@@ -1,0 +1,77 @@
+---
+# Main tasks for fulfillment_cli_base role
+
+- name: Create test workspace directory
+  ansible.builtin.file:
+    path: "{{ testing_workspace }}"
+    state: directory
+    mode: "0755"
+
+- name: Verify fulfillment-cli binary exists
+  ansible.builtin.stat:
+    path: "{{ cli_binary }}"
+  register: fulfillment_cli_base_cli_binary_stat
+  failed_when: not fulfillment_cli_base_cli_binary_stat.stat.exists
+
+- name: Verify KUBECONFIG file exists
+  ansible.builtin.stat:
+    path: "{{ KUBECONFIG }}"
+  register: fulfillment_cli_base_kubeconfig_stat
+  failed_when: not fulfillment_cli_base_kubeconfig_stat.stat.exists
+
+- name: Test oc CLI connectivity
+  ansible.builtin.command:
+    cmd: oc whoami
+  environment:
+    KUBECONFIG: "{{ KUBECONFIG }}"
+  register: fulfillment_cli_base_oc_whoami_result
+  changed_when: false
+
+- name: Login to fulfillment-cli
+  ansible.builtin.command:
+    cmd: >
+      {{ cli_binary }} login
+      --address {{ fulfillment_address }}
+      --insecure
+      --token-script "{{ fulfillment_token_script }}"
+  register: fulfillment_cli_base_cli_login_result
+  changed_when: false
+
+- name: Test fulfillment-cli connectivity after login
+  ansible.builtin.command:
+    cmd: "{{ cli_binary }} get hubs"
+  register: fulfillment_cli_base_cli_connectivity_test
+  changed_when: false
+  failed_when: fulfillment_cli_base_cli_connectivity_test.rc != 0
+
+- name: Display fulfillment-cli connectivity status
+  ansible.builtin.debug:
+    msg: "fulfillment-cli connectivity test successful"
+  when: fulfillment_cli_base_cli_connectivity_test.rc == 0
+
+- name: Generate access token for gRPC calls
+  ansible.builtin.command:
+    cmd: "{{ fulfillment_token_script }}"
+  environment:
+    KUBECONFIG: "{{ KUBECONFIG }}"
+  register: fulfillment_cli_base_grpc_token_result
+  changed_when: false
+  no_log: false
+
+- name: Save access token to file
+  ansible.builtin.copy:
+    content: "{{ fulfillment_cli_base_grpc_token_result.stdout }}"
+    dest: "{{ testing_workspace }}/grpc-token.txt"
+    mode: "0600"
+  no_log: true
+
+- name: Initialize test execution log
+  ansible.builtin.copy:
+    content: |
+      # CloudKit E2E Test Execution Log
+      KUBECONFIG: {{ KUBECONFIG }}
+      OpenShift User: {{ fulfillment_cli_base_oc_whoami_result.stdout }}
+
+      Started at: {{ ansible_date_time.iso8601 }}
+    dest: "{{ testing_workspace }}/test-execution.log"
+    mode: "0644"
