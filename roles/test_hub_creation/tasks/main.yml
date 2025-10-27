@@ -29,7 +29,7 @@
   set_fact:
     parsed_hub: "{{ test_hub_creation_hub_get_result.stdout | from_json  }}"
 
-- name: Parsed Hub 
+- name: Parsed Hub
   debug:
     var: parsed_hub
 
@@ -52,4 +52,3 @@
     line: "[{{ ansible_date_time.iso8601 }}] PASSED: Hub creation test passed"
     create: true
     mode: '0644'
-

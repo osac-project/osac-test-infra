@@ -15,7 +15,7 @@
 #     parsed_hub: test_hub_all_hubs | from_json
 #   listen: cleanup
 #
-# - name: debug all hubs 
+# - name: debug all hubs
 #   debug:
 #     var: parsed_hub
 #
@@ -57,6 +57,5 @@
   ansible.builtin.lineinfile:
     path: "{{ logging.test_log_file }}"
     line: |
-      [{{ ansible_date_time.iso8601 }}] CLEANUP: Hub test files cleaned up 
+      [{{ ansible_date_time.iso8601 }}] CLEANUP: Hub test files cleaned up
   listen: cleanup
-

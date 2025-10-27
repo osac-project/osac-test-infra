@@ -40,7 +40,7 @@ roles/              # Reusable Ansible roles for test functionality
 
 Execute hub creation test:
 ```bash
-ansible-playbook playbooks/test_hub_creation.yml 
+ansible-playbook playbooks/test_hub_creation.yml
 ```
 
 ## Configuration
@@ -95,4 +95,3 @@ fulfillment-api-foobar.apps.hcp.local.lab:443
 - Hub deletion verification ensures proper cleanup
 - All operations include proper error logging and failure messages
 - Retry functionality available through Ansible retry files
-
