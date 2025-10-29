@@ -10,8 +10,6 @@ test_hub:
   token_namespace: "{{ test_namespace }}"
 
 # Token creation command
-test_hub_creation_hub_token_command: oc create token {{ test_hub_creation_hub_service_account }} -n {{ test_hub_creation_hub_token_namespace }} --duration {{
-  test_hub_creation_hub_token_duration }} --as system:admin
+test_hub_creation_hub_token_command: oc create token {{ test.service_account }} -n {{ test_hub.token_namespace }} --duration {{
+  test_hub.token_duration }} --as system:admin
 
-# Temporary files
-test_hub_creation_hub_kubeconfig_file: "{{ testing_workspace }}/hub-kubeconfig-{{ test_hub_creation_hub_id }}.yaml"
