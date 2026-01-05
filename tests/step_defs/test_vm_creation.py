@@ -60,6 +60,34 @@ def create_vm_with_template(fulfillment_config, vm_context, created_vms, templat
     created_vms.append(vm_uuid)
 
 
+@when(parsers.parse('I create a VM with template "{template}" and parameters:'))
+def create_vm_with_parameters(
+    fulfillment_config, vm_context, created_vms, template, datatable
+):
+    """Create a VM with specified template and parameters from table."""
+    cli_path = fulfillment_config["cli_path"]
+
+    # Build command with template
+    cmd = [cli_path, "create", "virtualmachine", "--template", template]
+
+    # Add parameters from datatable (skip header row, skip empty values)
+    for row in datatable[1:]:  # Skip header row
+        name, value = row[0], row[1]
+        if name and value:  # Only add non-empty parameters
+            cmd.extend(["-p", f"{name}={value}"])
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode == 0, f"Failed to create VM: {result.stderr}"
+
+    # Extract UUID from output (format: 'uuid-here')
+    uuid_match = re.findall(r"'([^']+)'", result.stdout)
+    assert uuid_match, f"Could not extract VM UUID from output: {result.stdout}"
+
+    vm_uuid = uuid_match[0]
+    vm_context["vm_uuid"] = vm_uuid
+    created_vms.append(vm_uuid)
+
+
 @then("the VM should be registered in the fulfillment service")
 def verify_vm_registered(fulfillment_config, grpc_token, vm_context):
     """Verify VM appears in gRPC list."""
