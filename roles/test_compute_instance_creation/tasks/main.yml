@@ -1,0 +1,63 @@
+---
+- name: Create ComputeInstance via fulfillment-cli
+  ansible.builtin.command:
+    cmd: >
+      {{ fulfillment_cli_path }} create computeinstance
+      --template {{ template }}
+  register: test_compute_instance_creation_result
+  changed_when: test_compute_instance_creation_result.rc == 0
+
+- name: Save ComputeInstance ID
+  ansible.builtin.set_fact:
+    compute_instance_order_uuid: '{{ test_compute_instance_creation_result.stdout | regex_findall("''([^'']+)''") | first }}'
+
+- name: Verify ComputeInstance registration via gRPC call
+  ansible.builtin.command:
+    cmd: >
+      grpcurl -insecure
+      -H "Authorization: Bearer {{ fulfillment_cli_base_grpc_token_result.stdout }}"
+      {{ fulfillment_address }}
+      private.v1.ComputeInstances/List
+  register: test_compute_instance_verification_result
+  changed_when: false
+
+- name: Collect list of ComputeInstance UUIDs
+  ansible.builtin.set_fact:
+    known_ids: "{{ test_compute_instance_verification_result.stdout | from_json | json_query('items[].id') | map('trim') | list }}"
+
+- name: Check if ComputeInstance appears in gRPC response
+  ansible.builtin.assert:
+    that:
+      - compute_instance_order_uuid in known_ids
+    fail_msg: ComputeInstance {{ test_compute_instance_creation_result.stdout }} not found in gRPC ComputeInstance list response
+    success_msg: ComputeInstance {{ test_compute_instance_creation_result.stdout }} successfully registered and verified via gRPC
+
+- name: Wait for ComputeInstance to be ready
+  ansible.builtin.command:
+    cmd: >
+      grpcurl -insecure
+      -H "Authorization: Bearer {{ fulfillment_cli_base_grpc_token_result.stdout }}"
+      {{ fulfillment_address }}
+      private.v1.ComputeInstances/List
+  register: compute_instance_status_check
+  until:
+    - compute_instance_status_check.rc == 0
+    - compute_instance_status_check.stdout | from_json | json_query('status.conditions') is defined
+    - >
+      compute_instance_status_check.stdout
+      | from_json
+      | json_query("items[?id=='%s']" % compute_instance_order_uuid)
+      | map(attribute='status.state')
+      | list
+      | first
+      == "COMPUTE_INSTANCE_STATE_READY"
+  retries: "{{ (compute_instance_ready_timeout / check_interval) | int }}"
+  delay: "{{ check_interval }}"
+  changed_when: false
+
+- name: Log successful ComputeInstance creation and verification
+  ansible.builtin.lineinfile:
+    path: "{{ testing_workspace }}/test-execution.log"
+    line: |
+      [{{ ansible_date_time.iso8601 }}] SUCCESS: ComputeInstance {{ compute_instance_order_uuid }} created and verified successfully
+      ComputeInstance is ready and running
