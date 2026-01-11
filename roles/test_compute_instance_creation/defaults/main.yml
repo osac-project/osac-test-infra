@@ -2,7 +2,7 @@
 cli_binary: cli_binary_path
 
 # ComputeInstance template and settings (reasonable defaults)
-template: cloudkit.templates.ocp_virt_vm
+template: osac.templates.ocp_virt_vm
 cpu_cores: 2
 memory_gb: 4
 disk_size_gb: 20

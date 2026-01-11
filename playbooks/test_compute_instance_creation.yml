@@ -25,7 +25,7 @@
           ansible.builtin.include_role:
             name: test_compute_instance_creation
           vars:
-            compute_instance_template: cloudkit.templates.ocp_virt_vm
+            compute_instance_template: osac.templates.ocp_virt_vm
 
       rescue:
         - name: Log test failure
