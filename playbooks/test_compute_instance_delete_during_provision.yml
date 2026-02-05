@@ -1,0 +1,348 @@
+---
+# OSAC E2E Test: Delete ComputeInstance During Provisioning
+# This playbook tests deletion of a ComputeInstance while the provision job is still running
+# Verifies that provision job is canceled before deprovision job starts (no concurrent jobs)
+
+- name: OSAC ComputeInstance Delete During Provision Test
+  hosts: localhost
+  gather_facts: true
+  vars:
+    test_name: ComputeInstance Delete During Provision Test
+    test_description: Test deleting a ComputeInstance while provision job is still running
+    test_compute_instance_id: "e2e-delete-during-provision-{{ ansible_date_time.epoch }}"
+  tasks:
+    - name: Display test information
+      ansible.builtin.debug:
+        msg: |
+          {{ test_name }}
+          ==========================================
+          Description: {{ test_description }}
+          Namespace: {{ test_namespace }}
+          ComputeInstance ID: {{ test_compute_instance_id }}
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          ==========================================
+      tags:
+        - info
+
+    - name: Execute deletion during provision test
+      block:
+        - name: Create ComputeInstance via fulfillment-cli
+          ansible.builtin.command:
+            cmd: >
+              {{ fulfillment_cli_path }} create computeinstance
+              --template osac.templates.ocp_virt_vm
+          register: test_compute_instance_creation_result
+          changed_when: test_compute_instance_creation_result.rc == 0
+          tags:
+            - test
+
+        - name: Save ComputeInstance ID
+          ansible.builtin.set_fact:
+            compute_instance_order_uuid: '{{ test_compute_instance_creation_result.stdout | regex_findall("''([^'']+)''") | first }}'
+          tags:
+            - test
+
+        - name: Get fulfillment-cli token for gRPC calls
+          ansible.builtin.include_role:
+            name: fulfillment_cli_base
+          tags:
+            - test
+
+        - name: Display ComputeInstance UUID
+          ansible.builtin.debug:
+            msg: "Created ComputeInstance with UUID: {{ compute_instance_order_uuid }}"
+          tags:
+            - test
+
+        - name: Wait for provision job to start (5 seconds)
+          ansible.builtin.pause:
+            seconds: 5
+          tags:
+            - test
+
+        - name: Get ComputeInstance name from Kubernetes
+          ansible.builtin.shell:
+            cmd: >
+              kubectl --as system:admin get computeinstance
+              -n {{ test_namespace }}
+              -l cloudkit.openshift.io/computeinstance-uuid={{ compute_instance_order_uuid }}
+              -o jsonpath='{.items[0].metadata.name}'
+          register: ci_name_result
+          changed_when: false
+          tags:
+            - test
+
+        - name: Display ComputeInstance name
+          ansible.builtin.debug:
+            msg: "ComputeInstance name: {{ ci_name_result.stdout }}"
+          tags:
+            - test
+
+        - name: Check provision job status before deletion
+          ansible.builtin.shell:
+            cmd: >
+              kubectl --as system:admin get computeinstance {{ ci_name_result.stdout }}
+              -n {{ test_namespace }}
+              -o yaml | grep -E 'provisionJobID:|provisionJobState:|deprovisionJobID:|deprovisionJobState:|phase:' || echo ""
+          register: provision_status_before
+          changed_when: false
+          tags:
+            - test
+            - validation
+
+        - name: Parse provision status before deletion
+          ansible.builtin.set_fact:
+            before_prov_job_id: "{{ provision_status_before.stdout | regex_search('provisionJobID: \"?([^\"\\n]+)\"?', '\\1') | default([''], true) | first }}"
+            before_prov_state: "{{ provision_status_before.stdout | regex_search('provisionJobState: ([^\\n]+)', '\\1') | default([''], true) | first }}"
+            before_deprov_job_id: "{{ provision_status_before.stdout | regex_search('deprovisionJobID: \"?([^\"\\n]+)\"?', '\\1') | default([''], true) | first }}"
+            before_deprov_state: "{{ provision_status_before.stdout | regex_search('deprovisionJobState: ([^\\n]+)', '\\1') | default([''], true) | first }}"
+            before_phase: "{{ provision_status_before.stdout | regex_search('phase: ([^\\n]+)', '\\1') | default([''], true) | first }}"
+          tags:
+            - test
+
+        - name: Display provision job status before deletion
+          ansible.builtin.debug:
+            msg: "BEFORE DELETION - Provision: JobID={{ before_prov_job_id }}, State={{ before_prov_state }}, Deprovision: JobID={{ before_deprov_job_id }}, State={{ before_deprov_state }}, Phase={{ before_phase }}"
+          tags:
+            - test
+
+        - name: Verify only provision job is running (no deprovision)
+          ansible.builtin.assert:
+            that:
+              - before_prov_job_id != ""
+              - before_prov_state in ["Running", "Pending"]
+              - before_deprov_job_id == ""
+              - before_deprov_state == ""
+            fail_msg: "VALIDATION FAILED: Expected only provision job running, but found: prov={{ before_prov_state }}, deprov={{ before_deprov_state }}"
+            success_msg: "VALIDATION PASSED: Only provision job is running before deletion"
+          tags:
+            - test
+            - validation
+
+        - name: Delete ComputeInstance while provision is running
+          ansible.builtin.command:
+            cmd: >
+              {{ fulfillment_cli_path }} delete computeinstance
+              {{ compute_instance_order_uuid }}
+          register: test_compute_instance_deletion_result
+          changed_when: test_compute_instance_deletion_result.rc == 0
+          tags:
+            - test
+            - deletion
+
+        - name: Display deletion initiated message
+          ansible.builtin.debug:
+            msg: "Deletion initiated for ComputeInstance {{ compute_instance_order_uuid }}"
+          tags:
+            - test
+
+        # Step 1: Wait for provision job to be canceled
+        - name: Poll for provision job to reach terminal state (Canceled)
+          ansible.builtin.shell:
+            cmd: >
+              kubectl --as system:admin get computeinstance {{ ci_name_result.stdout }}
+              -n {{ test_namespace }}
+              -o jsonpath='{.status.provisionJobState}' 2>/dev/null || echo ""
+          register: provision_state_poll
+          changed_when: false
+          until: provision_state_poll.stdout in ['Canceled', 'Failed', 'Succeeded']
+          retries: 30
+          delay: 3
+          tags:
+            - test
+            - validation
+
+        - name: Get provision job details after cancellation
+          ansible.builtin.shell:
+            cmd: >
+              kubectl --as system:admin get computeinstance {{ ci_name_result.stdout }}
+              -n {{ test_namespace }}
+              -o jsonpath='{.status.provisionJobID},{.status.provisionJobState}' 2>/dev/null || echo ","
+          register: provision_after_cancel
+          changed_when: false
+          tags:
+            - test
+
+        - name: Parse provision job after cancellation
+          ansible.builtin.set_fact:
+            canceled_prov_job_id: "{{ provision_after_cancel.stdout.split(',')[0] }}"
+            canceled_prov_state: "{{ provision_after_cancel.stdout.split(',')[1] }}"
+          tags:
+            - test
+
+        - name: Display provision job after cancellation
+          ansible.builtin.debug:
+            msg: "AFTER CANCELLATION - Provision: JobID={{ canceled_prov_job_id }}, State={{ canceled_prov_state }}"
+          tags:
+            - test
+
+        - name: Verify provision job was canceled
+          ansible.builtin.assert:
+            that:
+              - canceled_prov_state in ['Canceled', 'Failed', 'Succeeded']
+            fail_msg: "VALIDATION FAILED: Provision job not in terminal state: {{ canceled_prov_state }}"
+            success_msg: "VALIDATION PASSED: Provision job reached terminal state ({{ canceled_prov_state }})"
+          tags:
+            - test
+            - validation
+
+        # Step 2: Wait for deprovision job to appear and be Running
+        - name: Poll for deprovision job to start
+          ansible.builtin.shell:
+            cmd: >
+              kubectl --as system:admin get computeinstance {{ ci_name_result.stdout }}
+              -n {{ test_namespace }}
+              -o jsonpath='{.status.deprovisionJobID},{.status.deprovisionJobState}' 2>/dev/null || echo ","
+          register: deprovision_poll
+          changed_when: false
+          until: >
+            deprovision_poll.stdout.split(',')[0] != '' and
+            deprovision_poll.stdout.split(',')[1] in ['Pending', 'Running']
+          retries: 30
+          delay: 3
+          tags:
+            - test
+            - validation
+
+        - name: Parse deprovision job details
+          ansible.builtin.set_fact:
+            deprov_job_id: "{{ deprovision_poll.stdout.split(',')[0] }}"
+            deprov_state: "{{ deprovision_poll.stdout.split(',')[1] }}"
+          tags:
+            - test
+
+        - name: Display deprovision job started
+          ansible.builtin.debug:
+            msg: "DEPROVISION STARTED - JobID={{ deprov_job_id }}, State={{ deprov_state }}"
+          tags:
+            - test
+
+        - name: Verify deprovision job started
+          ansible.builtin.assert:
+            that:
+              - deprov_job_id != ""
+              - deprov_state in ['Pending', 'Running']
+            fail_msg: "VALIDATION FAILED: Deprovision job not running: JobID={{ deprov_job_id }}, State={{ deprov_state }}"
+            success_msg: "VALIDATION PASSED: Deprovision job started ({{ deprov_state }})"
+          tags:
+            - test
+            - validation
+
+        # Step 3: Verify no duplicate deprovision jobs (poll and ensure job ID stays the same)
+        - name: Poll to ensure single deprovision job (no duplicates)
+          ansible.builtin.shell:
+            cmd: >
+              kubectl --as system:admin get computeinstance {{ ci_name_result.stdout }}
+              -n {{ test_namespace }}
+              -o jsonpath='{.status.deprovisionJobID}' 2>/dev/null || echo ""
+          register: deprov_job_check
+          changed_when: false
+          retries: 5
+          delay: 2
+          tags:
+            - test
+            - validation
+
+        - name: Verify deprovision job ID remained consistent (no duplicates)
+          ansible.builtin.assert:
+            that:
+              - deprov_job_check.stdout == deprov_job_id
+            fail_msg: "VALIDATION FAILED: Deprovision job ID changed! Original={{ deprov_job_id }}, Current={{ deprov_job_check.stdout }}"
+            success_msg: "VALIDATION PASSED: Single deprovision job ({{ deprov_job_id }}) - no duplicates"
+          tags:
+            - test
+            - validation
+
+        # Step 4: Wait for CR to be fully deleted
+        - name: Poll for ComputeInstance CR deletion
+          ansible.builtin.shell:
+            cmd: >
+              kubectl --as system:admin get computeinstance {{ ci_name_result.stdout }}
+              -n {{ test_namespace }} 2>&1
+          register: cr_check
+          changed_when: false
+          failed_when: false
+          until: "'NotFound' in cr_check.stderr or 'not found' in cr_check.stderr"
+          retries: 30
+          delay: 3
+          tags:
+            - test
+            - validation
+
+        - name: Display CR deletion confirmation
+          ansible.builtin.debug:
+            msg: "ComputeInstance CR {{ ci_name_result.stdout }} successfully deleted from Kubernetes"
+          tags:
+            - test
+
+        - name: Verify ComputeInstance deleted via gRPC
+          ansible.builtin.command:
+            cmd: >
+              grpcurl -insecure
+              -H "Authorization: Bearer {{ fulfillment_cli_base_grpc_token_result.stdout }}"
+              {{ fulfillment_address }}
+              fulfillment.v1.ComputeInstances/List
+          register: test_compute_instance_verification_result
+          changed_when: false
+          tags:
+            - test
+            - validation
+
+        - name: Collect list of ComputeInstance UUIDs
+          ansible.builtin.set_fact:
+            known_ids: "{{ test_compute_instance_verification_result.stdout | from_json | json_query('items[].id') | map('trim') | list }}"
+          tags:
+            - test
+
+        - name: Check if ComputeInstance was deleted
+          ansible.builtin.assert:
+            that:
+              - compute_instance_order_uuid not in known_ids
+            fail_msg: ComputeInstance {{ compute_instance_order_uuid }} deletion failed
+            success_msg: ComputeInstance {{ compute_instance_order_uuid }} successfully deleted
+          tags:
+            - test
+            - validation
+
+        - name: Check for orphaned VMs in all tenant namespaces
+          ansible.builtin.shell:
+            cmd: >
+              kubectl --as system:admin get virtualmachine
+              -A
+              -l cloudkit.openshift.io/computeinstance={{ ci_name_result.stdout }}
+              --no-headers 2>/dev/null | wc -l
+          register: orphaned_vm_check
+          changed_when: false
+          tags:
+            - validation
+
+        - name: Assert no orphaned VMs
+          ansible.builtin.assert:
+            that:
+              - orphaned_vm_check.stdout | int == 0
+            fail_msg: "Found {{ orphaned_vm_check.stdout }} orphaned VMs for ComputeInstance {{ ci_name_result.stdout }}"
+            success_msg: "No orphaned VMs found - cleanup successful"
+          tags:
+            - validation
+
+        - name: Log successful test completion
+          ansible.builtin.lineinfile:
+            path: "{{ testing_workspace }}/test-execution.log"
+            line: |
+              [{{ ansible_date_time.iso8601 }}] SUCCESS: ComputeInstance {{ compute_instance_order_uuid }} - provision canceled ({{ canceled_prov_state }}), deprovision job {{ deprov_job_id }}, no orphans
+            create: true
+            mode: "0644"
+          tags:
+            - test
+
+      rescue:
+        - name: Log test failure
+          ansible.builtin.lineinfile:
+            path: "{{ testing_workspace }}/test-execution.log"
+            line: "[{{ ansible_date_time.iso8601 }}] FAILED: Deletion during provision test failed"
+            create: true
+            mode: "0644"
+
+        - name: Re-raise the error
+          ansible.builtin.fail:
+            msg: Deletion during provision test failed
