@@ -113,7 +113,7 @@
   register: phase_poll
   changed_when: false
   until: phase_poll.stdout == 'Ready'
-  retries: 30
+  retries: 300
   delay: 2
 
 - name: Verify ComputeInstance is Ready
