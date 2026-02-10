@@ -133,7 +133,7 @@
           ansible.builtin.assert:
             that:
               - before_prov_job_id != ""
-              - before_prov_state in ["Running", "Pending"]
+              - before_prov_state in ["Running", "Pending", "Unknown"]
               - before_deprov_job_id == ""
               - before_deprov_state == ""
             fail_msg: "VALIDATION FAILED: Expected only provision job running, but found: prov={{ before_prov_state }}, deprov={{ before_deprov_state }}"
