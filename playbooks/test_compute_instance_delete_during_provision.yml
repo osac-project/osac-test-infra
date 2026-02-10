@@ -382,6 +382,7 @@
         - name: Check for orphaned VMs in all tenant namespaces
           ansible.builtin.shell:
             cmd: >
+              set -o pipefail;
               kubectl --as system:admin get virtualmachine
               -A
               -l cloudkit.openshift.io/computeinstance={{ ci_name_result.stdout }}
