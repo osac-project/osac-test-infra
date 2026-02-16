@@ -119,7 +119,7 @@
     msg: "Provision job succeeded"
   when: not provision_job_poll.stdout.startswith('eda-webhook')
 
-- name: Poll for ComputeInstance to reach Ready state
+- name: Poll for ComputeInstance to reach Running state
   ansible.builtin.shell:
     cmd: >
       kubectl --as system:admin get computeinstance {{ ci_name_result.stdout }}
@@ -127,19 +127,19 @@
       -o jsonpath='{.status.phase}' 2>/dev/null || echo ""
   register: phase_poll
   changed_when: false
-  until: phase_poll.stdout == 'Ready'
+  until: phase_poll.stdout == 'Running'
   retries: 300
   delay: 2
 
-- name: Verify ComputeInstance is Ready
+- name: Verify ComputeInstance is Running
   ansible.builtin.assert:
     that:
-      - phase_poll.stdout == 'Ready'
-    fail_msg: "ComputeInstance did not reach Ready state, current: {{ phase_poll.stdout }}"
-    success_msg: "ComputeInstance reached Ready state"
+      - phase_poll.stdout == 'Running'
+    fail_msg: "ComputeInstance did not reach Running state, current: {{ phase_poll.stdout }}"
+    success_msg: "ComputeInstance reached Running state"
 
 - name: Log successful ComputeInstance creation and verification
   ansible.builtin.lineinfile:
     path: "{{ testing_workspace }}/test-execution.log"
     line: |
-      [{{ ansible_date_time.iso8601 }}] SUCCESS: ComputeInstance {{ compute_instance_order_uuid }} created, provision job {{ provision_job_poll.stdout }} succeeded, Ready state reached
+      [{{ ansible_date_time.iso8601 }}] SUCCESS: ComputeInstance {{ compute_instance_order_uuid }} created, provision job {{ provision_job_poll.stdout }} succeeded, Running state reached
