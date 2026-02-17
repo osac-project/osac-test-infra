@@ -1,9 +1,10 @@
 ---
 # Main tasks for ComputeInstance API fields testing
 # Tests runStrategy mutability and immutability of other fields
-# Prerequisites: ComputeInstance should already be created and compute_instance_order_uuid should be set
+# Prerequisites: ComputeInstance should already be created
+# Either compute_instance_order_uuid (for fulfillment-cli created) or compute_instance_name (for kubectl created) must be set
 
-- name: Get ComputeInstance name from Kubernetes
+- name: Get ComputeInstance name from UUID label
   ansible.builtin.shell:
     cmd: >
       kubectl --as system:admin get computeinstance
@@ -12,10 +13,17 @@
       -o jsonpath='{.items[0].metadata.name}'
   register: ci_name_result
   changed_when: false
+  when: compute_instance_order_uuid is defined and compute_instance_name is not defined
 
-- name: Set ComputeInstance name fact
+- name: Set ComputeInstance name fact from UUID lookup
   ansible.builtin.set_fact:
     compute_instance_name: "{{ ci_name_result.stdout }}"
+  when: compute_instance_order_uuid is defined and compute_instance_name is not defined
+
+- name: Use provided ComputeInstance name
+  ansible.builtin.set_fact:
+    compute_instance_name: "{{ compute_instance_name }}"
+  when: compute_instance_name is defined
 
 - name: Display test information
   ansible.builtin.debug:
