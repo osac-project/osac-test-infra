@@ -1,0 +1,281 @@
+---
+# Main tasks for ComputeInstance API fields testing
+# Tests runStrategy mutability and immutability of other fields
+# Prerequisites: ComputeInstance should already be created and compute_instance_order_uuid should be set
+
+- name: Get ComputeInstance name from Kubernetes
+  ansible.builtin.shell:
+    cmd: >
+      kubectl --as system:admin get computeinstance
+      -n {{ test_namespace }}
+      -l cloudkit.openshift.io/computeinstance-uuid={{ compute_instance_order_uuid }}
+      -o jsonpath='{.items[0].metadata.name}'
+  register: ci_name_result
+  changed_when: false
+
+- name: Set ComputeInstance name fact
+  ansible.builtin.set_fact:
+    compute_instance_name: "{{ ci_name_result.stdout }}"
+
+- name: Display test information
+  ansible.builtin.debug:
+    msg: |
+      Testing ComputeInstance API Fields
+      ComputeInstance: {{ compute_instance_name }}
+      Namespace: {{ test_namespace }}
+      Tests: runStrategy mutability, field immutability
+
+- name: Test runStrategy - Change from Always to Halted
+  block:
+    - name: Get current runStrategy value
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get computeinstance {{ compute_instance_name }}
+          -n {{ test_namespace }}
+          -o jsonpath='{.spec.runStrategy}'
+      register: initial_run_strategy
+      changed_when: false
+
+    - name: Display initial runStrategy
+      ansible.builtin.debug:
+        msg: "Initial runStrategy: {{ initial_run_strategy.stdout }}"
+
+    - name: Get VirtualMachine namespace
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get computeinstance {{ compute_instance_name }}
+          -n {{ test_namespace }}
+          -o jsonpath='{.status.virtualMachineReference.namespace}'
+      register: vm_namespace_result
+      changed_when: false
+
+    - name: Patch runStrategy to Halted
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin patch computeinstance {{ compute_instance_name }}
+          -n {{ test_namespace }}
+          --type=merge
+          -p '{"spec":{"runStrategy":"Halted"}}'
+      register: patch_halted_result
+      changed_when: patch_halted_result.rc == 0
+
+    - name: Wait for VirtualMachine to stop
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get virtualmachine {{ compute_instance_name }}
+          -n {{ vm_namespace_result.stdout }}
+          -o jsonpath='{.status.printableStatus}'
+      register: vm_status_check
+      until: vm_status_check.stdout == "Stopped"
+      retries: "{{ (vm_state_change_timeout / status_poll_interval) | int }}"
+      delay: "{{ status_poll_interval }}"
+      changed_when: false
+
+    - name: Verify VirtualMachine spec.running is false
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get virtualmachine {{ compute_instance_name }}
+          -n {{ vm_namespace_result.stdout }}
+          -o jsonpath='{.spec.running}'
+      register: vm_running_check
+      changed_when: false
+
+    - name: Assert VM is stopped
+      ansible.builtin.assert:
+        that:
+          - vm_running_check.stdout == "false"
+          - vm_status_check.stdout == "Stopped"
+        fail_msg: |
+          VM did not stop correctly:
+          - spec.running: {{ vm_running_check.stdout }}
+          - status.printableStatus: {{ vm_status_check.stdout }}
+        success_msg: "VM successfully stopped (runStrategy=Halted)"
+
+    - name: Verify VirtualMachineInstance is terminated
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get virtualmachineinstance {{ compute_instance_name }}
+          -n {{ vm_namespace_result.stdout }}
+          2>&1
+      register: vmi_check
+      failed_when: false
+      changed_when: false
+
+    - name: Assert VMI is not found
+      ansible.builtin.assert:
+        that:
+          - "'NotFound' in vmi_check.stderr or vmi_check.rc != 0"
+        fail_msg: "VirtualMachineInstance still exists after VM stopped"
+        success_msg: "VirtualMachineInstance terminated successfully"
+
+    - name: Log successful VM stop
+      ansible.builtin.debug:
+        msg: "✓ Test PASSED: runStrategy=Halted successfully stopped the VM"
+
+- name: Test runStrategy - Change from Halted to Always
+  block:
+    - name: Patch runStrategy to Always
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin patch computeinstance {{ compute_instance_name }}
+          -n {{ test_namespace }}
+          --type=merge
+          -p '{"spec":{"runStrategy":"Always"}}'
+      register: patch_always_result
+      changed_when: patch_always_result.rc == 0
+
+    - name: Wait for VirtualMachine to start
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get virtualmachine {{ compute_instance_name }}
+          -n {{ vm_namespace_result.stdout }}
+          -o jsonpath='{.status.printableStatus}'
+      register: vm_status_running_check
+      until: vm_status_running_check.stdout == "Running"
+      retries: "{{ (vm_state_change_timeout / status_poll_interval) | int }}"
+      delay: "{{ status_poll_interval }}"
+      changed_when: false
+
+    - name: Verify VirtualMachine spec.running is true
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get virtualmachine {{ compute_instance_name }}
+          -n {{ vm_namespace_result.stdout }}
+          -o jsonpath='{.spec.running}'
+      register: vm_running_true_check
+      changed_when: false
+
+    - name: Assert VM is running
+      ansible.builtin.assert:
+        that:
+          - vm_running_true_check.stdout == "true"
+          - vm_status_running_check.stdout == "Running"
+        fail_msg: |
+          VM did not start correctly:
+          - spec.running: {{ vm_running_true_check.stdout }}
+          - status.printableStatus: {{ vm_status_running_check.stdout }}
+        success_msg: "VM successfully started (runStrategy=Always)"
+
+    - name: Wait for VirtualMachineInstance to be running
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get virtualmachineinstance {{ compute_instance_name }}
+          -n {{ vm_namespace_result.stdout }}
+          -o jsonpath='{.status.phase}'
+      register: vmi_phase_check
+      until: vmi_phase_check.stdout == "Running"
+      retries: "{{ (vm_state_change_timeout / status_poll_interval) | int }}"
+      delay: "{{ status_poll_interval }}"
+      changed_when: false
+
+    - name: Assert VMI is running
+      ansible.builtin.assert:
+        that:
+          - vmi_phase_check.stdout == "Running"
+        fail_msg: "VirtualMachineInstance did not start"
+        success_msg: "VirtualMachineInstance started successfully"
+
+    - name: Log successful VM start
+      ansible.builtin.debug:
+        msg: "✓ Test PASSED: runStrategy=Always successfully started the VM"
+
+- name: Test immutability - Attempt to change cores (should fail)
+  block:
+    - name: Get current cores value
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin get computeinstance {{ compute_instance_name }}
+          -n {{ test_namespace }}
+          -o jsonpath='{.spec.cores}'
+      register: original_cores
+      changed_when: false
+
+    - name: Attempt to patch cores field
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin patch computeinstance {{ compute_instance_name }}
+          -n {{ test_namespace }}
+          --type=merge
+          -p '{"spec":{"cores":8}}'
+      register: patch_cores_result
+      failed_when: false
+      changed_when: false
+
+    - name: Verify cores patch was rejected
+      ansible.builtin.assert:
+        that:
+          - patch_cores_result.rc != 0
+          - "'cores is immutable' in patch_cores_result.stderr"
+        fail_msg: "Cores field was allowed to change - immutability validation failed!"
+        success_msg: "✓ Test PASSED: cores field is immutable (patch rejected)"
+
+- name: Test immutability - Attempt to change memoryGiB (should fail)
+  block:
+    - name: Attempt to patch memoryGiB field
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin patch computeinstance {{ compute_instance_name }}
+          -n {{ test_namespace }}
+          --type=merge
+          -p '{"spec":{"memoryGiB":16}}'
+      register: patch_memory_result
+      failed_when: false
+      changed_when: false
+
+    - name: Verify memoryGiB patch was rejected
+      ansible.builtin.assert:
+        that:
+          - patch_memory_result.rc != 0
+          - "'memoryGiB is immutable' in patch_memory_result.stderr"
+        fail_msg: "MemoryGiB field was allowed to change - immutability validation failed!"
+        success_msg: "✓ Test PASSED: memoryGiB field is immutable (patch rejected)"
+
+- name: Test immutability - Attempt to change image (should fail)
+  block:
+    - name: Attempt to patch image field
+      ansible.builtin.shell:
+        cmd: >
+          kubectl --as system:admin patch computeinstance {{ compute_instance_name }}
+          -n {{ test_namespace }}
+          --type=merge
+          -p '{"spec":{"image":{"sourceRef":"quay.io/fedora/fedora:latest"}}}'
+      register: patch_image_result
+      failed_when: false
+      changed_when: false
+
+    - name: Verify image patch was rejected
+      ansible.builtin.assert:
+        that:
+          - patch_image_result.rc != 0
+          - "'image is immutable' in patch_image_result.stderr"
+        fail_msg: "Image field was allowed to change - immutability validation failed!"
+        success_msg: "✓ Test PASSED: image field is immutable (patch rejected)"
+
+- name: Log successful API fields test completion
+  ansible.builtin.lineinfile:
+    path: "{{ testing_workspace }}/test-execution.log"
+    line: |
+      [{{ ansible_date_time.iso8601 }}] SUCCESS: ComputeInstance {{ compute_instance_order_uuid }} API fields test completed
+      - runStrategy mutability: PASSED (VM stopped and restarted)
+      - cores immutability: PASSED (patch rejected)
+      - memoryGiB immutability: PASSED (patch rejected)
+      - image immutability: PASSED (patch rejected)
+    create: true
+    mode: "0644"
+
+- name: Display test summary
+  ansible.builtin.debug:
+    msg: |
+      ========================================
+      API Fields Test Summary
+      ========================================
+      ComputeInstance: {{ compute_instance_name }}
+
+      ✓ runStrategy Halted: VM stopped successfully
+      ✓ runStrategy Always: VM started successfully
+      ✓ cores immutability: Enforced
+      ✓ memoryGiB immutability: Enforced
+      ✓ image immutability: Enforced
+
+      All tests PASSED!
+      ========================================

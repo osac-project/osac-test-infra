@@ -1,0 +1,7 @@
+---
+# Default variables for ComputeInstance API fields testing
+# Variables are inherited from group_vars/all.yml unless overridden
+
+# Polling and timeout settings
+status_poll_interval: 10  # seconds
+vm_state_change_timeout: 120  # seconds (2 minutes for VM to stop/start)
