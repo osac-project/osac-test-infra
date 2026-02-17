@@ -2,6 +2,10 @@
 # Main tasks for ComputeInstance API fields testing
 # Creates a ComputeInstance using explicit API fields, tests runStrategy mutability and immutability
 
+- name: Generate unique instance name
+  ansible.builtin.set_fact:
+    test_instance_name: "e2e-test-api-fields-{{ 99999999 | random | string }}"
+
 - name: Display test configuration
   ansible.builtin.debug:
     msg: |

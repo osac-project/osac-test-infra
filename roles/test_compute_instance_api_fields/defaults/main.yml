@@ -3,7 +3,7 @@
 # Variables are inherited from group_vars/all.yml unless overridden
 
 # Test instance configuration
-test_instance_name: "e2e-test-api-fields-{{ 99999999 | random | string }}"
+# test_instance_name is generated in tasks/main.yml
 test_image_ref: "quay.io/fedora/fedora-coreos:stable"
 test_cores: 2
 test_memory_gib: 4
