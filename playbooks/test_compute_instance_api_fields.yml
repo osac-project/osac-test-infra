@@ -1,0 +1,71 @@
+---
+# OSAC E2E Test: ComputeInstance API Fields
+# This playbook tests the new explicit API fields introduced in MGMT-23103
+#
+# Tests:
+# 1. ComputeInstance creation using explicit API fields (image, cores, memoryGiB, bootDisk, runStrategy)
+# 2. runStrategy mutability - VM stop/start via runStrategy field
+# 3. Field immutability - cores, memoryGiB, image cannot be changed
+#
+# Usage:
+#   ansible-playbook playbooks/test_compute_instance_api_fields.yml \
+#     -e test_namespace=<NAMESPACE>
+
+- name: OSAC ComputeInstance API Fields Test
+  hosts: localhost
+  gather_facts: true
+  vars:
+    test_name: ComputeInstance API Fields Test
+    test_description: |
+      Test explicit API fields (MGMT-23103)
+      - Create ComputeInstance with explicit fields (not templateParameters)
+      - runStrategy: Stop and start VM
+      - Immutability: cores, memoryGiB, image
+  tasks:
+    - name: Display test information
+      ansible.builtin.debug:
+        msg: |
+          {{ test_name }}
+          ==========================================
+          Description: {{ test_description }}
+          Namespace: {{ test_namespace }}
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          ==========================================
+
+    - name: Validate test_namespace is set
+      ansible.builtin.assert:
+        that:
+          - test_namespace is defined
+          - test_namespace | length > 0
+        fail_msg: "test_namespace must be provided via -e flag"
+        success_msg: "Target namespace: {{ test_namespace }}"
+
+    - name: Execute API fields tests
+      block:
+        - name: Run ComputeInstance API fields test
+          ansible.builtin.include_role:
+            name: test_compute_instance_api_fields
+
+      rescue:
+        - name: Log test failure
+          ansible.builtin.lineinfile:
+            path: "{{ testing_workspace }}/test-execution.log"
+            line: "[{{ ansible_date_time.iso8601 }}] FAILED: ComputeInstance API fields test failed"
+            create: true
+            mode: "0644"
+
+        - name: Re-raise the error
+          ansible.builtin.fail:
+            msg: ComputeInstance API fields test failed
+
+    - name: Test completion message
+      ansible.builtin.debug:
+        msg: |
+          ==========================================
+          ComputeInstance API Fields Test COMPLETED
+          ==========================================
+          All tests passed successfully!
+
+          Related:
+          - Issue: https://issues.redhat.com/browse/MGMT-23103
+          - PR: https://github.com/osac-project/osac-operator/pull/111
