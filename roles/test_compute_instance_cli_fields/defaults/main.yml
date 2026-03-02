@@ -9,6 +9,7 @@ test_boot_disk_size: 20
 test_image: "quay.io/containerdisks/fedora:latest"
 test_image_source_type: registry
 test_run_strategy: Always
+test_user_data: "#cloud-config\npackages:\n  - vim\n"
 
 # Timeouts
 provision_timeout: 600
