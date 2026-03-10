@@ -128,6 +128,17 @@
     fail_msg: "User data Secret content does not match expected value"
     success_msg: "User data Secret verified with correct content"
 
+- name: Assert user data Secret has correct owner reference
+  vars:
+    secret_json: "{{ user_data_secret_result.stdout | from_json }}"
+  ansible.builtin.assert:
+    that:
+      - secret_json.metadata.ownerReferences | length > 0
+      - secret_json.metadata.ownerReferences[0].kind == "ComputeInstance"
+      - secret_json.metadata.ownerReferences[0].name == ci_name_result.stdout
+    fail_msg: "User data Secret missing or incorrect owner reference to ComputeInstance"
+    success_msg: "User data Secret has correct owner reference"
+
 - name: Wait for provision job to appear
   ansible.builtin.shell:
     cmd: >
