@@ -90,7 +90,7 @@ grpcurl -insecure \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"object": {"id": "...", "spec": {"restartRequestedAt": "2026-01-28T10:00:00Z"}}}' \
   fulfillment-api:8000 \
-  fulfillment.v1.ComputeInstances/Update
+  osac.public.v1.ComputeInstances/Update
 ```
 
 ## Test Tags

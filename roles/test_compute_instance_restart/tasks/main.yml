@@ -87,7 +87,7 @@
           }
         }' \
         {{ fulfillment_address }} \
-        fulfillment.v1.ComputeInstances/Update
+        osac.public.v1.ComputeInstances/Update
   register: restart_trigger_result
   changed_when: restart_trigger_result.rc == 0
 
