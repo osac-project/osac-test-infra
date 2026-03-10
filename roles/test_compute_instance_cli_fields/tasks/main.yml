@@ -38,6 +38,13 @@
     compute_instance_id: >-
       {{ cli_create_result.stdout | regex_findall("'([^']+)'") | first }}
 
+- name: Assert ComputeInstance ID was extracted successfully
+  ansible.builtin.assert:
+    that:
+      - compute_instance_id | length > 0
+    fail_msg: "Failed to extract ComputeInstance ID from CLI output: {{ cli_create_result.stdout }}"
+    success_msg: "ComputeInstance ID extracted: {{ compute_instance_id }}"
+
 - name: Display ComputeInstance ID
   ansible.builtin.debug:
     msg: "ComputeInstance ID: {{ compute_instance_id }}"
