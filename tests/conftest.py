@@ -62,3 +62,8 @@ def cli(namespace: str, fulfillment_address: str, service_account: str) -> Fulfi
 @pytest.fixture(scope="session")
 def vm_template() -> str:
     return env("OSAC_VM_TEMPLATE", "osac.templates.ocp_virt_vm")
+
+
+@pytest.fixture(scope="session")
+def cluster_template() -> str:
+    return env("OSAC_CLUSTER_TEMPLATE", "hosted_cluster")
