@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 from tests.fulfillment_cli import FulfillmentCLI
 from tests.grpc_client import GRPCClient
 from tests.runner import poll_until
@@ -21,8 +23,11 @@ def test_cluster_lifecycle(cli: FulfillmentCLI, grpc: GRPCClient, cluster_templa
 
     # Wait for cluster to reach READY state
     def get_cluster_state() -> str:
-        cluster = grpc.get_cluster(cluster_id=uuid)
-        return cluster.get("status", {}).get("state", "")
+        try:
+            cluster = grpc.get_cluster(cluster_id=uuid)
+            return cluster.get("status", {}).get("state", "")
+        except subprocess.CalledProcessError:
+            return ""
 
     poll_until(
         fn=get_cluster_state,
