@@ -1,7 +1,7 @@
 FROM registry.access.redhat.com/ubi9/ubi:latest
 
 ARG GRPCURL_VERSION=1.9.1
-ARG OSAC_VERSION=0.0.61
+ARG OSAC_VERSION=0.0.62
 
 RUN dnf install -y python3.11 python3.11-pip make && dnf clean all
 
