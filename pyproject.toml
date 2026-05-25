@@ -14,6 +14,7 @@ include = ["tests*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["serial: test must run alone without other AAP jobs active"]
 
 [tool.basedpyright]
 reportUnusedCallResult = false
