@@ -4,6 +4,8 @@ import time
 
 import yaml
 
+from uuid import uuid4
+
 from tests.core.helpers import wait_for_deletion, wait_for_provision, wait_for_running
 from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until
@@ -15,7 +17,7 @@ TEST_BOOT_DISK_SIZE: int = 20
 
 
 def test_compute_instance_api_fields(k8s_hub_client: K8sClient, k8s_virt_client: K8sClient, namespace: str) -> None:
-    instance_name: str = f"e2e-test-api-fields-{int(time.time())}"
+    instance_name: str = f"e2e-test-api-fields-{int(time.time())}-{uuid4().hex[:4]}"
 
     manifest: str = yaml.dump(
         {
