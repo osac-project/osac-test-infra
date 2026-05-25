@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from tests.core.grpc_client import GRPCClient
 from tests.core.k8s_client import K8sClient
 from tests.core.keycloak import get_jwt
 from tests.core.osac_cli import OsacCLI
+from tests.core.parallel import isolated_xdg_config_home
 from tests.core.runner import env, run
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolate_osac_config() -> None:
+    os.environ["XDG_CONFIG_HOME"] = str(isolated_xdg_config_home())
 
 
 @pytest.fixture(scope="session")
