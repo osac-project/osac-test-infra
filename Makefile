@@ -4,7 +4,7 @@ REPORTS_DIR ?= reports
 
 test:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/results.xml
+	uv run pytest tests/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/results.xml
 
 lint:
 	ruff check tests/
@@ -15,7 +15,7 @@ format:
 
 test-vmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/vmaas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/vmaas.xml
+	uv run pytest tests/vmaas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/vmaas.xml
 
 test-vmaas-parallel:
 	mkdir -p $(REPORTS_DIR)
@@ -24,4 +24,4 @@ test-vmaas-parallel:
 
 test-caas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/caas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/caas.xml
+	uv run pytest tests/caas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/caas.xml
