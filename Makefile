@@ -19,8 +19,8 @@ test-vmaas:
 
 test-vmaas-parallel:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/vmaas/ -n 3 -m "not serial" -v --junitxml=$(REPORTS_DIR)/vmaas-parallel.xml
-	pytest tests/vmaas/ -m "serial" -v --junitxml=$(REPORTS_DIR)/vmaas-serial.xml
+	uv run pytest tests/vmaas/ -n 3 -m "not serial" -v --junitxml=$(REPORTS_DIR)/vmaas-parallel.xml
+	uv run pytest tests/vmaas/ -m "serial" -v --junitxml=$(REPORTS_DIR)/vmaas-serial.xml
 
 test-caas:
 	mkdir -p $(REPORTS_DIR)
