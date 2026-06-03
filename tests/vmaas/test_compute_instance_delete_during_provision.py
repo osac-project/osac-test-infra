@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_grpc_removal
 from tests.core.k8s_client import K8sClient
@@ -51,6 +53,7 @@ def _verify_no_duplicate_deprovision(k8s: K8sClient, *, name: str) -> None:
     assert first_id == second_id, f"Deprovision job ID changed: {first_id} -> {second_id}"
 
 
+@pytest.mark.serial
 def test_compute_instance_delete_during_provision(
     cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, k8s_virt_client: K8sClient, vm_template: str
 ) -> None:

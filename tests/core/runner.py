@@ -16,8 +16,10 @@ def run(*args: str, timeout: int = 300) -> str:
 
 def run_unchecked(*args: str, timeout: int = 300) -> tuple[str, int]:
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
-    combined = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
-    return combined, result.returncode
+    if result.returncode != 0:
+        combined = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
+        return combined, result.returncode
+    return result.stdout.strip(), result.returncode
 
 
 def poll_until(

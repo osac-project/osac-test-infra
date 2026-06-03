@@ -1,10 +1,10 @@
 REPORTS_DIR ?= reports
 
-.PHONY: test lint format test-vmaas test-caas
+.PHONY: test lint format test-vmaas test-vmaas-parallel test-caas
 
 test:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/results.xml
+	uv run pytest tests/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/results.xml
 
 lint:
 	ruff check tests/
@@ -15,8 +15,13 @@ format:
 
 test-vmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/vmaas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/vmaas.xml
+	uv run pytest tests/vmaas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/vmaas.xml
+
+test-vmaas-parallel:
+	mkdir -p $(REPORTS_DIR)
+	uv run pytest tests/vmaas/ -n 3 -m "not serial" -v --junitxml=$(REPORTS_DIR)/vmaas-parallel.xml
+	uv run pytest tests/vmaas/ -m "serial" -v --junitxml=$(REPORTS_DIR)/vmaas-serial.xml
 
 test-caas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/caas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/caas.xml
+	uv run pytest tests/caas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/caas.xml

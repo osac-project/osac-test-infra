@@ -12,17 +12,19 @@ from tests.core.helpers import (
     wait_for_virtual_network_ready,
 )
 from tests.core.k8s_client import K8sClient
+from tests.core.parallel import subnet_cidr
 from tests.core.runner import poll_until
 
 
 def test_subnet_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, network_class: str) -> None:
+    vnet_cidr, sub_cidr = subnet_cidr()
     vn_name: str = f"test-vnet-{uuid4().hex[:8]}"
-    vn_id: str = grpc.create_virtual_network(name=vn_name, network_class=network_class, ipv4_cidr="10.200.0.0/16")
+    vn_id: str = grpc.create_virtual_network(name=vn_name, network_class=network_class, ipv4_cidr=vnet_cidr)
     vn_cr_name: str = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
     wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
 
     subnet_name: str = f"test-subnet-{uuid4().hex[:8]}"
-    subnet_id: str = grpc.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr="10.200.1.0/24")
+    subnet_id: str = grpc.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr=sub_cidr)
     subnet_cr_name: str = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
 
     assert subnet_id in grpc.list_subnet_ids()
