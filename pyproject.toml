@@ -5,7 +5,9 @@ description = "OSAC end-to-end test infrastructure"
 requires-python = ">=3.11"
 dependencies = [
     "pytest>=8.0",
+    "pytest-xdist>=3.0",
     "pyyaml>=6.0",
+    "websocket-client>=1.6",
 ]
 
 [tool.setuptools.packages.find]
@@ -14,6 +16,7 @@ include = ["tests*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-n 4 --dist loadfile"
 
 [tool.basedpyright]
 reportUnusedCallResult = false
