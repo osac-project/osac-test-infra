@@ -54,7 +54,7 @@ jobs:
       result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
 
     env:
-      CLONE_NAME: "e2e-${{ github.run_id }}-${{ github.run_attempt }}"
+      CLONE_NAME: "${{ inputs.test-suite || 'e2e' }}-${{ github.run_id }}"
       FLAVOR_LOCK: "/tmp/cluster-tool-flavor.lock"
 
     steps:
@@ -134,6 +134,20 @@ jobs:
             echo "ERROR: cluster-tool pull failed (exit ${rc})" >&2
             exit "${rc}"
           fi
+
+      - name: Clean up stale clone resources
+        run: |
+          # Destroy any leftover clone from a previous run attempt, then
+          # remove orphaned Linux bridges that survive virsh net-destroy
+          # (e.g. from interrupted teardowns). Only targets bridges matching
+          # this clone's truncated name — safe with concurrent jobs.
+          sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>/dev/null || true
+          BRIDGE_PREFIX="br-${CLONE_NAME:0:12}"
+          for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
+            echo "Removing stale bridge ${br}..."
+            sudo ip link set "${br}" down 2>/dev/null || true
+            sudo ip link delete "${br}" 2>/dev/null || true
+          done
 
       - name: Boot cluster clone
         env:
@@ -256,6 +270,14 @@ jobs:
         run: |
           echo "Destroying clone '${CLONE_NAME}'..."
           sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>&1 || true
+
+          # Remove orphaned bridges that survive virsh net-destroy
+          BRIDGE_PREFIX="br-${CLONE_NAME:0:12}"
+          for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
+            echo "Removing orphaned bridge ${br}..."
+            sudo ip link set "${br}" down 2>/dev/null || true
+            sudo ip link delete "${br}" 2>/dev/null || true
+          done
 
       - name: Clean up
         if: always()
