@@ -39,6 +39,16 @@ on:
         required: false
         type: string
         default: "vmaas-helm"
+      image-overrides:
+        description: "JSON object mapping Helm value paths to image refs, e.g. '{\"service.images.service\":\"ghcr.io/osac-project/fulfillment-service:pr-123\"}'"
+        required: false
+        type: string
+        default: "{}"
+      installer-ref:
+        description: "Branch/ref of osac-installer to clone for the deploy step"
+        required: false
+        type: string
+        default: "main"
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -214,6 +224,8 @@ jobs:
           INSTALLER_VM_TEMPLATE: ${{ inputs.vm-template }}
           INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
           AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
+          INSTALLER_REF: ${{ inputs.installer-ref }}
+          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
         run: |
           # Ensure helm and yq are available
           if ! command -v helm &>/dev/null; then
@@ -226,7 +238,7 @@ jobs:
           fi
 
           INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
-          git clone --recurse-submodules --depth 1 \
+          git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
             https://github.com/osac-project/osac-installer.git "${INSTALLER_DIR}"
           cd "${INSTALLER_DIR}"
 
@@ -237,6 +249,29 @@ jobs:
           # clusters: fixes stale routes/certs, adopts resources for Helm,
           # runs helm upgrade, and waits with health monitoring.
           python3 scripts/refresh-after-snapshot.py
+
+          # Apply image overrides via helm upgrade --set flags.
+          # Callers pass a JSON object mapping Helm value paths to image refs,
+          # e.g. '{"service.images.service":"ghcr.io/repo:pr-42"}'.
+          # If empty or '{}', this is a no-op.
+          if [[ -n "${IMAGE_OVERRIDES}" ]] && [[ "${IMAGE_OVERRIDES}" != "{}" ]]; then
+            echo "Applying image overrides..."
+            SET_ARGS=""
+            for key in $(echo "${IMAGE_OVERRIDES}" | jq -r 'keys[]'); do
+              value=$(echo "${IMAGE_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
+              SET_ARGS="${SET_ARGS} --set ${key}=${value}"
+              echo "  --set ${key}=${value}"
+            done
+
+            yq -i '(.dependencies[].version) = "0.0.0"' charts/osac/Chart.yaml
+            helm dependency update charts/osac/
+            helm upgrade osac charts/osac/ \
+              --namespace "${INSTALLER_NAMESPACE}" \
+              --values "${VALUES_FILE}" \
+              ${SET_ARGS} \
+              --timeout 10m \
+              --wait
+          fi
 
       - name: Run E2E tests
         id: test
