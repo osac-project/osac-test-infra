@@ -1,0 +1,339 @@
+---
+name: OSAC E2E Full Install
+
+on:
+  workflow_call:
+    inputs:
+      test-suite:
+        description: "Test suite to run: vmaas, caas, or empty string for all"
+        required: false
+        type: string
+        default: "vmaas"
+      test-filter:
+        description: "pytest -k filter expression (optional)"
+        required: false
+        type: string
+        default: ""
+      namespace:
+        description: "OSAC namespace on the cluster"
+        required: false
+        type: string
+        default: "osac-e2e-ci"
+      vm-template:
+        description: "VM template for compute instances"
+        required: false
+        type: string
+        default: "osac.templates.ocp_virt_vm"
+      cluster-template:
+        description: "Cluster template for CaaS tests"
+        required: false
+        type: string
+        default: ""
+      flavor-image:
+        description: "OCI image containing the cluster-tool flavor"
+        required: false
+        type: string
+        default: "quay.io/rh-ee-ovishlit/cluster-flavors:sno64withdisk"
+      flavor-name:
+        description: "cluster-tool flavor name"
+        required: false
+        type: string
+        default: "sno64withdisk"
+      image-overrides:
+        description: "JSON object mapping Helm value paths to image refs, e.g. '{\"service.images.service\":\"ghcr.io/osac-project/fulfillment-service:pr-123\"}'"
+        required: false
+        type: string
+        default: "{}"
+      installer-ref:
+        description: "Branch/ref of osac-installer to clone for the deploy step"
+        required: false
+        type: string
+        default: "main"
+    outputs:
+      result:
+        description: "Test result: PASSED or FAILED"
+        value: ${{ jobs.e2e.outputs.result }}
+
+jobs:
+  e2e:
+    runs-on: osac-ci
+    environment: e2e-test
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
+
+    env:
+      FLAVOR_LOCK: "/tmp/cluster-tool-flavor.lock"
+
+    steps:
+      - name: Set clone name
+        run: |
+          # Bridge name = br- + first 8 chars of clone name (cluster-tool).
+          # Use 1-char suite prefix + last 7 digits of run ID so bridges
+          # are unique across suites (vmaas vs caas in same run) and
+          # across runs (same suite in different PRs).
+          SUITE="${{ inputs.test-suite || 'e2e' }}"
+          RUN_ID="${{ github.run_id }}"
+          echo "CLONE_NAME=${SUITE:0:1}${RUN_ID: -7}-${SUITE}" >> "$GITHUB_ENV"
+
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Read AppRole credentials
+        id: approle
+        run: |
+          APPROLE_DIR="${HOME}/.vault-server/.approle"
+          echo "role-id=$(cat "${APPROLE_DIR}/role-id")" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$(cat "${APPROLE_DIR}/secret-id")"
+          echo "secret-id=$(cat "${APPROLE_DIR}/secret-id")" >> "$GITHUB_OUTPUT"
+
+      - name: Retrieve secrets from Vault
+        id: vault
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.approle.outputs.role-id }}
+          secretId: ${{ steps.approle.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
+            secret/data/osac/e2e/aap-license license | AAP_LICENSE
+
+      - name: Set up registry auth and write secrets
+        env:
+          PULL_SECRET: ${{ steps.vault.outputs.PULL_SECRET }}
+          AAP_LICENSE: ${{ steps.vault.outputs.AAP_LICENSE }}
+        run: |
+          # Set up podman registry auth for flavor pull and test image pulls
+          mkdir -p "${HOME}/.config/containers"
+          printf '%s' "${PULL_SECRET}" > "${HOME}/.config/containers/auth.json"
+          chmod 600 "${HOME}/.config/containers/auth.json"
+
+          # Write secrets for test container mounts
+          printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
+          chmod 600 "$RUNNER_TEMP/pull-secret.json"
+
+          printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
+          chmod 600 "$RUNNER_TEMP/aap-license.zip"
+
+      - name: Prepare cluster environment
+        env:
+          FLAVOR_IMAGE: ${{ inputs.flavor-image }}
+        run: |
+          # --- Ensure cluster-tool is configured ---
+          CT_CONFIG="${HOME}/.config/cluster-tool"
+          ROOT_CONFIG="/root/.config/cluster-tool"
+          if [[ -f "${CT_CONFIG}/servers.json" ]] && [[ -f "${CT_CONFIG}/state.json" ]]; then
+            echo "cluster-tool already configured."
+          elif [[ -f "${ROOT_CONFIG}/servers.json" ]]; then
+            echo "Syncing cluster-tool config from root..."
+            mkdir -p "${CT_CONFIG}"
+            cp "${ROOT_CONFIG}"/{config,servers.json,state.json,cluster-tool.key,cluster-tool.key.pub} "${CT_CONFIG}/" 2>/dev/null || true
+          else
+            echo "ERROR: cluster-tool not configured. Run machine-init.sh first." >&2
+            exit 1
+          fi
+
+          # --- Pull or update cluster flavor ---
+          # Try non-blocking exclusive lock to pull/update the flavor.
+          # If another job is already pulling, skip — the boot step's
+          # shared lock will wait for it to finish.
+          # flock exit code 1 = lock contention (skip), other = real error.
+          rc=0
+          flock --exclusive --nonblock "${FLAVOR_LOCK}" \
+            sudo python3 /usr/local/bin/cluster-tool pull "${FLAVOR_IMAGE}" \
+            || rc=$?
+          if [[ "${rc}" -eq 1 ]]; then
+            echo "Another job is pulling the flavor — skipping."
+          elif [[ "${rc}" -ne 0 ]]; then
+            echo "ERROR: cluster-tool pull failed (exit ${rc})" >&2
+            exit "${rc}"
+          fi
+
+          # --- Clean up stale clone resources ---
+          # Destroy any leftover clone from a previous run attempt, then
+          # remove orphaned Linux bridges that survive virsh net-destroy
+          # (e.g. from interrupted teardowns). Only targets bridges matching
+          # this clone's truncated name — safe with concurrent jobs.
+          sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>/dev/null || true
+          BRIDGE_PREFIX="br-${CLONE_NAME:0:8}"
+          for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
+            echo "Removing stale bridge ${br}..."
+            sudo ip link set "${br}" down 2>/dev/null || true
+            sudo ip link delete "${br}" 2>/dev/null || true
+          done
+
+      - name: Boot cluster clone
+        env:
+          FLAVOR_NAME: ${{ inputs.flavor-name }}
+        run: |
+          # Shared lock ensures no boot runs while a flavor pull is in progress.
+          # Multiple boots can run in parallel (shared locks are compatible).
+          flock --shared "${FLAVOR_LOCK}" \
+            sudo python3 /usr/local/bin/cluster-tool boot \
+              --flavor "${FLAVOR_NAME}" --name "${CLONE_NAME}"
+
+          echo "Cluster clone '${CLONE_NAME}' booted."
+
+          # cluster-tool boot runs as root (via sudo), so both ~/.kube and
+          # the kubeconfig are owned by root. Copy to RUNNER_TEMP so the
+          # runner user owns it — podman needs this to relabel for :Z mounts.
+          sudo cp "${HOME}/.kube/${CLONE_NAME}.kubeconfig" "$RUNNER_TEMP/kubeconfig"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
+          chmod 600 "$RUNNER_TEMP/kubeconfig"
+
+      - name: Build test image
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+        run: podman build -t "${E2E_IMAGE}" -f Containerfile .
+
+      - name: Install OSAC
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          INSTALLER_VM_TEMPLATE: ${{ inputs.vm-template }}
+          INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
+          AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
+          INSTALLER_REF: ${{ inputs.installer-ref }}
+          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
+        run: |
+          # --- Set default StorageClass ---
+          # The sno64withdisk flavor has LVMS installed via Assisted Installer
+          # but the StorageClass is not annotated as default.
+          echo "Setting lvms-vg1 as default StorageClass..."
+          oc annotate sc lvms-vg1 \
+            storageclass.kubernetes.io/is-default-class=true --overwrite
+
+          # --- Wait for KubeVirt ---
+          echo "Waiting for KubeVirt to be Available..."
+          for attempt in $(seq 1 60); do
+              AVAILABLE=$(oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+                  -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "Unknown")
+              if [[ "${AVAILABLE}" == "True" ]]; then
+                  echo "  KubeVirt Available after $((attempt * 10))s"
+                  break
+              fi
+              if [[ $((attempt % 6)) -eq 0 ]]; then
+                  echo "  [${attempt}0s] KubeVirt not Available yet"
+              fi
+              sleep 10
+          done
+          if [[ "${AVAILABLE}" != "True" ]]; then
+              echo "ERROR: KubeVirt not Available after 600s" >&2
+              exit 1
+          fi
+
+          # --- Install prerequisites and deploy ---
+          # Ensure helm, yq, and jq are available
+          if ! command -v helm &>/dev/null; then
+            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          fi
+          if ! command -v yq &>/dev/null; then
+            sudo curl -fsSL -o /usr/local/bin/yq \
+              "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
+            sudo chmod +x /usr/local/bin/yq
+          fi
+          if ! command -v jq &>/dev/null; then
+            sudo dnf install -y jq || sudo apt-get install -y jq
+          fi
+
+          INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
+          git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
+            https://github.com/osac-project/osac-installer.git "${INSTALLER_DIR}"
+          cd "${INSTALLER_DIR}"
+
+          # Run full installation via setup.sh.
+          # setup.sh handles everything: prerequisites (cert-manager, trust-manager,
+          # CA issuer, Authorino, Keycloak, AAP operator, MetalLB), secrets
+          # (ca-bundle, fulfillment-db, credentials, AAP license), Helm deploy,
+          # and post-install (AAP bootstrap, AAP token, hub registration, tenants).
+          export DEPLOY_MODE=helm
+          export VALUES_FILE=values/vmaas-ci.yaml
+          export INGRESS_SERVICE=true
+          export VIRT_SERVICE=false
+          export STORAGE_SERVICE=false
+          bash scripts/setup.sh
+
+          # --- Apply image overrides ---
+          # If callers pass image overrides, apply them via helm upgrade --set.
+          if [[ -n "${IMAGE_OVERRIDES}" ]] && [[ "${IMAGE_OVERRIDES}" != "{}" ]]; then
+            echo "Applying image overrides..."
+            SET_ARGS=()
+            for key in $(echo "${IMAGE_OVERRIDES}" | jq -r 'keys[]'); do
+              value=$(echo "${IMAGE_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
+              SET_ARGS+=("--set" "${key}=${value}")
+              echo "  --set ${key}=${value}"
+            done
+
+            yq -i '(.dependencies[].version) = "0.0.0"' charts/osac/Chart.yaml
+            helm dependency update charts/osac/
+            helm upgrade osac charts/osac/ \
+              --namespace "${INSTALLER_NAMESPACE}" \
+              --values "${VALUES_FILE}" \
+              "${SET_ARGS[@]}" \
+              --timeout 10m \
+              --wait
+          fi
+
+      - name: Run E2E tests
+        id: test
+        env:
+          TEST_SUITE: ${{ inputs.test-suite }}
+          TEST_FILTER: ${{ inputs.test-filter }}
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          OSAC_VM_TEMPLATE: ${{ inputs.vm-template }}
+          OSAC_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+        run: |
+          KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
+
+          TEST_ARGS="tests/"
+          if [ -n "${TEST_SUITE}" ]; then
+            TEST_ARGS="tests/${TEST_SUITE}/"
+          fi
+
+          FILTER_ARGS=""
+          if [ -n "${TEST_FILTER}" ]; then
+            FILTER_ARGS="-k ${TEST_FILTER}"
+          fi
+
+          podman run --rm --network=host \
+            -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
+            -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
+            -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
+            -e KUBECONFIG=/root/.kube/config \
+            -e OSAC_VM_KUBECONFIG=/root/.kube/config \
+            -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
+            -e OSAC_VM_TEMPLATE="${OSAC_VM_TEMPLATE}" \
+            -e OSAC_CLUSTER_TEMPLATE="${OSAC_CLUSTER_TEMPLATE}" \
+            -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+            "${E2E_IMAGE}" \
+            pytest ${TEST_ARGS} ${FILTER_ARGS} \
+              --junitxml=/tmp/junit.xml -v
+
+      - name: Teardown
+        if: always()
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+        run: |
+          # --- Destroy cluster clone ---
+          echo "Destroying clone '${CLONE_NAME}'..."
+          sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>&1 || true
+
+          # Remove orphaned bridges that survive virsh net-destroy
+          BRIDGE_PREFIX="br-${CLONE_NAME:0:8}"
+          for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
+            echo "Removing orphaned bridge ${br}..."
+            sudo ip link set "${br}" down 2>/dev/null || true
+            sudo ip link delete "${br}" 2>/dev/null || true
+          done
+
+          # --- Clean up temporary files ---
+          rm -f "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/aap-license.zip" "$RUNNER_TEMP/kubeconfig"
+          rm -f "${HOME}/.config/containers/auth.json"
+          rm -rf "$RUNNER_TEMP/osac-installer"
+          podman rmi "${E2E_IMAGE}" 2>/dev/null || true
