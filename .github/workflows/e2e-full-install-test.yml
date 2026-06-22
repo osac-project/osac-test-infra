@@ -1,0 +1,23 @@
+---
+name: E2E Full Install Tests
+
+on:
+  schedule:
+    - cron: "0 0,6,12,18 * * *"
+  workflow_dispatch:
+    inputs:
+      test-suite:
+        description: "Test suite (vmaas, caas, or empty for all)"
+        required: false
+        default: "vmaas"
+      test-filter:
+        description: "pytest -k filter"
+        required: false
+        default: ""
+
+jobs:
+  e2e-full-install:
+    uses: ./.github/workflows/e2e-full-install.yml
+    with:
+      test-suite: ${{ inputs.test-suite || 'vmaas' }}
+      test-filter: ${{ inputs.test-filter || '' }}
