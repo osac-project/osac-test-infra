@@ -120,8 +120,11 @@ jobs:
           printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
           chmod 600 "$RUNNER_TEMP/aap-license.zip"
 
-      - name: Ensure cluster-tool is configured
+      - name: Prepare cluster environment
+        env:
+          FLAVOR_IMAGE: ${{ inputs.flavor-image }}
         run: |
+          # --- Ensure cluster-tool is configured ---
           CT_CONFIG="${HOME}/.config/cluster-tool"
           ROOT_CONFIG="/root/.config/cluster-tool"
           if [[ -f "${CT_CONFIG}/servers.json" ]] && [[ -f "${CT_CONFIG}/state.json" ]]; then
@@ -135,10 +138,7 @@ jobs:
             exit 1
           fi
 
-      - name: Pull or update cluster flavor
-        env:
-          FLAVOR_IMAGE: ${{ inputs.flavor-image }}
-        run: |
+          # --- Pull or update cluster flavor ---
           # Try non-blocking exclusive lock to pull/update the flavor.
           # If another job is already pulling, skip — the boot step's
           # shared lock will wait for it to finish.
@@ -154,8 +154,7 @@ jobs:
             exit "${rc}"
           fi
 
-      - name: Clean up stale clone resources
-        run: |
+          # --- Clean up stale clone resources ---
           # Destroy any leftover clone from a previous run attempt, then
           # remove orphaned Linux bridges that survive virsh net-destroy
           # (e.g. from interrupted teardowns). Only targets bridges matching
@@ -180,8 +179,6 @@ jobs:
 
           echo "Cluster clone '${CLONE_NAME}' booted."
 
-      - name: Fix kubeconfig ownership
-        run: |
           # cluster-tool boot runs as root (via sudo), so both ~/.kube and
           # the kubeconfig are owned by root. Copy to RUNNER_TEMP so the
           # runner user owns it — podman needs this to relabel for :Z mounts.
@@ -194,10 +191,18 @@ jobs:
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
         run: podman build -t "${E2E_IMAGE}" -f Containerfile .
 
-      - name: Wait for KubeVirt
+      - name: Deploy OSAC
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          VALUES_FILE: values/vmaas-ci/values.yaml
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          INSTALLER_VM_TEMPLATE: ${{ inputs.vm-template }}
+          INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
+          AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
+          INSTALLER_REF: ${{ inputs.installer-ref }}
+          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
         run: |
-          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-
+          # --- Wait for KubeVirt ---
           echo "Waiting for KubeVirt to be Available..."
           for attempt in $(seq 1 60); do
               AVAILABLE=$(oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
@@ -216,17 +221,7 @@ jobs:
               exit 1
           fi
 
-      - name: Deploy OSAC
-        env:
-          KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          VALUES_FILE: values/vmaas-ci/values.yaml
-          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
-          INSTALLER_VM_TEMPLATE: ${{ inputs.vm-template }}
-          INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
-          AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
-          INSTALLER_REF: ${{ inputs.installer-ref }}
-          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
-        run: |
+          # --- Deploy ---
           # Ensure helm and yq are available
           if ! command -v helm &>/dev/null; then
             curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -256,10 +251,10 @@ jobs:
           # If empty or '{}', this is a no-op.
           if [[ -n "${IMAGE_OVERRIDES}" ]] && [[ "${IMAGE_OVERRIDES}" != "{}" ]]; then
             echo "Applying image overrides..."
-            SET_ARGS=""
+            SET_ARGS=()
             for key in $(echo "${IMAGE_OVERRIDES}" | jq -r 'keys[]'); do
               value=$(echo "${IMAGE_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
-              SET_ARGS="${SET_ARGS} --set ${key}=${value}"
+              SET_ARGS+=("--set" "${key}=${value}")
               echo "  --set ${key}=${value}"
             done
 
@@ -268,7 +263,7 @@ jobs:
             helm upgrade osac charts/osac/ \
               --namespace "${INSTALLER_NAMESPACE}" \
               --values "${VALUES_FILE}" \
-              ${SET_ARGS} \
+              "${SET_ARGS[@]}" \
               --timeout 10m \
               --wait
           fi
@@ -309,9 +304,12 @@ jobs:
             pytest ${TEST_ARGS} ${FILTER_ARGS} \
               --junitxml=/tmp/junit.xml -v
 
-      - name: Destroy cluster clone
+      - name: Teardown
         if: always()
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
         run: |
+          # --- Destroy cluster clone ---
           echo "Destroying clone '${CLONE_NAME}'..."
           sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>&1 || true
 
@@ -323,11 +321,7 @@ jobs:
             sudo ip link delete "${br}" 2>/dev/null || true
           done
 
-      - name: Clean up
-        if: always()
-        env:
-          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
-        run: |
+          # --- Clean up temporary files ---
           rm -f "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/aap-license.zip" "$RUNNER_TEMP/kubeconfig"
           rm -f "${HOME}/.config/containers/auth.json"
           rm -rf "$RUNNER_TEMP/osac-installer"

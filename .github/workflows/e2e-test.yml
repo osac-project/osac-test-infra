@@ -4,9 +4,6 @@ name: E2E Tests
 on:
   pull_request:
     branches: [main]
-  schedule:
-    # Nightly at 03:00 UTC
-    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       test-suite:
