@@ -201,6 +201,23 @@ jobs:
           # --- Set default StorageClass ---
           # The sno64withdisk flavor has LVMS installed via Assisted Installer
           # but the StorageClass is not annotated as default.
+          # After a clone boot the LVMS operator may need time to reconcile
+          # and create the StorageClass, so wait for it to appear.
+          echo "Waiting for lvms-vg1 StorageClass..."
+          for attempt in $(seq 1 30); do
+            if oc get sc lvms-vg1 &>/dev/null; then
+              echo "  lvms-vg1 found after $((attempt * 10))s"
+              break
+            fi
+            if [[ $((attempt % 6)) -eq 0 ]]; then
+              echo "  [${attempt}0s] lvms-vg1 not found yet"
+            fi
+            sleep 10
+          done
+          if ! oc get sc lvms-vg1 &>/dev/null; then
+            echo "ERROR: lvms-vg1 StorageClass not found after 300s" >&2
+            exit 1
+          fi
           echo "Setting lvms-vg1 as default StorageClass..."
           oc annotate sc lvms-vg1 \
             storageclass.kubernetes.io/is-default-class=true --overwrite
