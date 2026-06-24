@@ -14,6 +14,14 @@ on:
         description: "pytest -k filter"
         required: false
         default: ""
+      installer-ref:
+        description: "Branch/ref of osac-installer"
+        required: false
+        default: "main"
+      image-overrides:
+        description: "JSON mapping Helm value paths to image refs"
+        required: false
+        default: "{}"
 
 jobs:
   e2e-full-install:
@@ -21,3 +29,5 @@ jobs:
     with:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}
+      installer-ref: ${{ inputs.installer-ref || 'main' }}
+      image-overrides: ${{ inputs.image-overrides || '{}' }}
