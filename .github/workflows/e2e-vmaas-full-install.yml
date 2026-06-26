@@ -84,7 +84,7 @@ jobs:
     steps:
       - name: Setup runner
         id: setup
-        uses: ./.github/actions/setup-runner
+        uses: osac-project/osac-test-infra/.github/actions/setup-runner@main
         with:
           test-suite: ${{ inputs.test-suite || 'e2e' }}
           run-id: ${{ github.run_id }}
@@ -366,7 +366,7 @@ jobs:
 
       - name: Teardown
         if: always()
-        uses: ./.github/actions/teardown
+        uses: osac-project/osac-test-infra/.github/actions/teardown@main
         with:
           clone-name: ${{ steps.setup.outputs.clone-name }}
           e2e-image: "osac-e2e-tests:${{ github.run_id }}"
