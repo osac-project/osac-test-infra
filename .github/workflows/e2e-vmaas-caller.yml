@@ -1,5 +1,5 @@
 ---
-name: E2E Tests
+name: E2E VMaaS Tests
 
 on:
   pull_request:
@@ -24,12 +24,12 @@ on:
         default: "{}"
 
 concurrency:
-  group: e2e-${{ github.event.pull_request.number || github.run_id }}
+  group: e2e-vmaas-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e-vmaas:
-    uses: ./.github/workflows/e2e.yml
+    uses: ./.github/workflows/e2e-vmaas.yml
     with:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}

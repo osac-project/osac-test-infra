@@ -1,5 +1,5 @@
 ---
-name: E2E Full Install Tests
+name: E2E VMaaS Full Install Tests
 
 on:
   schedule:
@@ -25,7 +25,7 @@ on:
 
 jobs:
   e2e-full-install:
-    uses: ./.github/workflows/e2e-full-install.yml
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
     with:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}

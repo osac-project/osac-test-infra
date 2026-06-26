@@ -1,5 +1,5 @@
 ---
-name: OSAC E2E Full Install
+name: E2E VMaaS Full Install
 
 on:
   workflow_call:
@@ -49,6 +49,21 @@ on:
         required: false
         type: string
         default: "main"
+      installer-repo:
+        description: "GitHub repo (owner/name) to clone osac-installer from"
+        required: false
+        type: string
+        default: "osac-project/osac-installer"
+      test-infra-repository:
+        description: "Repository to checkout for tests/Containerfile (for cross-repo calls)"
+        required: false
+        type: string
+        default: ""
+      test-infra-ref:
+        description: "Git ref of test infrastructure repository"
+        required: false
+        type: string
+        default: ""
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -67,58 +82,14 @@ jobs:
       FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
 
     steps:
-      - name: Set clone name
-        run: |
-          # Bridge name = br- + first 8 chars of clone name (cluster-tool).
-          # Use 1-char suite prefix + last 7 digits of run ID so bridges
-          # are unique across suites (vmaas vs caas in same run) and
-          # across runs (same suite in different PRs).
-          SUITE="${{ inputs.test-suite || 'e2e' }}"
-          RUN_ID="${{ github.run_id }}"
-          echo "CLONE_NAME=${SUITE:0:1}${RUN_ID: -7}-${SUITE}" >> "$GITHUB_ENV"
-
-      - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Setup runner
+        id: setup
+        uses: ./.github/actions/setup-runner
         with:
-          persist-credentials: false
-
-      - name: Read AppRole credentials
-        id: approle
-        run: |
-          APPROLE_DIR="${HOME}/.vault-server/.approle"
-          echo "role-id=$(cat "${APPROLE_DIR}/role-id")" >> "$GITHUB_OUTPUT"
-          echo "::add-mask::$(cat "${APPROLE_DIR}/secret-id")"
-          echo "secret-id=$(cat "${APPROLE_DIR}/secret-id")" >> "$GITHUB_OUTPUT"
-
-      - name: Retrieve secrets from Vault
-        id: vault
-        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
-        with:
-          url: http://127.0.0.1:8200
-          method: approle
-          roleId: ${{ steps.approle.outputs.role-id }}
-          secretId: ${{ steps.approle.outputs.secret-id }}
-          exportEnv: false
-          secrets: |
-            secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
-            secret/data/osac/e2e/aap-license license | AAP_LICENSE
-
-      - name: Set up registry auth and write secrets
-        env:
-          PULL_SECRET: ${{ steps.vault.outputs.PULL_SECRET }}
-          AAP_LICENSE: ${{ steps.vault.outputs.AAP_LICENSE }}
-        run: |
-          # Set up podman registry auth for flavor pull and test image pulls
-          mkdir -p "${HOME}/.config/containers"
-          printf '%s' "${PULL_SECRET}" > "${HOME}/.config/containers/auth.json"
-          chmod 600 "${HOME}/.config/containers/auth.json"
-
-          # Write secrets for test container mounts
-          printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
-          chmod 600 "$RUNNER_TEMP/pull-secret.json"
-
-          printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
-          chmod 600 "$RUNNER_TEMP/aap-license.zip"
+          test-suite: ${{ inputs.test-suite || 'e2e' }}
+          run-id: ${{ github.run_id }}
+          checkout-repository: ${{ inputs.test-infra-repository }}
+          checkout-ref: ${{ inputs.test-infra-ref }}
 
       - name: Prepare cluster environment
         env:
@@ -280,6 +251,27 @@ jobs:
           sleep 180
           echo "Cluster prerequisites applied."
 
+      - name: Install infrastructure operators
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_REF: ${{ inputs.installer-ref }}
+          INSTALLER_REPO: ${{ inputs.installer-repo }}
+        run: |
+          # Clone osac-installer (reused by the next step)
+          INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
+          git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
+            "https://github.com/${INSTALLER_REPO}.git" "${INSTALLER_DIR}"
+          cd "${INSTALLER_DIR}"
+
+          # Install infrastructure operators only (LVMS, MetalLB, CNV)
+          export SETUP_PHASE=prerequisites
+          export DEPLOY_MODE=helm
+          export VALUES_FILE=values/vmaas-ci/values.yaml
+          export INGRESS_SERVICE=true
+          export VIRT_SERVICE=true
+          export STORAGE_SERVICE=true
+          bash scripts/setup.sh
+
       - name: Install OSAC
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
@@ -287,10 +279,12 @@ jobs:
           INSTALLER_VM_TEMPLATE: ${{ inputs.vm-template }}
           INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
           AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
-          INSTALLER_REF: ${{ inputs.installer-ref }}
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
         run: |
-          # --- Install prerequisites and deploy ---
+          # Reuse the osac-installer clone from the previous step
+          INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
+          cd "${INSTALLER_DIR}"
+
           # Ensure helm, yq, and jq are available
           if ! command -v helm &>/dev/null; then
             curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -304,16 +298,8 @@ jobs:
             sudo dnf install -y jq || sudo apt-get install -y jq
           fi
 
-          INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
-          git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
-            https://github.com/osac-project/osac-installer.git "${INSTALLER_DIR}"
-          cd "${INSTALLER_DIR}"
-
-          # Run full installation via setup.sh.
-          # setup.sh handles everything: prerequisites (cert-manager, trust-manager,
-          # CA issuer, Authorino, Keycloak, AAP operator, MetalLB), secrets
-          # (ca-bundle, fulfillment-db, credentials, AAP license), Helm deploy,
-          # and post-install (AAP bootstrap, AAP token, hub registration, tenants).
+          # Deploy OSAC (skips already-installed infrastructure operators)
+          export SETUP_PHASE=deploy
           export DEPLOY_MODE=helm
           export VALUES_FILE=values/vmaas-ci/values.yaml
           export INGRESS_SERVICE=true
@@ -380,23 +366,7 @@ jobs:
 
       - name: Teardown
         if: always()
-        env:
-          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
-        run: |
-          # --- Destroy cluster clone ---
-          echo "Destroying clone '${CLONE_NAME}'..."
-          sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>&1 || true
-
-          # Remove orphaned bridges that survive virsh net-destroy
-          BRIDGE_PREFIX="br-${CLONE_NAME:0:8}"
-          for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
-            echo "Removing orphaned bridge ${br}..."
-            sudo ip link set "${br}" down 2>/dev/null || true
-            sudo ip link delete "${br}" 2>/dev/null || true
-          done
-
-          # --- Clean up temporary files ---
-          rm -f "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/aap-license.zip" "$RUNNER_TEMP/kubeconfig"
-          rm -f "${HOME}/.config/containers/auth.json"
-          rm -rf "$RUNNER_TEMP/osac-installer"
-          podman rmi "${E2E_IMAGE}" 2>/dev/null || true
+        uses: ./.github/actions/teardown
+        with:
+          clone-name: ${{ steps.setup.outputs.clone-name }}
+          e2e-image: "osac-e2e-tests:${{ github.run_id }}"
