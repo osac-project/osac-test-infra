@@ -1,5 +1,5 @@
 ---
-name: E2E VMaaS Full Install Tests
+name: E2E VMaaS Full Install
 
 on:
   pull_request:
