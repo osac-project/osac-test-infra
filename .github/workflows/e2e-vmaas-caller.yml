@@ -2,8 +2,6 @@
 name: E2E VMaaS Tests
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       test-suite:
@@ -22,10 +20,6 @@ on:
         description: "JSON mapping Helm value paths to image refs"
         required: false
         default: "{}"
-
-concurrency:
-  group: e2e-vmaas-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e-vmaas:

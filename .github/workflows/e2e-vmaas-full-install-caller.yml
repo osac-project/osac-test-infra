@@ -2,6 +2,8 @@
 name: E2E VMaaS Full Install Tests
 
 on:
+  pull_request:
+    branches: [main]
   schedule:
     - cron: "0 0,6,12,18 * * *"
   workflow_dispatch:
@@ -22,6 +24,10 @@ on:
         description: "JSON mapping Helm value paths to image refs"
         required: false
         default: "{}"
+
+concurrency:
+  group: e2e-vmaas-full-install-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e-full-install:
