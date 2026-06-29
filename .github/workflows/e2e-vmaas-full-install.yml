@@ -491,8 +491,8 @@ jobs:
             SET_ARGS=()
             for key in $(echo "${MERGED_OVERRIDES}" | jq -r 'keys[]'); do
               value=$(echo "${MERGED_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
-              SET_ARGS+=("--set" "${key}=${value}")
-              echo "  --set ${key}=${value}"
+              SET_ARGS+=("--set-string" "${key}=${value}")
+              echo "  --set-string ${key}=${value}"
             done
 
             yq -i '(.dependencies[].version) = "0.0.0"' charts/osac/Chart.yaml
