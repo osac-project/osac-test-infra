@@ -468,14 +468,17 @@ jobs:
           if [[ -n "${COMPONENT_IMAGE:-}" ]] && [[ -n "${COMPONENT_IMAGE_KEY}" ]]; then
             if [[ "${COMPONENT_IMAGE_KEY}" == *.repository ]]; then
               # Split "localhost/component-pr:RUN_ID" into repo + tag
+              # Also set pullPolicy=IfNotPresent so CRI-O uses the locally-loaded image
               IMG_REPO="${COMPONENT_IMAGE%%:*}"
               IMG_TAG="${COMPONENT_IMAGE#*:}"
               TAG_KEY="${COMPONENT_IMAGE_KEY%.repository}.tag"
+              PULL_KEY="${COMPONENT_IMAGE_KEY%.repository}.pullPolicy"
               MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
                 jq -c --arg rk "${COMPONENT_IMAGE_KEY}" --arg rv "${IMG_REPO}" \
                       --arg tk "${TAG_KEY}" --arg tv "${IMG_TAG}" \
-                      '. + {($rk): $rv, ($tk): $tv}')
-              echo "Component image override: ${COMPONENT_IMAGE_KEY}=${IMG_REPO}, ${TAG_KEY}=${IMG_TAG}"
+                      --arg pk "${PULL_KEY}" --arg pv "IfNotPresent" \
+                      '. + {($rk): $rv, ($tk): $tv, ($pk): $pv}')
+              echo "Component image override: ${COMPONENT_IMAGE_KEY}=${IMG_REPO}, ${TAG_KEY}=${IMG_TAG}, ${PULL_KEY}=IfNotPresent"
             else
               MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
                 jq -c --arg k "${COMPONENT_IMAGE_KEY}" --arg v "${COMPONENT_IMAGE}" '. + {($k): $v}')
