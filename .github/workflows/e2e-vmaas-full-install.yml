@@ -462,11 +462,25 @@ jobs:
           # --- Merge component image into overrides ---
           # If a component image was built and loaded onto the node,
           # add it to the overrides so helm deploys it.
+          # Charts that split image into .repository + .tag need both set;
+          # charts that use a single value (e.g. service.images.service) get the full ref.
           MERGED_OVERRIDES="${IMAGE_OVERRIDES}"
           if [[ -n "${COMPONENT_IMAGE:-}" ]] && [[ -n "${COMPONENT_IMAGE_KEY}" ]]; then
-            MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
-              jq -c --arg k "${COMPONENT_IMAGE_KEY}" --arg v "${COMPONENT_IMAGE}" '. + {($k): $v}')
-            echo "Component image override: ${COMPONENT_IMAGE_KEY}=${COMPONENT_IMAGE}"
+            if [[ "${COMPONENT_IMAGE_KEY}" == *.repository ]]; then
+              # Split "localhost/component-pr:RUN_ID" into repo + tag
+              IMG_REPO="${COMPONENT_IMAGE%%:*}"
+              IMG_TAG="${COMPONENT_IMAGE#*:}"
+              TAG_KEY="${COMPONENT_IMAGE_KEY%.repository}.tag"
+              MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
+                jq -c --arg rk "${COMPONENT_IMAGE_KEY}" --arg rv "${IMG_REPO}" \
+                      --arg tk "${TAG_KEY}" --arg tv "${IMG_TAG}" \
+                      '. + {($rk): $rv, ($tk): $tv}')
+              echo "Component image override: ${COMPONENT_IMAGE_KEY}=${IMG_REPO}, ${TAG_KEY}=${IMG_TAG}"
+            else
+              MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
+                jq -c --arg k "${COMPONENT_IMAGE_KEY}" --arg v "${COMPONENT_IMAGE}" '. + {($k): $v}')
+              echo "Component image override: ${COMPONENT_IMAGE_KEY}=${COMPONENT_IMAGE}"
+            fi
           fi
 
           # --- Apply image overrides ---
