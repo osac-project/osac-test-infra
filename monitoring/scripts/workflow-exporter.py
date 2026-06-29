@@ -733,7 +733,8 @@ class WorkflowExporter:
     def get_counts_json(self, params):
         """Return job counts by conclusion, with the same filters as get_jobs_json.
 
-        Returns: {"success": N, "failure": N, "cancelled": N, "total": N,
+        Returns: {"success": N, "failure": N, "cancelled": N,
+                  "queued": N, "in_progress": N, "total": N,
                   "failure_rate": 0.xx}
         """
         # Reuse the same filtering logic — just count instead of return
@@ -750,6 +751,8 @@ class WorkflowExporter:
             "success": success_count,
             "failure": failure_count,
             "cancelled": counts.get("cancelled", 0),
+            "queued": counts.get("queued", 0),
+            "in_progress": counts.get("in_progress", 0),
             "total": total,
             "failure_rate": round(failure_count / decisive, 4) if decisive > 0 else 0,
         }
@@ -785,6 +788,9 @@ class ExporterHandler(BaseHTTPRequestHandler):
             params = parse_qs(parsed.query)
             # Override limit to max so we count all matching jobs
             params["limit"] = [str(JOBS_HISTORY_SIZE)]
+            # Always include active runs in counts so in-progress/queued
+            # periodic jobs are reflected in the totals
+            params["active"] = ["true"]
             counts = self.exporter.get_counts_json(params)
             payload = json.dumps(counts, default=str)
             self.send_response(200)
