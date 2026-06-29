@@ -374,6 +374,19 @@ jobs:
           INSTALLER_REF: ${{ inputs.installer-ref }}
           INSTALLER_REPO: ${{ inputs.installer-repo }}
         run: |
+          # Ensure helm, yq, and jq are available (setup.sh requires helm)
+          if ! command -v helm &>/dev/null; then
+            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          fi
+          if ! command -v yq &>/dev/null; then
+            sudo curl -fsSL -o /usr/local/bin/yq \
+              "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
+            sudo chmod +x /usr/local/bin/yq
+          fi
+          if ! command -v jq &>/dev/null; then
+            sudo dnf install -y jq || sudo apt-get install -y jq
+          fi
+
           # Clone osac-installer (reused by the next step)
           INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
           git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
@@ -402,19 +415,6 @@ jobs:
           # Reuse the osac-installer clone from the previous step
           INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
           cd "${INSTALLER_DIR}"
-
-          # Ensure helm, yq, and jq are available
-          if ! command -v helm &>/dev/null; then
-            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          fi
-          if ! command -v yq &>/dev/null; then
-            sudo curl -fsSL -o /usr/local/bin/yq \
-              "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
-            sudo chmod +x /usr/local/bin/yq
-          fi
-          if ! command -v jq &>/dev/null; then
-            sudo dnf install -y jq || sudo apt-get install -y jq
-          fi
 
           # Deploy OSAC (skips already-installed infrastructure operators)
           export SETUP_PHASE=deploy
