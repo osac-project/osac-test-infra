@@ -118,7 +118,11 @@ install_packages() {
         git \
         dnf-plugins-core \
         dnsmasq \
-        python3
+        python3 \
+        python3-pip
+
+    # ansible-builder is needed for building AAP execution-environment images
+    python3 -m pip install --quiet ansible-builder
 
     echo "    Done."
 }
@@ -407,6 +411,7 @@ run_verify() {
     _check "osac"           "osac version"
     _check "vault"          "vault --version"
     _check "jq"             "jq --version"
+    _check "ansible-builder" "ansible-builder --version"
 
     if [[ -f "${CLUSTER_TOOL_BIN}" ]]; then
         printf "  %-20s %s\n" "cluster-tool:" "installed at ${CLUSTER_TOOL_BIN}"
