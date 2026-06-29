@@ -155,11 +155,7 @@
         {
           "expr": "github_actions_queued_runs_org{org=\"osac-project\"}",
           "legendFormat": "Queued",
-          "refId": "A",
-          "instant": true,
-          "range": false,
-          "editorMode": "code",
-          "format": "table"
+          "refId": "A"
         }
       ]
     },
@@ -188,11 +184,7 @@
         {
           "expr": "github_actions_in_progress_runs_org{org=\"osac-project\"}",
           "legendFormat": "In Progress",
-          "refId": "A",
-          "instant": true,
-          "range": false,
-          "editorMode": "code",
-          "format": "table"
+          "refId": "A"
         }
       ]
     },
@@ -441,39 +433,33 @@
     {
       "title": "Avg Duration by Job Type",
       "description": "Average run duration grouped by trigger type: Periodic (cron), Presubmit (PRs), Manual.",
-      "type": "barchart",
+      "type": "bargauge",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
           "decimals": 0,
-          "custom": {
-            "fillOpacity": 80
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
           }
         },
-        "overrides": [
-          { "matcher": { "id": "byName", "options": "avg_duration_s" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] }
-        ]
+        "overrides": []
       },
       "options": {
+        "displayMode": "gradient",
         "orientation": "horizontal",
-        "barWidth": 0.6,
-        "groupWidth": 0.7,
-        "legend": { "displayMode": "hidden" },
-        "tooltip": { "mode": "single" },
-        "showValue": "always",
-        "xTickLabelRotation": 0
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/avg_duration_s/", "values": true },
+        "showUnfilled": true,
+        "namePlacement": "auto"
       },
       "transformations": [
         {
           "id": "organize",
           "options": {
-            "excludeByName": { "avg_duration": true, "count": true },
-            "renameByName": {
-              "job_type": "Job Type",
-              "avg_duration_s": "Avg Duration"
-            }
+            "excludeByName": { "avg_duration": true, "count": true }
           }
         }
       ],
@@ -498,39 +484,33 @@
     {
       "title": "Avg Duration by Step",
       "description": "Average duration of each workflow step, ordered by execution sequence. Helps identify the slowest steps.",
-      "type": "barchart",
+      "type": "bargauge",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
           "decimals": 0,
-          "custom": {
-            "fillOpacity": 80
+          "color": { "fixedColor": "purple", "mode": "fixed" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "purple", "value": null }]
           }
         },
-        "overrides": [
-          { "matcher": { "id": "byName", "options": "avg_duration_s" }, "properties": [{ "id": "color", "value": { "fixedColor": "purple", "mode": "fixed" } }] }
-        ]
+        "overrides": []
       },
       "options": {
+        "displayMode": "gradient",
         "orientation": "horizontal",
-        "barWidth": 0.6,
-        "groupWidth": 0.7,
-        "legend": { "displayMode": "hidden" },
-        "tooltip": { "mode": "single" },
-        "showValue": "always",
-        "xTickLabelRotation": 0
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/avg_duration_s/", "values": true },
+        "showUnfilled": true,
+        "namePlacement": "auto"
       },
       "transformations": [
         {
           "id": "organize",
           "options": {
-            "excludeByName": { "avg_duration": true, "count": true },
-            "renameByName": {
-              "step": "Step",
-              "avg_duration_s": "Avg Duration"
-            }
+            "excludeByName": { "avg_duration": true, "count": true }
           }
         }
       ],
@@ -676,7 +656,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs?active=true&limit=200&workflow=e2e&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs?limit=200&workflow=e2e&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": {
             "method": "GET",
             "data": ""

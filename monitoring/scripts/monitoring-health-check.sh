@@ -44,7 +44,7 @@ CHECK_NUM=1
 
 # 1. node-exporter container running
 check ${CHECK_NUM} "node-exporter container is running" \
-    podman inspect --format '{{.State.Running}}' node-exporter
+    bash -c 'test "$(podman inspect --format "{{.State.Running}}" node-exporter 2>/dev/null)" = "true"'
 CHECK_NUM=$(( CHECK_NUM + 1 ))
 
 # 2. node-exporter metrics reachable
@@ -63,7 +63,7 @@ CHECK_NUM=$(( CHECK_NUM + 1 ))
 if [[ "${IS_CENTRAL}" == "true" ]]; then
     # 4. Prometheus container running
     check ${CHECK_NUM} "prometheus container is running" \
-        podman inspect --format '{{.State.Running}}' prometheus
+        bash -c 'test "$(podman inspect --format "{{.State.Running}}" prometheus 2>/dev/null)" = "true"'
     CHECK_NUM=$(( CHECK_NUM + 1 ))
 
     # 5. Prometheus API reachable (port 9091; cockpit uses 9090)
@@ -78,7 +78,7 @@ if [[ "${IS_CENTRAL}" == "true" ]]; then
 
     # 7. Grafana container running
     check ${CHECK_NUM} "grafana container is running" \
-        podman inspect --format '{{.State.Running}}' grafana
+        bash -c 'test "$(podman inspect --format "{{.State.Running}}" grafana 2>/dev/null)" = "true"'
     CHECK_NUM=$(( CHECK_NUM + 1 ))
 
     # 8. Grafana API reachable
@@ -88,12 +88,12 @@ if [[ "${IS_CENTRAL}" == "true" ]]; then
 
     # 9. Grafana datasource configured
     check ${CHECK_NUM} "Grafana Prometheus datasource is configured" \
-        bash -c 'curl -sf http://127.0.0.1:3000/api/datasources | jq -e ".[0].type" | grep -q prometheus'
+        bash -c 'curl -sf http://127.0.0.1:3000/api/datasources | jq -e ".[] | select(.name == \"Prometheus\" and .type == \"prometheus\")"'
     CHECK_NUM=$(( CHECK_NUM + 1 ))
 
     # 10. Alertmanager container running
     check ${CHECK_NUM} "alertmanager container is running" \
-        podman inspect --format '{{.State.Running}}' alertmanager
+        bash -c 'test "$(podman inspect --format "{{.State.Running}}" alertmanager 2>/dev/null)" = "true"'
     CHECK_NUM=$(( CHECK_NUM + 1 ))
 
     # 11. Alertmanager API reachable
@@ -103,7 +103,7 @@ if [[ "${IS_CENTRAL}" == "true" ]]; then
 
     # 12. org-runner-exporter container running
     check ${CHECK_NUM} "org-runner-exporter container is running" \
-        podman inspect --format '{{.State.Running}}' org-runner-exporter
+        bash -c 'test "$(podman inspect --format "{{.State.Running}}" org-runner-exporter 2>/dev/null)" = "true"'
     CHECK_NUM=$(( CHECK_NUM + 1 ))
 
     # 13. Check SSH tunnel services (if any are configured)

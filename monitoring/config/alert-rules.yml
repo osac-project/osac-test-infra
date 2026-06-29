@@ -53,16 +53,16 @@ groups:
 
   - name: workflow-queue
     rules:
-      # JobsQueuedTooLong -- workflow runs waiting in queue for >10 minutes.
-      # Indicates all runners are busy and jobs are backing up.
-      - alert: JobsQueuedTooLong
+      # SustainedQueueBacklog -- queue has been non-empty for >10 minutes.
+      # Indicates runners are continuously busy and cannot drain the queue.
+      - alert: SustainedQueueBacklog
         expr: github_actions_queued_runs_org > 0
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $value }} workflow runs queued for >10 minutes"
-          description: "There have been queued workflow runs in osac-project for more than 10 minutes. All active runners may be busy."
+          summary: "Sustained queue backlog: {{ $value }} runs queued for >10 minutes"
+          description: "The workflow queue in osac-project has been non-empty for more than 10 minutes. All active runners may be busy."
 
       # HighQueueDepth -- many workflow runs queued simultaneously.
       # Fires immediately at 5+ queued runs to flag capacity issues.

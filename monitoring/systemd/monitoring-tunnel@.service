@@ -21,10 +21,11 @@ Wants=network-online.target
 Type=simple
 
 # Parse instance: everything before '--' is host, after is local_port
+# NOTE: $$ escapes $ for systemd so bash receives the raw $ signs.
 ExecStart=/bin/bash -c '\
     INSTANCE="%i"; \
-    HOST="${INSTANCE%%%%--*}"; \
-    LOCAL_PORT="${INSTANCE##*--}"; \
+    HOST="$${INSTANCE%%%%--*}"; \
+    LOCAL_PORT="$${INSTANCE##*--}"; \
     exec ssh -N -T \
         -o ServerAliveInterval=30 \
         -o ServerAliveCountMax=3 \
@@ -32,8 +33,8 @@ ExecStart=/bin/bash -c '\
         -o StrictHostKeyChecking=accept-new \
         -o BatchMode=yes \
         -i %h/.monitoring-server/.ssh/monitoring_ed25519 \
-        -L 127.0.0.1:${LOCAL_PORT}:127.0.0.1:9100 \
-        ${SSH_USER:-$(whoami)}@${HOST}'
+        -L 127.0.0.1:$${LOCAL_PORT}:127.0.0.1:9100 \
+        github-runner@$${HOST}'
 
 Restart=always
 RestartSec=15

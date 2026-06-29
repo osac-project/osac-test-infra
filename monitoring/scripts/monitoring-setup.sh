@@ -60,6 +60,17 @@ case "${1:-}" in
             echo "ERROR: --add-tunnel requires <host> and <base_port>" >&2
             usage
         fi
+        # Validate hostname (alphanumeric, dots, hyphens)
+        if ! [[ "${TUNNEL_HOST}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "ERROR: Invalid hostname: ${TUNNEL_HOST}" >&2
+            exit 1
+        fi
+        # Validate port (numeric, valid range)
+        if ! [[ "${TUNNEL_BASE_PORT}" =~ ^[0-9]+$ ]] || \
+           (( TUNNEL_BASE_PORT < 1024 || TUNNEL_BASE_PORT > 65535 )); then
+            echo "ERROR: Invalid port: ${TUNNEL_BASE_PORT} (must be 1024-65535)" >&2
+            exit 1
+        fi
         ;;
     *)  usage ;;
 esac
@@ -306,12 +317,11 @@ if [[ "${MODE}" == "tunnel" ]]; then
     systemctl --user enable --now "monitoring-tunnel@${INSTANCE}.service"
     info "Tunnel started: monitoring-tunnel@${INSTANCE}.service"
     info "  Remote 9100 -> local ${TUNNEL_BASE_PORT} (node_exporter)"
-    info "  Remote 9101 -> local $((TUNNEL_BASE_PORT + 1)) (runner_exporter)"
 
     echo ""
     echo "Next steps:"
     echo "  1. Ensure the SSH key is authorized on ${TUNNEL_HOST}"
-    echo "  2. Add scrape targets to prometheus.yml for ports ${TUNNEL_BASE_PORT} and $((TUNNEL_BASE_PORT + 1))"
+    echo "  2. Add a scrape target to prometheus.yml for port ${TUNNEL_BASE_PORT}"
     echo "  3. Reload Prometheus: curl -X POST http://127.0.0.1:9091/-/reload"
     exit 0
 fi

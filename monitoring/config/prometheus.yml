@@ -74,25 +74,18 @@ scrape_configs:
   #   4. Reload Prometheus: curl -X POST http://127.0.0.1:9091/-/reload
   # ---------------------------------------------------------------------------
 
-  - job_name: node-exporter-remote
-    static_configs:
-      - targets:
-          - 127.0.0.1:9110
-        labels:
-          instance: runner-1
-          role: agent
-
-      - targets:
-          - 127.0.0.1:9120
-        labels:
-          instance: runner-2
-          role: agent
-
-      - targets:
-          - 127.0.0.1:9130
-        labels:
-          instance: runner-3
-          role: agent
+  # Remote runner targets — add entries here after setting up SSH tunnels:
+  #   monitoring-setup.sh --add-tunnel <host> <base_port>
+  # Then add a target block and reload Prometheus.
+  #
+  # Example:
+  #   - job_name: node-exporter-remote
+  #     static_configs:
+  #       - targets:
+  #           - 127.0.0.1:9110
+  #         labels:
+  #           instance: runner-1
+  #           role: agent
 
   # runner-exporter-remote disabled -- no published container image available yet.
   # - job_name: runner-exporter-remote

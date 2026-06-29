@@ -458,9 +458,9 @@ class WorkflowExporter:
         with self._lock:
             self.active_runs = current_active
 
-        # Prevent unbounded memory growth
+        # Prevent unbounded memory growth — keep most recent IDs
         if len(self._seen_run_ids) > 10000:
-            self._seen_run_ids = set(list(self._seen_run_ids)[-5000:])
+            self._seen_run_ids = set(sorted(self._seen_run_ids)[-5000:])
 
         logger.info(
             "Collected: repos=%d queued=%d in_progress=%d history=%d",
@@ -578,8 +578,9 @@ class WorkflowExporter:
                     if matches(job):
                         result.append(job)
 
-        # Add completed jobs
-        for job in self.recent_jobs:
+        # Add completed jobs — snapshot to avoid concurrent mutation
+        jobs_snapshot = list(self.recent_jobs)
+        for job in jobs_snapshot:
             if matches(job):
                 result.append(job)
                 if len(result) >= limit:

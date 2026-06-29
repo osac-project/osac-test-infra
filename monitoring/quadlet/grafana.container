@@ -37,7 +37,9 @@ Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
 Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
 Environment=GF_SERVER_HTTP_PORT=3000
 
-# Run as the host user
+# Run as the host user — keep-id maps the invoking user's UID into the container.
+# User=1000 overrides the image's default USER (grafana:472) so the process
+# runs as the mapped host UID and can write to the data volume.
 UserNS=keep-id
 User=1000
 

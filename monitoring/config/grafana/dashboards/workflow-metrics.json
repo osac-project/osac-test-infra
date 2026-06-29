@@ -204,7 +204,7 @@
       },
       "targets": [
         {
-          "expr": "count(github_runner_org_status{status=\"online\",labels=\"\"} == 1) or vector(0)",
+          "expr": "count(github_runner_org_status{status=\"online\",labels!~\".*osac-ci.*\"} == 1) or vector(0)",
           "legendFormat": "On Hold",
           "refId": "A"
         }
@@ -275,7 +275,7 @@
       },
       "targets": [
         {
-          "expr": "(count(github_runner_org_busy{busy=\"true\",status=\"online\",labels=~\".*osac-ci.*\"} == 1) or vector(0)) / count(github_runner_org_status{status=\"online\",labels=~\".*osac-ci.*\"} == 1) * 100",
+          "expr": "(count(github_runner_org_busy{busy=\"true\",status=\"online\",labels=~\".*osac-ci.*\"} == 1) or vector(0)) / clamp_min(count(github_runner_org_status{status=\"online\",labels=~\".*osac-ci.*\"} == 1) or vector(1), 1) * 100",
           "legendFormat": "Utilization",
           "refId": "A"
         }
