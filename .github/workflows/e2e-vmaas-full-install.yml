@@ -64,6 +64,26 @@ on:
         required: false
         type: string
         default: ""
+      component-repo:
+        description: "GitHub repo (owner/name) of a component to build from source (e.g. osac-project/fulfillment-service)"
+        required: false
+        type: string
+        default: ""
+      component-ref:
+        description: "Git ref of the component repository to build"
+        required: false
+        type: string
+        default: ""
+      component-image-key:
+        description: "Helm value path for the component image (e.g. service.images.service)"
+        required: false
+        type: string
+        default: ""
+      component-containerfile:
+        description: "Path to Containerfile relative to component repo root"
+        required: false
+        type: string
+        default: "Containerfile"
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -269,6 +289,40 @@ jobs:
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
         run: podman build -t "${E2E_IMAGE}" -f Containerfile .
 
+      - name: Build and load component image
+        if: inputs.component-repo != ''
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          COMPONENT_REPO: ${{ inputs.component-repo }}
+          COMPONENT_REF: ${{ inputs.component-ref }}
+          COMPONENT_FILE: ${{ inputs.component-containerfile }}
+          COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
+        run: |
+          COMPONENT_TAG="component-pr:${GITHUB_RUN_ID}"
+
+          echo "Cloning ${COMPONENT_REPO}@${COMPONENT_REF}..."
+          git clone --depth 1 --branch "${COMPONENT_REF}" \
+            "https://github.com/${COMPONENT_REPO}.git" "$RUNNER_TEMP/component-src"
+
+          echo "Building image from ${COMPONENT_FILE}..."
+          podman build -t "${COMPONENT_TAG}" \
+            -f "${COMPONENT_FILE}" "$RUNNER_TEMP/component-src"
+
+          # Load image onto the cluster node so CRI-O can use it locally.
+          # On RHCOS, root podman and CRI-O share /var/lib/containers/storage,
+          # so 'sudo podman load' makes the image available to the kubelet.
+          NODE_IP=$(oc get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+          CT_KEY="${HOME}/.config/cluster-tool/cluster-tool.key"
+
+          echo "Loading image onto cluster node ${NODE_IP}..."
+          podman save "${COMPONENT_TAG}" | \
+            ssh -i "${CT_KEY}" -o StrictHostKeyChecking=no "core@${NODE_IP}" \
+              "sudo podman load"
+
+          echo "COMPONENT_IMAGE=${COMPONENT_TAG}" >> "$GITHUB_ENV"
+
+          rm -rf "$RUNNER_TEMP/component-src"
+
       - name: Prepare cluster prerequisites
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
@@ -343,6 +397,7 @@ jobs:
           INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
           AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
+          COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
         run: |
           # Reuse the osac-installer clone from the previous step
           INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
@@ -370,13 +425,24 @@ jobs:
           export STORAGE_SERVICE=true
           bash scripts/setup.sh
 
+          # --- Merge component image into overrides ---
+          # If a component image was built and loaded onto the node,
+          # add it to the overrides so helm deploys it.
+          MERGED_OVERRIDES="${IMAGE_OVERRIDES}"
+          if [[ -n "${COMPONENT_IMAGE:-}" ]] && [[ -n "${COMPONENT_IMAGE_KEY}" ]]; then
+            MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
+              jq -c --arg k "${COMPONENT_IMAGE_KEY}" --arg v "${COMPONENT_IMAGE}" '. + {($k): $v}')
+            echo "Component image override: ${COMPONENT_IMAGE_KEY}=${COMPONENT_IMAGE}"
+          fi
+
           # --- Apply image overrides ---
-          # If callers pass image overrides, apply them via helm upgrade --set.
-          if [[ -n "${IMAGE_OVERRIDES}" ]] && [[ "${IMAGE_OVERRIDES}" != "{}" ]]; then
+          # If callers pass image overrides (or a component was built),
+          # apply them via helm upgrade --set.
+          if [[ -n "${MERGED_OVERRIDES}" ]] && [[ "${MERGED_OVERRIDES}" != "{}" ]]; then
             echo "Applying image overrides..."
             SET_ARGS=()
-            for key in $(echo "${IMAGE_OVERRIDES}" | jq -r 'keys[]'); do
-              value=$(echo "${IMAGE_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
+            for key in $(echo "${MERGED_OVERRIDES}" | jq -r 'keys[]'); do
+              value=$(echo "${MERGED_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
               SET_ARGS+=("--set" "${key}=${value}")
               echo "  --set ${key}=${value}"
             done
