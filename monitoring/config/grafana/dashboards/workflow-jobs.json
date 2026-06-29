@@ -157,7 +157,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -193,7 +193,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
