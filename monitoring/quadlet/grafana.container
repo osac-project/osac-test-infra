@@ -1,0 +1,50 @@
+# Podman Quadlet unit file for Grafana
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/grafana.container
+#
+# Deployed on the CENTRAL machine only.
+# Access via: ssh -L 3000:127.0.0.1:3000 <user>@<central-host>
+#
+# Quadlet generates a systemd unit (grafana.service) from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=Grafana (OSAC CI Monitoring)
+After=network-online.target prometheus.service
+Wants=network-online.target
+
+[Container]
+Image=docker.io/grafana/grafana-oss:12.0.1
+ContainerName=grafana
+
+# Use host network so Grafana can reach Prometheus at 127.0.0.1:9091
+Network=host
+
+# Mount data and provisioning directories.
+# :Z applies the correct SELinux context for rootless Podman.
+Volume=%h/.monitoring-server/data/grafana:/var/lib/grafana:Z
+Volume=%h/.monitoring-server/config/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro,Z
+Volume=%h/.monitoring-server/config/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro,Z
+Volume=%h/.monitoring-server/dashboards:/var/lib/grafana/dashboards:ro,Z
+
+# Install Infinity plugin for JSON API datasource (workflow exporter jobs API)
+Environment=GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource
+
+# Anonymous viewers can browse; log in as admin to star/edit dashboards
+Environment=GF_AUTH_ANONYMOUS_ENABLED=true
+Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
+# Bind to localhost only (host network mode)
+Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
+Environment=GF_SERVER_HTTP_PORT=3000
+
+# Run as the host user
+UserNS=keep-id
+User=1000
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

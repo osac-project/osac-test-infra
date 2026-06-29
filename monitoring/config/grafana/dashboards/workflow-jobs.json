@@ -1,0 +1,915 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "E2E test runs: E2E Tests and E2E Full Install Tests. Status, duration, trigger, failed step, links.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Success",
+      "type": "stat",
+      "gridPos": { "h": 3, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "success", "text": "Success", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Failed",
+      "type": "stat",
+      "gridPos": { "h": 3, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "failure", "text": "Failed", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Cancelled",
+      "type": "stat",
+      "gridPos": { "h": 3, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "orange", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "cancelled", "text": "Cancelled", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Queued Now",
+      "type": "stat",
+      "gridPos": { "h": 3, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["last"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "github_actions_queued_runs_org{org=\"osac-project\"}",
+          "legendFormat": "Queued",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "In Progress Now",
+      "type": "stat",
+      "gridPos": { "h": 3, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["last"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "github_actions_in_progress_runs_org{org=\"osac-project\"}",
+          "legendFormat": "In Progress",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "Failure Rate",
+      "type": "gauge",
+      "gridPos": { "h": 3, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.1 },
+              { "color": "red", "value": 0.3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "failure_rate", "text": "Failure Rate", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "E2E Results by Workflow",
+      "description": "Stacked bars: success (green), failure (red), cancelled (orange) per E2E workflow.",
+      "type": "barchart",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "fillOpacity": 90,
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Success" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Failed" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Cancelled" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "barWidth": 0.7,
+        "groupWidth": 0.7,
+        "stacking": "normal",
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" },
+        "xTickLabelRotation": 0,
+        "showValue": "always"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "total": true,
+              "success_rate": true
+            },
+            "renameByName": {
+              "workflow": "Workflow",
+              "success": "Success",
+              "failure": "Failed",
+              "cancelled": "Cancelled"
+            },
+            "indexByName": {
+              "workflow": 0,
+              "success": 1,
+              "failure": 2,
+              "cancelled": 3
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/counts-by-workflow?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "success", "text": "success", "type": "number" },
+            { "selector": "failure", "text": "failure", "type": "number" },
+            { "selector": "cancelled", "text": "cancelled", "type": "number" },
+            { "selector": "total", "text": "total", "type": "number" },
+            { "selector": "success_rate", "text": "success_rate", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Success Rate by Workflow",
+      "type": "bargauge",
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.8 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/success_rate/", "values": true },
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "success": true,
+              "failure": true,
+              "cancelled": true,
+              "total": true
+            },
+            "renameByName": {}
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/counts-by-workflow?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "success", "text": "success", "type": "number" },
+            { "selector": "failure", "text": "failure", "type": "number" },
+            { "selector": "cancelled", "text": "cancelled", "type": "number" },
+            { "selector": "total", "text": "total", "type": "number" },
+            { "selector": "success_rate", "text": "success_rate", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Most Failing Steps",
+      "description": "Which E2E steps fail most frequently.",
+      "type": "piechart",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "values": ["value", "percent"] },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/count/", "values": true },
+        "pieType": "donut",
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/failed-steps?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "step", "text": "step", "type": "string" },
+            { "selector": "count", "text": "count", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Failures by Step (over time)",
+      "description": "E2E step failures over time — shows which steps are breaking and when.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "increase(github_actions_failed_step_total{workflow=~\"E2E.*\"}[$__rate_interval])",
+          "legendFormat": "{{ step }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Avg Duration by Job Type",
+      "description": "Average run duration grouped by trigger type: Periodic (cron), Presubmit (PRs), Manual.",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "custom": {
+            "fillOpacity": 80
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "avg_duration_s" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "barWidth": 0.6,
+        "groupWidth": 0.7,
+        "legend": { "displayMode": "hidden" },
+        "tooltip": { "mode": "single" },
+        "showValue": "always",
+        "xTickLabelRotation": 0
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "avg_duration": true, "count": true },
+            "renameByName": {
+              "job_type": "Job Type",
+              "avg_duration_s": "Avg Duration"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/avg-duration-by-type?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "job_type", "text": "job_type", "type": "string" },
+            { "selector": "avg_duration_s", "text": "avg_duration_s", "type": "number" },
+            { "selector": "avg_duration", "text": "avg_duration", "type": "string" },
+            { "selector": "count", "text": "count", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Avg Duration by Step",
+      "description": "Average duration of each workflow step, ordered by execution sequence. Helps identify the slowest steps.",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "custom": {
+            "fillOpacity": 80
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "avg_duration_s" }, "properties": [{ "id": "color", "value": { "fixedColor": "purple", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "barWidth": 0.6,
+        "groupWidth": 0.7,
+        "legend": { "displayMode": "hidden" },
+        "tooltip": { "mode": "single" },
+        "showValue": "always",
+        "xTickLabelRotation": 0
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "avg_duration": true, "count": true },
+            "renameByName": {
+              "step": "Step",
+              "avg_duration_s": "Avg Duration"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/avg-step-duration?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "step", "text": "step", "type": "string" },
+            { "selector": "avg_duration_s", "text": "avg_duration_s", "type": "number" },
+            { "selector": "avg_duration", "text": "avg_duration", "type": "string" },
+            { "selector": "count", "text": "count", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Recent E2E Runs",
+      "description": "All recent E2E workflow runs with status, duration, trigger type, and links. Click column headers to sort.",
+      "type": "table",
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 29 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [
+              { "id": "displayName", "value": "Status" },
+              { "id": "custom.width", "value": 100 },
+              { "id": "mappings", "value": [
+                { "options": { "success": { "color": "green", "text": "Success" }, "failure": { "color": "red", "text": "Failed" }, "cancelled": { "color": "orange", "text": "Cancelled" }, "queued": { "color": "purple", "text": "Queued" }, "in_progress": { "color": "blue", "text": "Running" } }, "type": "value" }
+              ]},
+              { "id": "custom.cellOptions", "value": { "mode": "gradient", "type": "color-background" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "repo" },
+            "properties": [
+              { "id": "displayName", "value": "Repository" },
+              { "id": "custom.width", "value": 160 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "workflow" },
+            "properties": [
+              { "id": "displayName", "value": "Workflow" },
+              { "id": "custom.width", "value": 180 },
+              { "id": "links", "value": [{ "title": "Open in GitHub", "url": "${__data.fields.url}", "targetBlank": true }] }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "branch" },
+            "properties": [
+              { "id": "displayName", "value": "Branch" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "trigger" },
+            "properties": [
+              { "id": "displayName", "value": "Trigger" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "duration" },
+            "properties": [
+              { "id": "displayName", "value": "Duration" },
+              { "id": "custom.width", "value": 100 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "actor" },
+            "properties": [
+              { "id": "displayName", "value": "Actor" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "failed_step" },
+            "properties": [
+              { "id": "displayName", "value": "Failed Step" },
+              { "id": "custom.width", "value": 250 },
+              { "id": "custom.cellOptions", "value": { "type": "auto" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "created_at" },
+            "properties": [
+              { "id": "displayName", "value": "Started" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "id" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "conclusion" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "event" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "duration_s" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "updated_at" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "run_number" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "run_attempt" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "url" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [],
+        "footer": { "show": true, "reducer": ["count"], "countRows": true }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/jobs?active=true&limit=200&workflow=e2e&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "",
+          "columns": [
+            { "selector": "status", "text": "status", "type": "string" },
+            { "selector": "repo", "text": "repo", "type": "string" },
+            { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "branch", "text": "branch", "type": "string" },
+            { "selector": "trigger", "text": "trigger", "type": "string" },
+            { "selector": "duration", "text": "duration", "type": "string" },
+            { "selector": "actor", "text": "actor", "type": "string" },
+            { "selector": "failed_step", "text": "failed_step", "type": "string" },
+            { "selector": "created_at", "text": "created_at", "type": "string" },
+            { "selector": "url", "text": "url", "type": "string" },
+            { "selector": "id", "text": "id", "type": "number" },
+            { "selector": "conclusion", "text": "conclusion", "type": "string" },
+            { "selector": "event", "text": "event", "type": "string" },
+            { "selector": "duration_s", "text": "duration_s", "type": "number" },
+            { "selector": "updated_at", "text": "updated_at", "type": "string" },
+            { "selector": "run_number", "text": "run_number", "type": "number" },
+            { "selector": "run_attempt", "text": "run_attempt", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Failed Runs Only",
+      "description": "Only failed workflow runs, showing which step failed.",
+      "type": "table",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 45 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "repo" },
+            "properties": [
+              { "id": "displayName", "value": "Repository" },
+              { "id": "custom.width", "value": 160 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "workflow" },
+            "properties": [
+              { "id": "displayName", "value": "Workflow" },
+              { "id": "custom.width", "value": 200 },
+              { "id": "links", "value": [{ "title": "Open in GitHub", "url": "${__data.fields.url}", "targetBlank": true }] }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "branch" },
+            "properties": [
+              { "id": "displayName", "value": "Branch" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "trigger" },
+            "properties": [
+              { "id": "displayName", "value": "Trigger" },
+              { "id": "custom.width", "value": 140 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "failed_step" },
+            "properties": [
+              { "id": "displayName", "value": "Failed Step" },
+              { "id": "custom.width", "value": 350 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "duration" },
+            "properties": [
+              { "id": "displayName", "value": "Duration" },
+              { "id": "custom.width", "value": 100 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "actor" },
+            "properties": [
+              { "id": "displayName", "value": "Actor" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "created_at" },
+            "properties": [
+              { "id": "displayName", "value": "Started" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "id" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "conclusion" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "event" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "duration_s" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "updated_at" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "run_number" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "run_attempt" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "url" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [],
+        "footer": { "show": true, "reducer": ["count"], "countRows": true }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/jobs?status=failure&limit=100&workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "",
+          "columns": [
+            { "selector": "repo", "text": "repo", "type": "string" },
+            { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "branch", "text": "branch", "type": "string" },
+            { "selector": "trigger", "text": "trigger", "type": "string" },
+            { "selector": "failed_step", "text": "failed_step", "type": "string" },
+            { "selector": "duration", "text": "duration", "type": "string" },
+            { "selector": "actor", "text": "actor", "type": "string" },
+            { "selector": "created_at", "text": "created_at", "type": "string" },
+            { "selector": "url", "text": "url", "type": "string" },
+            { "selector": "id", "text": "id", "type": "number" },
+            { "selector": "conclusion", "text": "conclusion", "type": "string" },
+            { "selector": "status", "text": "status", "type": "string" },
+            { "selector": "event", "text": "event", "type": "string" },
+            { "selector": "duration_s", "text": "duration_s", "type": "number" },
+            { "selector": "updated_at", "text": "updated_at", "type": "string" },
+            { "selector": "run_number", "text": "run_number", "type": "number" },
+            { "selector": "run_attempt", "text": "run_attempt", "type": "number" }
+          ]
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["osac", "ci", "workflows", "jobs"],
+  "templating": {
+    "list": [
+      {
+        "name": "workflow_name",
+        "label": "Workflow",
+        "type": "custom",
+        "query": "All,VMaaS Tests,VMaaS Full Install,E2E Tests,E2E Full Install Tests",
+        "current": { "text": "All", "value": "All", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": true },
+          { "text": "VMaaS Tests", "value": "VMaaS Tests", "selected": false },
+          { "text": "VMaaS Full Install", "value": "VMaaS Full Install", "selected": false },
+          { "text": "E2E Tests", "value": "E2E Tests", "selected": false },
+          { "text": "E2E Full Install Tests", "value": "E2E Full Install Tests", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
+      {
+        "name": "status_filter",
+        "label": "Status",
+        "type": "custom",
+        "query": "All,success,failure,cancelled",
+        "current": { "text": "All", "value": "All", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": true },
+          { "text": "Success", "value": "success", "selected": false },
+          { "text": "Failed", "value": "failure", "selected": false },
+          { "text": "Cancelled", "value": "cancelled", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
+      {
+        "name": "job_type",
+        "label": "Job Type",
+        "type": "custom",
+        "query": "All,periodic,presubmit,manual",
+        "current": { "text": "All", "value": "All", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": true },
+          { "text": "Periodic (cron)", "value": "periodic", "selected": false },
+          { "text": "Presubmit (PRs)", "value": "presubmit", "selected": false },
+          { "text": "Manual", "value": "manual", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "OSAC CI - E2E Jobs",
+  "uid": "osac-workflow-jobs",
+  "version": 1
+}

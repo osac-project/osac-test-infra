@@ -1,0 +1,35 @@
+# Podman Quadlet unit file for GitHub Runner Prometheus Exporter
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/runner-exporter.container
+#
+# Deployed on EVERY runner machine (central + agents).
+# Scrapes GitHub Actions runner logs locally and exposes workflow execution
+# metrics + runner health on port 9101.
+#
+# Source: https://github.com/thineshsubramani/github-runner-prometheus-exporter
+
+[Unit]
+Description=GitHub Runner Prometheus Exporter (OSAC CI)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/thineshsubramani/github-runner-prometheus-exporter:v1.1.0
+ContainerName=runner-exporter
+
+# Localhost-only binding -- no external exposure
+PublishPort=127.0.0.1:9101:9101
+
+# Mount the runner work directory so the exporter can read runner logs.
+# The action-runners directory is where GitHub Actions runners are installed.
+Volume=%h/action-runners:/action-runners:ro,Z
+
+# Tell the exporter where to find runner directories
+Environment=RUNNER_DIR=/action-runners
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

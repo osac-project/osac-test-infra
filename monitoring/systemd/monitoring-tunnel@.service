@@ -1,0 +1,44 @@
+# Systemd user template unit for persistent SSH monitoring tunnels
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/monitoring-tunnel@.service
+#
+# Each instance forwards a remote runner's node_exporter port to a unique
+# local port on the central machine, so Prometheus can scrape it on localhost.
+#
+# Instance name format: <remote_host>--<local_port>
+#   e.g. monitoring-tunnel@<remote-host>--9110.service
+#
+# This forwards:
+#   remote:9100 -> local:<local_port>  (node_exporter)
+#
+# SSH key must be pre-exchanged (monitoring-setup.sh --add-tunnel handles this).
+
+[Unit]
+Description=Monitoring SSH tunnel to %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Parse instance: everything before '--' is host, after is local_port
+ExecStart=/bin/bash -c '\
+    INSTANCE="%i"; \
+    HOST="${INSTANCE%%%%--*}"; \
+    LOCAL_PORT="${INSTANCE##*--}"; \
+    exec ssh -N -T \
+        -o ServerAliveInterval=30 \
+        -o ServerAliveCountMax=3 \
+        -o ExitOnForwardFailure=yes \
+        -o StrictHostKeyChecking=accept-new \
+        -o BatchMode=yes \
+        -i %h/.monitoring-server/.ssh/monitoring_ed25519 \
+        -L 127.0.0.1:${LOCAL_PORT}:127.0.0.1:9100 \
+        ${SSH_USER:-$(whoami)}@${HOST}'
+
+Restart=always
+RestartSec=15
+# Give SSH time to establish the connection
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

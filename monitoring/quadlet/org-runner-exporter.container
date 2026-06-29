@@ -1,0 +1,36 @@
+# Podman Quadlet unit file for GitHub Org Runner Exporter
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/org-runner-exporter.container
+#
+# Deployed on the CENTRAL machine only.
+# Polls GitHub API for org-level runner inventory and online/offline/busy status.
+# Complements the per-runner exporter with org-wide visibility.
+#
+# Requires PRIVATE_GITHUB_TOKEN (set in ~/.monitoring-server/.env).
+# Source: https://github.com/tchelovilar/github-org-runner-exporter
+
+[Unit]
+Description=GitHub Org Runner Exporter (OSAC CI Monitoring)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/tchelovilar/github-org-runner-exporter:v0.2.3
+ContainerName=org-runner-exporter
+
+# Localhost-only binding -- no external exposure
+# Exporter listens on port 8000 inside the container; map to 9102 on host
+PublishPort=127.0.0.1:9102:8000
+
+# Token loaded from environment file created by monitoring-setup.sh.
+# Must contain: PRIVATE_GITHUB_TOKEN=ghp_xxx
+EnvironmentFile=%h/.monitoring-server/.env
+
+Environment=OWNER=osac-project
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

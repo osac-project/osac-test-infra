@@ -1,0 +1,30 @@
+# Grafana datasource provisioning for OSAC CI monitoring
+# Deployed by monitoring-setup.sh
+# Auto-provisions Prometheus as the default datasource.
+
+apiVersion: 1
+
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: Workflow Exporter API
+    orgId: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:9091
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+
+  - name: Workflow Exporter API
+    uid: workflow-api
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      global_queries: []

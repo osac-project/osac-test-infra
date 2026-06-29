@@ -1,0 +1,17 @@
+# Grafana dashboard provisioning for OSAC CI monitoring
+# Deployed by monitoring-setup.sh
+# Auto-loads dashboards from the provisioned directory.
+
+apiVersion: 1
+
+providers:
+  - name: OSAC CI
+    orgId: 1
+    folder: OSAC CI
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

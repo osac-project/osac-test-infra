@@ -1,0 +1,116 @@
+# Prometheus configuration for OSAC CI runner monitoring
+# Deployed by monitoring-setup.sh to ~/.monitoring-server/config/prometheus.yml
+#
+# Prometheus runs with --network=host so it can scrape localhost-bound
+# exporters directly. All targets use 127.0.0.1.
+# Remote runners are reached via SSH tunnels that bind to 127.0.0.1
+# on unique local ports.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# Alert rules
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+# Alertmanager endpoint (localhost, same machine)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 127.0.0.1:9093
+
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Central machine exporters
+  # ---------------------------------------------------------------------------
+
+  - job_name: node-exporter
+    static_configs:
+      - targets:
+          - 127.0.0.1:9100
+        labels:
+          instance: central
+          role: central
+
+  # runner-exporter disabled -- no published container image available yet.
+  # Re-enable when a containerized per-runner exporter is available.
+  # - job_name: runner-exporter
+  #   static_configs:
+  #     - targets:
+  #         - 127.0.0.1:9101
+  #       labels:
+  #         instance: central
+  #         role: central
+
+  - job_name: org-runner-exporter
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 127.0.0.1:9102
+        labels:
+          instance: central
+
+  # Prometheus self-monitoring (port 9091; cockpit uses 9090)
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - 127.0.0.1:9091
+
+  # ---------------------------------------------------------------------------
+  # Remote runner exporters (via SSH tunnels)
+  #
+  # Each remote runner's ports are forwarded to unique local ports:
+  #   runner-1: node_exporter -> 127.0.0.1:9110
+  #   runner-2: node_exporter -> 127.0.0.1:9120
+  #   runner-3: node_exporter -> 127.0.0.1:9130
+  #
+  # To add a new runner:
+  #   1. Deploy monitoring-setup.sh --agent on the runner
+  #   2. Set up SSH tunnel: monitoring-setup.sh --add-tunnel <host> <base_port>
+  #   3. Add a scrape target block below with the tunneled ports
+  #   4. Reload Prometheus: curl -X POST http://127.0.0.1:9091/-/reload
+  # ---------------------------------------------------------------------------
+
+  - job_name: node-exporter-remote
+    static_configs:
+      - targets:
+          - 127.0.0.1:9110
+        labels:
+          instance: runner-1
+          role: agent
+
+      - targets:
+          - 127.0.0.1:9120
+        labels:
+          instance: runner-2
+          role: agent
+
+      - targets:
+          - 127.0.0.1:9130
+        labels:
+          instance: runner-3
+          role: agent
+
+  # runner-exporter-remote disabled -- no published container image available yet.
+  # - job_name: runner-exporter-remote
+  #   static_configs:
+  #     - targets:
+  #         - 127.0.0.1:9111
+  #       labels:
+  #         instance: runner-1
+  #         role: agent
+
+  # ---------------------------------------------------------------------------
+  # Workflow exporter (GitHub Actions job queue + history)
+  # ---------------------------------------------------------------------------
+
+  - job_name: workflow-exporter
+    scrape_interval: 90s
+    static_configs:
+      - targets:
+          - 127.0.0.1:9103
+        labels:
+          instance: central

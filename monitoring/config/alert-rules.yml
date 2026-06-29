@@ -1,0 +1,89 @@
+# Prometheus alerting rules for OSAC CI runner monitoring
+# Deployed by monitoring-setup.sh to ~/.monitoring-server/config/alert-rules.yml
+
+groups:
+  - name: runner-health
+    rules:
+      # RunnerDown -- node_exporter target unreachable for >2 minutes.
+      # Fires when Prometheus can't scrape a runner's node_exporter,
+      # indicating the machine is down or the exporter crashed.
+      - alert: RunnerDown
+        expr: up{job=~"node-exporter.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Runner {{ $labels.instance }} is down"
+          description: "node_exporter on {{ $labels.instance }} has been unreachable for more than 2 minutes."
+
+      # DiskAlmostFull -- filesystem usage >80% on any runner.
+      # Uses the rootfs mountpoint which represents the main disk.
+      - alert: DiskAlmostFull
+        expr: |
+          (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) * 100 > 80
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk almost full on {{ $labels.instance }}"
+          description: "Root filesystem on {{ $labels.instance }} is {{ $value | printf \"%.1f\" }}% full."
+
+      # HighMemoryUsage -- memory usage >90% for >5 minutes.
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage on {{ $labels.instance }} is {{ $value | printf \"%.1f\" }}% for more than 5 minutes."
+
+  - name: github-runners
+    rules:
+      # GitHubRunnerOffline -- org-runner-exporter reports a runner as offline.
+      - alert: GitHubRunnerOffline
+        expr: github_runner_org_status{status="offline"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GitHub runner {{ $labels.name }} is offline"
+          description: "Runner {{ $labels.name }} (id={{ $labels.id }}) has been reported offline by GitHub for more than 5 minutes."
+
+  - name: workflow-queue
+    rules:
+      # JobsQueuedTooLong -- workflow runs waiting in queue for >10 minutes.
+      # Indicates all runners are busy and jobs are backing up.
+      - alert: JobsQueuedTooLong
+        expr: github_actions_queued_runs_org > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} workflow runs queued for >10 minutes"
+          description: "There have been queued workflow runs in osac-project for more than 10 minutes. All active runners may be busy."
+
+      # HighQueueDepth -- many workflow runs queued simultaneously.
+      # Fires immediately at 5+ queued runs to flag capacity issues.
+      - alert: HighQueueDepth
+        expr: github_actions_queued_runs_org >= 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High queue depth: {{ $value }} runs waiting"
+          description: "{{ $value }} workflow runs have been queued in osac-project for more than 5 minutes. Consider adding runners or investigating stuck jobs."
+
+  - name: exporter-health
+    rules:
+      # ExporterDown -- any exporter stops reporting metrics.
+      # Catches silent failures from log format changes or exporter crashes.
+      - alert: ExporterDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Exporter {{ $labels.job }} is down on {{ $labels.instance }}"
+          description: "The {{ $labels.job }} exporter on {{ $labels.instance }} has been unreachable for more than 5 minutes."

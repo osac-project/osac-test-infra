@@ -1,0 +1,39 @@
+# Podman Quadlet unit file for Prometheus Node Exporter
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/node-exporter.container
+#
+# Deployed on EVERY runner machine (central + agents).
+# Exposes system metrics (CPU, memory, disk, network) on port 9100.
+#
+# Quadlet generates a systemd unit (node-exporter.service) from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=Prometheus Node Exporter (OSAC CI)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=quay.io/prometheus/node-exporter:v1.9.1
+ContainerName=node-exporter
+
+# Localhost-only binding -- no external exposure
+PublishPort=127.0.0.1:9100:9100
+
+# Mount host filesystem read-only for accurate host metrics
+Volume=/proc:/host/proc:ro
+Volume=/sys:/host/sys:ro
+Volume=/:/rootfs:ro
+
+# Collect host metrics, not container metrics
+Exec=--path.procfs=/host/proc --path.sysfs=/host/sys --path.rootfs=/rootfs --collector.filesystem.mount-points-exclude="^/(sys|proc|dev|host|etc)($$|/)"
+
+# Run in host PID namespace for process metrics
+PodmanArgs=--pid=host
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,5 @@
+FROM python:3.12-slim
+RUN pip install --no-cache-dir prometheus_client requests
+WORKDIR /app
+ENTRYPOINT ["python3"]
+CMD ["/app/workflow-exporter.py"]

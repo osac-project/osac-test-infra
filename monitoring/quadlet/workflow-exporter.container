@@ -1,0 +1,38 @@
+# Podman Quadlet unit file for OSAC Workflow Exporter
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/workflow-exporter.container
+#
+# Deployed on the CENTRAL machine only.
+# Polls the GitHub Actions API for workflow run queue depth and history,
+# exposes Prometheus metrics on port 9103.
+#
+# Quadlet generates a systemd unit (workflow-exporter.service) from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=Workflow Exporter (OSAC CI Monitoring)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/osac-workflow-exporter:latest
+ContainerName=workflow-exporter
+
+PublishPort=127.0.0.1:9103:9103
+
+# Token from shared .env, org name set explicitly
+EnvironmentFile=%h/.monitoring-server/.env
+Environment=GITHUB_ORG=osac-project
+Environment=PORT=9103
+Environment=POLL_INTERVAL=90
+Environment=REPOS=osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer
+
+# Mount the exporter script into the container
+Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z
+
+[Service]
+Restart=always
+RestartSec=15
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

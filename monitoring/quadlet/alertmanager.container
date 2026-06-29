@@ -1,0 +1,36 @@
+# Podman Quadlet unit file for Alertmanager
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/alertmanager.container
+#
+# Deployed on the CENTRAL machine only.
+# Routes alerts from Prometheus to Slack/email.
+#
+# Quadlet generates a systemd unit (alertmanager.service) from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=Alertmanager (OSAC CI Monitoring)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=quay.io/prometheus/alertmanager:v0.28.1
+ContainerName=alertmanager
+
+# Use host network so Prometheus can reach Alertmanager at 127.0.0.1:9093
+Network=host
+
+# Mount config and data directories.
+# :Z applies the correct SELinux context for rootless Podman.
+Volume=%h/.monitoring-server/config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro,Z
+Volume=%h/.monitoring-server/data/alertmanager:/alertmanager:Z
+
+# Bind to localhost only; --cluster.listen-address="" disables gossip clustering
+Exec=--config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --web.listen-address=127.0.0.1:9093 --cluster.listen-address=""
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target
