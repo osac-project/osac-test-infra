@@ -334,7 +334,7 @@ jobs:
           SRC="$RUNNER_TEMP/component-src"
           if [[ "${COMPONENT_BUILD_TYPE}" == "ansible-builder" ]]; then
             echo "Generating build context with ansible-builder from ${COMPONENT_FILE}..."
-            pip install --quiet ansible-builder
+            python3 -m pip install --quiet ansible-builder
             ansible-builder create --file "${SRC}/${COMPONENT_FILE}"
             podman build -t "${COMPONENT_TAG}" -f "${SRC}/context/Containerfile" "${SRC}/context"
           else
