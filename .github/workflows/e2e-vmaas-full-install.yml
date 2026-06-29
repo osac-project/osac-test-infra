@@ -65,12 +65,12 @@ on:
         type: string
         default: ""
       component-repo:
-        description: "GitHub repo (owner/name) of a component to build from source (e.g. osac-project/fulfillment-service)"
+        description: "GitHub repo (owner/name) of a component to build from source. Must be under osac-project/ org. Requires component-ref and component-image-key."
         required: false
         type: string
         default: ""
       component-ref:
-        description: "Git ref of the component repository to build"
+        description: "Branch or tag name of the component repository to build (must be a named ref, not a SHA)"
         required: false
         type: string
         default: ""
@@ -298,6 +298,26 @@ jobs:
           COMPONENT_FILE: ${{ inputs.component-containerfile }}
           COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
         run: |
+          # --- Validate component inputs (all-or-none) ---
+          if [[ -z "${COMPONENT_REF}" ]] || [[ -z "${COMPONENT_IMAGE_KEY}" ]]; then
+            echo "::error::component-repo requires component-ref and component-image-key"
+            exit 1
+          fi
+
+          # --- Repo allowlist: only build from trusted orgs ---
+          ALLOWED_ORGS="osac-project/ eliorerz/"
+          ALLOWED=false
+          for org in ${ALLOWED_ORGS}; do
+            if [[ "${COMPONENT_REPO}" == ${org}* ]]; then
+              ALLOWED=true
+              break
+            fi
+          done
+          if ! ${ALLOWED}; then
+            echo "::error::component-repo '${COMPONENT_REPO}' is not from an allowed org (${ALLOWED_ORGS})"
+            exit 1
+          fi
+
           COMPONENT_TAG="component-pr:${GITHUB_RUN_ID}"
 
           echo "Cloning ${COMPONENT_REPO}@${COMPONENT_REF}..."
@@ -319,7 +339,9 @@ jobs:
             ssh -i "${CT_KEY}" -o StrictHostKeyChecking=no "core@${NODE_IP}" \
               "sudo podman load"
 
+          # Pass image tag and node IP for teardown cleanup
           echo "COMPONENT_IMAGE=${COMPONENT_TAG}" >> "$GITHUB_ENV"
+          echo "COMPONENT_NODE_IP=${NODE_IP}" >> "$GITHUB_ENV"
 
           rm -rf "$RUNNER_TEMP/component-src"
 
@@ -498,4 +520,6 @@ jobs:
         env:
           CLONE_NAME: ${{ steps.clone-name.outputs.clone-name }}
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+          # COMPONENT_IMAGE and COMPONENT_NODE_IP are set by the build step
+          # via GITHUB_ENV; they'll be empty if no component was built.
         run: bash .github/scripts/teardown.sh
