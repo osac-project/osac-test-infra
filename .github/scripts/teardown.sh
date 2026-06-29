@@ -28,12 +28,8 @@ sudo rm -f /root/.config/containers/auth.json
 rm -rf "$RUNNER_TEMP/osac-installer"
 podman rmi "${E2E_IMAGE}" 2>/dev/null || true
 
-# --- Clean up component image (runner + cluster node) ---
+# --- Clean up component image on runner ---
+# Node-side cleanup is unnecessary: the clone is destroyed above.
 if [[ -n "${COMPONENT_IMAGE:-}" ]]; then
   podman rmi "${COMPONENT_IMAGE}" 2>/dev/null || true
-  if [[ -n "${COMPONENT_NODE_IP:-}" ]]; then
-    CT_KEY="${HOME}/.config/cluster-tool/cluster-tool.key"
-    ssh -i "${CT_KEY}" -o StrictHostKeyChecking=no "core@${COMPONENT_NODE_IP}" \
-      "sudo podman rmi '${COMPONENT_IMAGE}'" 2>/dev/null || true
-  fi
 fi

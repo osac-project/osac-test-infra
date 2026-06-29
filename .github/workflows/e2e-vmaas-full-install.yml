@@ -330,18 +330,16 @@ jobs:
 
           # Load image onto the cluster node so CRI-O can use it locally.
           # On RHCOS, root podman and CRI-O share /var/lib/containers/storage,
-          # so 'sudo podman load' makes the image available to the kubelet.
-          NODE_IP=$(oc get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-          CT_KEY="${HOME}/.config/cluster-tool/cluster-tool.key"
+          # so 'podman load' via oc debug makes the image available to the kubelet.
+          NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
 
-          echo "Loading image onto cluster node ${NODE_IP}..."
+          echo "Loading image onto node ${NODE_NAME}..."
           podman save "${COMPONENT_TAG}" | \
-            ssh -i "${CT_KEY}" -o StrictHostKeyChecking=no "core@${NODE_IP}" \
-              "sudo podman load"
+            oc debug "node/${NODE_NAME}" -t=false -- \
+              chroot /host podman load
 
-          # Pass image tag and node IP for teardown cleanup
+          # Pass image tag for teardown cleanup
           echo "COMPONENT_IMAGE=${COMPONENT_TAG}" >> "$GITHUB_ENV"
-          echo "COMPONENT_NODE_IP=${NODE_IP}" >> "$GITHUB_ENV"
 
           rm -rf "$RUNNER_TEMP/component-src"
 
@@ -520,6 +518,6 @@ jobs:
         env:
           CLONE_NAME: ${{ steps.clone-name.outputs.clone-name }}
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
-          # COMPONENT_IMAGE and COMPONENT_NODE_IP are set by the build step
-          # via GITHUB_ENV; they'll be empty if no component was built.
+          # COMPONENT_IMAGE is set by the build step via GITHUB_ENV;
+          # it will be empty if no component was built.
         run: bash .github/scripts/teardown.sh
