@@ -28,6 +28,9 @@ Environment=REPOS=osac-aap,osac-operator,fulfillment-service,osac-test-infra,osa
 
 # Mount the exporter script into the container
 Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z
+# Mount data directory for cache persistence across restarts
+Volume=%h/.monitoring-server/data:/data:Z
+Environment=CACHE_DIR=/data
 
 [Service]
 Restart=always

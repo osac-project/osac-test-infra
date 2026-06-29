@@ -47,6 +47,11 @@ PORT = int(os.getenv("PORT", "9103"))
 REPOS_FILTER = [r.strip() for r in os.getenv("REPOS", "").split(",") if r.strip()]
 # How many recent jobs to keep in memory for the JSON API
 JOBS_HISTORY_SIZE = int(os.getenv("JOBS_HISTORY_SIZE", "500"))
+# Cache file for persistence across restarts
+CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.monitoring-server/data"))
+CACHE_FILE = os.path.join(CACHE_DIR, "workflow-exporter-cache.json")
+# Max age of cache file before falling back to API fetch (seconds)
+CACHE_MAX_AGE = int(os.getenv("CACHE_MAX_AGE", "3600"))
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics
@@ -113,6 +118,58 @@ class WorkflowExporter:
         # Current in-flight runs (queued + in_progress)
         self.active_runs = []
         self._lock = threading.Lock()
+
+    # -- cache persistence ---------------------------------------------------
+
+    def _save_cache(self):
+        """Persist recent_jobs and _seen_run_ids to disk."""
+        try:
+            os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+            data = {
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "recent_jobs": list(self.recent_jobs),
+                "seen_run_ids": sorted(self._seen_run_ids),
+            }
+            tmp = CACHE_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, default=str)
+            os.replace(tmp, CACHE_FILE)
+            logger.debug("Cache saved: %d jobs, %d seen IDs",
+                         len(self.recent_jobs), len(self._seen_run_ids))
+        except Exception:
+            logger.exception("Failed to save cache")
+
+    def _load_cache(self):
+        """Load recent_jobs and _seen_run_ids from disk if cache is fresh.
+
+        Returns True if cache was loaded, False if missing/stale/corrupt.
+        """
+        if not os.path.exists(CACHE_FILE):
+            logger.info("No cache file found at %s", CACHE_FILE)
+            return False
+
+        try:
+            age = time.time() - os.path.getmtime(CACHE_FILE)
+            if age > CACHE_MAX_AGE:
+                logger.info("Cache is %.0fs old (max %ds), will re-fetch",
+                            age, CACHE_MAX_AGE)
+                return False
+
+            with open(CACHE_FILE) as f:
+                data = json.load(f)
+
+            jobs = data.get("recent_jobs", [])
+            seen = data.get("seen_run_ids", [])
+
+            self.recent_jobs = deque(jobs, maxlen=JOBS_HISTORY_SIZE)
+            self._seen_run_ids = set(seen)
+
+            logger.info("Cache loaded: %d jobs, %d seen IDs (%.0fs old)",
+                         len(self.recent_jobs), len(self._seen_run_ids), age)
+            return True
+        except Exception:
+            logger.exception("Failed to load cache, will re-fetch")
+            return False
 
     # -- helpers -------------------------------------------------------------
 
@@ -355,12 +412,19 @@ class WorkflowExporter:
     def initial_load(self):
         """Load recent history on startup so the jobs table isn't empty.
 
+        Tries loading from the on-disk cache first. If the cache is fresh
+        (less than CACHE_MAX_AGE seconds old), uses it and skips the slow
+        GitHub API fetch entirely.
+
         Only populates the JSON API history (recent_jobs) and marks run IDs
         as seen.  Does NOT increment Prometheus counters — those are only
         incremented for genuinely new completions detected during regular
         polling.  This prevents increase() from showing inflated numbers
         after every restart.
         """
+        if self._load_cache():
+            return
+
         repos = REPOS_FILTER if REPOS_FILTER else self.get_active_repos()
         for repo in repos:
             try:
@@ -386,6 +450,7 @@ class WorkflowExporter:
                 logger.exception("Error loading history for %s", repo)
 
         logger.info("Initial load: %d jobs in history", len(self.recent_jobs))
+        self._save_cache()
 
     def collect(self):
         repos = REPOS_FILTER if REPOS_FILTER else self.get_active_repos()
@@ -469,6 +534,7 @@ class WorkflowExporter:
             tot_in_progress,
             len(self.recent_jobs),
         )
+        self._save_cache()
 
     # Maps job_type filter values to GitHub Actions event names
     JOB_TYPE_EVENTS = {
