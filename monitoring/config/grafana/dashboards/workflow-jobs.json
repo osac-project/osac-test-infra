@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "E2E test runs: E2E Tests and E2E Full Install Tests. Status, duration, trigger, failed step, links.",
+  "description": "Workflow runs across all repos. Filter by category, repo, workflow name, status, and job type.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -42,7 +42,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -81,7 +81,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -117,7 +117,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -157,7 +157,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -193,7 +193,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -234,7 +234,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -244,8 +244,8 @@
       ]
     },
     {
-      "title": "E2E Results by Workflow",
-      "description": "Stacked bars: success (green), failure (red), cancelled (orange) per E2E workflow.",
+      "title": "Results by Workflow",
+      "description": "Stacked bars: success (green), failure (red), cancelled (orange) per workflow.",
       "type": "barchart",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
@@ -303,7 +303,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts-by-workflow?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts-by-workflow?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -366,7 +366,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts-by-workflow?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts-by-workflow?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -382,7 +382,7 @@
     },
     {
       "title": "Most Failing Steps",
-      "description": "Which E2E steps fail most frequently.",
+      "description": "Which steps fail most frequently.",
       "type": "piechart",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
@@ -404,7 +404,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/failed-steps?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/failed-steps?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -416,7 +416,7 @@
     },
     {
       "title": "Failures by Step (over time)",
-      "description": "E2E step failures over time — shows which steps are breaking and when.",
+      "description": "Step failures over time — shows which steps are breaking and when.",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -438,7 +438,7 @@
       },
       "targets": [
         {
-          "expr": "increase(github_actions_failed_step_total{workflow=~\"E2E.*\"}[$__rate_interval])",
+          "expr": "increase(github_actions_failed_step_total[$__rate_interval])",
           "legendFormat": "{{ step }}",
           "refId": "A"
         }
@@ -483,7 +483,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/avg-duration-by-type?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/avg-duration-by-type?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -534,7 +534,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/avg-step-duration?workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/avg-step-duration?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -547,8 +547,8 @@
       ]
     },
     {
-      "title": "Recent E2E Runs",
-      "description": "All recent E2E workflow runs with status, duration, trigger type, and links. Click column headers to sort.",
+      "title": "Recent Runs",
+      "description": "All recent workflow runs with status, duration, trigger type, and links. Click column headers to sort.",
       "type": "table",
       "gridPos": { "h": 16, "w": 24, "x": 0, "y": 29 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
@@ -656,6 +656,14 @@
           {
             "matcher": { "id": "byName", "options": "url" },
             "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "display_name" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "category" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
           }
         ]
       },
@@ -670,7 +678,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs?limit=200&workflow=e2e&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs?limit=200&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -680,6 +688,8 @@
             { "selector": "status", "text": "status", "type": "string" },
             { "selector": "repo", "text": "repo", "type": "string" },
             { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "display_name", "text": "display_name", "type": "string" },
+            { "selector": "category", "text": "category", "type": "string" },
             { "selector": "branch", "text": "branch", "type": "string" },
             { "selector": "trigger", "text": "trigger", "type": "string" },
             { "selector": "duration", "text": "duration", "type": "string" },
@@ -799,6 +809,14 @@
           {
             "matcher": { "id": "byName", "options": "url" },
             "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "display_name" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "category" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
           }
         ]
       },
@@ -813,7 +831,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs?status=failure&limit=100&workflow=e2e&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs?status=failure&limit=100&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -822,6 +840,8 @@
           "columns": [
             { "selector": "repo", "text": "repo", "type": "string" },
             { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "display_name", "text": "display_name", "type": "string" },
+            { "selector": "category", "text": "category", "type": "string" },
             { "selector": "branch", "text": "branch", "type": "string" },
             { "selector": "trigger", "text": "trigger", "type": "string" },
             { "selector": "failed_step", "text": "failed_step", "type": "string" },
@@ -846,6 +866,42 @@
   "tags": ["osac", "ci", "workflows", "jobs"],
   "templating": {
     "list": [
+      {
+        "name": "category",
+        "label": "Category",
+        "type": "custom",
+        "query": "All,e2e,ci,lint,release,automation",
+        "current": { "text": "E2E", "value": "e2e", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": false },
+          { "text": "E2E", "value": "e2e", "selected": true },
+          { "text": "CI/Build", "value": "ci", "selected": false },
+          { "text": "Lint/Quality", "value": "lint", "selected": false },
+          { "text": "Release/Publish", "value": "release", "selected": false },
+          { "text": "Automation", "value": "automation", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
+      {
+        "name": "repo_filter",
+        "label": "Repository",
+        "type": "custom",
+        "query": "All,osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer",
+        "current": { "text": "All", "value": "All", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": true },
+          { "text": "osac-aap", "value": "osac-aap", "selected": false },
+          { "text": "osac-operator", "value": "osac-operator", "selected": false },
+          { "text": "fulfillment-service", "value": "fulfillment-service", "selected": false },
+          { "text": "osac-test-infra", "value": "osac-test-infra", "selected": false },
+          { "text": "osac-installer", "value": "osac-installer", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
       {
         "name": "workflow_name",
         "label": "Workflow",
@@ -894,6 +950,20 @@
         "includeAll": false,
         "multi": false,
         "refresh": 0
+      },
+      {
+        "name": "merge_similar",
+        "label": "Merge Similar",
+        "type": "custom",
+        "query": "No,Yes",
+        "current": { "text": "No", "value": "No", "selected": true },
+        "options": [
+          { "text": "No", "value": "No", "selected": true },
+          { "text": "Yes", "value": "Yes", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
       }
     ]
   },
@@ -903,7 +973,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "OSAC CI - E2E Jobs",
+  "title": "OSAC CI - Workflow Jobs",
   "uid": "osac-workflow-jobs",
   "version": 1
 }

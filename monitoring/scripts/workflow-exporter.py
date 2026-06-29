@@ -103,6 +103,29 @@ api_remaining = Gauge(
 # Exporter logic
 # ---------------------------------------------------------------------------
 class WorkflowExporter:
+    # Ordered category mapping — first match wins (case-insensitive substring)
+    WORKFLOW_CATEGORIES = {
+        "e2e":        ["e2e"],
+        "ci":         ["ci", "test", "check", "build"],
+        "lint":       ["pre-commit", "lint", "checklist", "kustomize", "check image"],
+        "release":    ["publish", "container image", "mirror"],
+        "automation": ["bump", "dependabot", "copilot"],
+    }
+
+    @staticmethod
+    def _categorize_workflow(name):
+        """Categorize a workflow name using substring matching.
+
+        Iterates WORKFLOW_CATEGORIES in order, returns first match.
+        Defaults to 'ci' for unknown workflows.
+        """
+        lower = name.lower()
+        for category, patterns in WorkflowExporter.WORKFLOW_CATEGORIES.items():
+            for pattern in patterns:
+                if pattern in lower:
+                    return category
+        return "ci"
+
     def __init__(self):
         self.headers = {
             "Authorization": f"token {TOKEN}",
@@ -160,6 +183,16 @@ class WorkflowExporter:
 
             jobs = data.get("recent_jobs", [])
             seen = data.get("seen_run_ids", [])
+
+            # Backfill display_name and category for cached records
+            for job in jobs:
+                if "display_name" not in job:
+                    repo = job.get("repo", "")
+                    wf = job.get("workflow", "unknown")
+                    job["display_name"] = f"{repo} / {wf}"
+                if "category" not in job:
+                    job["category"] = self._categorize_workflow(
+                        job.get("workflow", "unknown"))
 
             self.recent_jobs = deque(jobs, maxlen=JOBS_HISTORY_SIZE)
             self._seen_run_ids = set(seen)
@@ -267,10 +300,13 @@ class WorkflowExporter:
         status = run.get("status", "unknown")
         display_status = conclusion if conclusion else status
 
+        workflow_name = run.get("name", "unknown")
         return {
             "id": run.get("id"),
             "repo": repo,
-            "workflow": run.get("name", "unknown"),
+            "workflow": workflow_name,
+            "display_name": f"{repo} / {workflow_name}",
+            "category": WorkflowExporter._categorize_workflow(workflow_name),
             "branch": run.get("head_branch", ""),
             "status": display_status,
             "conclusion": conclusion,
@@ -574,10 +610,11 @@ class WorkflowExporter:
           job_type  - periodic, presubmit, or manual
         """
         status_filter = self._parse_grafana_param(params, "status")
-        repo_filter = params.get("repo", [None])[0]
+        repo_filter = self._parse_grafana_param(params, "repo")
         workflow_filter = params.get("workflow", [None])[0]
         workflow_name_filter = self._parse_grafana_param(params, "workflow_name")
         job_type_filter = self._parse_grafana_param(params, "job_type")
+        category_filter = self._parse_grafana_param(params, "category")
         limit = min(int(params.get("limit", [200])[0]), JOBS_HISTORY_SIZE)
         include_active = params.get("active", ["false"])[0].lower() == "true"
 
@@ -611,6 +648,8 @@ class WorkflowExporter:
             if status_filter and job.get("conclusion") != status_filter:
                 return False
             if repo_filter and job["repo"] != repo_filter:
+                return False
+            if category_filter and job.get("category", "") != category_filter.lower():
                 return False
             if wf_filters:
                 wf_name = job.get("workflow", "").lower()
@@ -661,9 +700,12 @@ class WorkflowExporter:
                    "cancelled": N, "total": N, "success_rate": 0.xx}, ...]
         """
         jobs = self.get_jobs_json(params)
+        merge = self._parse_grafana_param(params, "merge_similar")
+        use_display = not (merge and merge.lower() in ("true", "yes", "1"))
         by_wf = {}
         for job in jobs:
-            wf = job.get("workflow", "unknown")
+            wf = (job.get("display_name") or job.get("workflow", "unknown")
+                  ) if use_display else job.get("workflow", "unknown")
             c = job.get("conclusion") or job.get("status", "unknown")
             if wf not in by_wf:
                 by_wf[wf] = {"workflow": wf, "success": 0, "failure": 0,
@@ -924,6 +966,15 @@ class ExporterHandler(BaseHTTPRequestHandler):
             with self.exporter._lock:
                 active = list(self.exporter.active_runs)
             payload = json.dumps(active, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
+        elif parsed.path == "/api/categories":
+            categories = list(WorkflowExporter.WORKFLOW_CATEGORIES.keys())
+            payload = json.dumps(categories, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
