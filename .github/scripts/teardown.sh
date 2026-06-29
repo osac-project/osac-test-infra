@@ -23,5 +23,7 @@ done
 # --- Clean up temporary files ---
 rm -f "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/aap-license.zip" "$RUNNER_TEMP/kubeconfig"
 rm -f "${REGISTRY_AUTH_FILE:-}" "$RUNNER_TEMP/auth.json"
+rm -f "${HOME}/.config/containers/auth.json"
+sudo rm -f /root/.config/containers/auth.json
 rm -rf "$RUNNER_TEMP/osac-installer"
 podman rmi "${E2E_IMAGE}" 2>/dev/null || true
