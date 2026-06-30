@@ -65,7 +65,7 @@ on:
         type: string
         default: ""
       component-repo:
-        description: "GitHub repo (owner/name) of a component to build from source. Must be under osac-project/ org. Requires component-ref and component-image-key."
+        description: "GitHub repo (owner/name) of a component to build from source. Fork repos allowed if PR author is an osac-project org member. Requires component-ref and component-image-key."
         required: false
         type: string
         default: ""
@@ -297,12 +297,14 @@ jobs:
       - name: Build and load component image
         if: inputs.component-repo != ''
         env:
+          GH_TOKEN: ${{ github.token }}
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           COMPONENT_REPO: ${{ inputs.component-repo }}
           COMPONENT_REF: ${{ inputs.component-ref }}
           COMPONENT_FILE: ${{ inputs.component-containerfile }}
           COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
           COMPONENT_BUILD_TYPE: ${{ inputs.component-build-type }}
+          PR_AUTHOR: ${{ github.actor }}
         run: |
           # --- Validate component inputs (all-or-none) ---
           if [[ -z "${COMPONENT_REF}" ]] || [[ -z "${COMPONENT_IMAGE_KEY}" ]]; then
@@ -310,18 +312,14 @@ jobs:
             exit 1
           fi
 
-          # --- Repo allowlist: only build from trusted orgs ---
-          ALLOWED_ORGS="osac-project/ eliorerz/"
-          ALLOWED=false
-          for org in ${ALLOWED_ORGS}; do
-            if [[ "${COMPONENT_REPO}" == ${org}* ]]; then
-              ALLOWED=true
-              break
+          # --- Verify PR author is a member of osac-project org ---
+          REPO_ORG="${COMPONENT_REPO%%/*}"
+          if [[ "${REPO_ORG}" != "osac-project" ]]; then
+            if ! gh api "orgs/osac-project/members/${PR_AUTHOR}" --silent 2>/dev/null; then
+              echo "::error::PR author '${PR_AUTHOR}' is not a member of osac-project. Fork PRs require org membership."
+              exit 1
             fi
-          done
-          if ! ${ALLOWED}; then
-            echo "::error::component-repo '${COMPONENT_REPO}' is not from an allowed org (${ALLOWED_ORGS})"
-            exit 1
+            echo "PR author '${PR_AUTHOR}' is an osac-project member — allowing fork build."
           fi
 
           COMPONENT_TAG="localhost/component-pr:${GITHUB_RUN_ID}"
