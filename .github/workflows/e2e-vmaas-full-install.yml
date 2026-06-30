@@ -131,6 +131,44 @@ jobs:
           ref: ${{ inputs.test-infra-ref || '' }}
           persist-credentials: false
 
+      - name: Validate component inputs
+        if: inputs.component-repo != ''
+        env:
+          COMPONENT_REPO: ${{ inputs.component-repo }}
+          COMPONENT_REF: ${{ inputs.component-ref }}
+          COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
+          PR_AUTHOR: ${{ inputs.component-pr-author }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --- Validate component inputs ---
+          if [[ -z "${COMPONENT_REF}" ]] || [[ -z "${COMPONENT_IMAGE_KEY}" ]]; then
+            echo "::error::component-repo requires component-ref and component-image-key"
+            exit 1
+          fi
+
+          # Repo must be "org/name" format
+          if [[ ! "${COMPONENT_REPO}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::component-repo '${COMPONENT_REPO}' is not a valid org/repo format"
+            exit 1
+          fi
+
+          # --- Verify PR author is a collaborator on the upstream repo ---
+          REPO_ORG="${COMPONENT_REPO%%/*}"
+          if [[ "${REPO_ORG}" != "osac-project" ]]; then
+            if [[ -z "${PR_AUTHOR}" ]]; then
+              echo "::error::component-pr-author is required for fork repos"
+              exit 1
+            fi
+            REPO_NAME="${COMPONENT_REPO#*/}"
+            if gh api "repos/osac-project/${REPO_NAME}/collaborators/${PR_AUTHOR}" \
+                 --silent 2>/dev/null; then
+              echo "PR author '${PR_AUTHOR}' is a collaborator on osac-project/${REPO_NAME} — allowing fork build."
+            else
+              echo "::error::PR author '${PR_AUTHOR}' is not a collaborator on osac-project/${REPO_NAME}. Fork PRs require org membership."
+              exit 1
+            fi
+          fi
+
       # --- Secret bootstrap (inline — must not run PR-controlled code) ---
       - name: Read AppRole credentials
         id: approle
@@ -298,38 +336,6 @@ jobs:
         env:
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
         run: podman build --no-cache -t "${E2E_IMAGE}" -f Containerfile .
-
-      - name: Validate component inputs
-        if: inputs.component-repo != ''
-        env:
-          COMPONENT_REPO: ${{ inputs.component-repo }}
-          COMPONENT_REF: ${{ inputs.component-ref }}
-          COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
-          PR_AUTHOR: ${{ inputs.component-pr-author }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # --- Validate component inputs (all-or-none) ---
-          if [[ -z "${COMPONENT_REF}" ]] || [[ -z "${COMPONENT_IMAGE_KEY}" ]]; then
-            echo "::error::component-repo requires component-ref and component-image-key"
-            exit 1
-          fi
-
-          # --- Verify PR author is a collaborator on the upstream repo ---
-          REPO_ORG="${COMPONENT_REPO%%/*}"
-          if [[ "${REPO_ORG}" != "osac-project" ]]; then
-            if [[ -z "${PR_AUTHOR}" ]]; then
-              echo "::error::component-pr-author is required for fork repos"
-              exit 1
-            fi
-            REPO_NAME="${COMPONENT_REPO#*/}"
-            if gh api "repos/osac-project/${REPO_NAME}/collaborators/${PR_AUTHOR}" \
-                 --silent 2>/dev/null; then
-              echo "PR author '${PR_AUTHOR}' is a collaborator on osac-project/${REPO_NAME} — allowing fork build."
-            else
-              echo "::error::PR author '${PR_AUTHOR}' is not a collaborator on osac-project/${REPO_NAME}. Fork PRs require org membership."
-              exit 1
-            fi
-          fi
 
       - name: Build and load component image
         if: inputs.component-repo != ''
