@@ -314,18 +314,25 @@ jobs:
             exit 1
           fi
 
-          # --- Verify PR author is a member of osac-project org ---
+          # --- Verify PR author has write access to the upstream repo ---
           REPO_ORG="${COMPONENT_REPO%%/*}"
           if [[ "${REPO_ORG}" != "osac-project" ]]; then
             if [[ -z "${PR_AUTHOR}" ]]; then
               echo "::error::component-pr-author is required for fork repos"
               exit 1
             fi
-            if ! gh api "orgs/osac-project/members/${PR_AUTHOR}" --silent 2>/dev/null; then
-              echo "::error::PR author '${PR_AUTHOR}' is not a member of osac-project. Fork PRs require org membership."
-              exit 1
-            fi
-            echo "PR author '${PR_AUTHOR}' is an osac-project member — allowing fork build."
+            REPO_NAME="${COMPONENT_REPO#*/}"
+            PERM=$(gh api "repos/osac-project/${REPO_NAME}/collaborators/${PR_AUTHOR}/permission" \
+              --jq '.permission' 2>/dev/null || echo "none")
+            case "${PERM}" in
+              admin|maintain|write)
+                echo "PR author '${PR_AUTHOR}' has ${PERM} access to osac-project/${REPO_NAME} — allowing fork build."
+                ;;
+              *)
+                echo "::error::PR author '${PR_AUTHOR}' does not have write access to osac-project/${REPO_NAME} (got: ${PERM}). Fork PRs require write access."
+                exit 1
+                ;;
+            esac
           fi
 
       - name: Build and load component image
