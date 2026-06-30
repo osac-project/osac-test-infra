@@ -105,7 +105,7 @@ jobs:
               select($wf != null) |
               {
                 id: .databaseId,
-                stem: ($wf.path | ltrimstr(".github/workflows/") | rtrimstr(".yml") | rtrimstr(".yaml")),
+                stem: ($wf.path | ltrimstr(".github/workflows/") | rtrimstr(".yml") | rtrimstr(".yaml") | rtrimstr("-caller")),
                 name: $wf.name
               }
             ]
@@ -316,7 +316,7 @@ jobs:
                 select($wf != null) |
                 {
                   id: .databaseId,
-                  stem: ($wf.path | ltrimstr(".github/workflows/") | rtrimstr(".yml") | rtrimstr(".yaml")),
+                  stem: ($wf.path | ltrimstr(".github/workflows/") | rtrimstr(".yml") | rtrimstr(".yaml") | rtrimstr("-caller")),
                   name: $wf.name
                 }
               ] | .[] | select(.stem == $cmd or (.stem | startswith($cmd + "-")))
