@@ -89,6 +89,11 @@ on:
         required: false
         type: string
         default: "containerfile"
+      component-pr-author:
+        description: "GitHub login of the PR author (used for org membership check on fork PRs)"
+        required: false
+        type: string
+        default: ""
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -294,17 +299,14 @@ jobs:
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
         run: podman build --no-cache -t "${E2E_IMAGE}" -f Containerfile .
 
-      - name: Build and load component image
+      - name: Validate component inputs
         if: inputs.component-repo != ''
         env:
-          GH_TOKEN: ${{ github.token }}
-          KUBECONFIG: ${{ runner.temp }}/kubeconfig
           COMPONENT_REPO: ${{ inputs.component-repo }}
           COMPONENT_REF: ${{ inputs.component-ref }}
-          COMPONENT_FILE: ${{ inputs.component-containerfile }}
           COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
-          COMPONENT_BUILD_TYPE: ${{ inputs.component-build-type }}
-          PR_AUTHOR: ${{ github.actor }}
+          PR_AUTHOR: ${{ inputs.component-pr-author }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # --- Validate component inputs (all-or-none) ---
           if [[ -z "${COMPONENT_REF}" ]] || [[ -z "${COMPONENT_IMAGE_KEY}" ]]; then
@@ -315,6 +317,10 @@ jobs:
           # --- Verify PR author is a member of osac-project org ---
           REPO_ORG="${COMPONENT_REPO%%/*}"
           if [[ "${REPO_ORG}" != "osac-project" ]]; then
+            if [[ -z "${PR_AUTHOR}" ]]; then
+              echo "::error::component-pr-author is required for fork repos"
+              exit 1
+            fi
             if ! gh api "orgs/osac-project/members/${PR_AUTHOR}" --silent 2>/dev/null; then
               echo "::error::PR author '${PR_AUTHOR}' is not a member of osac-project. Fork PRs require org membership."
               exit 1
@@ -322,6 +328,16 @@ jobs:
             echo "PR author '${PR_AUTHOR}' is an osac-project member — allowing fork build."
           fi
 
+      - name: Build and load component image
+        if: inputs.component-repo != ''
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          COMPONENT_REPO: ${{ inputs.component-repo }}
+          COMPONENT_REF: ${{ inputs.component-ref }}
+          COMPONENT_FILE: ${{ inputs.component-containerfile }}
+          COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
+          COMPONENT_BUILD_TYPE: ${{ inputs.component-build-type }}
+        run: |
           COMPONENT_TAG="localhost/component-pr:${GITHUB_RUN_ID}"
 
           echo "Cloning ${COMPONENT_REPO}@${COMPONENT_REF}..."
