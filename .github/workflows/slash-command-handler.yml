@@ -1,0 +1,373 @@
+---
+name: Slash Command Handler
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  checks: write
+
+jobs:
+  handle-command:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+      COMMENT_ID: ${{ github.event.comment.id }}
+    steps:
+      - name: Check permissions
+        env:
+          COMMENTER: ${{ github.event.comment.user.login }}
+        run: |
+          PERM=$(gh api "repos/${REPO}/collaborators/${COMMENTER}/permission" \
+            --jq '.permission' 2>/dev/null) || true
+          if [ -z "${PERM}" ]; then
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+              --body "@${COMMENTER} you don't have permission to trigger CI jobs. Required: write access or above."
+            exit 1
+          fi
+          case "${PERM}" in
+            admin|maintain|write) echo "User ${COMMENTER} has ${PERM} permission" ;;
+            *)
+              gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+                --body "@${COMMENTER} you don't have permission to trigger CI jobs. Required: write access or above."
+              exit 1
+              ;;
+          esac
+
+      - name: Get PR details
+        id: pr
+        run: |
+          PR_JSON=$(gh pr view "${PR_NUMBER}" -R "${REPO}" \
+            --json headRefName,headRefOid,headRepositoryOwner)
+
+          HEAD_BRANCH=$(echo "${PR_JSON}" | jq -r '.headRefName')
+          HEAD_SHA=$(echo "${PR_JSON}" | jq -r '.headRefOid')
+          HEAD_REPO_OWNER=$(echo "${PR_JSON}" | jq -r '.headRepositoryOwner.login')
+
+          echo "head_branch=${HEAD_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+          if [ "${HEAD_REPO_OWNER}" != "${{ github.repository_owner }}" ]; then
+            echo "is_fork=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_fork=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: React with eyes
+        run: |
+          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content='eyes'
+
+      - name: Parse command
+        id: cmd
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          FIRST_LINE=$(echo "${COMMENT_BODY}" | head -n1 | xargs)
+
+          if [[ "${FIRST_LINE}" =~ ^/retest ]]; then
+            echo "command=retest" >> "$GITHUB_OUTPUT"
+          elif [[ "${FIRST_LINE}" =~ ^/cancel[[:space:]]+(.*) ]]; then
+            echo "command=cancel:${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          elif [[ "${FIRST_LINE}" =~ ^/cancel ]]; then
+            echo "command=cancel:all" >> "$GITHUB_OUTPUT"
+          elif [[ "${FIRST_LINE}" =~ ^/test[[:space:]]+(.*) ]]; then
+            echo "command=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "command=help" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Discover workflows
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          # Fetch active workflows and their file stems
+          gh workflow list -R "${REPO}" --json id,name,path,state \
+            --jq '[.[] | select(.state == "active")]' > /tmp/workflows.json
+
+          # Fetch latest PR run per workflow for this SHA
+          gh run list -R "${REPO}" --limit 200 \
+            --json databaseId,workflowDatabaseId,workflowName,headSha,event \
+            --jq "[.[] | select(.headSha == \"${HEAD_SHA}\" and .event == \"pull_request\")]
+              | group_by(.workflowDatabaseId)
+              | map(first)" > /tmp/pr_runs.json
+
+          # Join: for each PR run, resolve its workflow file stem
+          jq -s '
+            (.[0] | map({key: (.id | tostring), value: .}) | from_entries) as $wf_map |
+            [.[1][] |
+              ($wf_map[(.workflowDatabaseId | tostring)] // null) as $wf |
+              select($wf != null) |
+              {
+                id: .databaseId,
+                stem: ($wf.path | ltrimstr(".github/workflows/") | rtrimstr(".yml") | rtrimstr(".yaml")),
+                name: $wf.name
+              }
+            ]
+          ' /tmp/workflows.json /tmp/pr_runs.json > /tmp/available.json
+
+      - name: Handle help
+        if: steps.cmd.outputs.command == '?' || steps.cmd.outputs.command == 'help'
+        run: |
+          {
+            echo "### Slash commands"
+            echo ""
+            echo "Commands match workflow file names by prefix."
+            echo ""
+            echo "| Command | Workflow |"
+            echo "|---------|----------|"
+
+            while IFS=$'\t' read -r stem name; do
+              echo "| \`/test ${stem}\` | ${name} |"
+            done < <(jq -r '.[] | "\(.stem)\t\(.name)"' /tmp/available.json)
+
+            echo "| \`/test all\` | Re-run all PR workflows |"
+            echo "| \`/test ?\` or \`/test help\` | Show this help |"
+            echo "| \`/retest\` | Re-run all failed checks |"
+            echo "| \`/cancel [name]\` | Cancel in-progress runs |"
+
+            if jq -e '[.[] | select(.stem | startswith("e2e-"))] | length > 0' /tmp/available.json > /dev/null 2>&1; then
+              echo ""
+              echo "Tip: \`/test e2e\` runs all \`e2e-*\` workflows."
+            fi
+          } > /tmp/help_body.md
+
+          gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+            --body "$(cat /tmp/help_body.md)"
+          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content='rocket'
+
+      - name: Execute command
+        if: >-
+          steps.cmd.outputs.command != '?' &&
+          steps.cmd.outputs.command != 'help' &&
+          steps.cmd.outputs.command != 'retest' &&
+          !startsWith(steps.cmd.outputs.command, 'cancel:')
+        env:
+          COMMAND: ${{ steps.cmd.outputs.command }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          SUCCEEDED=""
+          FAILED=""
+
+          track_result() {
+            local name="$1"
+            if [ "$2" -eq 0 ]; then
+              SUCCEEDED="${SUCCEEDED:+${SUCCEEDED}, }${name}"
+            else
+              FAILED="${FAILED:+${FAILED}, }${name}"
+            fi
+          }
+
+          if [ "${COMMAND}" = "all" ]; then
+            MATCHES=$(jq -r '.[] | "\(.id)\t\(.name)"' /tmp/available.json)
+          else
+            MATCHES=$(jq -r --arg cmd "${COMMAND}" '
+              .[] | select(.stem == $cmd or (.stem | startswith($cmd + "-")))
+              | "\(.id)\t\(.name)"
+            ' /tmp/available.json)
+          fi
+
+          if [ -z "${MATCHES}" ]; then
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+              --body "No PR workflow runs found matching \`/test ${COMMAND}\` at commit \`${HEAD_SHA:0:7}\`. Use \`/test ?\` to see available commands."
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+              -f content='confused'
+            exit 1
+          fi
+
+          while IFS=$'\t' read -r run_id run_name; do
+            [ -z "${run_id}" ] && continue
+            if gh run rerun "${run_id}" -R "${REPO}"; then
+              track_result "${run_name}" 0
+            else
+              track_result "${run_name}" 1
+            fi
+          done <<< "${MATCHES}"
+
+          if [ -n "${FAILED}" ]; then
+            BODY="Failed: ${FAILED}"
+            [ -n "${SUCCEEDED}" ] && BODY="${BODY}
+          Succeeded: ${SUCCEEDED}"
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "${BODY}"
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+              -f content='-1'
+            exit 1
+          fi
+
+          gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+            --body "Triggered: ${SUCCEEDED}"
+          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content='rocket'
+
+      - name: Handle retest
+        if: steps.cmd.outputs.command == 'retest'
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_BRANCH: ${{ steps.pr.outputs.head_branch }}
+        run: |
+          FAILED_RUNS=$(gh run list \
+            -R "${REPO}" \
+            --branch "${HEAD_BRANCH}" \
+            --status failure \
+            --limit 200 \
+            --json databaseId,name,headSha \
+            --jq ".[] | select(.headSha == \"${HEAD_SHA}\") | \"\(.databaseId)\t\(.name)\"")
+
+          if [ -z "${FAILED_RUNS}" ]; then
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+              --body "No failed workflow runs found for this PR at commit \`${HEAD_SHA:0:7}\`."
+            exit 0
+          fi
+
+          RERUN_LIST=""
+          RERUN_ERRORS=""
+
+          while IFS=$'\t' read -r RUN_ID RUN_NAME; do
+            if gh run rerun "${RUN_ID}" -R "${REPO}"; then
+              RERUN_LIST="${RERUN_LIST:+${RERUN_LIST}
+          }- ${RUN_NAME} (#${RUN_ID})"
+            else
+              RERUN_ERRORS="${RERUN_ERRORS:+${RERUN_ERRORS}
+          }- ${RUN_NAME} (#${RUN_ID})"
+            fi
+          done <<< "${FAILED_RUNS}"
+
+          BODY="Re-triggered failed runs:"
+          if [ -n "${RERUN_LIST}" ]; then
+            BODY="${BODY}
+          ${RERUN_LIST}"
+          fi
+          if [ -n "${RERUN_ERRORS}" ]; then
+            BODY="${BODY}
+
+          Failed to re-trigger:
+          ${RERUN_ERRORS}"
+          fi
+
+          gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "${BODY}"
+
+          if [ -n "${RERUN_ERRORS}" ]; then
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+              -f content='confused'
+            exit 1
+          fi
+
+          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content='rocket'
+
+      - name: Handle cancel
+        if: startsWith(steps.cmd.outputs.command, 'cancel:')
+        env:
+          COMMAND: ${{ steps.cmd.outputs.command }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_BRANCH: ${{ steps.pr.outputs.head_branch }}
+        run: |
+          CANCEL_TARGET="${COMMAND#cancel:}"
+          CANCELLED=""
+          CANCEL_ERRORS=""
+
+          if [ "${CANCEL_TARGET}" = "all" ]; then
+            ALL_RUNS=$(gh run list \
+              -R "${REPO}" \
+              --branch "${HEAD_BRANCH}" \
+              --status in_progress \
+              --limit 200 \
+              --json databaseId,name,headSha \
+              --jq ".[] | select(.headSha == \"${HEAD_SHA}\") | \"\(.databaseId)\t\(.name)\"")
+
+            if [ -z "${ALL_RUNS}" ]; then
+              gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+                --body "No in-progress workflow runs found for this PR at commit \`${HEAD_SHA:0:7}\`."
+              exit 0
+            fi
+
+            while IFS=$'\t' read -r RUN_ID RUN_NAME; do
+              [ -z "${RUN_ID}" ] && continue
+              if gh run cancel "${RUN_ID}" -R "${REPO}"; then
+                CANCELLED="${CANCELLED:+${CANCELLED}
+          }- ${RUN_NAME} (#${RUN_ID})"
+              else
+                CANCEL_ERRORS="${CANCEL_ERRORS:+${CANCEL_ERRORS}
+          }- ${RUN_NAME} (#${RUN_ID})"
+              fi
+            done <<< "${ALL_RUNS}"
+          else
+            # Fetch fresh in-progress runs and join with workflow map for stem matching
+            IN_PROGRESS=$(gh run list -R "${REPO}" \
+              --branch "${HEAD_BRANCH}" \
+              --status in_progress \
+              --limit 200 \
+              --json databaseId,workflowDatabaseId,workflowName,headSha \
+              --jq "[.[] | select(.headSha == \"${HEAD_SHA}\")]")
+
+            MATCHES=$(jq -n \
+              --argjson wfs "$(cat /tmp/workflows.json)" \
+              --argjson runs "${IN_PROGRESS}" \
+              --arg cmd "${CANCEL_TARGET}" '
+              ($wfs | map({key: (.id | tostring), value: .}) | from_entries) as $wf_map |
+              [$runs[] |
+                ($wf_map[(.workflowDatabaseId | tostring)] // null) as $wf |
+                select($wf != null) |
+                {
+                  id: .databaseId,
+                  stem: ($wf.path | ltrimstr(".github/workflows/") | rtrimstr(".yml") | rtrimstr(".yaml")),
+                  name: $wf.name
+                }
+              ] | .[] | select(.stem == $cmd or (.stem | startswith($cmd + "-")))
+              | "\(.id)\t\(.name)"
+            ')
+
+            if [ -z "${MATCHES}" ]; then
+              gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+                --body "No in-progress runs found matching \`${CANCEL_TARGET}\` at commit \`${HEAD_SHA:0:7}\`. Use \`/test ?\` to see available names."
+              gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+                -f content='confused'
+              exit 1
+            fi
+
+            while IFS=$'\t' read -r RUN_ID RUN_NAME; do
+              [ -z "${RUN_ID}" ] && continue
+              if gh run cancel "${RUN_ID}" -R "${REPO}"; then
+                CANCELLED="${CANCELLED:+${CANCELLED}
+          }- ${RUN_NAME} (#${RUN_ID})"
+              else
+                CANCEL_ERRORS="${CANCEL_ERRORS:+${CANCEL_ERRORS}
+          }- ${RUN_NAME} (#${RUN_ID})"
+              fi
+            done <<< "${MATCHES}"
+          fi
+
+          if [ -z "${CANCELLED}" ] && [ -z "${CANCEL_ERRORS}" ]; then
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+              --body "No in-progress runs found for \`${CANCEL_TARGET}\` at commit \`${HEAD_SHA:0:7}\`."
+            exit 0
+          fi
+
+          BODY="Cancelled:"
+          if [ -n "${CANCELLED}" ]; then
+            BODY="${BODY}
+          ${CANCELLED}"
+          fi
+          if [ -n "${CANCEL_ERRORS}" ]; then
+            BODY="${BODY}
+
+          Failed to cancel:
+          ${CANCEL_ERRORS}"
+          fi
+
+          gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "${BODY}"
+
+          if [ -n "${CANCEL_ERRORS}" ]; then
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+              -f content='confused'
+            exit 1
+          fi
+
+          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content='rocket'
