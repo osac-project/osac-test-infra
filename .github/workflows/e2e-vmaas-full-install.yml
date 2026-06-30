@@ -89,6 +89,11 @@ on:
         required: false
         type: string
         default: "containerfile"
+      fork-pr-author-association:
+        description: "PR author_association from the caller (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc). Passed by callers for fork PR authorization since github.event context is not inherited by reusable workflows."
+        required: false
+        type: string
+        default: ""
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -108,9 +113,9 @@ jobs:
 
     steps:
       - name: Validate fork PR author
-        if: github.event.pull_request.head.repo.fork == true
+        if: inputs.fork-pr-author-association != ''
         env:
-          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          AUTHOR_ASSOCIATION: ${{ inputs.fork-pr-author-association }}
         run: |
           case "${AUTHOR_ASSOCIATION}" in
             OWNER|MEMBER|COLLABORATOR|CONTRIBUTOR)
