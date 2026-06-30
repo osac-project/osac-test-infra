@@ -109,7 +109,7 @@ class WorkflowExporter:
         "ci":         ["ci", "test", "check", "build"],
         "lint":       ["pre-commit", "lint", "checklist", "kustomize", "check image"],
         "release":    ["publish", "container image", "mirror"],
-        "automation": ["bump", "dependabot", "copilot"],
+        "automation": ["bump", "dependabot", "copilot", "slash"],
     }
 
     @staticmethod
