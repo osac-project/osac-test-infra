@@ -217,7 +217,7 @@ jobs:
             --status failure \
             --limit 200 \
             --json databaseId,name,headSha \
-            --jq ".[] | select(.headSha == \"${HEAD_SHA}\") | \"\(.databaseId)\t\(.name)\"")
+            --jq "[.[] | select(.headSha == \"${HEAD_SHA}\") | [.databaseId, .name]] | .[] | @tsv")
 
           if [ -z "${FAILED_RUNS}" ]; then
             gh pr comment "${PR_NUMBER}" -R "${REPO}" \
@@ -279,7 +279,7 @@ jobs:
               --status in_progress \
               --limit 200 \
               --json databaseId,name,headSha \
-              --jq ".[] | select(.headSha == \"${HEAD_SHA}\") | \"\(.databaseId)\t\(.name)\"")
+              --jq "[.[] | select(.headSha == \"${HEAD_SHA}\") | [.databaseId, .name]] | .[] | @tsv")
 
             if [ -z "${ALL_RUNS}" ]; then
               gh pr comment "${PR_NUMBER}" -R "${REPO}" \
