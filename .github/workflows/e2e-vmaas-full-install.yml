@@ -314,7 +314,7 @@ jobs:
             exit 1
           fi
 
-          # --- Verify PR author has write access to the upstream repo ---
+          # --- Verify PR author is a collaborator on the upstream repo ---
           REPO_ORG="${COMPONENT_REPO%%/*}"
           if [[ "${REPO_ORG}" != "osac-project" ]]; then
             if [[ -z "${PR_AUTHOR}" ]]; then
@@ -322,17 +322,13 @@ jobs:
               exit 1
             fi
             REPO_NAME="${COMPONENT_REPO#*/}"
-            PERM=$(gh api "repos/osac-project/${REPO_NAME}/collaborators/${PR_AUTHOR}/permission" \
-              --jq '.permission' 2>/dev/null || echo "none")
-            case "${PERM}" in
-              admin|maintain|write)
-                echo "PR author '${PR_AUTHOR}' has ${PERM} access to osac-project/${REPO_NAME} — allowing fork build."
-                ;;
-              *)
-                echo "::error::PR author '${PR_AUTHOR}' does not have write access to osac-project/${REPO_NAME} (got: ${PERM}). Fork PRs require write access."
-                exit 1
-                ;;
-            esac
+            if gh api "repos/osac-project/${REPO_NAME}/collaborators/${PR_AUTHOR}" \
+                 --silent 2>/dev/null; then
+              echo "PR author '${PR_AUTHOR}' is a collaborator on osac-project/${REPO_NAME} — allowing fork build."
+            else
+              echo "::error::PR author '${PR_AUTHOR}' is not a collaborator on osac-project/${REPO_NAME}. Fork PRs require org membership."
+              exit 1
+            fi
           fi
 
       - name: Build and load component image
