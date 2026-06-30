@@ -306,7 +306,7 @@ jobs:
               --json databaseId,workflowDatabaseId,workflowName,headSha \
               --jq "[.[] | select(.headSha == \"${HEAD_SHA}\")]")
 
-            MATCHES=$(jq -n \
+            MATCHES=$(jq -nr \
               --argjson wfs "$(cat /tmp/workflows.json)" \
               --argjson runs "${IN_PROGRESS}" \
               --arg cmd "${CANCEL_TARGET}" '
