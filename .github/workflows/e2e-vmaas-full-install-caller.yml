@@ -37,4 +37,7 @@ jobs:
       test-filter: ${{ inputs.test-filter || '' }}
       installer-ref: ${{ inputs.installer-ref || 'main' }}
       image-overrides: ${{ inputs.image-overrides || '{}' }}
+      # Pass author_association and login for fork PR authorization (empty for non-fork PRs)
+      fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
+      fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}

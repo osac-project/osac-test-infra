@@ -94,6 +94,11 @@ on:
         required: false
         type: string
         default: ""
+      fork-pr-author:
+        description: "GitHub login of the PR author (for fork PR org membership check)"
+        required: false
+        type: string
+        default: ""
       notify-on-failure:
         description: "Send Slack notification on failure (typically set for scheduled runs)"
         required: false
@@ -117,21 +122,6 @@ jobs:
       FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
 
     steps:
-      - name: Validate fork PR author
-        if: inputs.fork-pr-author-association != ''
-        env:
-          AUTHOR_ASSOCIATION: ${{ inputs.fork-pr-author-association }}
-        run: |
-          case "${AUTHOR_ASSOCIATION}" in
-            OWNER|MEMBER|COLLABORATOR|CONTRIBUTOR)
-              echo "PR author association is ${AUTHOR_ASSOCIATION} — allowing fork e2e."
-              ;;
-            *)
-              echo "::error::PR author association is '${AUTHOR_ASSOCIATION}'. Fork PRs require org membership."
-              exit 1
-              ;;
-          esac
-
       - name: Set clone name
         id: clone-name
         env:
@@ -192,7 +182,46 @@ jobs:
             secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
             secret/data/osac/e2e/aap-license license | AAP_LICENSE ;
             secret/data/osac/e2e/snapshot-registry dockerconfigjson | SNAPSHOT_REGISTRY_AUTH ;
-            secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL
+            secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL ;
+            secret/data/osac/e2e/github-token token | GH_ORG_TOKEN
+
+      - name: Validate fork PR authorization
+        if: inputs.fork-pr-author-association != ''
+        env:
+          AUTHOR_ASSOCIATION: ${{ inputs.fork-pr-author-association }}
+          PR_AUTHOR: ${{ inputs.fork-pr-author }}
+          GH_TOKEN: ${{ steps.vault.outputs.GH_ORG_TOKEN }}
+        run: |
+          # Tier 1: fast-pass using author_association from webhook (works most of the time)
+          case "${AUTHOR_ASSOCIATION}" in
+            OWNER|MEMBER|COLLABORATOR|CONTRIBUTOR)
+              echo "Fork PR authorized: author_association is ${AUTHOR_ASSOCIATION}."
+              exit 0
+              ;;
+          esac
+
+          # Tier 2: author_association is unreliable ('${AUTHOR_ASSOCIATION}').
+          # Check org membership directly using a Vault-stored token with read:org scope.
+          echo "author_association is '${AUTHOR_ASSOCIATION}', checking org membership for '${PR_AUTHOR}'..."
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/orgs/osac-project/members/${PR_AUTHOR}")
+
+          case "${HTTP_CODE}" in
+            204)
+              echo "Fork PR authorized: '${PR_AUTHOR}' is an osac-project org member."
+              ;;
+            404)
+              echo "::error::Fork PR blocked: '${PR_AUTHOR}' is not an osac-project org member."
+              echo "::error::External contributors need an org member to approve their PR for E2E testing."
+              exit 1
+              ;;
+            *)
+              echo "::error::Org membership check returned unexpected HTTP ${HTTP_CODE} for '${PR_AUTHOR}'."
+              exit 1
+              ;;
+          esac
 
       - name: Write secrets
         env:
