@@ -106,7 +106,17 @@ if [[ "${IS_CENTRAL}" == "true" ]]; then
         bash -c 'test "$(podman inspect --format "{{.State.Running}}" org-runner-exporter 2>/dev/null)" = "true"'
     CHECK_NUM=$(( CHECK_NUM + 1 ))
 
-    # 13. Check SSH tunnel services (if any are configured)
+    # 13. runner-exporter container running
+    check ${CHECK_NUM} "runner-exporter container is running" \
+        bash -c 'test "$(podman inspect --format "{{.State.Running}}" runner-exporter 2>/dev/null)" = "true"'
+    CHECK_NUM=$(( CHECK_NUM + 1 ))
+
+    # 14. workflow-exporter container running
+    check ${CHECK_NUM} "workflow-exporter container is running" \
+        bash -c 'test "$(podman inspect --format "{{.State.Running}}" workflow-exporter 2>/dev/null)" = "true"'
+    CHECK_NUM=$(( CHECK_NUM + 1 ))
+
+    # 15. Check SSH tunnel services (if any are configured)
     tunnel_count=$(systemctl --user list-units --type=service --state=running 'monitoring-tunnel@*' 2>/dev/null | grep -c 'monitoring-tunnel@' || true)
     if [[ "${tunnel_count}" -gt 0 ]]; then
         check ${CHECK_NUM} "SSH tunnel services running (${tunnel_count})" \

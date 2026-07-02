@@ -60,9 +60,12 @@ case "${1:-}" in
             echo "ERROR: --add-tunnel requires <host> and <base_port>" >&2
             usage
         fi
-        # Validate hostname (alphanumeric, dots, hyphens)
-        if ! [[ "${TUNNEL_HOST}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        # Validate hostname (alphanumeric, dots, single hyphens)
+        # Double hyphens are rejected because the tunnel service uses "--" as
+        # the delimiter between host and port in the systemd instance name.
+        if ! [[ "${TUNNEL_HOST}" =~ ^[a-zA-Z0-9._-]+$ ]] || [[ "${TUNNEL_HOST}" == *--* ]]; then
             echo "ERROR: Invalid hostname: ${TUNNEL_HOST}" >&2
+            echo "  (must not contain '--' — used as instance-name delimiter)" >&2
             exit 1
         fi
         # Validate port (numeric, valid range)

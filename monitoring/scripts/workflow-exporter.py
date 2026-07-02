@@ -676,20 +676,27 @@ class WorkflowExporter:
 
         result = []
 
-        # Include active runs first if requested
-        if include_active:
-            with self._lock:
-                for job in self.active_runs:
-                    if matches(job):
-                        result.append(job)
-
-        # Add completed jobs — snapshot to avoid concurrent mutation
+        # Add completed jobs first — snapshot to avoid concurrent mutation.
+        # The limit applies only to completed jobs so active runs never
+        # crowd them out.
         jobs_snapshot = list(self.recent_jobs)
+        completed_count = 0
         for job in jobs_snapshot:
             if matches(job):
                 result.append(job)
-                if len(result) >= limit:
+                completed_count += 1
+                if completed_count >= limit:
                     break
+
+        # Prepend active runs (queued/in_progress) if requested — these are
+        # not counted against the limit so they never displace history.
+        if include_active:
+            active_matched = []
+            with self._lock:
+                for job in self.active_runs:
+                    if matches(job):
+                        active_matched.append(job)
+            result = active_matched + result
 
         return result
 

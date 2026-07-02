@@ -678,7 +678,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs?limit=200&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs?limit=200&active=true&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": {
             "method": "GET",
             "data": ""
