@@ -10,8 +10,8 @@
 
 [Unit]
 Description=GitHub Org Runner Exporter (OSAC CI Monitoring)
-After=network-online.target
-Wants=network-online.target
+
+
 
 [Container]
 Image=ghcr.io/tchelovilar/github-org-runner-exporter:v0.2.3

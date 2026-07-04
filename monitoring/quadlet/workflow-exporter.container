@@ -10,8 +10,8 @@
 
 [Unit]
 Description=Workflow Exporter (OSAC CI Monitoring)
-After=network-online.target
-Wants=network-online.target
+
+
 
 [Container]
 Image=localhost/osac-workflow-exporter:latest

@@ -24,7 +24,7 @@ Type=simple
 # NOTE: $$ escapes $ for systemd so bash receives the raw $ signs.
 ExecStart=/bin/bash -c '\
     INSTANCE="%i"; \
-    HOST="$${INSTANCE%%%%--*}"; \
+    HOST="$${INSTANCE%%--*}"; \
     LOCAL_PORT="$${INSTANCE##*--}"; \
     exec ssh -N -T \
         -o ServerAliveInterval=30 \

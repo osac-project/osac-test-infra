@@ -106,8 +106,8 @@ class WorkflowExporter:
     # Ordered category mapping — first match wins (case-insensitive substring)
     WORKFLOW_CATEGORIES = {
         "e2e":        ["e2e"],
-        "ci":         ["ci", "test", "check", "build"],
         "lint":       ["pre-commit", "lint", "checklist", "kustomize", "check image"],
+        "ci":         ["ci", "test", "check", "build"],
         "release":    ["publish", "container image", "mirror"],
         "automation": ["bump", "dependabot", "copilot", "slash"],
     }
@@ -561,6 +561,8 @@ class WorkflowExporter:
 
         # Prevent unbounded memory growth — keep most recent IDs
         if len(self._seen_run_ids) > 10000:
+            # Keep the most recent 5000 IDs. Run IDs are monotonically
+            # increasing integers, so sorting preserves chronological order.
             self._seen_run_ids = set(sorted(self._seen_run_ids)[-5000:])
 
         logger.info(
@@ -649,7 +651,7 @@ class WorkflowExporter:
                 return False
             if repo_filter and job["repo"] != repo_filter:
                 return False
-            if category_filter and job.get("category", "") != category_filter.lower():
+            if category_filter and job.get("category", "").lower() != category_filter.lower():
                 return False
             if wf_filters:
                 wf_name = job.get("workflow", "").lower()

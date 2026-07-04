@@ -9,8 +9,6 @@
 
 [Unit]
 Description=Alertmanager (OSAC CI Monitoring)
-After=network-online.target
-Wants=network-online.target
 
 [Container]
 Image=quay.io/prometheus/alertmanager:v0.28.1

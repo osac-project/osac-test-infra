@@ -9,8 +9,8 @@
 
 [Unit]
 Description=Prometheus Node Exporter (OSAC CI)
-After=network-online.target
-Wants=network-online.target
+
+
 
 [Container]
 Image=quay.io/prometheus/node-exporter:v1.9.1

@@ -9,8 +9,6 @@
 
 [Unit]
 Description=Prometheus (OSAC CI Monitoring)
-After=network-online.target
-Wants=network-online.target
 
 [Container]
 Image=quay.io/prometheus/prometheus:v3.4.1
@@ -29,12 +27,11 @@ Volume=%h/.monitoring-server/data/prometheus:/prometheus:Z
 # 30-day retention, WAL compression enabled
 Exec=--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=30d --web.listen-address=127.0.0.1:9091 --web.enable-lifecycle --web.enable-admin-api
 
-# Run as the host user inside the container.
-# keep-id maps the invoking user's UID into the container's user namespace.
-# User=1000 overrides the image's default USER (nobody:65534) so the process
-# runs as the mapped host UID and can write to the data volume.
+# Run as the host user — keep-id maps the invoking user's UID into the
+# container so files written to the data volume are owned by the host user.
+# User=%U overrides the image default (nobody:65534) to the invoking user.
 UserNS=keep-id
-User=1000
+User=%U
 
 [Service]
 Restart=always

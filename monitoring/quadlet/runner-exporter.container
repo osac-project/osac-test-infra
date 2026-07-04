@@ -9,8 +9,8 @@
 
 [Unit]
 Description=GitHub Runner Prometheus Exporter (OSAC CI)
-After=network-online.target
-Wants=network-online.target
+
+
 
 [Container]
 Image=ghcr.io/thineshsubramani/github-runner-prometheus-exporter:v1.1.0

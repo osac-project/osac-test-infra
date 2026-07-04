@@ -92,7 +92,7 @@ if [[ "${MODE}" == "central" ]]; then
     chmod 700 "${MONITORING_HOME}/.ssh"
 
     # Data dirs are owned by the current user; containers run with
-    # keep-id + User=1000 so the host uid maps into the container.
+    # keep-id so the host uid maps into the container.
     # No special chown needed.
 fi
 
@@ -145,6 +145,7 @@ CENTRAL_UNITS=(
     "grafana.container"
     "alertmanager.container"
     "org-runner-exporter.container"
+    "workflow-exporter.container"
 )
 
 for unit in "${COMMON_UNITS[@]}"; do
@@ -181,17 +182,18 @@ CENTRAL_SERVICES=(
     "prometheus.service"
     "grafana.service"
     "org-runner-exporter.service"
+    "workflow-exporter.service"
 )
 
 for svc in "${COMMON_SERVICES[@]}"; do
     echo "  Starting ${svc} ..."
-    systemctl --user start "${svc}" || true
+    systemctl --user start "${svc}"
 done
 
 if [[ "${MODE}" == "central" ]]; then
     for svc in "${CENTRAL_SERVICES[@]}"; do
         echo "  Starting ${svc} ..."
-        systemctl --user start "${svc}" || true
+        systemctl --user start "${svc}"
     done
 fi
 
@@ -200,7 +202,7 @@ echo ""
 echo "Waiting for containers to be healthy ..."
 ALL_CONTAINERS=("node-exporter")
 if [[ "${MODE}" == "central" ]]; then
-    ALL_CONTAINERS+=("prometheus" "grafana" "alertmanager" "org-runner-exporter")
+    ALL_CONTAINERS+=("prometheus" "grafana" "alertmanager" "org-runner-exporter" "workflow-exporter")
 fi
 
 containers_ready=true
@@ -223,9 +225,10 @@ done
 
 if [[ "${containers_ready}" != "true" ]]; then
     echo ""
-    echo "WARNING: Some containers did not start. Check with:"
+    echo "ERROR: Some containers did not start. Check with:"
     echo "  podman ps -a"
     echo "  podman logs <container-name>"
+    exit 1
 fi
 
 ###############################################################################
@@ -284,6 +287,17 @@ fi
 phase ${phase_num} "Enabling loginctl linger"
 
 loginctl enable-linger "$(whoami)" 2>/dev/null || true
+
+# Enable services so they survive reboots (Quadlet WantedBy handles this for
+# container units, but explicit enable ensures consistent state).
+for svc in "${COMMON_SERVICES[@]}"; do
+    systemctl --user enable "${svc}" 2>/dev/null || true
+done
+if [[ "${MODE}" == "central" ]]; then
+    for svc in "${CENTRAL_SERVICES[@]}"; do
+        systemctl --user enable "${svc}" 2>/dev/null || true
+    done
+fi
 
 ###############################################################################
 # Handle --add-tunnel mode

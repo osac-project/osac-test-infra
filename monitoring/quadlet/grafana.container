@@ -9,8 +9,7 @@
 
 [Unit]
 Description=Grafana (OSAC CI Monitoring)
-After=network-online.target prometheus.service
-Wants=network-online.target
+After=prometheus.service
 
 [Container]
 Image=docker.io/grafana/grafana-oss:12.0.1
@@ -37,11 +36,11 @@ Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
 Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
 Environment=GF_SERVER_HTTP_PORT=3000
 
-# Run as the host user — keep-id maps the invoking user's UID into the container.
-# User=1000 overrides the image's default USER (grafana:472) so the process
-# runs as the mapped host UID and can write to the data volume.
+# Run as the host user — keep-id maps the invoking user's UID into the
+# container so files written to the data volume are owned by the host user.
+# User=%U overrides the image default (grafana:472) to the invoking user.
 UserNS=keep-id
-User=1000
+User=%U
 
 [Service]
 Restart=always
