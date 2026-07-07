@@ -286,7 +286,7 @@ fi
 ###############################################################################
 phase 1 "Creating directory layout under ${MONITORING_HOME}"
 
-mkdir -p "${MONITORING_HOME}"/{config/grafana,data,dashboards}
+mkdir -p "${MONITORING_HOME}"/{config/grafana,data/textfile-collector,dashboards,scripts}
 chmod 700 "${MONITORING_HOME}"
 
 if [[ "${MODE}" == "central" ]]; then
@@ -330,6 +330,12 @@ else
     info "Agent mode -- no config files to copy."
 fi
 
+# Scripts common to every machine (central + agents).
+cp "${MONITORING_REPO_DIR}/scripts/service-health-textfile.sh" \
+   "${MONITORING_HOME}/scripts/service-health-textfile.sh"
+chmod +x "${MONITORING_HOME}/scripts/service-health-textfile.sh"
+info "Installed service-health-textfile.sh"
+
 ###############################################################################
 # Phase 3: Deploy Quadlet units
 ###############################################################################
@@ -356,6 +362,13 @@ for unit in "${COMMON_UNITS[@]}"; do
     info "Installed ${unit}"
 done
 
+# Plain systemd units common to every machine (not Podman quadlets).
+cp "${MONITORING_REPO_DIR}/systemd/service-health-textfile.service" \
+   "${SYSTEMD_USER_DIR}/service-health-textfile.service"
+cp "${MONITORING_REPO_DIR}/systemd/service-health-textfile.timer" \
+   "${SYSTEMD_USER_DIR}/service-health-textfile.timer"
+info "Installed service-health-textfile.service + .timer"
+
 if [[ "${MODE}" == "central" ]]; then
     for unit in "${CENTRAL_UNITS[@]}"; do
         cp "${MONITORING_REPO_DIR}/quadlet/${unit}" "${QUADLET_DIR}/${unit}"
@@ -375,9 +388,13 @@ systemctl --user daemon-reload
 ###############################################################################
 phase 4 "Starting services"
 
-# Start common services
+# Start common services. service-health-textfile.timer (not the .service --
+# that's Type=oneshot, triggered by the timer, never started directly) runs
+# on every machine since libvirtd/haproxy/podman.socket/runner-agent all
+# exist on agents too, not just the central box.
 COMMON_SERVICES=(
     "node-exporter.service"
+    "service-health-textfile.timer"
 )
 
 CENTRAL_SERVICES=(

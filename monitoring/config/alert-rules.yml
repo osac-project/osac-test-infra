@@ -87,3 +87,19 @@ groups:
         annotations:
           summary: "Exporter {{ $labels.job }} is down on {{ $labels.instance }}"
           description: "The {{ $labels.job }} exporter on {{ $labels.instance }} has been unreachable for more than 5 minutes."
+
+  - name: service-health
+    rules:
+      # ServiceDown -- a machine-level service (GitHub Actions runner agent,
+      # libvirtd, haproxy, podman.socket) is inactive for >5 minutes.
+      # Sourced from the service-health-textfile.sh collector, since these
+      # are system-level systemd units this rootless stack can't reach via
+      # node_exporter's built-in --collector.systemd.
+      - alert: ServiceDown
+        expr: osac_service_active == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.unit }} is down on {{ $labels.instance }}"
+          description: "The systemd unit {{ $labels.unit }} on {{ $labels.instance }} has been inactive for more than 5 minutes."

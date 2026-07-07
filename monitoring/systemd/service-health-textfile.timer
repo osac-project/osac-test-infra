@@ -1,0 +1,17 @@
+# Systemd user timer for the OSAC service health textfile collector.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/service-health-textfile.timer
+#
+# Runs service-health-textfile.service every 30s on every machine (central
+# and agents), so node_exporter's textfile collector always has a fresh
+# osac_service_active reading.
+
+[Unit]
+Description=Run OSAC service health textfile collector every 30s
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

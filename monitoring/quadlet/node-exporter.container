@@ -24,8 +24,16 @@ Volume=/proc:/host/proc:ro
 Volume=/sys:/host/sys:ro
 Volume=/:/rootfs:ro
 
+# Directory (not a single file) mounted read-only for the textfile
+# collector -- service-health-textfile.timer writes osac_service_active
+# metrics here. A directory bind mount doesn't have the single-file inode
+# fragility that prometheus.yml's mount has (see OSAC-2202): files can be
+# freely replaced/atomically renamed within it and the container sees the
+# change immediately.
+Volume=%h/.monitoring-server/data/textfile-collector:/textfile-collector:ro
+
 # Collect host metrics, not container metrics
-Exec=--path.procfs=/host/proc --path.sysfs=/host/sys --path.rootfs=/rootfs --collector.filesystem.mount-points-exclude="^/(sys|proc|dev|host|etc)($$|/)"
+Exec=--path.procfs=/host/proc --path.sysfs=/host/sys --path.rootfs=/rootfs --collector.filesystem.mount-points-exclude="^/(sys|proc|dev|host|etc)($$|/)" --collector.textfile.directory=/textfile-collector
 
 # Run in host PID namespace for process metrics
 PodmanArgs=--pid=host
