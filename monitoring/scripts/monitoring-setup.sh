@@ -9,15 +9,20 @@
 #   --agent     Deploy exporters only (node_exporter).
 #               Run on every other runner machine.
 #
-#   --add-tunnel <host> <base_port>
+#   --add-tunnel <host> <base_port> [label]
 #               Set up a persistent SSH tunnel from the central machine to
 #               a remote runner. Forwards remote 9100/9101 to local ports.
 #               Also registers the runner in prometheus.yml and reloads
 #               Prometheus -- no manual scrape-config edit needed.
+#               <host> is the SSH target (IP or resolvable hostname). If
+#               <host> isn't a meaningful Prometheus instance label on its
+#               own (e.g. a bare IP), pass [label] to set a friendly
+#               "instance" label instead -- it defaults to <host>.
 #
-#   --remove-tunnel <host>
+#   --remove-tunnel <label>
 #               Tear down a remote runner's tunnel and remove it from
-#               Prometheus's scrape config.
+#               Prometheus's scrape config, by the label it was registered
+#               with (see --add-tunnel).
 #
 # Prerequisites:
 #   - podman installed
@@ -33,9 +38,12 @@ MONITORING_REPO_DIR="${MONITORING_REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 QUADLET_DIR="${HOME}/.config/containers/systemd"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
-# Registry of remote runners wired into Prometheus: one "<host> <port>" line
-# per runner. Source of truth for the auto-generated BEGIN/END REMOTE TARGETS
-# block in prometheus.yml -- see regenerate_remote_targets() below.
+# Registry of remote runners wired into Prometheus: one
+# "<label> <ssh_host> <port>" line per runner, keyed by label (the
+# Prometheus "instance" value -- e.g. a friendly name like "osac-9" even
+# when <ssh_host> is a bare IP). Source of truth for the auto-generated
+# BEGIN/END REMOTE TARGETS block in prometheus.yml -- see
+# regenerate_remote_targets() below.
 REMOTE_REGISTRY="${MONITORING_HOME}/config/remote-runners.txt"
 
 ###############################################################################
@@ -44,13 +52,17 @@ info()  { echo "    $1"; }
 ###############################################################################
 
 usage() {
-    echo "Usage: $(basename "$0") [--central | --agent | --add-tunnel <host> <base_port> | --remove-tunnel <host>]"
+    echo "Usage: $(basename "$0") [--central | --agent | --add-tunnel <host> <base_port> [label] | --remove-tunnel <label>]"
     echo ""
     echo "Modes:"
     echo "  --central              Full monitoring stack (central machine only)"
     echo "  --agent                Exporters only (every runner machine)"
-    echo "  --add-tunnel <h> <p>   Add SSH tunnel to remote runner, wire it into Prometheus"
-    echo "  --remove-tunnel <h>    Remove a remote runner's tunnel and Prometheus target"
+    echo "  --add-tunnel <h> <p> [l]  Add SSH tunnel to remote runner, wire it into"
+    echo "                            Prometheus. [l] sets the instance label if <h>"
+    echo "                            (e.g. a bare IP) isn't a good label on its own;"
+    echo "                            defaults to <h>."
+    echo "  --remove-tunnel <l>    Remove a remote runner's tunnel and Prometheus"
+    echo "                         target, by the label it was registered with."
     exit 1
 }
 
@@ -63,27 +75,28 @@ usage() {
 # never hand-edited.
 ###############################################################################
 registry_upsert() {
-    local host="$1" port="$2"
+    local label="$1" host="$2" port="$3"
     local tmp
     tmp="$(mktemp)"
     touch "${REMOTE_REGISTRY}"
-    { grep -v "^${host} " "${REMOTE_REGISTRY}" || true; echo "${host} ${port}"; } > "${tmp}"
+    { grep -v "^${label} " "${REMOTE_REGISTRY}" || true; echo "${label} ${host} ${port}"; } > "${tmp}"
     mv "${tmp}" "${REMOTE_REGISTRY}"
 }
 
 registry_remove() {
-    local host="$1"
+    local label="$1"
     [[ -f "${REMOTE_REGISTRY}" ]] || return 0
     local tmp
     tmp="$(mktemp)"
-    grep -v "^${host} " "${REMOTE_REGISTRY}" > "${tmp}" || true
+    grep -v "^${label} " "${REMOTE_REGISTRY}" > "${tmp}" || true
     mv "${tmp}" "${REMOTE_REGISTRY}"
 }
 
-registry_port_for_host() {
-    local host="$1"
+# Prints "<ssh_host> <port>" for a given label, or fails if not found.
+registry_lookup() {
+    local label="$1"
     [[ -f "${REMOTE_REGISTRY}" ]] || return 1
-    awk -v h="${host}" '$1 == h { print $2; found=1 } END { exit !found }' "${REMOTE_REGISTRY}"
+    awk -v l="${label}" '$1 == l { print $2, $3; found=1 } END { exit !found }' "${REMOTE_REGISTRY}"
 }
 
 regenerate_remote_targets() {
@@ -96,10 +109,10 @@ regenerate_remote_targets() {
         {
             echo "  - job_name: node-exporter-remote"
             echo "    static_configs:"
-            while read -r host port; do
-                [[ -z "${host}" ]] && continue
+            while read -r label _host port; do
+                [[ -z "${label}" ]] && continue
                 printf '      - targets:\n          - 127.0.0.1:%s\n        labels:\n          instance: %s\n          role: agent\n' \
-                    "${port}" "${host}"
+                    "${port}" "${label}"
             done < "${REMOTE_REGISTRY}"
         } > "${body}"
     fi
@@ -118,8 +131,14 @@ regenerate_remote_targets() {
         skipping { next }
         { print }
     ' "${prom_config}" > "${tmp}"
-    mv "${tmp}" "${prom_config}"
-    rm -f "${body}"
+    # NOT `mv` -- prom_config is bind-mounted as a single file into the
+    # Prometheus container, and Podman/Docker single-file bind mounts follow
+    # the inode, not the path. `mv` (rename) swaps in a new inode that the
+    # running container never sees, so edits would silently stop reaching
+    # Prometheus until the container is restarted. `cp -f` onto an existing
+    # destination truncates and rewrites the same inode in place instead.
+    cp -f "${tmp}" "${prom_config}"
+    rm -f "${tmp}" "${body}"
 }
 
 reload_prometheus() {
@@ -142,6 +161,7 @@ reload_prometheus() {
 MODE=""
 TUNNEL_HOST=""
 TUNNEL_BASE_PORT=""
+TUNNEL_LABEL=""
 
 case "${1:-}" in
     --central)   MODE="central" ;;
@@ -150,8 +170,9 @@ case "${1:-}" in
         MODE="tunnel"
         TUNNEL_HOST="${2:-}"
         TUNNEL_BASE_PORT="${3:-}"
+        TUNNEL_LABEL="${4:-${TUNNEL_HOST}}"
         if [[ -z "${TUNNEL_HOST}" || -z "${TUNNEL_BASE_PORT}" ]]; then
-            echo "ERROR: --add-tunnel requires <host> and <base_port>" >&2
+            echo "ERROR: --add-tunnel requires <host> and <base_port> (optional [label])" >&2
             usage
         fi
         # Validate hostname (alphanumeric, dots, single hyphens)
@@ -160,6 +181,10 @@ case "${1:-}" in
         if ! [[ "${TUNNEL_HOST}" =~ ^[a-zA-Z0-9._-]+$ ]] || [[ "${TUNNEL_HOST}" == *--* ]]; then
             echo "ERROR: Invalid hostname: ${TUNNEL_HOST}" >&2
             echo "  (must not contain '--' — used as instance-name delimiter)" >&2
+            exit 1
+        fi
+        if ! [[ "${TUNNEL_LABEL}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "ERROR: Invalid label: ${TUNNEL_LABEL}" >&2
             exit 1
         fi
         # Validate port (numeric, valid range)
@@ -171,9 +196,9 @@ case "${1:-}" in
         ;;
     --remove-tunnel)
         MODE="remove-tunnel"
-        TUNNEL_HOST="${2:-}"
-        if [[ -z "${TUNNEL_HOST}" ]]; then
-            echo "ERROR: --remove-tunnel requires <host>" >&2
+        TUNNEL_LABEL="${2:-}"
+        if [[ -z "${TUNNEL_LABEL}" ]]; then
+            echo "ERROR: --remove-tunnel requires <label>" >&2
             usage
         fi
         ;;
@@ -220,11 +245,11 @@ if [[ "${MODE}" == "tunnel" ]]; then
     info "Tunnel started: monitoring-tunnel@${INSTANCE}.service"
     info "  Remote 9100 -> local ${TUNNEL_BASE_PORT} (node_exporter)"
 
-    phase 2 "Wiring ${TUNNEL_HOST} into Prometheus"
-    registry_upsert "${TUNNEL_HOST}" "${TUNNEL_BASE_PORT}"
+    phase 2 "Wiring ${TUNNEL_LABEL} (${TUNNEL_HOST}) into Prometheus"
+    registry_upsert "${TUNNEL_LABEL}" "${TUNNEL_HOST}" "${TUNNEL_BASE_PORT}"
     regenerate_remote_targets
     reload_prometheus
-    info "Registered in ${REMOTE_REGISTRY} and prometheus.yml"
+    info "Registered in ${REMOTE_REGISTRY} and prometheus.yml (instance label: ${TUNNEL_LABEL})"
 
     echo ""
     echo "Next steps (if not already done):"
@@ -235,20 +260,21 @@ if [[ "${MODE}" == "tunnel" ]]; then
 fi
 
 if [[ "${MODE}" == "remove-tunnel" ]]; then
-    phase 1 "Removing SSH tunnel to ${TUNNEL_HOST}"
+    phase 1 "Removing SSH tunnel for ${TUNNEL_LABEL}"
 
-    port="$(registry_port_for_host "${TUNNEL_HOST}")" || true
-    if [[ -z "${port}" ]]; then
-        echo "ERROR: ${TUNNEL_HOST} is not registered in ${REMOTE_REGISTRY}" >&2
+    lookup_result="$(registry_lookup "${TUNNEL_LABEL}")" || true
+    if [[ -z "${lookup_result}" ]]; then
+        echo "ERROR: ${TUNNEL_LABEL} is not registered in ${REMOTE_REGISTRY}" >&2
         exit 1
     fi
+    read -r host port <<< "${lookup_result}"
 
-    INSTANCE="${TUNNEL_HOST}--${port}"
+    INSTANCE="${host}--${port}"
     systemctl --user disable --now "monitoring-tunnel@${INSTANCE}.service" 2>/dev/null || true
     info "Tunnel stopped: monitoring-tunnel@${INSTANCE}.service"
 
-    phase 2 "Unwiring ${TUNNEL_HOST} from Prometheus"
-    registry_remove "${TUNNEL_HOST}"
+    phase 2 "Unwiring ${TUNNEL_LABEL} from Prometheus"
+    registry_remove "${TUNNEL_LABEL}"
     regenerate_remote_targets
     reload_prometheus
     info "Removed from ${REMOTE_REGISTRY} and prometheus.yml"
