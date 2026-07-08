@@ -58,24 +58,44 @@ jobs:
           exportEnv: false
           secrets: |
             secret/data/osac/monitoring/github-token token | PRIVATE_GITHUB_TOKEN ;
-            secret/data/osac/monitoring/slack-webhook-url url | SLACK_WEBHOOK_URL
+            secret/data/osac/monitoring/slack-webhook-url url | SLACK_WEBHOOK_URL ;
+            secret/data/osac/monitoring/grafana-oauth client_id | GF_OAUTH_CLIENT_ID ;
+            secret/data/osac/monitoring/grafana-oauth client_secret | GF_OAUTH_CLIENT_SECRET ;
+            secret/data/osac/monitoring/grafana-oauth root_url | GF_ROOT_URL ;
+            secret/data/osac/monitoring/grafana-oauth admin_password | GF_ADMIN_PASSWORD
 
-      - name: Write .env
+      - name: Write .env files
         env:
           PRIVATE_GITHUB_TOKEN: ${{ steps.vault.outputs.PRIVATE_GITHUB_TOKEN }}
+          GF_OAUTH_CLIENT_ID: ${{ steps.vault.outputs.GF_OAUTH_CLIENT_ID }}
+          GF_OAUTH_CLIENT_SECRET: ${{ steps.vault.outputs.GF_OAUTH_CLIENT_SECRET }}
+          GF_ROOT_URL: ${{ steps.vault.outputs.GF_ROOT_URL }}
+          GF_ADMIN_PASSWORD: ${{ steps.vault.outputs.GF_ADMIN_PASSWORD }}
         run: |
           set -euo pipefail
-          ENV_FILE="${HOME}/.monitoring-server/.env"
-          mkdir -p "$(dirname "${ENV_FILE}")"
-          touch "${ENV_FILE}"
-          # Update in place if the file already has other variables --
-          # don't clobber them.
-          if grep -q '^PRIVATE_GITHUB_TOKEN=' "${ENV_FILE}"; then
-            sed -i "s|^PRIVATE_GITHUB_TOKEN=.*|PRIVATE_GITHUB_TOKEN=${PRIVATE_GITHUB_TOKEN}|" "${ENV_FILE}"
-          else
-            echo "PRIVATE_GITHUB_TOKEN=${PRIVATE_GITHUB_TOKEN}" >> "${ENV_FILE}"
-          fi
-          chmod 600 "${ENV_FILE}"
+          # Idempotent: updates a key in place if the file already has other
+          # variables, appends otherwise -- never clobbers the rest of the file.
+          set_var() {
+            local file="$1" key="$2" value="$3"
+            touch "${file}"
+            if grep -q "^${key}=" "${file}"; then
+              sed -i "s|^${key}=.*|${key}=${value}|" "${file}"
+            else
+              echo "${key}=${value}" >> "${file}"
+            fi
+            chmod 600 "${file}"
+          }
+
+          MONITORING_HOME="${HOME}/.monitoring-server"
+          mkdir -p "${MONITORING_HOME}"
+          set_var "${MONITORING_HOME}/.env" PRIVATE_GITHUB_TOKEN "${PRIVATE_GITHUB_TOKEN}"
+          set_var "${MONITORING_HOME}/.env.grafana" GF_AUTH_GITHUB_CLIENT_ID "${GF_OAUTH_CLIENT_ID}"
+          set_var "${MONITORING_HOME}/.env.grafana" GF_AUTH_GITHUB_CLIENT_SECRET "${GF_OAUTH_CLIENT_SECRET}"
+          set_var "${MONITORING_HOME}/.env.grafana" GF_SERVER_ROOT_URL "${GF_ROOT_URL}"
+          # Only takes effect on Grafana's first-ever boot (seeds the
+          # initial admin user) -- harmless to keep in sync on every
+          # deploy regardless, in case of a future re-provision.
+          set_var "${MONITORING_HOME}/.env.grafana" GF_SECURITY_ADMIN_PASSWORD "${GF_ADMIN_PASSWORD}"
 
       - name: Update central stack
         env:

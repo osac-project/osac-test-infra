@@ -457,6 +457,12 @@ path "secret/data/osac/monitoring/github-token" {
 path "secret/data/osac/monitoring/slack-webhook-url" {
   capabilities = ["read"]
 }
+# Grafana's GitHub OAuth app credentials + root URL -- previously only in
+# the manually-configured .env.grafana / hardcoded in grafana.container
+# on osac-ci-1, never in git.
+path "secret/data/osac/monitoring/grafana-oauth" {
+  capabilities = ["read"]
+}
 POLICY
 echo "Policy 'osac-e2e' created."
 

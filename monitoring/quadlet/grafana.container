@@ -2,7 +2,13 @@
 # Installed by monitoring-setup.sh to ~/.config/containers/systemd/grafana.container
 #
 # Deployed on the CENTRAL machine only.
-# Access via: ssh -L 3000:127.0.0.1:3000 <user>@<central-host>
+# Access via: https://<central-host-ip>:3000 (direct HTTPS + GitHub OAuth
+# login -- see GF_SERVER_ROOT_URL below, specific to this deployment's host).
+#
+# TLS cert/key and the GitHub OAuth client id/secret (.env.grafana) are
+# real credentials, provisioned manually on the central host, never
+# committed here -- see monitoring/README.md (OSAC-2205) for how to
+# provision them on a fresh central machine.
 #
 # Quadlet generates a systemd unit (grafana.service) from this file.
 # See: man podman-systemd.unit(5)
@@ -25,16 +31,46 @@ Volume=%h/.monitoring-server/config/grafana/datasources.yml:/etc/grafana/provisi
 Volume=%h/.monitoring-server/config/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro,Z
 Volume=%h/.monitoring-server/dashboards:/var/lib/grafana/dashboards:ro,Z
 
+# TLS certificates -- provisioned manually on the central host, see
+# monitoring/README.md. Not committed (private key material).
+Volume=%h/.monitoring-server/certs/grafana.crt:/etc/grafana/grafana.crt:ro,Z
+Volume=%h/.monitoring-server/certs/grafana.key:/etc/grafana/grafana.key:ro,Z
+
 # Install Infinity plugin for JSON API datasource (workflow exporter jobs API)
 Environment=GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource
 
-# Anonymous viewers can browse; log in as admin to star/edit dashboards
-Environment=GF_AUTH_ANONYMOUS_ENABLED=true
-Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
-# Bind to localhost only (host network mode)
-Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
+# --- Server: direct HTTPS on all interfaces (no reverse proxy) ---
+Environment=GF_SERVER_HTTP_ADDR=0.0.0.0
 Environment=GF_SERVER_HTTP_PORT=3000
+Environment=GF_SERVER_PROTOCOL=https
+Environment=GF_SERVER_CERT_FILE=/etc/grafana/grafana.crt
+Environment=GF_SERVER_CERT_KEY=/etc/grafana/grafana.key
+# GF_SERVER_ROOT_URL (deployment-specific -- the central host's address)
+# comes from .env.grafana below, not hardcoded here.
+
+# --- GitHub OAuth + admin password ---
+# GF_AUTH_GITHUB_CLIENT_ID / GF_AUTH_GITHUB_CLIENT_SECRET, GF_SERVER_ROOT_URL,
+# and GF_SECURITY_ADMIN_PASSWORD all come from this file -- provisioned
+# manually on the central host, see monitoring/README.md.
+# GF_SECURITY_ADMIN_PASSWORD only takes effect on Grafana's first-ever
+# boot (it seeds the initial admin user in the data volume); without it,
+# a brand new deployment would default to the well-known admin/admin.
+EnvironmentFile=%h/.monitoring-server/.env.grafana
+Environment=GF_AUTH_GITHUB_ENABLED=true
+Environment=GF_AUTH_GITHUB_ALLOW_SIGN_UP=true
+Environment=GF_AUTH_GITHUB_SCOPES=user:email,read:org
+Environment=GF_AUTH_GITHUB_AUTH_URL=https://github.com/login/oauth/authorize
+Environment=GF_AUTH_GITHUB_TOKEN_URL=https://github.com/login/oauth/access_token
+Environment=GF_AUTH_GITHUB_API_URL=https://api.github.com/user
+Environment=GF_AUTH_GITHUB_ALLOWED_ORGANIZATIONS=osac-project
+
+# --- Auth settings: require GitHub login, no anonymous access ---
+Environment=GF_AUTH_ANONYMOUS_ENABLED=false
+Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
+
+# --- User settings ---
+Environment=GF_USERS_ALLOW_SIGN_UP=false
+Environment=GF_USERS_AUTO_ASSIGN_ORG_ROLE=Viewer
 
 # Run as the host user — keep-id maps the invoking user's UID into the
 # container so files written to the data volume are owned by the host user.

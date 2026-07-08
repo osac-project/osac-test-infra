@@ -99,11 +99,25 @@ if [[ "${IS_CENTRAL}" == "true" ]]; then
     check "grafana container is running" \
         bash -c 'test "$(podman inspect --format "{{.State.Running}}" grafana 2>/dev/null)" = "true"'
 
+    # Grafana serves HTTPS directly with a real cert (see
+    # monitoring/quadlet/grafana.container) -- -k because it's not
+    # necessarily signed by a CA this box trusts.
     check "Grafana API is reachable" \
-        curl -sf http://127.0.0.1:3000/api/health
+        curl -skf https://127.0.0.1:3000/api/health
 
-    check "Grafana Prometheus datasource is configured" \
-        bash -c 'curl -sf http://127.0.0.1:3000/api/datasources | jq -e ".[] | select(.name == \"Prometheus\" and .type == \"prometheus\")"'
+    # /api/datasources requires authentication now that anonymous access
+    # is disabled (GF_AUTH_ANONYMOUS_ENABLED=false). Gated on an optional
+    # GRAFANA_API_TOKEN (a Grafana service account token, e.g. from Vault)
+    # rather than run unconditionally -- without one, this would always
+    # fail regardless of whether the datasource is actually fine, which
+    # is worse than not checking at all.
+    if [[ -n "${GRAFANA_API_TOKEN:-}" ]]; then
+        check "Grafana Prometheus datasource is configured" \
+            bash -c 'curl -skf -H "Authorization: Bearer ${GRAFANA_API_TOKEN}" https://127.0.0.1:3000/api/datasources | jq -e ".[] | select(.name == \"Prometheus\" and .type == \"prometheus\")"'
+    else
+        CHECK_NUM=$(( CHECK_NUM + 1 ))
+        echo "  [SKIP] ${CHECK_NUM}. Grafana Prometheus datasource is configured (no GRAFANA_API_TOKEN set)"
+    fi
 
     check "alertmanager container is running" \
         bash -c 'test "$(podman inspect --format "{{.State.Running}}" alertmanager 2>/dev/null)" = "true"'
