@@ -29,6 +29,10 @@ inputs:
     description: 'URL to download artifacts (optional)'
     required: false
     default: ''
+  pr-info:
+    description: 'Pull request that triggered this run, e.g. "PR #166: <title> (<url>)" (optional)'
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -43,6 +47,7 @@ runs:
         INPUT_WORKFLOW_URL: ${{ inputs.workflow-url }}
         INPUT_FAILED_STEP: ${{ inputs.failed-step }}
         INPUT_ARTIFACT_URL: ${{ inputs.artifact-url }}
+        INPUT_PR_INFO: ${{ inputs.pr-info }}
         INPUT_SLACK_WEBHOOK: ${{ inputs.slack-webhook-url }}
       run: |
         # Set status-specific values
@@ -67,13 +72,18 @@ runs:
           fi
         fi
 
-        # Build compact 2-column fields
+        # Build compact 2-column fields -- PR info and (for failures) which
+        # step failed are appended only when provided, so callers that don't
+        # pass them (e.g. existing e2e workflows) see no change in output.
         FIELDS=$(jq -n \
           --arg branch "$INPUT_BRANCH_NAME" \
           --arg commit "${INPUT_COMMIT_SHA:0:7}" \
-          '[
-            {"type": "mrkdwn", "text": ("*Branch:* " + $branch + " (" + $commit + ")")}
-          ]')
+          --arg pr_info "$INPUT_PR_INFO" \
+          --arg failed_step "$INPUT_FAILED_STEP" \
+          --arg status "$INPUT_STATUS" \
+          '[{"type": "mrkdwn", "text": ("*Branch:* " + $branch + " (" + $commit + ")")}]
+           + (if $pr_info != "" then [{"type": "mrkdwn", "text": ("*Triggered by:* " + $pr_info)}] else [] end)
+           + (if $failed_step != "" and $status != "success" then [{"type": "mrkdwn", "text": ("*Failed step:* " + $failed_step)}] else [] end)')
 
         # Build action buttons
         if [ -n "$INPUT_ARTIFACT_URL" ]; then

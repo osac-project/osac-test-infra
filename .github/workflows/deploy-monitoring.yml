@@ -28,12 +28,16 @@ jobs:
     runs-on: monitoring-central
     permissions:
       contents: read
+      # Read-only lookup of the PR (if any) associated with the deployed
+      # commit, for the Slack notification at the end of this job.
+      pull-requests: read
     concurrency:
       group: deploy-monitoring
       cancel-in-progress: false
 
     steps:
       - name: Checkout repository
+        id: checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
@@ -65,6 +69,7 @@ jobs:
             secret/data/osac/monitoring/grafana-oauth admin_password | GF_ADMIN_PASSWORD
 
       - name: Write .env files
+        id: write_env
         env:
           PRIVATE_GITHUB_TOKEN: ${{ steps.vault.outputs.PRIVATE_GITHUB_TOKEN }}
           GF_OAUTH_CLIENT_ID: ${{ steps.vault.outputs.GF_OAUTH_CLIENT_ID }}
@@ -98,11 +103,13 @@ jobs:
           set_var "${MONITORING_HOME}/.env.grafana" GF_SECURITY_ADMIN_PASSWORD "${GF_ADMIN_PASSWORD}"
 
       - name: Update central stack
+        id: update_central
         env:
           SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
         run: bash monitoring/scripts/monitoring-setup.sh --update-central
 
       - name: Update remote agents
+        id: update_agents
         run: |
           set -uo pipefail
           REGISTRY="${HOME}/.monitoring-server/config/remote-runners.txt"
@@ -178,6 +185,7 @@ jobs:
           fi
 
       - name: Post-deploy health check
+        id: health_check
         run: |
           set -uo pipefail
           # A few retries with a scrape-interval-sized gap: node-exporter on
@@ -194,3 +202,58 @@ jobs:
           done
           echo "Health check failed after 3 attempts."
           exit 1
+
+      # --- Slack notification (always runs, regardless of earlier failures) ---
+      - name: Look up triggering PR
+        id: pr_lookup
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          RESPONSE=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" 2>/dev/null) || RESPONSE='[]'
+          PR_NUMBER=$(echo "${RESPONSE}" | jq -r '.[0].number // empty')
+          PR_TITLE=$(echo "${RESPONSE}" | jq -r '.[0].title // empty')
+          if [[ -n "${PR_NUMBER}" ]]; then
+            echo "info=PR #${PR_NUMBER}: ${PR_TITLE} (${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER})" >> "$GITHUB_OUTPUT"
+          else
+            echo "info=Direct push to main (no associated PR found)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine failed step
+        id: failed_step
+        if: always()
+        continue-on-error: true
+        run: |
+          if [[ "${{ steps.checkout.outcome }}" == "failure" ]]; then
+            echo "name=Checkout repository" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.approle.outcome }}" == "failure" ]]; then
+            echo "name=Read AppRole credentials" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.vault.outcome }}" == "failure" ]]; then
+            echo "name=Retrieve secrets from Vault" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.write_env.outcome }}" == "failure" ]]; then
+            echo "name=Write .env files" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.update_central.outcome }}" == "failure" ]]; then
+            echo "name=Update central stack" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.update_agents.outcome }}" == "failure" ]]; then
+            echo "name=Update remote agents" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.health_check.outcome }}" == "failure" ]]; then
+            echo "name=Post-deploy health check" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify Slack
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/notify-slack
+        with:
+          status: ${{ job.status }}
+          workflow-name: "Deploy monitoring stack"
+          slack-webhook-url: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
+          workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch-name: ${{ github.ref_name }}
+          commit-sha: ${{ github.sha }}
+          failed-step: ${{ steps.failed_step.outputs.name }}
+          pr-info: ${{ steps.pr_lookup.outputs.info }}
