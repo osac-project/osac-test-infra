@@ -42,6 +42,16 @@
 #   - For --add-tunnel: ssh, ssh-keygen installed
 set -euo pipefail
 
+# `systemctl --user` needs XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS to reach
+# the user's systemd/dbus instance. An interactive login shell always has
+# these, but a process spawned outside one -- e.g. a GitHub Actions
+# self-hosted runner job (see deploy-monitoring.yml, OSAC-2204) -- may not,
+# even though loginctl enable-linger (Phase 7 below) keeps that instance
+# running persistently at the standard path. Default to that path instead
+# of failing with "Failed to connect to user scope bus via local transport".
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
+
 MONITORING_HOME="${HOME}/.monitoring-server"
 # Resolve to the monitoring/ directory: scripts live at monitoring/scripts/
 MONITORING_REPO_DIR="${MONITORING_REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -314,7 +324,21 @@ if [[ "${MODE}" == "update-central" ]]; then
 
     cp "${MONITORING_REPO_DIR}/config/prometheus.yml"   "${MONITORING_HOME}/config/prometheus.yml"
     cp "${MONITORING_REPO_DIR}/config/alert-rules.yml"  "${MONITORING_HOME}/config/alert-rules.yml"
-    cp "${MONITORING_REPO_DIR}/config/alertmanager.yml" "${MONITORING_HOME}/config/alertmanager.yml"
+
+    # alertmanager.yml's api_url is a real credential (Slack webhook) that's
+    # never committed to git -- the repo copy only has the SLACK_WEBHOOK_URL
+    # placeholder. A plain cp here would silently overwrite a working,
+    # manually-configured webhook with that placeholder (this happened
+    # live during OSAC-2204 rollout and broke Alertmanager). Render the
+    # placeholder from the env var if provided; otherwise leave whatever's
+    # already deployed untouched rather than risk clobbering it.
+    if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+        sed "s|SLACK_WEBHOOK_URL|${SLACK_WEBHOOK_URL}|g" \
+            "${MONITORING_REPO_DIR}/config/alertmanager.yml" > "${MONITORING_HOME}/config/alertmanager.yml"
+    else
+        echo "  WARNING: SLACK_WEBHOOK_URL not set -- leaving deployed alertmanager.yml" \
+             "untouched (would otherwise overwrite it with the repo's placeholder)."
+    fi
     cp "${MONITORING_REPO_DIR}/config/grafana/datasources.yml" "${MONITORING_HOME}/config/grafana/datasources.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
     # Remove stale dashboards first -- a plain cp only adds/overwrites, so a

@@ -57,7 +57,8 @@ jobs:
           secretId: ${{ steps.approle.outputs.secret-id }}
           exportEnv: false
           secrets: |
-            secret/data/osac/monitoring/github-token token | PRIVATE_GITHUB_TOKEN
+            secret/data/osac/monitoring/github-token token | PRIVATE_GITHUB_TOKEN ;
+            secret/data/osac/monitoring/slack-webhook-url url | SLACK_WEBHOOK_URL
 
       - name: Write .env
         env:
@@ -77,6 +78,8 @@ jobs:
           chmod 600 "${ENV_FILE}"
 
       - name: Update central stack
+        env:
+          SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
         run: bash monitoring/scripts/monitoring-setup.sh --update-central
 
       - name: Update remote agents
