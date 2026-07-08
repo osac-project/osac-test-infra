@@ -42,7 +42,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -81,7 +81,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -117,7 +117,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -157,7 +157,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -193,7 +193,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -234,7 +234,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -303,7 +303,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts-by-workflow?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts-by-workflow?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -366,7 +366,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/counts-by-workflow?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/counts-by-workflow?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -404,7 +404,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/failed-steps?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/failed-steps?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -483,7 +483,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/avg-duration-by-type?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/avg-duration-by-type?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -534,7 +534,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/avg-step-duration?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/avg-step-duration?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
@@ -601,7 +601,10 @@
             "properties": [
               { "id": "displayName", "value": "PR" },
               { "id": "custom.width", "value": 70 },
-              { "id": "links", "value": [{ "title": "Open PR", "url": "${__data.fields.pr_url}", "targetBlank": true }] }
+              { "id": "links", "value": [
+                { "title": "Open PR", "url": "${__data.fields.pr_url}", "targetBlank": true },
+                { "title": "Filter this dashboard by this PR", "url": "/d/osac-workflow-jobs/osac-ci-workflow-jobs?orgId=1&from=${__from}&to=${__to}&var-search=${__value.raw:percentencode}&var-category=All&var-repo_filter=All&var-workflow_name=All&var-status_filter=All&var-job_type=All", "targetBlank": false }
+              ] }
             ]
           },
           {
@@ -690,7 +693,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs?limit=200&active=true&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs?limit=200&active=true&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -765,7 +768,10 @@
             "properties": [
               { "id": "displayName", "value": "PR" },
               { "id": "custom.width", "value": 70 },
-              { "id": "links", "value": [{ "title": "Open PR", "url": "${__data.fields.pr_url}", "targetBlank": true }] }
+              { "id": "links", "value": [
+                { "title": "Open PR", "url": "${__data.fields.pr_url}", "targetBlank": true },
+                { "title": "Filter this dashboard by this PR", "url": "/d/osac-workflow-jobs/osac-ci-workflow-jobs?orgId=1&from=${__from}&to=${__to}&var-search=${__value.raw:percentencode}&var-category=All&var-repo_filter=All&var-workflow_name=All&var-status_filter=All&var-job_type=All", "targetBlank": false }
+              ] }
             ]
           },
           {
@@ -857,7 +863,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs?status=failure&limit=100&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs?status=failure&limit=100&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": {
             "method": "GET",
             "data": ""
