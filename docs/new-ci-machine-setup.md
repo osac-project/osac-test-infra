@@ -165,6 +165,11 @@ KUBECONFIG=~/.kube/test-1.kubeconfig oc get nodes
 sudo python3 /usr/local/bin/cluster-tool destroy test-1
 ```
 
+Once the machine is up as a runner, add it to CI monitoring — see
+[`monitoring/README.md`](../monitoring/README.md#provisioning-a-new-agent-machine)
+for provisioning it as a monitoring agent and wiring it into the central
+Prometheus via an SSH tunnel.
+
 ## Cleanup / Removing runners
 
 To remove all runners from a machine:
