@@ -25,6 +25,10 @@ Environment=GITHUB_ORG=osac-project
 Environment=PORT=9103
 Environment=POLL_INTERVAL=90
 Environment=REPOS=osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer
+# Job history retention (SQLite-backed, see OSAC-2211): keep 2 months,
+# with a hard row-count cap as a disk safety net.
+Environment=JOBS_HISTORY_DAYS=60
+Environment=JOBS_HISTORY_MAX_COUNT=100000
 
 # Mount the exporter script into the container
 Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z

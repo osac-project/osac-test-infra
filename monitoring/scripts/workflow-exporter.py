@@ -14,8 +14,8 @@ import sys
 import time
 import json
 import logging
+import sqlite3
 import threading
-from collections import deque
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -45,13 +45,27 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "90"))
 PORT = int(os.getenv("PORT", "9103"))
 # Comma-separated list of repos to monitor. Empty = auto-discover active repos.
 REPOS_FILTER = [r.strip() for r in os.getenv("REPOS", "").split(",") if r.strip()]
-# How many recent jobs to keep in memory for the JSON API
-JOBS_HISTORY_SIZE = int(os.getenv("JOBS_HISTORY_SIZE", "500"))
-# Cache file for persistence across restarts
+# How many days of job history to retain in the DB. A count cap alone (the
+# old JOBS_HISTORY_SIZE behavior, 500 jobs shared across all repos) gets
+# exhausted in ~10 hours during busy periods since PR/comment-triggered runs
+# vastly outnumber scheduled ones -- silently truncating dashboards that
+# select "last 7 days" (see OSAC-2211).
+JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "60"))
+# Hard cap on stored job count regardless of age, as a memory/disk safety
+# net -- not expected to be the binding constraint at normal CI volume.
+JOBS_HISTORY_MAX_COUNT = int(os.getenv("JOBS_HISTORY_MAX_COUNT", "100000"))
+# Data directory for the SQLite DB (persists across restarts) and the
+# legacy JSON cache file this exporter migrates from on first startup.
 CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.monitoring-server/data"))
-CACHE_FILE = os.path.join(CACHE_DIR, "workflow-exporter-cache.json")
-# Max age of cache file before falling back to API fetch (seconds)
-CACHE_MAX_AGE = int(os.getenv("CACHE_MAX_AGE", "3600"))
+DB_FILE = os.path.join(CACHE_DIR, "workflow-exporter.db")
+LEGACY_CACHE_FILE = os.path.join(CACHE_DIR, "workflow-exporter-cache.json")
+
+JOB_COLUMNS = [
+    "id", "repo", "workflow", "display_name", "category", "branch", "status",
+    "conclusion", "event", "trigger", "duration_s", "duration", "actor",
+    "url", "created_at", "updated_at", "run_number", "run_attempt",
+    "failed_step", "steps_json",
+]
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics
@@ -135,56 +149,65 @@ class WorkflowExporter:
         self._repos_cache_ts = 0
         self._active_repos = None
         self._active_repos_ts = 0
-        self._seen_run_ids = set()
-        # Recent jobs for JSON API — thread-safe via GIL for reads
-        self.recent_jobs = deque(maxlen=JOBS_HISTORY_SIZE)
-        # Current in-flight runs (queued + in_progress)
+        # Current in-flight runs (queued + in_progress) — pure in-memory,
+        # unrelated to the persisted job history below.
         self.active_runs = []
         self._lock = threading.Lock()
+        self._init_db()
 
-    # -- cache persistence ---------------------------------------------------
+    # -- SQLite persistence ---------------------------------------------------
+    #
+    # Job history lives in a SQLite DB (DB_FILE), not in memory: at 60 days
+    # of retention (~70-80k jobs at current CI volume) a JSON-file dump on
+    # every 90s poll cycle -- the previous design -- rewrites the entire
+    # history every cycle, and every dashboard query re-scans the entire
+    # list in Python. SQLite gives cheap appends and indexed queries
+    # instead. Connections are opened short-lived, per operation, rather
+    # than shared across threads (the collect() polling loop and the HTTP
+    # handler both touch the DB) -- simplest way to avoid sqlite3's
+    # same-thread restriction without adding a lock, and cheap enough at
+    # this call frequency.
 
-    def _save_cache(self):
-        """Persist recent_jobs and _seen_run_ids to disk."""
-        try:
-            os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-            data = {
-                "saved_at": datetime.now(timezone.utc).isoformat(),
-                "recent_jobs": list(self.recent_jobs),
-                "seen_run_ids": sorted(self._seen_run_ids),
-            }
-            tmp = CACHE_FILE + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(data, f, default=str)
-            os.replace(tmp, CACHE_FILE)
-            logger.debug("Cache saved: %d jobs, %d seen IDs",
-                         len(self.recent_jobs), len(self._seen_run_ids))
-        except Exception:
-            logger.exception("Failed to save cache")
+    def _db(self):
+        conn = sqlite3.connect(DB_FILE, timeout=5)
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.row_factory = sqlite3.Row
+        return conn
 
-    def _load_cache(self):
-        """Load recent_jobs and _seen_run_ids from disk if cache is fresh.
+    def _init_db(self):
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with self._db() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS jobs (
+                    {JOB_COLUMNS[0]} INTEGER PRIMARY KEY,
+                    {", ".join(f"{c} TEXT" if c not in ("duration_s", "run_number", "run_attempt")
+                                else f"{c} INTEGER" for c in JOB_COLUMNS[1:])}
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at)")
+        self._migrate_json_cache_if_needed()
 
-        Returns True if cache was loaded, False if missing/stale/corrupt.
+    def _migrate_json_cache_if_needed(self):
+        """One-time import of the legacy JSON cache into the new DB.
+
+        Only runs if the jobs table is empty and the old cache file exists
+        -- preserves whatever history was already collected under the old
+        design instead of starting from zero. The old file is renamed
+        (not deleted) so it isn't re-imported on the next restart.
         """
-        if not os.path.exists(CACHE_FILE):
-            logger.info("No cache file found at %s", CACHE_FILE)
-            return False
+        if not os.path.exists(LEGACY_CACHE_FILE):
+            return
+        with self._db() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        if count > 0:
+            return
 
         try:
-            age = time.time() - os.path.getmtime(CACHE_FILE)
-            if age > CACHE_MAX_AGE:
-                logger.info("Cache is %.0fs old (max %ds), will re-fetch",
-                            age, CACHE_MAX_AGE)
-                return False
-
-            with open(CACHE_FILE) as f:
+            with open(LEGACY_CACHE_FILE) as f:
                 data = json.load(f)
-
             jobs = data.get("recent_jobs", [])
-            seen = data.get("seen_run_ids", [])
-
-            # Backfill display_name and category for cached records
+            imported = 0
             for job in jobs:
                 if "display_name" not in job:
                     repo = job.get("repo", "")
@@ -193,16 +216,55 @@ class WorkflowExporter:
                 if "category" not in job:
                     job["category"] = self._categorize_workflow(
                         job.get("workflow", "unknown"))
-
-            self.recent_jobs = deque(jobs, maxlen=JOBS_HISTORY_SIZE)
-            self._seen_run_ids = set(seen)
-
-            logger.info("Cache loaded: %d jobs, %d seen IDs (%.0fs old)",
-                         len(self.recent_jobs), len(self._seen_run_ids), age)
-            return True
+                if self._upsert_job(job):
+                    imported += 1
+            os.replace(LEGACY_CACHE_FILE, LEGACY_CACHE_FILE + ".migrated")
+            logger.info("Migrated %d/%d jobs from legacy JSON cache into SQLite",
+                         imported, len(jobs))
         except Exception:
-            logger.exception("Failed to load cache, will re-fetch")
-            return False
+            logger.exception("Failed to migrate legacy JSON cache")
+
+    def _upsert_job(self, record):
+        """Insert a job record if its id isn't already stored.
+
+        The id (GitHub run id, globally unique) is the primary key, so this
+        doubles as the dedup check that _seen_run_ids used to provide.
+        Returns True if the row was newly inserted, False if it already
+        existed.
+        """
+        row = {c: record.get(c) for c in JOB_COLUMNS if c != "steps_json"}
+        row["id"] = record.get("id")
+        row["steps_json"] = json.dumps(record.get("steps", []))
+        placeholders = ", ".join(f":{c}" for c in JOB_COLUMNS)
+        with self._db() as conn:
+            cur = conn.execute(
+                f"INSERT OR IGNORE INTO jobs ({', '.join(JOB_COLUMNS)}) "
+                f"VALUES ({placeholders})",
+                row,
+            )
+            return cur.rowcount > 0
+
+    def _prune_jobs(self):
+        """Evict jobs older than JOBS_HISTORY_DAYS, then enforce the hard
+        JOBS_HISTORY_MAX_COUNT cap as a disk safety net.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=JOBS_HISTORY_DAYS)).isoformat()
+        with self._db() as conn:
+            conn.execute("DELETE FROM jobs WHERE created_at < ?", (cutoff,))
+            conn.execute(
+                "DELETE FROM jobs WHERE id NOT IN "
+                "(SELECT id FROM jobs ORDER BY created_at DESC LIMIT ?)",
+                (JOBS_HISTORY_MAX_COUNT,),
+            )
+
+    def get_cache_coverage(self):
+        """Return the oldest job's created_at in the DB -- how far back the
+        exporter's data actually goes, independent of any dashboard query
+        filters. None if empty.
+        """
+        with self._db() as conn:
+            row = conn.execute("SELECT MIN(created_at) FROM jobs").fetchone()
+        return row[0] if row else None
 
     # -- helpers -------------------------------------------------------------
 
@@ -363,7 +425,7 @@ class WorkflowExporter:
 
         The GitHub API returns completed runs sorted by updated_at descending,
         so the most recently finished runs come first. We fetch 50 per page
-        and rely on _seen_run_ids to skip already-processed ones.
+        and rely on _job_exists() to skip already-processed ones.
         This correctly catches long-running jobs (e.g. created 2h ago,
         just now completed) that a created-time filter would miss.
         """
@@ -445,28 +507,36 @@ class WorkflowExporter:
                     pass
         return steps
 
+    def _job_exists(self, run_id):
+        with self._db() as conn:
+            row = conn.execute("SELECT 1 FROM jobs WHERE id = ?", (run_id,)).fetchone()
+        return row is not None
+
     def initial_load(self):
-        """Load recent history on startup so the jobs table isn't empty.
+        """Seed history from the GitHub API on a genuinely fresh DB.
 
-        Tries loading from the on-disk cache first. If the cache is fresh
-        (less than CACHE_MAX_AGE seconds old), uses it and skips the slow
-        GitHub API fetch entirely.
+        The DB persists across restarts, and _migrate_json_cache_if_needed
+        (run during __init__) already imports any legacy JSON cache -- so
+        this only hits the GitHub API when there's truly no history yet
+        (first-ever deploy).
 
-        Only populates the JSON API history (recent_jobs) and marks run IDs
-        as seen.  Does NOT increment Prometheus counters — those are only
-        incremented for genuinely new completions detected during regular
-        polling.  This prevents increase() from showing inflated numbers
-        after every restart.
+        Does NOT increment Prometheus counters — those are only incremented
+        for genuinely new completions detected during regular polling. This
+        prevents increase() from showing inflated numbers after every
+        restart.
         """
-        if self._load_cache():
+        with self._db() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        if count > 0:
+            logger.info("DB already has %d jobs, skipping initial API fetch", count)
             return
 
         repos = REPOS_FILTER if REPOS_FILTER else self.get_active_repos()
+        loaded = 0
         for repo in repos:
             try:
                 for run in self._fetch_recent_history(repo):
                     run_id = run["id"]
-                    self._seen_run_ids.add(run_id)
                     record = self._make_job_record(run, repo)
                     conclusion = run.get("conclusion") or "unknown"
 
@@ -481,14 +551,15 @@ class WorkflowExporter:
                                 )
                         record["steps"] = self._extract_step_durations(jobs)
 
-                    self.recent_jobs.appendleft(record)
+                    if self._upsert_job(record):
+                        loaded += 1
             except Exception:
                 logger.exception("Error loading history for %s", repo)
 
-        logger.info("Initial load: %d jobs in history", len(self.recent_jobs))
-        self._save_cache()
+        logger.info("Initial load: %d jobs seeded", loaded)
 
     def collect(self):
+        self._prune_jobs()
         repos = REPOS_FILTER if REPOS_FILTER else self.get_active_repos()
         tot_queued = 0
         tot_in_progress = 0
@@ -508,15 +579,32 @@ class WorkflowExporter:
                 if q > 0 or ip > 0:
                     current_active.extend(self._fetch_active_runs(repo))
 
-                # Track newly completed runs
+                # Track newly completed runs. Checked via a cheap existence
+                # query before spending the extra _fetch_run_jobs API call,
+                # so already-recorded runs don't burn rate-limit budget.
                 for run in self._recent_completed(repo):
                     run_id = run["id"]
-                    if run_id in self._seen_run_ids:
+                    if self._job_exists(run_id):
                         continue
-                    self._seen_run_ids.add(run_id)
 
                     conclusion = run.get("conclusion") or "unknown"
                     workflow_name = run.get("name", "unknown")
+
+                    record = self._make_job_record(run, repo)
+                    jobs = self._fetch_run_jobs(repo, run_id)
+                    failed = []
+                    if jobs:
+                        if conclusion == "failure":
+                            failed = self._extract_failed_steps(jobs)
+                            if failed:
+                                record["failed_step"] = "; ".join(
+                                    f["display"] for f in failed
+                                )
+                        record["steps"] = self._extract_step_durations(jobs)
+
+                    if not self._upsert_job(record):
+                        continue  # lost a race with itself -- shouldn't happen, single-threaded polling
+
                     completed_runs.labels(
                         org=ORG, repo=repo, workflow=workflow_name, conclusion=conclusion
                     ).inc()
@@ -532,23 +620,10 @@ class WorkflowExporter:
                                 org=ORG, repo=repo, conclusion=conclusion
                             ).observe(dur)
 
-                    # Add to recent jobs for JSON API
-                    record = self._make_job_record(run, repo)
-                    jobs = self._fetch_run_jobs(repo, run_id)
-                    if jobs:
-                        if conclusion == "failure":
-                            failed = self._extract_failed_steps(jobs)
-                            if failed:
-                                record["failed_step"] = "; ".join(
-                                    f["display"] for f in failed
-                                )
-                                for f in failed:
-                                    failed_step_total.labels(
-                                        org=ORG, workflow=workflow_name,
-                                        step=f["step"]
-                                    ).inc()
-                        record["steps"] = self._extract_step_durations(jobs)
-                    self.recent_jobs.appendleft(record)
+                    for f in failed:
+                        failed_step_total.labels(
+                            org=ORG, workflow=workflow_name, step=f["step"]
+                        ).inc()
 
             except Exception:
                 logger.exception("Error collecting metrics for %s", repo)
@@ -559,20 +634,16 @@ class WorkflowExporter:
         with self._lock:
             self.active_runs = current_active
 
-        # Prevent unbounded memory growth — keep most recent IDs
-        if len(self._seen_run_ids) > 10000:
-            # Keep the most recent 5000 IDs. Run IDs are monotonically
-            # increasing integers, so sorting preserves chronological order.
-            self._seen_run_ids = set(sorted(self._seen_run_ids)[-5000:])
+        with self._db() as conn:
+            total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 
         logger.info(
             "Collected: repos=%d queued=%d in_progress=%d history=%d",
             len(repos),
             tot_queued,
             tot_in_progress,
-            len(self.recent_jobs),
+            total_jobs,
         )
-        self._save_cache()
 
     # Maps job_type filter values to GitHub Actions event names
     JOB_TYPE_EVENTS = {
@@ -598,6 +669,25 @@ class WorkflowExporter:
             return None
         return cleaned
 
+    @staticmethod
+    def _normalize_iso(dt_str):
+        """Parse an ISO-8601 timestamp (any offset/precision) and re-render
+        it as "YYYY-MM-DDTHH:MM:SSZ" -- the exact format the GitHub API (and
+        thus every stored created_at) always uses. Needed so the SQL range
+        comparison below (plain TEXT comparison) orders the same way the
+        previous datetime-object comparison did, regardless of the
+        precision/format a caller's since/until param happens to use (e.g.
+        Grafana's ${__from:date:iso} includes milliseconds).
+        """
+        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _row_to_job(self, row):
+        job = dict(row)
+        steps_json = job.pop("steps_json", None)
+        job["steps"] = json.loads(steps_json) if steps_json else []
+        return job
+
     def get_jobs_json(self, params):
         """Return jobs list as JSON, with optional filters.
 
@@ -617,22 +707,25 @@ class WorkflowExporter:
         workflow_name_filter = self._parse_grafana_param(params, "workflow_name")
         job_type_filter = self._parse_grafana_param(params, "job_type")
         category_filter = self._parse_grafana_param(params, "category")
-        limit = min(int(params.get("limit", [200])[0]), JOBS_HISTORY_SIZE)
+        limit = min(int(params.get("limit", [200])[0]), JOBS_HISTORY_MAX_COUNT)
         include_active = params.get("active", ["false"])[0].lower() == "true"
 
-        # Parse time-range filters
+        # Parse time-range filters — kept as both datetime objects (for the
+        # in-memory active_runs filter below) and normalized strings (for
+        # the SQL query against the DB-backed history).
         since_str = params.get("since", [None])[0]
         until_str = params.get("until", [None])[0]
-        since_dt = None
-        until_dt = None
+        since_dt = until_dt = since_norm = until_norm = None
         if since_str:
             try:
                 since_dt = datetime.fromisoformat(since_str.replace("Z", "+00:00"))
+                since_norm = self._normalize_iso(since_str)
             except (ValueError, TypeError):
                 pass
         if until_str:
             try:
                 until_dt = datetime.fromisoformat(until_str.replace("Z", "+00:00"))
+                until_norm = self._normalize_iso(until_str)
             except (ValueError, TypeError):
                 pass
 
@@ -646,57 +739,87 @@ class WorkflowExporter:
         if job_type_filter:
             allowed_events = self.JOB_TYPE_EVENTS.get(job_type_filter.lower())
 
-        def matches(job):
-            if status_filter and job.get("conclusion") != status_filter:
-                return False
-            if repo_filter and job["repo"] != repo_filter:
-                return False
-            if category_filter and job.get("category", "").lower() != category_filter.lower():
-                return False
-            if wf_filters:
-                wf_name = job.get("workflow", "").lower()
-                if not any(f in wf_name for f in wf_filters):
-                    return False
-            if (workflow_name_filter
-                    and workflow_name_filter.lower()
-                    not in job.get("workflow", "").lower()):
-                return False
-            if allowed_events and job.get("event") not in allowed_events:
-                return False
-            if since_dt or until_dt:
-                created = job.get("created_at", "")
-                if created:
-                    try:
-                        job_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                        if since_dt and job_dt < since_dt:
-                            return False
-                        if until_dt and job_dt >= until_dt:
-                            return False
-                    except (ValueError, TypeError):
-                        pass
-            return True
+        # -- DB-backed completed-job history -----------------------------
+        where = []
+        args = {"limit": limit}
+        if status_filter:
+            where.append("conclusion = :status")
+            args["status"] = status_filter
+        if repo_filter:
+            where.append("repo = :repo")
+            args["repo"] = repo_filter
+        if category_filter:
+            where.append("LOWER(category) = :category")
+            args["category"] = category_filter.lower()
+        if wf_filters:
+            where.append("(" + " OR ".join(
+                f"LOWER(workflow) LIKE :wf{i}" for i in range(len(wf_filters))
+            ) + ")")
+            for i, f in enumerate(wf_filters):
+                args[f"wf{i}"] = f"%{f}%"
+        if workflow_name_filter:
+            where.append("LOWER(workflow) LIKE :workflow_name")
+            args["workflow_name"] = f"%{workflow_name_filter.lower()}%"
+        if allowed_events:
+            events = sorted(allowed_events)
+            where.append("event IN (" + ", ".join(f":ev{i}" for i in range(len(events))) + ")")
+            for i, ev in enumerate(events):
+                args[f"ev{i}"] = ev
+        if since_norm:
+            where.append("created_at >= :since")
+            args["since"] = since_norm
+        if until_norm:
+            where.append("created_at < :until")
+            args["until"] = until_norm
 
-        result = []
+        sql = "SELECT * FROM jobs"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC LIMIT :limit"
 
-        # Add completed jobs first — snapshot to avoid concurrent mutation.
-        # The limit applies only to completed jobs so active runs never
-        # crowd them out.
-        jobs_snapshot = list(self.recent_jobs)
-        completed_count = 0
-        for job in jobs_snapshot:
-            if matches(job):
-                result.append(job)
-                completed_count += 1
-                if completed_count >= limit:
-                    break
+        with self._db() as conn:
+            rows = conn.execute(sql, args).fetchall()
+        result = [self._row_to_job(r) for r in rows]
 
-        # Prepend active runs (queued/in_progress) if requested — these are
-        # not counted against the limit so they never displace history.
+        # -- in-memory active (queued/in_progress) runs -------------------
+        # Not persisted in the DB, so filtered in Python against the same
+        # criteria. Prepended if requested, not counted against the limit
+        # so they never displace history.
         if include_active:
+            def matches_active(job):
+                if status_filter and job.get("conclusion") != status_filter:
+                    return False
+                if repo_filter and job["repo"] != repo_filter:
+                    return False
+                if category_filter and job.get("category", "").lower() != category_filter.lower():
+                    return False
+                if wf_filters:
+                    wf_name = job.get("workflow", "").lower()
+                    if not any(f in wf_name for f in wf_filters):
+                        return False
+                if (workflow_name_filter
+                        and workflow_name_filter.lower()
+                        not in job.get("workflow", "").lower()):
+                    return False
+                if allowed_events and job.get("event") not in allowed_events:
+                    return False
+                if since_dt or until_dt:
+                    created = job.get("created_at", "")
+                    if created:
+                        try:
+                            job_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                            if since_dt and job_dt < since_dt:
+                                return False
+                            if until_dt and job_dt >= until_dt:
+                                return False
+                        except (ValueError, TypeError):
+                            pass
+                return True
+
             active_matched = []
             with self._lock:
                 for job in self.active_runs:
-                    if matches(job):
+                    if matches_active(job):
                         active_matched.append(job)
             result = active_matched + result
 
@@ -852,7 +975,7 @@ class WorkflowExporter:
 
         Returns: {"success": N, "failure": N, "cancelled": N,
                   "queued": N, "in_progress": N, "total": N,
-                  "failure_rate": 0.xx}
+                  "failure_rate": 0.xx, "cache_oldest_at": "2026-..." | None}
         """
         # Reuse the same filtering logic — just count instead of return
         jobs = self.get_jobs_json(params)
@@ -872,6 +995,11 @@ class WorkflowExporter:
             "in_progress": counts.get("in_progress", 0),
             "total": total,
             "failure_rate": round(failure_count / decisive, 4) if decisive > 0 else 0,
+            # How far back the exporter's in-memory data actually goes,
+            # regardless of the query's own filters -- lets the dashboard
+            # show "data since: X" instead of implying full coverage of
+            # whatever time range is selected (see OSAC-2211).
+            "cache_oldest_at": self.get_cache_coverage(),
         }
 
 
@@ -904,7 +1032,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/counts":
             params = parse_qs(parsed.query)
             # Override limit to max so we count all matching jobs
-            params["limit"] = [str(JOBS_HISTORY_SIZE)]
+            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             # Always include active runs in counts so in-progress/queued
             # periodic jobs are reflected in the totals
             params["active"] = ["true"]
@@ -918,7 +1046,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/api/workflows":
             params = parse_qs(parsed.query)
-            params["limit"] = [str(JOBS_HISTORY_SIZE)]
+            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             workflows = self.exporter.get_workflows_json(params)
             payload = json.dumps(workflows, default=str)
             self.send_response(200)
@@ -929,7 +1057,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/api/failed-steps":
             params = parse_qs(parsed.query)
-            params["limit"] = [str(JOBS_HISTORY_SIZE)]
+            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             steps = self.exporter.get_failed_steps_json(params)
             payload = json.dumps(steps, default=str)
             self.send_response(200)
@@ -940,7 +1068,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/api/counts-by-workflow":
             params = parse_qs(parsed.query)
-            params["limit"] = [str(JOBS_HISTORY_SIZE)]
+            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             counts = self.exporter.get_counts_by_workflow_json(params)
             payload = json.dumps(counts, default=str)
             self.send_response(200)
@@ -951,7 +1079,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/api/avg-duration-by-type":
             params = parse_qs(parsed.query)
-            params["limit"] = [str(JOBS_HISTORY_SIZE)]
+            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             data = self.exporter.get_avg_duration_by_type_json(params)
             payload = json.dumps(data, default=str)
             self.send_response(200)
@@ -962,7 +1090,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/api/avg-step-duration":
             params = parse_qs(parsed.query)
-            params["limit"] = [str(JOBS_HISTORY_SIZE)]
+            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             data = self.exporter.get_avg_step_duration_json(params)
             payload = json.dumps(data, default=str)
             self.send_response(200)

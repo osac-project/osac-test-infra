@@ -860,6 +860,42 @@
           ]
         }
       ]
+    },
+    {
+      "title": "Data Coverage",
+      "description": "Oldest job record currently retained (JOBS_HISTORY_DAYS, see OSAC-2211). If this doesn't go back as far as expected, the exporter may have restarted recently or be mid-backfill.",
+      "type": "stat",
+      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 57 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/counts",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "cache_oldest_at", "text": "Data since", "type": "string" }
+          ]
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
