@@ -10,8 +10,8 @@
 #
 # Example:
 #   vault-migrate-secrets.sh \
-#       github-runner@169.63.211.54       /home/eerez/vaults/osac-ci-1.vault-init.json \
-#       github-runner@osac-10.redhat.com  /home/eerez/vaults/osac-10-vault-init.json
+#       github-runner@osac-ci-1.example.com  ~/vaults/osac-ci-1.vault-init.json \
+#       github-runner@osac-10.example.com    ~/vaults/osac-10-vault-init.json
 #
 # Prerequisites: jq, ssh (vault CLI on remote hosts)
 set -euo pipefail
