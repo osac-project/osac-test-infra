@@ -34,7 +34,7 @@ lab_name: "{{ lookup('ini', 'lab_name section=default file=' + config_path, erro
 dns_hosted_zone: "{{ lookup('ini', 'dns_hosted_zone section=default file=' + config_path, errors='ignore') | default(lookup('env', 'DNS_HOSTED_ZONE'), true) | default('ecoeng-osac-ci.devcluster.openshift.com', true) }}"
 
 # OCP Installation
-ocp_version: "4.21"
+ocp_version: "4.22"
 ocp_cluster_name: "ocp-sno"
 ocp_base_domain: "{{ lab_name }}.{{ dns_hosted_zone }}"
 pull_secret_path: "/root/pull-secret"
