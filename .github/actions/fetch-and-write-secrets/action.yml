@@ -11,6 +11,14 @@ inputs:
 outputs:
   SLACK_WEBHOOK_URL:
     value: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
+  AWS_ACCESS_KEY_ID:
+    value: ${{ steps.vault.outputs.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY:
+    value: ${{ steps.vault.outputs.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION:
+    value: ${{ steps.vault.outputs.AWS_REGION }}
+  NETRIS_LICENSE_KEY:
+    value: ${{ steps.vault.outputs.NETRIS_LICENSE_KEY }}
 
 runs:
   using: composite
@@ -28,7 +36,11 @@ runs:
           secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
           secret/data/osac/e2e/aap-license license | AAP_LICENSE ;
           secret/data/osac/e2e/snapshot-registry dockerconfigjson | SNAPSHOT_REGISTRY_AUTH ;
-          secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL
+          secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL ;
+          secret/data/osac/e2e/aws-credentials access_key_id | AWS_ACCESS_KEY_ID ;
+          secret/data/osac/e2e/aws-credentials secret_access_key | AWS_SECRET_ACCESS_KEY ;
+          secret/data/osac/e2e/aws-credentials region | AWS_REGION ;
+          secret/data/osac/e2e/netris-license license_key | NETRIS_LICENSE_KEY
 
     - name: Write secrets to disk
       shell: bash

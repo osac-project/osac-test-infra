@@ -1,0 +1,32 @@
+---
+name: E2E CaaS
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "pytest -k filter"
+        required: false
+        default: ""
+      installer-ref:
+        description: "Branch/ref of osac-installer"
+        required: false
+        default: "main"
+      image-overrides:
+        description: "JSON mapping Helm value paths to image refs"
+        required: false
+        default: "{}"
+
+concurrency:
+  group: e2e-caas-${{ github.run_id }}
+
+jobs:
+  e2e-caas:
+    uses: ./.github/workflows/e2e-caas.yml
+    with:
+      test-filter: ${{ inputs.test-filter || '' }}
+      installer-ref: ${{ inputs.installer-ref || 'main' }}
+      image-overrides: ${{ inputs.image-overrides || '{}' }}
+      notify-on-failure: ${{ github.event_name == 'schedule' }}

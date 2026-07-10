@@ -1,0 +1,249 @@
+---
+name: E2E CaaS
+
+on:
+  workflow_call:
+    inputs:
+      test-filter:
+        description: "pytest -k filter expression (optional)"
+        required: false
+        type: string
+        default: ""
+      namespace:
+        description: "OSAC namespace on the cluster"
+        required: false
+        type: string
+        default: "osac-e2e-ci"
+      cluster-template:
+        description: "Cluster template for CaaS tests"
+        required: false
+        type: string
+        default: "osac.templates.ocp_ci_small"
+      image-overrides:
+        description: "JSON object mapping Helm value paths to image refs"
+        required: false
+        type: string
+        default: "{}"
+      installer-ref:
+        description: "Branch/ref of osac-installer to clone"
+        required: false
+        type: string
+        default: "main"
+      osac-cli-version:
+        description: "OSAC CLI version for the test image (e.g. 0.0.73). Defaults to latest."
+        required: false
+        type: string
+        default: ""
+      notify-on-failure:
+        description: "Send Slack notification on failure (typically set for scheduled runs)"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      result:
+        description: "Test result: PASSED or FAILED"
+        value: ${{ jobs.e2e-caas.outputs.result }}
+
+jobs:
+  e2e-caas:
+    runs-on: osac-ci
+    environment: e2e-test
+    permissions:
+      contents: read
+    timeout-minutes: 180
+    outputs:
+      result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
+
+    env:
+      NETRIS_DIR: infra/netris
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: caas
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch and write secrets
+        id: secrets
+        uses: ./.github/actions/fetch-and-write-secrets
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Write netris prerequisites
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.secrets.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.secrets.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ steps.secrets.outputs.AWS_REGION }}
+          NETRIS_LICENSE_KEY: ${{ steps.secrets.outputs.NETRIS_LICENSE_KEY }}
+          LAB_NAME: ${{ steps.setup.outputs.clone-name }}
+        run: |
+          cd "${NETRIS_DIR}"
+
+          # Config file (INI format with lab name and AWS credentials)
+          cat > config << EOF
+          [default]
+          lab_name = ${LAB_NAME}
+          aws_access_key_id = ${AWS_ACCESS_KEY_ID}
+          aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
+          aws_region = ${AWS_REGION}
+          EOF
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' config
+
+          # Netris license key
+          printf '%s' "${NETRIS_LICENSE_KEY}" > license.key
+
+          # AAP license
+          cp "$RUNNER_TEMP/aap-license.zip" license.zip
+
+          # Pull secret (already written to $RUNNER_TEMP by fetch-and-write-secrets)
+          sudo cp "$RUNNER_TEMP/pull-secret.json" /root/pull-secret
+          sudo chmod 600 /root/pull-secret
+
+      - name: Install prerequisites
+        run: |
+          cd "${NETRIS_DIR}"
+          sudo make setup
+
+      - name: Deploy netris lab and OCP+OSAC from snapshot
+        run: |
+          cd "${NETRIS_DIR}"
+          sudo make deploy-fast
+
+      - name: Extract kubeconfig
+        run: |
+          sudo cp /root/.kube/config "$RUNNER_TEMP/kubeconfig"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
+          chmod 600 "$RUNNER_TEMP/kubeconfig"
+
+      - name: Apply image overrides
+        if: inputs.image-overrides != '{}'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
+          INSTALLER_REF: ${{ inputs.installer-ref }}
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          INSTALLER_DIR="$RUNNER_TEMP/osac-installer"
+          if [[ ! -d "${INSTALLER_DIR}" ]]; then
+            git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
+              "https://github.com/osac-project/osac-installer.git" "${INSTALLER_DIR}"
+          fi
+          cd "${INSTALLER_DIR}"
+
+          if ! command -v yq &>/dev/null; then
+            YQ_VERSION="v4.53.3"
+            YQ_SHA256="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+            YQ_DIR="${RUNNER_TEMP}/bin"
+            mkdir -p "${YQ_DIR}"
+            curl -fsSL -o "${YQ_DIR}/yq" \
+              "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            echo "${YQ_SHA256}  ${YQ_DIR}/yq" | sha256sum -c -
+            chmod +x "${YQ_DIR}/yq"
+            export PATH="${YQ_DIR}:${PATH}"
+          fi
+
+          echo "Applying image overrides..."
+          SET_ARGS=()
+          for key in $(echo "${IMAGE_OVERRIDES}" | jq -r 'keys[]'); do
+            value=$(echo "${IMAGE_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
+            SET_ARGS+=("--set-string" "${key}=${value}")
+            echo "  --set-string ${key}=${value}"
+          done
+
+          yq -i '(.dependencies[].version) = "0.0.0"' charts/osac/Chart.yaml
+          helm dependency update charts/osac/
+          helm upgrade osac charts/osac/ \
+            --namespace "${INSTALLER_NAMESPACE}" \
+            --reuse-values \
+            "${SET_ARGS[@]}" \
+            --timeout 10m \
+            --wait
+
+      - name: Setup CaaS agents
+        run: |
+          cd "${NETRIS_DIR}"
+          sudo make setup-caas
+
+      - name: Build test image
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+          OSAC_VERSION: ${{ inputs.osac-cli-version }}
+        run: |
+          podman build --no-cache \
+            --build-arg OSAC_VERSION="${OSAC_VERSION}" \
+            -t "${E2E_IMAGE}" -f Containerfile .
+
+      - name: Run E2E tests
+        id: test
+        env:
+          TEST_FILTER: ${{ inputs.test-filter }}
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          OSAC_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+        run: |
+          KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
+
+          FILTER_ARGS=""
+          if [ -n "${TEST_FILTER}" ]; then
+            FILTER_ARGS="-k ${TEST_FILTER}"
+          fi
+
+          mkdir -p "$RUNNER_TEMP/test-output"
+
+          podman run --rm --network=host \
+            -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
+            -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
+            -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
+            -v "${RUNNER_TEMP}/test-output":/tmp/test-output:Z \
+            -e KUBECONFIG=/root/.kube/config \
+            -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
+            -e OSAC_CLUSTER_TEMPLATE="${OSAC_CLUSTER_TEMPLATE}" \
+            -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+            "${E2E_IMAGE}" \
+            pytest tests/caas/ ${FILTER_ARGS} \
+              --junitxml=/tmp/test-output/junit.xml -v -p no:xdist
+
+      - name: Gather artifacts
+        if: always()
+        uses: ./.github/actions/gather-artifacts
+        with:
+          namespace: ${{ inputs.namespace }}
+          kubeconfig-path: ${{ runner.temp }}/kubeconfig
+          artifact-name: osac-logs-caas-${{ github.run_id }}
+          junit-path: ${{ runner.temp }}/test-output/junit.xml
+
+      - name: Teardown
+        if: always()
+        run: |
+          cd "${NETRIS_DIR}"
+          sudo make destroy || true
+          sudo make cleanup-dns || true
+
+          # Clean up temp files
+          rm -f "$RUNNER_TEMP/kubeconfig"
+          rm -f "$RUNNER_TEMP/pull-secret.json"
+          rm -f "$RUNNER_TEMP/aap-license.zip"
+          rm -rf "$RUNNER_TEMP/osac-installer"
+          podman rmi "osac-e2e-tests:${{ github.run_id }}" 2>/dev/null || true
+
+      - name: Notify Slack on failure
+        if: always() && failure() && inputs.notify-on-failure
+        uses: ./.github/actions/notify-slack
+        with:
+          status: failure
+          workflow-name: "E2E CaaS"
+          slack-webhook-url: ${{ steps.secrets.outputs.SLACK_WEBHOOK_URL }}
+          workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch-name: ${{ github.ref_name }}
+          commit-sha: ${{ github.sha }}
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
