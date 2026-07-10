@@ -2,6 +2,8 @@
 name: E2E CaaS
 
 on:
+  pull_request:
+    branches: [main]
   schedule:
     - cron: "30 3 * * *"
   workflow_dispatch:
