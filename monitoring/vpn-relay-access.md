@@ -194,22 +194,56 @@ Every TLS-terminated service reachable through a relay (Grafana on `:3000`,
 Vault on `:8210`) uses a self-signed cert issued for the **relay's**
 hostname specifically — not the central host's — so there's no certificate
 name-mismatch warning, only the expected "self-signed, not trusted by a
-public CA" one. To remove that too, trust each cert as a local CA on your
-own machine:
+public CA" one. To remove that too, each teammate runs this **on their own
+machine** — no SSH access to any server, no git clone, nothing beyond
+network access to the relay itself (which they already have via VPN to use
+Grafana/Vault in the first place):
 
 ```bash
-# Fetch a cert (example: Grafana's)
-ssh root@<central-host> 'cat ~/.monitoring-server/certs/grafana.crt' > grafana-relay.crt
-
-# Fedora/RHEL system-wide trust (covers curl, most CLI tools, Chrome)
-sudo cp grafana-relay.crt /etc/pki/ca-trust/source/anchors/
-sudo update-ca-trust
+curl -sL https://raw.githubusercontent.com/osac-project/osac-test-infra/main/monitoring/scripts/trust-relay-certs.sh \
+  | bash -s -- <relay-host> [port ...]
+# defaults to ports 3000 (Grafana) and 8210 (Vault) if none are given
 ```
 
-Firefox keeps its own certificate store, separate from the system one:
-`about:preferences#privacy` → "View Certificates" → "Authorities" →
-"Import..." → select the `.crt` file → check "Trust this CA to identify
-websites".
+`raw.githubusercontent.com` serves this over a normal, publicly-trusted
+certificate — no bootstrapping-trust problem piping it into `bash`. The
+script itself only ever fetches from `<relay-host>` (never runs anything
+else remotely), and prints what it fetched before installing it, per below.
+
+It prints each cert's SHA-256 fingerprint before installing it — **confirm
+it matches the reference fingerprint below** before trusting it, since this
+script has no other way to prove you're actually talking to the real relay
+and not something else on the network answering to the same name. This
+table lives in git specifically so it's a separate channel from the live
+TLS connection itself — checking it here still catches an on-path attacker
+between your machine and the relay, which is the actual thing this
+verification step defends against.
+
+| Service | Port | SHA-256 fingerprint |
+|---|---|---|
+| Grafana | 3000 | `37:5D:AB:20:33:50:BD:BA:37:77:92:4A:86:93:36:67:75:B8:FC:F1:98:D0:2C:DA:58:95:91:26:08:86:64:21` |
+| Vault | 8210 | `DD:79:EC:F9:E0:11:BA:C6:6B:50:A0:F1:46:DC:4A:24:28:C3:67:05:6C:2E:E2:24:45:51:35:38:26:BA:6A:35` |
+
+**Whoever regenerates either cert must update this table in the same
+change** — a stale fingerprint here would either block legitimate trust
+(mismatch against a rotated-but-fine cert) or, worse, train people to
+ignore mismatches. Get the current fingerprint of a live cert with:
+`openssl s_client -connect <relay-host>:<port> -servername <relay-host> </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256`.
+
+Supports Fedora/RHEL, Debian/Ubuntu, and macOS system trust stores.
+
+Firefox keeps its own certificate store, separate from the system one, and
+isn't covered by the script: `about:preferences#privacy` → "View
+Certificates" → "Authorities" → "Import..." → select the fetched `.crt`
+file → check "Trust this CA to identify websites".
+
+If a real internal CA becomes available for this hostname later (e.g. via
+Red Hat IT, if `infra-edge.lab.eng.rdu2.redhat.com` is covered by one),
+prefer that over this script — it would mean certs are trusted automatically
+on every corporate-managed machine, with no per-teammate action at all.
+Checked this relay directly when the question came up: no FreeIPA/AD
+enrollment, no active certmonger, no internal CA already in its trust
+bundle -- so that's not available today, at least not through this host.
 
 **When adding a new relay-facing TLS service**: generate its self-signed
 cert for the *relay's* hostname (not the service's own host), e.g.:
