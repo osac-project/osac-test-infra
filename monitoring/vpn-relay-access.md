@@ -1,14 +1,19 @@
-# Secure relay access to monitoring services
+# Secure relay access to central-host services
 
 The central monitoring host (`osac-ci-1`) has a public IP, and its SSH port
 sees continuous internet-wide brute-force traffic (thousands of attempts a
 day, common for any host with SSH on the open internet). Rather than expose
-Grafana/Prometheus/Alertmanager on that public IP directly, they're also
-reachable through a **relay machine** — an internal, VPN-reachable, always-on
-host that holds a persistent, tightly-restricted SSH tunnel back to the
-central host. Anyone who can reach the relay (e.g. anyone on the internal
-VPN) can reach the forwarded services; nobody else can, without also opening
-those ports on the central host's own public-facing firewall.
+services on that public IP directly, they're also reachable through a
+**relay machine** — an internal, VPN-reachable, always-on host that holds
+one or more persistent, tightly-restricted SSH tunnels back to the central
+host, one per service (or group of related services). Anyone who can reach
+the relay (e.g. anyone on the internal VPN) can reach the forwarded
+services; nobody else can, without also opening those ports on the central
+host's own public-facing firewall.
+
+Originally built for Grafana/Prometheus/Alertmanager; the same pattern now
+also covers Vault, as a separate tunnel with its own restricted identity
+(see "A service sensitive enough to warrant its own identity" below).
 
 This does not replace the central host's own security posture (that's
 covered by the broader hardening effort — SSH key-only auth, sudo scoping,
@@ -23,14 +28,30 @@ ports to be reachable from the public internet at all.
         |                                                   |
         v                                                   v
   +----------------+                              +--------------------+
-  |  relay machine |--- SSH tunnel (outbound,  --->|   central host     |
-  |  (always-on,   |    relay-initiated,           |   (osac-ci-1)      |
-  |  VPN-reachable)|    restricted key)             |                   |
+  |  relay machine |--- SSH tunnel #1 (grafana- -->|   central host     |
+  |  (always-on,   |    tunnel key, restricted     |   (osac-ci-1)      |
+  |  VPN-reachable)|    to 3000/9091/9093)          |                   |
   |                |                                |  Grafana   :3000  |
   |  :3000  :9091  |<-- forwards to 127.0.0.1 ------|  Prometheus:9091  |
   |  :9093         |    on the central host         |  Alertmgr  :9093  |
-  +----------------+                                +--------------------+
+  |                |                                |                   |
+  |                |--- SSH tunnel #2 (vault-  ---->|                   |
+  |                |    tunnel key, restricted      |                   |
+  |  :8210         |    to 8210 ONLY)               |  Vault     :8210  |
+  |                |<-- forwards to 127.0.0.1 ------|  (TLS listener,   |
+  +----------------+                                |   see below)      |
+                                                     +--------------------+
 ```
+
+Vault's `:8210` is a dedicated **TLS** listener, separate from the plain-HTTP
+`:8200` listener every CI workflow's AppRole login already depends on (see
+"Vault: a second, TLS-only listener for relay access" below) — `:8200` is
+never tunneled and stays loopback-only on the central host.
+
+Two separate SSH tunnels (separate keypairs, separate restricted central-host
+users), not one tunnel carrying both — see "A service sensitive enough to
+warrant its own identity" below for why Vault doesn't just share the
+Grafana/Prometheus/Alertmanager tunnel.
 
 The relay **initiates** the connection outbound to the central host — the
 central host never needs to reach the relay, and no inbound firewall change
@@ -51,6 +72,10 @@ sudo ./monitoring/scripts/setup-tunnel-relay.sh <label> <central-host> <central-
 
 # Example: relay to the monitoring central host's Grafana/Prometheus/Alertmanager
 sudo ./monitoring/scripts/setup-tunnel-relay.sh osac-ci1 <central-host-ip-or-hostname> grafana-tunnel 3000 9091 9093
+
+# Example: a second, independent tunnel for Vault (its own identity -- see
+# "A service sensitive enough to warrant its own identity" below)
+sudo ./monitoring/scripts/setup-tunnel-relay.sh osac-ci1-vault <central-host-ip-or-hostname> vault-tunnel 8210
 ```
 
 This creates a dedicated, unprivileged, shell-less local user
@@ -62,33 +87,55 @@ retrying and failing to connect until that step happens, which is expected.
 ### 2. On the central host
 
 ```bash
-sudo ./monitoring/scripts/authorize-tunnel-relay.sh <central-tunnel-user> "<public-key-from-step-1>"
+sudo ./monitoring/scripts/authorize-tunnel-relay.sh <central-tunnel-user> "<public-key-from-step-1>" <port> [<port> ...]
 ```
 
 This creates a dedicated, unprivileged, shell-less system user
 (`<central-tunnel-user>`, e.g. `grafana-tunnel`) and installs the relay's key
-into its `authorized_keys` with `restrict,port-forwarding` — critically, this
-is an SSH-protocol-level restriction enforced before any shell or sudo is
-even reachable. **This key can only forward a connection to a port the
-central host already listens on locally; it cannot open a shell, run a
-command, or do anything else**, regardless of what OS-level permissions that
-account might otherwise have. Verified directly (not just assumed) when this
-was set up: an attempt to get a shell with the restricted key is refused
-outright, while port forwarding through it works normally.
+into its `authorized_keys` with
+`permitopen="127.0.0.1:<port>",... restrict,port-forwarding` — critically,
+this is an SSH-protocol-level restriction enforced before any shell or sudo
+is even reachable. **This key can only forward a connection to the specific
+`127.0.0.1:<port>`s given here; it cannot open a shell, run a command, reach
+any other port, or do anything else**, regardless of what OS-level
+permissions that account might otherwise have. Verified directly (not just
+assumed) when this was set up: an attempt to get a shell with the restricted
+key is refused outright, forwarding to an authorized port works normally,
+and forwarding to an unauthorized port on the same host is refused with
+"administratively prohibited" by sshd itself.
 
 Both scripts are idempotent — re-running either with the same arguments
 detects the existing user/keypair/service and leaves it alone.
 
 ## Adding another port, or another relay
 
-- **Another port on the same relay**: re-run `setup-tunnel-relay.sh` with the
-  full port list (existing plus new) — it rewrites the systemd unit with the
-  complete forward list, then `systemctl restart <label>-tunnel.service` to
-  pick it up (a plain re-run alone does *not* restart an already-active
-  service, since `systemctl enable --now` is a no-op on something already
-  running).
-- **A second, independent relay**: pick a different `<label>` on the relay
-  side and a different `<central-tunnel-user>` on the central side, so the
+- **Another port for an existing tunnel identity**: re-run
+  `setup-tunnel-relay.sh` with the full port list (existing plus new) — it
+  rewrites the systemd unit with the complete forward list, then
+  `systemctl restart <label>-tunnel.service` to pick it up (a plain re-run
+  alone does *not* restart an already-active service, since
+  `systemctl enable --now` is a no-op on something already running). You
+  must **also** re-run `authorize-tunnel-relay.sh` on the central host with
+  the same full port list — `permitopen` is derived from the ports given at
+  authorize time, so a port added only on the relay side stays refused by
+  sshd until the central side's authorization is updated too.
+- **A service sensitive enough to warrant its own identity** (e.g. Vault
+  alongside the Grafana/Prometheus/Alertmanager tunnel): use a distinct
+  `<label>` on the relay (its own keypair, its own systemd service) *and* a
+  distinct `<central-tunnel-user>` on the central host, rather than adding
+  the port to an existing identity. `permitopen` means each key can already
+  only reach the ports it was explicitly authorized for, but a fully
+  separate keypair means a leaked/compromised key for one service (say,
+  read-only dashboards) can't be reused to reach a much more sensitive one
+  (say, the secret store backing every credential in this setup) — the
+  isolation holds even if `permitopen` were somehow misconfigured on one
+  side, since there's no shared key to exploit in the first place. Verified
+  directly when the Vault tunnel was added: the Grafana-tunnel key's forward
+  attempt to Vault's port was refused ("administratively prohibited"), and
+  the Vault-tunnel key's forward attempt to Grafana's port failed the same
+  way.
+- **A second, independent relay** (a different physical/VM relay machine):
+  same as above — distinct `<label>` and `<central-tunnel-user>` — so the
   two relays get fully separate identities and neither can be used to
   impersonate or interfere with the other.
 
@@ -100,13 +147,84 @@ From the relay machine, after setup:
 curl -sk https://127.0.0.1:3000/api/health      # Grafana
 curl -s  http://127.0.0.1:9091/-/healthy         # Prometheus
 curl -s  http://127.0.0.1:9093/-/healthy         # Alertmanager
+curl -sk https://127.0.0.1:8210/v1/sys/health    # Vault (TLS listener -- see below)
 ```
 
-Grafana's TLS certificate is issued for the central host's own address, not
-the relay's — expect a certificate name-mismatch warning in the browser when
-accessing it via the relay. Safe to click through for internal use; a
-proper fix would mean issuing a cert that also covers the relay's hostname
-(or terminating TLS at the relay instead), not done as part of this setup.
+Vault's web UI (`ui = true` in `vault.hcl`) is reachable the same way, from a
+browser on the relay's network: `https://<relay-host>:8210/ui/`. Logging in
+still requires a real Vault token or AppRole credentials — the tunnel only
+narrows *network* reachability, it doesn't bypass Vault's own auth.
+
+## Vault: a second, TLS-only listener for relay access
+
+Vault's `vault.hcl` has two `listener "tcp"` blocks, not one:
+
+- `:8200`, `tls_disable = 1` — the original listener. Every internal
+  consumer (every GitHub Actions workflow's AppRole login, every manual
+  `vault kv` call in this repo's docs) uses this via
+  `VAULT_ADDR=http://127.0.0.1:8200`. **Never tunneled, never changed** when
+  the relay was added — there was no reason to touch something dozens of
+  workflows already depend on just to add one more access path.
+- `:8210`, TLS, self-signed cert whose CN/SAN is the **relay's** hostname
+  (not the central host's) — this is the one the relay tunnel forwards.
+  Because plain HTTP over a corporate VPN can be blocked or silently
+  upgraded by browsers/network policy, this listener exists specifically so
+  relay access can be HTTPS without touching the listener everything else
+  depends on.
+
+Both listeners run in the same container (`Volume=%h/.vault-server/certs:/vault/certs:Z`
+in `vault.container`, referenced by `tls_cert_file`/`tls_key_file` in
+`vault.hcl`). **Gotcha hit while setting this up**: the Vault container runs
+as a non-root user internally, and `:Z` only sets SELinux context, not POSIX
+permissions — a `600`-mode key file owned by the host's root user caused
+`error loading TLS cert: ... permission denied` and the container failed to
+start. Fixed by `chmod 644` on the key (safe here since `~/.vault-server`
+itself is `700`, root-only — the real access boundary is the directory, not
+this one file's mode). If you add a third listener/service like this,
+check the actual UID the container image runs as before assuming `600` will
+work, since it clearly doesn't always.
+
+Adding this port followed the exact same identity-isolation pattern as the
+tunnel itself: a **separate** Vault-only tunnel identity, not folding `:8210`
+into the existing Grafana/Prometheus/Alertmanager tunnel.
+
+## Trusting the relay's self-signed certificates
+
+Every TLS-terminated service reachable through a relay (Grafana on `:3000`,
+Vault on `:8210`) uses a self-signed cert issued for the **relay's**
+hostname specifically — not the central host's — so there's no certificate
+name-mismatch warning, only the expected "self-signed, not trusted by a
+public CA" one. To remove that too, trust each cert as a local CA on your
+own machine:
+
+```bash
+# Fetch a cert (example: Grafana's)
+ssh root@<central-host> 'cat ~/.monitoring-server/certs/grafana.crt' > grafana-relay.crt
+
+# Fedora/RHEL system-wide trust (covers curl, most CLI tools, Chrome)
+sudo cp grafana-relay.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust
+```
+
+Firefox keeps its own certificate store, separate from the system one:
+`about:preferences#privacy` → "View Certificates" → "Authorities" →
+"Import..." → select the `.crt` file → check "Trust this CA to identify
+websites".
+
+**When adding a new relay-facing TLS service**: generate its self-signed
+cert for the *relay's* hostname (not the service's own host), e.g.:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
+  -keyout service.key -out service.crt \
+  -subj "/CN=<relay-hostname>" \
+  -addext "subjectAltName=DNS:<relay-hostname>"
+```
+
+Doing this at cert-creation time avoids the mismatch warning outright,
+rather than needing to reissue and redeploy the cert (with a service
+restart) later, as had to be done for Grafana's pre-existing
+central-host-only cert when the relay's TLS-trust story was tightened up.
 
 ## Grafana OAuth login only works from one canonical host at a time
 

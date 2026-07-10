@@ -47,6 +47,24 @@ if [[ ! "${LABEL}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "ERROR: label must be alphanumeric (plus - or _): ${LABEL}" >&2
     exit 1
 fi
+# All three of these get interpolated into a systemd unit heredoc below,
+# which systemd then parses as a command line for ExecStart -- reject
+# anything that isn't a plain hostname/IP, username, or port number
+# before that happens, rather than trusting the caller's input.
+if [[ ! "${CENTRAL_HOST}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo "ERROR: invalid central host: ${CENTRAL_HOST}" >&2
+    exit 1
+fi
+if [[ ! "${CENTRAL_USER}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "ERROR: invalid central user: ${CENTRAL_USER}" >&2
+    exit 1
+fi
+for port in "${PORTS[@]}"; do
+    if ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        echo "ERROR: invalid port: ${port}" >&2
+        exit 1
+    fi
+done
 
 TUNNEL_USER="${LABEL}-tunnel"
 TUNNEL_HOME="/home/${TUNNEL_USER}"
@@ -110,7 +128,7 @@ echo "Service ${SERVICE_NAME} is running and will survive reboots."
 echo ""
 echo "Next step -- run this on ${CENTRAL_HOST} (as root) to authorize this relay:"
 echo ""
-echo "  ./authorize-tunnel-relay.sh ${CENTRAL_USER} \"$(cat "${KEY_FILE}.pub")\""
+echo "  ./authorize-tunnel-relay.sh ${CENTRAL_USER} \"$(cat "${KEY_FILE}.pub")\" ${PORTS[*]}"
 echo ""
 echo "Until that runs, the tunnel service above will keep retrying and failing"
 echo "to connect -- that's expected."
