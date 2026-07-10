@@ -111,7 +111,7 @@ jobs:
 
       - name: Install prerequisites
         run: |
-          python3 -m pip install --quiet ansible
+          sudo python3 -m pip install --quiet ansible
           cd "${NETRIS_DIR}"
           sudo make setup
 
