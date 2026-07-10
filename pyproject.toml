@@ -10,6 +10,9 @@ dependencies = [
     "websocket-client>=1.6",
 ]
 
+[project.optional-dependencies]
+infra = ["ansible"]
+
 [tool.setuptools.packages.find]
 include = ["tests*"]
 
