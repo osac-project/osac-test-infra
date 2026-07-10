@@ -111,17 +111,14 @@ jobs:
 
       - name: Install prerequisites
         run: |
-          uv sync --extra infra
-          VENV_BIN="${PWD}/.venv/bin"
-          echo "${VENV_BIN}" >> "$GITHUB_PATH"
-          echo "VENV_BIN=${VENV_BIN}" >> "$GITHUB_ENV"
+          python3 -m pip install --quiet ansible
           cd "${NETRIS_DIR}"
-          sudo PATH="${VENV_BIN}:${PATH}" make setup
+          sudo make setup
 
       - name: Deploy netris lab and OCP+OSAC from snapshot
         run: |
           cd "${NETRIS_DIR}"
-          sudo PATH="${VENV_BIN}:${PATH}" make deploy-fast
+          sudo make deploy-fast
 
       - name: Extract kubeconfig
         run: |
@@ -176,7 +173,7 @@ jobs:
       - name: Setup CaaS agents
         run: |
           cd "${NETRIS_DIR}"
-          sudo PATH="${VENV_BIN}:${PATH}" make setup-caas
+          sudo make setup-caas
 
       - name: Build test image
         env:
@@ -230,8 +227,8 @@ jobs:
         if: always()
         run: |
           cd "${NETRIS_DIR}"
-          sudo PATH="${VENV_BIN}:${PATH}" make destroy || true
-          sudo PATH="${VENV_BIN}:${PATH}" make cleanup-dns || true
+          sudo make destroy || true
+          sudo make cleanup-dns || true
 
           # Clean up temp files
           rm -f "$RUNNER_TEMP/kubeconfig"
