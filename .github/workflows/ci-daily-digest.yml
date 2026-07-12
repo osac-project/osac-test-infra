@@ -46,16 +46,18 @@ jobs:
           secretId: ${{ steps.approle.outputs.secret-id }}
           exportEnv: false
           secrets: |
-            secret/data/osac/monitoring/slack-webhook-url url | SLACK_WEBHOOK_URL
+            secret/data/osac/monitoring/slack-bot bot_token | SLACK_BOT_TOKEN ;
+            secret/data/osac/monitoring/slack-bot channel_id | SLACK_CHANNEL_ID
 
       # post-ci-digest.py runs directly on the runner host (not in the
-      # workflow-exporter's container), so its one third-party dependency
-      # isn't already present -- same pattern as e2e-vmaas-full-install.yml's
+      # workflow-exporter's container), so its third-party dependencies
+      # aren't already present -- same pattern as e2e-vmaas-full-install.yml's
       # ansible-builder install for a host-run step.
       - name: Install Python dependencies
-        run: python3 -m pip install --quiet requests
+        run: python3 -m pip install --quiet requests matplotlib numpy
 
       - name: Post CI digest
         env:
-          SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ steps.vault.outputs.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ steps.vault.outputs.SLACK_CHANNEL_ID }}
         run: python3 monitoring/scripts/post-ci-digest.py
