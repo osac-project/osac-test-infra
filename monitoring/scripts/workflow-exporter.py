@@ -15,6 +15,7 @@ import time
 import json
 import logging
 import sqlite3
+import statistics
 import threading
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -169,13 +170,19 @@ class WorkflowExporter:
         failed_steps: the list from _extract_failed_steps
         ([{"display":.., "step":..}, ...]). Returns "infra" if any failed
         step is in INFRA_STEPS, "test" if there's failure detail but none
-        of it is an infra step, "unknown" if there's no per-step detail at
-        all (e.g. cancelled/startup_failure runs with no steps recorded).
+        of it is an infra step, and "infra" too when there's no per-step
+        detail at all (e.g. the job itself shows conclusion "cancelled"
+        with zero recorded steps even though the run's overall conclusion
+        is "failure" -- a real observed case: a runner-level crash/timeout
+        that GitHub cancelled mid-job). A genuine product/test failure
+        always produces step-level data (a red "Run E2E tests" step); the
+        total absence of any step data is itself an infra-level symptom,
+        not an ambiguous third category.
         """
         if category != "e2e":
             return "n/a"
         if not failed_steps:
-            return "unknown"
+            return "infra"
         for f in failed_steps:
             if f["step"] in WorkflowExporter.INFRA_STEPS:
                 return "infra"
@@ -262,12 +269,23 @@ class WorkflowExporter:
                     author TEXT,
                     created_at TEXT,
                     merged_at TEXT,
-                    merge_seconds INTEGER
+                    merge_seconds INTEGER,
+                    first_approval_at TEXT,
+                    approval_to_merge_seconds INTEGER,
+                    retest_count INTEGER
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_merges_merged_at ON pr_merges(merged_at)")
+            pr_merges_cols = {row[1] for row in conn.execute("PRAGMA table_info(pr_merges)")}
+            for col in ("first_approval_at",):
+                if col not in pr_merges_cols:
+                    conn.execute(f"ALTER TABLE pr_merges ADD COLUMN {col} TEXT")
+            for col in ("approval_to_merge_seconds", "retest_count"):
+                if col not in pr_merges_cols:
+                    conn.execute(f"ALTER TABLE pr_merges ADD COLUMN {col} INTEGER")
         self._migrate_json_cache_if_needed()
         self._backfill_pr_data_from_legacy_cache()
+        self._backfill_pr_approval_data_if_needed()
         self._purge_ignored_events_if_needed()
         self._recategorize_jobs_if_needed()
         self._reclassify_failure_reasons_if_needed()
@@ -325,13 +343,19 @@ class WorkflowExporter:
         existed only have the already-flattened `failed_step` text ("job ->
         step; job2 -> step2"). Re-parses that stored text (no GitHub API
         calls needed) so existing history gets classified too, not just new
-        rows. Safe to re-run: no-op once every failed row already has a
-        failure_reason.
+        rows. Also re-processes rows already stored as "unknown" -- an
+        earlier version of _classify_failure_reason used that as a
+        catch-all for jobs with no per-step data at all, before "the total
+        absence of step data is itself an infra-level symptom" was
+        recognized as always meaning "infra". Safe to re-run: no-op once
+        every failed row already matches what _classify_failure_reason
+        would assign today.
         """
         with self._db() as conn:
             rows = conn.execute(
                 "SELECT id, category, failed_step FROM jobs "
-                "WHERE conclusion = 'failure' AND (failure_reason IS NULL OR failure_reason = '')"
+                "WHERE conclusion = 'failure' AND "
+                "(failure_reason IS NULL OR failure_reason = '' OR failure_reason = 'unknown')"
             ).fetchall()
             updated = 0
             for row in rows:
@@ -595,13 +619,75 @@ class WorkflowExporter:
         mapping = self._pr_map.get(repo, {})
         return mapping.get(branch, (None, ""))
 
+    def _fetch_first_approval(self, repo, pr_number):
+        """Earliest human-reviewer APPROVED review's timestamp for a PR.
+
+        Excludes bot reviewers (e.g. coderabbitai[bot]) deliberately --
+        automated review tools typically approve within seconds of a PR
+        being opened, which would collapse this metric back to roughly
+        "time since PR opened" for any PR that has one, defeating the
+        entire point of separating approval-to-merge from open-to-merge.
+
+        Returns one of three distinct outcomes, which callers must not
+        conflate:
+        - a timestamp string: found a human approval.
+        - "": the API call succeeded but there's genuinely no human
+          approval on record (e.g. merged by an admin override) -- safe
+          to store and never re-check.
+        - None: the fetch itself failed (network error, rate limit, non-2xx
+          response) -- callers must treat this as "unknown, try again
+          later", never as "confirmed no approval", or a transient failure
+          would get permanently misrecorded as "this PR was never
+          approved" and silently exclude it from the metric forever.
+        """
+        try:
+            resp = self._get(f"{API_URL}/repos/{ORG}/{repo}/pulls/{pr_number}/reviews?per_page=100")
+        except requests.exceptions.RequestException:
+            logger.warning("Failed to fetch reviews for %s#%s (network error), will retry later",
+                            repo, pr_number)
+            return None
+        if not resp.ok:
+            return None
+        approvals = [
+            r for r in resp.json()
+            if r.get("state") == "APPROVED" and r.get("user", {}).get("type") != "Bot"
+        ]
+        if not approvals:
+            return ""
+        approvals.sort(key=lambda r: r["submitted_at"])
+        return approvals[0]["submitted_at"]
+
+    def _count_e2e_retests(self, repo, pr_number):
+        """Number of e2e runs for this PR beyond the first -- each
+        /retest (or /test) slash command, or new push, triggers another
+        full e2e run (see AGENTS.md's slash-command.yml), so this counts
+        purely from already-stored job history, no extra API calls.
+        """
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM jobs WHERE repo = :repo AND pr_display = :pr_display "
+                "AND category = 'e2e' AND event = 'pull_request'",
+                {"repo": repo, "pr_display": f"#{pr_number}"},
+            ).fetchone()
+        return max(0, (row["c"] if row else 0) - 1)
+
     def _upsert_pr_merge(self, repo, pr):
-        """Persist a merged PR's open-to-merge time into pr_merges.
+        """Persist a merged PR's timing/retest data into pr_merges.
 
         Piggybacks on _refresh_pr_map's existing per-repo "closed" PR fetch
-        (already polled every cycle for the branch->PR map) -- no extra
-        API calls. Keyed by the PR's GitHub-global `id` (stable, unique
-        across repos), so this is naturally idempotent across polls.
+        (already polled every cycle for the branch->PR map) -- no extra API
+        calls for the open-to-merge time itself. Keyed by the PR's
+        GitHub-global `id` (stable, unique across repos), so this is
+        naturally idempotent across polls.
+
+        first_approval_at requires one extra API call per PR (reviews
+        aren't in the /pulls list response) -- only fetched when the
+        column is truly NULL (never checked), not just falsy, so a PR
+        confirmed to have no human approval (stored as "", distinct from
+        NULL) doesn't get re-fetched every single 90s poll cycle for as
+        long as it sits in _refresh_pr_map's 30-most-recent window --
+        confirmed live this was happening for every one of the ~55% of
+        PRs here merged without a formal approval, before this fix.
         """
         try:
             created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
@@ -609,11 +695,38 @@ class WorkflowExporter:
         except (ValueError, TypeError, KeyError):
             return
         merge_seconds = max(0, round((merged - created).total_seconds()))
+
+        with self._db() as conn:
+            existing = conn.execute(
+                "SELECT first_approval_at FROM pr_merges WHERE id = ?", (pr["id"],)
+            ).fetchone()
+        if existing is None or existing["first_approval_at"] is None:
+            # NULL means "never checked" (brand new row, or a fetch
+            # previously failed and left it unresolved) -- fetch now. A
+            # failed fetch here again returns None, which we store as-is
+            # (NULL), naturally retrying on a future poll cycle rather
+            # than getting stuck as a false "confirmed no approval".
+            first_approval_at = self._fetch_first_approval(repo, pr["number"])
+        else:
+            first_approval_at = existing["first_approval_at"]
+
+        approval_to_merge_seconds = None
+        if first_approval_at:
+            try:
+                approved = datetime.fromisoformat(first_approval_at.replace("Z", "+00:00"))
+                approval_to_merge_seconds = max(0, round((merged - approved).total_seconds()))
+            except (ValueError, TypeError):
+                pass
+
+        retest_count = self._count_e2e_retests(repo, pr["number"])
+
         with self._db() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO pr_merges "
-                "(id, repo, number, title, author, created_at, merged_at, merge_seconds) "
-                "VALUES (:id, :repo, :number, :title, :author, :created_at, :merged_at, :merge_seconds)",
+                "(id, repo, number, title, author, created_at, merged_at, merge_seconds, "
+                "first_approval_at, approval_to_merge_seconds, retest_count) "
+                "VALUES (:id, :repo, :number, :title, :author, :created_at, :merged_at, :merge_seconds, "
+                ":first_approval_at, :approval_to_merge_seconds, :retest_count)",
                 {
                     "id": pr["id"],
                     "repo": repo,
@@ -623,8 +736,65 @@ class WorkflowExporter:
                     "created_at": pr["created_at"],
                     "merged_at": pr["merged_at"],
                     "merge_seconds": merge_seconds,
+                    "first_approval_at": first_approval_at,
+                    "approval_to_merge_seconds": approval_to_merge_seconds,
+                    "retest_count": retest_count,
                 },
             )
+
+    def _backfill_pr_approval_data_if_needed(self):
+        """One-time-ish startup backfill for pr_merges rows recorded before
+        approval-time tracking existed, or that have since fallen out of
+        _refresh_pr_map's 30-most-recent-closed-PRs-per-repo window (and so
+        would otherwise never get this data filled in by normal polling).
+
+        Skipped entirely without a token (e.g. local dry-run testing
+        against a copy of the DB) -- this makes real API calls, unlike
+        every other _init_db migration, so it shouldn't turn constructing
+        a WorkflowExporter() into a slow, network-dependent operation in
+        contexts that never call collect()/initial_load() anyway.
+        Bounded to 200 rows per startup as a rate-limit safety net.
+
+        Only targets rows where first_approval_at is truly NULL (never
+        checked) -- "" (confirmed no human approval) is intentionally
+        excluded so this doesn't re-fetch settled answers every restart.
+        Rows where the fetch itself fails are simply skipped (left NULL),
+        not written with a failure result, so a transient network/API
+        error can't get permanently misrecorded as "no approval" -- they
+        naturally retry on the next startup or poll cycle instead.
+        """
+        if not TOKEN:
+            return
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT id, repo, number, merged_at FROM pr_merges "
+                "WHERE first_approval_at IS NULL "
+                "LIMIT 200"
+            ).fetchall()
+        if not rows:
+            return
+        updated = 0
+        for row in rows:
+            first_approval_at = self._fetch_first_approval(row["repo"], row["number"])
+            if first_approval_at is None:
+                continue  # fetch failed -- leave NULL, retry later
+            retest_count = self._count_e2e_retests(row["repo"], row["number"])
+            approval_to_merge_seconds = None
+            if first_approval_at:
+                try:
+                    merged = datetime.fromisoformat(row["merged_at"].replace("Z", "+00:00"))
+                    approved = datetime.fromisoformat(first_approval_at.replace("Z", "+00:00"))
+                    approval_to_merge_seconds = max(0, round((merged - approved).total_seconds()))
+                except (ValueError, TypeError):
+                    pass
+            with self._db() as conn:
+                conn.execute(
+                    "UPDATE pr_merges SET first_approval_at = ?, "
+                    "approval_to_merge_seconds = ?, retest_count = ? WHERE id = ?",
+                    (first_approval_at, approval_to_merge_seconds, retest_count, row["id"]),
+                )
+            updated += 1
+        logger.info("Backfilled approval/retest data for %d pr_merges row(s)", updated)
 
     def _backfill_missing_pr_data(self):
         """One-time catch-up pass: fill pr_url/pr_display for already-stored
@@ -1776,17 +1946,36 @@ class WorkflowExporter:
         }
 
     def get_pr_merge_time_json(self, params):
-        """Average PR open-to-merge time, filtered by when the PR was
-        *merged* (not opened) -- "avg time to merge in the past week" means
-        the merge event fell in that window, regardless of how old the PR
-        itself was.
+        """PR merge timing/retest stats, filtered by when the PR was
+        *merged* (not opened) -- "in the past week" means the merge event
+        fell in that window, regardless of how old the PR itself was.
 
         Query params: since, until (ISO 8601, compared against merged_at),
         repo (optional, exact match).
 
-        Returns: {"avg_merge_seconds": N, "avg_merge_display": "Xh Ym",
-                  "count": N, "by_repo": [{"repo":.., "avg_merge_seconds":..,
-                  "avg_merge_display":.., "count":..}, ...]}
+        Reports two distinct timing metrics, since they answer different
+        questions:
+        - open-to-merge: full PR lifecycle (create to merge). Skewed by
+          PRs that sat stale for a long time before anyone reviewed them.
+        - approval-to-merge: first APPROVED review to merge -- "how long
+          did it take to land once approved," not muddied by staleness.
+          None/excluded for PRs merged without a formal approval (e.g. an
+          admin override).
+
+        Also reports avg_retest_count (e2e runs beyond the first, per PR
+        -- see _count_e2e_retests).
+
+        Both timing metrics report mean AND median -- a handful of PRs
+        approved and then simply never merged for days/weeks (no new
+        commits, no blocker, just forgotten) skew the mean heavily; median
+        shows the typical case instead.
+
+        Returns: {"avg_open_to_merge_seconds": N, "avg_open_to_merge_display": "Xh Ym",
+                  "median_open_to_merge_seconds": N, "median_open_to_merge_display": "Xh Ym",
+                  "avg_approval_to_merge_seconds": N|None, "avg_approval_to_merge_display": "Xh Ym"|"n/a",
+                  "median_approval_to_merge_seconds": N|None, "median_approval_to_merge_display": "Xh Ym"|"n/a",
+                  "approved_count": N, "avg_retest_count": N, "count": N,
+                  "by_repo": [{"repo":.., ...same fields..}, ...]}
         """
         repo_filter = self._parse_grafana_param(params, "repo")
         since_str = params.get("since", [None])[0]
@@ -1812,39 +2001,96 @@ class WorkflowExporter:
             except (ValueError, TypeError):
                 pass
 
-        sql = "SELECT repo, merge_seconds FROM pr_merges"
+        sql = "SELECT repo, number, title, merge_seconds, approval_to_merge_seconds, retest_count FROM pr_merges"
         if where:
             sql += " WHERE " + " AND ".join(where)
 
         with self._db() as conn:
             rows = conn.execute(sql, args).fetchall()
 
-        def avg_seconds(values):
-            return round(sum(values) / len(values)) if values else 0
+        def avg(values):
+            return round(sum(values) / len(values)) if values else None
 
-        all_seconds = [r["merge_seconds"] for r in rows]
-        by_repo_seconds = {}
-        for r in rows:
-            by_repo_seconds.setdefault(r["repo"], []).append(r["merge_seconds"])
+        def median(values):
+            # A handful of PRs approved and then simply forgotten for days
+            # or weeks (no new commits, no blocker -- just never merged)
+            # skew the mean heavily; median reports the typical case
+            # instead of letting a few outliers dominate the headline
+            # number. Both are reported since the mean-vs-median gap
+            # itself is a useful signal that outliers exist at all.
+            return round(statistics.median(values)) if values else None
 
-        avg = avg_seconds(all_seconds)
-        return {
-            "avg_merge_seconds": avg,
-            "avg_merge_display": self._fmt_duration(avg),
-            "count": len(rows),
-            "by_repo": sorted(
-                (
-                    {
-                        "repo": repo,
-                        "avg_merge_seconds": avg_seconds(seconds),
-                        "avg_merge_display": self._fmt_duration(avg_seconds(seconds)),
-                        "count": len(seconds),
-                    }
-                    for repo, seconds in by_repo_seconds.items()
+        def stats(rs):
+            open_vals = [r["merge_seconds"] for r in rs]
+            approval_vals = [
+                r["approval_to_merge_seconds"] for r in rs
+                if r["approval_to_merge_seconds"] is not None
+            ]
+            retest_vals = [r["retest_count"] or 0 for r in rs]
+            avg_open = avg(open_vals) or 0
+            avg_approval = avg(approval_vals)
+            median_open = median(open_vals) or 0
+            median_approval = median(approval_vals)
+            return {
+                "avg_open_to_merge_seconds": avg_open,
+                "avg_open_to_merge_display": self._fmt_duration(avg_open),
+                "median_open_to_merge_seconds": median_open,
+                "median_open_to_merge_display": self._fmt_duration(median_open),
+                "avg_approval_to_merge_seconds": avg_approval,
+                "avg_approval_to_merge_display": (
+                    self._fmt_duration(avg_approval) if avg_approval is not None else "n/a"
                 ),
-                key=lambda x: x["repo"],
-            ),
-        }
+                "median_approval_to_merge_seconds": median_approval,
+                "median_approval_to_merge_display": (
+                    self._fmt_duration(median_approval) if median_approval is not None else "n/a"
+                ),
+                "approved_count": len(approval_vals),
+                "avg_retest_count": round(sum(retest_vals) / len(retest_vals), 1) if retest_vals else 0,
+                "count": len(rs),
+            }
+
+        by_repo_rows = {}
+        for r in rows:
+            by_repo_rows.setdefault(r["repo"], []).append(r)
+
+        result = stats(rows)
+        result["by_repo"] = sorted(
+            ({"repo": repo, **stats(rs)} for repo, rs in by_repo_rows.items()),
+            key=lambda x: x["repo"],
+        )
+
+        # Individual PRs approved-then-forgotten for days/weeks are exactly
+        # what the median (above) is deliberately insensitive to -- but
+        # that doesn't mean they should be invisible. Surfaced separately
+        # so a real problem PR doesn't just vanish from the reported
+        # numbers. Threshold is relative (3x the window's own median) with
+        # an absolute floor so a tight cluster of small values (e.g. all
+        # under 10 minutes) doesn't get "outliers" 3x'd into noise.
+        approved_rows = [r for r in rows if r["approval_to_merge_seconds"] is not None]
+        overall_median_approval = median([r["approval_to_merge_seconds"] for r in approved_rows])
+        outliers = []
+        # Not `if overall_median_approval:` -- a median of exactly 0
+        # (plausible: "mostly-instant approvals, one straggler") is falsy
+        # and would silently skip outlier detection for precisely the
+        # "mostly fine, one real problem" case this feature targets.
+        if overall_median_approval is not None:
+            threshold = max(overall_median_approval * 3, 3600)
+            outliers = sorted(
+                (r for r in approved_rows if r["approval_to_merge_seconds"] > threshold),
+                key=lambda r: r["approval_to_merge_seconds"],
+                reverse=True,
+            )[:5]
+        result["approval_outliers"] = [
+            {
+                "repo": r["repo"],
+                "number": r["number"],
+                "title": r["title"],
+                "approval_to_merge_seconds": r["approval_to_merge_seconds"],
+                "approval_to_merge_display": self._fmt_duration(r["approval_to_merge_seconds"]),
+            }
+            for r in outliers
+        ]
+        return result
 
 
 # ---------------------------------------------------------------------------

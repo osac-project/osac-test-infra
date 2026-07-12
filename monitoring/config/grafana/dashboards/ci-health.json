@@ -243,8 +243,8 @@
       ]
     },
     {
-      "title": "Avg Time to Merge",
-      "description": "Average time from PR open to merge, for PRs merged within the selected time range (filtered by merge time, not open time). Not affected by the Category/Workflow/Job Type filters, which don't apply to PRs -- only Repository does.",
+      "title": "Time to Merge (First Approval, Median)",
+      "description": "Median time from a PR's first human-reviewer approval to merge, for PRs merged within the selected time range (filtered by merge time, not open time). Median, not mean -- a handful of PRs approved and then simply never merged for days/weeks skew the mean heavily (see the Outliers table); median reports the typical case. Excludes PRs with no human approval on record (e.g. admin-merged, or only bot-reviewed -- see approved_count/count for that ratio). Not affected by the Category/Workflow/Job Type filters, which don't apply to PRs -- only Repository does.",
       "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 17 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
@@ -274,14 +274,14 @@
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
-            { "selector": "avg_merge_display", "text": "avg_merge_display", "type": "string" }
+            { "selector": "median_approval_to_merge_display", "text": "median_approval_to_merge_display", "type": "string" }
           ]
         }
       ]
     },
     {
       "title": "Time to Merge by Repo",
-      "description": "Per-repo average time to merge, for PRs merged within the selected time range. Click column headers to sort.",
+      "description": "Per-repo PR timing/retest stats, for PRs merged within the selected time range. Approval→Merge excludes PRs with no human approval on record; Open→Merge is the full PR lifecycle (create to merge). Both report median (typical case) and mean (sensitive to outliers -- a big mean/median gap means outliers exist, see the Outliers table below). Retests (avg) counts e2e runs beyond the first per PR (each /retest or new push triggers another). Click column headers to sort.",
       "type": "table",
       "gridPos": { "h": 4, "w": 16, "x": 8, "y": 17 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
@@ -292,31 +292,57 @@
             "matcher": { "id": "byName", "options": "repo" },
             "properties": [
               { "id": "displayName", "value": "Repository" },
-              { "id": "custom.width", "value": 220 }
+              { "id": "custom.width", "value": 160 }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "avg_merge_display" },
+            "matcher": { "id": "byName", "options": "median_approval_to_merge_display" },
             "properties": [
-              { "id": "displayName", "value": "Avg Time to Merge" },
-              { "id": "custom.width", "value": 160 }
+              { "id": "displayName", "value": "Approval→Merge (median)" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "avg_approval_to_merge_display" },
+            "properties": [
+              { "id": "displayName", "value": "Approval→Merge (mean)" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "median_open_to_merge_display" },
+            "properties": [
+              { "id": "displayName", "value": "Open→Merge (median)" },
+              { "id": "custom.width", "value": 140 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "avg_retest_count" },
+            "properties": [
+              { "id": "displayName", "value": "Retests (avg)" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "approved_count" },
+            "properties": [
+              { "id": "displayName", "value": "Approved" }
             ]
           },
           {
             "matcher": { "id": "byName", "options": "count" },
             "properties": [
-              { "id": "displayName", "value": "PRs Merged" }
+              { "id": "displayName", "value": "Merged" }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "avg_merge_seconds" },
+            "matcher": { "id": "byName", "options": "median_approval_to_merge_seconds" },
             "properties": [{ "id": "custom.hidden", "value": true }]
           }
         ]
       },
       "options": {
         "showHeader": true,
-        "sortBy": [{ "displayName": "avg_merge_seconds", "desc": true }],
+        "sortBy": [{ "displayName": "median_approval_to_merge_seconds", "desc": true }],
         "footer": { "show": false }
       },
       "targets": [
@@ -330,9 +356,78 @@
           "root_selector": "by_repo",
           "columns": [
             { "selector": "repo", "text": "repo", "type": "string" },
-            { "selector": "avg_merge_display", "text": "avg_merge_display", "type": "string" },
-            { "selector": "count", "text": "count", "type": "number" },
-            { "selector": "avg_merge_seconds", "text": "avg_merge_seconds", "type": "number" }
+            { "selector": "median_approval_to_merge_display", "text": "median_approval_to_merge_display", "type": "string" },
+            { "selector": "median_approval_to_merge_seconds", "text": "median_approval_to_merge_seconds", "type": "number" },
+            { "selector": "avg_approval_to_merge_display", "text": "avg_approval_to_merge_display", "type": "string" },
+            { "selector": "median_open_to_merge_display", "text": "median_open_to_merge_display", "type": "string" },
+            { "selector": "avg_retest_count", "text": "avg_retest_count", "type": "number" },
+            { "selector": "approved_count", "text": "approved_count", "type": "number" },
+            { "selector": "count", "text": "count", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Time to Merge Outliers",
+      "description": "PRs approved and then not merged for a long time (>3x the window's median approval→merge time, or >1h absolute floor). These are exactly what the median above is deliberately insensitive to -- surfaced here so a real \"approved, then forgotten\" PR doesn't just disappear from the reported numbers. Capped at the 5 worst per query.",
+      "type": "table",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 21 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No outliers in this window"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "repo" },
+            "properties": [{ "id": "displayName", "value": "Repository" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "number" },
+            "properties": [
+              { "id": "displayName", "value": "PR" },
+              { "id": "unit", "value": "none" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "title" },
+            "properties": [
+              { "id": "displayName", "value": "Title" },
+              { "id": "custom.width", "value": 400 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "approval_to_merge_display" },
+            "properties": [
+              { "id": "displayName", "value": "Approval→Merge" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "approval_to_merge_seconds" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "approval_to_merge_seconds", "desc": true }],
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/pr-merge-time?repo=${repo_filter}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "approval_outliers",
+          "columns": [
+            { "selector": "repo", "text": "repo", "type": "string" },
+            { "selector": "number", "text": "number", "type": "number" },
+            { "selector": "title", "text": "title", "type": "string" },
+            { "selector": "approval_to_merge_display", "text": "approval_to_merge_display", "type": "string" },
+            { "selector": "approval_to_merge_seconds", "text": "approval_to_merge_seconds", "type": "number" }
           ]
         }
       ]

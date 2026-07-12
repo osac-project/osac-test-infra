@@ -96,10 +96,13 @@ def fetch_periodic_success_rate(since):
     return _get("/api/counts", job_type="periodic", category="e2e", since=_iso(since))
 
 
-def fetch_presubmit_infra_failures(since):
+def fetch_infra_failures(since, job_type):
+    """The exporter's endpoint isn't actually presubmit-specific -- it
+    buckets whatever jobs match the given filters into infra/test/
+    unattributed, so this works identically for job_type=periodic."""
     return _get(
         "/api/presubmit-infra-failures",
-        job_type="presubmit", category="e2e", since=_iso(since),
+        job_type=job_type, category="e2e", since=_iso(since),
     )
 
 
@@ -239,8 +242,10 @@ def build_digest_image(now):
 
     periodic_24h = fetch_periodic_success_rate(h24)
     periodic_72h = fetch_periodic_success_rate(h72)
-    infra_24h = fetch_presubmit_infra_failures(h24)
-    infra_72h = fetch_presubmit_infra_failures(h72)
+    infra_24h = fetch_infra_failures(h24, "presubmit")
+    infra_72h = fetch_infra_failures(h72, "presubmit")
+    periodic_infra_24h = fetch_infra_failures(h24, "periodic")
+    periodic_infra_72h = fetch_infra_failures(h72, "periodic")
     merge_time = fetch_pr_merge_time(d7)
     flake_rate = fetch_overall_flake_rate(d7)
     mttr = fetch_overall_mttr(d7)
@@ -252,17 +257,23 @@ def build_digest_image(now):
     _text(fig, 0.03, 0.945, "OSAC CI Daily Digest", 30, COLOR_NAVY, weight="bold")
     _text(fig, 0.03, 0.895, now.strftime("%Y-%m-%d %H:%M UTC"), 15, "#3a5a78")
 
-    # -- Card A: Periodic E2E Success Rate (top-left, light) --------------
-    a_rect = (0.02, 0.585, 0.47, 0.275)
+    # -- Card A: Periodic E2E Success Rate + Infra vs. Test (top-left, light)
+    # Grown taller (and Card C below it shrunk to match) to fit the
+    # periodic infra-vs-test breakdown without losing the success-rate
+    # percentages -- both are anchored to the top of the card so the
+    # extra room lands below the percentage boxes, not squeezed between
+    # them and the title.
+    a_rect = (0.02, 0.475, 0.47, 0.385)
     _card(fig, a_rect, dark=False)
     _text(fig, a_rect[0] + 0.02, a_rect[1] + a_rect[3] - 0.035,
           "Periodic E2E Success Rate", 17, COLOR_NAVY, weight="bold")
 
+    ch = 0.175
+    sub_top = a_rect[1] + a_rect[3] - 0.075
+    cy = sub_top - ch
     for i, (label, counts) in enumerate((("Last 24h", periodic_24h), ("Last 72h", periodic_72h))):
         cx = a_rect[0] + 0.025 + i * 0.225
         cw = 0.20
-        cy = a_rect[1] + 0.035
-        ch = a_rect[3] - 0.10
         _card(fig, (cx, cy, cw, ch), dark=False)
         rate = decisive_rate(counts)
         total = counts["success"] + counts["failure"]
@@ -271,6 +282,18 @@ def build_digest_image(now):
               weight="bold", ha="center")
         _checkmark(fig, cx + cw - 0.035, cy + ch / 2, 0.018, status_color(rate))
         _text(fig, cx + cw / 2, cy + 0.035, f"({counts['success']}/{total})", 12, "#5a7a98", ha="center")
+
+    _text(fig, a_rect[0] + 0.02, cy - 0.028,
+          "Periodic Failures — Infra vs. Test", 11.5, COLOR_NAVY, weight="bold")
+    for i, (label, data) in enumerate((("24h", periodic_infra_24h), ("72h", periodic_infra_72h))):
+        ly = cy - 0.058 - i * 0.032
+        infra_n, test_n, tot = data["infra_total"], data["test_total"], data["total_failures"]
+        _text(fig, a_rect[0] + 0.03, ly, f"{label}:", 10, "#3a5a78", weight="bold")
+        _text(fig, a_rect[0] + 0.10, ly, f"{infra_n} infra", 10,
+              COLOR_RED if infra_n else "#8ba3b8", weight="bold")
+        _text(fig, a_rect[0] + 0.21, ly, f"{test_n} test", 10,
+              COLOR_GREEN if test_n else "#8ba3b8", weight="bold")
+        _text(fig, a_rect[0] + 0.31, ly, f"({tot} total)", 9.5, "#5a7a98")
 
     # -- Card B: Presubmit E2E Failures -- Infra vs. Test (top-right, dark)
     b_rect = (0.51, 0.35, 0.47, 0.51)
@@ -310,28 +333,61 @@ def build_digest_image(now):
         )
         _text(fig, b_rect[0] + 0.02, b_rect[1] + 0.02, wrapped, 9.5, COLOR_TEXT_MUTED)
 
-    # -- Card C: Avg Time to Merge (bottom-left, dark) ---------------------
-    c_rect = (0.02, 0.02, 0.47, 0.545)
+    # -- Card C: Time to Merge -- First Approval (bottom-left, dark) -------
+    # Height shrunk to match Card A's growth above (0.02 gap preserved
+    # between the two stacked left-column cards).
+    c_rect = (0.02, 0.02, 0.47, 0.435)
     _card(fig, c_rect, dark=True)
     _text(fig, c_rect[0] + 0.02, c_rect[1] + c_rect[3] - 0.04,
-          "Avg Time to Merge (7d)", 16, COLOR_TEXT_LIGHT, weight="bold")
+          "Time to Merge — First Approval (7d)", 14.5, COLOR_TEXT_LIGHT, weight="bold")
     _text(fig, c_rect[0] + 0.02, c_rect[1] + c_rect[3] - 0.075,
-          f"{merge_time['avg_merge_display']} across {merge_time['count']} PRs", 13, COLOR_TEXT_LIGHT)
+          (
+              f"Median {merge_time['median_approval_to_merge_display']} · "
+              f"{merge_time['approved_count']} of {merge_time['count']} merged PRs "
+              "had a human approval"
+          ),
+          10.5, COLOR_TEXT_LIGHT)
 
-    by_repo = merge_time["by_repo"]
-    if by_repo:
+    # Median, not mean -- a handful of PRs approved and then simply never
+    # merged for days/weeks would otherwise dominate a mean-based bar
+    # chart, squashing every normal repo down to an invisible sliver next
+    # to the outlier's bar. Those outliers aren't hidden, just moved to
+    # their own callout below (see approval_outliers) instead of
+    # distorting this comparison.
+    approved_repos = [r for r in merge_time["by_repo"] if r["median_approval_to_merge_seconds"] is not None]
+    # Reserve extra room at the bottom of the card for the outliers
+    # callout + retest count, beyond what the bar chart itself needs.
+    reserved_bottom = 0.12
+    if approved_repos:
         # Repo names are drawn manually (not via barh's automatic y-tick
         # labels) so their width is fully under control -- relying on
         # tick-label auto-placement let long names like
         # "fulfillment-service" overflow past the card's left edge.
         label_margin = 0.16
+        # The axes' pixel height must scale with how many bars there
+        # actually are -- a fixed-height axes box with just 1-2 items
+        # (common here, since few merges have a human approval on record)
+        # gives each bar a huge vertical slot and renders as a big block
+        # instead of a thin bar, however small `height=` is set below.
+        # Anchored to the same top edge regardless of count, so it doesn't
+        # visually float when there are fewer bars.
+        max_bars = 5
+        # Top reserve only needs to clear the title+subtitle text (which
+        # occupy roughly the top 0.10 of the card) -- the previous 0.20
+        # left a large dead gap above the bars that this space was never
+        # actually spent on.
+        full_height = c_rect[3] - 0.10 - reserved_bottom
+        n = len(approved_repos)
+        bar_area_height = full_height * min(n, max_bars) / max_bars
         chart_ax = fig.add_axes((
-            c_rect[0] + label_margin, c_rect[1] + 0.03,
-            c_rect[2] - label_margin - 0.04, c_rect[3] - 0.16,
+            c_rect[0] + label_margin,
+            c_rect[1] + reserved_bottom + (full_height - bar_area_height),
+            c_rect[2] - label_margin - 0.04,
+            bar_area_height,
         ), zorder=2)
         chart_ax.patch.set_alpha(0)
-        sorted_repos = sorted(by_repo, key=lambda r: r["avg_merge_seconds"])
-        hours = [r["avg_merge_seconds"] / 3600 for r in sorted_repos]
+        sorted_repos = sorted(approved_repos, key=lambda r: r["median_approval_to_merge_seconds"])
+        hours = [r["median_approval_to_merge_seconds"] / 3600 for r in sorted_repos]
         # A scale of 0 (single repo, or every repo at 0s) would collapse
         # both label offsets below to x=0, drawing the repo name and the
         # value label on top of each other as garbled overlapping text --
@@ -339,11 +395,11 @@ def build_digest_image(now):
         x_scale = max(hours) if max(hours) > 0 else 1.0
         bar_colors = plt.cm.Blues(np.linspace(0.4, 0.9, len(hours)))
         y_pos = range(len(sorted_repos))
-        bars = chart_ax.barh(list(y_pos), hours, color=bar_colors)
+        bars = chart_ax.barh(list(y_pos), hours, height=0.6, color=bar_colors)
         for y, bar, r in zip(y_pos, bars, sorted_repos):
             chart_ax.text(
                 bar.get_width() + x_scale * 0.03, y,
-                _truncate(f"{r['avg_merge_display']} ({r['count']})"),
+                _truncate(f"{r['median_approval_to_merge_display']} ({r['approved_count']}/{r['count']})"),
                 va="center", fontsize=9.5, color=COLOR_TEXT_LIGHT,
             )
             # Repo names are drawn in the reserved label_margin, which sits
@@ -359,6 +415,20 @@ def build_digest_image(now):
         chart_ax.set_xlim(0, x_scale * 1.5)
         chart_ax.set_ylim(-0.6, len(sorted_repos) - 0.4)
         chart_ax.axis("off")
+    else:
+        _text(fig, c_rect[0] + 0.02, c_rect[1] + c_rect[3] / 2,
+              "No merged PRs had a human approval in this window", 11, COLOR_TEXT_MUTED)
+
+    outliers = merge_time.get("approval_outliers", [])
+    if outliers:
+        shown = ", ".join(f"{o['repo']} #{o['number']} ({o['approval_to_merge_display']})" for o in outliers[:3])
+        extra = len(outliers) - 3
+        outlier_text = "Outliers (approved, then sat): " + shown + (f", +{extra} more" if extra > 0 else "")
+        wrapped = "\n".join(textwrap.wrap(outlier_text, width=72))
+        _text(fig, c_rect[0] + 0.02, c_rect[1] + 0.065, wrapped, 9, COLOR_YELLOW)
+
+    _text(fig, c_rect[0] + 0.02, c_rect[1] + 0.03,
+          f"Avg retests per PR: {merge_time['avg_retest_count']}", 10.5, COLOR_TEXT_MUTED)
 
     # -- Card D: Additional Stability Signals (bottom-right, dark) ---------
     d_rect = (0.51, 0.02, 0.47, 0.31)
