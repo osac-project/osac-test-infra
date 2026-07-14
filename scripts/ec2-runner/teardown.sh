@@ -24,6 +24,10 @@
 #   RUNNER_ID          GitHub runner id to defensively deregister
 #   GITHUB_REPOSITORY  owner/repo the runner was registered against (required
 #                      if RUNNER_ID is set)
+#   KNOWN_HOSTS_FILE   the run-specific known_hosts file provision.sh created
+#                      (see that script's header) -- removed here since it's
+#                      scratch state scoped to this one run's now-terminated
+#                      instance
 
 set -euo pipefail
 
@@ -35,6 +39,7 @@ RED="\e[31m"
 
 INSTANCE_ID="${INSTANCE_ID:-}"
 RUNNER_ID="${RUNNER_ID:-}"
+KNOWN_HOSTS_FILE="${KNOWN_HOSTS_FILE:-}"
 
 if [ -n "$RUNNER_ID" ]; then
     : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required when RUNNER_ID is set}"
@@ -58,4 +63,8 @@ if [ -n "$INSTANCE_ID" ]; then
     fi
 else
     echo -e "${YELLOW}No INSTANCE_ID set -- nothing to terminate.${RESET}"
+fi
+
+if [ -n "$KNOWN_HOSTS_FILE" ]; then
+    rm -f "$KNOWN_HOSTS_FILE"
 fi

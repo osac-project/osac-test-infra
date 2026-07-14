@@ -15,8 +15,11 @@
 # on the central Vault, then vault-sync.sh to propagate.
 #
 # Usage:
-#   ./vault-add-ec2-runner-github-pat.sh <token>
-#   ./vault-add-ec2-runner-github-pat.sh <token> --dry-run
+#   ./vault-add-ec2-runner-github-pat.sh [--dry-run]
+#
+# Prompts for the token (input is not echoed) rather than taking it as a CLI
+# argument, so it never lands in shell history or `ps` output. When stdin
+# isn't a TTY (e.g. piped input), reads one line instead.
 #
 # The token must be a FINE-GRAINED PAT (github.com -> Settings -> Developer
 # settings -> Fine-grained tokens) scoped to ONLY:
@@ -33,15 +36,27 @@ SECRET_PATH="${SECRET_PATH:-secret/osac/e2e/ec2-runner-github-pat}"
 ###############################################################################
 # Parse arguments
 ###############################################################################
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <token> [--dry-run]" >&2
+DRY_RUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+elif [[ $# -gt 0 ]]; then
+    echo "Usage: $0 [--dry-run]" >&2
     exit 1
 fi
 
-TOKEN="$1"
-DRY_RUN=false
-if [[ "${2:-}" == "--dry-run" ]]; then
-    DRY_RUN=true
+###############################################################################
+# Read token
+###############################################################################
+if [[ -t 0 ]]; then
+    read -r -s -p "GitHub PAT: " TOKEN
+    echo
+else
+    read -r TOKEN
+fi
+
+if [[ -z "${TOKEN}" ]]; then
+    echo "ERROR: token must not be empty." >&2
+    exit 1
 fi
 
 ###############################################################################

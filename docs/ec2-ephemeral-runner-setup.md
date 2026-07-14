@@ -67,9 +67,12 @@ with no policy changes needed) at the cost of that standing credential.
 Run once, on the central Vault host:
 
 ```bash
-./vault/scripts/vault-add-ec2-runner-aws-creds.sh <access-key-id> <secret-access-key>
+./vault/scripts/vault-add-ec2-runner-aws-creds.sh
 ./vault/scripts/vault-sync.sh
 ```
+
+You'll be prompted for the access key id and secret access key (the secret
+isn't echoed back). Add `--dry-run` to preview without writing to Vault.
 
 Use the dedicated, narrowly-scoped IAM credential from Prerequisites above,
 not a broad admin credential -- the orchestrator only ever calls
@@ -93,9 +96,12 @@ Fine-grained tokens):
 Then store it, same pattern as Step 3:
 
 ```bash
-./vault/scripts/vault-add-ec2-runner-github-pat.sh <token>
+./vault/scripts/vault-add-ec2-runner-github-pat.sh
 ./vault/scripts/vault-sync.sh
 ```
+
+You'll be prompted for the token (not echoed back). Add `--dry-run` to
+preview without writing to Vault.
 
 ## Step 5: Dispatch the workflow
 

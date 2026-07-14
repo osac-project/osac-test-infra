@@ -30,6 +30,9 @@
 #                     this cannot be github.token
 #   GITHUB_REPOSITORY  owner/repo to register the runner against (standard
 #                     GitHub Actions env var, set automatically in workflows)
+#   KNOWN_HOSTS_FILE   the same run-specific known_hosts path provision.sh
+#                     used to establish trust with this box -- see that
+#                     script's header for why it's per-run, not shared
 #
 # Optional env vars:
 #   TOOLING_CHECK_CMDS   semicolon-separated shell commands to verify on the
@@ -61,6 +64,7 @@ RED="\e[31m"
 : "${RUN_ID:?RUN_ID is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+: "${KNOWN_HOSTS_FILE:?KNOWN_HOSTS_FILE is required}"
 
 TOOLING_CHECK_CMDS="${TOOLING_CHECK_CMDS:-command -v podman}"
 RUNNER_GROUP_ID="${RUNNER_GROUP_ID:-1}"
@@ -69,7 +73,7 @@ RUNNER_LABEL="ec2-${RUN_ID}"
 ssh_exec() {
     ssh -i "$SSH_KEY_PATH" \
         -o StrictHostKeyChecking=accept-new \
-        -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
+        -o UserKnownHostsFile="${KNOWN_HOSTS_FILE}" \
         -o BatchMode=yes \
         -o ConnectTimeout=10 \
         "${SSH_USER}@${PUBLIC_IP}" "$@"

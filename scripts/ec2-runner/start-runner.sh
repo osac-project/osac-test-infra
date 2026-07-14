@@ -34,6 +34,9 @@
 #                  passwordless sudo -- the default for cloud-init images)
 #   PUBLIC_IP      the box's public IP (from provision.sh output)
 #   JIT_CONFIG     base64 JIT config from verify-and-register.sh
+#   KNOWN_HOSTS_FILE  the same run-specific known_hosts path provision.sh
+#                  used to establish trust with this box -- see that
+#                  script's header for why it's per-run, not shared
 #
 # Optional env vars:
 #   RUNNER_VERSION   GitHub Actions runner version (default: 2.335.1, keep in
@@ -50,6 +53,7 @@ RED="\e[31m"
 : "${SSH_USER:?SSH_USER is required}"
 : "${PUBLIC_IP:?PUBLIC_IP is required}"
 : "${JIT_CONFIG:?JIT_CONFIG is required}"
+: "${KNOWN_HOSTS_FILE:?KNOWN_HOSTS_FILE is required}"
 
 RUNNER_VERSION="${RUNNER_VERSION:-2.335.1}"
 RUNNER_DIR="/opt/actions-runner"
@@ -59,7 +63,7 @@ ENV_FILE="/etc/systemd/system/${SERVICE_NAME}.env"
 ssh_exec() {
     ssh -i "$SSH_KEY_PATH" \
         -o StrictHostKeyChecking=accept-new \
-        -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
+        -o UserKnownHostsFile="${KNOWN_HOSTS_FILE}" \
         -o BatchMode=yes \
         -o ConnectTimeout=10 \
         "${SSH_USER}@${PUBLIC_IP}" "$@"

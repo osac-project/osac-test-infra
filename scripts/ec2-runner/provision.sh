@@ -33,6 +33,17 @@
 #                        ORCHESTRATOR_PUBKEY_PATH, matching how
 #                        verify-and-register.sh/start-runner.sh take it, so
 #                        the two can't silently diverge
+#   KNOWN_HOSTS_FILE     a run-specific (not the orchestrator's shared
+#                        ~/.ssh/known_hosts) known_hosts path. EC2 public IPs
+#                        are recycled from a shared pool, and a previous
+#                        ephemeral instance's host key could already be
+#                        cached under the same IP in a shared file --
+#                        accept-new only auto-trusts genuinely new hosts, so
+#                        a stale cached entry causes a confusing connection
+#                        timeout. A fresh per-run file sidesteps this
+#                        entirely (nothing stale can be in a file that never
+#                        existed before this run) and avoids concurrent runs
+#                        racing on the same file. teardown.sh removes it.
 #
 # Optional env vars:
 #   AWS_REGION           defaults to the AWS CLI's configured region
@@ -63,6 +74,7 @@ YELLOW="\e[33m"
 : "${SUBNET_ID:?SUBNET_ID is required}"
 : "${SECURITY_GROUP_ID:?SECURITY_GROUP_ID is required}"
 : "${RUN_ID:?RUN_ID is required}"
+: "${KNOWN_HOSTS_FILE:?KNOWN_HOSTS_FILE is required}"
 : "${ORCHESTRATOR_PUBKEY_PATH:?ORCHESTRATOR_PUBKEY_PATH is required}"
 : "${SSH_KEY_PATH:?SSH_KEY_PATH is required}"
 
@@ -115,6 +127,7 @@ if ! aws ec2 run-instances \
         --user-data "file://${USER_DATA_FILE}" \
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${INSTANCE_NAME}},{Key=osac-ephemeral,Value=true},{Key=osac-run-id,Value=${RUN_ID}}]" \
         --count 1 \
+        --output json \
         > "$RUN_INSTANCES_OUTPUT" 2>&1; then
     if grep -q "InsufficientInstanceCapacity" "$RUN_INSTANCES_OUTPUT"; then
         echo -e "${RED}${BOLD}ERROR: InsufficientInstanceCapacity for ${INSTANCE_TYPE} in this AZ.${RESET}" >&2
@@ -166,21 +179,12 @@ if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; then
 fi
 echo -e "${GREEN}Public IP: ${PUBLIC_IP}${RESET}"
 
-# EC2 public IPs are recycled from a shared pool -- a previous ephemeral
-# instance's host key may already be cached in known_hosts under this same
-# IP. accept-new only auto-trusts genuinely new hosts; it refuses to connect
-# if the cached key doesn't match the new instance's, causing a confusing
-# timeout with no indication that a stale known_hosts entry is the cause.
-# Strip any existing entry for this IP before connecting so accept-new
-# always sees it as new.
-ssh-keygen -R "$PUBLIC_IP" -f "${HOME}/.ssh/known_hosts" > /dev/null 2>&1 || true
-
 echo -e "${GREEN}Waiting for SSH to accept connections (timeout ${SSH_TIMEOUT_SECONDS}s)...${RESET}"
 ELAPSED=0
 POLL_INTERVAL=10
 until ssh -i "$SSH_KEY_PATH" \
         -o StrictHostKeyChecking=accept-new \
-        -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
+        -o UserKnownHostsFile="${KNOWN_HOSTS_FILE}" \
         -o BatchMode=yes \
         -o ConnectTimeout=5 \
         "${SSH_USER}@${PUBLIC_IP}" true 2>/dev/null; do

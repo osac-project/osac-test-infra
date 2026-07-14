@@ -47,6 +47,14 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+    env:
+      # Run-specific, not the orchestrator's shared ~/.ssh/known_hosts --
+      # see provision.sh's header for why (recycled EC2 IPs can carry a
+      # stale cached host key in a shared file). Deterministically derived
+      # here (rather than passed as a job output) so the teardown job,
+      # which needs the identical path to clean it up, can compute the same
+      # value independently.
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
     outputs:
       instance-id: ${{ steps.provision.outputs.instance-id }}
       public-ip: ${{ steps.provision.outputs.public-ip }}
@@ -136,6 +144,8 @@ jobs:
     needs: provision
     runs-on: ${{ needs.provision.outputs.runner-label }}
     timeout-minutes: 30
+    permissions:
+      contents: read
     outputs:
       result: ${{ steps.placeholder.outcome == 'success' && 'PASSED' || 'FAILED' }}
     steps:
@@ -160,6 +170,11 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    env:
+      # Must match the provision job's derivation exactly -- see that job's
+      # env block for why this is computed independently rather than passed
+      # as an output.
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

@@ -8,8 +8,12 @@
 # Run once on the central Vault, then vault-sync.sh to propagate.
 #
 # Usage:
-#   ./vault-add-ec2-runner-aws-creds.sh <access-key-id> <secret-access-key>
-#   ./vault-add-ec2-runner-aws-creds.sh <access-key-id> <secret-access-key> --dry-run
+#   ./vault-add-ec2-runner-aws-creds.sh [--dry-run]
+#
+# Prompts for the access key id and secret access key (secret input is not
+# echoed) rather than taking them as CLI arguments, so they never land in
+# shell history or `ps` output. When stdin isn't a TTY (e.g. piped input),
+# reads two lines instead: access key id, then secret access key.
 #
 # These credentials should be scoped to exactly the EC2 lifecycle actions the
 # orchestrator scripts need (RunInstances/TerminateInstances/DescribeInstances/
@@ -24,16 +28,29 @@ SECRET_PATH="${SECRET_PATH:-secret/osac/e2e/ec2-runner-aws-credentials}"
 ###############################################################################
 # Parse arguments
 ###############################################################################
-if [[ $# -lt 2 ]]; then
-    echo "Usage: $0 <access-key-id> <secret-access-key> [--dry-run]" >&2
+DRY_RUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+elif [[ $# -gt 0 ]]; then
+    echo "Usage: $0 [--dry-run]" >&2
     exit 1
 fi
 
-ACCESS_KEY_ID="$1"
-SECRET_ACCESS_KEY="$2"
-DRY_RUN=false
-if [[ "${3:-}" == "--dry-run" ]]; then
-    DRY_RUN=true
+###############################################################################
+# Read credentials
+###############################################################################
+if [[ -t 0 ]]; then
+    read -r -p "AWS Access Key ID: " ACCESS_KEY_ID
+    read -r -s -p "AWS Secret Access Key: " SECRET_ACCESS_KEY
+    echo
+else
+    read -r ACCESS_KEY_ID
+    read -r SECRET_ACCESS_KEY
+fi
+
+if [[ -z "${ACCESS_KEY_ID}" || -z "${SECRET_ACCESS_KEY}" ]]; then
+    echo "ERROR: access key id and secret access key must not be empty." >&2
+    exit 1
 fi
 
 ###############################################################################
