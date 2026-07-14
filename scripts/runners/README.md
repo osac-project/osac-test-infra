@@ -92,6 +92,24 @@ RUNNER_NAME_PREFIX="monitoring" \
   ./scripts/runners/action-runners-cleanup.sh <TOKEN>
 ```
 
+The `osac-ci-orchestrator` runner used by the on-demand EC2 ephemeral-runner flow
+(see [`docs/ec2-ephemeral-runner-setup.md`](../../docs/ec2-ephemeral-runner-setup.md))
+follows the same pattern -- registered as a dedicated label so it's never
+queued behind the shared `osac-ci` fleet's VMaaS/CaaS e2e jobs:
+
+```bash
+# Register
+LABELS="self-hosted,osac-ci-orchestrator" \
+BASE_DIR="$HOME/action-runners-orchestrator" \
+RUNNER_NAME_PREFIX="orchestrator" \
+  ./scripts/runners/action-runners-setup.sh <TOKEN> 1
+
+# Clean up (must match the overrides used at registration time)
+BASE_DIR="$HOME/action-runners-orchestrator" \
+RUNNER_NAME_PREFIX="orchestrator" \
+  ./scripts/runners/action-runners-cleanup.sh <TOKEN>
+```
+
 ## Workflow Usage
 
 ```yaml

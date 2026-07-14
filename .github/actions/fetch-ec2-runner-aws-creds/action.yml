@@ -1,0 +1,35 @@
+---
+name: Fetch EC2 runner AWS credentials
+description: >-
+  Retrieve the AWS credentials the osac-ci-orchestrator uses to
+  launch/terminate ephemeral EC2 e2e runners from Vault. Separate from
+  fetch-and-write-secrets, which is scoped to OSAC test secrets
+  (pull-secret/AAP-license/registry-auth), not AWS credentials.
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+
+outputs:
+  AWS_ACCESS_KEY_ID:
+    value: ${{ steps.vault.outputs.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY:
+    value: ${{ steps.vault.outputs.AWS_SECRET_ACCESS_KEY }}
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve AWS credentials from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: |
+          secret/data/osac/e2e/ec2-runner-aws-credentials access_key_id | AWS_ACCESS_KEY_ID ;
+          secret/data/osac/e2e/ec2-runner-aws-credentials secret_access_key | AWS_SECRET_ACCESS_KEY

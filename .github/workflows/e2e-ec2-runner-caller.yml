@@ -1,0 +1,37 @@
+---
+name: E2E EC2 Ephemeral Runner
+
+# workflow_dispatch only, deliberately -- this is an interim risk gate.
+# No pull_request/schedule trigger until an orphan-instance watchdog exists,
+# so exposure is limited to manually-triggered runs someone is actively
+# watching.
+on:
+  workflow_dispatch:
+    inputs:
+      ami-id:
+        description: "AMI to launch (stock, only validated against Rocky Linux 9.6 so far)"
+        required: true
+      instance-type:
+        description: "EC2 instance type"
+        required: false
+        default: "c5n.metal"
+      subnet-id:
+        description: "Subnet to launch the instance into"
+        required: true
+      security-group-id:
+        description: "Security group for the instance"
+        required: true
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        default: "us-east-1"
+
+jobs:
+  e2e-ec2-runner:
+    uses: ./.github/workflows/e2e-ec2-runner.yml
+    with:
+      ami-id: ${{ inputs.ami-id }}
+      instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
+      subnet-id: ${{ inputs.subnet-id }}
+      security-group-id: ${{ inputs.security-group-id }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}

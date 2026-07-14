@@ -1,0 +1,33 @@
+---
+name: Gather EC2 Runner Artifacts
+description: >-
+  Collect host-level diagnostics (journalctl/cloud-init/dmesg) from an
+  ephemeral EC2 runner and upload as a workflow artifact. Wraps
+  scripts/ec2-runner/gather-host-logs.sh. Runs on the ephemeral runner itself,
+  not via SSH -- unlike gather-artifacts, which requires a kubeconfig this
+  bare box doesn't have.
+
+inputs:
+  artifact-name:
+    description: "Name for the uploaded artifact"
+    required: false
+    default: "osac-ec2-runner-logs"
+
+runs:
+  using: composite
+  steps:
+    - name: Gather host logs
+      if: always()
+      shell: bash
+      run: |
+        ARTIFACT_DIR="${RUNNER_TEMP}/osac-ec2-runner-artifacts"
+        "$GITHUB_WORKSPACE/scripts/ec2-runner/gather-host-logs.sh" "${ARTIFACT_DIR}"
+
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/osac-ec2-runner-artifacts/
+        retention-days: 7
+        if-no-files-found: warn

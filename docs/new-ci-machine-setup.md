@@ -274,3 +274,10 @@ git -C /opt/cluster-tool fetch eliorerz fix-machine-type-detection
 git -C /opt/cluster-tool checkout fix-machine-type-detection
 cp /opt/cluster-tool/cluster-tool /usr/local/bin/cluster-tool
 ```
+
+## Related: on-demand EC2 bare-metal runner
+
+Tests that need a genuinely bare (no-hypervisor) machine the persistent fleet
+above can't provide use a separate, ephemeral EC2 flow instead of this
+machine-init process -- see
+[`docs/ec2-ephemeral-runner-setup.md`](ec2-ephemeral-runner-setup.md).
