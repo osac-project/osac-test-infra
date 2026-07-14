@@ -37,10 +37,19 @@
 #                      for why this can't be github.token
 #
 # Optional env vars:
-#   MAX_INSTANCE_AGE_MINUTES  safety-net threshold (default 90 -- above the
-#                      85-minute worst case of provision/test/teardown's
-#                      summed timeout-minutes; tune once more real run data
-#                      exists)
+#   MAX_INSTANCE_AGE_MINUTES  safety-net threshold (default 120). The
+#                      provision/test/teardown job timeouts sum to 85
+#                      minutes, but LaunchTime (what age is measured from)
+#                      occurs partway into the provision job, and GitHub
+#                      Actions queue time before a job starts executing
+#                      doesn't count against its timeout-minutes budget --
+#                      90 would leave only a few minutes of real margin
+#                      once queueing is considered, especially since this
+#                      watchdog itself now shares the same singleton
+#                      osac-ci-orchestrator runner slot with provision/
+#                      teardown. 120 leaves comfortable headroom; tune via
+#                      this workflow's max-age-minutes dispatch input once
+#                      more real run data exists.
 #   DRY_RUN            "true" to log what would happen without terminating
 #                      instances or deregistering runners (default "false")
 #   AWS_REGION         defaults to the AWS CLI's configured region
@@ -56,7 +65,7 @@ YELLOW="\e[33m"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 
-MAX_INSTANCE_AGE_MINUTES="${MAX_INSTANCE_AGE_MINUTES:-90}"
+MAX_INSTANCE_AGE_MINUTES="${MAX_INSTANCE_AGE_MINUTES:-120}"
 DRY_RUN="${DRY_RUN:-false}"
 
 DESCRIBE_OUTPUT=$(mktemp)
@@ -100,7 +109,11 @@ while IFS=$'\t' read -r INSTANCE_ID LAUNCH_TIME RUN_ID_TAG; do
         echo -e "${YELLOW}${BOLD}ORPHAN: ${INSTANCE_ID}${RESET} -- ${ORPHAN_REASON}"
 
         if [ "$DRY_RUN" = "true" ]; then
-            echo "[DRY RUN] Would terminate ${INSTANCE_ID} and deregister runner label ec2-${RUN_ID_TAG}"
+            if [ "$RUN_ID_TAG" != "unknown" ]; then
+                echo "[DRY RUN] Would terminate ${INSTANCE_ID} and deregister runner label ec2-${RUN_ID_TAG}"
+            else
+                echo "[DRY RUN] Would terminate ${INSTANCE_ID} (no run-id tag -- would not attempt deregistration)"
+            fi
         else
             if aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" > /dev/null; then
                 echo -e "${GREEN}Terminated ${INSTANCE_ID}.${RESET}"
@@ -112,15 +125,22 @@ while IFS=$'\t' read -r INSTANCE_ID LAUNCH_TIME RUN_ID_TAG; do
 
             if [ "$RUN_ID_TAG" != "unknown" ]; then
                 RUNNER_LABEL="ec2-${RUN_ID_TAG}"
-                RUNNER_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runners" 2>/dev/null \
+                # `|| true` on the assignment: under set -e -o pipefail, a
+                # transient failure of `gh api` here (rate limit, network
+                # blip) would otherwise abort the whole script mid-loop,
+                # silently skipping every remaining candidate instance this
+                # cycle -- exactly the "no silent skips" promise above.
+                RUNNER_ID=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runners" 2>/dev/null \
                     | jq -r --arg label "$RUNNER_LABEL" '.runners[] | select(.labels[].name == $label) | .id' \
-                    | head -n1)
+                    | head -n1) || true
                 if [ -n "$RUNNER_ID" ] && [ "$RUNNER_ID" != "null" ]; then
                     if gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/runners/${RUNNER_ID}" > /dev/null 2>&1; then
                         echo -e "${GREEN}Deregistered lingering runner ${RUNNER_LABEL} (id ${RUNNER_ID}).${RESET}"
                     else
                         echo -e "${YELLOW}Runner ${RUNNER_LABEL} deregistration failed or already gone.${RESET}"
                     fi
+                else
+                    echo -e "${YELLOW}No runner found with label ${RUNNER_LABEL} -- nothing to deregister (or the lookup itself failed).${RESET}"
                 fi
             fi
         fi

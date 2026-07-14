@@ -181,11 +181,13 @@ orchestrator crash mid-job, or a GitHub outage that broke the
 
 It terminates an instance if either is true: the GitHub Actions run it's
 tagged with has already completed (so `teardown.sh` should have already run
-but the instance is still alive), or the instance is older than
-`MAX_INSTANCE_AGE_MINUTES` (default 90, an env var on the
-`scripts/ec2-runner/reap-orphans.sh` step in that workflow) regardless of
-run status. Every instance it examines is logged either way, whether or not
-it acts on it.
+but the instance is still alive), or the instance is older than a max-age
+threshold (default 120 minutes) regardless of run status. Every instance it
+examines is logged either way, whether or not it acts on it.
+
+Override the threshold per-dispatch via the `max-age-minutes` input (no
+workflow file edit needed) if it needs tuning -- e.g. once more real run
+data narrows down how tight it can safely be.
 
 To test it without risking a real termination, dispatch it manually with
 `dry-run: true`.

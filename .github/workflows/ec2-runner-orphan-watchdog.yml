@@ -25,6 +25,10 @@ on:
         description: "AWS region to scan -- must match wherever e2e-ec2-runner-caller.yml actually launches instances"
         required: false
         default: "us-east-1"
+      max-age-minutes:
+        description: "Terminate any osac-ephemeral instance older than this regardless of its run's status (safety net) -- see reap-orphans.sh's header comment for how this default was chosen"
+        required: false
+        default: "120"
 
 jobs:
   reap-orphans:
@@ -67,4 +71,5 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ inputs.aws-region || 'us-east-1' }}
           DRY_RUN: ${{ inputs.dry-run || false }}
+          MAX_INSTANCE_AGE_MINUTES: ${{ inputs.max-age-minutes || '120' }}
         run: ./scripts/ec2-runner/reap-orphans.sh
