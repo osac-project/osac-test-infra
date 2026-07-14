@@ -167,6 +167,25 @@ From the GitHub UI (Actions → E2E EC2 Ephemeral Runner → Run workflow) or vi
 Everything else (AWS credentials, GitHub PAT, AMI/subnet/security group) is
 fetched from Vault automatically -- no other input needed on dispatch.
 
-The workflow is `workflow_dispatch`-only for now (an interim risk gate) -- it
-is not wired to any PR trigger or schedule until an orphan-instance watchdog
-exists as a follow-up.
+The workflow is `workflow_dispatch`-only for now (an interim risk gate) --
+adding a PR trigger or schedule is a separate, deliberate follow-up.
+
+## Orphan-instance watchdog
+
+`ec2-runner-orphan-watchdog.yml` runs on a schedule (every 15 minutes, plus
+manual `workflow_dispatch`) on the same `osac-ci-orchestrator` runner, and
+terminates any `osac-ephemeral`-tagged instance that `e2e-ec2-runner.yml`'s
+own `teardown` job failed to clean up -- e.g. a cancelled run, an
+orchestrator crash mid-job, or a GitHub outage that broke the
+`needs: [provision, test]` chain before `teardown` ever ran.
+
+It terminates an instance if either is true: the GitHub Actions run it's
+tagged with has already completed (so `teardown.sh` should have already run
+but the instance is still alive), or the instance is older than
+`MAX_INSTANCE_AGE_MINUTES` (default 90, an env var on the
+`scripts/ec2-runner/reap-orphans.sh` step in that workflow) regardless of
+run status. Every instance it examines is logged either way, whether or not
+it acts on it.
+
+To test it without risking a real termination, dispatch it manually with
+`dry-run: true`.

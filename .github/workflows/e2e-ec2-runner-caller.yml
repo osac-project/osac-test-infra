@@ -2,9 +2,11 @@
 name: E2E EC2 Ephemeral Runner
 
 # workflow_dispatch only, deliberately -- this is an interim risk gate.
-# No pull_request/schedule trigger until an orphan-instance watchdog exists,
-# so exposure is limited to manually-triggered runs someone is actively
-# watching.
+# ec2-runner-orphan-watchdog.yml now exists (backstop for cancelled/hung
+# runs that break the teardown chain), which was the specific prerequisite
+# for this gate -- but no pull_request/schedule trigger has been added here
+# yet regardless, so exposure stays limited to manually-triggered runs
+# someone is actively watching. Revisit as a separate, deliberate change.
 #
 # AMI id, subnet id, and security group id are NOT dispatch inputs: this
 # repo is public, and workflow_dispatch inputs are visible forever in the

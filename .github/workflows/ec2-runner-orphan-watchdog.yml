@@ -1,0 +1,70 @@
+---
+name: EC2 Ephemeral Runner Orphan Watchdog
+
+# Independent backstop for scripts/ec2-runner/reap-orphans.sh's job: finds
+# and terminates any osac-ephemeral EC2 instance that e2e-ec2-runner.yml's
+# own teardown job (if: always()) failed to clean up -- e.g. a cancelled
+# run, an orchestrator crash mid-job, or a GitHub outage that broke the
+# needs: [provision, test] -> teardown chain before it ever started.
+#
+# Single file, no caller/reusable split (unlike the e2e-ec2-runner-*.yml
+# pair): that split exists to isolate a pull_request trigger from a reusable
+# workflow's own history, which doesn't apply here -- this only ever has
+# schedule/workflow_dispatch triggers, same as ci-daily-digest.yml.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Log what would be terminated/deregistered without actually doing it"
+        required: false
+        type: boolean
+        default: false
+      aws-region:
+        description: "AWS region to scan -- must match wherever e2e-ec2-runner-caller.yml actually launches instances"
+        required: false
+        default: "us-east-1"
+
+jobs:
+  reap-orphans:
+    runs-on: osac-ci-orchestrator
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner-watchdog
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch EC2 runner AWS credentials
+        id: aws-creds
+        uses: ./.github/actions/fetch-ec2-runner-aws-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch EC2 runner GitHub PAT
+        id: gh-pat
+        uses: ./.github/actions/fetch-ec2-runner-github-pat
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Reap orphaned instances
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.gh-pat.outputs.GH_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ inputs.aws-region || 'us-east-1' }}
+          DRY_RUN: ${{ inputs.dry-run || false }}
+        run: ./scripts/ec2-runner/reap-orphans.sh
