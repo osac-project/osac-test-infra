@@ -4,23 +4,11 @@ name: E2E EC2 Ephemeral Runner
 on:
   workflow_call:
     inputs:
-      ami-id:
-        description: "AMI to launch (stock, no pre-baked tooling for now -- AMI-baking is a follow-up. Only validated against Rocky Linux 9.6 so far -- a different distro may need SSH_USER/provision.sh cloud-init adjustments.)"
-        required: true
-        type: string
       instance-type:
         description: "EC2 instance type"
         required: false
         type: string
         default: "c5n.metal"
-      subnet-id:
-        description: "Subnet to launch the instance into"
-        required: true
-        type: string
-      security-group-id:
-        description: "Security group for the instance (must allow SSH from the orchestrator)"
-        required: true
-        type: string
       aws-region:
         description: "AWS region to launch into"
         required: false
@@ -86,6 +74,13 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
+      - name: Fetch EC2 runner network config
+        id: network-config
+        uses: ./.github/actions/fetch-ec2-runner-network-config
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
       - name: Verify orchestrator SSH keypair exists
         shell: bash
         run: |
@@ -101,10 +96,10 @@ jobs:
         id: provision
         shell: bash
         env:
-          AMI_ID: ${{ inputs.ami-id }}
+          AMI_ID: ${{ steps.network-config.outputs.AMI_ID }}
           INSTANCE_TYPE: ${{ inputs.instance-type }}
-          SUBNET_ID: ${{ inputs.subnet-id }}
-          SECURITY_GROUP_ID: ${{ inputs.security-group-id }}
+          SUBNET_ID: ${{ steps.network-config.outputs.SUBNET_ID }}
+          SECURITY_GROUP_ID: ${{ steps.network-config.outputs.SECURITY_GROUP_ID }}
           # run_attempt (not just run_id) so a re-run after a failed teardown
           # never collides with a still-registered runner/instance from the
           # previous attempt.

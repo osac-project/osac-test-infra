@@ -1,0 +1,39 @@
+---
+name: Fetch EC2 runner network config
+description: >-
+  Retrieve the AMI id, subnet id, and security group id the
+  osac-ci-orchestrator uses to launch ephemeral EC2 e2e runners from Vault.
+  Kept out of workflow_dispatch inputs because this repo is public --
+  dispatch inputs are visible in the Actions run history/API to anyone, and
+  subnet/security-group ids reveal real VPC layout.
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+
+outputs:
+  AMI_ID:
+    value: ${{ steps.vault.outputs.AMI_ID }}
+  SUBNET_ID:
+    value: ${{ steps.vault.outputs.SUBNET_ID }}
+  SECURITY_GROUP_ID:
+    value: ${{ steps.vault.outputs.SECURITY_GROUP_ID }}
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve network config from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: |
+          secret/data/osac/e2e/ec2-runner-network-config ami_id | AMI_ID ;
+          secret/data/osac/e2e/ec2-runner-network-config subnet_id | SUBNET_ID ;
+          secret/data/osac/e2e/ec2-runner-network-config security_group_id | SECURITY_GROUP_ID

@@ -103,19 +103,40 @@ Then store it, same pattern as Step 3:
 You'll be prompted for the token (not echoed back). Add `--dry-run` to
 preview without writing to Vault.
 
-## Step 5: Dispatch the workflow
+## Step 5: Store the AMI/subnet/security group config in Vault
 
-From the GitHub UI (Actions → E2E EC2 Ephemeral Runner → Run workflow) or via
-`gh workflow run`, providing:
+This repo is public: `workflow_dispatch` inputs are visible forever in the
+Actions run history/API to anyone, and a subnet id or security group id
+reveals real VPC layout. So the AMI id, subnet id, and security group id are
+**not** dispatch inputs -- they're stored in Vault and fetched at run time
+the same way the AWS credentials and GitHub PAT are.
 
-- `ami-id` -- a stock AMI, no pre-baked tooling (AMI-baking is a possible
+Run once, on the central Vault host:
+
+```bash
+./vault/scripts/vault-add-ec2-runner-network-config.sh
+./vault/scripts/vault-sync.sh
+```
+
+You'll be prompted for the AMI id, subnet id, and security group id. Add
+`--dry-run` to preview without writing to Vault.
+
+- AMI id: a stock AMI, no pre-baked tooling (AMI-baking is a possible
   follow-up). Only validated against Rocky Linux 9.6 so far -- a different
   distro/AMI may need `provision.sh`'s `SSH_USER`/cloud-init handling
   adjusted (see that script's comments for what's distro-specific)
-- `subnet-id`, `security-group-id` -- from Prerequisites above
+- Subnet id, security group id -- from Prerequisites above
 
-AWS credentials are fetched from Vault automatically -- no credential input
-needed on dispatch.
+To change any of these later (e.g. testing a new AMI), re-run the script with
+the new values and `vault-sync.sh` again.
+
+## Step 6: Dispatch the workflow
+
+From the GitHub UI (Actions → E2E EC2 Ephemeral Runner → Run workflow) or via
+`gh workflow run`. `instance-type` (default `c5n.metal`) and `aws-region`
+(default `us-east-1`) can optionally be overridden -- neither is sensitive.
+Everything else (AWS credentials, GitHub PAT, AMI/subnet/security group) is
+fetched from Vault automatically -- no other input needed on dispatch.
 
 The workflow is `workflow_dispatch`-only for now (an interim risk gate) -- it
 is not wired to any PR trigger or schedule until an orphan-instance watchdog
