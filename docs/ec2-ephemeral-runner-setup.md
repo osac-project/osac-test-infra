@@ -14,6 +14,35 @@ automatically per run.
   for storing in Vault (Step 3) -- not a broad admin credential.
 - Access to the central Vault (root token or an operator token that can write
   to `secret/osac/e2e/*`), to run Step 3.
+- The AWS CLI (`aws`) and GitHub CLI (`gh`) must be installed and on `PATH`
+  for the user the orchestrator runner service(s) run as -- `provision.sh`/
+  `teardown.sh` call `aws` directly, and `verify-and-register.sh`/
+  `teardown.sh` call `gh`. Neither is a given on a general-purpose CI box:
+  confirmed missing on a real orchestrator machine during acceptance
+  testing, causing `Provision ephemeral EC2 instance` and `Verify tooling
+  and register JIT runner` to fail with "command not found" well after the
+  runner itself was working correctly. If the runner user has no root/sudo,
+  both ship official portable installers that work entirely user-local (no
+  system package manager needed):
+  ```bash
+  # AWS CLI v2, user-local
+  curl -sS "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  unzip -q -o /tmp/awscliv2.zip -d /tmp
+  mkdir -p ~/.local/aws-cli ~/.local/bin
+  /tmp/aws/install --install-dir ~/.local/aws-cli --bin-dir ~/.local/bin --update
+  rm -rf /tmp/aws /tmp/awscliv2.zip
+
+  # GitHub CLI, user-local
+  GH_VERSION=$(curl -sS https://api.github.com/repos/cli/cli/releases/latest | grep -oP '"tag_name": "v\K[^"]+')
+  curl -sSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" -o /tmp/gh.tar.gz
+  tar xzf /tmp/gh.tar.gz -C /tmp
+  mkdir -p ~/.local/bin
+  cp "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" ~/.local/bin/gh
+  rm -rf "/tmp/gh_${GH_VERSION}_linux_amd64" /tmp/gh.tar.gz
+  ```
+  Make sure `~/.local/bin` is on `PATH` for that user (it already is by
+  default on most distros' login shells; confirm with `echo $PATH` as that
+  user, since the runner service inherits its environment from there).
 
 ## Step 1: Register the osac-ci-orchestrator runner
 
