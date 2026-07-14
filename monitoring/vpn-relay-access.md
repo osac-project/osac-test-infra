@@ -221,8 +221,12 @@ verification step defends against.
 
 | Service | Port | SHA-256 fingerprint |
 |---|---|---|
-| Grafana | 3000 | `37:5D:AB:20:33:50:BD:BA:37:77:92:4A:86:93:36:67:75:B8:FC:F1:98:D0:2C:DA:58:95:91:26:08:86:64:21` |
-| Vault | 8210 | `DD:79:EC:F9:E0:11:BA:C6:6B:50:A0:F1:46:DC:4A:24:28:C3:67:05:6C:2E:E2:24:45:51:35:38:26:BA:6A:35` |
+| Grafana | 3000 | `9E:50:62:83:CC:4C:31:71:29:5B:64:D3:37:4D:00:3D:8B:00:1E:C1:3F:C6:A0:3E:02:11:4B:4C:16:70:0B:06` |
+| Vault | 8210 | `CA:0C:80:9E:18:00:A3:27:79:53:99:D9:17:18:AB:D5:6E:9D:D4:22:06:46:8C:05:2C:42:41:31:06:61:F6:13` |
+
+Regenerated to add `osac-ci.redhat.com` as a SAN (a real CNAME now points at the relay's
+existing hostname — see below), which is why both fingerprints changed from the
+values in earlier commits even though the relay itself didn't move.
 
 **Whoever regenerates either cert must update this table in the same
 change** — a stale fingerprint here would either block legitimate trust
