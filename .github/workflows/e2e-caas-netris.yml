@@ -105,12 +105,41 @@ jobs:
           test-suite: ec2-runner
           run-id: ${{ github.run_id }}
 
-      - name: Fetch E2E secrets (pull-secret, AAP license, snapshot registry)
-        id: e2e-secrets
-        uses: ./.github/actions/fetch-and-write-secrets
+      # Not ./.github/actions/fetch-and-write-secrets: that composite action
+      # also writes a merged podman auth.json to $HOME/.config/containers and
+      # (via sudo) /root/.config/containers -- appropriate for e2e-vmaas.yml,
+      # where it runs on the same box that later podman-pulls images with it,
+      # but wrong here: this job runs on the persistent orchestrator, not the
+      # disposable box, so it would leave standing registry credentials on a
+      # long-lived machine (the exact thing this fix is trying to avoid --
+      # see push-caas-netris-secrets.sh's header) and needs sudo, which isn't
+      # guaranteed on every orchestrator runner. infra/netris never reads
+      # auth.json (confirmed: no reference to it anywhere under infra/netris
+      # or the root Makefile) -- only the raw pull-secret JSON and AAP
+      # license zip are actually needed, so fetch just those two directly.
+      - name: Fetch pull secret and AAP license from Vault
+        id: vault-secrets
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
         with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.setup.outputs.role-id }}
+          secretId: ${{ steps.setup.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
+            secret/data/osac/e2e/aap-license license | AAP_LICENSE
+
+      - name: Write pull secret and AAP license to temp files
+        shell: bash
+        env:
+          PULL_SECRET: ${{ steps.vault-secrets.outputs.PULL_SECRET }}
+          AAP_LICENSE: ${{ steps.vault-secrets.outputs.AAP_LICENSE }}
+        run: |
+          printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
+          chmod 600 "$RUNNER_TEMP/pull-secret.json"
+          printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
+          chmod 600 "$RUNNER_TEMP/aap-license.zip"
 
       - name: Fetch Netris license
         id: netris-license

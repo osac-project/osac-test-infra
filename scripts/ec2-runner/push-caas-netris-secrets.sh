@@ -95,7 +95,12 @@ ssh_exec() {
 }
 
 scp_to_box() {
-    scp -i "$SSH_KEY_PATH" \
+    # -p preserves the source file's mode (all four sources below are 600,
+    # written by mktemp or an explicit chmod) instead of falling back to
+    # sftp's default create mode -- without it, each file would briefly sit
+    # on the box at whatever the remote sshd's default permissions are until
+    # the batch chmod below runs afterwards in a separate SSH round-trip.
+    scp -p -i "$SSH_KEY_PATH" \
         -o StrictHostKeyChecking=accept-new \
         -o UserKnownHostsFile="${KNOWN_HOSTS_FILE}" \
         -o BatchMode=yes \
