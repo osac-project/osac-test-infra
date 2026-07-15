@@ -1,0 +1,6 @@
+---
+- name: Install OSAC fresh via Helm (no golden-snapshot restore)
+  hosts: all
+  gather_facts: false
+  roles:
+    - osac_install_full

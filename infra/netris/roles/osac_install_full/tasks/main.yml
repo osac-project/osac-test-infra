@@ -1,0 +1,150 @@
+---
+# Full/fresh OSAC install, modeled on how e2e-vmaas-full-install.yml already
+# installs OSAC (clone osac-installer -> make install-operators ->
+# make install-prereqs -> make install-osac against a values file with no
+# dynamic patching needed). Unlike roles/osac_install (left untouched -- it
+# does real Netris/AAP host-provisioning integration, a separate concern),
+# this role is deliberately thin: values/caas-ci/values.yaml already sets
+# mce.enabled/cnv.enabled correctly, so there's nothing here that benefits
+# from ansible's idempotency machinery beyond what Helm's own
+# --wait/--wait-for-jobs already provides. kubeconfig is already in place at
+# /root/.kube/config by this point -- roles/ocp_install (part of deploy-ocp,
+# which always runs before this role) downloads it once the OCP install
+# finishes.
+
+- name: Remove any previous osac-installer-full checkout
+  ansible.builtin.file:
+    path: "{{ osac_installer_full_dir }}"
+    state: absent
+
+- name: Clone osac-installer
+  ansible.builtin.git:
+    repo: "{{ osac_installer_repo }}"
+    dest: "{{ osac_installer_full_dir }}"
+    version: "{{ osac_installer_branch }}"
+    force: true
+
+- name: Initialize submodules
+  ansible.builtin.command:
+    cmd: git submodule update --init --recursive
+    chdir: "{{ osac_installer_full_dir }}"
+  changed_when: true
+
+- name: Override osac-operator code in installer
+  ansible.builtin.git:
+    repo: "{{ osac_operator_repo }}"
+    dest: "{{ osac_installer_full_dir }}/base/osac-operator"
+    version: "{{ osac_operator_branch }}"
+    force: true
+  when: osac_operator_branch | default('') | length > 0
+
+- name: Override fulfillment-service code in installer
+  ansible.builtin.git:
+    repo: "{{ fulfillment_service_repo }}"
+    dest: "{{ osac_installer_full_dir }}/base/osac-fulfillment-service"
+    version: "{{ fulfillment_service_branch }}"
+    force: true
+  when: fulfillment_service_branch | default('') | length > 0
+
+- name: Ensure helm is on PATH
+  ansible.builtin.command:
+    cmd: bash -c "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+    creates: /usr/local/bin/helm
+
+- name: Determine values directory
+  ansible.builtin.set_fact:
+    _osac_full_values_dir: "{{ snapshot_osac_values_file | dirname }}"
+
+- name: Copy AAP license to values directory
+  ansible.builtin.copy:
+    src: "{{ osac_license_path }}"
+    dest: "{{ osac_installer_full_dir }}/{{ _osac_full_values_dir }}/license.zip"
+    remote_src: true
+    mode: "0644"
+
+# Matches roles/osac_install's existing pattern (lines 138-164) for direct
+# image-ref overrides -- CaaS/Netris has no component-build-and-load feature
+# (unlike e2e-vmaas-full-install.yml's PR-triggered component builds), so
+# there's no need for that workflow's more involved two-phase
+# install-then-reuse-values-upgrade dance; patching the values file before
+# the first (and only) helm upgrade --install is simpler and already proven.
+- name: Override component images in values file
+  when: osac_operator_image or fulfillment_service_image or osac_aap_image
+  block:
+    - name: Read current values file
+      ansible.builtin.slurp:
+        src: "{{ osac_installer_full_dir }}/{{ snapshot_osac_values_file }}"
+      register: _values_raw
+
+    - name: Build image overrides
+      ansible.builtin.set_fact:
+        _image_overrides: >-
+          {{ {}
+             | combine(({'operator': {'image': {
+                 'repository': osac_operator_image | regex_replace(':([^/]+)$', ''),
+                 'tag': (osac_operator_image | regex_search(':([^/]+)$', '\1') | first | default('latest'))
+               }}} if osac_operator_image else {}), recursive=true)
+             | combine(({'service': {'images': {'service': fulfillment_service_image}},
+                         'dbMigrate': {'image': fulfillment_service_image}}
+                        if fulfillment_service_image else {}), recursive=true)
+             | combine(({'aap': {'bootstrap': {'image': osac_aap_image}}}
+                        if osac_aap_image else {}), recursive=true)
+          }}
+
+    - name: Write patched values file
+      ansible.builtin.copy:
+        dest: "{{ osac_installer_full_dir }}/{{ snapshot_osac_values_file }}"
+        content: "{{ _values_raw.content | b64decode | from_yaml | combine(_image_overrides, recursive=true) | to_nice_yaml(indent=2) }}"
+        mode: "0644"
+
+- name: Install infra operators (Phase 1)
+  ansible.builtin.command:
+    cmd: "make install-operators VALUES_FILE={{ snapshot_osac_values_file }}"
+    chdir: "{{ osac_installer_full_dir }}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Install prereqs (Phase 2)
+  ansible.builtin.command:
+    cmd: >-
+      make install-prereqs
+      VALUES_FILE={{ snapshot_osac_values_file }}
+      INSTALLER_NAMESPACE={{ snapshot_osac_namespace }}
+    chdir: "{{ osac_installer_full_dir }}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Install OSAC (Phase 3)
+  ansible.builtin.command:
+    cmd: >-
+      make install-osac
+      VALUES_FILE={{ snapshot_osac_values_file }}
+      INSTALLER_NAMESPACE={{ snapshot_osac_namespace }}
+    chdir: "{{ osac_installer_full_dir }}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Create CI Tenant CRs
+  ansible.builtin.shell:
+    cmd: |
+      oc apply -f - <<EOF
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: Tenant
+      metadata:
+        name: {{ item }}
+        namespace: {{ snapshot_osac_namespace }}
+      spec: {}
+      EOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop:
+    - shared
+    - "{{ snapshot_osac_namespace }}"
+  changed_when: true
+
+- name: Report OSAC full install complete
+  ansible.builtin.debug:
+    msg: "OSAC installed fresh via Helm in namespace {{ snapshot_osac_namespace }}."

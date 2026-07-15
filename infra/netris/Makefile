@@ -1,6 +1,7 @@
 .PHONY: deploy deploy-fast setup deploy-lab deploy-ocp deploy-ocp-snapshot deploy-osac \
        restore-ocp-snapshot snapshot-refresh prep-snapshot-refresh workaround-helm-adopt-vast-secret \
        run-snapshot-refresh post-snapshot-refresh \
+       deploy-osac-full install-osac-full \
        setup-caas deploy-caas \
        deploy-vmaas deploy-bmaas \
        destroy destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
@@ -45,6 +46,19 @@ run-osac-setup:
 
 post-osac:
 	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
+
+# Full/fresh OSAC install (no golden-snapshot restore) -- clones
+# osac-installer and runs its own make install-operators/install-prereqs/
+# install-osac directly against values/caas-ci/values.yaml, mirroring how
+# .github/workflows/e2e-vmaas-full-install.yml already installs OSAC. Unlike
+# deploy-osac above (kustomize-era, unused in CI) and deploy-ocp-snapshot
+# (golden-snapshot + refresh-after-snapshot.py adoption dance), this never
+# has pre-existing Helm-unmanaged resources to adopt -- everything is
+# created fresh, with correct Helm ownership metadata from the start.
+deploy-osac-full: install-osac-full
+
+install-osac-full:
+	ansible-playbook playbooks/install-osac-full.yml $(ANSIBLE_EXTRA)
 
 # Per-flow targets — run after deploy
 setup-caas:
