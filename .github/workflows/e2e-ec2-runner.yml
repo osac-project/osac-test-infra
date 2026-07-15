@@ -25,7 +25,7 @@ on:
         type: string
         default: "command -v podman"
       osac-installer-image:
-        description: "Override osac-installer image (registry-pullable reference, e.g. from a component repo's own PR build) -- empty means no override, use infra/netris's own default"
+        description: "Override osac-installer image (registry-pullable reference, e.g. from a component repo's own PR build) -- accepted but not yet consumed: infra/netris has no plain extra-var for this (see the test job's 'Build component image overrides' step comment), needs podman-extraction handling in a later PR"
         required: false
         type: string
         default: ""
@@ -180,18 +180,32 @@ jobs:
       # Empty means "no override", not "override with an empty value" --
       # only non-empty inputs are included, letting infra/netris's own
       # Makefile/ansible defaults apply otherwise.
+      #
+      # osac-installer-image is deliberately NOT included in this JSON:
+      # infra/netris has no osac_installer_image ansible var (only
+      # osac_installer_repo/osac_installer_branch/osac_installer_dir --
+      # confirmed by reading infra/netris/inventory/group_vars/all.yml and
+      # roles/osac_install/tasks/main.yml). Prow's own handling of this
+      # exact input wasn't a simple extra-var either -- it podman-pulled the
+      # image, extracted the installer binary via `podman create`+`cp`, and
+      # set osac_installer_skip_clone: true so ansible wouldn't re-clone it.
+      # That extraction logic belongs in the real deploy step (a later PR in
+      # this series), not this plumbing-only step -- passing it through
+      # naively here would silently no-op since ansible ignores unknown
+      # extra-vars.
       - name: Build component image overrides
         id: extra-vars
         shell: bash
         env:
-          OSAC_INSTALLER_IMAGE: ${{ inputs.osac-installer-image }}
           OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
           FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
           OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
         run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo dnf install -y jq
+          fi
           EXTRA_VARS="{}"
           declare -A OVERRIDES=(
-            [osac_installer_image]="$OSAC_INSTALLER_IMAGE"
             [osac_operator_image]="$OSAC_OPERATOR_IMAGE"
             [fulfillment_service_image]="$FULFILLMENT_SERVICE_IMAGE"
             [osac_aap_image]="$OSAC_AAP_EE_IMAGE"
@@ -210,10 +224,14 @@ jobs:
         shell: bash
         env:
           EXTRA_VARS_JSON: ${{ steps.extra-vars.outputs.json }}
+          OSAC_INSTALLER_IMAGE: ${{ inputs.osac-installer-image }}
         run: |
           echo "TODO: CaaS/Netris test logic runs here (owned by another team)."
           echo "This skeleton only proves provisioning, tooling install, and log collection."
           echo "Component image overrides that would be passed to make deploy-ocp-snapshot: ${EXTRA_VARS_JSON}"
+          if [ -n "${OSAC_INSTALLER_IMAGE}" ]; then
+            echo "osac-installer-image was set (${OSAC_INSTALLER_IMAGE}) but is not consumed yet -- see the previous step's comment."
+          fi
 
       - name: Gather EC2 runner artifacts
         if: always()

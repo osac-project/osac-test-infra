@@ -31,7 +31,7 @@ on:
         required: false
         default: "command -v podman"
       osac-installer-image:
-        description: "Override osac-installer image (registry-pullable reference) -- empty means no override. Not sensitive: just a container image tag."
+        description: "Override osac-installer image (registry-pullable reference) -- accepted but not yet consumed, needs podman-extraction handling in a later PR. Not sensitive: just a container image tag."
         required: false
         default: ""
       osac-operator-image:
