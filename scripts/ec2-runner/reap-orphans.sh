@@ -37,19 +37,21 @@
 #                      for why this can't be github.token
 #
 # Optional env vars:
-#   MAX_INSTANCE_AGE_MINUTES  safety-net threshold (default 120). The
-#                      provision/test/teardown job timeouts sum to 85
-#                      minutes, but LaunchTime (what age is measured from)
-#                      occurs partway into the provision job, and GitHub
-#                      Actions queue time before a job starts executing
-#                      doesn't count against its timeout-minutes budget --
-#                      90 would leave only a few minutes of real margin
-#                      once queueing is considered, especially since this
-#                      watchdog itself now shares the same singleton
-#                      osac-ci-orchestrator runner slot with provision/
-#                      teardown. 120 leaves comfortable headroom; tune via
-#                      this workflow's max-age-minutes dispatch input once
-#                      more real run data exists.
+#   MAX_INSTANCE_AGE_MINUTES  safety-net threshold (default 450). The
+#                      provision/test/teardown job timeouts sum to 415
+#                      minutes (test alone is 360m/6h -- the real CaaS/
+#                      Netris flow's own Prow step timeouts summed to
+#                      several hours in the worst case), but LaunchTime
+#                      (what age is measured from) occurs partway into the
+#                      provision job, and GitHub Actions queue time before a
+#                      job starts executing doesn't count against its
+#                      timeout-minutes budget -- 415 would leave only a few
+#                      minutes of real margin once queueing is considered,
+#                      especially since this watchdog itself shares the same
+#                      singleton osac-ci-orchestrator runner slot with
+#                      provision/teardown. 450 leaves comfortable headroom;
+#                      tune via this workflow's max-age-minutes dispatch
+#                      input once more real run data exists.
 #   DRY_RUN            "true" to log what would happen without terminating
 #                      instances or deregistering runners (default "false")
 #   AWS_REGION         defaults to the AWS CLI's configured region
@@ -65,7 +67,7 @@ YELLOW="\e[33m"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 
-MAX_INSTANCE_AGE_MINUTES="${MAX_INSTANCE_AGE_MINUTES:-120}"
+MAX_INSTANCE_AGE_MINUTES="${MAX_INSTANCE_AGE_MINUTES:-450}"
 DRY_RUN="${DRY_RUN:-false}"
 
 DESCRIBE_OUTPUT=$(mktemp)

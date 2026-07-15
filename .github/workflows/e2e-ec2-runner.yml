@@ -167,17 +167,51 @@ jobs:
 
   test:
     needs: provision
+    # 360m (6h): the placeholder's 30m was fine for an echo statement, but
+    # the real CaaS/Netris flow's own Prow step timeouts summed to
+    # lab-setup(30m)+lab-deploy(90m)+lab-snapshot(3h)+caas-setup(45m)+
+    # caas-deploy(90m) -- several hours in the worst case. Self-hosted
+    # runners aren't bound by GitHub-hosted runners' 6h job cap, so this is
+    # just an explicit upper bound, not a platform limit.
     runs-on: ${{ needs.provision.outputs.runner-label }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     permissions:
       contents: read
     outputs:
-      result: ${{ steps.placeholder.outcome == 'success' && 'PASSED' || 'FAILED' }}
+      result: ${{ steps.run-tests.outcome == 'success' && 'PASSED' || 'FAILED' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch E2E secrets (pull-secret, AAP license, snapshot registry)
+        id: e2e-secrets
+        uses: ./.github/actions/fetch-and-write-secrets
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch Netris license
+        id: netris-license
+        uses: ./.github/actions/fetch-netris-license
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch CaaS Route 53 credentials
+        id: route53-creds
+        uses: ./.github/actions/fetch-caas-route53-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
 
       # Unlike Prow's netris-caas job (which always gets fresh, ci-operator
       # -resolved image references for all four of these via its
@@ -227,19 +261,111 @@ jobs:
           done
           echo "json=${EXTRA_VARS}" >> "$GITHUB_OUTPUT"
 
-      - name: Placeholder test step
-        id: placeholder
+      - name: Log unconsumed osac-installer-image input
         shell: bash
         env:
-          EXTRA_VARS_JSON: ${{ steps.extra-vars.outputs.json }}
           OSAC_INSTALLER_IMAGE: ${{ inputs.osac-installer-image }}
         run: |
-          echo "TODO: CaaS/Netris test logic runs here (owned by another team)."
-          echo "This skeleton only proves provisioning, tooling install, and log collection."
-          echo "Component image overrides that would be passed to make deploy-ocp-snapshot: ${EXTRA_VARS_JSON}"
           if [ -n "${OSAC_INSTALLER_IMAGE}" ]; then
-            echo "osac-installer-image was set (${OSAC_INSTALLER_IMAGE}) but is not consumed yet -- see the previous step's comment."
+            echo "osac-installer-image was set (${OSAC_INSTALLER_IMAGE}) but is not consumed yet -- see the 'Build component image overrides' step's comment."
           fi
+
+      # Must run before make setup-infra: infra/netris's own deploy steps
+      # need the pull secret and licenses already in place (mirrors Prow's
+      # lab-setup step, which copied these early too, not lazily at deploy
+      # time).
+      - name: Write CaaS/Netris secrets and config
+        shell: bash
+        env:
+          NETRIS_DIR: infra/netris
+          NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
+          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
+          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
+          AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
+          PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
+          LAB_NAME: ci-${{ github.run_id }}
+          AWS_REGION: ${{ inputs.aws-region }}
+        run: ./scripts/ec2-runner/write-caas-netris-config.sh
+
+      # Each stage is a separate step (rather than one `make e2e` call) for
+      # per-stage visibility/timing in the Actions UI, mirroring Prow's own
+      # per-step granularity (lab-setup/lab-deploy/lab-snapshot/caas-setup
+      # were all separate Prow steps too). make e2e INFRA=netris SUITE=caas
+      # is the equivalent single-command form if that granularity is ever
+      # not wanted.
+      - name: Setup infra prerequisites (make setup-infra)
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make setup-infra INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Deploy Netris lab (make deploy-infra)
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make deploy-infra INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Deploy OSAC from snapshot (make deploy-osac)
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make deploy-osac INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Setup CaaS suite (make setup-suite)
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make setup-suite INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+
+      # The actual test: tests/caas/test_cluster_create.py creates a cluster
+      # via the osac CLI, waits for it to become Ready, deletes it, and
+      # verifies removal -- functionally the same thing Prow's separate
+      # deploy-caas/gather-caas shell steps did, but already implemented
+      # here as a real pytest test rather than something to re-port.
+      - name: Run CaaS e2e tests (make run-tests)
+        id: run-tests
+        shell: bash
+        run: make run-tests INFRA=netris SUITE=caas
+
+      # Two separate steps, each independently best-effort (rather than one
+      # script with both commands): GH Actions' default bash shell runs with
+      # -e, so if the first command failed inside a single multi-line step,
+      # the second would never even attempt to run despite
+      # continue-on-error -- that only stops a step's failure from failing
+      # the job, it doesn't help a step's own script recover mid-script.
+      - name: Gather infra diagnostics
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: make gather-infra INFRA=netris
+
+      - name: Gather CaaS diagnostics
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: make gather-suite INFRA=netris SUITE=caas
+
+      - name: Upload CaaS/Netris test artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: caas-netris-artifacts
+          path: |
+            reports/caas.xml
+            infra/netris/logs/
+          if-no-files-found: ignore
+
+      # Not part of the formal backend contract (infra/contract.md's target
+      # list doesn't include it), so called directly against contract.mk
+      # rather than through a root Makefile wrapper -- see this PR's
+      # description for why a generic root-level wrapper would be
+      # misleading for a netris-specific extra.
+      - name: Cleanup Route 53 DNS records
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: make -C infra/netris -f contract.mk cleanup-dns
 
       - name: Gather EC2 runner artifacts
         if: always()
