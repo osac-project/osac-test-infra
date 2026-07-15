@@ -65,13 +65,6 @@
 #                        root volume and failed with "No space left on
 #                        device" partway through image caching, well before
 #                        even reaching the 60GB snapshot download.
-#   ROOT_DEVICE_NAME     root device name to resize (default /dev/sda1,
-#                        matching the only AMI this has been validated
-#                        against -- Rocky Linux 9.6). Not looked up via
-#                        describe-images: that needs ec2:DescribeImages,
-#                        which the orchestrator's IAM credential deliberately
-#                        doesn't have (see Prerequisites in
-#                        docs/ec2-ephemeral-runner-setup.md).
 #
 # Outputs (written to $GITHUB_OUTPUT if set, always echoed to stdout, each
 # emitted as soon as it's known -- not only on full success, so teardown.sh
@@ -106,13 +99,6 @@ if [[ ! "$ROOT_VOLUME_SIZE_GB" =~ ^[1-9][0-9]*$ ]]; then
     echo -e "${RED}${BOLD}ERROR: ROOT_VOLUME_SIZE_GB '${ROOT_VOLUME_SIZE_GB}' is not a positive integer.${RESET}" >&2
     exit 1
 fi
-# Not looked up via `aws ec2 describe-images` -- that needs ec2:DescribeImages,
-# which the orchestrator's narrowly-scoped IAM credential deliberately doesn't
-# have (see docs/ec2-ephemeral-runner-setup.md's Prerequisites), confirmed the
-# hard way (UnauthorizedOperation on a real dispatch). /dev/sda1 is the root
-# device name for the only AMI this has ever been validated against (Rocky
-# Linux 9.6, an HVM/EBS-backed image) -- override if a different AMI needs it.
-ROOT_DEVICE_NAME="${ROOT_DEVICE_NAME:-/dev/sda1}"
 INSTANCE_NAME="osac-ephemeral-${RUN_ID}"
 
 # Emits an output as soon as its value is known, not just on full success --
@@ -144,7 +130,8 @@ echo -e "${GREEN}AMI: ${AMI_ID}  Type: ${INSTANCE_TYPE}${RESET}"
 
 USER_DATA_FILE=$(mktemp)
 RUN_INSTANCES_OUTPUT=$(mktemp)
-trap 'rm -f "$USER_DATA_FILE" "$RUN_INSTANCES_OUTPUT"' EXIT
+DESCRIBE_IMAGES_OUTPUT=$(mktemp)
+trap 'rm -f "$USER_DATA_FILE" "$RUN_INSTANCES_OUTPUT" "$DESCRIBE_IMAGES_OUTPUT"' EXIT
 
 # Both the top-level ssh_authorized_keys directive and the runcmd write are
 # intentionally redundant, not a leftover: which one actually lands the key
@@ -165,6 +152,21 @@ runcmd:
     chmod 700 /root/.ssh
     chmod 600 /root/.ssh/authorized_keys
 EOF
+
+if ! aws ec2 describe-images \
+        --image-ids "$AMI_ID" \
+        --query 'Images[0].RootDeviceName' \
+        --output text \
+        > "$DESCRIBE_IMAGES_OUTPUT" 2>&1; then
+    echo -e "${RED}${BOLD}ERROR: describe-images failed for AMI ${AMI_ID}:${RESET}" >&2
+    cat "$DESCRIBE_IMAGES_OUTPUT" >&2
+    exit 1
+fi
+ROOT_DEVICE_NAME=$(cat "$DESCRIBE_IMAGES_OUTPUT")
+if [ -z "$ROOT_DEVICE_NAME" ] || [ "$ROOT_DEVICE_NAME" = "None" ]; then
+    echo -e "${RED}${BOLD}ERROR: could not determine root device name for AMI ${AMI_ID}${RESET}" >&2
+    exit 1
+fi
 
 echo -e "${GREEN}Launching instance (root volume: ${ROOT_VOLUME_SIZE_GB}GB on ${ROOT_DEVICE_NAME})...${RESET}"
 
@@ -268,7 +270,7 @@ ROOT_FS_SIZE_GB=$(ssh -i "$SSH_KEY_PATH" \
 MIN_EXPECTED_GB=$((ROOT_VOLUME_SIZE_GB * 80 / 100))
 if [ -z "$ROOT_FS_SIZE_GB" ] || [ "$ROOT_FS_SIZE_GB" -lt "$MIN_EXPECTED_GB" ]; then
     echo -e "${RED}${BOLD}ERROR: root filesystem is only ${ROOT_FS_SIZE_GB:-unknown}GB, expected at least ${MIN_EXPECTED_GB}GB (requested a ${ROOT_VOLUME_SIZE_GB}GB volume).${RESET}" >&2
-    echo -e "${YELLOW}Either the AMI doesn't auto-grow its root partition on boot (no cloud-init growpart/resizefs), or ROOT_DEVICE_NAME ('${ROOT_DEVICE_NAME}') doesn't match this AMI's actual root device -- the volume would then attach as an unused extra disk instead of the root disk. Instance ${INSTANCE_ID} is still running -- teardown.sh must still be called.${RESET}" >&2
+    echo -e "${YELLOW}The AMI likely doesn't auto-grow its root partition on boot (no cloud-init growpart/resizefs). Instance ${INSTANCE_ID} is still running -- teardown.sh must still be called.${RESET}" >&2
     exit 1
 fi
 echo -e "${GREEN}Root filesystem: ${ROOT_FS_SIZE_GB}GB.${RESET}"
