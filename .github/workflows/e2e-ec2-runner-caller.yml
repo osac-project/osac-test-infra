@@ -27,9 +27,9 @@ on:
         required: false
         default: "us-east-1"
       tooling-check-cmds:
-        description: "Semicolon-separated commands to verify on the box before JIT registration. Default is a placeholder pending CaaS/Netris team sync -- override here to smoke-test against a stock AMI (e.g. 'true') or to check for whatever the real test suite needs, without editing the workflow file."
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites -- override here to smoke-test against a stock AMI (e.g. 'true') or to check for something else, without editing the workflow file."
         required: false
-        default: "command -v podman"
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
       osac-installer-image:
         description: "Override osac-installer image (registry-pullable reference) -- accepted but not yet consumed, needs podman-extraction handling in a later PR. Not sensitive: just a container image tag."
         required: false
@@ -53,7 +53,7 @@ jobs:
     with:
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
-      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'command -v podman' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
       osac-installer-image: ${{ inputs.osac-installer-image || '' }}
       osac-operator-image: ${{ inputs.osac-operator-image || '' }}
       fulfillment-service-image: ${{ inputs.fulfillment-service-image || '' }}

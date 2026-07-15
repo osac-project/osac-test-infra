@@ -20,10 +20,10 @@ on:
         type: string
         default: "osac-ci-orchestrator"
       tooling-check-cmds:
-        description: "Semicolon-separated commands to verify on the box before JIT registration (placeholder pending CaaS/Netris team sync)"
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites (ansible-core, python3-pip, make -- matching what the equivalent Prow lab-setup step installed), since that's this workflow's one real consumer today."
         required: false
         type: string
-        default: "command -v podman"
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
       osac-installer-image:
         description: "Override osac-installer image (registry-pullable reference, e.g. from a component repo's own PR build) -- accepted but not yet consumed: infra/netris has no plain extra-var for this (see the test job's 'Build component image overrides' step comment), needs podman-extraction handling in a later PR"
         required: false
