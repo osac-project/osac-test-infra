@@ -72,24 +72,27 @@ snapshot-refresh: prep-snapshot-refresh workaround-helm-adopt-vast-secret run-sn
 prep-snapshot-refresh:
 	ansible-playbook playbooks/prep-snapshot-refresh.yml $(ANSIBLE_EXTRA)
 
-# OSAC-2529 workaround: the CaaS golden snapshot's "vast-tenant-config-shared"
-# secret is missing Helm's ownership label/annotations, so
-# refresh-after-snapshot.py's `helm upgrade osac ...` fails outright with
-# "invalid ownership metadata" before adopting any of the release's other 111
-# resources (which all adopt fine). Pre-label/annotate it as already
-# Helm-owned so the upgrade doesn't trip on it. `|| true`: if a future
-# snapshot rebuild fixes this at the source, the secret will already carry
-# these values and re-applying them is a harmless no-op; if the secret is
-# ever absent for some reason, there's nothing for Helm to trip on either.
+# OSAC-2529 workaround: the CaaS golden snapshot has multiple
+# "vast-tenant-config-*" secrets (confirmed so far: "vast-tenant-config-shared"
+# and a per-namespace "vast-tenant-config-<namespace>") missing Helm's
+# ownership label/annotations, so refresh-after-snapshot.py's
+# `helm upgrade osac ...` fails outright with "invalid ownership metadata" on
+# the first one it hits -- before adopting any of the release's other 111
+# resources (which all adopt fine). Helm only reports one bad resource at a
+# time, so fixing the first just uncovers the next; loop over every matching
+# secret rather than hardcoding names one real dispatch at a time. `|| true`:
+# if a future snapshot rebuild fixes this at the source, matching secrets
+# will already carry these values and re-applying them is a harmless no-op.
 # Remove once the snapshot image itself is fixed (tracked in OSAC-2529).
 workaround-helm-adopt-vast-secret:
-	@echo "=== Workaround (OSAC-2529): adopting vast-tenant-config-shared into Helm ownership ==="
-	KUBECONFIG=/root/.kube/config oc label secret vast-tenant-config-shared \
-		-n $(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) app.kubernetes.io/managed-by=Helm --overwrite || true
-	KUBECONFIG=/root/.kube/config oc annotate secret vast-tenant-config-shared \
-		-n $(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) \
-		meta.helm.sh/release-name=osac \
-		meta.helm.sh/release-namespace=$(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) --overwrite || true
+	@echo "=== Workaround (OSAC-2529): adopting vast-tenant-config-* secrets into Helm ownership ==="
+	@for secret in $$(KUBECONFIG=/root/.kube/config oc get secret -n $(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) -o name 2>/dev/null | grep '^secret/vast-tenant-config-'); do \
+		echo "Adopting $$secret"; \
+		KUBECONFIG=/root/.kube/config oc label "$$secret" -n $(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) app.kubernetes.io/managed-by=Helm --overwrite || true; \
+		KUBECONFIG=/root/.kube/config oc annotate "$$secret" -n $(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) \
+			meta.helm.sh/release-name=osac \
+			meta.helm.sh/release-namespace=$(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) --overwrite || true; \
+	done
 
 run-snapshot-refresh:
 	@echo "=== Running OSAC refresh with live output ==="
