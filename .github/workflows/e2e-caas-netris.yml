@@ -77,8 +77,73 @@ jobs:
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
       tooling-check-cmds: ${{ inputs.tooling-check-cmds }}
 
-  test:
+  # Fetches all 5 CaaS/Netris secrets and pushes them to the box, on the
+  # orchestrator -- not the box itself. The box was never bootstrapped with
+  # the Vault SSH-tunnel/AppRole setup persistent machines like the
+  # orchestrator have, confirmed the hard way (a real dispatch failed here:
+  # "AppRole credentials missing or empty in ~/.vault-server/.approle").
+  # See push-caas-netris-secrets.sh's header for the full rationale.
+  push-secrets:
     needs: provision
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Must match ec2-runner-provision.yml's derivation exactly.
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch E2E secrets (pull-secret, AAP license, snapshot registry)
+        id: e2e-secrets
+        uses: ./.github/actions/fetch-and-write-secrets
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch Netris license
+        id: netris-license
+        uses: ./.github/actions/fetch-netris-license
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch CaaS Route 53 credentials
+        id: route53-creds
+        uses: ./.github/actions/fetch-caas-route53-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Push CaaS/Netris secrets to ephemeral box
+        shell: bash
+        env:
+          SSH_USER: ${{ needs.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
+          NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
+          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
+          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
+          AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
+          PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
+          LAB_NAME: ci-${{ github.run_id }}
+          AWS_REGION: ${{ inputs.aws-region }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/push-caas-netris-secrets.sh
+
+  test:
+    needs: [provision, push-secrets]
     # 360m (6h): the real CaaS/Netris flow's own Prow step timeouts summed
     # to lab-setup(30m)+lab-deploy(90m)+lab-snapshot(3h)+caas-setup(45m)+
     # caas-deploy(90m) -- several hours in the worst case. Self-hosted
@@ -127,34 +192,6 @@ jobs:
               exit 1
             fi
           done
-
-      - name: Validate and bootstrap
-        id: setup
-        uses: ./.github/actions/validate-and-bootstrap
-        with:
-          test-suite: ec2-runner
-          run-id: ${{ github.run_id }}
-
-      - name: Fetch E2E secrets (pull-secret, AAP license, snapshot registry)
-        id: e2e-secrets
-        uses: ./.github/actions/fetch-and-write-secrets
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
-
-      - name: Fetch Netris license
-        id: netris-license
-        uses: ./.github/actions/fetch-netris-license
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
-
-      - name: Fetch CaaS Route 53 credentials
-        id: route53-creds
-        uses: ./.github/actions/fetch-caas-route53-creds
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
 
       # Unlike Prow's netris-caas job (which always gets fresh, ci-operator
       # -resolved image references for all four of these via its
@@ -213,22 +250,16 @@ jobs:
             echo "osac-installer-image was set (${OSAC_INSTALLER_IMAGE}) but is not consumed yet -- see the 'Build component image overrides' step's comment."
           fi
 
-      # Must run before make setup-infra: infra/netris's own deploy steps
-      # need the pull secret and licenses already in place (mirrors Prow's
-      # lab-setup step, which copied these early too, not lazily at deploy
-      # time).
-      - name: Write CaaS/Netris secrets and config
+      # push-secrets already staged these on the box (before the JIT runner
+      # even started) since the box can't talk to Vault itself -- this just
+      # copies them from that fixed staging location into infra/netris/ and
+      # /root/pull-secret, which didn't exist until this job's own checkout
+      # above ran.
+      - name: Stage CaaS/Netris secrets into place
         shell: bash
         env:
           NETRIS_DIR: infra/netris
-          NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
-          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
-          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
-          AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
-          PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
-          LAB_NAME: ci-${{ github.run_id }}
-          AWS_REGION: ${{ inputs.aws-region }}
-        run: ./scripts/ec2-runner/write-caas-netris-config.sh
+        run: ./scripts/ec2-runner/stage-caas-netris-secrets.sh
 
       # Each stage is a separate step (rather than one `make e2e` call) for
       # per-stage visibility/timing in the Actions UI, mirroring Prow's own
@@ -315,7 +346,7 @@ jobs:
         uses: ./.github/actions/gather-ec2-runner-artifacts
 
   teardown:
-    needs: [provision, test]
+    needs: [provision, push-secrets, test]
     if: always()
     uses: ./.github/workflows/ec2-runner-teardown.yml
     permissions:
