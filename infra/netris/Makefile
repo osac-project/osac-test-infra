@@ -1,5 +1,6 @@
 .PHONY: deploy deploy-fast setup deploy-lab deploy-ocp deploy-ocp-snapshot deploy-osac \
-       restore-ocp-snapshot snapshot-refresh prep-snapshot-refresh run-snapshot-refresh post-snapshot-refresh \
+       restore-ocp-snapshot snapshot-refresh prep-snapshot-refresh workaround-helm-adopt-vast-secret \
+       run-snapshot-refresh post-snapshot-refresh \
        setup-caas deploy-caas \
        deploy-vmaas deploy-bmaas \
        destroy destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
@@ -66,10 +67,29 @@ deploy-ocp-snapshot: restore-ocp-snapshot snapshot-refresh
 restore-ocp-snapshot:
 	ansible-playbook playbooks/restore-ocp-snapshot.yml $(ANSIBLE_EXTRA)
 
-snapshot-refresh: prep-snapshot-refresh run-snapshot-refresh post-snapshot-refresh
+snapshot-refresh: prep-snapshot-refresh workaround-helm-adopt-vast-secret run-snapshot-refresh post-snapshot-refresh
 
 prep-snapshot-refresh:
 	ansible-playbook playbooks/prep-snapshot-refresh.yml $(ANSIBLE_EXTRA)
+
+# OSAC-2529 workaround: the CaaS golden snapshot's "vast-tenant-config-shared"
+# secret is missing Helm's ownership label/annotations, so
+# refresh-after-snapshot.py's `helm upgrade osac ...` fails outright with
+# "invalid ownership metadata" before adopting any of the release's other 111
+# resources (which all adopt fine). Pre-label/annotate it as already
+# Helm-owned so the upgrade doesn't trip on it. `|| true`: if a future
+# snapshot rebuild fixes this at the source, the secret will already carry
+# these values and re-applying them is a harmless no-op; if the secret is
+# ever absent for some reason, there's nothing for Helm to trip on either.
+# Remove once the snapshot image itself is fixed (tracked in OSAC-2529).
+workaround-helm-adopt-vast-secret:
+	@echo "=== Workaround (OSAC-2529): adopting vast-tenant-config-shared into Helm ownership ==="
+	KUBECONFIG=/root/.kube/config oc label secret vast-tenant-config-shared \
+		-n $(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) app.kubernetes.io/managed-by=Helm --overwrite || true
+	KUBECONFIG=/root/.kube/config oc annotate secret vast-tenant-config-shared \
+		-n $(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) \
+		meta.helm.sh/release-name=osac \
+		meta.helm.sh/release-namespace=$(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) --overwrite || true
 
 run-snapshot-refresh:
 	@echo "=== Running OSAC refresh with live output ==="
