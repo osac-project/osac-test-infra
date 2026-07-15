@@ -2,12 +2,15 @@
 name: EC2 Ephemeral Runner Orphan Watchdog
 
 # Independent backstop for scripts/ec2-runner/reap-orphans.sh's job: finds
-# and terminates any osac-ephemeral EC2 instance that e2e-ec2-runner.yml's
-# own teardown job (if: always()) failed to clean up -- e.g. a cancelled
-# run, an orchestrator crash mid-job, or a GitHub outage that broke the
-# needs: [provision, test] -> teardown chain before it ever started.
+# and terminates any osac-ephemeral EC2 instance that ec2-runner-teardown.yml
+# (if: always(), called from a suite-specific workflow like e2e-caas-netris.yml)
+# failed to clean up -- e.g. a cancelled run, an orchestrator crash mid-job,
+# or a GitHub outage that broke the needs: [provision, test] -> teardown
+# chain before it ever started. Suite-agnostic: it operates on AWS tags and
+# GitHub runner labels, not on which suite-specific workflow launched the
+# instance, so it doesn't need updating as new suites are added.
 #
-# Single file, no caller/reusable split (unlike the e2e-ec2-runner-*.yml
+# Single file, no caller/reusable split (unlike the e2e-caas-netris-*.yml
 # pair): that split exists to isolate a pull_request trigger from a reusable
 # workflow's own history, which doesn't apply here -- this only ever has
 # schedule/workflow_dispatch triggers, same as ci-daily-digest.yml.
@@ -22,7 +25,7 @@ on:
         type: boolean
         default: false
       aws-region:
-        description: "AWS region to scan -- must match wherever e2e-ec2-runner-caller.yml actually launches instances"
+        description: "AWS region to scan -- must match wherever suite-specific callers (e.g. e2e-caas-netris-caller.yml) actually launch instances"
         required: false
         default: "us-east-1"
       max-age-minutes:

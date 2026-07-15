@@ -1,5 +1,5 @@
 ---
-name: E2E EC2 Ephemeral Runner
+name: E2E CaaS Netris
 
 # workflow_dispatch only, deliberately -- this is an interim risk gate.
 # ec2-runner-orphan-watchdog.yml now exists (backstop for cancelled/hung
@@ -27,7 +27,7 @@ on:
         required: false
         default: "us-east-1"
       tooling-check-cmds:
-        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites -- override here to smoke-test against a stock AMI (e.g. 'true') or to check for something else, without editing the workflow file."
+        description: "Semicolon-separated commands to verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites -- override here to smoke-test against a stock AMI (e.g. 'true') or to check for something else, without editing the workflow file."
         required: false
         default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
       osac-installer-image:
@@ -48,8 +48,8 @@ on:
         default: ""
 
 jobs:
-  e2e-ec2-runner:
-    uses: ./.github/workflows/e2e-ec2-runner.yml
+  e2e-caas-netris:
+    uses: ./.github/workflows/e2e-caas-netris.yml
     with:
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}

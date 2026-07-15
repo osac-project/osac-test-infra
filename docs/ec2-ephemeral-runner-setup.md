@@ -1,9 +1,12 @@
 # On-Demand EC2 Ephemeral Runner: One-Time Setup
 
 Setup guide for the on-demand EC2 bare-metal e2e flow. This document covers
-only the one-time, human-driven setup steps needed before
-`e2e-ec2-runner-caller.yml` can be dispatched -- everything else happens
-automatically per run.
+only the one-time, human-driven setup steps needed before a suite-specific
+caller (e.g. `e2e-caas-netris-caller.yml`) can be dispatched -- everything
+else happens automatically per run. The underlying provisioning
+(`ec2-runner-provision.yml`/`ec2-runner-teardown.yml`) is generic and shared
+across suites; only the suite-specific workflow (its `test` job) differs
+per consumer.
 
 ## Prerequisites
 
@@ -73,7 +76,7 @@ The orchestrator uses one static, non-rotating SSH keypair to bootstrap trust
 with each freshly-launched ephemeral box (injected via cloud-init user-data,
 trusted on first connect via `StrictHostKeyChecking=accept-new`). This key
 never leaves the orchestrator machine and is **not** generated per run --
-`e2e-ec2-runner.yml`'s provision job fails loudly if it's missing.
+`ec2-runner-provision.yml`'s provision job fails loudly if it's missing.
 
 As the user the orchestrator runner runs as, on the orchestrator machine:
 
@@ -161,7 +164,7 @@ the new values and `vault-sync.sh` again.
 
 ## Step 6: Dispatch the workflow
 
-From the GitHub UI (Actions → E2E EC2 Ephemeral Runner → Run workflow) or via
+From the GitHub UI (Actions → E2E CaaS Netris → Run workflow) or via
 `gh workflow run`. `instance-type` (default `c5n.metal`) and `aws-region`
 (default `us-east-1`) can optionally be overridden -- neither is sensitive.
 Everything else (AWS credentials, GitHub PAT, AMI/subnet/security group) is
@@ -174,10 +177,12 @@ adding a PR trigger or schedule is a separate, deliberate follow-up.
 
 `ec2-runner-orphan-watchdog.yml` runs on a schedule (every 15 minutes, plus
 manual `workflow_dispatch`) on the same `osac-ci-orchestrator` runner, and
-terminates any `osac-ephemeral`-tagged instance that `e2e-ec2-runner.yml`'s
-own `teardown` job failed to clean up -- e.g. a cancelled run, an
-orchestrator crash mid-job, or a GitHub outage that broke the
-`needs: [provision, test]` chain before `teardown` ever ran.
+terminates any `osac-ephemeral`-tagged instance that `ec2-runner-teardown.yml`
+failed to clean up -- e.g. a cancelled run, an orchestrator crash mid-job,
+or a GitHub outage that broke the `needs: [provision, test]` chain before
+`teardown` ever ran. It's suite-agnostic (operates on AWS tags and GitHub
+runner labels, not on which suite-specific workflow launched the instance),
+so it doesn't need updating as new suites are added.
 
 It terminates an instance if either is true: the GitHub Actions run it's
 tagged with has already completed (so `teardown.sh` should have already run

@@ -1,6 +1,13 @@
 ---
-name: E2E EC2 Ephemeral Runner
+name: E2E CaaS Netris
 
+# Suite-specific: provisions an ephemeral EC2 bare-metal box (via
+# ec2-runner-provision.yml), runs the real CaaS/Netris e2e flow on it, and
+# tears it down (via ec2-runner-teardown.yml). The provision/teardown
+# pieces are generic and suite-agnostic -- see those files' own headers --
+# split out specifically so a future suite needing the same bare-metal
+# provisioning doesn't have to copy this file's plumbing, only write its
+# own test job. See docs/ec2-ephemeral-runner-setup.md.
 on:
   workflow_call:
     inputs:
@@ -20,15 +27,17 @@ on:
         type: string
         default: "osac-ci-orchestrator"
       # The default installs real packages/network access (dnf + pip), unlike
-      # the old "command -v podman" placeholder which could never fail on
-      # network flakiness. Each semicolon-separated item runs as its own SSH
-      # call with no retry -- v1 accepts that a transient mirror/PyPI hiccup
-      # hard-fails verification (skipping JIT registration, same cost as any
-      # other tooling-check failure), matching this repo's existing
+      # ec2-runner-provision.yml's own generic "command -v podman" default --
+      # this workflow supplies the CaaS/Netris-specific default itself,
+      # since the provisioner shouldn't hardcode one suite's prerequisites.
+      # Each semicolon-separated item runs as its own SSH call with no
+      # retry -- v1 accepts that a transient mirror/PyPI hiccup hard-fails
+      # verification (skipping JIT registration, same cost as any other
+      # tooling-check failure), matching this repo's existing
       # accept-and-revisit-if-flaky precedent (see provision.sh's
       # InsufficientInstanceCapacity handling for the same philosophy).
       tooling-check-cmds:
-        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites (ansible-core, python3-pip, make -- matching what the equivalent Prow lab-setup step installed, and infra/netris/README.md's own documented setup), since that's what this workflow is being built to serve -- the test job itself doesn't consume these yet (still a placeholder), a later PR adds the real steps that do."
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites (ansible-core, python3-pip, make -- matching what the equivalent Prow lab-setup step installed, and infra/netris/README.md's own documented setup)."
         required: false
         type: string
         default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
@@ -59,117 +68,19 @@ on:
 
 jobs:
   provision:
-    runs-on: ${{ inputs.orchestrator-runner-label }}
-    timeout-minutes: 45
+    uses: ./.github/workflows/ec2-runner-provision.yml
     permissions:
       contents: read
-    env:
-      # Run-specific, not the orchestrator's shared ~/.ssh/known_hosts --
-      # see provision.sh's header for why (recycled EC2 IPs can carry a
-      # stale cached host key in a shared file). Deterministically derived
-      # here (rather than passed as a job output) so the teardown job,
-      # which needs the identical path to clean it up, can compute the same
-      # value independently.
-      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
-    outputs:
-      instance-id: ${{ steps.provision.outputs.instance-id }}
-      public-ip: ${{ steps.provision.outputs.public-ip }}
-      ssh-user: ${{ steps.provision.outputs.ssh-user }}
-      runner-label: ${{ steps.register.outputs.runner-label }}
-      runner-id: ${{ steps.register.outputs.runner-id }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-
-      - name: Validate and bootstrap
-        id: setup
-        uses: ./.github/actions/validate-and-bootstrap
-        with:
-          test-suite: ec2-runner
-          run-id: ${{ github.run_id }}
-
-      - name: Fetch EC2 runner AWS credentials
-        id: aws-creds
-        uses: ./.github/actions/fetch-ec2-runner-aws-creds
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
-
-      - name: Fetch EC2 runner GitHub PAT
-        id: gh-pat
-        uses: ./.github/actions/fetch-ec2-runner-github-pat
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
-
-      - name: Fetch EC2 runner network config
-        id: network-config
-        uses: ./.github/actions/fetch-ec2-runner-network-config
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
-
-      - name: Verify orchestrator SSH keypair exists
-        shell: bash
-        run: |
-          if [ ! -f "${HOME}/.ssh/osac_ec2_orchestrator" ] || [ ! -f "${HOME}/.ssh/osac_ec2_orchestrator.pub" ]; then
-            echo "::error::Orchestrator SSH keypair not found at ~/.ssh/osac_ec2_orchestrator{,.pub}."
-            echo "This is a static, non-rotating keypair generated once during orchestrator"
-            echo "runner setup (see docs/new-ci-machine-setup.md), not per-run -- it must"
-            echo "already exist on this machine."
-            exit 1
-          fi
-
-      - name: Provision ephemeral EC2 instance
-        id: provision
-        shell: bash
-        env:
-          AMI_ID: ${{ steps.network-config.outputs.AMI_ID }}
-          INSTANCE_TYPE: ${{ inputs.instance-type }}
-          SUBNET_ID: ${{ steps.network-config.outputs.SUBNET_ID }}
-          SECURITY_GROUP_ID: ${{ steps.network-config.outputs.SECURITY_GROUP_ID }}
-          # run_attempt (not just run_id) so a re-run after a failed teardown
-          # never collides with a still-registered runner/instance from the
-          # previous attempt.
-          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
-        run: |
-          export ORCHESTRATOR_PUBKEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator.pub"
-          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
-          ./scripts/ec2-runner/provision.sh
-
-      - name: Verify tooling and register JIT runner
-        id: register
-        shell: bash
-        env:
-          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
-          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
-          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          GH_TOKEN: ${{ steps.gh-pat.outputs.GH_TOKEN }}
-          TOOLING_CHECK_CMDS: ${{ inputs.tooling-check-cmds }}
-        run: |
-          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
-          ./scripts/ec2-runner/verify-and-register.sh
-
-      - name: Install and start runner
-        shell: bash
-        env:
-          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
-          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
-          JIT_CONFIG: ${{ steps.register.outputs.jit-config }}
-        run: |
-          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
-          ./scripts/ec2-runner/start-runner.sh
+    with:
+      instance-type: ${{ inputs.instance-type }}
+      aws-region: ${{ inputs.aws-region }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds }}
 
   test:
     needs: provision
-    # 360m (6h): the placeholder's 30m was fine for an echo statement, but
-    # the real CaaS/Netris flow's own Prow step timeouts summed to
-    # lab-setup(30m)+lab-deploy(90m)+lab-snapshot(3h)+caas-setup(45m)+
+    # 360m (6h): the real CaaS/Netris flow's own Prow step timeouts summed
+    # to lab-setup(30m)+lab-deploy(90m)+lab-snapshot(3h)+caas-setup(45m)+
     # caas-deploy(90m) -- several hours in the worst case. Self-hosted
     # runners aren't bound by GitHub-hosted runners' 6h job cap, so this is
     # just an explicit upper bound, not a platform limit.
@@ -406,60 +317,11 @@ jobs:
   teardown:
     needs: [provision, test]
     if: always()
-    runs-on: ${{ inputs.orchestrator-runner-label }}
-    timeout-minutes: 10
+    uses: ./.github/workflows/ec2-runner-teardown.yml
     permissions:
       contents: read
-    env:
-      # Must match the provision job's derivation exactly -- see that job's
-      # env block for why this is computed independently rather than passed
-      # as an output.
-      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      # Every step below is if: always(): the job-level if: always() only
-      # guarantees this job STARTS regardless of provision/test outcome, it
-      # does not make a later step run if an earlier step in this job fails.
-      # Without this, a transient Vault hiccup while fetching credentials
-      # here would skip the "Teardown" step itself, leaving a real, billed
-      # instance running with no automated path to terminate it.
-      - name: Checkout repository
-        if: always()
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-
-      - name: Validate and bootstrap
-        if: always()
-        id: setup
-        uses: ./.github/actions/validate-and-bootstrap
-        with:
-          test-suite: ec2-runner
-          run-id: ${{ github.run_id }}
-
-      - name: Fetch EC2 runner AWS credentials
-        if: always()
-        id: aws-creds
-        uses: ./.github/actions/fetch-ec2-runner-aws-creds
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
-
-      - name: Fetch EC2 runner GitHub PAT
-        if: always()
-        id: gh-pat
-        uses: ./.github/actions/fetch-ec2-runner-github-pat
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
-
-      - name: Teardown
-        if: always()
-        shell: bash
-        env:
-          INSTANCE_ID: ${{ needs.provision.outputs.instance-id }}
-          RUNNER_ID: ${{ needs.provision.outputs.runner-id }}
-          GH_TOKEN: ${{ steps.gh-pat.outputs.GH_TOKEN }}
-          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
-        run: ./scripts/ec2-runner/teardown.sh
+    with:
+      instance-id: ${{ needs.provision.outputs.instance-id }}
+      runner-id: ${{ needs.provision.outputs.runner-id }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
+      aws-region: ${{ inputs.aws-region }}
