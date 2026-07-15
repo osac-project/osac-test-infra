@@ -50,6 +50,16 @@ GREEN="\e[32m"
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
 
+# AWS_REGION is interpolated directly into the config INI file below.
+# Real AWS region names are always lowercase alphanumeric plus hyphens
+# (e.g. us-east-1) -- reject anything else (a newline could inject an extra
+# key into the [default] section; this is a defense-in-depth check, since
+# the caller workflow's aws-region input is free text, not a curated list).
+if [[ ! "$AWS_REGION" =~ ^[a-z0-9-]+$ ]]; then
+    echo "ERROR: AWS_REGION '${AWS_REGION}' is not a valid-looking region name." >&2
+    exit 1
+fi
+
 echo -e "${BOLD}Writing CaaS/Netris secret and config files...${RESET}"
 
 printf '%s' "${NETRIS_LICENSE}" > "${NETRIS_DIR}/license.key"

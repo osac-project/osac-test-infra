@@ -185,6 +185,38 @@ jobs:
         with:
           persist-credentials: false
 
+      # SECURITY: EXTRA_VARS ends up passed as EXTRA_VARS='$(EXTRA_VARS)' on
+      # a recipe line through several layers of make (root Makefile ->
+      # infra/netris/contract.mk -> infra/netris/Makefile) before reaching
+      # ansible-playbook. GNU Make recursively re-expands $(...) sequences
+      # every time a variable is dereferenced -- verified empirically that
+      # an image-override value containing e.g. $(shell <cmd>) gets executed
+      # for real by make itself during that expansion, independent of any
+      # shell-quoting concerns, giving anyone with write access to dispatch
+      # this workflow root code execution on the ephemeral box (with access
+      # to every secret staged there: pull secret, AAP/Netris licenses,
+      # Route53 AWS creds). Real container image references never contain
+      # anything outside this character set, so validate-and-reject instead
+      # of trying to escape -- escaping doesn't cleanly survive an unknown
+      # number of make-expansion layers (verified: a single $ -> $$ escape
+      # is consumed by the first layer and unprotected by the second). Runs
+      # first, before any Vault secret fetch, so a bad input fails fast.
+      - name: Validate component image override inputs
+        shell: bash
+        env:
+          OSAC_INSTALLER_IMAGE: ${{ inputs.osac-installer-image }}
+          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
+          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
+          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
+        run: |
+          for name in OSAC_INSTALLER_IMAGE OSAC_OPERATOR_IMAGE FULFILLMENT_SERVICE_IMAGE OSAC_AAP_EE_IMAGE; do
+            value="${!name}"
+            if [[ -n "$value" ]] && [[ ! "$value" =~ ^[A-Za-z0-9._/:@-]+$ ]]; then
+              echo "::error::${name} contains characters outside a valid image reference (letters, digits, and ._/:@- only): ${value}"
+              exit 1
+            fi
+          done
+
       - name: Validate and bootstrap
         id: setup
         uses: ./.github/actions/validate-and-bootstrap

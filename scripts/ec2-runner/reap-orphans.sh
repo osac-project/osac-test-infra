@@ -37,7 +37,7 @@
 #                      for why this can't be github.token
 #
 # Optional env vars:
-#   MAX_INSTANCE_AGE_MINUTES  safety-net threshold (default 450). The
+#   MAX_INSTANCE_AGE_MINUTES  safety-net threshold (default 480). The
 #                      provision/test/teardown job timeouts sum to 415
 #                      minutes (test alone is 360m/6h -- the real CaaS/
 #                      Netris flow's own Prow step timeouts summed to
@@ -49,7 +49,8 @@
 #                      minutes of real margin once queueing is considered,
 #                      especially since this watchdog itself shares the same
 #                      singleton osac-ci-orchestrator runner slot with
-#                      provision/teardown. 450 leaves comfortable headroom;
+#                      provision/teardown (though each watchdog run only
+#                      occupies it for seconds). 480 leaves ~65m headroom;
 #                      tune via this workflow's max-age-minutes dispatch
 #                      input once more real run data exists.
 #   DRY_RUN            "true" to log what would happen without terminating
@@ -67,7 +68,7 @@ YELLOW="\e[33m"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 
-MAX_INSTANCE_AGE_MINUTES="${MAX_INSTANCE_AGE_MINUTES:-450}"
+MAX_INSTANCE_AGE_MINUTES="${MAX_INSTANCE_AGE_MINUTES:-480}"
 DRY_RUN="${DRY_RUN:-false}"
 
 DESCRIBE_OUTPUT=$(mktemp)

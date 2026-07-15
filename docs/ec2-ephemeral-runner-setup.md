@@ -182,7 +182,7 @@ orchestrator crash mid-job, or a GitHub outage that broke the
 It terminates an instance if either is true: the GitHub Actions run it's
 tagged with has already completed (so `teardown.sh` should have already run
 but the instance is still alive), or the instance is older than a max-age
-threshold (default 450 minutes -- generous headroom above the `test` job's
+threshold (default 480 minutes -- generous headroom above the `test` job's
 own 360-minute worst case) regardless of run status. Every instance it
 examines is logged either way, whether or not it acts on it.
 
