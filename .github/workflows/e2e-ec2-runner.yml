@@ -24,6 +24,26 @@ on:
         required: false
         type: string
         default: "command -v podman"
+      osac-installer-image:
+        description: "Override osac-installer image (registry-pullable reference, e.g. from a component repo's own PR build) -- empty means no override, use infra/netris's own default"
+        required: false
+        type: string
+        default: ""
+      osac-operator-image:
+        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      fulfillment-service-image:
+        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      osac-aap-ee-image:
+        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
     outputs:
       result:
         description: "Overall result: PASSED or FAILED"
@@ -151,12 +171,49 @@ jobs:
         with:
           persist-credentials: false
 
+      # Unlike Prow's netris-caas job (which always gets fresh, ci-operator
+      # -resolved image references for all four of these via its
+      # `dependencies:` mechanism), these are optional overrides here --
+      # there's no equivalent automatic build/resolution graph in GitHub
+      # Actions, so a component repo's own CI is responsible for having
+      # already built and pushed an image before passing its reference in.
+      # Empty means "no override", not "override with an empty value" --
+      # only non-empty inputs are included, letting infra/netris's own
+      # Makefile/ansible defaults apply otherwise.
+      - name: Build component image overrides
+        id: extra-vars
+        shell: bash
+        env:
+          OSAC_INSTALLER_IMAGE: ${{ inputs.osac-installer-image }}
+          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
+          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
+          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
+        run: |
+          EXTRA_VARS="{}"
+          declare -A OVERRIDES=(
+            [osac_installer_image]="$OSAC_INSTALLER_IMAGE"
+            [osac_operator_image]="$OSAC_OPERATOR_IMAGE"
+            [fulfillment_service_image]="$FULFILLMENT_SERVICE_IMAGE"
+            [osac_aap_image]="$OSAC_AAP_EE_IMAGE"
+          )
+          for key in "${!OVERRIDES[@]}"; do
+            value="${OVERRIDES[$key]}"
+            if [ -n "$value" ]; then
+              EXTRA_VARS=$(echo "$EXTRA_VARS" | jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}')
+              echo "Component image override: ${key}=${value}"
+            fi
+          done
+          echo "json=${EXTRA_VARS}" >> "$GITHUB_OUTPUT"
+
       - name: Placeholder test step
         id: placeholder
         shell: bash
+        env:
+          EXTRA_VARS_JSON: ${{ steps.extra-vars.outputs.json }}
         run: |
           echo "TODO: CaaS/Netris test logic runs here (owned by another team)."
           echo "This skeleton only proves provisioning, tooling install, and log collection."
+          echo "Component image overrides that would be passed to make deploy-ocp-snapshot: ${EXTRA_VARS_JSON}"
 
       - name: Gather EC2 runner artifacts
         if: always()

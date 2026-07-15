@@ -30,6 +30,22 @@ on:
         description: "Semicolon-separated commands to verify on the box before JIT registration. Default is a placeholder pending CaaS/Netris team sync -- override here to smoke-test against a stock AMI (e.g. 'true') or to check for whatever the real test suite needs, without editing the workflow file."
         required: false
         default: "command -v podman"
+      osac-installer-image:
+        description: "Override osac-installer image (registry-pullable reference) -- empty means no override. Not sensitive: just a container image tag."
+        required: false
+        default: ""
+      osac-operator-image:
+        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      fulfillment-service-image:
+        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      osac-aap-ee-image:
+        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
 
 jobs:
   e2e-ec2-runner:
@@ -38,3 +54,7 @@ jobs:
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
       tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'command -v podman' }}
+      osac-installer-image: ${{ inputs.osac-installer-image || '' }}
+      osac-operator-image: ${{ inputs.osac-operator-image || '' }}
+      fulfillment-service-image: ${{ inputs.fulfillment-service-image || '' }}
+      osac-aap-ee-image: ${{ inputs.osac-aap-ee-image || '' }}
