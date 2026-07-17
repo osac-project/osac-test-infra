@@ -712,13 +712,13 @@
             { "selector": "duration", "text": "duration", "type": "string" },
             { "selector": "actor", "text": "actor", "type": "string" },
             { "selector": "failed_step", "text": "failed_step", "type": "string" },
-            { "selector": "created_at", "text": "created_at", "type": "string" },
+            { "selector": "created_at", "text": "created_at", "type": "timestamp" },
             { "selector": "url", "text": "url", "type": "string" },
             { "selector": "id", "text": "id", "type": "number" },
             { "selector": "conclusion", "text": "conclusion", "type": "string" },
             { "selector": "event", "text": "event", "type": "string" },
             { "selector": "duration_s", "text": "duration_s", "type": "number" },
-            { "selector": "updated_at", "text": "updated_at", "type": "string" },
+            { "selector": "updated_at", "text": "updated_at", "type": "timestamp" },
             { "selector": "run_number", "text": "run_number", "type": "number" },
             { "selector": "run_attempt", "text": "run_attempt", "type": "number" }
           ]
@@ -881,14 +881,14 @@
             { "selector": "failed_step", "text": "failed_step", "type": "string" },
             { "selector": "duration", "text": "duration", "type": "string" },
             { "selector": "actor", "text": "actor", "type": "string" },
-            { "selector": "created_at", "text": "created_at", "type": "string" },
+            { "selector": "created_at", "text": "created_at", "type": "timestamp" },
             { "selector": "url", "text": "url", "type": "string" },
             { "selector": "id", "text": "id", "type": "number" },
             { "selector": "conclusion", "text": "conclusion", "type": "string" },
             { "selector": "status", "text": "status", "type": "string" },
             { "selector": "event", "text": "event", "type": "string" },
             { "selector": "duration_s", "text": "duration_s", "type": "number" },
-            { "selector": "updated_at", "text": "updated_at", "type": "string" },
+            { "selector": "updated_at", "text": "updated_at", "type": "timestamp" },
             { "selector": "run_number", "text": "run_number", "type": "number" },
             { "selector": "run_attempt", "text": "run_attempt", "type": "number" }
           ]
