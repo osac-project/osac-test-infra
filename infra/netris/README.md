@@ -202,7 +202,7 @@ Then browse to `https://osac-aap-osac-devel.apps.ocp-sno.osac.local:9444` (accep
 
 ## How deploy-ocp-snapshot Works
 
-`make deploy-ocp-snapshot` deploys OCP+OSAC in ~13 minutes from a pre-built VM snapshot instead of installing from scratch (~1.5 hours). It uses a golden qcow2 disk image from `quay.io/rh-ee-ovishlit/cluster-flavors:caas` containing a fully deployed OCP+OSAC cluster, then regenerates the cluster's identity (certificates, hostname, IP, domain) using [recert](https://github.com/rh-ecosystem-edge/recert).
+`make deploy-ocp-snapshot` deploys OCP+OSAC in ~13 minutes from a pre-built VM snapshot instead of installing from scratch (~1.5 hours). It uses a golden qcow2 disk image from `quay.io/osac-project/cluster-flavors:caas` containing a fully deployed OCP+OSAC cluster, then regenerates the cluster's identity (certificates, hostname, IP, domain) using [recert](https://github.com/rh-ecosystem-edge/recert).
 
 The flow runs five Ansible roles in sequence:
 
@@ -258,7 +258,7 @@ make deploy-osac EXTRA_VARS='{"osac_installer_branch": "feature-x"}'
 | `caas_cluster_template` | `ocp_ci_small` | Cluster template for CaaS cluster creation |
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name |
 | `caas_host_type_id` | `ci-worker` | Resource class for CaaS agents |
-| `snapshot_flavor_image` | `quay.io/rh-ee-ovishlit/cluster-flavors:caas` | OCI image containing the snapshot flavor |
+| `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:caas` | OCI image containing the snapshot flavor |
 | `snapshot_osac_namespace` | `osac-e2e-ci` | OSAC namespace baked into the snapshot |
 | `snapshot_osac_values_file` | `values/caas-ci/values.yaml` | Helm values file for OSAC refresh |
 

@@ -150,7 +150,7 @@ As `github-runner`, pull the required cluster flavors:
 
 ```bash
 su - github-runner
-sudo python3 /usr/local/bin/cluster-tool pull quay.io/rh-ee-ovishlit/cluster-flavors:vmaas-helm
+sudo python3 /usr/local/bin/cluster-tool pull quay.io/osac-project/cluster-flavors:vmaas
 ```
 
 This creates the `state.json` file that the e2e workflow checks during its preflight.

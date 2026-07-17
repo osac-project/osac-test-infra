@@ -67,9 +67,9 @@ osac_aap_branch: ""
 osac_aap_image: ""
 
 # Snapshot-based deployment (fast path)
-snapshot_flavor_image: "quay.io/rh-ee-ovishlit/cluster-flavors:caas"
+snapshot_flavor_image: "quay.io/osac-project/cluster-flavors:caas"
 snapshot_flavor_dir: "/var/cache/netris-lab/cluster-flavors/caas"
-snapshot_recert_image: "quay.io/rh-ee-ovishlit/recert:latest"
+snapshot_recert_image: "quay.io/osac-project/recert:latest"
 # Also used by roles/osac_install_full and roles/caas_setup/caas_discovery,
 # not just the snapshot-refresh path -- despite the name, this is the single
 # source of truth for "which namespace/values-file does CaaS CI use" across
