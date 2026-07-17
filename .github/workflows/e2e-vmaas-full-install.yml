@@ -384,6 +384,13 @@ jobs:
             "https://github.com/${INSTALLER_REPO}.git" "${INSTALLER_DIR}"
           cd "${INSTALLER_DIR}"
 
+          # OLM Subscriptions need a working CatalogSource to resolve operators.
+          # After snapshot boot the marketplace pods may still be reconnecting.
+          echo "Waiting for CatalogSource redhat-operators to be READY..."
+          oc wait --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
+            catalogsource/redhat-operators -n openshift-marketplace --timeout=300s
+          echo "CatalogSource is READY."
+
           # Phase 1: Install OLM operators
           make install-operators VALUES_FILE=values/vmaas-ci/values.yaml
 
