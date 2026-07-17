@@ -262,7 +262,8 @@ jobs:
           exec 9>"${FLAVOR_LOCK}"
           flock --shared 9
           sudo python3 /usr/local/bin/cluster-tool boot \
-            --flavor "${FLAVOR_NAME}" --name "${CLONE_NAME}" 9>&-
+            --flavor "${FLAVOR_NAME}" --name "${CLONE_NAME}" \
+            --pull-secret "${RUNNER_TEMP}/pull-secret.json" 9>&-
           exec 9>&-
 
           echo "Cluster clone '${CLONE_NAME}' booted."
