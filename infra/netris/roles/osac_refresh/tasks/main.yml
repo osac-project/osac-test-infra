@@ -35,13 +35,32 @@
     - not (osac_installer_skip_clone | default(false) | bool)
     - fulfillment_service_branch | default('') | length > 0
 
+# Job-scoped, non-root install -- consistent with roles/lab_setup's osac
+# build. Neither this task nor anything in its call chain
+# (playbooks/prep-snapshot-refresh.yml, ansible.cfg) sets become: true, so
+# this was already running as the unprivileged connecting user; it was just
+# pointed at a root-owned path (/usr/local/bin) it likely couldn't actually
+# write to. become: false is added explicitly so that stays true even if a
+# future caller wraps this role in a become: true play.
+#
+# lookup('env', 'HOME'), not ansible_env.HOME -- see the identical note in
+# roles/lab_setup/tasks/main.yml for why.
+- name: Ensure non-root install directory exists
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'HOME') }}/.local/bin"
+    state: directory
+    mode: "0755"
+  become: false
+  when: not (osac_installer_skip_clone | default(false) | bool)
+
 - name: Rebuild osac CLI from fulfillment-service
   ansible.builtin.command:
-    cmd: /usr/local/go/bin/go build -o /usr/local/bin/osac ./cmd/osac
+    cmd: /usr/local/go/bin/go build -o "{{ lookup('env', 'HOME') }}/.local/bin/osac" ./cmd/osac
     chdir: "{{ osac_installer_dir }}/base/osac-fulfillment-service"
+  become: false
   environment:
-    GOPATH: /root/go
-    GOCACHE: /root/.cache/go-build
+    GOPATH: "{{ lookup('env', 'HOME') }}/go"
+    GOCACHE: "{{ lookup('env', 'HOME') }}/.cache/go-build"
   when: not (osac_installer_skip_clone | default(false) | bool)
 
 - name: Determine values directory

@@ -55,27 +55,51 @@
         | tar xzf - -C /usr/local
     creates: /usr/local/go/bin/go
 
-- name: Check if fulfillment-service already exists
-  ansible.builtin.stat:
-    path: /opt/fulfillment-service
-  register: _fs_exists
-
+# Job-scoped, non-root checkout: this role only ever runs on a freshly
+# provisioned, single-job EC2 instance (e2e-caas-netris.yml's "test" job),
+# so there's no actual concurrent-job interference on /opt today -- but
+# root-owning the source tree contradicts the rest of this change (job-
+# scoped, non-root osac tooling), and a non-root build step reading from a
+# root-owned checkout is an assumption, not something to keep relying on.
+#
+# lookup('env', 'HOME'), not ansible_env.HOME: this play sets gather_facts:
+# true + become: true, and Ansible's implicit fact-gathering task inherits
+# that become setting -- so ansible_env reflects root's environment
+# (HOME=/root), not the unprivileged connecting user's. lookup() evaluates
+# in the controller process's own environment instead (the same
+# unprivileged process ansible-playbook itself was invoked from), which is
+# correct here since ansible_connection: local makes controller and target
+# the same machine.
 - name: Clone fulfillment-service
   ansible.builtin.git:
     repo: "{{ fulfillment_service_repo }}"
-    dest: /opt/fulfillment-service
+    dest: "{{ lookup('env', 'HOME') }}/.local/src/fulfillment-service"
     version: "{{ fulfillment_service_branch | default('main', true) }}"
     force: true
-  when: not _fs_exists.stat.exists
+  become: false
+  # No existence guard: ansible.builtin.git is already idempotent (no-ops
+  # if already at the requested ref) and a "only clone if the directory is
+  # missing" guard actively breaks re-running this role with a different
+  # fulfillment_service_branch on the same box -- it would silently keep
+  # whatever was cloned the first time.
+
+- name: Ensure non-root install directory exists
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'HOME') }}/.local/bin"
+    state: directory
+    mode: "0755"
+  become: false
 
 - name: Build osac CLI
   ansible.builtin.command:
-    cmd: /usr/local/go/bin/go build -o /usr/local/bin/osac ./cmd/osac
-    chdir: /opt/fulfillment-service
-    creates: /usr/local/bin/osac
+    cmd: /usr/local/go/bin/go build -o "{{ lookup('env', 'HOME') }}/.local/bin/osac" ./cmd/osac
+    chdir: "{{ lookup('env', 'HOME') }}/.local/src/fulfillment-service"
+  # No creates: guard -- always rebuild so a different fulfillment_service_branch
+  # actually takes effect instead of reusing whatever was built first.
+  become: false
   environment:
-    GOPATH: /root/go
-    GOCACHE: /root/.cache/go-build
+    GOPATH: "{{ lookup('env', 'HOME') }}/go"
+    GOCACHE: "{{ lookup('env', 'HOME') }}/.cache/go-build"
 
 - name: Cache snapshot flavor image
   ansible.builtin.include_role:

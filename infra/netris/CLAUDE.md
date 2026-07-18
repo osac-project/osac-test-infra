@@ -90,7 +90,7 @@ All variables in `inventory/group_vars/all.yml`. Key sections:
 ## External Dependencies
 
 - **osac-installer** — cloned to `/opt/osac-installer` during `prep-osac`
-- **fulfillment-service** — cloned to `/opt/fulfillment-service`; `osac` CLI built from its Go code
+- **fulfillment-service** — cloned to `$HOME/.local/src/fulfillment-service` (job-scoped, non-root); `osac` CLI built from its Go code to `$HOME/.local/bin/osac`
 - **aicli** — CLI for Red Hat Assisted Installer (pip install)
 - **Credentials**: pull secret at `/root/pull-secret`, SSH key at `/root/.ssh/id_rsa.pub`
 

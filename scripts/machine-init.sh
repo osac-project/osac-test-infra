@@ -607,7 +607,6 @@ run_verify() {
     _check "haproxy"        "haproxy -v"
     _check "pigz"           "pigz --version"
     _check "skopeo"         "skopeo --version"
-    _check "osac"           "osac version"
     _check "vault"          "vault --version"
     _check "grpcurl"        "grpcurl --version"
     _check "jq"             "jq --version"
