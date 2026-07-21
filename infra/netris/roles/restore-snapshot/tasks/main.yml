@@ -516,6 +516,69 @@
 
 # --- Wait for cluster ready ---
 
+# recert finishes rewriting the node's identity after kubelet's on-disk
+# config.json is already written, so MachineConfigDaemon boots believing its
+# rendered-master content doesn't match disk and latches Degraded ("content
+# mismatch for file /var/lib/kubelet/config.json"). Forcing a resync clears
+# it in the common case; if not, clear the stuck annotations and restart.
+- name: Force machine-config-daemon to skip its on-disk drift check
+  ansible.builtin.shell:
+    cmd: >-
+      {{ _ssh_cmd }} "sudo touch /run/machine-config-daemon-force"
+  register: _mcd_force_sync
+  until: _mcd_force_sync.rc == 0
+  retries: 10
+  delay: 10
+
+- name: Wait for MachineConfigPool master to be fully synced
+  ansible.builtin.command:
+    cmd: >-
+      oc get mcp/master
+      -o 'jsonpath={.status.conditions[?(@.type=="Updated")].status}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _mcp_master_synced
+  until: _mcp_master_synced.stdout | default('') | trim == 'True'
+  retries: 90
+  delay: 10
+  changed_when: false
+  ignore_errors: true
+
+- name: Recover MachineConfigPool master from a stuck Degraded state
+  when: _mcp_master_synced.stdout | default('') | trim != 'True'
+  block:
+    - name: Clear stuck degraded annotations on the node
+      ansible.builtin.shell:
+        cmd: >-
+          oc patch node "$(oc get nodes -o jsonpath='{.items[0].metadata.name}')"
+          --type merge
+          --patch '{"metadata":{"annotations":{"machineconfiguration.openshift.io/reason":"","machineconfiguration.openshift.io/state":"Done"}}}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _clear_node_degraded_annotations
+      until: _clear_node_degraded_annotations.rc == 0
+      retries: 10
+      delay: 10
+
+    - name: Restart machine-config-daemon to pick up the cleared state
+      ansible.builtin.command:
+        cmd: oc delete pod -n openshift-machine-config-operator -l k8s-app=machine-config-daemon
+      environment:
+        KUBECONFIG: /root/.kube/config
+
+    - name: Wait for MachineConfigPool master to be fully synced (after recovery)
+      ansible.builtin.command:
+        cmd: >-
+          oc get mcp/master
+          -o 'jsonpath={.status.conditions[?(@.type=="Updated")].status}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _mcp_master_synced_recovered
+      until: _mcp_master_synced_recovered.stdout | default('') | trim == 'True'
+      retries: 60
+      delay: 10
+      changed_when: false
+
 - name: Wait for node Ready
   ansible.builtin.shell:
     cmd: >-
@@ -550,6 +613,100 @@
   until: _co_health.rc == 0
   retries: 40
   delay: 30
+
+# recert's --extend-expiration regenerates every certificate it finds in
+# etcd, including MCE's self-signed cluster-proxy-signer CA. That CA has no
+# --use-key mapping, so recert generates a replacement key in PKCS#1
+# encoding, but cluster-proxy-addon-manager only accepts PKCS#8 and
+# crash-loops after any recert-based restore that bakes in MCE ("failed to
+# parse ca key: x509: failed to parse private key"). MCE's own controller
+# regenerates the secret correctly once it's missing, so delete the
+# corrupted secret and restart -- gated on the multicluster-engine namespace
+# existing, since flavors without MCE never hit this.
+- name: Check if multicluster-engine namespace exists
+  ansible.builtin.command:
+    cmd: oc get namespace multicluster-engine
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _mce_namespace_check
+  until: _mce_namespace_check.rc == 0 or 'NotFound' in (_mce_namespace_check.stderr | default(''))
+  retries: 90
+  delay: 10
+  changed_when: false
+  failed_when: false
+
+- name: Recover cluster-proxy-addon-manager from a corrupted signer key
+  when: _mce_namespace_check.rc == 0
+  block:
+    - name: Check for cluster-proxy-addon-manager crash loop
+      ansible.builtin.shell:
+        cmd: |
+          oc get pods -n multicluster-engine -l component=cluster-proxy-addon-manager -o json | python3 -c "
+          import json, sys
+          pods = json.load(sys.stdin)['items']
+          for pod in pods:
+              for cs in pod.get('status', {}).get('containerStatuses', []):
+                  if cs.get('restartCount', 0) > 1:
+                      print('CRASHING')
+                      sys.exit(0)
+                  waiting = cs.get('state', {}).get('waiting', {})
+                  if waiting.get('reason') == 'CrashLoopBackOff':
+                      print('CRASHING')
+                      sys.exit(0)
+          print('OK')
+          "
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _cpam_crash_check
+      until: _cpam_crash_check.stdout | default('') | trim in ['CRASHING', 'OK']
+      retries: 9
+      delay: 10
+      changed_when: false
+      failed_when: false
+
+    - name: Delete corrupted cluster-proxy-signer secret and restart
+      when: _cpam_crash_check.stdout | default('') | trim == 'CRASHING'
+      block:
+        - name: Delete cluster-proxy-signer secret
+          ansible.builtin.command:
+            cmd: oc delete secret cluster-proxy-signer -n multicluster-engine
+          environment:
+            KUBECONFIG: /root/.kube/config
+
+        - name: Restart cluster-proxy-addon-manager deployment
+          ansible.builtin.command:
+            cmd: oc rollout restart deployment/cluster-proxy-addon-manager -n multicluster-engine
+          environment:
+            KUBECONFIG: /root/.kube/config
+
+        # Rollout can stall on a stale watch connection at "1 old replicas
+        # pending termination" -- retry re-issues a fresh `oc rollout
+        # status` watch rather than waiting longer on one connection.
+        - name: Wait for cluster-proxy-addon-manager rollout
+          ansible.builtin.command:
+            cmd: oc rollout status deployment/cluster-proxy-addon-manager -n multicluster-engine --timeout=300s
+          environment:
+            KUBECONFIG: /root/.kube/config
+          register: _cpam_rollout
+          until: _cpam_rollout.rc == 0
+          retries: 2
+          delay: 5
+
+        # MCE can take longer than 120s to settle after the addon-manager
+        # restart, and on SNO the API server can also be transiently
+        # unreachable during kube-apiserver static-pod cycling -- retry with
+        # enough budget to cover both.
+        - name: Wait for MultiClusterEngine to be Available
+          ansible.builtin.command:
+            cmd: >-
+              oc wait --for=jsonpath='{.status.phase}'=Available
+              multiclusterengine/multiclusterengine --timeout=120s
+          environment:
+            KUBECONFIG: /root/.kube/config
+          register: _mce_available
+          until: _mce_available.rc == 0
+          retries: 10
+          delay: 10
 
 - name: Report cluster status
   ansible.builtin.debug:

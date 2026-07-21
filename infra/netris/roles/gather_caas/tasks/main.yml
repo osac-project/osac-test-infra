@@ -24,6 +24,45 @@
     - hosted-cluster
 
 # ── Hosting cluster (OCP SNO running OSAC) ──
+# MetalLB state: HostedCluster kube-apiserver Services rely on MetalLB assigning a
+# LoadBalancer IP; captured here (rather than only inspecting live during a run) so a
+# slow/failed IP assignment (e.g. OSAC-????) can be diagnosed from CI artifacts after
+# the ephemeral box and its resources are already torn down.
+- name: Gather MetalLB IPAddressPools
+  ansible.builtin.shell: oc get ipaddresspool -n metallb-system -o yaml > {{ _gather_dir }}/caas/hosting-cluster/metallb-ipaddresspools 2>&1 || echo "no ipaddresspools" > {{ _gather_dir }}/caas/hosting-cluster/metallb-ipaddresspools
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Gather MetalLB L2Advertisements
+  ansible.builtin.shell: oc get l2advertisement -n metallb-system -o yaml > {{ _gather_dir }}/caas/hosting-cluster/metallb-l2advertisements 2>&1 || echo "no l2advertisements" > {{ _gather_dir }}/caas/hosting-cluster/metallb-l2advertisements
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Gather MetalLB pods
+  ansible.builtin.shell: oc get pods -n metallb-system -o wide > {{ _gather_dir }}/caas/hosting-cluster/metallb-pods 2>&1 || echo "no metallb pods" > {{ _gather_dir }}/caas/hosting-cluster/metallb-pods
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Gather MetalLB controller logs
+  ansible.builtin.shell: oc logs -n metallb-system deploy/controller -c controller --tail=500 > {{ _gather_dir }}/caas/hosting-cluster/metallb-controller-logs 2>&1 || echo "unavailable" > {{ _gather_dir }}/caas/hosting-cluster/metallb-controller-logs
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Gather all LoadBalancer-type Services across the hosting cluster
+  ansible.builtin.shell: oc get svc --all-namespaces --field-selector spec.type=LoadBalancer -o wide > {{ _gather_dir }}/caas/hosting-cluster/loadbalancer-services 2>&1 || echo "none" > {{ _gather_dir }}/caas/hosting-cluster/loadbalancer-services
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
 - name: Gather CaaS catalogs
   ansible.builtin.shell: oc get catalogs.osac.redhat.com --all-namespaces -o wide > {{ _gather_dir }}/caas/hosting-cluster/catalogs 2>&1 || echo "no catalogs" > {{ _gather_dir }}/caas/hosting-cluster/catalogs
   environment:
@@ -223,6 +262,33 @@
   register: _hc_ns
   changed_when: false
   failed_when: false
+
+- name: Get hosted cluster name
+  ansible.builtin.shell:
+    cmd: >-
+      oc get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _hc_name
+  changed_when: false
+  failed_when: false
+  when: _hc_ns.stdout | default('') | length > 0
+
+# Control-plane namespace follows HyperShift's "<namespace>-<name>" convention; this
+# is where the kube-apiserver LoadBalancer Service lives (on the hosting cluster, not
+# inside the hosted cluster itself). Its creationTimestamp vs. status.loadBalancer.ingress
+# tells apart "control plane was slow to create the Service" from "MetalLB was slow to
+# assign it an IP" -- see the MetalLB gather tasks above for the latter.
+- name: Gather kube-apiserver Service (control plane namespace)
+  ansible.builtin.shell: >-
+    oc get svc kube-apiserver -n {{ _hc_ns.stdout }}-{{ _hc_name.stdout }} -o yaml
+    > {{ _gather_dir }}/caas/hosted-cluster/kube-apiserver-service 2>&1
+    || echo "kube-apiserver service not found" > {{ _gather_dir }}/caas/hosted-cluster/kube-apiserver-service
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+  when: _hc_name.stdout | default('') | length > 0
 
 - name: Extract hosted cluster kubeconfig
   ansible.builtin.shell: |

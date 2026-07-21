@@ -70,26 +70,16 @@ osac_aap_image: ""
 snapshot_flavor_image: "quay.io/osac-project/cluster-flavors:caas"
 snapshot_flavor_dir: "/var/cache/netris-lab/cluster-flavors/caas"
 snapshot_recert_image: "quay.io/osac-project/recert:latest"
-# Also used by roles/osac_install_full and roles/caas_setup/caas_discovery,
-# not just the snapshot-refresh path -- despite the name, this is the single
-# source of truth for "which namespace/values-file does CaaS CI use" across
-# every OSAC-install path. Kept as one shared pair rather than a separate
-# osac_full_* set so overriding one path's namespace can't silently diverge
-# from what caas_setup/caas_discovery still read.
 snapshot_osac_namespace: "osac-e2e-ci"
 snapshot_osac_values_file: "values/caas-ci/values.yaml"
-
-# Full/fresh OSAC install (no golden-snapshot restore) -- separate dir from
-# osac_installer_dir so this path can't clash with osac_install/osac_refresh
-# if ever run on the same host.
-osac_installer_full_dir: "/opt/osac-installer-full"
 
 # AWS configuration for Route 53 DNS (read from config file or environment)
 aws_access_key_id: "{{ lookup('ini', 'aws_access_key_id section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_ACCESS_KEY_ID'), true) }}"
 aws_secret_access_key: "{{ lookup('ini', 'aws_secret_access_key section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_SECRET_ACCESS_KEY'), true) }}"
 aws_region: "{{ lookup('ini', 'aws_region section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_DEFAULT_REGION'), true) | default('us-east-1', true) }}"
 
-# CaaS OCP Version
+# CaaS OCP Version -- must match a version present in the golden caas
+# snapshot's AgentServiceConfig OS_IMAGES.
 caas_ocp_version: "4.22"
 caas_release_image: "quay.io/openshift-release-dev/ocp-release:{{ caas_ocp_version }}.0-multi"
 

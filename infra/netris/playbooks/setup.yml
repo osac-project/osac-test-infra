@@ -1,7 +1,18 @@
 ---
+# See roles/lab_setup/tasks/main.yml for the root cause (an OpenSSL upgrade
+# that breaks ansible.builtin.get_url's CA validation). lab_setup pre-fetches
+# both cloud images itself via curl and records their sha256 checksums in
+# cache_role_checksums; injecting that as get_url's checksum default here
+# makes the vendored cache role's own get_url task take its "file already
+# exists" shortcut instead of hitting the broken code path. Guarded with
+# `| default({})`/`| default('')` so this has no effect on unrelated get_url
+# tasks elsewhere in this play (e.g. prerequisites' own "Download Go").
 - name: Setup Netris lab (prerequisites + cache)
   hosts: all
   gather_facts: true
   become: true
+  module_defaults:
+    ansible.builtin.get_url:
+      checksum: "{{ (cache_role_checksums | default({})).get((item | default({})).name | default(''), omit) }}"
   roles:
     - lab_setup

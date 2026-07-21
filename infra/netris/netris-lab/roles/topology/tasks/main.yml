@@ -46,9 +46,17 @@
     chdir: "{{ topology_dir }}"
     creates: "{{ topology_dir }}/.terraform.lock.hcl"
 
+# The softgate and fabric-link resources have no explicit depends_on and
+# can be created concurrently under default parallelism, occasionally
+# causing "Softgate does not have link to the fabric" (Netris API 400).
+# `tofu apply` is idempotent, so retrying re-applies against the
+# partially-created state rather than starting over.
 - name: Apply topology
   shell: tofu apply -auto-approve
   args:
     chdir: "{{ topology_dir }}"
   register: tofu_apply
+  until: tofu_apply.rc == 0
+  retries: 3
+  delay: 10
   changed_when: "'0 added, 0 changed' not in tofu_apply.stdout"

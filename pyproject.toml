@@ -18,6 +18,14 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-n 4 --dist loadfile"
 log_level = "INFO"
+# Stream log records live as tests run (works under xdist -- workers forward
+# log records to the master for display), instead of only showing captured
+# output after a test finishes or fails. Long single-test suites (e.g.
+# tests/caas/, which polls silently for up to ~90 minutes with only one test
+# to distribute across 4 xdist workers) would otherwise show nothing in a CI
+# log until the whole run completes.
+log_cli = true
+log_cli_level = "INFO"
 
 [tool.basedpyright]
 reportUnusedCallResult = false

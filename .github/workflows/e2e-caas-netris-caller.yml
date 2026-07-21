@@ -1,12 +1,15 @@
 ---
 name: E2E CaaS Netris
 
-# workflow_dispatch only, deliberately -- this is an interim risk gate.
-# ec2-runner-orphan-watchdog.yml now exists (backstop for cancelled/hung
-# runs that break the teardown chain), which was the specific prerequisite
-# for this gate -- but no pull_request/schedule trigger has been added here
-# yet regardless, so exposure stays limited to manually-triggered runs
-# someone is actively watching. Revisit as a separate, deliberate change.
+permissions:
+  contents: read
+
+# workflow_dispatch + a periodic schedule (8x/day) -- ec2-runner-orphan-watchdog.yml
+# (backstop for cancelled/hung runs that break the teardown chain) was the
+# specific prerequisite for opening this up beyond manual-only dispatch, and
+# now exists. No pull_request trigger yet -- that's a separate, deliberate
+# change (this repo is public; a PR trigger would let anyone with a PR spend
+# real EC2 money/time without review).
 #
 # AMI id, subnet id, and security group id are NOT dispatch inputs: this
 # repo is public, and workflow_dispatch inputs are visible forever in the
@@ -46,6 +49,27 @@ on:
         description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
         required: false
         default: ""
+      osac-aap-repo:
+        description: "Override osac-aap git URI the AAP Project syncs ansible content from (e.g. a personal fork, to test a PR pre-merge) -- empty means the upstream repo already baked into the snapshot's values file. Not sensitive: a public repo URL."
+        required: false
+        default: ""
+      osac-aap-branch:
+        description: "Branch, tag, or commit of osac-aap for the AAP Project to sync ansible content from -- empty means whatever's already baked into the snapshot's values file."
+        required: false
+        default: ""
+      osac-installer-repo:
+        description: "Override osac-installer git URI (e.g. a personal fork, to test a PR pre-merge) -- empty means the upstream repo. Not sensitive: a public repo URL."
+        required: false
+        default: ""
+      osac-installer-branch:
+        description: "Branch, tag, or commit of osac-installer to clone -- empty means main."
+        required: false
+        default: ""
+  # 8x/day (every 3h). Offset 17 minutes past the hour, not on the hour,
+  # since GitHub Actions' shared cron scheduler queues everyone's on-the-hour
+  # schedules together and can delay/drop them under load.
+  schedule:
+    - cron: "17 */3 * * *"
 
 jobs:
   e2e-caas-netris:
@@ -58,3 +82,7 @@ jobs:
       osac-operator-image: ${{ inputs.osac-operator-image || '' }}
       fulfillment-service-image: ${{ inputs.fulfillment-service-image || '' }}
       osac-aap-ee-image: ${{ inputs.osac-aap-ee-image || '' }}
+      osac-aap-repo: ${{ inputs.osac-aap-repo || '' }}
+      osac-aap-branch: ${{ inputs.osac-aap-branch || '' }}
+      osac-installer-repo: ${{ inputs.osac-installer-repo || '' }}
+      osac-installer-branch: ${{ inputs.osac-installer-branch || '' }}

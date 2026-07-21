@@ -1,6 +1,9 @@
 ---
 name: E2E CaaS Netris
 
+permissions:
+  contents: read
+
 # Suite-specific: provisions an ephemeral EC2 bare-metal box (via
 # ec2-runner-provision.yml), runs the real CaaS/Netris e2e flow on it, and
 # tears it down (via ec2-runner-teardown.yml). The provision/teardown
@@ -63,6 +66,26 @@ on:
         default: ""
       osac-aap-ee-image:
         description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      osac-aap-repo:
+        description: "Override osac-aap git URI the AAP Project syncs ansible content from (e.g. a personal fork, to test a PR pre-merge) -- empty means the upstream repo already baked into the snapshot's values file. Consumed by infra/netris/roles/osac_refresh."
+        required: false
+        type: string
+        default: ""
+      osac-aap-branch:
+        description: "Branch, tag, or commit of osac-aap for the AAP Project to sync ansible content from -- empty means whatever's already baked into the snapshot's values file. Consumed by infra/netris/roles/osac_refresh."
+        required: false
+        type: string
+        default: ""
+      osac-installer-repo:
+        description: "Override osac-installer git URI (e.g. a personal fork, to test a PR pre-merge) -- empty means the upstream repo. Consumed by infra/netris/roles/osac_refresh's existing 'Clone osac-installer' task."
+        required: false
+        type: string
+        default: ""
+      osac-installer-branch:
+        description: "Branch, tag, or commit of osac-installer to clone -- empty means main. Consumed by infra/netris/roles/osac_refresh's existing 'Clone osac-installer' task."
         required: false
         type: string
         default: ""
@@ -219,12 +242,39 @@ jobs:
           FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
           FULFILLMENT_SERVICE_BRANCH: ${{ inputs.fulfillment-service-branch }}
           OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
+          OSAC_AAP_REPO: ${{ inputs.osac-aap-repo }}
+          OSAC_AAP_BRANCH: ${{ inputs.osac-aap-branch }}
+          OSAC_INSTALLER_REPO: ${{ inputs.osac-installer-repo }}
+          OSAC_INSTALLER_BRANCH: ${{ inputs.osac-installer-branch }}
         run: |
-          for name in OSAC_INSTALLER_IMAGE OSAC_OPERATOR_IMAGE FULFILLMENT_SERVICE_IMAGE FULFILLMENT_SERVICE_BRANCH OSAC_AAP_EE_IMAGE; do
+          # Branch/tag/commit-ish inputs are validated with git's own ref-name
+          # rules (git check-ref-format), not the shared character whitelist --
+          # the whitelist allows colons, which git considers invalid in branch
+          # names and are unsafe once these values reach real git operations.
+          for name in OSAC_INSTALLER_IMAGE OSAC_OPERATOR_IMAGE FULFILLMENT_SERVICE_IMAGE OSAC_AAP_EE_IMAGE OSAC_AAP_REPO OSAC_INSTALLER_REPO; do
             value="${!name}"
             if [[ -n "$value" ]] && [[ ! "$value" =~ ^[A-Za-z0-9._/:@-]+$ ]]; then
-              echo "::error::${name} contains characters outside a valid image reference (letters, digits, and ._/:@- only): ${value}"
+              echo "::error::${name} contains characters outside a valid reference (letters, digits, and ._/:@- only): ${value}"
               exit 1
+            fi
+          done
+          for name in FULFILLMENT_SERVICE_BRANCH OSAC_AAP_BRANCH OSAC_INSTALLER_BRANCH; do
+            value="${!name}"
+            if [[ -n "$value" ]]; then
+              # Both checks must pass: the character whitelist guards against
+              # $, backticks, parens, semicolons, etc. surviving into the
+              # make-expansion layers below (git's own ref-name rules don't
+              # forbid any of those -- confirmed structurally valid branch
+              # names can still contain them); check-ref-format catches
+              # git-invalid-but-whitelisted-character names (e.g. a lone "@").
+              if [[ ! "$value" =~ ^[A-Za-z0-9._/@-]+$ ]]; then
+                echo "::error::${name} contains characters outside a valid branch name (letters, digits, and ._/@- only): ${value}"
+                exit 1
+              fi
+              if ! git check-ref-format --branch "$value" >/dev/null 2>&1; then
+                echo "::error::${name} is not a valid git branch name: ${value}"
+                exit 1
+              fi
             fi
           done
 
@@ -239,17 +289,18 @@ jobs:
       # Makefile/ansible defaults apply otherwise.
       #
       # osac-installer-image is deliberately NOT included in this JSON:
-      # infra/netris has no osac_installer_image ansible var (only
-      # osac_installer_repo/osac_installer_branch/osac_installer_dir --
-      # confirmed by reading infra/netris/inventory/group_vars/all.yml and
-      # roles/osac_install/tasks/main.yml). Prow's own handling of this
-      # exact input wasn't a simple extra-var either -- it podman-pulled the
-      # image, extracted the installer binary via `podman create`+`cp`, and
-      # set osac_installer_skip_clone: true so ansible wouldn't re-clone it.
-      # That extraction logic belongs in the real deploy step (a later PR in
-      # this series), not this plumbing-only step -- passing it through
-      # naively here would silently no-op since ansible ignores unknown
-      # extra-vars.
+      # infra/netris has no osac_installer_image ansible var. Prow's own
+      # handling of this exact input wasn't a simple extra-var either -- it
+      # podman-pulled the image, extracted the installer binary via
+      # `podman create`+`cp`, and set osac_installer_skip_clone: true so
+      # ansible wouldn't re-clone it. That extraction logic belongs in the
+      # real deploy step (a later PR in this series), not this
+      # plumbing-only step -- passing it through naively here would
+      # silently no-op since ansible ignores unknown extra-vars.
+      # osac_installer_repo/osac_installer_branch, by contrast, ARE real
+      # ansible vars (confirmed via infra/netris/inventory/group_vars/all.yml
+      # and roles/osac_refresh's "Clone osac-installer" task) and are
+      # included below.
       - name: Build component image overrides
         id: extra-vars
         shell: bash
@@ -258,6 +309,10 @@ jobs:
           FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
           FULFILLMENT_SERVICE_BRANCH: ${{ inputs.fulfillment-service-branch }}
           OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
+          OSAC_AAP_REPO: ${{ inputs.osac-aap-repo }}
+          OSAC_AAP_BRANCH: ${{ inputs.osac-aap-branch }}
+          OSAC_INSTALLER_REPO: ${{ inputs.osac-installer-repo }}
+          OSAC_INSTALLER_BRANCH: ${{ inputs.osac-installer-branch }}
         run: |
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
@@ -268,6 +323,10 @@ jobs:
             [fulfillment_service_image]="$FULFILLMENT_SERVICE_IMAGE"
             [fulfillment_service_branch]="$FULFILLMENT_SERVICE_BRANCH"
             [osac_aap_image]="$OSAC_AAP_EE_IMAGE"
+            [osac_aap_repo]="$OSAC_AAP_REPO"
+            [osac_aap_branch]="$OSAC_AAP_BRANCH"
+            [osac_installer_repo]="$OSAC_INSTALLER_REPO"
+            [osac_installer_branch]="$OSAC_INSTALLER_BRANCH"
           )
           for key in "${!OVERRIDES[@]}"; do
             value="${OVERRIDES[$key]}"
@@ -367,6 +426,14 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/pull-secret.json"
           chmod 600 "$RUNNER_TEMP/pull-secret.json"
 
+          # tests/caas/conftest.py's ssh_public_key_path fixture defaults to
+          # ~/.ssh/id_rsa.pub (root's, since the container runs as root), so
+          # it must be staged/mounted like the other secrets. Not sensitive
+          # like the other two (it's a public key), so no chmod/ownership
+          # tightening needed beyond matching them for consistency.
+          sudo cp /root/.ssh/id_rsa.pub "$RUNNER_TEMP/id_rsa.pub"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/id_rsa.pub"
+
           # steps.output, not $GITHUB_ENV: the latter would leak
           # OSAC_NAMESPACE into every later step in this job (gather-infra,
           # gather-caas, upload-artifact), none of which need it -- scope it
@@ -399,8 +466,23 @@ jobs:
       # inside the per-job container built above instead of directly on the
       # host (make run-tests), matching VMaaS/BMaaS's architecture and
       # dropping the host-PATH/OSAC_CLI_PATH osac resolution entirely.
+      #
+      # -n0 overrides pyproject.toml's global `-n 4 --dist loadfile`: with
+      # only one test in this suite, xdist gives zero parallelism benefit
+      # while actively hiding progress -- pytest-xdist can't stream live
+      # output from worker processes (execnet doesn't forward worker
+      # stdout/stderr), so log_cli/print() progress from
+      # tests/core/runner.py's poll_until() (used by wait_for_cluster_ready,
+      # which alone can legitimately poll silently for up to ~60 minutes)
+      # would never reach this log otherwise. PYTHONUNBUFFERED=1 ensures
+      # Python itself flushes promptly too, since stdout isn't a TTY here.
       - name: Run CaaS e2e tests
         id: run-tests
+        # Legitimately-succeeding runs can take 60+ min (wait_for_cluster_ready's
+        # own retry/backoff plus deletion and gRPC-removal waits stacked after
+        # it -- see tests/core/helpers.py). 120m leaves real margin above that
+        # while still bounding worst-case runtime, well under the job's 360m cap.
+        timeout-minutes: 120
         shell: bash
         env:
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
@@ -414,13 +496,15 @@ jobs:
           podman run --rm --network=host \
             -v "$RUNNER_TEMP/kubeconfig":/root/.kube/config:ro,Z \
             -v "$RUNNER_TEMP/pull-secret.json":/root/pull-secret:ro,Z \
+            -v "$RUNNER_TEMP/id_rsa.pub":/root/.ssh/id_rsa.pub:ro,Z \
             -v "$RUNNER_TEMP/test-output":/tmp/test-output:Z \
             -e KUBECONFIG=/root/.kube/config \
             -e OSAC_VM_KUBECONFIG=/root/.kube/config \
             -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
             -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+            -e PYTHONUNBUFFERED=1 \
             "${E2E_IMAGE}" \
-            pytest tests/caas/ --junitxml=/tmp/test-output/junit.xml -v
+            pytest tests/caas/ -n0 --junitxml=/tmp/test-output/junit.xml -v
 
       # Raw secret copies staged above for the container mount -- clean them
       # up explicitly rather than relying solely on this being an ephemeral,
@@ -430,7 +514,7 @@ jobs:
       - name: Remove staged secret copies
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/kubeconfig" "$RUNNER_TEMP/pull-secret.json"
+        run: rm -f "$RUNNER_TEMP/kubeconfig" "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/id_rsa.pub"
 
       # Two separate steps, each independently best-effort (rather than one
       # script with both commands): GH Actions' default bash shell runs with

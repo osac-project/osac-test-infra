@@ -31,18 +31,36 @@
   changed_when: false
   ignore_errors: true
 
+# ConnectTimeout/ServerAliveInterval only guard SSH setup/keepalive, not
+# total command duration, and `cloud-init status --wait` has no timeout of
+# its own -- bound it explicitly. The outer `|| true` preserves this task's
+# best-effort semantics (never fails the play) even when the timeout kills it.
 - name: Wait for cloud-init to finish on ISP server
   when: isp_frr_check.stdout is not defined or isp_frr_check.stdout != "active"
-  shell: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@192.168.122.15 "cloud-init status --wait 2>/dev/null || true"
+  shell: timeout -s 9 5m ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@192.168.122.15 "cloud-init status --wait 2>/dev/null || true" || true
   changed_when: false
 
+# Unlike the cloud-init wait above, this one is expected to actually
+# succeed (FRR is required for the lab to function), so a timeout here
+# should fail the play loudly rather than being swallowed. apt-get install
+# occasionally needs more than 5m against a slow/cold mirror, and on a
+# genuinely fresh VM boot cloud-init's own background apt activity
+# (unattended-upgrades/apt-daily.timer) can still hold the apt lock for a
+# while after cloud-init itself reports done -- retries are cheap here
+# (a lock-contention failure returns in ~1s, not the 10m ssh timeout), so
+# the retry count gives that other process real time to finish.
 - name: Install and start FRR on ISP server
   when: isp_frr_check.stdout is not defined or isp_frr_check.stdout != "active"
   shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@192.168.122.15 "
+    timeout -s 9 10m ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@192.168.122.15 "
+      set -e -o pipefail
       echo 'Acquire::ForceIPv4 \"true\";' > /etc/apt/apt.conf.d/99force-ipv4
       apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y frr 2>&1 | tail -3
       sed -i '/bgpd=no/c\bgpd=yes' /etc/frr/daemons
-      test -f /tmp/frr.conf && cp /tmp/frr.conf /etc/frr/frr.conf
+      test -f /tmp/frr.conf && cp /tmp/frr.conf /etc/frr/frr.conf || true
       systemctl restart frr
     "
+  register: _frr_install
+  until: _frr_install.rc == 0
+  retries: 20
+  delay: 15

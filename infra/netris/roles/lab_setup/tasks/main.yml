@@ -16,6 +16,60 @@
   ansible.builtin.include_role:
     name: prerequisites
 
+# netris-lab's own prerequisites role drags in an openssl-libs upgrade as a
+# side effect of its package installs, and that OpenSSL version breaks
+# Python's ssl.SSLContext.load_verify_locations(cadata=...) bytes-based
+# multi-certificate loading path -- the exact path ansible.builtin.get_url
+# always uses for CA validation, breaking both downloads in the vendored
+# cache role's very next task.
+#
+# Two other fixes were rejected: excluding openssl-libs from dnf entirely
+# breaks installing libvirt/qemu-kvm (systemd-container, required by
+# libvirt-daemon-driver-qemu, hard-requires a systemd build that itself
+# requires libcrypto.so.3(OPENSSL_3.4.0)); disabling get_url's
+# validate_certs was rejected as an unnecessary security trade-off.
+#
+# Sidestep get_url's broken code path entirely instead: pre-fetch both
+# files ourselves via curl (unaffected by this bug -- never goes through
+# Python's cadata-based loading), then inject a matching checksum via
+# module_defaults (see playbooks/setup.yml) so the vendored cache role's
+# own get_url task takes its "file already exists" shortcut and exits
+# before ever calling url_get()/open_url()/make_context(). Full certificate
+# validation is preserved throughout (curl does its own TLS validation
+# normally); nothing here weakens security.
+- name: Ensure cloud image cache directory exists
+  ansible.builtin.file:
+    path: "{{ k3s_image_cache_dir }}/../cloud-images"
+    state: directory
+    mode: '0755'
+
+- name: Pre-fetch cloud images via curl (bypasses get_url's broken CA-cert loading)
+  ansible.builtin.command:
+    cmd: >-
+      curl -fSL --retry 5 --retry-delay 5
+      -o "{{ k3s_image_cache_dir }}/../cloud-images/{{ item.name }}"
+      "{{ item.url }}"
+    creates: "{{ k3s_image_cache_dir }}/../cloud-images/{{ item.name }}"
+  loop:
+    - { url: "{{ cumulus_image_url }}", name: "{{ cumulus_image_name }}" }
+    - { url: "{{ ubuntu_image_url }}", name: "{{ ubuntu_image_name }}" }
+
+- name: Compute checksums of pre-fetched cloud images
+  ansible.builtin.stat:
+    path: "{{ k3s_image_cache_dir }}/../cloud-images/{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - "{{ cumulus_image_name }}"
+    - "{{ ubuntu_image_name }}"
+  register: _cloud_image_stats
+
+- name: Record checksums for get_url's module_defaults shortcut
+  ansible.builtin.set_fact:
+    cache_role_checksums: "{{ cache_role_checksums | default({}) | combine({item.item: 'sha256:' + item.stat.checksum}) }}"
+  loop: "{{ _cloud_image_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
 - name: Cache container and cloud images
   ansible.builtin.include_role:
     name: cache

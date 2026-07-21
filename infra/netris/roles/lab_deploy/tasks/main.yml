@@ -30,9 +30,28 @@
     value: "0"
     sysctl_set: true
 
-- name: Deploy K3s and Netris controller
-  ansible.builtin.include_role:
-    name: k3s_controller
+# k3s_controller's vendored "Verify controller API" task hits the same
+# OpenSSL CA-cert-loading bug documented in playbooks/deploy-lab.yml's own
+# comment; the play-level module_defaults' ca_path fix (cafile-based
+# loading) doesn't help here since this box's openssl-libs build breaks
+# even file-based cert parsing (matches upstream OpenSSL regression
+# https://github.com/openssl/openssl/issues/31807). validate_certs: false
+# avoids eager cert-parsing entirely (defers to Python's lazy default cert
+# lookup, never touches cert bytes). Scoped at the block level rather than
+# play-wide since a block-level module_defaults entry for a module fully
+# replaces (not merges with) an outer scope's entry for that same module.
+#
+# Not a real security weakening: the role's only uri call targets
+# "http://localhost:{{ controller_nodeport }}/api/auth" -- plain HTTP, so no
+# TLS handshake or certificate validation happens regardless of this setting.
+- name: Deploy K3s and Netris controller (validate_certs workaround scope)
+  module_defaults:
+    ansible.builtin.uri:
+      validate_certs: false
+  block:
+    - name: Deploy K3s and Netris controller
+      ansible.builtin.include_role:
+        name: k3s_controller
 
 - name: Deploy network topology
   ansible.builtin.include_role:

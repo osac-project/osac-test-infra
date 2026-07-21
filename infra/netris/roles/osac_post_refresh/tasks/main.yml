@@ -106,18 +106,19 @@
     KUBECONFIG: /root/.kube/config
   no_log: true
 
-# --- Refresh AAP token ---
-
-- name: Refresh AAP API token
-  ansible.builtin.shell:
-    cmd: |
-      cd {{ osac_installer_dir }} && \
-      INSTALLER_NAMESPACE={{ snapshot_osac_namespace }} \
-      SKIP_TOKEN_CONFIG_PATCH=1 \
-      bash scripts/prepare-aap.sh
-  environment:
-    KUBECONFIG: /root/.kube/config
+# AAP API token refresh used to be a separate step here (scripts/prepare-aap.sh
+# in osac-installer), but that script was deleted upstream (osac-installer
+# commit d604478, "OSAC-1928: clean umbrella chart + add osac-prereqs chart")
+# and replaced by osac-aap's own create-api-token Helm hook
+# (base/osac-aap/charts/aap/templates/hooks/create-api-token.yaml), which
+# already fires automatically during the "helm upgrade osac" that
+# run-snapshot-refresh just performed, refreshing the osac-aap-api-token
+# secret and restarting osac-operator/bmf-operator on its own.
+# osac-operator's OSAC_AAP_URL also no longer needs patching after a
+# restore -- the modern chart points it at the in-cluster service DNS name
+# (http://osac-aap/api/controller), not an external route hostname that
+# would change when the snapshot's identity is refreshed.
 
 - name: Report OSAC post-refresh completed
   ansible.builtin.debug:
-    msg: "OSAC post-refresh completed — Netris config, SSH keys, socat, and AAP token configured"
+    msg: "OSAC post-refresh completed — Netris config, SSH keys, and socat configured (AAP token refresh now handled automatically by osac-aap's create-api-token Helm hook)"

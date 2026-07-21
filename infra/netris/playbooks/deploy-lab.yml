@@ -1,4 +1,10 @@
 ---
+# The one uri/get_url call in this play's roles (netris-lab's vendored
+# k3s_controller role's "Verify controller API" task) hits the same OpenSSL
+# CA-cert-loading bug documented in setup.yml's own comment. That fix is
+# scoped at the block level in roles/lab_deploy/tasks/main.yml (around just
+# the k3s_controller include) rather than here at the play level -- see that
+# file's comment for the full root-cause explanation.
 - name: Deploy Netris lab
   hosts: all
   gather_facts: true
