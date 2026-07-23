@@ -1,0 +1,6 @@
+---
+- name: Prepare OSAC for bare-metal deployment
+  hosts: all
+  gather_facts: false
+  roles:
+    - osac_install_onprem

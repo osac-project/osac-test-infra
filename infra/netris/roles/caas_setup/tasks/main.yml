@@ -24,6 +24,16 @@
   ansible.builtin.set_fact:
     caas_agent_names: "{{ _agent_names.stdout.split() }}"
 
+# Scale infrastructure-operator back up now that agents have registered
+# (was scaled down during caas_discovery to prevent OS_IMAGES restore)
+- name: Scale infrastructure-operator back up
+  ansible.builtin.command:
+    cmd: oc scale deployment infrastructure-operator -n multicluster-engine --replicas=1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  failed_when: false
+  changed_when: false
+
 # Step 2: Label agents with resource class and netris server name
 - name: Label agent with resource class
   ansible.builtin.command:
@@ -250,3 +260,46 @@
           editable: true
     validate_certs: false
     status_code: [200, 201, 409]
+
+# Step 6 (BM): Create CAPI provider RBAC in agent namespace
+# The HyperShift operator expects this Role/RoleBinding to exist when
+# reconciling Agent-platform HostedClusters. Normally created by the
+# `hypershift create cluster agent` CLI, but OSAC creates clusters
+# programmatically and skips that step.
+- name: Create capi-provider-role Role in agent namespace (BM)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: capi-provider-role
+        namespace: "{{ caas_agent_namespace }}"
+      rules:
+        - apiGroups: ["agent-install.openshift.io"]
+          resources: ["agents"]
+          verbs: ["*"]
+  environment:
+    KUBECONFIG: /root/.kube/config
+  when: infra_provider == "onprem"
+
+- name: Create capi-provider-role RoleBinding in agent namespace (BM)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: capi-provider-role
+        namespace: "{{ caas_agent_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: capi-provider-role
+      subjects:
+        - kind: Group
+          name: system:serviceaccounts
+          apiGroup: rbac.authorization.k8s.io
+  environment:
+    KUBECONFIG: /root/.kube/config
+  when: infra_provider == "onprem"

@@ -1,0 +1,200 @@
+---
+- name: Gather minimal facts
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+
+- name: Set common facts
+  ansible.builtin.set_fact:
+    _bm_ip: "{{ ansible_default_ipv4.address }}"
+    _apps_domain: "apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+
+# ── OCP Management Cluster ──
+
+- name: Get OCP API URL
+  ansible.builtin.command:
+    cmd: oc whoami --show-server
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ocp_api
+  changed_when: false
+
+- name: Get OCP console route
+  ansible.builtin.command:
+    cmd: oc get route console -n openshift-console -o jsonpath='{.spec.host}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ocp_console
+  changed_when: false
+
+- name: Get OCP kubeadmin password
+  ansible.builtin.shell:
+    cmd: |
+      find / -path "*/data/*/kubeadmin-password" -type f 2>/dev/null | head -1 | xargs cat 2>/dev/null || echo ""
+  register: _ocp_kubeadmin
+  changed_when: false
+
+# ── CaaS Hosted Cluster ──
+
+- name: Get hosted cluster info
+  ansible.builtin.shell:
+    cmd: |
+      oc get hostedclusters -A -o json | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      items = data.get('items', [])
+      if items:
+          hc = items[0]
+          ns = hc['metadata']['namespace']
+          name = hc['metadata']['name']
+          ep = hc.get('status', {}).get('controlPlaneEndpoint', {})
+          api = ep.get('host', '') + ':' + str(ep.get('port', 6443))
+          print(f'{ns}|{name}|{api}')
+      else:
+          print('||')
+      "
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _hc_info_raw
+  changed_when: false
+
+- name: Parse hosted cluster info
+  ansible.builtin.set_fact:
+    _hc_namespace: "{{ _hc_info_raw.stdout.split('|')[0] }}"
+    _hc_name: "{{ _hc_info_raw.stdout.split('|')[1] }}"
+    _hc_api: "{{ _hc_info_raw.stdout.split('|')[2] }}"
+
+- name: Get CaaS kubeadmin password
+  ansible.builtin.shell:
+    cmd: |
+      for ns in "{{ _hc_namespace }}-{{ _hc_name }}" "{{ _hc_namespace }}"; do
+        for secret in kubeadmin-password "{{ _hc_name }}-kubeadmin-password"; do
+          val=$(oc get secret -n "$ns" "$secret" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
+          if [ -n "$val" ]; then echo "$val"; exit 0; fi
+        done
+      done
+      echo ""
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_kubeadmin
+  changed_when: false
+
+- name: Get CaaS console route
+  ansible.builtin.shell:
+    cmd: |
+      KUBECONFIG=/tmp/caas-kubeconfig.yaml oc get route console -n openshift-console -o jsonpath='{.spec.host}' 2>/dev/null || echo ""
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_console
+  changed_when: false
+  failed_when: false
+
+- name: Extract CaaS kubeconfig
+  ansible.builtin.shell:
+    cmd: |
+      oc get secret -n {{ _hc_namespace }}-{{ _hc_name }} admin-kubeconfig \
+        -o jsonpath='{.data.kubeconfig}' 2>/dev/null | base64 -d > /tmp/caas-kubeconfig.yaml
+      if [ -s /tmp/caas-kubeconfig.yaml ]; then echo "ok"; else echo ""; fi
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_kubeconfig
+  changed_when: false
+  failed_when: false
+
+- name: Get CaaS cluster nodes
+  ansible.builtin.shell:
+    cmd: oc get nodes --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | tr '\n' ',' | sed 's/,$//'
+  environment:
+    KUBECONFIG: /tmp/caas-kubeconfig.yaml
+  register: _caas_nodes
+  changed_when: false
+  failed_when: false
+
+# ── OSAC / AAP Credentials ──
+
+- name: Get AAP Gateway admin password
+  ansible.builtin.shell:
+    cmd: oc get secret -n {{ osac_namespace }} osac-aap-admin-password -o jsonpath='{.data.password}' | base64 -d
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _aap_gateway_pass
+  changed_when: false
+  failed_when: false
+
+- name: Get AAP Controller admin password
+  ansible.builtin.shell:
+    cmd: oc get secret -n {{ osac_namespace }} osac-aap-controller-admin-password -o jsonpath='{.data.password}' | base64 -d
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _aap_controller_pass
+  changed_when: false
+  failed_when: false
+
+- name: Get AAP EDA admin password
+  ansible.builtin.shell:
+    cmd: oc get secret -n {{ osac_namespace }} osac-aap-eda-admin-password -o jsonpath='{.data.password}' | base64 -d
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _aap_eda_pass
+  changed_when: false
+  failed_when: false
+
+- name: Get Keycloak admin credentials
+  ansible.builtin.shell:
+    cmd: |
+      oc get deployment keycloak-service -n keycloak -o json | python3 -c "
+      import sys, json
+      dep = json.load(sys.stdin)
+      envs = dep['spec']['template']['spec']['containers'][0]['env']
+      user = next((e['value'] for e in envs if e['name'] == 'KEYCLOAK_ADMIN'), 'admin')
+      pw = next((e['value'] for e in envs if e['name'] == 'KEYCLOAK_ADMIN_PASSWORD'), 'admin')
+      print(f'{user}|{pw}')
+      "
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _keycloak_creds_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse Keycloak credentials
+  ansible.builtin.set_fact:
+    _keycloak_user: "{{ _keycloak_creds_raw.stdout.split('|')[0] | default('admin', true) }}"
+    _keycloak_pass: "{{ _keycloak_creds_raw.stdout.split('|')[1] | default('admin', true) }}"
+
+- name: Get fulfillment client credentials
+  ansible.builtin.shell:
+    cmd: |
+      id=$(oc get secret -n {{ osac_namespace }} fulfillment-controller-credentials -o jsonpath='{.data.client-id}' 2>/dev/null | base64 -d)
+      secret=$(oc get secret -n {{ osac_namespace }} fulfillment-controller-credentials -o jsonpath='{.data.client-secret}' 2>/dev/null | base64 -d)
+      echo "${id}|${secret}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _fulfillment_creds_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse fulfillment credentials
+  ansible.builtin.set_fact:
+    _fulfillment_client_id: "{{ _fulfillment_creds_raw.stdout.split('|')[0] }}"
+    _fulfillment_client_secret: "{{ _fulfillment_creds_raw.stdout.split('|')[1] }}"
+
+# ── Netris Controller ──
+
+- name: Get Netris controller UI port
+  ansible.builtin.shell:
+    cmd: ss -tlnp | grep -oP '(?<=:)9443(?=\s)' | head -1 || echo "9443"
+  register: _netris_port
+  changed_when: false
+  failed_when: false
+
+# ── Render Template ──
+
+- name: Render access document
+  ansible.builtin.template:
+    src: access.md.j2
+    dest: "{{ inventory_dir }}/../docs/{{ lab_name }}-access.md"
+    mode: "0644"
+
+- name: Display access doc path
+  ansible.builtin.debug:
+    msg: "Access document written to docs/{{ lab_name }}-access.md"

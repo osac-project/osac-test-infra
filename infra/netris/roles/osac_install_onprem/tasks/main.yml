@@ -1,0 +1,334 @@
+---
+- name: Download kubeconfig if missing
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} download kubeconfig {{ ocp_cluster_name }} --path /root/
+    creates: "/root/kubeconfig.{{ ocp_cluster_name }}"
+
+- name: Ensure .kube directory exists
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: "0700"
+
+- name: Copy kubeconfig to default location
+  ansible.builtin.copy:
+    src: "/root/kubeconfig.{{ ocp_cluster_name }}"
+    dest: /root/.kube/config
+    remote_src: true
+    mode: "0600"
+    force: false
+
+- name: Clone osac-installer
+  ansible.builtin.git:
+    repo: "{{ osac_installer_repo }}"
+    dest: "{{ osac_installer_dir }}"
+    version: "{{ osac_installer_branch }}"
+    force: true
+
+- name: Initialize submodules
+  ansible.builtin.command:
+    cmd: git submodule update --init --recursive
+    chdir: "{{ osac_installer_dir }}"
+  register: _submodule_update
+  changed_when: _submodule_update.stdout | length > 0
+
+- name: Override osac-operator code in installer
+  ansible.builtin.git:
+    repo: "{{ osac_operator_repo }}"
+    dest: "{{ osac_installer_dir }}/base/osac-operator"
+    version: "{{ osac_operator_branch }}"
+    force: true
+  when: osac_operator_branch | default('') | length > 0
+
+- name: Override fulfillment-service code in installer
+  ansible.builtin.git:
+    repo: "{{ fulfillment_service_repo }}"
+    dest: "{{ osac_installer_dir }}/base/osac-fulfillment-service"
+    version: "{{ fulfillment_service_branch }}"
+    force: true
+  when: fulfillment_service_branch | default('') | length > 0
+
+- name: Determine values directory
+  ansible.builtin.set_fact:
+    _values_dir: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}"
+
+- name: Ensure values directory exists
+  ansible.builtin.file:
+    path: "{{ _values_dir }}"
+    state: directory
+    mode: "0755"
+
+# --- Discover Netris controller settings ---
+
+- name: Discover Netris controller URL
+  ansible.builtin.shell:
+    cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _traefik_nodeport
+  changed_when: false
+  until: _traefik_nodeport.rc == 0 and _traefik_nodeport.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Set Netris controller URL
+  ansible.builtin.set_fact:
+    _netris_ctl_url: "http://192.168.16.254:{{ _traefik_nodeport.stdout }}"
+
+- name: Get Netris site
+  ansible.builtin.include_role:
+    name: netris.controller.site
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    site_state: read
+
+- name: Set site ID
+  ansible.builtin.set_fact:
+    _netris_site_id: "{{ netris_site_id }}"
+
+- name: Get VPCs
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    vpc_state: read
+
+- name: Set OCP VPC ID
+  ansible.builtin.set_fact:
+    _netris_mgmt_vpc_id: "{{ netris_vpc_by_name[ocp_vpc_name].id }}"
+
+- name: Get server cluster templates
+  ansible.builtin.include_role:
+    name: netris.controller.server_cluster_template
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    server_cluster_template_state: list
+
+- name: Set server cluster template ID
+  ansible.builtin.set_fact:
+    _netris_sct_id: "{{ netris_sct_by_name[caas_server_cluster_template_name].id }}"
+
+- name: Build resource class map
+  ansible.builtin.set_fact:
+    _netris_resource_class_map: >-
+      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ _netris_sct_id }},"mgmt_interface":"ens4","vpc_interfaces":["ens5"]}}
+
+# --- Discover operator channels from OCP catalog ---
+
+- name: Wait for OCP cluster operators to stabilize
+  ansible.builtin.shell:
+    cmd: |
+      timeout 30 oc get clusteroperators --no-headers --request-timeout=20s 2>/dev/null | awk '{print $3}' | grep -v True | wc -l
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _co_check
+  until: _co_check.rc == 0 and (_co_check.stdout | trim) == "0"
+  retries: 60
+  delay: 30
+  changed_when: false
+
+- name: Wait for Route CRD to be available
+  ansible.builtin.shell:
+    cmd: timeout 15 oc api-resources --api-group=route.openshift.io --no-headers --request-timeout=10s 2>/dev/null
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _route_crd
+  until: _route_crd.rc == 0 and 'routes' in _route_crd.stdout
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Wait for OLM PackageServer to serve catalog data
+  ansible.builtin.shell:
+    cmd: timeout 20 oc get packagemanifest --no-headers --request-timeout=15s 2>/dev/null
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _pkgserver_ready
+  until: _pkgserver_ready.rc == 0 and (_pkgserver_ready.stdout_lines | length) > 0
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Discover operator default channels from OCP catalog
+  ansible.builtin.command:
+    cmd: "oc get packagemanifest {{ item }} -o jsonpath={.status.defaultChannel}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _pkg_channels
+  loop:
+    - lvms-operator
+    - multicluster-engine
+  changed_when: false
+  until: _pkg_channels is not failed and (_pkg_channels.stdout | default('')) | length > 0
+  retries: 5
+  delay: 10
+
+- name: Set operator channel facts from catalog
+  ansible.builtin.set_fact:
+    _lvms_channel: "{{ _pkg_channels.results[0].stdout }}"
+    _mce_channel: "{{ _pkg_channels.results[1].stdout }}"
+
+- name: Display discovered operator channels
+  ansible.builtin.debug:
+    msg: "Discovered channels -- LVMS: {{ _lvms_channel }}, MCE: {{ _mce_channel }}"
+
+# --- Patch values file with all settings ---
+
+- name: Read current values file
+  ansible.builtin.slurp:
+    src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+  register: _values_raw
+
+- name: Build values overrides
+  ansible.builtin.set_fact:
+    _values_overrides: >-
+      {{ {'bundledPostgres': {'enabled': true},
+          'hubAccess': {'enabled': true},
+          'bmf': {'enabled': false},
+          'lvms': {'enabled': true, 'channel': _lvms_channel},
+          'metallb': {'enabled': true},
+          'cnv': {'enabled': true},
+          'mce': {'enabled': true, 'channel': _mce_channel},
+          'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
+          'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
+              'NETWORK_CLASS': 'netris',
+              'NETWORK_STEPS_COLLECTION': 'netris.steps',
+              'EXTERNAL_ACCESS_BASE_DOMAIN': ocp_base_domain,
+              'EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS': ocp_base_domain,
+              'EXTERNAL_ACCESS_API_INTERNAL_NETWORK': 'hypershift',
+              'HOSTED_CLUSTER_BASE_DOMAIN': ocp_base_domain,
+              'HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY': 'SingleReplica',
+              'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY': 'SingleReplica',
+              'NETRIS_CONTROLLER_URL': _netris_ctl_url,
+              'NETRIS_USERNAME': netris_username,
+              'NETRIS_SITE_ID': _netris_site_id | string,
+              'NETRIS_TENANT_ID': '1',
+              'NETRIS_TENANT_NAME': 'Admin',
+              'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
+              'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
+              'NETRIS_RESOURCE_CLASS_MAP': _netris_resource_class_map | to_json,
+              'SERVER_MGMT_ROUTE_DESTINATION': '192.168.16.0/20',
+              'SERVER_MGMT_ROUTE_GATEWAY': '192.168.16.1',
+              'SERVER_SSH_BASTION_HOST': '192.168.16.254',
+              'SERVER_SSH_BASTION_USER': 'root',
+              'SERVER_SSH_USER': 'root',
+              'DNS_CLASS': 'dns.route53.dns',
+              'DNS_ZONE': dns_hosted_zone
+            }, 'secret': {
+              'NETRIS_PASSWORD': netris_password,
+              'AWS_ACCESS_KEY_ID': aws_access_key_id,
+              'AWS_SECRET_ACCESS_KEY': aws_secret_access_key
+            }},
+            'networkFulfillment': {'enabled': true, 'config': {
+              'NETRIS_CONTROLLER_URL': _netris_ctl_url,
+              'NETRIS_USERNAME': netris_username,
+              'NETRIS_SITE_ID': _netris_site_id | string,
+              'NETRIS_TENANT_ID': '1',
+              'NETRIS_TENANT_NAME': 'Admin'
+            }, 'secret': {
+              'NETRIS_PASSWORD': netris_password
+            }}
+          }},
+          'clusterFulfillment': {'config': {
+              'DNS_CLASS': 'dns.route53.dns',
+              'DNS_ZONE': dns_hosted_zone
+            }, 'secret': {
+              'AWS_ACCESS_KEY_ID': aws_access_key_id,
+              'AWS_SECRET_ACCESS_KEY': aws_secret_access_key
+            }}
+         }
+         | combine(({'operator': {'image': {
+               'repository': osac_operator_image | regex_replace(':([^/]+)$', ''),
+               'tag': (osac_operator_image | regex_search(':([^/]+)$', '\1') | first | default('latest'))
+             }}} if osac_operator_image | default('') | length > 0 else {}), recursive=true)
+         | combine(({'service': {'images': {'service': fulfillment_service_image}},
+                     'dbMigrate': {'image': fulfillment_service_image}}
+                    if fulfillment_service_image | default('') | length > 0 else {}), recursive=true)
+         | combine(({'aap': {'configAsCode': {'projectGitBranch': osac_aap_branch}}}
+                    if osac_aap_branch | default('') | length > 0 else {}), recursive=true)
+         | combine(({'aap': {'bootstrap': {'image': osac_aap_image}}}
+                    if osac_aap_image | default('') | length > 0 else {}), recursive=true)
+      }}
+
+- name: Write patched values file
+  ansible.builtin.copy:
+    dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+    content: "{{ _values_raw.content | b64decode | from_yaml | combine(_values_overrides, recursive=true) | to_nice_yaml(indent=2) }}"
+  no_log: true
+
+# --- Copy files to values directory ---
+
+- name: Copy AAP license file to values directory
+  ansible.builtin.copy:
+    src: "{{ osac_license_path }}"
+    dest: "{{ _values_dir }}/license.zip"
+    remote_src: true
+    mode: "0644"
+
+- name: Copy pull secret to values directory
+  ansible.builtin.copy:
+    src: "{{ pull_secret_path }}"
+    dest: "{{ _values_dir }}/pull-secret.json"
+    remote_src: true
+    mode: "0644"
+
+- name: Copy SSH keys for Netris integration
+  ansible.builtin.copy:
+    src: "{{ ssh_public_key_path | regex_replace('\\.pub$', '') }}"
+    dest: "{{ _values_dir }}/{{ item }}"
+    remote_src: true
+    mode: "0600"
+  loop:
+    - server-ssh-key
+    - server-ssh-bastion-key
+
+# --- Hub access RBAC (chart creates RoleBinding but not the ClusterRole) ---
+
+- name: Create hub-access ClusterRole for fulfillment controller
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: "{{ osac_namespace }}-hub-access"
+      rules:
+        - apiGroups: ["osac.openshift.io"]
+          resources: ["*"]
+          verbs: ["*"]
+        - apiGroups: ["hypershift.openshift.io"]
+          resources: ["*"]
+          verbs: ["*"]
+        - apiGroups: ["agent-install.openshift.io"]
+          resources: ["*"]
+          verbs: ["*"]
+        - apiGroups: [""]
+          resources: ["namespaces", "secrets", "configmaps", "serviceaccounts"]
+          verbs: ["*"]
+        - apiGroups: ["rbac.authorization.k8s.io"]
+          resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+          verbs: ["*"]
+  environment:
+    KUBECONFIG: /root/.kube/config
+
+# --- Socat forwarder for OCP ingress ---
+
+- name: Create socat env file for OCP ingress (port 9444 → OCP 443)
+  ansible.builtin.copy:
+    dest: /etc/netris-lab/socat/0.0.0.0-9444.env
+    content: |
+      BIND_IP=0.0.0.0
+      PORT=9444
+      TARGET_IP={{ ocp_dnat_ip }}
+      TARGET_PORT=443
+
+- name: Enable and start OCP ingress socat forwarder
+  ansible.builtin.systemd:
+    name: socat-forwarder@0.0.0.0-9444
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Report OSAC preparation complete
+  ansible.builtin.debug:
+    msg: "OSAC prepared. Run 'make run-osac-setup' to install via Helm."

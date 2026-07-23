@@ -82,6 +82,23 @@
   retries: 30
   delay: 10
 
+- name: Wait for image-service to be running (restart if crashed)
+  ansible.builtin.shell:
+    cmd: |
+      state=$(podman inspect --format '{{ '{{' }}.State.Status{{ '}}' }}' assisted-installer-image-service 2>/dev/null)
+      if [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
+        echo "Image service in $state state, restarting..."
+        podman restart assisted-installer-image-service
+        sleep 10
+        state=$(podman inspect --format '{{ '{{' }}.State.Status{{ '}}' }}' assisted-installer-image-service 2>/dev/null)
+      fi
+      [ "$state" = "running" ] && echo "OK" || { echo "FAIL: state=$state"; exit 1; }
+  register: _image_svc
+  until: _image_svc.rc == 0
+  retries: 5
+  delay: 15
+  changed_when: "'restarting' in _image_svc.stdout"
+
 - name: Configure DNS
   ansible.builtin.include_role:
     name: ocp_dns

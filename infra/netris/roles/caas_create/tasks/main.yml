@@ -34,6 +34,54 @@
   ansible.builtin.debug:
     msg: "Cluster '{{ caas_cluster_name }}' {{ 'created' if _cluster_create is not skipped else 'already exists' }} with ID {{ caas_cluster_id }}"
 
+# BM-only: The HyperShift operator creates the hosted control plane namespace
+# with PodSecurity enforce=restricted, which blocks ALL CP pods (etcd,
+# apiserver, capi-provider). Relabel to privileged before they can start.
+- name: Wait for hosted control plane namespace to appear (BM)
+  ansible.builtin.shell:
+    cmd: >-
+      oc get ns -l hypershift.openshift.io/hosted-control-plane=true --no-headers 2>/dev/null
+      | grep '{{ osac_namespace }}'
+      | awk '{print $1}'
+      | grep -v '^$'
+      | head -1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _cp_namespace
+  until: _cp_namespace.stdout | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  when: infra_provider == "onprem"
+
+- name: Label hosted control plane namespace with privileged PodSecurity (BM)
+  ansible.builtin.command:
+    cmd: >-
+      oc label ns {{ _cp_namespace.stdout }}
+      pod-security.kubernetes.io/enforce=privileged
+      pod-security.kubernetes.io/audit=privileged
+      pod-security.kubernetes.io/warn=privileged
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+  when: infra_provider == "onprem" and _cp_namespace.stdout | default('') | length > 0
+
+- name: Also label the HostedCluster namespace with privileged PodSecurity (BM)
+  ansible.builtin.shell:
+    cmd: >-
+      HC_NS=$(oc get hostedcluster -A --no-headers 2>/dev/null
+      | grep '{{ osac_namespace }}'
+      | awk '{print $1}'
+      | head -1);
+      [ -n "$HC_NS" ] && oc label ns "$HC_NS"
+      pod-security.kubernetes.io/enforce=privileged
+      --overwrite 2>/dev/null || true
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  when: infra_provider == "onprem"
+
 - name: Wait for cluster to be ready
   ansible.builtin.shell:
     cmd: |

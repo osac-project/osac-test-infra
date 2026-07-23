@@ -1,0 +1,15 @@
+---
+- name: Post-install — scale down MCE, fix UI, generate access doc
+  hosts: all
+  gather_facts: false
+  pre_tasks:
+    - name: Scale down MCE operator to save resources (after CaaS is deployed)
+      ansible.builtin.command:
+        cmd: oc scale deployment infrastructure-operator -n multicluster-engine --replicas=0
+      environment:
+        KUBECONFIG: /root/.kube/config
+      failed_when: false
+      changed_when: false
+  roles:
+    - post_ui_fix
+    - access_doc

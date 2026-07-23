@@ -1,0 +1,6 @@
+---
+- name: Destroy CaaS — delete cluster, force-remove agents and InfraEnv, stop VMs
+  hosts: all
+  gather_facts: false
+  roles:
+    - destroy_caas

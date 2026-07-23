@@ -3,6 +3,20 @@
   hosts: all
   gather_facts: false
   tasks:
+    - name: Patch cluster-fulfillment-ig secret with SSH keys
+      ansible.builtin.shell:
+        cmd: |
+          oc create secret generic cluster-fulfillment-ig -n {{ osac_namespace }} \
+            --from-literal=NETRIS_PASSWORD={{ netris_password }} \
+            --from-literal=AWS_ACCESS_KEY_ID={{ aws_access_key_id }} \
+            --from-literal=AWS_SECRET_ACCESS_KEY={{ aws_secret_access_key }} \
+            --from-file=SERVER_SSH_KEY={{ ssh_public_key_path | regex_replace('\.pub$', '') }} \
+            --from-file=SERVER_SSH_BASTION_KEY={{ ssh_public_key_path | regex_replace('\.pub$', '') }} \
+            --dry-run=client -o yaml | oc apply -f -
+      environment:
+        KUBECONFIG: /root/.kube/config
+      no_log: true
+
     - name: Scale down MCE operators to prevent OS_IMAGES overwrites
       ansible.builtin.command:
         cmd: oc scale deployment {{ item }} -n multicluster-engine --replicas=0
@@ -42,7 +56,7 @@
               return r.stdout
 
           os_images = json.loads(run(["oc", "get", "configmap", "assisted-service", "-n", "multicluster-engine", "-o", "jsonpath={.data.OS_IMAGES}"]))
-          filtered = [i for i in os_images if i["openshift_version"] == "{{ caas_ocp_version }}" and i["cpu_architecture"] == "x86_64"]
+          filtered = [i for i in os_images if i["openshift_version"] == "{{ ocp_version }}" and i["cpu_architecture"] == "x86_64"]
           if len(filtered) == len(os_images) and len(os_images) <= 1:
               print("OS_IMAGES already filtered (%d entries, all match)" % len(os_images))
           else:
@@ -105,15 +119,34 @@
           images = json.loads(rhcos['value'])
           versions = [(i['openshift_version'], i['cpu_architecture']) for i in images]
           print(f'RHCOS_VERSIONS: {len(images)} image(s): {versions}')
-          bad = [v for v in versions if v != ('{{ caas_ocp_version }}', 'x86_64')]
+          bad = [v for v in versions if v != ('{{ ocp_version }}', 'x86_64')]
           if bad:
               print(f'ERROR: unexpected images: {bad}')
               sys.exit(1)
           if not versions:
               print('ERROR: no images found')
               sys.exit(1)
-          print('OK: only {{ caas_ocp_version }} x86_64')
+          print('OK: only {{ ocp_version }} x86_64')
           "
       environment:
         KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    - name: Scale infrastructure-operator back up (needed for CaaS Agent platform)
+      ansible.builtin.command:
+        cmd: oc scale deployment infrastructure-operator -n multicluster-engine --replicas=1
+      environment:
+        KUBECONFIG: /root/.kube/config
+      failed_when: false
+      changed_when: false
+
+    - name: Wait for infrastructure-operator pod
+      ansible.builtin.shell:
+        cmd: oc get pods -n multicluster-engine -l control-plane=infrastructure-operator --no-headers 2>/dev/null | grep Running | wc -l
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _infra_op
+      until: _infra_op.stdout | int >= 1
+      retries: 30
+      delay: 5
       changed_when: false

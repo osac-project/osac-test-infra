@@ -6,15 +6,49 @@
 - name: Pre-flight checks
   ansible.builtin.include_tasks: "{{ role_path }}/../lab_deploy/tasks/preflight.yml"
 
+- name: Remove stale collections left by rsync
+  ansible.builtin.file:
+    path: "{{ netris_lab_dir }}/collections/ansible_collections"
+    state: absent
+
 - name: Install Ansible collections
   ansible.builtin.command:
-    cmd: ansible-galaxy collection install -r requirements.yml -p collections
+    cmd: ansible-galaxy collection install -r requirements.yml -p collections --force
     chdir: "{{ netris_lab_dir }}"
   changed_when: false
+
+- name: Pre-install EPEL from URL (RHEL has no epel-release in base repos)
+  ansible.builtin.shell:
+    cmd: |
+      if rpm -q epel-release &>/dev/null; then
+        echo "already_installed"
+      else
+        dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-$(rpm -E %rhel).noarch.rpm"
+        echo "installed"
+      fi
+  register: _epel_install
+  changed_when: "'installed' == _epel_install.stdout | trim"
+  when: infra_provider == "onprem"
 
 - name: Run prerequisites
   ansible.builtin.include_role:
     name: prerequisites
+
+- name: Downgrade crun to avoid eBPF device filter bug (RHEL 9 systemd)
+  ansible.builtin.shell:
+    cmd: |
+      CURRENT=$(rpm -q --qf '%{VERSION}' crun 2>/dev/null)
+      if [[ "$CURRENT" =~ ^1\.(2[6-9]|[3-9]) ]]; then
+        dnf downgrade -y 'crun-1.23.1-2.el9*'
+        dnf install -y python3-dnf-plugin-versionlock 2>/dev/null || true
+        dnf versionlock add crun 2>/dev/null || true
+        echo "downgraded_and_locked"
+      else
+        echo "skipped"
+      fi
+  register: _crun_fix
+  changed_when: "'downgraded' in _crun_fix.stdout"
+  when: infra_provider == "onprem"
 
 # netris-lab's own prerequisites role drags in an openssl-libs upgrade as a
 # side effect of its package installs, and that OpenSSL version breaks
@@ -154,6 +188,13 @@
   environment:
     GOPATH: "{{ lookup('env', 'HOME') }}/go"
     GOCACHE: "{{ lookup('env', 'HOME') }}/.cache/go-build"
+
+- name: Symlink osac CLI to /usr/local/bin for system-wide access
+  ansible.builtin.file:
+    src: "{{ lookup('env', 'HOME') }}/.local/bin/osac"
+    dest: /usr/local/bin/osac
+    state: link
+    force: true
 
 - name: Cache snapshot flavor image
   ansible.builtin.include_role:

@@ -1,3 +1,6 @@
+# Infrastructure provider: "aws" (EC2 CI, default) or "onprem" (bare-metal RHEL)
+infra_provider: "aws"
+
 # Netris Lab
 netris_lab_dir: "{{ inventory_dir }}/../netris-lab"
 ew_fabric_enable: 0
@@ -70,7 +73,7 @@ osac_aap_image: ""
 snapshot_flavor_image: "quay.io/osac-project/cluster-flavors:caas"
 snapshot_flavor_dir: "/var/cache/netris-lab/cluster-flavors/caas"
 snapshot_recert_image: "quay.io/osac-project/recert:latest"
-snapshot_osac_namespace: "osac-e2e-ci"
+snapshot_osac_namespace: "{{ 'osac-devel' if infra_provider == 'onprem' else 'osac-e2e-ci' }}"
 snapshot_osac_values_file: "values/caas-ci/values.yaml"
 
 # AWS configuration for Route 53 DNS (read from config file or environment)

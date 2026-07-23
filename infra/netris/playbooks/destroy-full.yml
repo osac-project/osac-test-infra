@@ -1,0 +1,265 @@
+---
+- name: Full destroy — nuke all VMs, wipe data disk, clean services and DNS
+  hosts: all
+  gather_facts: false
+  vars:
+    netris_lab_dir: "{{ inventory_dir }}/../netris-lab"
+  pre_tasks:
+    - name: Load netris-lab variables
+      ansible.builtin.include_vars:
+        file: "{{ netris_lab_dir }}/group_vars/all.yml"
+
+  tasks:
+    # --- Phase 1: Route53 DNS cleanup (needs AWS CLI before K3s teardown) ---
+
+    - name: Get Route 53 hosted zone ID
+      ansible.builtin.shell:
+        cmd: >-
+          aws route53 list-hosted-zones-by-name
+          --dns-name {{ dns_hosted_zone }}
+          --query "HostedZones[0].Id"
+          --output text
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ aws_region }}"
+      register: _r53_zone_id
+      changed_when: false
+      failed_when: false
+
+    - name: Delete OCP DNS records from Route 53
+      ansible.builtin.shell:
+        cmd: >-
+          aws route53 change-resource-record-sets
+          --hosted-zone-id {{ _r53_zone_id.stdout | trim }}
+          --change-batch '{{ _batch | to_json }}'
+      vars:
+        _batch:
+          Changes:
+            - Action: DELETE
+              ResourceRecordSet:
+                Name: "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+                Type: A
+                TTL: 300
+                ResourceRecords:
+                  - Value: "{{ ocp_dnat_ip }}"
+            - Action: DELETE
+              ResourceRecordSet:
+                Name: "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+                Type: A
+                TTL: 300
+                ResourceRecords:
+                  - Value: "{{ ocp_dnat_ip }}"
+            - Action: DELETE
+              ResourceRecordSet:
+                Name: "*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+                Type: A
+                TTL: 300
+                ResourceRecords:
+                  - Value: "{{ ocp_dnat_ip }}"
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ aws_region }}"
+      when: _r53_zone_id.rc == 0 and _r53_zone_id.stdout | trim | length > 0
+      changed_when: true
+      failed_when: false
+
+    # --- Phase 2: Kill all VMs ---
+
+    - name: Destroy and undefine all VMs
+      ansible.builtin.shell:
+        cmd: |
+          count=0
+          for vm in $(virsh list --all --name 2>/dev/null | grep -v '^$'); do
+            virsh destroy "$vm" 2>/dev/null || true
+            virsh undefine "$vm" --remove-all-storage 2>/dev/null || true
+            count=$((count + 1))
+          done
+          echo "Removed $count VMs"
+      register: _vm_destroy
+      changed_when: "'Removed 0' not in _vm_destroy.stdout"
+
+    - name: Show VM cleanup result
+      ansible.builtin.debug:
+        msg: "{{ _vm_destroy.stdout }}"
+
+    # --- Phase 3: Stop services ---
+
+    - name: Stop and disable socat forwarders
+      ansible.builtin.shell:
+        cmd: |
+          for svc in $(systemctl list-units --type=service --all 2>/dev/null | grep socat-forwarder | awk '{print $1}'); do
+            systemctl stop "$svc" 2>/dev/null
+            systemctl disable "$svc" 2>/dev/null
+          done
+          pkill -9 socat 2>/dev/null || true
+      failed_when: false
+      changed_when: true
+
+    - name: Stop VPN
+      ansible.builtin.systemd:
+        name: openvpn-client@client
+        state: stopped
+      failed_when: false
+
+    - name: Kill orphaned K3s/containerd processes
+      ansible.builtin.shell:
+        cmd: |
+          /usr/local/bin/k3s-killall.sh 2>/dev/null || true
+          pkill -9 -f containerd-shim-runc-v2 2>/dev/null || true
+          sleep 2
+          # Kill any container workloads that survived (reparented to PID 1)
+          for pattern in '/app/servicebin' 'haproxy.*haproxy.cfg' '/pause' 'redis-server' 'mysqld.*bitnami' 'traefik' '/coredns' '/metrics-server' 'exim' 'node src/index'; do
+            pkill -9 -f "$pattern" 2>/dev/null || true
+          done
+      failed_when: false
+      changed_when: true
+
+    - name: Uninstall K3s
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/k3s-uninstall.sh 2>/dev/null || true
+      failed_when: false
+      changed_when: true
+
+    - name: Remove dnsmasq OCP config
+      ansible.builtin.file:
+        path: /etc/dnsmasq.d/ocp-sno.conf
+        state: absent
+      register: _dnsmasq_removed
+
+    - name: Restart dnsmasq if config was removed
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: restarted
+      when: _dnsmasq_removed is changed
+      failed_when: false
+
+    # --- Phase 4: Wipe data disk contents ---
+
+    - name: Stop all podman containers, pods, and fully reset state
+      ansible.builtin.shell:
+        cmd: |
+          podman pod stop --all 2>/dev/null || true
+          podman stop --all 2>/dev/null || true
+          podman pod rm --all --force 2>/dev/null || true
+          podman rm --all --force 2>/dev/null || true
+          podman network rm podman-default-kube-network 2>/dev/null || true
+          podman system reset --force 2>/dev/null || true
+          pkill -9 conmon 2>/dev/null || true
+          pkill -9 crun 2>/dev/null || true
+          pkill -9 aardvark-dns 2>/dev/null || true
+          pkill -9 netavark 2>/dev/null || true
+          rm -rf /run/containers/ 2>/dev/null || true
+          rm -rf /run/libpod/ 2>/dev/null || true
+          rm -rf /etc/containers/networks/*.json 2>/dev/null || true
+          rm -rf /etc/cni/net.d/* 2>/dev/null || true
+          nft flush table ip nat 2>/dev/null || true
+          nft delete table ip nat 2>/dev/null || true
+          sleep 2
+      failed_when: false
+      changed_when: true
+
+    - name: Unmount container overlay filesystems
+      ansible.builtin.shell:
+        cmd: |
+          umount /mnt/data/containers/storage/overlay/*/merged 2>/dev/null || true
+          umount /mnt/data/containers/storage/overlay-containers/*/rootfs/merge 2>/dev/null || true
+          umount /mnt/data/containers/storage/overlay-containers/*/userdata/shm 2>/dev/null || true
+      failed_when: false
+      changed_when: true
+
+    - name: Check if data disk is mounted
+      ansible.builtin.shell:
+        cmd: mountpoint -q /mnt/data && echo "mounted" || echo "not_mounted"
+      register: _data_mounted
+      changed_when: false
+
+    - name: Wipe all data disk contents
+      ansible.builtin.shell:
+        cmd: rm -rf /mnt/data/*
+      when: _data_mounted.stdout == 'mounted'
+      changed_when: true
+
+    - name: Report data disk wipe
+      ansible.builtin.debug:
+        msg: >-
+          Data disk: {{ 'wiped /mnt/data/*' if _data_mounted.stdout == 'mounted'
+          else 'not mounted, nothing to wipe' }}
+
+    # --- Phase 5: Clean mgmt-server DNS ---
+
+    - name: Remove OCP DNS config from mgmt-server
+      ansible.builtin.shell:
+        cmd: >-
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.16.1
+          "rm -f /etc/dnsmasq.d/ocp-sno.conf && systemctl restart dnsmasq" 2>/dev/null || true
+      failed_when: false
+      changed_when: true
+
+    # --- Phase 6: Destroy Pulumi/Tofu state ---
+
+    - name: Destroy Pulumi cloudsim state
+      ansible.builtin.shell:
+        cmd: |
+          export PATH=$PATH:/root/.pulumi/bin
+          export PULUMI_CONFIG_PASSPHRASE=""
+          cd {{ cloudsim_dir }} 2>/dev/null && pulumi destroy --yes 2>/dev/null || true
+      failed_when: false
+
+    - name: Destroy Terraform topology state
+      ansible.builtin.shell:
+        cmd: cd {{ topology_dir }} 2>/dev/null && tofu destroy -auto-approve 2>/dev/null || true
+      failed_when: false
+
+    # --- Phase 7: Remove network bridges ---
+
+    - name: Remove lab bridges
+      ansible.builtin.shell:
+        cmd: ip link set {{ item }} down 2>/dev/null && ip link del {{ item }} 2>/dev/null || true
+      loop:
+        - br-mgmt
+        - br-public
+      failed_when: false
+      changed_when: true
+
+    # --- Phase 8: Remove software artifacts ---
+
+    - name: Remove installed artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /opt/osac-installer
+        - /opt/fulfillment-service
+        - /opt/netris-lab
+        - /root/.config/osac
+        - /root/.kube
+        - /root/kubeconfig.{{ ocp_cluster_name | default('ocp-sno') }}
+
+    - name: Remove stale Ansible collection artifacts from repo
+      ansible.builtin.shell:
+        cmd: rm -rf /root/netris-test-infra/netris-lab/collections/ansible_collections 2>/dev/null || true
+      changed_when: true
+
+    # --- Phase 9: Final status ---
+
+    - name: Collect cleanup status
+      ansible.builtin.shell:
+        cmd: |
+          echo "VMs:       $(virsh list --all --name 2>/dev/null | grep -c -v '^$' || echo 0)"
+          echo "K3s:       $(systemctl is-active k3s 2>&1)"
+          echo "socat:     $(pgrep -c socat 2>/dev/null || echo 0)"
+          echo "data disk: $(du -sh /mnt/data/ 2>/dev/null | cut -f1 || echo 'not mounted')"
+          echo "cache:     $(du -sh /var/cache/netris-lab/ 2>/dev/null | cut -f1 || echo 'not found')"
+      register: _status
+      changed_when: false
+
+    - name: Destroy complete
+      ansible.builtin.debug:
+        msg: |
+          === Full destroy complete ===
+          {{ _status.stdout }}
+          ===
+          Cache preserved at /var/cache/netris-lab/
+          Run 'make deploy-full' or 'make deploy-bg-full' to redeploy.

@@ -81,21 +81,28 @@
   register: _pull_secret
   no_log: true
 
-- name: Regenerate assisted-service auth keypair
+- name: Ensure assisted-service local-auth secret exists
   ansible.builtin.shell:
     cmd: |
-      oc delete secret assisted-servicelocal-auth -n multicluster-engine --ignore-not-found
-      for i in $(seq 30); do
-        oc get secret assisted-servicelocal-auth -n multicluster-engine --no-headers 2>/dev/null && break
-        sleep 2
-      done
-      sleep 10
-      oc rollout restart deployment/assisted-service -n multicluster-engine
-      oc rollout status deployment/assisted-service -n multicluster-engine --timeout=120s
-      oc rollout restart statefulset/assisted-image-service -n multicluster-engine
-      oc rollout status statefulset/assisted-image-service -n multicluster-engine --timeout=120s
+      if oc get secret assisted-servicelocal-auth -n multicluster-engine --no-headers 2>/dev/null; then
+        echo "exists"
+      else
+        openssl ecparam -name prime256v1 -genkey -noout -out /tmp/ec-priv.pem
+        openssl ec -in /tmp/ec-priv.pem -pubout -out /tmp/ec-pub.pem 2>/dev/null
+        oc create secret generic assisted-servicelocal-auth -n multicluster-engine \
+          --from-file=ec-private-key.pem=/tmp/ec-priv.pem \
+          --from-file=ec-public-key.pem=/tmp/ec-pub.pem
+        rm -f /tmp/ec-priv.pem /tmp/ec-pub.pem
+        oc rollout restart deployment/assisted-service -n multicluster-engine
+        oc rollout status deployment/assisted-service -n multicluster-engine --timeout=180s
+        oc rollout restart statefulset/assisted-image-service -n multicluster-engine
+        oc rollout status statefulset/assisted-image-service -n multicluster-engine --timeout=180s
+        echo "created"
+      fi
   environment:
     KUBECONFIG: /root/.kube/config
+  register: _local_auth_result
+  changed_when: "'created' in _local_auth_result.stdout"
 
 - name: Create InfraEnv namespace
   ansible.builtin.command:
@@ -146,6 +153,79 @@
   retries: 10
   delay: 15
 
+# BM-only: The infrastructure-operator may restore the full OS_IMAGES list
+# after post-osac filtered it. Scale it down, re-filter, then let discovery
+# proceed with only the target OCP version's RHCOS image.
+- name: Scale down infrastructure-operator before filtering OS_IMAGES (BM)
+  ansible.builtin.command:
+    cmd: oc scale deployment infrastructure-operator -n multicluster-engine --replicas=0
+  environment:
+    KUBECONFIG: /root/.kube/config
+  failed_when: false
+  changed_when: false
+  when: infra_provider == "onprem"
+
+- name: Wait for infrastructure-operator pod to terminate (BM)
+  ansible.builtin.shell:
+    cmd: oc get pods -n multicluster-engine -l control-plane=infrastructure-operator --no-headers 2>/dev/null | grep -v Terminating | wc -l
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _infra_op_down
+  until: _infra_op_down.stdout | int == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  when: infra_provider == "onprem"
+
+- name: Re-filter OS_IMAGES (infrastructure-operator may have restored full list) (BM)
+  ansible.builtin.shell:
+    cmd: |
+      COUNT=$(oc get cm assisted-service -n multicluster-engine \
+        -o jsonpath='{.data.OS_IMAGES}' | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
+      if [ "$COUNT" -le 1 ]; then
+        echo "already_filtered"
+        exit 0
+      fi
+      echo "Re-filtering OS_IMAGES from $COUNT entries..."
+      python3 << 'PYEOF'
+      import json, subprocess, os
+      os.environ["KUBECONFIG"] = "/root/.kube/config"
+      def run(cmd):
+          return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+      os_images = json.loads(run(["oc", "get", "configmap", "assisted-service", "-n", "multicluster-engine", "-o", "jsonpath={.data.OS_IMAGES}"]))
+      filtered = [i for i in os_images if i["openshift_version"] == "{{ ocp_version }}" and i["cpu_architecture"] == "x86_64"]
+      filtered_json = json.dumps(filtered)
+      patch = json.dumps({"data": {"OS_IMAGES": filtered_json}})
+      run(["oc", "patch", "configmap", "assisted-service", "-n", "multicluster-engine", "--type=merge", "-p", patch])
+      ss = json.loads(run(["oc", "get", "statefulset", "assisted-image-service", "-n", "multicluster-engine", "-o", "json"]))
+      idx = next(i for i, e in enumerate(ss["spec"]["template"]["spec"]["containers"][0]["env"]) if e["name"] == "RHCOS_VERSIONS")
+      ss_patch = json.dumps([{"op": "replace", "path": "/spec/template/spec/containers/0/env/%d/value" % idx, "value": filtered_json}])
+      with open("/tmp/patch.json", "w") as f:
+          f.write(ss_patch)
+      run(["oc", "patch", "statefulset", "assisted-image-service", "-n", "multicluster-engine", "--type=json", "--patch-file=/tmp/patch.json"])
+      run(["oc", "delete", "pod", "assisted-image-service-0", "-n", "multicluster-engine", "--ignore-not-found"])
+      print("re-filtered and restarted")
+      PYEOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _refilter
+  changed_when: "'re-filtered' in _refilter.stdout"
+  when: infra_provider == "onprem"
+
+- name: Wait for assisted-image-service to become ready (BM)
+  ansible.builtin.shell:
+    cmd: >-
+      oc get pod assisted-image-service-0 -n multicluster-engine
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ais_ready
+  until: _ais_ready.stdout == 'True'
+  retries: 60
+  delay: 15
+  changed_when: false
+  when: infra_provider == "onprem"
+
 - name: Wait for discovery ISO URL
   ansible.builtin.shell:
     cmd: oc get infraenv {{ caas_discovery_infraenv_name }} -n {{ caas_discovery_infraenv_namespace }} -o jsonpath='{.status.isoDownloadURL}'
@@ -154,6 +234,11 @@
   retries: 60
   delay: 10
   changed_when: false
+
+- name: Remove stale discovery ISO (token changes on InfraEnv recreate)
+  ansible.builtin.file:
+    path: /var/lib/libvirt/images/caas-discovery.iso
+    state: absent
 
 - name: Download discovery ISO
   ansible.builtin.get_url:
