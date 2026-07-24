@@ -113,7 +113,11 @@
   failed_when: false
 
 - name: Gather HostedCluster details
-  ansible.builtin.shell: oc describe hostedclusters.hypershift.openshift.io --all-namespaces > {{ _gather_dir }}/caas/hosting-cluster/hostedclusters-describe 2>&1 || echo "no hostedclusters" > {{ _gather_dir }}/caas/hosting-cluster/hostedclusters-describe
+  ansible.builtin.shell: |
+    oc describe hostedclusters.hypershift.openshift.io --all-namespaces 2>&1 \
+      | sed -E -e 's/([?&]api_key=)[^&[:space:]"]+/\1<REDACTED>/g' \
+      > {{ _gather_dir }}/caas/hosting-cluster/hostedclusters-describe \
+      || echo "no hostedclusters" > {{ _gather_dir }}/caas/hosting-cluster/hostedclusters-describe
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
@@ -141,28 +145,49 @@
   failed_when: false
 
 - name: Gather InfraEnv
-  ansible.builtin.shell: oc get infraenv -n {{ caas_discovery_infraenv_namespace }} -o wide > {{ _gather_dir }}/caas/hosting-cluster/infraenv 2>&1 || echo "no InfraEnv found" > {{ _gather_dir }}/caas/hosting-cluster/infraenv
+  ansible.builtin.shell: |
+    oc get infraenv -n {{ caas_discovery_infraenv_namespace }} -o wide 2>&1 \
+      | sed -E -e 's/([?&]api_key=)[^&[:space:]"]+/\1<REDACTED>/g' \
+      > {{ _gather_dir }}/caas/hosting-cluster/infraenv \
+      || echo "no InfraEnv found" > {{ _gather_dir }}/caas/hosting-cluster/infraenv
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
   failed_when: false
 
+# oc describe prints the InfraEnv's full .status, including Assisted
+# Installer download/event/log URLs with an embedded api_key= JWT query
+# param -- redact it before writing to the CI artifact.
 - name: Gather InfraEnv details
-  ansible.builtin.shell: oc describe infraenv -n {{ caas_discovery_infraenv_namespace }} > {{ _gather_dir }}/caas/hosting-cluster/infraenv-describe 2>&1 || echo "no InfraEnv found" > {{ _gather_dir }}/caas/hosting-cluster/infraenv-describe
+  ansible.builtin.shell: |
+    oc describe infraenv -n {{ caas_discovery_infraenv_namespace }} 2>&1 \
+      | sed -E -e 's/([?&]api_key=)[^&[:space:]"]+/\1<REDACTED>/g' \
+      > {{ _gather_dir }}/caas/hosting-cluster/infraenv-describe \
+      || echo "no InfraEnv found" > {{ _gather_dir }}/caas/hosting-cluster/infraenv-describe
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
   failed_when: false
 
 - name: Gather Agents
-  ansible.builtin.shell: oc get agent -n {{ caas_agent_namespace }} -o wide --show-labels > {{ _gather_dir }}/caas/hosting-cluster/agents 2>&1 || echo "no agents found" > {{ _gather_dir }}/caas/hosting-cluster/agents
+  ansible.builtin.shell: |
+    oc get agent -n {{ caas_agent_namespace }} -o wide --show-labels 2>&1 \
+      | sed -E -e 's/([?&]api_key=)[^&[:space:]"]+/\1<REDACTED>/g' \
+      > {{ _gather_dir }}/caas/hosting-cluster/agents \
+      || echo "no agents found" > {{ _gather_dir }}/caas/hosting-cluster/agents
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
   failed_when: false
 
+# Same api_key= leak as InfraEnv details above -- Agent .status also embeds
+# Assisted Installer URLs.
 - name: Gather Agent details
-  ansible.builtin.shell: oc describe agent -n {{ caas_agent_namespace }} > {{ _gather_dir }}/caas/hosting-cluster/agents-describe 2>&1 || echo "no agents found" > {{ _gather_dir }}/caas/hosting-cluster/agents-describe
+  ansible.builtin.shell: |
+    oc describe agent -n {{ caas_agent_namespace }} 2>&1 \
+      | sed -E -e 's/([?&]api_key=)[^&[:space:]"]+/\1<REDACTED>/g' \
+      > {{ _gather_dir }}/caas/hosting-cluster/agents-describe \
+      || echo "no agents found" > {{ _gather_dir }}/caas/hosting-cluster/agents-describe
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false

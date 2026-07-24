@@ -95,6 +95,7 @@
     return_content: true
     validate_certs: false
   register: _sct_list
+  no_log: true
 
 - name: Create NS-only server cluster template for CaaS
   ansible.builtin.uri:
@@ -115,6 +116,7 @@
           ipv4Gateway: "{{ caas_server_cluster_template_gateway }}"
     validate_certs: false
     status_code: [200, 201]
+  no_log: true
   when: _sct_list.json.data | selectattr('name', 'equalto', caas_server_cluster_template_name) | list | length == 0
 
 - name: Report Netris networking configuration
