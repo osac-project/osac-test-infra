@@ -26,6 +26,10 @@ PublishPort=127.0.0.1:9102:8000
 EnvironmentFile=%h/.monitoring-server/.env
 
 Environment=OWNER=osac-project
+# Tool defaults to 20s if unset -- far more aggressive than this dashboard
+# data needs, and it shares PRIVATE_GITHUB_TOKEN's rate-limit budget with
+# workflow-exporter (90s interval). 60s matches that same order of magnitude.
+Environment=REFRESH_INTERVAL=60
 
 [Service]
 Restart=always

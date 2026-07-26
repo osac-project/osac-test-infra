@@ -472,6 +472,35 @@ EOF
         echo "    Podman parallel downloads configured."
     fi
 
+    # Pin rootless podman's storage paths explicitly. podman 6.0.0 has been
+    # observed (on osac-ci-1) to sometimes fail to auto-detect the rootless
+    # RunRoot/GraphRoot and fall back to root-mode defaults instead -- this
+    # only surfaces on service restart (already-running containers are
+    # unaffected), which made it a nasty latent trap for quadlet units. These
+    # values match what rootless podman resolves to when it's working
+    # correctly, so writing them explicitly is a no-op on unaffected machines.
+    RUNNER_UID=$(id -u "${RUNNER_USER}")
+    STORAGE_CONF="${RUNNER_HOME}/.config/containers/storage.conf"
+    if [[ ! -f "${STORAGE_CONF}" ]]; then
+        cat > "${STORAGE_CONF}" <<EOF
+[storage]
+driver = "overlay"
+runroot = "/run/user/${RUNNER_UID}/containers"
+graphroot = "${RUNNER_HOME}/.local/share/containers/storage"
+
+[storage.options]
+additionalimagestores = [
+]
+
+[storage.options.pull_options]
+enable_partial_images = "false"
+
+[storage.options.overlay]
+mountopt = "nodev,metacopy=on"
+EOF
+        echo "    Podman rootless storage paths pinned explicitly."
+    fi
+
     # Register as local server
     SERVERS_FILE="${CT_CONFIG_DIR}/servers.json"
     if [[ ! -f "${SERVERS_FILE}" ]]; then
