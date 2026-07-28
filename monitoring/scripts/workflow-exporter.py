@@ -66,7 +66,7 @@ JOB_COLUMNS = [
     "pr_url", "pr_display", "status",
     "conclusion", "event", "trigger", "duration_s", "duration", "actor",
     "url", "created_at", "updated_at", "run_number", "run_attempt",
-    "failed_step", "steps_json", "failure_reason",
+    "failed_step", "steps_json", "failure_reason", "runner_name",
 ]
 
 # ---------------------------------------------------------------------------
@@ -257,7 +257,7 @@ class WorkflowExporter:
             # schema, so a DB from before pr_url/pr_display existed needs
             # an explicit migration.
             existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
-            for col in ("pr_url", "pr_display", "failure_reason"):
+            for col in ("pr_url", "pr_display", "failure_reason", "runner_name"):
                 if col not in existing_cols:
                     conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT DEFAULT ''")
             conn.execute("""
@@ -910,6 +910,7 @@ class WorkflowExporter:
             "updated_at": ended,
             "run_number": run.get("run_number", 0),
             "run_attempt": run.get("run_attempt", 1),
+            "runner_name": "",
         }
 
     @staticmethod
@@ -936,7 +937,15 @@ class WorkflowExporter:
         return resp.json().get("total_count", 0)
 
     def _fetch_active_runs(self, repo):
-        """Fetch current queued and in_progress runs for the active list."""
+        """Fetch current queued and in_progress runs for the active list.
+
+        Also resolves which machine each run is on -- the whole point of
+        the active list is "what's running right now", so runner_name
+        matters more here than anywhere else. Active runs are few (this
+        is only called when repo has queued/in_progress runs at all), so
+        the extra per-run _fetch_run_jobs call doesn't meaningfully add
+        to rate-limit usage.
+        """
         runs = []
         for status in ("queued", "in_progress"):
             resp = self._get(
@@ -947,7 +956,11 @@ class WorkflowExporter:
                 for run in resp.json().get("workflow_runs", []):
                     if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
                         continue
-                    runs.append(self._make_job_record(run, repo))
+                    record = self._make_job_record(run, repo)
+                    jobs = self._fetch_run_jobs(repo, run["id"])
+                    if jobs:
+                        record["runner_name"] = self._extract_runner_names(jobs)
+                    runs.append(record)
         return runs
 
     def _recent_completed(self, repo):
@@ -1041,6 +1054,17 @@ class WorkflowExporter:
                     pass
         return steps
 
+    @staticmethod
+    def _extract_runner_names(jobs):
+        """Extract the machine(s) a run's job(s) executed on.
+
+        Usually one job per run, but matrix strategies can have several --
+        returns a sorted, deduplicated, comma-joined string rather than a
+        single value so that case is never silently collapsed to one name.
+        """
+        names = sorted({j["runner_name"] for j in jobs if j.get("runner_name")})
+        return ", ".join(names)
+
     def _needs_upsert(self, run):
         """Whether `run` (a raw GitHub API run object) is worth fetching
         job-level details for and upserting -- true if it's not stored at
@@ -1101,6 +1125,7 @@ class WorkflowExporter:
                     )
                     continue
                 if jobs:
+                    record["runner_name"] = self._extract_runner_names(jobs)
                     if conclusion == "failure":
                         failed = self._extract_failed_steps(jobs)
                         record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
@@ -1170,6 +1195,7 @@ class WorkflowExporter:
                 )
                 continue
             if jobs:
+                record["runner_name"] = self._extract_runner_names(jobs)
                 if conclusion == "failure":
                     failed = self._extract_failed_steps(jobs)
                     record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
@@ -1254,6 +1280,7 @@ class WorkflowExporter:
                         )
                         continue
                     if jobs:
+                        record["runner_name"] = self._extract_runner_names(jobs)
                         if conclusion == "failure":
                             failed = self._extract_failed_steps(jobs)
                             record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
@@ -1320,6 +1347,7 @@ class WorkflowExporter:
                         continue
                     failed = []
                     if jobs:
+                        record["runner_name"] = self._extract_runner_names(jobs)
                         if conclusion == "failure":
                             failed = self._extract_failed_steps(jobs)
                             record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
@@ -1447,6 +1475,9 @@ class WorkflowExporter:
           failure_reason - infra, test, or unknown (only meaningful
                       together with status=failure; see
                       _classify_failure_reason)
+          runner    - filter by machine/runner name (substring match --
+                      runner_name can hold more than one name for
+                      matrix-strategy runs)
           search    - free-text substring match across workflow, repo,
                       trigger, branch, PR, display name, and actor
         """
@@ -1457,6 +1488,7 @@ class WorkflowExporter:
         job_type_filter = self._parse_grafana_param(params, "job_type")
         category_filter = self._parse_grafana_param(params, "category")
         failure_reason_filter = self._parse_grafana_param(params, "failure_reason")
+        runner_filter = self._parse_grafana_param(params, "runner")
         search_filter = self._parse_grafana_param(params, "search")
         search_lower = search_filter.lower() if search_filter else None
         limit = self._parse_limit(params)
@@ -1506,6 +1538,9 @@ class WorkflowExporter:
         if failure_reason_filter:
             where.append("LOWER(failure_reason) = :failure_reason")
             args["failure_reason"] = failure_reason_filter.lower()
+        if runner_filter:
+            where.append("LOWER(runner_name) LIKE :runner")
+            args["runner"] = f"%{runner_filter.lower()}%"
         if wf_filters:
             where.append("(" + " OR ".join(
                 f"LOWER(workflow) LIKE :wf{i}" for i in range(len(wf_filters))
@@ -1562,6 +1597,10 @@ class WorkflowExporter:
                 if (workflow_name_filter
                         and workflow_name_filter.lower()
                         not in job.get("workflow", "").lower()):
+                    return False
+                if (runner_filter
+                        and runner_filter.lower()
+                        not in job.get("runner_name", "").lower()):
                     return False
                 if allowed_events and job.get("event") not in allowed_events:
                     return False
@@ -1750,6 +1789,23 @@ class WorkflowExporter:
         jobs = self.get_jobs_json(params)
         names = sorted(set(j.get("workflow", "unknown") for j in jobs))
         return [{"workflow": n, "__text": n, "__value": n} for n in names]
+
+    def get_runners_json(self, params):
+        """Return distinct machine/runner names from the job history.
+
+        runner_name can hold more than one comma-joined name for a single
+        job (matrix strategies), so this splits those back into individual
+        machine names rather than offering the joined string as one option.
+
+        Returns: [{"runner": "...", "__text": "...", "__value": "..."}, ...]
+        """
+        jobs = self.get_jobs_json(params)
+        names = set()
+        for j in jobs:
+            for name in (j.get("runner_name") or "").split(", "):
+                if name:
+                    names.add(name)
+        return [{"runner": n, "__text": n, "__value": n} for n in sorted(names)]
 
     def get_failed_steps_json(self, params):
         """Return failure counts by step name for jobs matching the filters.
@@ -2160,6 +2216,18 @@ class ExporterHandler(BaseHTTPRequestHandler):
             params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             workflows = self.exporter.get_workflows_json(params)
             payload = json.dumps(workflows, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
+        elif parsed.path == "/api/runners":
+            params = parse_qs(parsed.query)
+            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
+            params["active"] = ["true"]
+            runners = self.exporter.get_runners_json(params)
+            payload = json.dumps(runners, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")

@@ -583,6 +583,13 @@
             ]
           },
           {
+            "matcher": { "id": "byName", "options": "runner_name" },
+            "properties": [
+              { "id": "displayName", "value": "Machine" },
+              { "id": "custom.width", "value": 140 }
+            ]
+          },
+          {
             "matcher": { "id": "byName", "options": "branch" },
             "properties": [
               { "id": "displayName", "value": "Branch" },
@@ -693,7 +700,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs?limit=200&active=true&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&status=${status_filter}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs?limit=200&active=true&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&status=${status_filter}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -703,6 +710,7 @@
             { "selector": "status", "text": "status", "type": "string" },
             { "selector": "repo", "text": "repo", "type": "string" },
             { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "runner_name", "text": "runner_name", "type": "string" },
             { "selector": "display_name", "text": "display_name", "type": "string" },
             { "selector": "category", "text": "category", "type": "string" },
             { "selector": "branch", "text": "branch", "type": "string" },
@@ -747,6 +755,13 @@
               { "id": "displayName", "value": "Workflow" },
               { "id": "custom.width", "value": 200 },
               { "id": "links", "value": [{ "title": "Open in GitHub", "url": "${__data.fields.url}", "targetBlank": true }] }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "runner_name" },
+            "properties": [
+              { "id": "displayName", "value": "Machine" },
+              { "id": "custom.width", "value": 140 }
             ]
           },
           {
@@ -863,7 +878,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs?status=failure&limit=100&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs?status=failure&limit=100&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -872,6 +887,7 @@
           "columns": [
             { "selector": "repo", "text": "repo", "type": "string" },
             { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "runner_name", "text": "runner_name", "type": "string" },
             { "selector": "display_name", "text": "display_name", "type": "string" },
             { "selector": "category", "text": "category", "type": "string" },
             { "selector": "branch", "text": "branch", "type": "string" },
@@ -985,6 +1001,35 @@
           "source": "url",
           "format": "table",
           "url": "http://127.0.0.1:9103/api/workflows",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "__text", "text": "__text", "type": "string" },
+            { "selector": "__value", "text": "__value", "type": "string" }
+          ]
+        },
+        "current": { "text": "All", "value": "All" },
+        "options": [],
+        "includeAll": true,
+        "allValue": "All",
+        "multi": false,
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
+        "hide": 0
+      },
+      {
+        "name": "machine",
+        "label": "Machine",
+        "type": "query",
+        "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/runners",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "",
           "columns": [
