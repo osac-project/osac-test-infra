@@ -141,52 +141,53 @@ class WorkflowExporter:
     # permanent single-occurrence entry bloating every workflow-grouped panel.
     IGNORED_EVENTS = {"dynamic"}
 
-    # Steps in e2e-vmaas-full-install.yml's `e2e` job that are infra
-    # setup/teardown, not the actual product/test path -- a failure here
-    # means CI broke, not that OSAC broke. Used to classify presubmit
-    # failures into failure_reason "infra" vs "test" (see
-    # _classify_failure_reason). "Set up job" is GitHub Actions' own
-    # auto-injected first step, not something in our YAML.
-    INFRA_STEPS = frozenset({
-        "Set up job",
-        "Checkout repository",
-        "Validate and bootstrap",
-        "Authorize fork PR",
-        "Fetch and write secrets",
-        "Prepare cluster environment",
-        "Boot cluster clone",
-        "Teardown",
+    # Steps across e2e flavors (VMaaS, BMaaS, CaaS, CaaS Netris) that
+    # represent the product actually being installed/tested, as opposed to
+    # CI plumbing (checkout, secret-fetching, cluster/infra provisioning,
+    # teardown, notifications). Deliberately a *small*, stable allowlist
+    # of "real work" steps rather than an ever-growing list of every infra
+    # step name -- each e2e flavor invents its own setup/teardown step
+    # names (e.g. BMaaS's "Setup virtual BareMetalHosts", Netris's "Deploy
+    # Netris lab"), so enumerating infra steps requires updating this list
+    # every time a new flavor ships; enumerating the few genuine test/
+    # install steps does not. A step failing here means OSAC itself likely
+    # broke; anything else failing means CI/environment broke instead.
+    # Used to classify presubmit failures into failure_reason "infra" vs
+    # "test" (see _classify_failure_reason).
+    TEST_STEPS = frozenset({
+        "Install OSAC",
+        "Deploy OSAC (make deploy-osac)",
+        "Deploy OSAC from snapshot (make deploy-osac)",
+        "Run E2E tests",
+        "Run CaaS e2e tests",
     })
 
     @staticmethod
     def _classify_failure_reason(category, failed_steps):
-        """category: only "e2e" jobs get classified -- INFRA_STEPS matches
-        e2e-vmaas-full-install.yml's specific step names, several of which
-        (e.g. "Checkout repository", "Teardown") are generic names other
-        repos' non-e2e workflows also happen to use, so applying this
-        outside e2e would misclassify those as infra failures. Returns
-        "n/a" for any other category.
+        """category: only "e2e" jobs get classified. Returns "n/a" for
+        any other category.
 
         failed_steps: the list from _extract_failed_steps
-        ([{"display":.., "step":..}, ...]). Returns "infra" if any failed
-        step is in INFRA_STEPS, "test" if there's failure detail but none
-        of it is an infra step, and "infra" too when there's no per-step
-        detail at all (e.g. the job itself shows conclusion "cancelled"
-        with zero recorded steps even though the run's overall conclusion
-        is "failure" -- a real observed case: a runner-level crash/timeout
-        that GitHub cancelled mid-job). A genuine product/test failure
-        always produces step-level data (a red "Run E2E tests" step); the
-        total absence of any step data is itself an infra-level symptom,
-        not an ambiguous third category.
+        ([{"display":.., "step":..}, ...]). Returns "test" if any failed
+        step is in TEST_STEPS (OSAC's own install/test execution), "infra"
+        if there's failure detail but none of it is a test step, and
+        "infra" too when there's no per-step detail at all (e.g. the job
+        itself shows conclusion "cancelled" with zero recorded steps even
+        though the run's overall conclusion is "failure" -- a real
+        observed case: a runner-level crash/timeout that GitHub cancelled
+        mid-job). A genuine product/test failure always produces step-
+        level data (a red "Run E2E tests" step); the total absence of any
+        step data is itself an infra-level symptom, not an ambiguous
+        third category.
         """
         if category != "e2e":
             return "n/a"
         if not failed_steps:
             return "infra"
         for f in failed_steps:
-            if f["step"] in WorkflowExporter.INFRA_STEPS:
-                return "infra"
-        return "test"
+            if f["step"] in WorkflowExporter.TEST_STEPS:
+                return "test"
+        return "infra"
 
     @staticmethod
     def _categorize_workflow(name):
@@ -289,6 +290,7 @@ class WorkflowExporter:
         self._purge_ignored_events_if_needed()
         self._recategorize_jobs_if_needed()
         self._reclassify_failure_reasons_if_needed()
+        self._clean_hosted_runner_noise_if_needed()
 
     def _purge_ignored_events_if_needed(self):
         """One-time cleanup of already-stored jobs whose event is now in
@@ -336,26 +338,24 @@ class WorkflowExporter:
                 )
 
     def _reclassify_failure_reasons_if_needed(self):
-        """One-time backfill of failure_reason for already-stored failed jobs.
+        """Re-apply _classify_failure_reason to already-stored failed jobs.
 
         failure_reason is computed at ingestion time from live per-step API
-        data (_classify_failure_reason), but rows stored before this field
-        existed only have the already-flattened `failed_step` text ("job ->
-        step; job2 -> step2"). Re-parses that stored text (no GitHub API
-        calls needed) so existing history gets classified too, not just new
-        rows. Also re-processes rows already stored as "unknown" -- an
-        earlier version of _classify_failure_reason used that as a
-        catch-all for jobs with no per-step data at all, before "the total
-        absence of step data is itself an infra-level symptom" was
-        recognized as always meaning "infra". Safe to re-run: no-op once
-        every failed row already matches what _classify_failure_reason
-        would assign today.
+        data, but rows stored before this field existed only have the
+        already-flattened `failed_step` text ("job -> step; job2 -> step2").
+        Re-parses that stored text (no GitHub API calls needed) so existing
+        history gets (re)classified too, not just new rows. Also re-checks
+        rows already classified "infra" or "test" -- a TEST_STEPS change
+        (e.g. covering a new e2e flavor's step names) only affects new rows
+        unless existing ones are re-walked here, same rationale as
+        _recategorize_jobs_if_needed for WORKFLOW_CATEGORIES. Safe to
+        re-run every startup: no-op once every failed row already matches
+        what _classify_failure_reason would assign today.
         """
         with self._db() as conn:
             rows = conn.execute(
-                "SELECT id, category, failed_step FROM jobs "
-                "WHERE conclusion = 'failure' AND "
-                "(failure_reason IS NULL OR failure_reason = '' OR failure_reason = 'unknown')"
+                "SELECT id, category, failed_step, failure_reason FROM jobs "
+                "WHERE conclusion = 'failure'"
             ).fetchall()
             updated = 0
             for row in rows:
@@ -365,13 +365,43 @@ class WorkflowExporter:
                     if entry
                 ]
                 reason = self._classify_failure_reason(row["category"], steps)
-                conn.execute(
-                    "UPDATE jobs SET failure_reason = ? WHERE id = ?", (reason, row["id"])
-                )
-                updated += 1
+                if reason != row["failure_reason"]:
+                    conn.execute(
+                        "UPDATE jobs SET failure_reason = ? WHERE id = ?", (reason, row["id"])
+                    )
+                    updated += 1
             if updated:
                 logger.info(
-                    "Backfilled failure_reason for %d already-stored failed job(s)", updated
+                    "Reclassified failure_reason for %d already-stored failed job(s)", updated
+                )
+
+    def _clean_hosted_runner_noise_if_needed(self):
+        """Strip GitHub-hosted runner entries ("GitHub Actions <id>") from
+        runner_name on already-stored rows -- that exclusion was added
+        after runner_name tracking already existed, so rows ingested in
+        between have the noise baked in. Pure string cleanup on the
+        already-stored value, no GitHub API calls needed. Safe to re-run:
+        no-op once every stored row is already clean.
+        """
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT id, runner_name FROM jobs WHERE runner_name LIKE '%GitHub Actions %'"
+            ).fetchall()
+            updated = 0
+            for row in rows:
+                names = [
+                    n for n in row["runner_name"].split(", ")
+                    if n and not n.startswith("GitHub Actions ")
+                ]
+                cleaned = ", ".join(names)
+                if cleaned != row["runner_name"]:
+                    conn.execute(
+                        "UPDATE jobs SET runner_name = ? WHERE id = ?", (cleaned, row["id"])
+                    )
+                    updated += 1
+            if updated:
+                logger.info(
+                    "Cleaned GitHub-hosted-runner noise from %d already-stored job(s)", updated
                 )
 
     def _migrate_json_cache_if_needed(self):
@@ -1061,8 +1091,16 @@ class WorkflowExporter:
         Usually one job per run, but matrix strategies can have several --
         returns a sorted, deduplicated, comma-joined string rather than a
         single value so that case is never silently collapsed to one name.
+
+        Excludes GitHub-hosted runners ("GitHub Actions <id>", GitHub's
+        default display name for its own hosted runners) -- those aren't
+        our fleet, carry no useful "which machine" signal, and are
+        ephemeral/unstable identifiers anyway.
         """
-        names = sorted({j["runner_name"] for j in jobs if j.get("runner_name")})
+        names = sorted({
+            j["runner_name"] for j in jobs
+            if j.get("runner_name") and not j["runner_name"].startswith("GitHub Actions ")
+        })
         return ", ".join(names)
 
     def _needs_upsert(self, run):
@@ -1472,9 +1510,9 @@ class WorkflowExporter:
           since     - ISO 8601 timestamp, only return jobs created at or after
           until     - ISO 8601 timestamp, only return jobs created before
           job_type  - periodic, presubmit, or manual
-          failure_reason - infra, test, or unknown (only meaningful
-                      together with status=failure; see
-                      _classify_failure_reason)
+          failure_reason - infra or test (see _classify_failure_reason).
+                      Implies status=failure and takes precedence over
+                      the status param if both are given.
           runner    - filter by machine/runner name (substring match --
                       runner_name can hold more than one name for
                       matrix-strategy runs)
@@ -1526,7 +1564,17 @@ class WorkflowExporter:
         # -- DB-backed completed-job history -----------------------------
         where = []
         args = {"limit": limit}
-        if status_filter:
+        if failure_reason_filter:
+            # Picking a failure reason implies "only failures" -- the same
+            # effect as also picking status=failure. Takes precedence over
+            # status_filter since Grafana has no native way to make one
+            # dropdown's selection change another dropdown's displayed
+            # value, so this is how "selecting Failure Reason behaves as
+            # if Status were set to Failed" actually gets enforced.
+            where.append("conclusion = 'failure'")
+            where.append("LOWER(failure_reason) = :failure_reason")
+            args["failure_reason"] = failure_reason_filter.lower()
+        elif status_filter:
             where.append("conclusion = :status")
             args["status"] = status_filter
         if repo_filter:
@@ -1535,9 +1583,6 @@ class WorkflowExporter:
         if category_filter:
             where.append("LOWER(category) = :category")
             args["category"] = category_filter.lower()
-        if failure_reason_filter:
-            where.append("LOWER(failure_reason) = :failure_reason")
-            args["failure_reason"] = failure_reason_filter.lower()
         if runner_filter:
             where.append("LOWER(runner_name) LIKE :runner")
             args["runner"] = f"%{runner_filter.lower()}%"
@@ -1584,6 +1629,11 @@ class WorkflowExporter:
         # so they never displace history.
         if include_active:
             def matches_active(job):
+                if failure_reason_filter:
+                    # Active (queued/in_progress) jobs are never
+                    # conclusion == "failure" yet -- same precedence as
+                    # the SQL branch above.
+                    return False
                 if status_filter and job.get("conclusion") != status_filter:
                     return False
                 if repo_filter and job["repo"] != repo_filter:
@@ -1979,7 +2029,7 @@ class WorkflowExporter:
                     if not entry:
                         continue
                     step = entry.split(" → ")[-1]
-                    if step in self.INFRA_STEPS:
+                    if step not in self.TEST_STEPS:
                         infra_by_step[step] = infra_by_step.get(step, 0) + 1
             elif reason == "test":
                 test_total += 1
