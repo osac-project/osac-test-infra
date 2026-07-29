@@ -45,7 +45,7 @@ def network_class(grpc: GRPCClient) -> str:
     response: dict[str, Any] = grpc.call(service="osac.public.v1.NetworkClasses/List")
     items = response.get("items", [])
     assert items, "No network classes found; set OSAC_NETWORK_CLASS"
-    return items[0]["id"]
+    return items[0]["metadata"]["name"]
 
 
 def _delete_subnet_teardown(

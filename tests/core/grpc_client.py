@@ -27,10 +27,10 @@ class GRPCClient:
         return json.loads(run(*self._build_args(service=service, data=data)))
 
     def create_compute_instance(self, *, catalog_item: str, subnet_ids: list[str]) -> str:
-        attachments = [{"subnet": sid} for sid in subnet_ids]
+        attachments = [{"subnet": {"id": sid}} for sid in subnet_ids]
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ComputeInstances/Create",
-            data={"object": {"spec": {"catalog_item": catalog_item, "network_attachments": attachments}}},
+            data={"object": {"spec": {"catalog_item": {"id": catalog_item}, "network_attachments": attachments}}},
         )
         return response["object"]["id"]
 
@@ -51,7 +51,7 @@ class GRPCClient:
         return self.call(
             service=f"{PUBLIC_API}.ComputeInstances/Update",
             data={
-                "object": {"id": uuid, "spec": {"template": template, "restart_requested_at": timestamp}},
+                "object": {"id": uuid, "spec": {"template": {"name": template}, "restart_requested_at": timestamp}},
                 "updateMask": {"paths": ["spec.restart_requested_at"]},
             },
         )
@@ -62,7 +62,10 @@ class GRPCClient:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
             data={
-                "object": {"metadata": {"name": name}, "spec": {"network_class": network_class, "ipv4_cidr": ipv4_cidr}}
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {"network_class": {"name": network_class}, "ipv4_cidr": ipv4_cidr},
+                }
             },
         )
         return response["object"]["id"]
@@ -85,7 +88,7 @@ class GRPCClient:
             data={
                 "object": {
                     "metadata": {"name": name},
-                    "spec": {"virtual_network": virtual_network, "ipv4_cidr": ipv4_cidr},
+                    "spec": {"virtual_network": {"id": virtual_network}, "ipv4_cidr": ipv4_cidr},
                 }
             },
         )
@@ -118,7 +121,7 @@ class GRPCClient:
     def create_security_group(self, *, name: str, virtual_network: str) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.SecurityGroups/Create",
-            data={"object": {"metadata": {"name": name}, "spec": {"virtual_network": virtual_network}}},
+            data={"object": {"metadata": {"name": name}, "spec": {"virtual_network": {"id": virtual_network}}}},
         )
         return response["object"]["id"]
 
@@ -198,7 +201,7 @@ class GRPCClient:
     def create_external_ip(self, *, name: str, pool: str) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={"object": {"metadata": {"name": name}, "spec": {"pool": pool}}},
+            data={"object": {"metadata": {"name": name}, "spec": {"pool": {"id": pool}}}},
         )
         return response["object"]["id"]
 
@@ -220,7 +223,7 @@ class GRPCClient:
             data={
                 "object": {
                     "metadata": {"name": name},
-                    "spec": {"external_ip": external_ip, "compute_instance": compute_instance},
+                    "spec": {"external_ip": {"id": external_ip}, "compute_instance": {"id": compute_instance}},
                 }
             },
         )
@@ -241,7 +244,12 @@ class GRPCClient:
     def create_cluster_catalog_item(
         self, *, name: str, template: str, published: bool = True, field_definitions: list[dict[str, Any]] | None = None
     ) -> str:
-        obj: dict[str, Any] = {"metadata": {"name": name}, "title": name, "template": template, "published": published}
+        obj: dict[str, Any] = {
+            "metadata": {"name": name},
+            "title": name,
+            "template": {"name": template},
+            "published": published,
+        }
         if field_definitions is not None:
             obj["field_definitions"] = field_definitions
         response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Create", data={"object": obj})
@@ -269,7 +277,12 @@ class GRPCClient:
     def create_compute_instance_catalog_item(
         self, *, name: str, template: str, published: bool = True, field_definitions: list[dict[str, Any]] | None = None
     ) -> str:
-        obj: dict[str, Any] = {"metadata": {"name": name}, "title": name, "template": template, "published": published}
+        obj: dict[str, Any] = {
+            "metadata": {"name": name},
+            "title": name,
+            "template": {"name": template},
+            "published": published,
+        }
         if field_definitions is not None:
             obj["field_definitions"] = field_definitions
         response: dict[str, Any] = self.call(
@@ -378,7 +391,7 @@ class GRPCClient:
             "metadata": {"name": name},
             "title": title,
             "description": description,
-            "template": template,
+            "template": {"name": template},
             "published": True,
         }
         if field_definitions is not None:
