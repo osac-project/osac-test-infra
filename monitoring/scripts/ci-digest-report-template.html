@@ -184,26 +184,34 @@ function showTip(evt, text) { tooltip.textContent = text; tooltip.style.opacity 
 function hideTip() { tooltip.style.opacity = 0; }
 
 // Escapes a value for use as HTML element content (innerHTML text nodes,
-// e.g. `<td>${esc(p.repo)}</td>`). Most of what this wraps (bucket labels,
-// outcome names) is our own fixed backend output, but step names and repo
-// names ultimately trace back to GitHub Actions workflow YAML, so this is
-// applied at every such site rather than assuming that data stays clean.
+// e.g. `<td>${esc(p.repo)}</td>`) or as an HTML attribute value (e.g.
+// `data-tip="${esc(x)}"`). Most of what this wraps (bucket labels, outcome
+// names) is our own fixed backend output, but step names and repo names
+// ultimately trace back to GitHub Actions workflow YAML, so this is applied
+// at every such site rather than assuming that data stays clean. Quotes are
+// escaped too so the same function is safe in both contexts -- harmless in
+// plain text, required once a value is placed inside a quoted attribute.
 function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-// Escapes a value for embedding inside an inline event-handler attribute
-// that itself contains a single-quoted JS string literal, e.g.
-// `onmousemove="showTip(event, '${escAttr(x)}')"`. Two escaping passes are
-// required here, in this order: backslash and single-quote first (so the
-// value can't terminate the JS string early), then & and " (so it can't
-// terminate the surrounding double-quoted HTML attribute either) -- esc()
-// alone is not sufficient for this context since it doesn't touch quotes.
-function escAttr(s) {
   return String(s)
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
     .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;');
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+// Tooltips are bound as data-tip attributes (escaped via esc() above) plus a
+// delegated mousemove/mouseleave listener, rather than inline
+// onmousemove="showTip(event, '...')" handlers -- an inline handler embeds
+// the value inside a JS string literal, which needs its own escaping pass
+// on top of HTML-attribute escaping (backslash/quote first, then &/") to
+// stay safe; reading the already HTML-decoded value from .dataset instead
+// avoids that second escaping pass entirely. Call this once after setting
+// a chart container's innerHTML.
+function bindTooltips(container) {
+  container.querySelectorAll('[data-tip]').forEach(el => {
+    el.addEventListener('mousemove', evt => showTip(evt, el.dataset.tip));
+    el.addEventListener('mouseleave', hideTip);
+  });
 }
 // Rounds up to a "nice" axis max (1/2/5/10 * a power of 10 matching maxVal's
 // magnitude) instead of a fixed step, so low-volume charts (maxVal ~5) don't
@@ -343,11 +351,13 @@ document.getElementById('mergeDesc').textContent =
     const barW = Math.max(3, (hours / maxH) * plotW);
     svg += `<text x="${padL - 14}" y="${y + rowH/2 + 5}" text-anchor="end" style="font-size:14px;fill:var(--text-secondary);font-weight:500">${esc(r.repo)}</text>`;
     svg += `<rect x="${padL}" y="${y + 7}" width="${barW}" height="${rowH - 18}" rx="6" fill="${repoColor(r.repo)}"
-              onmousemove="showTip(event, '${escAttr(r.repo)}: ${r.median_approval_to_merge_display} (${r.approved_count}/${r.count})')" onmouseleave="hideTip()"/>`;
+              data-tip="${esc(r.repo)}: ${r.median_approval_to_merge_display} (${r.approved_count}/${r.count})"/>`;
     svg += `<text x="${padL + barW + 12}" y="${y + rowH/2 + 5}" text-anchor="start" style="font-size:15px;font-weight:700;fill:var(--text-primary)">${r.median_approval_to_merge_display} (${r.approved_count}/${r.count})</text>`;
   });
   svg += '</svg>';
-  document.getElementById('mergeChart').innerHTML = svg;
+  const mergeChartEl = document.getElementById('mergeChart');
+  mergeChartEl.innerHTML = svg;
+  bindTooltips(mergeChartEl);
 })();
 
 // e2e jobs-per-pr tiles
@@ -409,10 +419,10 @@ document.getElementById('prTiles').innerHTML = [
                      L ${xLeft + barW - r} ${y} A ${r} ${r} 0 0 1 ${xLeft + barW} ${y + r}
                      L ${xLeft + barW} ${y + segH} L ${xLeft} ${y + segH} Z"
                      fill="${seg.color}"
-                     onmousemove="showTip(event, '${escAttr(d.bucket)} jobs — ${seg.key}: ${seg.n} (${pctv}%)')" onmouseleave="hideTip()"/>`;
+                     data-tip="${esc(d.bucket)} jobs — ${seg.key}: ${seg.n} (${pctv}%)"/>`;
           } else {
             svg += `<rect x="${xLeft}" y="${y}" width="${barW}" height="${drawH}" fill="${seg.color}"
-                      onmousemove="showTip(event, '${escAttr(d.bucket)} jobs — ${seg.key}: ${seg.n} (${pctv}%)')" onmouseleave="hideTip()"/>`;
+                      data-tip="${esc(d.bucket)} jobs — ${seg.key}: ${seg.n} (${pctv}%)"/>`;
           }
           yCursor = y;
         });
@@ -428,11 +438,13 @@ document.getElementById('prTiles').innerHTML = [
   svg += `<text class="axis-label" x="${W/2}" y="${H - 2}" text-anchor="middle" style="fill:var(--text-secondary)">e2e job runs on the PR</text>`;
   svg += '</svg>';
 
+  const histChartEl = document.getElementById('histChart');
+  histChartEl.innerHTML = svg;
+  bindTooltips(histChartEl);
+
   document.getElementById('histLegend').innerHTML = [
     ['Success', 'var(--status-good)'], ['Cancelled', 'var(--status-warning)'], ['Failure', 'var(--status-critical)'],
   ].map(([label, color]) => `<div class="item"><span class="swatch" style="background:${color}"></span>${label}</div>`).join('');
-
-  document.getElementById('histChart').innerHTML = svg;
 })();
 
 document.getElementById('topPrsBody').innerHTML = jp.top_prs.map(p =>
@@ -462,13 +474,15 @@ document.getElementById('topPrsBody').innerHTML = jp.top_prs.map(p =>
     const y = padT + plotH - barH;
     const pctv = total ? ((d.count / total) * 100).toFixed(1) : '0.0';
     svg += `<rect x="${cx - barW/2}" y="${y}" width="${barW}" height="${barH}" fill="${colors[d.outcome]}" rx="4"
-              onmousemove="showTip(event, '${escAttr(d.outcome)}: ${d.count.toLocaleString()} (${pctv}%)')" onmouseleave="hideTip()"/>`;
+              data-tip="${esc(d.outcome)}: ${d.count.toLocaleString()} (${pctv}%)"/>`;
     svg += `<text class="bar-label" x="${cx}" y="${y - 6}" style="font-weight:600">${d.count.toLocaleString()}</text>`;
     svg += `<text class="bar-label" x="${cx}" y="${y - 20}">${pctv}%</text>`;
     svg += `<text class="cat-label" x="${cx}" y="${padT + plotH + 20}">${esc(d.outcome)}</text>`;
   });
   svg += '</svg>';
-  document.getElementById('outcomesChart').innerHTML = svg;
+  const outcomesChartEl = document.getElementById('outcomesChart');
+  outcomesChartEl.innerHTML = svg;
+  bindTooltips(outcomesChartEl);
 })();
 
 document.getElementById('flakeVal').textContent = D.flake_rate == null ? 'no successes yet' : pct(D.flake_rate);

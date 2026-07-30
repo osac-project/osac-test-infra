@@ -1164,14 +1164,18 @@ class WorkflowExporter:
                     continue
                 if jobs:
                     record["runner_name"] = self._extract_runner_names(jobs)
-                    if conclusion == "failure":
-                        failed = self._extract_failed_steps(jobs)
-                        record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
-                        if failed:
-                            record["failed_step"] = "; ".join(
-                                f["display"] for f in failed
-                            )
                     record["steps"] = self._extract_step_durations(jobs)
+                if conclusion == "failure":
+                    # jobs may be [] (fetch succeeded, zero job entries) --
+                    # classify anyway rather than leaving failure_reason
+                    # unset; _classify_failure_reason treats "no per-step
+                    # detail at all" as infra, which is correct here too.
+                    failed = self._extract_failed_steps(jobs or [])
+                    record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
+                    if failed:
+                        record["failed_step"] = "; ".join(
+                            f["display"] for f in failed
+                        )
 
                 if self._upsert_job(record):
                     new += 1
@@ -1234,12 +1238,16 @@ class WorkflowExporter:
                 continue
             if jobs:
                 record["runner_name"] = self._extract_runner_names(jobs)
-                if conclusion == "failure":
-                    failed = self._extract_failed_steps(jobs)
-                    record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
-                    if failed:
-                        record["failed_step"] = "; ".join(f["display"] for f in failed)
                 record["steps"] = self._extract_step_durations(jobs)
+            if conclusion == "failure":
+                # jobs may be [] (fetch succeeded, zero job entries) --
+                # classify anyway rather than leaving failure_reason unset;
+                # _classify_failure_reason treats "no per-step detail at
+                # all" as infra, which is correct here too.
+                failed = self._extract_failed_steps(jobs or [])
+                record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
+                if failed:
+                    record["failed_step"] = "; ".join(f["display"] for f in failed)
             if self._upsert_job(record):
                 new += 1
 
@@ -1319,14 +1327,19 @@ class WorkflowExporter:
                         continue
                     if jobs:
                         record["runner_name"] = self._extract_runner_names(jobs)
-                        if conclusion == "failure":
-                            failed = self._extract_failed_steps(jobs)
-                            record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
-                            if failed:
-                                record["failed_step"] = "; ".join(
-                                    f["display"] for f in failed
-                                )
                         record["steps"] = self._extract_step_durations(jobs)
+                    if conclusion == "failure":
+                        # jobs may be [] (fetch succeeded, zero job entries)
+                        # -- classify anyway rather than leaving
+                        # failure_reason unset; _classify_failure_reason
+                        # treats "no per-step detail at all" as infra,
+                        # which is correct here too.
+                        failed = self._extract_failed_steps(jobs or [])
+                        record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
+                        if failed:
+                            record["failed_step"] = "; ".join(
+                                f["display"] for f in failed
+                            )
 
                     if self._upsert_job(record):
                         loaded += 1
@@ -1386,14 +1399,19 @@ class WorkflowExporter:
                     failed = []
                     if jobs:
                         record["runner_name"] = self._extract_runner_names(jobs)
-                        if conclusion == "failure":
-                            failed = self._extract_failed_steps(jobs)
-                            record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
-                            if failed:
-                                record["failed_step"] = "; ".join(
-                                    f["display"] for f in failed
-                                )
                         record["steps"] = self._extract_step_durations(jobs)
+                    if conclusion == "failure":
+                        # jobs may be [] (fetch succeeded, zero job entries)
+                        # -- classify anyway rather than leaving
+                        # failure_reason unset; _classify_failure_reason
+                        # treats "no per-step detail at all" as infra,
+                        # which is correct here too.
+                        failed = self._extract_failed_steps(jobs or [])
+                        record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed)
+                        if failed:
+                            record["failed_step"] = "; ".join(
+                                f["display"] for f in failed
+                            )
 
                     if not self._upsert_job(record):
                         continue  # stored row's run_attempt was already current
@@ -1513,9 +1531,10 @@ class WorkflowExporter:
           failure_reason - infra or test (see _classify_failure_reason).
                       Implies status=failure and takes precedence over
                       the status param if both are given.
-          runner    - filter by machine/runner name (substring match --
-                      runner_name can hold more than one name for
-                      matrix-strategy runs)
+          runner    - filter by machine/runner name (matches a
+                      "<runner>-runner-" prefix, case-insensitively;
+                      runner_name can hold more than one comma-joined
+                      name for matrix-strategy runs)
           search    - free-text substring match across workflow, repo,
                       trigger, branch, PR, display name, and actor
         """
@@ -1774,7 +1793,16 @@ class WorkflowExporter:
                   an object so it plots the same way as histogram --
                   one field selector per row instead of one per column)
         """
-        jobs = [j for j in self.get_jobs_json(params) if j.get("pr_display")]
+        # Force active=false regardless of what the caller passed: an
+        # in-progress job has no conclusion yet, so it would inflate
+        # total_jobs/distinct_prs/each bucket's "prs" count (which count
+        # every matching job) while being silently excluded from the
+        # success/cancelled/failure breakdown (which only counts jobs with
+        # a matching conclusion) -- breaking the documented invariant that
+        # a bucket's outcome segments sum to its bar height.
+        completed_params = dict(params)
+        completed_params["active"] = ["false"]
+        jobs = [j for j in self.get_jobs_json(completed_params) if j.get("pr_display")]
         by_pr = {}
         outcome_counts = {"success": 0, "cancelled": 0, "failure": 0}
         for job in jobs:

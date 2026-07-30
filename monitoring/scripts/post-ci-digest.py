@@ -26,7 +26,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import re
 import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
@@ -540,17 +539,17 @@ def build_digest_html(data):
     with open(HTML_TEMPLATE_PATH, encoding="utf-8") as f:
         template = f.read()
     # GitHub-derived strings (PR titles, step names, ...) end up in this
-    # payload verbatim, so escape sequences that would let them break out of
-    # the <script> block or the JS string context it's embedded in: a literal
-    # "</script>" (HTML's script-data end tag match is case-insensitive, so
-    # "</Script>"/"</SCRIPT>" must be caught too) would close the tag early,
-    # "<!--" can confuse HTML parsing inside a script body, and U+2028/U+2029
-    # are valid JSON but illegal inside pre-ES2019 JS string/line contexts.
-    payload = re.sub(
-        r"</script", r"<\/script", json.dumps(data, default=str), flags=re.IGNORECASE
-    )
+    # payload verbatim. The template embeds it unquoted (`const D =
+    # __DIGEST_DATA_JSON__;`), so every "<" in the output is necessarily
+    # inside a quoted JSON string value -- JSON's own syntax never uses "<"
+    # structurally. Escaping every "<" as a JS unicode escape is therefore
+    # always safe and, unlike matching "</script" specifically, also covers
+    # "<!--", "<script", "<style", and any other tag-like sequence in one
+    # pass, regardless of case. U+2028/U+2029 are valid JSON but illegal
+    # inside pre-ES2019 JS string/line contexts.
     payload = (
-        payload.replace("<!--", "<\\!--")
+        json.dumps(data, default=str)
+        .replace("<", "\\u003c")
         .replace(" ", "\\u2028")
         .replace(" ", "\\u2029")
     )
