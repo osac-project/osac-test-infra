@@ -29,12 +29,12 @@ def unique_name(prefix: str) -> str:
 
 @pytest.fixture(scope="session")
 def cluster_template() -> str:
-    return env("OSAC_CLUSTER_TEMPLATE", "osac.templates.ocp_4_17_small")
+    return env("OSAC_CLUSTER_TEMPLATE", "ocp-small")
 
 
 @pytest.fixture(scope="session")
 def compute_instance_template() -> str:
-    return env("OSAC_VM_TEMPLATE", "osac.templates.ocp_virt_vm")
+    return env("OSAC_VM_TEMPLATE", "ocp-virt-vm")
 
 
 @pytest.fixture(scope="session")

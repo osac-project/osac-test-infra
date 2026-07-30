@@ -76,7 +76,7 @@ All configuration via environment variables. Works identically in local dev and 
 | `KUBECONFIG` | `~/.kube/config` | Kubeconfig for the hub (management cluster) |
 | `OSAC_VM_KUBECONFIG` | *(required for vmaas tests)* | Kubeconfig for the VM cluster (where VirtualMachines run). In single-cluster setups, set this to the same value as `KUBECONFIG`. Only used by vmaas test suite. |
 | `OSAC_FULFILLMENT_ADDRESS` | auto-derived | Fulfillment API address (`host:port`) |
-| `OSAC_VM_TEMPLATE` | `osac.templates.ocp_virt_vm` | ComputeInstance template to use |
+| `OSAC_VM_TEMPLATE` | `ocp-virt-vm` | ComputeInstance template to use |
 | `OSAC_SERVICE_ACCOUNT` | `admin` | ServiceAccount for token generation |
 | `OSAC_CLI_PATH` | `osac` | Path to the CLI binary |
 | `TEST` | (none) | pytest `-k` filter — run only tests matching this name substring |
