@@ -1,6 +1,10 @@
 ---
 # Native from day one (trivial, no wrapping benefit) -- mirrors
-# scripts/machine-init.sh's install_packages().
+# scripts/machine-init.sh's install_packages(). The AGENT_STORAGE dir and
+# osac-hosts-entry install that used to also live in install_packages()
+# moved to create_runner_user() (see runner_user.yml, which wraps that step
+# as-is) -- they're chowned/associated with RUNNER_USER, which doesn't
+# exist yet at packages-install time.
 - name: Install system packages
   ansible.builtin.dnf:
     name:
@@ -18,6 +22,7 @@
       - dnsmasq
       - python3
       - python3-pip
+      - virt-install
     state: present
 
 - name: Install ansible-builder (needed for AAP execution-environment images)

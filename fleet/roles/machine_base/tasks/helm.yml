@@ -1,0 +1,8 @@
+---
+# Phase 1: wrap as-is -- already idempotent (skips install if the pinned
+# version is present).
+- name: Run machine-init.sh helm
+  ansible.builtin.script: "{{ playbook_dir }}/../../scripts/machine-init.sh helm"
+  register: _helm_result
+  changed_when: "'already installed' not in _helm_result.stdout"
+  failed_when: _helm_result.rc != 0

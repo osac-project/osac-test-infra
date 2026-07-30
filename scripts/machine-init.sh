@@ -17,6 +17,7 @@
 #   cluster-tool   Install and configure cluster-tool for local CI mode
 #   vault          Install Vault CLI
 #   grpcurl        Install grpcurl
+#   helm           Install Helm
 #   verify         Show installed versions and storage info
 #
 # Options:
@@ -59,7 +60,7 @@ while [[ $# -gt 0 ]]; do
             sed -n '2,/^[^#]/{ /^#/s/^# \?//p }' "$0"
             exit 0
             ;;
-        packages|runner-user|services|oc|osac|cluster-tool|vault|grpcurl|verify)
+        packages|runner-user|services|oc|osac|cluster-tool|vault|grpcurl|helm|verify)
             STEPS+=("$1")
             shift
             ;;
@@ -73,7 +74,7 @@ done
 
 # Default: run all steps
 if [[ ${#STEPS[@]} -eq 0 ]]; then
-    STEPS=(packages runner-user services oc osac cluster-tool vault grpcurl verify)
+    STEPS=(packages runner-user services oc osac cluster-tool vault grpcurl helm verify)
 fi
 
 ###############################################################################
@@ -129,18 +130,6 @@ install_packages() {
     # ansible-builder is needed for building AAP execution-environment images
     python3 -m pip install --quiet ansible-builder
 
-    # Agent VM storage directory for CaaS E2E
-    AGENT_STORAGE="/data/osac-storage"
-    if [[ ! -d "${AGENT_STORAGE}" ]]; then
-        mkdir -p "${AGENT_STORAGE}"
-        echo "    Created ${AGENT_STORAGE}"
-    fi
-    chown "${RUNNER_USER}:${RUNNER_USER}" "${AGENT_STORAGE}"
-
-    # Install osac-hosts-entry helper for /etc/hosts management
-    install -m 0755 "${SCRIPT_DIR}/osac-hosts-entry" /usr/local/sbin/osac-hosts-entry
-    echo "    Installed /usr/local/sbin/osac-hosts-entry"
-
     echo "    Done."
 }
 
@@ -165,6 +154,34 @@ create_runner_user() {
     if ! id -nG "${RUNNER_USER}" | grep -qw libvirt; then
         usermod -aG libvirt "${RUNNER_USER}"
         echo "    Added to libvirt group."
+    fi
+
+    # Agent VM storage directory for CaaS E2E. Lives here (not in
+    # install_packages()) because it's chowned to RUNNER_USER, which must
+    # already exist -- install_packages() runs before this step in the
+    # fixed execution order at the bottom of this script, so a chown there
+    # would fail on a genuinely fresh machine.
+    AGENT_STORAGE="/data/osac-storage"
+    if [[ ! -d "${AGENT_STORAGE}" ]]; then
+        mkdir -p "${AGENT_STORAGE}"
+        echo "    Created ${AGENT_STORAGE}"
+    fi
+    chown "${RUNNER_USER}:${RUNNER_USER}" "${AGENT_STORAGE}"
+
+    # Install osac-hosts-entry helper for /etc/hosts management (referenced
+    # by the HOSTS_ENTRY_ADD/HOSTS_ENTRY_REMOVE sudoers grants below). Guard
+    # on the sibling file existing -- when this script runs via Ansible's
+    # ansible.builtin.script module, only this one file is copied to the
+    # remote host (no siblings), so SCRIPT_DIR won't have osac-hosts-entry
+    # next to it. fleet/roles/machine_base/tasks/runner_user.yml installs it
+    # separately via a native copy task for that path.
+    if [[ -f "${SCRIPT_DIR}/osac-hosts-entry" ]]; then
+        install -m 0755 "${SCRIPT_DIR}/osac-hosts-entry" /usr/local/sbin/osac-hosts-entry
+        echo "    Installed /usr/local/sbin/osac-hosts-entry"
+    elif [[ ! -f /usr/local/sbin/osac-hosts-entry ]]; then
+        echo "    WARNING: ${SCRIPT_DIR}/osac-hosts-entry not found and" >&2
+        echo "    /usr/local/sbin/osac-hosts-entry doesn't already exist -- skipping." >&2
+        echo "    Install it manually or via the fleet Ansible role." >&2
     fi
 
     RUNNER_HOME=$(eval echo "~${RUNNER_USER}")
@@ -601,6 +618,34 @@ install_grpcurl() {
 }
 
 ###############################################################################
+# Step: helm
+###############################################################################
+install_helm() {
+    echo "==> Installing Helm..."
+
+    local version="3.21.2"
+
+    if command -v helm &>/dev/null && [[ "$(helm version --short 2>&1)" == *"v${version}"* ]]; then
+        echo "    helm already installed: $(helm version --short)"
+        return 0
+    fi
+
+    local tarball="helm-v${version}-linux-amd64.tar.gz"
+    local url="https://get.helm.sh/${tarball}"
+    local sha256="0a745198de24545d0055cd8414bc8d2ba10363ef5f5d38369ea1b399671cc083"
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf "${tmp}"' RETURN
+
+    echo "    Downloading helm v${version}..."
+    curl -sL -o "${tmp}/${tarball}" "${url}"
+    echo "${sha256}  ${tmp}/${tarball}" | sha256sum -c -
+    tar xzf "${tmp}/${tarball}" -C "${tmp}"
+    install -m 0755 "${tmp}/linux-amd64/helm" /usr/local/bin/helm
+    echo "    helm installed: $(helm version --short)"
+}
+
+###############################################################################
 # Step: verify
 ###############################################################################
 run_verify() {
@@ -634,6 +679,7 @@ run_verify() {
     _check "skopeo"         "skopeo --version"
     _check "vault"          "vault --version"
     _check "grpcurl"        "grpcurl --version"
+    _check "helm"           "helm version --short"
     _check "jq"             "jq --version"
     _check "ansible-builder" "ansible-builder --version"
 
@@ -683,6 +729,7 @@ should_run osac          && install_osac
 should_run cluster-tool  && setup_cluster_tool
 should_run vault         && install_vault
 should_run grpcurl       && install_grpcurl
+should_run helm          && install_helm
 should_run verify        && run_verify
 
 echo ""

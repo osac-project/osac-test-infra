@@ -44,6 +44,10 @@
   ansible.builtin.import_tasks: grpcurl.yml
   tags: [grpcurl]
 
+- name: Helm
+  ansible.builtin.import_tasks: helm.yml
+  tags: [helm]
+
 - name: Verify
   ansible.builtin.import_tasks: verify.yml
   tags: [verify]
