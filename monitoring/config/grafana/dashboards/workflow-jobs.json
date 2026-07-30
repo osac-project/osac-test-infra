@@ -605,7 +605,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=e2e&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "histogram",
           "columns": [
@@ -654,7 +654,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=e2e&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "top_prs",
           "columns": [
@@ -713,7 +713,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=e2e&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
           "url_options": { "method": "GET", "data": "" },
           "root_selector": "outcomes",
           "columns": [
@@ -787,7 +787,7 @@
               { "id": "custom.width", "value": 70 },
               { "id": "links", "value": [
                 { "title": "Open PR", "url": "${__data.fields.pr_url}", "targetBlank": true },
-                { "title": "Filter this dashboard by this PR", "url": "/d/osac-workflow-jobs/osac-ci-workflow-jobs?orgId=1&from=${__from}&to=${__to}&var-search=${__value.raw:percentencode}&var-category=${category:percentencode}&var-repo_filter=${repo_filter:percentencode}&var-workflow_name=${workflow_name:percentencode}&var-status_filter=${status_filter:percentencode}&var-job_type=${job_type:percentencode}&var-merge_similar=${merge_similar:percentencode}", "targetBlank": false }
+                { "title": "Filter this dashboard by this PR", "url": "/d/osac-workflow-jobs/osac-ci-workflow-jobs?orgId=1&from=${__from}&to=${__to}&var-search=${__value.raw:percentencode}&var-category=${category:percentencode}&var-repo_filter=${repo_filter:percentencode}&var-workflow_name=${workflow_name:percentencode}&var-status_filter=${status_filter:percentencode}&var-job_type=${job_type:percentencode}&var-merge_similar=${merge_similar:percentencode}&var-machine=${machine:percentencode}&var-failure_reason=${failure_reason:percentencode}", "targetBlank": false }
               ] }
             ]
           },
@@ -962,7 +962,7 @@
               { "id": "custom.width", "value": 70 },
               { "id": "links", "value": [
                 { "title": "Open PR", "url": "${__data.fields.pr_url}", "targetBlank": true },
-                { "title": "Filter this dashboard by this PR", "url": "/d/osac-workflow-jobs/osac-ci-workflow-jobs?orgId=1&from=${__from}&to=${__to}&var-search=${__value.raw:percentencode}&var-category=${category:percentencode}&var-repo_filter=${repo_filter:percentencode}&var-workflow_name=${workflow_name:percentencode}&var-status_filter=${status_filter:percentencode}&var-job_type=${job_type:percentencode}&var-merge_similar=${merge_similar:percentencode}", "targetBlank": false }
+                { "title": "Filter this dashboard by this PR", "url": "/d/osac-workflow-jobs/osac-ci-workflow-jobs?orgId=1&from=${__from}&to=${__to}&var-search=${__value.raw:percentencode}&var-category=${category:percentencode}&var-repo_filter=${repo_filter:percentencode}&var-workflow_name=${workflow_name:percentencode}&var-status_filter=${status_filter:percentencode}&var-job_type=${job_type:percentencode}&var-merge_similar=${merge_similar:percentencode}&var-machine=${machine:percentencode}&var-failure_reason=${failure_reason:percentencode}", "targetBlank": false }
               ] }
             ]
           },
@@ -1170,11 +1170,13 @@
       {
         "name": "workflow_name",
         "label": "Workflow",
+        "description": "Static allowlist snapshotted from live workflow names across all tracked repos -- it will go stale as workflows are added/renamed. Regenerate via: curl -s 'http://127.0.0.1:9103/api/workflows' | jq -r '.[].workflow' | sort -u -f",
         "type": "custom",
-        "query": "All,Ansible Lint,Audit workflow logs,Build container image,Build execution environment,Bump submodules,Bump submodules and pinned refs,CI,CI daily digest,Check AuthConfig Rego matches base,Check Floating Image Tags,Check image tags match submodules,Check pull request,Cleanup nightly branches,Container image,Deploy monitoring stack,E2E BMaaS Full Install,E2E CaaS,E2E CaaS Full Install,E2E CaaS Full Install (EC2),E2E CaaS Netris,E2E CaaS Netris Full Install,E2E EC2 Ephemeral Runner,E2E Full Install Tests,E2E Tests,E2E VMaaS,E2E VMaaS Full Install,E2E VMaaS Full Install Tests,E2E VMaaS Tests,EC2 Ephemeral Runner Orphan Watchdog,Helm Integration Test,Helm Lint,Integration Tests,Kustomize Build,Mirror Envoy Image,Nightly Build,Publish Helm Charts,Publish OpenAPI,Publish binaries,Publish charts,Publish proto,Remove ok-to-test on new push,Scan E2E logs,Secret scanning,Slash Command,Unit Tests,Validate monitoring stack,check-generated-code,e2e,integration,pre-commit",
+        "query": "All,.github/workflows/e2e-test.yml,Ansible Lint,Audit workflow logs,Build container image,Build execution environment,Bump submodules,Bump submodules and pinned refs,CI,CI daily digest,Check AuthConfig Rego matches base,Check Floating Image Tags,Check image tags match submodules,Check pull request,Cleanup nightly branches,Container image,Deploy monitoring stack,E2E BMaaS Full Install,E2E CaaS,E2E CaaS Full Install,E2E CaaS Full Install (EC2),E2E CaaS Netris,E2E CaaS Netris Full Install,E2E EC2 Ephemeral Runner,E2E Full Install Tests,E2E Tests,E2E VMaaS,E2E VMaaS Full Install,E2E VMaaS Full Install Tests,E2E VMaaS Tests,EC2 Ephemeral Runner Orphan Watchdog,Helm Integration Test,Helm Lint,Integration Tests,Kustomize Build,Mirror Envoy Image,Nightly Build,Publish Helm Charts,Publish OpenAPI,Publish binaries,Publish charts,Publish proto,Remove ok-to-test on new push,Scan E2E logs,Secret scanning,Slash Command,Unit Tests,Validate monitoring stack,check-generated-code,e2e,integration,pre-commit",
         "current": { "text": "All", "value": "All", "selected": true },
         "options": [
           { "text": "All", "value": "All", "selected": true },
+          { "text": ".github/workflows/e2e-test.yml", "value": ".github/workflows/e2e-test.yml", "selected": false },
           { "text": "Ansible Lint", "value": "Ansible Lint", "selected": false },
           { "text": "Audit workflow logs", "value": "Audit workflow logs", "selected": false },
           { "text": "Build container image", "value": "Build container image", "selected": false },

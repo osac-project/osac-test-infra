@@ -1584,8 +1584,20 @@ class WorkflowExporter:
             where.append("LOWER(category) = :category")
             args["category"] = category_filter.lower()
         if runner_filter:
-            where.append("LOWER(runner_name) LIKE :runner")
-            args["runner"] = f"%{runner_filter.lower()}%"
+            # Anchored to the "-runner-" boundary rather than a bare
+            # substring -- runner_name is a single "box-runner-NN" or a
+            # comma-joined list of those (matrix runs). An unanchored
+            # substring would let a box filter like "osac-42" also match
+            # "osac-421-runner-01"; requiring "-runner-" immediately after
+            # the filter value (either at the start of the string, or
+            # right after a ", " separator) rules that out while still
+            # matching every real box name the Machine dropdown can send.
+            where.append(
+                "(LOWER(runner_name) LIKE :runner_start OR LOWER(runner_name) LIKE :runner_mid)"
+            )
+            runner_lower = runner_filter.lower()
+            args["runner_start"] = f"{runner_lower}-runner-%"
+            args["runner_mid"] = f"%, {runner_lower}-runner-%"
         if wf_filters:
             where.append("(" + " OR ".join(
                 f"LOWER(workflow) LIKE :wf{i}" for i in range(len(wf_filters))
@@ -1648,10 +1660,13 @@ class WorkflowExporter:
                         and workflow_name_filter.lower()
                         not in job.get("workflow", "").lower()):
                     return False
-                if (runner_filter
-                        and runner_filter.lower()
-                        not in job.get("runner_name", "").lower()):
-                    return False
+                if runner_filter:
+                    # Same "-runner-" boundary anchoring as the SQL branch
+                    # above, checked against each comma-separated token
+                    # individually rather than the raw joined string.
+                    tokens = [t.strip().lower() for t in job.get("runner_name", "").split(",")]
+                    if not any(t.startswith(f"{runner_filter.lower()}-runner-") for t in tokens):
+                        return False
                 if allowed_events and job.get("event") not in allowed_events:
                     return False
                 if search_lower:
@@ -1945,23 +1960,6 @@ class WorkflowExporter:
         jobs = self.get_jobs_json(params)
         names = sorted(set(j.get("workflow", "unknown") for j in jobs))
         return [{"workflow": n, "__text": n, "__value": n} for n in names]
-
-    def get_runners_json(self, params):
-        """Return distinct machine/runner names from the job history.
-
-        runner_name can hold more than one comma-joined name for a single
-        job (matrix strategies), so this splits those back into individual
-        machine names rather than offering the joined string as one option.
-
-        Returns: [{"runner": "...", "__text": "...", "__value": "..."}, ...]
-        """
-        jobs = self.get_jobs_json(params)
-        names = set()
-        for j in jobs:
-            for name in (j.get("runner_name") or "").split(", "):
-                if name:
-                    names.add(name)
-        return [{"runner": n, "__text": n, "__value": n} for n in sorted(names)]
 
     def get_failed_steps_json(self, params):
         """Return failure counts by step name for jobs matching the filters.
@@ -2372,18 +2370,6 @@ class ExporterHandler(BaseHTTPRequestHandler):
             params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             workflows = self.exporter.get_workflows_json(params)
             payload = json.dumps(workflows, default=str)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(payload.encode())
-
-        elif parsed.path == "/api/runners":
-            params = parse_qs(parsed.query)
-            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
-            params["active"] = ["true"]
-            runners = self.exporter.get_runners_json(params)
-            payload = json.dumps(runners, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")

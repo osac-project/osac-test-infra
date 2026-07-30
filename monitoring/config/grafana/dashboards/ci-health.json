@@ -478,7 +478,7 @@
         "name": "repo_regex",
         "label": "Repository (trend panel)",
         "type": "custom",
-        "query": "All,osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer",
+        "query": "All,osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer,bare-metal-fulfillment-operator",
         "current": { "text": "All", "value": ".*", "selected": true },
         "options": [
           { "text": "All", "value": ".*", "selected": true },
@@ -486,7 +486,8 @@
           { "text": "osac-operator", "value": "osac-operator", "selected": false },
           { "text": "fulfillment-service", "value": "fulfillment-service", "selected": false },
           { "text": "osac-test-infra", "value": "osac-test-infra", "selected": false },
-          { "text": "osac-installer", "value": "osac-installer", "selected": false }
+          { "text": "osac-installer", "value": "osac-installer", "selected": false },
+          { "text": "bare-metal-fulfillment-operator", "value": "bare-metal-fulfillment-operator", "selected": false }
         ],
         "includeAll": false,
         "multi": false,
@@ -495,11 +496,13 @@
       {
         "name": "workflow_name",
         "label": "Workflow",
+        "description": "Static allowlist snapshotted from live workflow names across all tracked repos -- it will go stale as workflows are added/renamed. Regenerate via: curl -s 'http://127.0.0.1:9103/api/workflows' | jq -r '.[].workflow' | sort -u -f",
         "type": "custom",
-        "query": "All,Ansible Lint,Audit workflow logs,Build container image,Build execution environment,Bump submodules,Bump submodules and pinned refs,CI,CI daily digest,Check AuthConfig Rego matches base,Check Floating Image Tags,Check image tags match submodules,Check pull request,Cleanup nightly branches,Container image,Deploy monitoring stack,E2E BMaaS Full Install,E2E CaaS,E2E CaaS Full Install,E2E CaaS Full Install (EC2),E2E CaaS Netris,E2E CaaS Netris Full Install,E2E EC2 Ephemeral Runner,E2E Full Install Tests,E2E Tests,E2E VMaaS,E2E VMaaS Full Install,E2E VMaaS Full Install Tests,E2E VMaaS Tests,EC2 Ephemeral Runner Orphan Watchdog,Helm Integration Test,Helm Lint,Integration Tests,Kustomize Build,Mirror Envoy Image,Nightly Build,Publish Helm Charts,Publish OpenAPI,Publish binaries,Publish charts,Publish proto,Remove ok-to-test on new push,Scan E2E logs,Secret scanning,Slash Command,Unit Tests,Validate monitoring stack,check-generated-code,e2e,integration,pre-commit",
+        "query": "All,.github/workflows/e2e-test.yml,Ansible Lint,Audit workflow logs,Build container image,Build execution environment,Bump submodules,Bump submodules and pinned refs,CI,CI daily digest,Check AuthConfig Rego matches base,Check Floating Image Tags,Check image tags match submodules,Check pull request,Cleanup nightly branches,Container image,Deploy monitoring stack,E2E BMaaS Full Install,E2E CaaS,E2E CaaS Full Install,E2E CaaS Full Install (EC2),E2E CaaS Netris,E2E CaaS Netris Full Install,E2E EC2 Ephemeral Runner,E2E Full Install Tests,E2E Tests,E2E VMaaS,E2E VMaaS Full Install,E2E VMaaS Full Install Tests,E2E VMaaS Tests,EC2 Ephemeral Runner Orphan Watchdog,Helm Integration Test,Helm Lint,Integration Tests,Kustomize Build,Mirror Envoy Image,Nightly Build,Publish Helm Charts,Publish OpenAPI,Publish binaries,Publish charts,Publish proto,Remove ok-to-test on new push,Scan E2E logs,Secret scanning,Slash Command,Unit Tests,Validate monitoring stack,check-generated-code,e2e,integration,pre-commit",
         "current": { "text": "All", "value": "All", "selected": true },
         "options": [
           { "text": "All", "value": "All", "selected": true },
+          { "text": ".github/workflows/e2e-test.yml", "value": ".github/workflows/e2e-test.yml", "selected": false },
           { "text": "Ansible Lint", "value": "Ansible Lint", "selected": false },
           { "text": "Audit workflow logs", "value": "Audit workflow logs", "selected": false },
           { "text": "Build container image", "value": "Build container image", "selected": false },

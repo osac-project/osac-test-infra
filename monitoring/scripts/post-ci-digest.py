@@ -26,6 +26,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
@@ -312,9 +313,9 @@ def build_digest_image(data):
 
     _text(fig, a_rect[0] + 0.02, cy - 0.028,
           "Periodic Failures — Infra vs. Test", 11.5, COLOR_NAVY, weight="bold")
-    for i, (label, data) in enumerate((("24h", periodic_infra_24h), ("72h", periodic_infra_72h))):
+    for i, (label, window) in enumerate((("24h", periodic_infra_24h), ("72h", periodic_infra_72h))):
         ly = cy - 0.058 - i * 0.032
-        infra_n, test_n, tot = data["infra_total"], data["test_total"], data["total_failures"]
+        infra_n, test_n, tot = window["infra_total"], window["test_total"], window["total_failures"]
         _text(fig, a_rect[0] + 0.03, ly, f"{label}:", 10, "#3a5a78", weight="bold")
         _text(fig, a_rect[0] + 0.10, ly, f"{infra_n} infra", 10,
               COLOR_RED if infra_n else "#8ba3b8", weight="bold")
@@ -330,10 +331,10 @@ def build_digest_image(data):
     _text(fig, b_rect[0] + 0.02, b_rect[1] + b_rect[3] - 0.075,
           "Infra = CI's fault (setup/teardown), not the product's", 10.5, COLOR_TEXT_MUTED)
 
-    for i, (label, data) in enumerate((("Last 24h", infra_24h), ("Last 72h", infra_72h))):
+    for i, (label, window) in enumerate((("Last 24h", infra_24h), ("Last 72h", infra_72h))):
         gx = b_rect[0] + 0.14 + i * 0.22
         gy = b_rect[1] + 0.20
-        infra_n, test_n, tot = data["infra_total"], data["test_total"], data["total_failures"]
+        infra_n, test_n, tot = window["infra_total"], window["test_total"], window["total_failures"]
         frac = infra_n / tot if tot else 0
         # Dome opens downward -- title sits above the dome's peak, counts
         # sit below its flat base.
@@ -538,9 +539,22 @@ def build_digest_html(data):
     """
     with open(HTML_TEMPLATE_PATH, encoding="utf-8") as f:
         template = f.read()
-    return template.replace(
-        "__DIGEST_DATA_JSON__", json.dumps(data, default=str)
-    ).encode("utf-8")
+    # GitHub-derived strings (PR titles, step names, ...) end up in this
+    # payload verbatim, so escape sequences that would let them break out of
+    # the <script> block or the JS string context it's embedded in: a literal
+    # "</script>" (HTML's script-data end tag match is case-insensitive, so
+    # "</Script>"/"</SCRIPT>" must be caught too) would close the tag early,
+    # "<!--" can confuse HTML parsing inside a script body, and U+2028/U+2029
+    # are valid JSON but illegal inside pre-ES2019 JS string/line contexts.
+    payload = re.sub(
+        r"</script", r"<\/script", json.dumps(data, default=str), flags=re.IGNORECASE
+    )
+    payload = (
+        payload.replace("<!--", "<\\!--")
+        .replace(" ", "\\u2028")
+        .replace(" ", "\\u2029")
+    )
+    return template.replace("__DIGEST_DATA_JSON__", payload).encode("utf-8")
 
 
 # -- Slack delivery ---------------------------------------------------------
