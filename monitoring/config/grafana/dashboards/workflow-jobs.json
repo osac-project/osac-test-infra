@@ -547,10 +547,187 @@
       ]
     },
     {
+      "title": "E2E Jobs per PR",
+      "description": "How many e2e job runs (including retries/re-runs) land on a PR, bucketed. Bars show the outcome breakdown of the underlying jobs in each bucket -- height is total jobs in that bucket, not PR count (see the PR-count histogram in the full HTML digest report for that view).",
+      "type": "barchart",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 29 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "fillOpacity": 90,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Success" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Cancelled" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failure" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "barWidth": 0.7,
+        "groupWidth": 0.7,
+        "stacking": "normal",
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" },
+        "xTickLabelRotation": 0,
+        "showValue": "never"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "prs": true },
+            "renameByName": { "bucket": "E2E jobs on PR", "success": "Success", "cancelled": "Cancelled", "failure": "Failure" },
+            "indexByName": { "bucket": 0, "success": 1, "cancelled": 2, "failure": 3 }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "histogram",
+          "columns": [
+            { "selector": "bucket", "text": "bucket", "type": "string" },
+            { "selector": "success", "text": "success", "type": "number" },
+            { "selector": "cancelled", "text": "cancelled", "type": "number" },
+            { "selector": "failure", "text": "failure", "type": "number" },
+            { "selector": "prs", "text": "prs", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Top 10 PRs by E2E Job Count",
+      "description": "The specific PRs behind the long tail in the distribution above.",
+      "type": "table",
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 29 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "repo" },
+            "properties": [
+              { "id": "displayName", "value": "Repository" },
+              { "id": "custom.width", "value": 160 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "pr" },
+            "properties": [{ "id": "displayName", "value": "PR" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "jobs" },
+            "properties": [{ "id": "displayName", "value": "E2E Jobs" }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "E2E Jobs", "desc": true }]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "top_prs",
+          "columns": [
+            { "selector": "repo", "text": "repo", "type": "string" },
+            { "selector": "pr", "text": "pr", "type": "string" },
+            { "selector": "jobs", "text": "jobs", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "E2E Job Outcomes",
+      "description": "Every e2e job run in the window, by final conclusion.",
+      "type": "barchart",
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 29 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0 },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Success" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Cancelled" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failure" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "barWidth": 0.6,
+        "legend": { "displayMode": "none" },
+        "tooltip": { "mode": "single" },
+        "xTickLabelRotation": 0,
+        "showValue": "always"
+      },
+      "transformations": [
+        {
+          "id": "rowsToFields",
+          "options": {
+            "mappings": [
+              { "fieldName": "outcome", "handlerKey": "field.name" },
+              { "fieldName": "count", "handlerKey": "field.value" }
+            ]
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/jobs-per-pr?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "outcomes",
+          "columns": [
+            { "selector": "outcome", "text": "outcome", "type": "string" },
+            { "selector": "count", "text": "count", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
       "title": "Recent Runs",
       "description": "All recent workflow runs with status, duration, trigger type, and links. Click column headers to sort.",
       "type": "table",
-      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 29 },
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 38 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {},
@@ -737,7 +914,7 @@
       "title": "Failed Runs Only",
       "description": "Only failed workflow runs, showing which step failed.",
       "type": "table",
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 45 },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 54 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {},
@@ -915,7 +1092,7 @@
       "title": "Data Coverage",
       "description": "Oldest job record currently retained (JOBS_HISTORY_DAYS, see OSAC-2211). If this doesn't go back as far as expected, the exporter may have restarted recently or be mid-backfill.",
       "type": "stat",
-      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 57 },
+      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 66 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {

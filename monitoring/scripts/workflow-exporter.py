@@ -1717,6 +1717,112 @@ class WorkflowExporter:
             result.append(wf_data)
         return sorted(result, key=lambda x: x["workflow"])
 
+    # Job-count-per-PR buckets for the histogram -- single values up to 5
+    # (the bulk of PRs land here), then widening ranges for the long tail
+    # of heavy-retry PRs, so a handful of 50-95-job outliers don't force
+    # every other bucket down to an unreadable sliver.
+    JOBS_PER_PR_BUCKETS = ["1", "2", "3", "4", "5", "6-10", "11-20", "21-50", "51+"]
+
+    @staticmethod
+    def _jobs_per_pr_bucket(count):
+        if count <= 5:
+            return str(count)
+        if count <= 10:
+            return "6-10"
+        if count <= 20:
+            return "11-20"
+        if count <= 50:
+            return "21-50"
+        return "51+"
+
+    def get_jobs_per_pr_json(self, params):
+        """How many e2e job runs (including retries/re-runs) accumulate on
+        each PR, with the same filters as get_jobs_json -- callers
+        typically pass category=e2e, since this question ("how many jobs
+        did this PR need") is specific to e2e, not lint/build noise.
+
+        Groups by (repo, pr_display); jobs with no pr_display (not
+        PR-triggered) are excluded entirely rather than counted as one
+        enormous fake "PR".
+
+        Returns: {"total_jobs": N, "distinct_prs": N, "avg_jobs_per_pr": X,
+                  "median_jobs_per_pr": X, "max_jobs_per_pr": N,
+                  "histogram": [{"bucket": "1", "prs": N, "success": N,
+                                 "cancelled": N, "failure": N}, ...]
+                  (success/cancelled/failure are job-level counts across
+                  every PR in that bucket, not PR-level -- lets a caller
+                  render each bucket's bar as a proportional 3-way stack
+                  without changing what the bar's total height means),
+                  "top_prs": [{"repo":.., "pr":.., "jobs": N}, ...] (top 10),
+                  "outcomes": [{"outcome": "Success", "count": N}, ...]}
+                  (fixed Success/Cancelled/Failure order, list rather than
+                  an object so it plots the same way as histogram --
+                  one field selector per row instead of one per column)
+        """
+        jobs = [j for j in self.get_jobs_json(params) if j.get("pr_display")]
+        by_pr = {}
+        outcome_counts = {"success": 0, "cancelled": 0, "failure": 0}
+        for job in jobs:
+            key = (job["repo"], job["pr_display"])
+            by_pr.setdefault(key, []).append(job.get("conclusion"))
+            c = job.get("conclusion")
+            if c in outcome_counts:
+                outcome_counts[c] += 1
+
+        outcomes = [
+            {"outcome": "Success", "count": outcome_counts["success"]},
+            {"outcome": "Cancelled", "count": outcome_counts["cancelled"]},
+            {"outcome": "Failure", "count": outcome_counts["failure"]},
+        ]
+
+        if not by_pr:
+            return {
+                "total_jobs": 0, "distinct_prs": 0, "avg_jobs_per_pr": 0,
+                "median_jobs_per_pr": 0, "max_jobs_per_pr": 0,
+                "histogram": [
+                    {"bucket": b, "prs": 0, "success": 0, "cancelled": 0, "failure": 0}
+                    for b in self.JOBS_PER_PR_BUCKETS
+                ],
+                "top_prs": [], "outcomes": outcomes,
+            }
+
+        counts = sorted(len(v) for v in by_pr.values())
+        n = len(counts)
+        median = counts[n // 2] if n % 2 else (counts[n // 2 - 1] + counts[n // 2]) / 2
+
+        bucket_counts = {}
+        bucket_outcomes = {b: {"success": 0, "cancelled": 0, "failure": 0} for b in self.JOBS_PER_PR_BUCKETS}
+        for conclusions in by_pr.values():
+            b = self._jobs_per_pr_bucket(len(conclusions))
+            bucket_counts[b] = bucket_counts.get(b, 0) + 1
+            for concl in conclusions:
+                if concl in bucket_outcomes[b]:
+                    bucket_outcomes[b][concl] += 1
+        histogram = [
+            {
+                "bucket": b,
+                "prs": bucket_counts.get(b, 0),
+                "success": bucket_outcomes[b]["success"],
+                "cancelled": bucket_outcomes[b]["cancelled"],
+                "failure": bucket_outcomes[b]["failure"],
+            }
+            for b in self.JOBS_PER_PR_BUCKETS
+        ]
+
+        top = sorted(by_pr.items(), key=lambda kv: -len(kv[1]))[:10]
+        top_prs = [{"repo": k[0], "pr": k[1], "jobs": len(v)} for k, v in top]
+
+        return {
+            "total_jobs": len(jobs),
+            "distinct_prs": n,
+            "avg_jobs_per_pr": round(sum(counts) / n, 2),
+            "median_jobs_per_pr": median,
+            "max_jobs_per_pr": max(counts),
+            "histogram": histogram,
+            "top_prs": top_prs,
+            "outcomes": outcomes,
+        }
+
     def get_flake_rate_json(self, params):
         """Retry-to-green flake rate per workflow, with the same filters as
         get_jobs_json (OSAC-2064).
@@ -2300,6 +2406,17 @@ class ExporterHandler(BaseHTTPRequestHandler):
             params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
             counts = self.exporter.get_counts_by_workflow_json(params)
             payload = json.dumps(counts, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
+        elif parsed.path == "/api/jobs-per-pr":
+            params = parse_qs(parsed.query)
+            params["limit"] = [str(JOBS_HISTORY_MAX_COUNT)]
+            data = self.exporter.get_jobs_per_pr_json(params)
+            payload = json.dumps(data, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
