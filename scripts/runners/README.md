@@ -29,6 +29,22 @@ gh api -X POST orgs/osac-project/actions/runners/registration-token --jq .token
 
 ### Step 3: Install Runners
 
+**Must be run from a real login shell for `github-runner`** (`su - github-runner`,
+not `sudo -u github-runner ...`). `sudo`'s `secure_path` Defaults setting
+silently strips `/usr/local/bin` and `/usr/local/sbin` from `PATH` for any
+`sudo -u`-invoked command -- and `config.sh` captures whatever `PATH` was
+active at registration time into each runner's `.path` file, baking that
+stripped `PATH` in *permanently* for every future job on that runner
+instance. Since `oc`, `helm`, and `cluster-tool` all live under
+`/usr/local/{,s}bin`, this breaks any job step that invokes them by bare name
+(as opposed to sudoers-covered calls to fully-qualified command paths, which
+work regardless). This has bitten real hosts twice (osac-1, osac-2) --
+symptom is `oc: command not found` deep into an otherwise-working job, not an
+obvious registration-time failure. Fix if it happens: overwrite the affected
+runner(s)' `.path` file with the correct `PATH` (compare against a known-good
+runner's `.path`, e.g. `cat action-runners/runner-1/.path` on an
+already-working host) -- no service restart needed, it's read fresh per job.
+
 ```bash
 ./scripts/runners/action-runners-setup.sh <TOKEN> [NUM_RUNNERS]
 ```
