@@ -18,6 +18,7 @@
 #   vault          Install Vault CLI
 #   grpcurl        Install grpcurl
 #   helm           Install Helm
+#   go             Install Go
 #   verify         Show installed versions and storage info
 #
 # Options:
@@ -60,7 +61,7 @@ while [[ $# -gt 0 ]]; do
             sed -n '2,/^[^#]/{ /^#/s/^# \?//p }' "$0"
             exit 0
             ;;
-        packages|runner-user|services|oc|osac|cluster-tool|vault|grpcurl|helm|verify)
+        packages|runner-user|services|oc|osac|cluster-tool|vault|grpcurl|helm|go|verify)
             STEPS+=("$1")
             shift
             ;;
@@ -74,7 +75,7 @@ done
 
 # Default: run all steps
 if [[ ${#STEPS[@]} -eq 0 ]]; then
-    STEPS=(packages runner-user services oc osac cluster-tool vault grpcurl helm verify)
+    STEPS=(packages runner-user services oc osac cluster-tool vault grpcurl helm go verify)
 fi
 
 ###############################################################################
@@ -646,6 +647,36 @@ install_helm() {
 }
 
 ###############################################################################
+# Step: go
+###############################################################################
+install_go() {
+    echo "==> Installing Go..."
+
+    local version="1.26.3"
+
+    if command -v go &>/dev/null && [[ "$(go version 2>&1)" == *"go${version}"* ]]; then
+        echo "    go already installed: $(go version)"
+        return 0
+    fi
+
+    local tarball="go${version}.linux-amd64.tar.gz"
+    local url="https://go.dev/dl/${tarball}"
+    local sha256="2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556"
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf "${tmp}"' RETURN
+
+    echo "    Downloading go v${version}..."
+    curl -sL -o "${tmp}/${tarball}" "${url}"
+    echo "${sha256}  ${tmp}/${tarball}" | sha256sum -c -
+    rm -rf /usr/local/go
+    tar xzf "${tmp}/${tarball}" -C /usr/local
+    ln -sf /usr/local/go/bin/go /usr/local/bin/go
+    ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+    echo "    go installed: $(go version)"
+}
+
+###############################################################################
 # Step: verify
 ###############################################################################
 run_verify() {
@@ -680,6 +711,7 @@ run_verify() {
     _check "vault"          "vault --version"
     _check "grpcurl"        "grpcurl --version"
     _check "helm"           "helm version --short"
+    _check "go"             "go version"
     _check "jq"             "jq --version"
     _check "ansible-builder" "ansible-builder --version"
 
@@ -730,6 +762,7 @@ should_run cluster-tool  && setup_cluster_tool
 should_run vault         && install_vault
 should_run grpcurl       && install_grpcurl
 should_run helm          && install_helm
+should_run go            && install_go
 should_run verify        && run_verify
 
 echo ""

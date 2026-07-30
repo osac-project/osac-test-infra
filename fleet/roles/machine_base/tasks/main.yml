@@ -48,6 +48,10 @@
   ansible.builtin.import_tasks: helm.yml
   tags: [helm]
 
+- name: Go
+  ansible.builtin.import_tasks: go.yml
+  tags: [go]
+
 - name: Verify
   ansible.builtin.import_tasks: verify.yml
   tags: [verify]
