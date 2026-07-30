@@ -24,6 +24,7 @@ Env vars:
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import textwrap
@@ -133,6 +134,35 @@ def fetch_top_failing_workflow(since):
     return failing[0] if failing else None
 
 
+def fetch_jobs_per_pr(since):
+    return _get("/api/jobs-per-pr", category="e2e", since=_iso(since))
+
+
+def gather_digest_data(now):
+    """Single data-gathering pass, shared by both build_digest_image (PNG
+    summary) and build_digest_html (full HTML report) -- each API endpoint
+    is fetched exactly once per digest run rather than once per output
+    format."""
+    h24 = now - timedelta(hours=24)
+    h72 = now - timedelta(hours=72)
+    d7 = now - timedelta(days=7)
+
+    return {
+        "periodic_24h": fetch_periodic_success_rate(h24),
+        "periodic_72h": fetch_periodic_success_rate(h72),
+        "infra_24h": fetch_infra_failures(h24, "presubmit"),
+        "infra_72h": fetch_infra_failures(h72, "presubmit"),
+        "periodic_infra_24h": fetch_infra_failures(h24, "periodic"),
+        "periodic_infra_72h": fetch_infra_failures(h72, "periodic"),
+        "merge_time": fetch_pr_merge_time(d7),
+        "flake_rate": fetch_overall_flake_rate(d7),
+        "mttr": fetch_overall_mttr(d7),
+        "top_failing": fetch_top_failing_workflow(h24),
+        "jobs_per_pr": fetch_jobs_per_pr(d7),
+        "now": now.strftime("%Y-%m-%d %H:%M UTC"),
+    }
+
+
 # -- drawing helpers ----------------------------------------------------
 
 
@@ -235,27 +265,24 @@ def _truncate(s, max_len=26):
 # -- image assembly -------------------------------------------------------
 
 
-def build_digest_image(now):
-    h24 = now - timedelta(hours=24)
-    h72 = now - timedelta(hours=72)
-    d7 = now - timedelta(days=7)
-
-    periodic_24h = fetch_periodic_success_rate(h24)
-    periodic_72h = fetch_periodic_success_rate(h72)
-    infra_24h = fetch_infra_failures(h24, "presubmit")
-    infra_72h = fetch_infra_failures(h72, "presubmit")
-    periodic_infra_24h = fetch_infra_failures(h24, "periodic")
-    periodic_infra_72h = fetch_infra_failures(h72, "periodic")
-    merge_time = fetch_pr_merge_time(d7)
-    flake_rate = fetch_overall_flake_rate(d7)
-    mttr = fetch_overall_mttr(d7)
-    top_failing = fetch_top_failing_workflow(h24)
+def build_digest_image(data):
+    periodic_24h = data["periodic_24h"]
+    periodic_72h = data["periodic_72h"]
+    infra_24h = data["infra_24h"]
+    infra_72h = data["infra_72h"]
+    periodic_infra_24h = data["periodic_infra_24h"]
+    periodic_infra_72h = data["periodic_infra_72h"]
+    merge_time = data["merge_time"]
+    flake_rate = data["flake_rate"]
+    mttr = data["mttr"]
+    top_failing = data["top_failing"]
+    jobs_per_pr = data["jobs_per_pr"]
 
     fig = plt.figure(figsize=(14, 8.5), dpi=180)
     _gradient_background(fig)
 
     _text(fig, 0.03, 0.945, "OSAC CI Daily Digest", 30, COLOR_NAVY, weight="bold")
-    _text(fig, 0.03, 0.895, now.strftime("%Y-%m-%d %H:%M UTC"), 15, "#3a5a78")
+    _text(fig, 0.03, 0.895, data["now"], 15, "#3a5a78")
 
     # -- Card A: Periodic E2E Success Rate + Infra vs. Test (top-left, light)
     # Grown taller (and Card C below it shrunk to match) to fit the
@@ -316,22 +343,37 @@ def build_digest_image(now):
         _text(fig, gx + 0.085, gy - 0.05, f"{test_n}\ntest", 11, COLOR_GREEN, ha="center", weight="bold")
         _text(fig, gx, gy - 0.14, f"({tot} total)", 10, COLOR_TEXT_MUTED, ha="center")
 
-    # Wrapped defensively: INFRA_STEPS names are fixed/known, but with
-    # several distinct steps failing in the same window the joined summary
-    # could otherwise run past the card (or the whole figure) as one
-    # unbroken line.
+    # Capped to the top 3 steps (already sorted by count desc) rather than
+    # every distinct step: TEST_STEPS classifies infra as "anything that
+    # isn't the actual test/install step" (see workflow-exporter.py), so
+    # unlike the old fixed INFRA_STEPS allowlist, the number of distinct
+    # infra step names here is unbounded -- a wide window can list a dozen
+    # different steps, which textwrap alone won't keep from running past
+    # this card's remaining height and into the card below it.
+    def _step_summary(steps, limit=3):
+        shown = ", ".join(f"{s['step']} ({s['count']})" for s in steps[:limit])
+        extra = len(steps) - limit
+        return shown + (f", +{extra} more" if extra > 0 else "")
+
     step_lines = []
     s24 = infra_24h["infra_by_step"]
     s72 = infra_72h["infra_by_step"]
     if s24:
-        step_lines.append("24h: " + ", ".join(f"{s['step']} ({s['count']})" for s in s24))
+        step_lines.append("24h: " + _step_summary(s24))
     if s72:
-        step_lines.append("72h: " + ", ".join(f"{s['step']} ({s['count']})" for s in s72))
+        step_lines.append("72h: " + _step_summary(s72))
     if step_lines:
         wrapped = "\n".join(
             "\n".join(textwrap.wrap(line, width=78)) for line in step_lines
         )
-        _text(fig, b_rect[0] + 0.02, b_rect[1] + 0.02, wrapped, 9.5, COLOR_TEXT_MUTED)
+        # va="top", anchored just below the gauge captions above (gy is the
+        # last loop's value, but both iterations share the same gy) --
+        # va="center" (the _text default) vertically centers a multi-line
+        # block around its anchor, so a tall block grows upward into the
+        # gauge captions *and* downward past the card's bottom edge at the
+        # same time. Anchoring the top and growing downward only is the
+        # predictable direction given how little room is left below.
+        _text(fig, b_rect[0] + 0.02, gy - 0.14 - 0.03, wrapped, 9, COLOR_TEXT_MUTED, va="top")
 
     # -- Card C: Time to Merge -- First Approval (bottom-left, dark) -------
     # Height shrunk to match Card A's growth above (0.02 gap preserved
@@ -444,15 +486,32 @@ def build_digest_image(now):
     top_str = (
         f"{top_failing['workflow']} ({top_failing['failure']})" if top_failing else "None"
     )
+    jobs_per_pr_str = (
+        f"{jobs_per_pr['avg_jobs_per_pr']} avg / {jobs_per_pr['median_jobs_per_pr']} median"
+        if jobs_per_pr["distinct_prs"] else "no e2e PR activity"
+    )
+    outcome_total = sum(o["count"] for o in jobs_per_pr["outcomes"])
+    if outcome_total:
+        outcomes_str = " / ".join(
+            f"{round(o['count'] / outcome_total * 100)}% {o['outcome'].lower()}"
+            for o in jobs_per_pr["outcomes"]
+        )
+    else:
+        outcomes_str = "no e2e job runs"
     lines = [
         ("Flake rate", flake_str),
         ("MTTR", mttr_str),
         ("Top failing workflow (24h)", top_str),
+        ("E2E jobs per PR (7d)", jobs_per_pr_str),
+        ("E2E outcomes (7d)", outcomes_str),
     ]
+    # Spacing shrunk (0.075 -> 0.048) and font size trimmed (12 -> 10.5) to
+    # fit 5 lines in the same card height that used to hold 3 -- see the
+    # full HTML report (linked in the caption) for the un-compressed charts.
     for i, (label, value) in enumerate(lines):
-        ly = d_rect[1] + d_rect[3] - 0.10 - i * 0.075
-        _text(fig, d_rect[0] + 0.03, ly, f"•  {label}:", 12, COLOR_TEXT_MUTED)
-        _text(fig, d_rect[0] + d_rect[2] - 0.03, ly, value, 12, COLOR_TEXT_LIGHT,
+        ly = d_rect[1] + d_rect[3] - 0.095 - i * 0.048
+        _text(fig, d_rect[0] + 0.03, ly, f"•  {label}:", 10.5, COLOR_TEXT_MUTED)
+        _text(fig, d_rect[0] + d_rect[2] - 0.03, ly, value, 10.5, COLOR_TEXT_LIGHT,
               weight="bold", ha="right")
 
     buf = io.BytesIO()
@@ -461,36 +520,68 @@ def build_digest_image(now):
     return buf.getvalue()
 
 
+# -- HTML full report -------------------------------------------------------
+
+HTML_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "ci-digest-report-template.html")
+
+
+def build_digest_html(data):
+    """Render the full interactive HTML report -- a superset of the PNG
+    summary (same underlying data, already gathered once by
+    gather_digest_data) with the charts the static PNG can't show
+    un-compressed: the full infra-vs-test breakdown, per-repo merge times,
+    and the e2e-jobs-per-PR distribution/outcomes. The template is plain
+    HTML/CSS/JS with a single JSON placeholder -- no server-side templating
+    needed, it just embeds `data` as `const D = {...}` for the page's own
+    JS to render client-side, identical to how the design was prototyped
+    and approved before being wired in here.
+    """
+    with open(HTML_TEMPLATE_PATH, encoding="utf-8") as f:
+        template = f.read()
+    return template.replace(
+        "__DIGEST_DATA_JSON__", json.dumps(data, default=str)
+    ).encode("utf-8")
+
+
 # -- Slack delivery ---------------------------------------------------------
 
 
-def upload_image(png_bytes, filename, caption):
-    """Uploads the digest image directly as a new channel message (no
+def upload_files(files, caption):
+    """Uploads one or more files as a single new channel message (no
     separate text message) via Slack's current (2024+) external-upload
-    flow -- the older files.upload endpoint is deprecated. initial_comment
-    becomes the message text, and posting without thread_ts shares it to
-    the channel as a top-level message."""
-    resp = requests.post(
-        "https://slack.com/api/files.getUploadURLExternal",
-        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-        data={"filename": filename, "length": len(png_bytes)},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        print(f"Slack API error (files.getUploadURLExternal): {data.get('error')}", file=sys.stderr)
-        sys.exit(1)
-    upload_url, file_id = data["upload_url"], data["file_id"]
+    flow -- the older files.upload endpoint is deprecated. Each file gets
+    its own getUploadURLExternal call and binary upload, but all of them
+    are attached together in one completeUploadExternal call so they land
+    as one message with multiple attachments, not one message per file.
+    initial_comment becomes the message text; posting without thread_ts
+    shares it to the channel as a top-level message.
 
-    up = requests.post(upload_url, files={"file": (filename, png_bytes, "image/png")}, timeout=60)
-    up.raise_for_status()
+    files: [(filename, content_bytes, mimetype, title), ...]
+    """
+    file_ids = []
+    for filename, content, mimetype, title in files:
+        resp = requests.post(
+            "https://slack.com/api/files.getUploadURLExternal",
+            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+            data={"filename": filename, "length": len(content)},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            print(f"Slack API error (files.getUploadURLExternal, {filename}): {data.get('error')}", file=sys.stderr)
+            sys.exit(1)
+        upload_url, file_id = data["upload_url"], data["file_id"]
+
+        up = requests.post(upload_url, files={"file": (filename, content, mimetype)}, timeout=60)
+        up.raise_for_status()
+        file_ids.append({"id": file_id, "title": title})
 
     resp = requests.post(
         "https://slack.com/api/files.completeUploadExternal",
         headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
         json={
-            "files": [{"id": file_id, "title": "OSAC CI Daily Digest"}],
+            "files": file_ids,
             "channel_id": SLACK_CHANNEL_ID,
             "initial_comment": caption,
         },
@@ -505,21 +596,33 @@ def upload_image(png_bytes, filename, caption):
 
 def main():
     now = datetime.now(timezone.utc)
-    png_bytes = build_digest_image(now)
+    data = gather_digest_data(now)
+    png_bytes = build_digest_image(data)
+    html_bytes = build_digest_html(data)
 
     if DRY_RUN:
-        path = "ci-digest-preview.png"
-        with open(path, "wb") as f:
+        png_path = "ci-digest-preview.png"
+        html_path = "ci-digest-preview.html"
+        with open(png_path, "wb") as f:
             f.write(png_bytes)
-        print(f"Saved preview image: {path}", file=sys.stderr)
+        with open(html_path, "wb") as f:
+            f.write(html_bytes)
+        print(f"Saved preview image: {png_path}", file=sys.stderr)
+        print(f"Saved preview report: {html_path}", file=sys.stderr)
         return
 
     if not SLACK_BOT_TOKEN or not SLACK_CHANNEL_ID:
         print("SLACK_BOT_TOKEN and SLACK_CHANNEL_ID are required unless DRY_RUN=true", file=sys.stderr)
         sys.exit(1)
 
-    caption = f"📊 OSAC CI Daily Digest — {now.strftime('%Y-%m-%d %H:%M UTC')}"
-    upload_image(png_bytes, "ci-digest.png", caption)
+    caption = f"📊 OSAC CI Daily Digest — {now.strftime('%Y-%m-%d %H:%M UTC')} (see the attached report for the full breakdown)"
+    upload_files(
+        [
+            ("ci-digest.png", png_bytes, "image/png", "OSAC CI Daily Digest"),
+            ("ci-digest-report.html", html_bytes, "text/html", "OSAC CI Daily Digest — Full Report"),
+        ],
+        caption,
+    )
 
 
 if __name__ == "__main__":
