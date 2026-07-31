@@ -15,11 +15,15 @@
 # The optional third argument is the containerfile path used to build this
 # component (e.g. "Containerfile" for a standalone single-component repo, or
 # "fulfillment-service/Containerfile" when the component is built from a
-# monorepo checkout). When it has a directory component, that directory name
-# both identifies which submodule to replace (COMPONENT_REPO_NAME alone can't,
-# since a monorepo caller passes the same repo name, e.g. "osac-project/osac",
-# for every component it builds) and scopes the copy to that subdirectory of
-# <component-src-dir> instead of the whole checkout.
+# monorepo checkout, or "osac-aap/execution-environment/execution-environment.yaml"
+# when the containerfile itself is nested further inside the component). Its
+# TOP-LEVEL directory segment both identifies which submodule to replace
+# (COMPONENT_REPO_NAME alone can't, since a monorepo caller passes the same
+# repo name, e.g. "osac-project/osac", for every component it builds) and
+# scopes the copy to that top-level subdirectory of <component-src-dir> --
+# not wherever the containerfile itself happens to sit, since the submodule
+# needs the component's whole directory (e.g. osac-aap's charts/, Makefile,
+# etc.), not just the one nested subdirectory the containerfile lives in.
 
 set -euo pipefail
 
@@ -31,16 +35,16 @@ if [[ ! -d "${COMPONENT_SRC}" ]]; then
   exit 0
 fi
 
-COMPONENT_SUBDIR=""
+HAS_SUBDIR=false
 if [[ "${COMPONENT_CONTAINERFILE}" == */* ]]; then
-  COMPONENT_SUBDIR="$(dirname "${COMPONENT_CONTAINERFILE}")"
-  # First path segment only, for the SUBMODULE_MAP lookup below -- a
-  # containerfile can be nested more than one level deep (e.g.
-  # "osac-aap/execution-environment/execution-environment.yaml"), but the
-  # submodule it belongs to is always named after the top-level component
-  # directory. COMPONENT_SUBDIR itself keeps the full path: it's used later
-  # to scope which subdirectory gets copied, and that really is nested.
-  REPO_NAME="${COMPONENT_SUBDIR%%/*}"
+  HAS_SUBDIR=true
+  # Top-level path segment only -- a containerfile can be nested more than
+  # one level deep (e.g. "osac-aap/execution-environment/execution-environment.yaml"),
+  # but the submodule it belongs to, and the directory that needs to be
+  # copied into that submodule, are always the top-level component
+  # directory, regardless of how deep the containerfile itself sits within it.
+  REPO_NAME="$(dirname "${COMPONENT_CONTAINERFILE}")"
+  REPO_NAME="${REPO_NAME%%/*}"
 else
   REPO_NAME="${COMPONENT_REPO_NAME##*/}"
 fi
@@ -78,11 +82,15 @@ fi
 
 MATCH="${INSTALLER_DIR}/base/${SUBMODULE_NAME}"
 # When COMPONENT_SRC is a monorepo checkout, only the component's own
-# subdirectory belongs in the submodule -- copying the whole checkout would
-# put every other component's code inside this one submodule too.
+# top-level subdirectory belongs in the submodule -- copying the whole
+# checkout would put every other component's code inside this one submodule
+# too, and copying only the containerfile's own (possibly deeper-nested)
+# directory would miss the rest of the component (e.g. osac-aap's charts/,
+# Makefile, playbooks -- everything outside its execution-environment/
+# subdirectory where the containerfile itself happens to live).
 COPY_SRC="${COMPONENT_SRC}"
-if [[ -n "${COMPONENT_SUBDIR}" ]]; then
-  COPY_SRC="${COMPONENT_SRC}/${COMPONENT_SUBDIR}"
+if [[ "${HAS_SUBDIR}" == true ]]; then
+  COPY_SRC="${COMPONENT_SRC}/${REPO_NAME}"
 fi
 
 echo "Replacing submodule ${MATCH} with component source (${COMPONENT_REPO_NAME}@${COMPONENT_REF_NAME})..."
