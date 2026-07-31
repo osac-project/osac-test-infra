@@ -481,8 +481,13 @@ EOF
     # correctly, so writing them explicitly is a no-op on unaffected machines.
     RUNNER_UID=$(id -u "${RUNNER_USER}")
     STORAGE_CONF="${RUNNER_HOME}/.config/containers/storage.conf"
+    if [[ -L "${STORAGE_CONF}" ]]; then
+        echo "WARNING: ${STORAGE_CONF} is a symlink — removing to avoid following a runner-controlled path."
+        rm -f "${STORAGE_CONF}"
+    fi
     if [[ ! -f "${STORAGE_CONF}" ]]; then
-        cat > "${STORAGE_CONF}" <<EOF
+        STORAGE_CONF_TMP="$(mktemp "${STORAGE_CONF}.XXXXXX")"
+        cat > "${STORAGE_CONF_TMP}" <<EOF
 [storage]
 driver = "overlay"
 runroot = "/run/user/${RUNNER_UID}/containers"
@@ -498,6 +503,7 @@ enable_partial_images = "false"
 [storage.options.overlay]
 mountopt = "nodev,metacopy=on"
 EOF
+        mv -T "${STORAGE_CONF_TMP}" "${STORAGE_CONF}"
         echo "    Podman rootless storage paths pinned explicitly."
     fi
 
