@@ -378,19 +378,32 @@ jobs:
             echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
             git clone --depth 1 --branch "${ref}" "https://github.com/${repo}.git" "${src}"
 
+            # When `file` has a directory component (e.g.
+            # "fulfillment-service/Containerfile" from a monorepo checkout),
+            # everything about this component -- build context, go.mod,
+            # cmd/, CRDs -- lives under that subdirectory, not at the
+            # checkout root. Mirrors the same scoping in
+            # replace-installer-submodule.sh.
+            build_dir="${src}"
+            containerfile_name="${file}"
+            if [[ "${file}" == */* ]]; then
+              build_dir="${src}/$(dirname "${file}")"
+              containerfile_name="$(basename "${file}")"
+            fi
+
             if [[ "${build_type}" == "ansible-builder" ]]; then
               python3 -m pip install --quiet 'ansible-builder~=3.0'
-              ansible-builder create --file "${src}/${file}" --context "${src}/context"
-              podman build -t "${tag}" -f "${src}/context/Containerfile" "${src}/context"
+              ansible-builder create --file "${build_dir}/${containerfile_name}" --context "${build_dir}/context"
+              podman build -t "${tag}" -f "${build_dir}/context/Containerfile" "${build_dir}/context"
             else
-              podman build -t "${tag}" -f "${src}/${file}" "${src}"
+              podman build -t "${tag}" -f "${build_dir}/${containerfile_name}" "${build_dir}"
             fi
 
             # Build OSAC CLI from source when this component is fulfillment-service.
             # Keyed off imageKey (not a repo-name substring), so this works whether
             # repo is fulfillment-service's own repo or a monorepo like osac-project/osac.
             if [[ "${image_key}" == "service.images.service" ]]; then
-              (cd "${src}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
+              (cd "${build_dir}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
               echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
             fi
 
@@ -398,10 +411,10 @@ jobs:
             # OSAC install. Without this, CRDs come from osac-installer's
             # submodule pin and miss any CRD changes in the PR.
             crds_dir=""
-            if [[ -d "${src}/config/crd/bases" ]]; then
+            if [[ -d "${build_dir}/config/crd/bases" ]]; then
               crds_dir="$RUNNER_TEMP/component-${i}-crds"
               mkdir -p "${crds_dir}"
-              cp "${src}"/config/crd/bases/*.yaml "${crds_dir}/"
+              cp "${build_dir}"/config/crd/bases/*.yaml "${crds_dir}/"
             fi
 
             echo "Loading image onto node ${NODE_NAME}..."
