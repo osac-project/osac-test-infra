@@ -3,6 +3,9 @@
 # files, and remove the test container image.
 #
 # Required env: CLONE_NAME, E2E_IMAGE
+# Optional env: COMPONENT_BUILD_RESULTS (JSON array with an "image" field per
+# built component, set by the e2e workflow's build step -- empty/unset if no
+# components were built from source)
 set -euo pipefail
 
 : "${CLONE_NAME:?CLONE_NAME is required}"
@@ -53,10 +56,19 @@ for c in $(podman ps -a --filter ancestor="${E2E_IMAGE}" --format "{{.ID}}" 2>/d
 done
 podman rmi "${E2E_IMAGE}" 2>/dev/null || true
 
-# --- Clean up component image on runner ---
+# --- Clean up component images on runner ---
 # Node-side cleanup is unnecessary: the clone is destroyed above.
-if [[ -n "${COMPONENT_IMAGE:-}" ]]; then
-  podman rmi "${COMPONENT_IMAGE}" 2>/dev/null || true
+# Validate as a JSON array first: a malformed value would otherwise make jq
+# fail silently inside the process substitution below (its exit status isn't
+# visible to `set -e`), leaving the loop to just read nothing and move on.
+if [[ -n "${COMPONENT_BUILD_RESULTS:-}" ]]; then
+  if echo "${COMPONENT_BUILD_RESULTS}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    while IFS= read -r image; do
+      [[ -n "${image}" && "${image}" != "null" ]] && podman rmi "${image}" 2>/dev/null || true
+    done < <(echo "${COMPONENT_BUILD_RESULTS}" | jq -r '.[].image')
+  else
+    echo "WARNING: COMPONENT_BUILD_RESULTS is not a valid JSON array, skipping component image cleanup" >&2
+  fi
 fi
 
 # --- Clean up BMaaS virtual BMH resources ---

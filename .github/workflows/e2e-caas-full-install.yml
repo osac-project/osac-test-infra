@@ -64,28 +64,41 @@ on:
         required: false
         type: string
         default: ""
+      components:
+        description: >-
+          JSON array of components to build from source and load onto the cluster, e.g.
+          '[{"repo":"osac-project/osac","ref":"my-branch","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"osac-project/osac","ref":"my-branch","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'.
+          Each entry supports repo, ref, imageKey (required), and containerfile
+          (default "Containerfile"), buildType ("containerfile" default, or "ansible-builder").
+          A single-repo caller passes one entry; a monorepo caller passes one entry per
+          component it wants built from the same checkout. Empty array (default) builds
+          nothing from source -- use image-overrides for pre-built images instead. Supersedes
+          the deprecated component-* inputs below.
+        required: false
+        type: string
+        default: "[]"
       component-repo:
-        description: "GitHub repo (owner/name) of a component to build from source. Requires component-ref and component-image-key."
+        description: "DEPRECATED, use components instead. GitHub repo (owner/name) of a component to build from source. Requires component-ref and component-image-key."
         required: false
         type: string
         default: ""
       component-ref:
-        description: "Branch or tag name of the component repository to build (must be a named ref, not a SHA)"
+        description: "DEPRECATED, use components instead. Branch or tag name of the component repository to build (must be a named ref, not a SHA)"
         required: false
         type: string
         default: ""
       component-image-key:
-        description: "Helm value path for the component image (e.g. service.images.service)"
+        description: "DEPRECATED, use components instead. Helm value path for the component image (e.g. service.images.service)"
         required: false
         type: string
         default: ""
       component-containerfile:
-        description: "Path to Containerfile relative to component repo root"
+        description: "DEPRECATED, use components instead. Path to Containerfile (or execution-environment.yaml for ansible-builder) relative to component repo root"
         required: false
         type: string
         default: "Containerfile"
       component-build-type:
-        description: "Build method: 'containerfile' (default) or 'ansible-builder'"
+        description: "DEPRECATED, use components instead. Build method: 'containerfile' (default) or 'ansible-builder'"
         required: false
         type: string
         default: "containerfile"
@@ -150,9 +163,58 @@ jobs:
         with:
           test-suite: ${{ inputs.test-suite || 'caas' }}
           run-id: ${{ github.run_id }}
-          component-repo: ${{ inputs.component-repo }}
-          component-ref: ${{ inputs.component-ref }}
-          component-image-key: ${{ inputs.component-image-key }}
+
+      - name: Resolve and validate components input
+        id: components
+        env:
+          COMPONENTS_JSON: ${{ inputs.components }}
+          LEGACY_COMPONENT_REPO: ${{ inputs.component-repo }}
+          LEGACY_COMPONENT_REF: ${{ inputs.component-ref }}
+          LEGACY_COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
+          LEGACY_COMPONENT_CONTAINERFILE: ${{ inputs.component-containerfile }}
+          LEGACY_COMPONENT_BUILD_TYPE: ${{ inputs.component-build-type }}
+        run: |
+          echo "::group::Resolve and validate components input"
+          # Backward compatibility: callers that haven't migrated off the
+          # deprecated single component-* inputs yet. Synthesize a one-entry
+          # components[] array from them so those callers keep working
+          # unchanged. Remove this once every caller uses `components`.
+          if { [[ -z "${COMPONENTS_JSON}" ]] || [[ "${COMPONENTS_JSON}" == "[]" ]]; } && [[ -n "${LEGACY_COMPONENT_REPO}" ]]; then
+            echo "Using deprecated component-* inputs as a single components[] entry."
+            COMPONENTS_JSON=$(jq -nc \
+              --arg repo "${LEGACY_COMPONENT_REPO}" \
+              --arg ref "${LEGACY_COMPONENT_REF}" \
+              --arg key "${LEGACY_COMPONENT_IMAGE_KEY}" \
+              --arg file "${LEGACY_COMPONENT_CONTAINERFILE:-Containerfile}" \
+              --arg type "${LEGACY_COMPONENT_BUILD_TYPE:-containerfile}" \
+              '[{"repo":$repo,"ref":$ref,"imageKey":$key,"containerfile":$file,"buildType":$type}]')
+          fi
+
+          if ! echo "${COMPONENTS_JSON}" | jq -e 'type == "array"' >/dev/null; then
+            echo "::error::components must be a JSON array"
+            exit 1
+          fi
+          COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
+          for i in $(seq 0 $((COUNT - 1))); do
+            repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo // empty")
+            ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref // empty")
+            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey // empty")
+            if [[ -z "${repo}" || -z "${ref}" || -z "${image_key}" ]]; then
+              echo "::error::components[$i] requires repo, ref, and imageKey"
+              exit 1
+            fi
+            if [[ ! "${repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::components[$i].repo '${repo}' is not a valid org/repo format"
+              exit 1
+            fi
+          done
+
+          {
+            echo "components<<EOF_RESOLVED_COMPONENTS"
+            echo "${COMPONENTS_JSON}"
+            echo "EOF_RESOLVED_COMPONENTS"
+          } >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
 
       - name: Authorize fork PR
         if: inputs.fork-pr-author-association != ''
@@ -273,50 +335,70 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
           chmod 600 "$RUNNER_TEMP/kubeconfig"
 
-      - name: Build and load component image
-        if: inputs.component-repo != ''
+      # Loops over the `components` JSON array so any number of components
+      # (one, two, or the 5-8 this repo is headed toward) can be built from
+      # source in a single e2e run -- fixed named inputs (component-repo,
+      # a "component2-repo" for a second slot, and so on) don't scale past a
+      # handful without adding new inputs for every additional caller.
+      - name: Build and load component images
+        if: steps.components.outputs.components != '[]' && steps.components.outputs.components != ''
+        shell: bash
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          COMPONENT_REPO: ${{ inputs.component-repo }}
-          COMPONENT_REF: ${{ inputs.component-ref }}
-          COMPONENT_FILE: ${{ inputs.component-containerfile }}
-          COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
-          COMPONENT_BUILD_TYPE: ${{ inputs.component-build-type }}
+          COMPONENTS_JSON: ${{ steps.components.outputs.components }}
         run: |
-          COMPONENT_TAG="localhost/component-pr:${GITHUB_RUN_ID}"
-
-          echo "Cloning ${COMPONENT_REPO}@${COMPONENT_REF}..."
-          git clone --depth 1 --branch "${COMPONENT_REF}" \
-            "https://github.com/${COMPONENT_REPO}.git" "$RUNNER_TEMP/component-src"
-
-          SRC="$RUNNER_TEMP/component-src"
-          if [[ "${COMPONENT_BUILD_TYPE}" == "ansible-builder" ]]; then
-            echo "Generating build context with ansible-builder from ${COMPONENT_FILE}..."
-            python3 -m pip install --quiet ansible-builder
-            ansible-builder create --file "${SRC}/${COMPONENT_FILE}" --context "${SRC}/context"
-            podman build -t "${COMPONENT_TAG}" -f "${SRC}/context/Containerfile" "${SRC}/context"
-          else
-            echo "Building image from ${COMPONENT_FILE}..."
-            podman build -t "${COMPONENT_TAG}" -f "${SRC}/${COMPONENT_FILE}" "${SRC}"
-          fi
-
-          if [[ "${COMPONENT_REPO}" == *"fulfillment-service"* ]]; then
-            echo "Building osac CLI from source..."
-            (cd "${SRC}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
-            echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
-          fi
-
+          RESULTS="[]"
+          COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
           NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
-          echo "Loading image onto node ${NODE_NAME}..."
-          podman save "${COMPONENT_TAG}" | \
-            oc debug "node/${NODE_NAME}" -t=false -- \
-              chroot /host podman load
 
-          echo "COMPONENT_IMAGE=${COMPONENT_TAG}" >> "$GITHUB_ENV"
-          echo "COMPONENT_REPO_NAME=${COMPONENT_REPO}" >> "$GITHUB_ENV"
-          echo "COMPONENT_REF_NAME=${COMPONENT_REF}" >> "$GITHUB_ENV"
+          for i in $(seq 0 $((COUNT - 1))); do
+            repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo")
+            ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref")
+            file=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].containerfile // \"Containerfile\"")
+            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey")
+            build_type=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildType // \"containerfile\"")
 
-          rm -rf "$RUNNER_TEMP/component-src"
+            tag="localhost/component-${i}-pr:${GITHUB_RUN_ID}"
+            src="$RUNNER_TEMP/component-${i}-src"
+
+            echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
+            git clone --depth 1 --branch "${ref}" "https://github.com/${repo}.git" "${src}"
+
+            if [[ "${build_type}" == "ansible-builder" ]]; then
+              python3 -m pip install --quiet 'ansible-builder~=3.0'
+              ansible-builder create --file "${src}/${file}" --context "${src}/context"
+              podman build -t "${tag}" -f "${src}/context/Containerfile" "${src}/context"
+            else
+              podman build -t "${tag}" -f "${src}/${file}" "${src}"
+            fi
+
+            # Build OSAC CLI from source when this component is fulfillment-service.
+            # Keyed off imageKey (not a repo-name substring), so this works whether
+            # repo is fulfillment-service's own repo or a monorepo like osac-project/osac.
+            if [[ "${image_key}" == "service.images.service" ]]; then
+              (cd "${src}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
+              echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
+            fi
+
+            echo "Loading image onto node ${NODE_NAME}..."
+            podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+
+            RESULTS=$(echo "${RESULTS}" | jq -c \
+              --arg image "${tag}" --arg key "${image_key}" \
+              --arg repo "${repo}" --arg ref "${ref}" --arg file "${file}" \
+              '. + [{"image":$image,"imageKey":$key,"repo":$repo,"ref":$ref,"containerfile":$file,"crdsDir":""}]')
+
+            # Recorded after every component, not just once at the end -- if
+            # a later component fails the loop, images already built and
+            # loaded by earlier ones are still tracked here so Teardown can
+            # still clean them up instead of leaking them on the runner.
+            {
+              echo "COMPONENT_BUILD_RESULTS<<EOF_COMPONENT_BUILD_RESULTS"
+              echo "${RESULTS}"
+              echo "EOF_COMPONENT_BUILD_RESULTS"
+            } >> "$GITHUB_ENV"
+            echo "::endgroup::"
+          done
 
       - name: Build test image
         env:
@@ -393,8 +475,15 @@ jobs:
             "https://github.com/${INSTALLER_REPO}.git" "${INSTALLER_DIR}"
           cd "${INSTALLER_DIR}"
 
-          bash "${GITHUB_WORKSPACE}/.github/scripts/replace-installer-submodule.sh" \
-            "${INSTALLER_DIR}" "$RUNNER_TEMP/component-src"
+          COUNT=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq 'length')
+          for i in $(seq 0 $((COUNT - 1))); do
+            repo=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].repo")
+            ref=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].ref")
+            file=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].containerfile")
+            COMPONENT_REPO_NAME="${repo}" COMPONENT_REF_NAME="${ref}" \
+              bash "${GITHUB_WORKSPACE}/.github/scripts/replace-installer-submodule.sh" \
+              "${INSTALLER_DIR}" "$RUNNER_TEMP/component-${i}-src" "${file}"
+          done
 
           make install-operators VALUES_FILE=values/caas-ci/values.yaml
           make install-prereqs VALUES_FILE=values/caas-ci/values.yaml
@@ -406,7 +495,6 @@ jobs:
           INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
           AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
-          COMPONENT_IMAGE_KEY: ${{ inputs.component-image-key }}
           AWS_ACCESS_KEY_ID: ${{ steps.caas-secrets.outputs.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ steps.caas-secrets.outputs.AWS_SECRET_ACCESS_KEY }}
           CAAS_DOMAIN: ${{ inputs.caas-domain }}
@@ -416,32 +504,40 @@ jobs:
 
           make install-osac VALUES_FILE=values/caas-ci/values.yaml
 
-          # Apply image overrides
+          # Merge each built component's image into overrides. Unlike
+          # bmaas/vmaas, the build step above never captures component CRDs
+          # for caas, so there's no crdsDir handling to apply here.
           MERGED_OVERRIDES="${IMAGE_OVERRIDES}"
-          if [[ -n "${COMPONENT_IMAGE:-}" ]] && [[ -n "${COMPONENT_IMAGE_KEY}" ]]; then
-            if [[ "${COMPONENT_IMAGE_KEY}" == *.repository ]]; then
-              IMG_REPO="${COMPONENT_IMAGE%%:*}"
-              IMG_TAG="${COMPONENT_IMAGE#*:}"
-              TAG_KEY="${COMPONENT_IMAGE_KEY%.repository}.tag"
-              PULL_KEY="${COMPONENT_IMAGE_KEY%.repository}.pullPolicy"
+          COUNT=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq 'length')
+          for i in $(seq 0 $((COUNT - 1))); do
+            image=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].image")
+            image_key=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].imageKey")
+            repo=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].repo")
+            ref=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].ref")
+
+            if [[ "${image_key}" == *.repository ]]; then
+              img_repo="${image%%:*}"
+              img_tag="${image#*:}"
+              tag_key="${image_key%.repository}.tag"
+              pull_key="${image_key%.repository}.pullPolicy"
               MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
-                jq -c --arg rk "${COMPONENT_IMAGE_KEY}" --arg rv "${IMG_REPO}" \
-                      --arg tk "${TAG_KEY}" --arg tv "${IMG_TAG}" \
-                      --arg pk "${PULL_KEY}" --arg pv "IfNotPresent" \
+                jq -c --arg rk "${image_key}" --arg rv "${img_repo}" \
+                      --arg tk "${tag_key}" --arg tv "${img_tag}" \
+                      --arg pk "${pull_key}" --arg pv "IfNotPresent" \
                       '. + {($rk): $rv, ($tk): $tv, ($pk): $pv}')
             else
               MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
-                jq -c --arg k "${COMPONENT_IMAGE_KEY}" --arg v "${COMPONENT_IMAGE}" '. + {($k): $v}')
+                jq -c --arg k "${image_key}" --arg v "${image}" '. + {($k): $v}')
             fi
-          fi
 
-          if [[ "${COMPONENT_IMAGE_KEY}" == "aap.bootstrap.image" && -n "${COMPONENT_REF_NAME:-}" ]]; then
-            AAP_GIT_URI="https://github.com/${COMPONENT_REPO_NAME}"
-            MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
-              jq -c --arg bk "aap.configAsCode.projectGitBranch" --arg bv "${COMPONENT_REF_NAME}" \
-                    --arg uk "aap.configAsCode.projectGitUri" --arg uv "${AAP_GIT_URI}" \
-                    '. + {($bk): $bv, ($uk): $uv}')
-          fi
+            if [[ "${image_key}" == "aap.bootstrap.image" ]]; then
+              aap_git_uri="https://github.com/${repo}"
+              MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
+                jq -c --arg bk "aap.configAsCode.projectGitBranch" --arg bv "${ref}" \
+                      --arg uk "aap.configAsCode.projectGitUri" --arg uv "${aap_git_uri}" \
+                      '. + {($bk): $bv, ($uk): $uv}')
+            fi
+          done
 
           if [[ -n "${MERGED_OVERRIDES}" ]] && [[ "${MERGED_OVERRIDES}" != "{}" ]]; then
             echo "Applying image overrides..."
