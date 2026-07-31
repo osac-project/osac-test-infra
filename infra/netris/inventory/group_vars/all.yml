@@ -59,7 +59,11 @@ osac_license_path: "{{ inventory_dir }}/../license.zip"
 osac_operator_repo: "https://github.com/osac-project/osac-operator.git"
 osac_operator_branch: ""
 osac_operator_image: ""
-fulfillment_service_repo: "https://github.com/osac-project/fulfillment-service.git"
+# fulfillment-service now lives merged into the osac mono-repo (see OSAC-1732) --
+# a checkout of this repo has fulfillment-service's own code one level deeper,
+# under fulfillment-service/. roles/osac_refresh and roles/osac_install flatten
+# that subdirectory up into the installer submodule after cloning.
+fulfillment_service_repo: "https://github.com/osac-project/osac.git"
 fulfillment_service_branch: ""
 fulfillment_service_image: ""
 osac_aap_repo: "https://github.com/osac-project/osac-aap.git"

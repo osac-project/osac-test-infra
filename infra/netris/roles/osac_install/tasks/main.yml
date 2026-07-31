@@ -66,6 +66,28 @@
     force: true
   when: fulfillment_service_branch | length > 0
 
+# fulfillment_service_repo now points at the osac mono-repo (see OSAC-1732), so
+# the clone above has fulfillment-service's own code one level deeper, under
+# fulfillment-service/, instead of at the checkout root the submodule directory
+# is expected to be (cmd/osac, charts/service/, etc.). Flatten it up so
+# consumers of base/osac-fulfillment-service keep seeing the same
+# single-component layout they always have. No-op for a non-mono-repo
+# fulfillment_service_repo override (no fulfillment-service/ subdir to
+# flatten). Mirrors the equivalent scoping in
+# .github/scripts/replace-installer-submodule.sh for GH Actions e2e runs.
+- name: Flatten mono-repo checkout to fulfillment-service's own subdirectory
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      cd "{{ osac_installer_dir }}/base/osac-fulfillment-service"
+      if [ -d fulfillment-service ]; then
+        find . -mindepth 1 -maxdepth 1 ! -name fulfillment-service -exec rm -rf {} +
+        find fulfillment-service -mindepth 1 -maxdepth 1 -exec mv -t . {} +
+        rmdir fulfillment-service
+      fi
+  when: fulfillment_service_branch | length > 0
+  changed_when: true
+
 - name: Copy development overlay to working overlay
   ansible.builtin.copy:
     src: "{{ osac_installer_dir }}/overlays/development/"

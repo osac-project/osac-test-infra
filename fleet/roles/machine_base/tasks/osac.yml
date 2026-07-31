@@ -30,7 +30,7 @@
 
 - name: Download osac CLI
   ansible.builtin.get_url:
-    url: "https://github.com/osac-project/fulfillment-service/releases/download/v{{ osac_version }}/osac_Linux_x86_64"
+    url: "https://github.com/osac-project/osac/releases/download/v{{ osac_version }}/osac_Linux_x86_64"
     dest: /usr/local/bin/osac
     mode: "0755"
   when: not _osac_up_to_date

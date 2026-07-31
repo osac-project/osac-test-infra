@@ -144,10 +144,16 @@
     mode: "0755"
   become: false
 
+# fulfillment_service_repo now points at the osac mono-repo (fulfillment-service
+# merged in as a subtree -- see OSAC-1732), so the Go module that used to sit at
+# the checkout root now lives one level deeper, under fulfillment-service/. The
+# clone dest above keeps the name "fulfillment-service" as the logical source
+# directory for this component regardless of which repo backs it (same idiom as
+# infra/netris/roles/osac_refresh|osac_install's base/osac-fulfillment-service).
 - name: Build osac CLI
   ansible.builtin.command:
     cmd: /usr/local/go/bin/go build -o "{{ lookup('env', 'HOME') }}/.local/bin/osac" ./cmd/osac
-    chdir: "{{ lookup('env', 'HOME') }}/.local/src/fulfillment-service"
+    chdir: "{{ lookup('env', 'HOME') }}/.local/src/fulfillment-service/fulfillment-service"
   # No creates: guard -- always rebuild so a different fulfillment_service_branch
   # actually takes effect instead of reusing whatever was built first.
   become: false

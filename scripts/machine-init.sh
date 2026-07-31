@@ -396,12 +396,12 @@ install_osac() {
     if [[ -z "${version}" ]]; then
         echo "    Detecting latest release..."
         version=$(curl -sfL -o /dev/null -w '%{url_effective}' \
-            "https://github.com/osac-project/fulfillment-service/releases/latest" \
+            "https://github.com/osac-project/osac/releases/latest" \
             | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+$') \
             || { echo "ERROR: failed to detect latest osac version" >&2; exit 1; }
     fi
 
-    local url="https://github.com/osac-project/fulfillment-service/releases/download/v${version}/osac_Linux_x86_64"
+    local url="https://github.com/osac-project/osac/releases/download/v${version}/osac_Linux_x86_64"
     echo "    Downloading osac v${version} from ${url}..."
     curl -fL -o /usr/local/bin/osac "${url}" \
         || { echo "ERROR: failed to download osac v${version}" >&2; exit 1; }

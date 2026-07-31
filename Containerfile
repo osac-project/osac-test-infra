@@ -24,12 +24,12 @@ RUN set -euo pipefail; \
     else \
       rm -f /tmp/osac-cli-candidate; \
       if [ -z "${OSAC_VERSION}" ]; then \
-        OSAC_VERSION=$(curl -Lsf https://api.github.com/repos/osac-project/fulfillment-service/releases/latest | jq -r '.tag_name | ltrimstr("v")'); \
+        OSAC_VERSION=$(curl -Lsf https://api.github.com/repos/osac-project/osac/releases/latest | jq -r '.tag_name | ltrimstr("v")'); \
         echo "Resolved latest OSAC CLI version: ${OSAC_VERSION}"; \
       fi; \
-      curl -Lsfo /usr/local/bin/osac "https://github.com/osac-project/fulfillment-service/releases/download/v${OSAC_VERSION}/osac_Linux_x86_64" \
+      curl -Lsfo /usr/local/bin/osac "https://github.com/osac-project/osac/releases/download/v${OSAC_VERSION}/osac_Linux_x86_64" \
         || { echo "ERROR: osac binary download failed"; exit 1; }; \
-      curl -Lsfo /tmp/checksums.txt "https://github.com/osac-project/fulfillment-service/releases/download/v${OSAC_VERSION}/fulfillment-service_${OSAC_VERSION}_checksums.txt" \
+      curl -Lsfo /tmp/checksums.txt "https://github.com/osac-project/osac/releases/download/v${OSAC_VERSION}/fulfillment-service_${OSAC_VERSION}_checksums.txt" \
         || { echo "ERROR: checksums file download failed"; exit 1; }; \
       line="$(grep -E '[[:space:]]osac_Linux_x86_64$' /tmp/checksums.txt || true)"; \
       [ -n "$line" ] || { echo "ERROR: osac_Linux_x86_64 entry not found in checksums file"; exit 1; }; \

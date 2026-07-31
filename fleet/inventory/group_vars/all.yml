@@ -3,7 +3,7 @@
 
 # REQUIRED: pin an explicit osac CLI version for the fleet instead of always
 # installing "latest" -- see docs/new-ci-machine-setup.md and
-# https://github.com/osac-project/fulfillment-service/releases. Pinning
+# https://github.com/osac-project/osac/releases. Pinning
 # means every host converges to the same version regardless of when it was
 # last touched, instead of drifting based on install date (the failure mode
 # of scripts/machine-init.sh's install_osac(), which always resolves
