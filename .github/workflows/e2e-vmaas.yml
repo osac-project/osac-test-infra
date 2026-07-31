@@ -40,7 +40,7 @@ on:
         type: string
         default: "vmaas"
       image-overrides:
-        description: "JSON object mapping Helm value paths to image refs, e.g. '{\"service.images.service\":\"ghcr.io/osac-project/fulfillment-service:pr-123\"}'"
+        description: "JSON object mapping Helm value paths to image refs, e.g. '{\"service.images.service\":\"ghcr.io/osac-project/osac:pr-123\"}'"
         required: false
         type: string
         default: "{}"

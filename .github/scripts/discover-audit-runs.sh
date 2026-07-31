@@ -62,6 +62,13 @@ EXTERNAL_CALLERS=(
   osac-project/osac-operator:e2e-bmaas-full-install.yml
   osac-project/fulfillment-service:e2e-vmaas-full-install.yml
   osac-project/fulfillment-service:e2e-bmaas-full-install.yml
+  # fulfillment-service and osac-operator's e2e runs also happen here now
+  # (mono-repo merge, OSAC-1732) -- kept alongside their still-active
+  # standalone-repo entries above, not in place of them, since both repos
+  # keep running e2e until each one's own cutover/archive.
+  osac-project/osac:e2e-vmaas-full-install.yml
+  osac-project/osac:e2e-bmaas-full-install.yml
+  osac-project/osac:e2e-caas-full-install.yml
 )
 # Must stay in sync with workflow_dispatch target-repo options in
 # .github/workflows/audit-workflow-logs.yml (both lists change together).
@@ -72,6 +79,7 @@ KNOWN_TARGET_REPOS=(
   osac-project/osac-installer
   osac-project/osac-operator
   osac-project/fulfillment-service
+  osac-project/osac
 )
 
 # Trim whitespace from dispatch inputs; parse into LOOKBACK_HOURS.
