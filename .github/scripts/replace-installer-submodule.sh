@@ -34,7 +34,13 @@ fi
 COMPONENT_SUBDIR=""
 if [[ "${COMPONENT_CONTAINERFILE}" == */* ]]; then
   COMPONENT_SUBDIR="$(dirname "${COMPONENT_CONTAINERFILE}")"
-  REPO_NAME="${COMPONENT_SUBDIR}"
+  # First path segment only, for the SUBMODULE_MAP lookup below -- a
+  # containerfile can be nested more than one level deep (e.g.
+  # "osac-aap/execution-environment/execution-environment.yaml"), but the
+  # submodule it belongs to is always named after the top-level component
+  # directory. COMPONENT_SUBDIR itself keeps the full path: it's used later
+  # to scope which subdirectory gets copied, and that really is nested.
+  REPO_NAME="${COMPONENT_SUBDIR%%/*}"
 else
   REPO_NAME="${COMPONENT_REPO_NAME##*/}"
 fi
