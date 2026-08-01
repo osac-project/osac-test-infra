@@ -24,7 +24,8 @@ RUN set -euo pipefail; \
     else \
       rm -f /tmp/osac-cli-candidate; \
       if [ -z "${OSAC_VERSION}" ]; then \
-        OSAC_VERSION=$(curl -Lsf https://api.github.com/repos/osac-project/osac/releases/latest | jq -r '.tag_name | ltrimstr("v")'); \
+        OSAC_VERSION=$(curl -Lsf "https://api.github.com/repos/osac-project/osac/releases?per_page=100" | jq -r '[.[] | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].tag_name // empty | ltrimstr("v")'); \
+        [ -n "${OSAC_VERSION}" ] || { echo "ERROR: no fulfillment-service release (bare vX.Y.Z tag) found on osac-project/osac"; exit 1; }; \
         echo "Resolved latest OSAC CLI version: ${OSAC_VERSION}"; \
       fi; \
       curl -Lsfo /usr/local/bin/osac "https://github.com/osac-project/osac/releases/download/v${OSAC_VERSION}/osac_Linux_x86_64" \

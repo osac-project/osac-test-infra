@@ -394,11 +394,15 @@ install_osac() {
 
     # Use env var if set, otherwise fetch latest release tag from GitHub
     if [[ -z "${version}" ]]; then
-        echo "    Detecting latest release..."
-        version=$(curl -sfL -o /dev/null -w '%{url_effective}' \
-            "https://github.com/osac-project/osac/releases/latest" \
-            | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+$') \
-            || { echo "ERROR: failed to detect latest osac version" >&2; exit 1; }
+        echo "    Detecting latest fulfillment-service release..."
+        # osac-project/osac now hosts releases for multiple components (each
+        # tagged <component>/vX.Y.Z per OSAC-3467), so following
+        # releases/latest's redirect can land on a different component's
+        # release -- filter explicitly for fulfillment-service's own bare
+        # vX.Y.Z tag via the releases list instead.
+        version=$(curl -sfL "https://api.github.com/repos/osac-project/osac/releases?per_page=100" \
+            | jq -r '[.[] | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].tag_name // empty | ltrimstr("v")')
+        [[ -n "${version}" ]] || { echo "ERROR: no fulfillment-service release (bare vX.Y.Z tag) found on osac-project/osac" >&2; exit 1; }
     fi
 
     local url="https://github.com/osac-project/osac/releases/download/v${version}/osac_Linux_x86_64"
