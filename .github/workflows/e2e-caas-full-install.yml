@@ -493,8 +493,21 @@ jobs:
             GRPCURL_VERSION="1.9.1"
             GRPCURL_DIR="${RUNNER_TEMP}/bin"
             mkdir -p "${GRPCURL_DIR}"
-            curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" \
-              | tar xz -C "${GRPCURL_DIR}" grpcurl
+            GRPCURL_TARBALL="grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz"
+            GRPCURL_ARCHIVE="${RUNNER_TEMP}/${GRPCURL_TARBALL}"
+            curl -fsSL -o "${GRPCURL_ARCHIVE}" \
+              "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/${GRPCURL_TARBALL}"
+            # grpcurl publishes one combined checksums.txt per release (no
+            # per-asset .sha256), unlike yq above -- fetch it and verify
+            # against the matching line, rewriting the filename to the
+            # archive's actual local path so sha256sum -c can find it
+            # regardless of cwd.
+            curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
+              | grep " ${GRPCURL_TARBALL}\$" \
+              | sed "s|${GRPCURL_TARBALL}|${GRPCURL_ARCHIVE}|" \
+              | sha256sum -c -
+            tar xz -C "${GRPCURL_DIR}" grpcurl -f "${GRPCURL_ARCHIVE}"
+            rm -f "${GRPCURL_ARCHIVE}"
             export PATH="${GRPCURL_DIR}:${PATH}"
             echo "${GRPCURL_DIR}" >> "$GITHUB_PATH"
           fi
@@ -648,10 +661,20 @@ jobs:
             done
 
             DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
-            GRPC_ADDR="fulfillment-internal-api-${INSTALLER_NAMESPACE}.${DOMAIN}:443"
+            # Public address with bearer-token auth, matching what the real
+            # E2E gRPC clients use (tests/conftest.py's `grpc` fixture) --
+            # the private address used before this could report reachable
+            # while the actual path tests use is still broken (missing
+            # route, UNAUTHENTICATED, etc).
+            GRPC_ADDR="fulfillment-api-${INSTALLER_NAMESPACE}.${DOMAIN}:443"
+            GRPC_TOKEN=$(oc create token admin -n "${INSTALLER_NAMESPACE}" --duration 5m --as system:admin)
             echo "Waiting for gRPC endpoint ${GRPC_ADDR} to be reachable..."
             for i in $(seq 1 30); do
-              if grpcurl -insecure "${GRPC_ADDR}" grpc.health.v1.Health/Check; then
+              # -format json + jq status check, not just exit code: grpcurl
+              # exits 0 even when the gRPC Health Checking Protocol response
+              # body reports NOT_SERVING.
+              if grpcurl -insecure -H "Authorization: Bearer ${GRPC_TOKEN}" -format json \
+                "${GRPC_ADDR}" grpc.health.v1.Health/Check 2>/dev/null | jq -e '.status == "SERVING"' >/dev/null 2>&1; then
                 echo "gRPC endpoint reachable (attempt ${i})"
                 break
               fi
