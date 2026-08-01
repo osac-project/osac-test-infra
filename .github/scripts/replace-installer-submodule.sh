@@ -62,12 +62,13 @@ fi
 # the e2e reusable workflows now skip calling this script entirely for any component
 # built from the same repo as the installer itself, since that component is already
 # a correct sibling directory inside the installer's own checkout -- no splice needed.
-# This script is only still invoked for components that remain genuinely separate
-# repos. Update this map whenever that changes (a submodule is added, renamed, or
-# removed, or a component here merges into a mono-repo and stops needing a splice).
-declare -A SUBMODULE_MAP=(
-  [osac-ui]="osac-ui"
-)
+# osac-ui was removed once OSAC-3528 converted it from a git submodule to a
+# released OCI chart + image dependency -- there's no base/osac-ui submodule left
+# to splice into, and no e2e-*-full-install.yml components[] array builds it from
+# source anyway. This map is intentionally empty now: no component currently needs
+# splicing. Add an entry here if a future component needs it (a new genuinely
+# separate-repo submodule that PR-source e2e testing must build from source).
+declare -A SUBMODULE_MAP=()
 
 SUBMODULE_NAME="${SUBMODULE_MAP[${REPO_NAME}]:-}"
 

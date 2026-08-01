@@ -652,7 +652,14 @@ jobs:
               echo "  --set-string ${key}=${value}"
             done
 
-            yq -i '(.dependencies[].version) = "0.0.0"' charts/osac/Chart.yaml
+            # Local (file://) dependencies: force to 0.0.0 so any real chart
+            # version there is ignored -- helm dependency update just copies
+            # whatever's on disk regardless of its declared version, so pinning
+            # to a fixed placeholder here avoids drift/mismatch churn. Real
+            # registry-hosted deps (e.g. osac-ui's oci:// chart) are left alone --
+            # "0.0.0" isn't a published version, so overwriting those breaks the
+            # actual chart pull.
+            yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
             helm dependency update charts/osac/
             helm upgrade osac charts/osac/ \
               --namespace "${INSTALLER_NAMESPACE}" \
