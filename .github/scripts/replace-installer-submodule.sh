@@ -62,7 +62,6 @@ declare -A SUBMODULE_MAP=(
   [fulfillment-service]="osac-fulfillment-service"
   [osac-aap]="osac-aap"
   [bare-metal-fulfillment-operator]="bare-metal-fulfillment-operator"
-  [osac-ui]="osac-ui"
 )
 
 SUBMODULE_NAME="${SUBMODULE_MAP[${REPO_NAME}]:-}"
