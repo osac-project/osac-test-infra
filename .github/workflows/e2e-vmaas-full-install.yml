@@ -694,7 +694,7 @@ jobs:
             # while the actual path tests use is still broken (missing
             # route, UNAUTHENTICATED, etc).
             GRPC_ADDR="fulfillment-api-${INSTALLER_NAMESPACE}.${DOMAIN}:443"
-            GRPC_TOKEN=$(oc create token admin -n "${INSTALLER_NAMESPACE}" --duration 5m --as system:admin)
+            GRPC_TOKEN=$(oc create token admin -n "${INSTALLER_NAMESPACE}" --duration 10m --as system:admin)
             echo "Waiting for gRPC endpoint ${GRPC_ADDR} to be reachable..."
             for i in $(seq 1 30); do
               # -format json + jq status check, not just exit code: grpcurl
