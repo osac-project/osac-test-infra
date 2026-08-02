@@ -1,0 +1,6 @@
+---
+- name: Create CaaS cluster
+  hosts: all
+  gather_facts: false
+  roles:
+    - caas_create

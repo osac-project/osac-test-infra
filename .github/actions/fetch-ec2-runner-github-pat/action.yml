@@ -1,0 +1,32 @@
+---
+name: Fetch EC2 runner GitHub PAT
+description: >-
+  Retrieve the fine-grained GitHub PAT the osac-ci-orchestrator uses to
+  register/deregister ephemeral EC2 runners from Vault. GITHUB_TOKEN cannot
+  call the self-hosted runner registration endpoints under any permissions
+  grant, so a standing credential is required here.
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+
+outputs:
+  GH_TOKEN:
+    value: ${{ steps.vault.outputs.GH_TOKEN }}
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve GitHub PAT from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: |
+          secret/data/osac/e2e/ec2-runner-github-pat token | GH_TOKEN

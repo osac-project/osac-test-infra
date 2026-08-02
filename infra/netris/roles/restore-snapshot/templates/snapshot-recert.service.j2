@@ -1,0 +1,17 @@
+[Unit]
+Description=Snapshot recert - apply network config and re-sign certificates
+After=NetworkManager.service
+Wants=NetworkManager.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/var/lib/snapshot-recert/recert.sh
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

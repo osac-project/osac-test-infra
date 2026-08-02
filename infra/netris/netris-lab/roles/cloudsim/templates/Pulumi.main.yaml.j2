@@ -1,0 +1,37 @@
+config:
+  netris-air:controller_url: {{ controller_url }}
+  netris-air:controller_password: {{ netris_password }}
+  netris-air:controller_insecure: false
+  netris-air:controller_site: {{ site_name }}
+  netris-air:hypers_list:
+    - 127.0.0.1
+  netris-air:hypers_ssh_user: {{ hypers_ssh_user }}
+  netris-air:servers_gw: {{ servers_gw }}
+  netris-air:switch_vcpu: {{ switch_vcpu }}
+  netris-air:switch_memory: {{ switch_memory }}
+  netris-air:server_vcpu: {{ server_vcpu }}
+  netris-air:server_memory: {{ server_memory }}
+  netris-air:softgate_vcpu: {{ softgate_vcpu }}
+  netris-air:softgate_memory: {{ softgate_memory }}
+  netris-air:apt_repo: {{ apt_repo }}
+  netris-air:sshAuthKeys:
+{% for key in ssh_auth_keys %}
+    - {{ key }}
+{% endfor %}
+{% if ssh_auth_keys | length == 0 %}
+    - {{ lookup('file', '/root/.ssh/id_rsa.pub') }}
+{% endif %}
+{% if connectivity_mode == 'public' and public_bgp_link_subnet is defined %}
+  netris-air:bgp_link_subnet: {{ public_bgp_link_subnet }}
+  netris-air:bgp_subnets_to_advertise:
+{% for subnet in public_bgp_subnets_to_advertise %}
+    - {{ subnet }}
+{% endfor %}
+{% else %}
+  netris-air:bgp_link_subnet: {{ bgp_link_subnet }}
+  netris-air:bgp_subnets_to_advertise:
+{% for subnet in bgp_subnets_to_advertise %}
+    - {{ subnet }}
+{% endfor %}
+{% endif %}
+  netris-air:bgp_password: {{ bgp_password }}

@@ -1,0 +1,6 @@
+---
+- name: Prepare OSAC refresh after snapshot restore
+  hosts: all
+  gather_facts: false
+  roles:
+    - osac_refresh

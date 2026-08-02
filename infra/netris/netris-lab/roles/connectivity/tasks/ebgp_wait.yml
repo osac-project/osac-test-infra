@@ -1,0 +1,31 @@
+---
+- name: Read E-BGP sessions via collection
+  ansible.builtin.include_role:
+    name: netris.controller.ebgp
+  vars:
+    ebgp_state: read
+
+- name: Check E-BGP sessions
+  ansible.builtin.set_fact:
+    _ebgp_ready: "{{ netris_ebgp_established | int >= 1 }}"
+    _ebgp_attempt: "{{ (_ebgp_attempt | default(0) | int) + 1 }}"
+
+- name: Report E-BGP progress
+  ansible.builtin.debug:
+    msg: "E-BGP: {{ netris_ebgp_established }}/{{ netris_ebgp_total }} established (attempt {{ _ebgp_attempt }}/20)"
+  when: not _ebgp_ready | bool
+
+- name: Wait and retry
+  when: not _ebgp_ready | bool and _ebgp_attempt | int < 20
+  block:
+    - name: Pause before retry
+      ansible.builtin.pause:
+        seconds: 15
+
+    - name: Retry E-BGP check
+      ansible.builtin.include_tasks: ebgp_wait.yml
+
+- name: Fail if no E-BGP sessions established
+  ansible.builtin.fail:
+    msg: "E-BGP: {{ netris_ebgp_established }}/{{ netris_ebgp_total }} established after {{ _ebgp_attempt }} attempts (need at least 1)"
+  when: not _ebgp_ready | bool and _ebgp_attempt | int >= 20

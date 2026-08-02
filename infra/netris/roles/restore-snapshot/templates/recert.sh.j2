@@ -1,0 +1,158 @@
+#!/bin/bash
+set -uo pipefail
+
+WORK_DIR=/var/lib/snapshot-recert
+CRYPTO_DIR=${WORK_DIR}/crypto
+NMSTATE_FILE=${WORK_DIR}/nmstate.yaml
+MARKER_DIR=${WORK_DIR}/markers
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') snapshot-recert: $*"; }
+
+run_once() {
+  local name="$1"
+  shift
+  if [[ -f "${MARKER_DIR}/${name}.done" ]]; then
+    log "Skipping ${name} (already completed)"
+    return 0
+  fi
+  log "Running ${name}"
+  if "$@"; then
+    touch "${MARKER_DIR}/${name}.done"
+    log "Completed ${name}"
+    return 0
+  else
+    log "Failed ${name}"
+    return 1
+  fi
+}
+
+mkdir -p "${MARKER_DIR}"
+
+# --- Apply network configuration ---
+apply_nmstate() {
+  nmstatectl apply "${NMSTATE_FILE}"
+}
+run_once "nmstate" apply_nmstate
+
+# --- Clean CRI-O pod state from snapshot ---
+clean_crio() {
+  crictl stop --timeout 5 $(crictl ps -q 2>/dev/null) 2>/dev/null || true
+  crictl pods -q 2>/dev/null | xargs --no-run-if-empty crictl rmp -f 2>/dev/null || true
+  systemctl stop crio.service
+}
+run_once "crio-clean" clean_crio
+
+# --- Run recert with standalone etcd ---
+run_recert() {
+  log "Reading etcd image from static pod manifest"
+  local etcd_image
+  etcd_image=$(python3 -c "
+import yaml
+d = yaml.safe_load(open('/etc/kubernetes/manifests/etcd-pod.yaml'))
+print([c['image'] for c in d['spec']['containers'] if c['name'] == 'etcd'][0])
+")
+
+  cleanup_etcd() {
+    podman stop etcd-recert 2>/dev/null || true
+    podman rm etcd-recert 2>/dev/null || true
+  }
+  trap cleanup_etcd RETURN
+
+  log "Starting standalone etcd (image: ${etcd_image})"
+  podman run -d --name etcd-recert \
+    --network host --privileged --replace \
+    --pull=never \
+    --authfile /var/lib/kubelet/config.json \
+    -v /var/lib/etcd:/store \
+    --entrypoint etcd \
+    "${etcd_image}" \
+    --name editor --data-dir /store \
+    --listen-client-urls http://localhost:2379 \
+    --advertise-client-urls http://localhost:2379
+
+  log "Waiting for etcd to be healthy"
+  local retries=0
+  until curl -sf http://localhost:2379/health; do
+    retries=$((retries + 1))
+    if [[ $retries -ge 30 ]]; then
+      log "etcd failed to become healthy after 30 attempts"
+      return 1
+    fi
+    sleep 2
+  done
+
+  log "Deleting HyperShift secrets from etcd"
+  podman exec etcd-recert etcdctl del /kubernetes.io/secrets/hypershift/ --prefix || true
+  podman exec etcd-recert etcdctl del /kubernetes.io/validatingwebhookconfigurations/hypershift.openshift.io || true
+  podman exec etcd-recert etcdctl del /kubernetes.io/mutatingwebhookconfigurations/hypershift.openshift.io || true
+  podman exec etcd-recert etcdctl del /kubernetes.io/secrets/open-cluster-management-agent-addon/hypershift-addon-agent-metrics || true
+  podman exec etcd-recert etcdctl del /kubernetes.io/secrets/open-cluster-management-agent-addon/hypershift-addon-hub-kubeconfig || true
+
+  log "Running recert"
+  podman run --rm --name recert --pull=missing \
+    --network host --privileged \
+    -v /etc/kubernetes:/etc/kubernetes \
+    -v /var/lib/kubelet:/var/lib/kubelet \
+    -v /etc/machine-config-daemon:/etc/machine-config-daemon \
+    -v /etc/cni:/etc/cni \
+    -v /var/tmp:/var/tmp \
+    -v "${CRYPTO_DIR}":/tmp/crypto:ro \
+    {{ snapshot_recert_image }} \
+    --etcd-endpoint localhost:2379 \
+    --crypto-dir /etc/kubernetes \
+    --crypto-dir /var/lib/kubelet \
+    --crypto-dir /etc/machine-config-daemon \
+    --crypto-dir /etc/cni \
+    --cluster-customization-dir /etc/kubernetes \
+    --cluster-customization-dir /var/lib/kubelet \
+    --cluster-customization-dir /etc/machine-config-daemon \
+    --use-key kube-apiserver-lb-signer:/tmp/crypto/lb-signer.key \
+    --use-key kube-apiserver-localhost-signer:/tmp/crypto/localhost-signer.key \
+    --use-key kube-apiserver-service-network-signer:/tmp/crypto/service-network-signer.key \
+    --use-key '{{ _ingress_cn }}:/tmp/crypto/ingress.key' \
+    --pull-secret /tmp/crypto/pull-secret \
+    --cluster-rename {{ ocp_cluster_name }}:{{ ocp_base_domain }} \
+    --hostname {{ ocp_vm_name }} \
+    --ip {{ ocp_node_ip }} \
+    --cn-san-replace api.{{ snapshot_source_cluster }}.{{ snapshot_source_domain }}:api.{{ ocp_cluster_name }}.{{ ocp_base_domain }} \
+    --cn-san-replace api-int.{{ snapshot_source_cluster }}.{{ snapshot_source_domain }}:api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }} \
+    --cn-san-replace '*.apps.{{ snapshot_source_cluster }}.{{ snapshot_source_domain }}:*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}' \
+    --cn-san-replace {{ snapshot_source_hostname }}:{{ ocp_vm_name }} \
+    --cn-san-replace system:node:{{ snapshot_source_hostname }},system:node:{{ ocp_vm_name }} \
+    --cn-san-replace {{ snapshot_source_ip }}:{{ ocp_node_ip }} \
+    --extend-expiration \
+    --summary-file-clean /var/tmp/recert-summary.yaml
+
+  log "Stopping standalone etcd"
+  cleanup_etcd
+  trap - RETURN
+}
+run_once "recert" run_recert
+
+# --- Fix pull-secret (recert writes the file path instead of content) ---
+fix_pull_secret() {
+  log "Fixing pull-secret on disk"
+  cp "${CRYPTO_DIR}/pull-secret" /var/lib/kubelet/config.json
+}
+run_once "fix-pull-secret" fix_pull_secret
+
+# --- Start services ---
+start_services() {
+  log "Starting CRI-O"
+  systemctl start crio.service
+
+  log "Restoring and starting kubelet"
+  mv /etc/systemd/system/kubelet.service.snapshot-disabled /etc/systemd/system/kubelet.service
+  systemctl daemon-reload
+  systemctl enable --now kubelet
+
+  log "Touching static pod manifests to force recreation"
+  find /etc/kubernetes/manifests -name '*.yaml' -exec touch {} + 2>/dev/null || true
+}
+run_once "start-services" start_services
+
+# --- Self-cleanup ---
+log "Disabling snapshot-recert.service"
+systemctl disable snapshot-recert.service
+
+log "Recert complete"

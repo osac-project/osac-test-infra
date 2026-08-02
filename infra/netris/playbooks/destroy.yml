@@ -1,0 +1,6 @@
+---
+- name: Destroy Netris lab and cleanup
+  hosts: all
+  gather_facts: false
+  roles:
+    - destroy

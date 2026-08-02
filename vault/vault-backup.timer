@@ -1,0 +1,13 @@
+# Daily Vault backup timer -- fires at 03:00 with up to 10min random delay.
+
+[Unit]
+Description=Daily Vault backup timer (OSAC CI)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=600
+Timezone=UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

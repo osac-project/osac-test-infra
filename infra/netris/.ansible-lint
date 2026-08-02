@@ -1,0 +1,19 @@
+skip_list:
+  - role-name[path]
+  - fqcn[keyword]
+  - fqcn[action-core]
+  - fqcn[action]
+  - no-changed-when
+  - risky-shell-pipe
+  - ignore-errors
+  - command-instead-of-shell
+  - command-instead-of-module
+  - var-naming[no-role-prefix]
+  - no-handler
+  - name[template]
+warn_list:
+  - risky-file-permissions
+exclude_paths:
+  - vendor/
+  - netris-lab/
+  - .claude/

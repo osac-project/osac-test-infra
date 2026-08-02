@@ -1,0 +1,8 @@
+#!/bin/bash
+# Fix VPN route that conflicts with virbr0.
+# The VPN server pushes a route for 192.168.122.0/24 via tun0,
+# which overrides the virbr0 connected route needed for mgmt-server access.
+sleep 3
+ip route del 192.168.122.0/24 via 255.255.255.0 dev tun0 2>/dev/null || true
+# Re-add virbr0 connected route in case VPN route deletion removed it
+ip route add 192.168.122.0/24 dev virbr0 proto kernel scope link src 192.168.122.1 2>/dev/null || true

@@ -1,0 +1,93 @@
+---
+- name: Flush restrictive libvirt nftables chains
+  shell: |
+    nft flush chain ip filter LIBVIRT_FWI 2>/dev/null || true
+    nft flush chain ip filter LIBVIRT_FWO 2>/dev/null || true
+    nft flush chain ip filter LIBVIRT_FWX 2>/dev/null || true
+    if nft list chain ip libvirt_network guest_input &>/dev/null; then
+      nft flush chain ip libvirt_network guest_input
+      nft flush chain ip libvirt_network guest_output
+      nft add rule ip libvirt_network guest_input accept
+      nft add rule ip libvirt_network guest_output accept
+    fi
+  changed_when: false
+
+- name: Wait for mgmt-server VM to be reachable
+  wait_for:
+    host: 192.168.122.10
+    port: 22
+    timeout: 600
+    sleep: 15
+
+- name: Wait for mgmt-server OpenVPN server
+  shell: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.122.10 "systemctl is-active openvpn@server"
+  register: vpn_server_check
+  until: vpn_server_check.stdout == "active"
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Create RHEL openvpn client directory
+  file:
+    path: /etc/openvpn/client
+    state: directory
+
+- name: Copy VPN client config to RHEL path
+  copy:
+    src: "/etc/openvpn/{{ item }}"
+    dest: "/etc/openvpn/client/{{ item }}"
+    remote_src: true
+  loop:
+    - client.conf
+    - ca.crt
+    - ta.key
+    - myclient1.crt
+    - myclient1.key
+
+- name: Fix VPN remote address
+  lineinfile:
+    path: /etc/openvpn/client/client.conf
+    regexp: '^remote\s+'
+    line: 'remote 192.168.122.10 1194'
+
+- name: Install VPN route fix script
+  template:
+    src: openvpn-route-fix.sh.j2
+    dest: /usr/local/bin/openvpn-route-fix.sh
+    mode: '0755'
+    setype: bin_t
+
+- name: Create systemd override directory
+  file:
+    path: /etc/systemd/system/openvpn-client@client.service.d
+    state: directory
+    mode: '0755'
+
+- name: Create systemd override for VPN route fix
+  copy:
+    dest: /etc/systemd/system/openvpn-client@client.service.d/route-fix.conf
+    content: |
+      [Service]
+      ExecStartPost=/usr/local/bin/openvpn-route-fix.sh
+    mode: '0644'
+  register: vpn_override
+
+- name: Reload systemd
+  when: vpn_override.changed
+  systemd:
+    daemon_reload: true
+
+- name: Start OpenVPN client
+  systemd:
+    name: openvpn-client@client
+    state: started
+    enabled: true
+
+- name: Wait for tun0 interface
+  wait_for:
+    path: /sys/class/net/tun0
+    timeout: 30
+
+- name: Verify VPN IP
+  shell: ip addr show tun0 | grep "10.8.0.2"
+  changed_when: false

@@ -1,0 +1,119 @@
+---
+- name: Post-OSAC — scale down MCE operators and filter OS images
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Scale down MCE operators to prevent OS_IMAGES overwrites
+      ansible.builtin.command:
+        cmd: oc scale deployment {{ item }} -n multicluster-engine --replicas=0
+      environment:
+        KUBECONFIG: /root/.kube/config
+      loop:
+        - infrastructure-operator
+        - multicluster-engine-operator
+      failed_when: false
+      changed_when: false
+
+    - name: Wait for MCE operator pods to terminate
+      ansible.builtin.shell:
+        cmd: oc get pods -n multicluster-engine -l control-plane={{ item }} --no-headers 2>/dev/null | grep -v Terminating | wc -l
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _mce_pods
+      until: _mce_pods.stdout | int == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+      failed_when: false
+      loop:
+        - infrastructure-operator
+        - backplane-operator
+
+    - name: Filter OS_IMAGES and patch assisted-service ConfigMap and StatefulSet
+      ansible.builtin.shell:
+        cmd: |
+          python3 << 'PYEOF'
+          import json, subprocess, os
+
+          os.environ["KUBECONFIG"] = "/root/.kube/config"
+
+          def run(cmd):
+              r = subprocess.run(cmd, capture_output=True, text=True, check=True)
+              return r.stdout
+
+          os_images = json.loads(run(["oc", "get", "configmap", "assisted-service", "-n", "multicluster-engine", "-o", "jsonpath={.data.OS_IMAGES}"]))
+          filtered = [i for i in os_images if i["openshift_version"] == "{{ caas_ocp_version }}" and i["cpu_architecture"] == "x86_64"]
+          if len(filtered) == len(os_images) and len(os_images) <= 1:
+              print("OS_IMAGES already filtered (%d entries, all match)" % len(os_images))
+          else:
+              filtered_json = json.dumps(filtered)
+              print("Filtered OS_IMAGES from %d to %d" % (len(os_images), len(filtered)))
+
+              patch = json.dumps({"data": {"OS_IMAGES": filtered_json}})
+              run(["oc", "patch", "configmap", "assisted-service", "-n", "multicluster-engine", "--type=merge", "-p", patch])
+
+              ss = json.loads(run(["oc", "get", "statefulset", "assisted-image-service", "-n", "multicluster-engine", "-o", "json"]))
+              idx = next(i for i, e in enumerate(ss["spec"]["template"]["spec"]["containers"][0]["env"]) if e["name"] == "RHCOS_VERSIONS")
+              ss_patch = json.dumps([{"op": "replace", "path": "/spec/template/spec/containers/0/env/%d/value" % idx, "value": filtered_json}])
+              with open("/tmp/patch.json", "w") as f:
+                  f.write(ss_patch)
+              run(["oc", "patch", "statefulset", "assisted-image-service", "-n", "multicluster-engine", "--type=json", "--patch-file=/tmp/patch.json"])
+              print("Patched ConfigMap and StatefulSet")
+
+              run(["oc", "rollout", "restart", "deployment/assisted-service", "-n", "multicluster-engine"])
+              print("Restarted assisted-service")
+
+              run(["oc", "delete", "pod", "assisted-image-service-0", "-n", "multicluster-engine", "--ignore-not-found"])
+              print("Deleted assisted-image-service pod")
+          PYEOF
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: "'Patched' in _filter_result.stdout"
+      register: _filter_result
+
+    - name: Display filtering result
+      ansible.builtin.debug:
+        msg: "{{ _filter_result.stdout_lines }}"
+
+    - name: Wait for assisted-service rollout
+      ansible.builtin.command:
+        cmd: oc rollout status deployment/assisted-service -n multicluster-engine --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    - name: Wait for assisted-image-service pod ready
+      ansible.builtin.shell:
+        cmd: oc get pod assisted-image-service-0 -n multicluster-engine -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _ais_ready
+      until: _ais_ready.stdout == 'True'
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Verify assisted-image-service has only target OCP version
+      ansible.builtin.shell:
+        cmd: |
+          oc get statefulset assisted-image-service -n multicluster-engine -o json | \
+            python3 -c "
+          import json, sys
+          ss = json.load(sys.stdin)
+          env = ss['spec']['template']['spec']['containers'][0]['env']
+          rhcos = next(e for e in env if e['name'] == 'RHCOS_VERSIONS')
+          images = json.loads(rhcos['value'])
+          versions = [(i['openshift_version'], i['cpu_architecture']) for i in images]
+          print(f'RHCOS_VERSIONS: {len(images)} image(s): {versions}')
+          bad = [v for v in versions if v != ('{{ caas_ocp_version }}', 'x86_64')]
+          if bad:
+              print(f'ERROR: unexpected images: {bad}')
+              sys.exit(1)
+          if not versions:
+              print('ERROR: no images found')
+              sys.exit(1)
+          print('OK: only {{ caas_ocp_version }} x86_64')
+          "
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false

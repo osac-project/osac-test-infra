@@ -1,0 +1,22 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get sites
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/sites"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+    timeout: "{{ netris_timeout | default(30) }}"
+    status_code: 200
+  register: _sites_resp
+
+- name: Set site facts
+  ansible.builtin.set_fact:
+    netris_sites: "{{ _sites_resp.json.data }}"
+    netris_site_id: "{{ _sites_resp.json.data[0].id }}"
+    netris_site_name: "{{ _sites_resp.json.data[0].name }}"

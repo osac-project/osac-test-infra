@@ -1,0 +1,57 @@
+---
+- name: Clean up Route 53 DNS records for this lab
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Get Route 53 hosted zone ID
+      ansible.builtin.shell:
+        cmd: >-
+          aws route53 list-hosted-zones-by-name
+          --dns-name {{ dns_hosted_zone }}
+          --query "HostedZones[0].Id"
+          --output text
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ aws_region }}"
+      register: _r53_zone_id
+      changed_when: false
+      failed_when: false
+
+    - name: Delete OCP DNS records from Route 53
+      ansible.builtin.shell:
+        cmd: >-
+          aws route53 change-resource-record-sets
+          --hosted-zone-id {{ _r53_zone_id.stdout | trim }}
+          --change-batch '{{ _batch | to_json }}'
+      vars:
+        _batch:
+          Changes:
+            - Action: DELETE
+              ResourceRecordSet:
+                Name: "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+                Type: A
+                TTL: 300
+                ResourceRecords:
+                  - Value: "{{ ocp_dnat_ip }}"
+            - Action: DELETE
+              ResourceRecordSet:
+                Name: "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+                Type: A
+                TTL: 300
+                ResourceRecords:
+                  - Value: "{{ ocp_dnat_ip }}"
+            - Action: DELETE
+              ResourceRecordSet:
+                Name: "*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+                Type: A
+                TTL: 300
+                ResourceRecords:
+                  - Value: "{{ ocp_dnat_ip }}"
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ aws_region }}"
+      when: _r53_zone_id.rc == 0 and _r53_zone_id.stdout | trim | length > 0
+      changed_when: true
+      failed_when: false

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if jq -re '.tool_input.command' | grep -qE '(^|[;&|] *)git commit'; then if ! command -v pre-commit >/dev/null 2>&1; then echo '{\"decision\":\"block\",\"reason\":\"pre-commit is not installed. Install it with: pip install pre-commit\"}'; exit 0; fi; pre-commit run --all-files >&2 || { echo '{\"decision\":\"block\",\"reason\":\"pre-commit checks failed\"}'; exit 0; }; fi",
+            "timeout": 300,
+            "statusMessage": "Running pre-commit checks..."
+          }
+        ]
+      }
+    ]
+  }
+}

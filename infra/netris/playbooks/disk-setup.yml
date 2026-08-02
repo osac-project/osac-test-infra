@@ -1,0 +1,6 @@
+---
+- name: Set up data disk layout
+  hosts: all
+  gather_facts: false
+  roles:
+    - disk_setup

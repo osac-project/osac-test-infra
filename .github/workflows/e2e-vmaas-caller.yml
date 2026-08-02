@@ -1,0 +1,36 @@
+---
+name: E2E VMaaS
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-suite:
+        description: "Test suite (vmaas, caas, or empty for all)"
+        required: false
+        default: "vmaas"
+      test-filter:
+        description: "pytest -k filter"
+        required: false
+        default: ""
+      installer-ref:
+        description: "Branch/ref of the OSAC monorepo"
+        required: false
+        default: "main"
+      image-overrides:
+        description: "JSON mapping Helm value paths to image refs"
+        required: false
+        default: "{}"
+      osac-cli-version:
+        description: "OSAC CLI version (e.g. 0.0.73). Defaults to latest."
+        required: false
+        default: ""
+
+jobs:
+  e2e-vmaas:
+    uses: ./.github/workflows/e2e-vmaas.yml
+    with:
+      test-suite: ${{ inputs.test-suite || 'vmaas' }}
+      test-filter: ${{ inputs.test-filter || '' }}
+      installer-ref: ${{ inputs.installer-ref || 'main' }}
+      image-overrides: ${{ inputs.image-overrides || '{}' }}
+      osac-cli-version: ${{ inputs.osac-cli-version || '' }}

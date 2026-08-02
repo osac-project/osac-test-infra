@@ -1,0 +1,7 @@
+---
+- name: Install OCP SNO on Netris-managed server
+  hosts: all
+  gather_facts: false
+  roles:
+    - assisted_service
+    - ocp_install

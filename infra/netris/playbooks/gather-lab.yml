@@ -1,0 +1,27 @@
+---
+- name: Gather lab diagnostic information from hypervisor
+  hosts: all
+  become: true
+  gather_facts: true
+  pre_tasks:
+    - name: Load netris-lab variables
+      ansible.builtin.include_vars:
+        file: "{{ netris_lab_dir }}/group_vars/all.yml"
+      ignore_errors: true
+
+    - name: Set gather directory
+      ansible.builtin.set_fact:
+        _gather_dir: "{{ playbook_dir }}/../logs"
+
+    - name: Create gather root directory
+      ansible.builtin.file:
+        path: "{{ _gather_dir }}"
+        state: directory
+        mode: "0755"
+      failed_when: false
+  roles:
+    - gather_lab
+  post_tasks:
+    - name: Print gather location
+      ansible.builtin.debug:
+        msg: "Lab diagnostics saved to {{ _gather_dir }}/lab"

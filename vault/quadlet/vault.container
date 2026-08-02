@@ -1,0 +1,43 @@
+# Podman Quadlet unit file for HashiCorp Vault
+# Installed by vault-setup.sh to ~/.config/containers/systemd/vault.container
+#
+# Quadlet generates a systemd unit (vault.service) from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=HashiCorp Vault (OSAC CI)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/hashicorp/vault:2.0.3
+ContainerName=vault
+
+# Localhost-only binding -- no external exposure
+PublishPort=127.0.0.1:8200:8200
+
+# Run the vault server with our config
+Exec=server
+
+# Mount host directories into the container.
+# :Z applies the correct SELinux context for rootless Podman.
+Volume=%h/.vault-server/config:/vault/config:Z
+Volume=%h/.vault-server/data:/vault/data:Z
+Volume=%h/.vault-server/logs:/vault/logs:Z
+
+# Environment for rootless operation
+Environment=SKIP_CHOWN=true
+Environment=SKIP_SETCAP=true
+Environment=VAULT_ADDR=http://127.0.0.1:8200
+
+# Version pinned for CI stability -- update deliberately after testing
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+# Auto-unseal after the container starts
+ExecStartPost=%h/.vault-server/scripts/vault-unseal.sh
+
+[Install]
+WantedBy=default.target

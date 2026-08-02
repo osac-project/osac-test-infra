@@ -1,0 +1,135 @@
+---
+- name: Check if flavor is already cached
+  ansible.builtin.stat:
+    path: "{{ snapshot_flavor_dir }}/disk-0.qcow2"
+  register: _flavor_cached
+
+- name: Pull and extract flavor image
+  when: not _flavor_cached.stat.exists
+  block:
+    - name: Ensure cache directory exists
+      ansible.builtin.file:
+        path: "{{ snapshot_flavor_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create temp directory for OCI download
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: flavor-oci-
+      register: _oci_tmp
+
+    - name: Pull flavor OCI image with skopeo
+      ansible.builtin.command:
+        cmd: >-
+          skopeo copy
+          --retry-times 5
+          docker://{{ snapshot_flavor_image }}
+          oci:{{ _oci_tmp.path }}/oci:latest
+      register: _skopeo_pull
+      until: _skopeo_pull.rc == 0
+      retries: 3
+      delay: 30
+
+    - name: Read OCI index
+      ansible.builtin.slurp:
+        src: "{{ _oci_tmp.path }}/oci/index.json"
+      register: _oci_index_raw
+
+    - name: Parse OCI index to get manifest digest
+      ansible.builtin.set_fact:
+        _oci_manifest_digest: "{{ (_oci_index_raw.content | b64decode | from_json).manifests[0].digest | replace('sha256:', '') }}"
+
+    - name: Read OCI manifest
+      ansible.builtin.slurp:
+        src: "{{ _oci_tmp.path }}/oci/blobs/sha256/{{ _oci_manifest_digest }}"
+      register: _oci_manifest_raw
+
+    - name: Parse OCI manifest layers
+      ansible.builtin.set_fact:
+        _oci_layers: "{{ (_oci_manifest_raw.content | b64decode | from_json).layers }}"
+
+    - name: Extract layer 1 — manifest.json (flavor metadata)
+      ansible.builtin.shell:
+        cmd: >-
+          tar xzf {{ _oci_tmp.path }}/oci/blobs/sha256/{{ _oci_layers[0].digest | replace('sha256:', '') }}
+          -C {{ snapshot_flavor_dir }}/
+          manifest.json
+      args:
+        creates: "{{ snapshot_flavor_dir }}/manifest.json"
+
+    - name: Extract layer 2 — crypto directory
+      ansible.builtin.shell:
+        cmd: >-
+          tar xzf {{ _oci_tmp.path }}/oci/blobs/sha256/{{ _oci_layers[1].digest | replace('sha256:', '') }}
+          -C {{ snapshot_flavor_dir }}/
+
+    - name: Read flavor manifest for disk info
+      ansible.builtin.slurp:
+        src: "{{ snapshot_flavor_dir }}/manifest.json"
+      register: _flavor_manifest_raw
+
+    - name: Parse flavor manifest
+      ansible.builtin.set_fact:
+        _flavor_manifest: "{{ _flavor_manifest_raw.content | b64decode | from_json }}"
+
+    - name: Build disk layer mapping
+      ansible.builtin.set_fact:
+        _disk_layer_map: >-
+          {%- set ns = namespace(offset=2, result=[]) -%}
+          {%- for disk in _flavor_manifest.disks -%}
+            {%- set layers = [] -%}
+            {%- for i in range(disk.chunk_count) -%}
+              {%- set _ = layers.append(_oci_layers[ns.offset + i].digest | replace('sha256:', '')) -%}
+            {%- endfor -%}
+            {%- set _ = ns.result.append({'index': loop.index0, 'layers': layers}) -%}
+            {%- set ns.offset = ns.offset + disk.chunk_count -%}
+          {%- endfor -%}
+          {{ ns.result }}
+
+    - name: Reassemble disk images from compressed chunks
+      ansible.builtin.shell:
+        cmd: |
+          set -eo pipefail
+          shopt -s nullglob
+          disk_file="{{ snapshot_flavor_dir }}/disk-{{ item.index }}.qcow2"
+          rm -f "${disk_file}"
+          mkdir -p "{{ _oci_tmp.path }}/chunks"
+          {% for digest in item.layers %}
+          blob="{{ _oci_tmp.path }}/oci/blobs/sha256/{{ digest }}"
+          tar xf "${blob}" -C "{{ _oci_tmp.path }}"
+          for chunk in "{{ _oci_tmp.path }}"/chunks/*.zst; do
+            zstd -dc "$chunk" >> "${disk_file}"
+            rm -f "$chunk"
+          done
+          for chunk in "{{ _oci_tmp.path }}"/chunks/*.gz; do
+            pigz -dc "$chunk" >> "${disk_file}"
+            rm -f "$chunk"
+          done
+          {% endfor %}
+        executable: /bin/bash
+      loop: "{{ _disk_layer_map }}"
+      loop_control:
+        label: "disk-{{ item.index }}.qcow2"
+
+    - name: Set correct permissions on crypto directory
+      ansible.builtin.file:
+        path: "{{ snapshot_flavor_dir }}/crypto"
+        mode: "0700"
+
+    - name: Set correct permissions on SSH key
+      ansible.builtin.file:
+        path: "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+        mode: "0600"
+      failed_when: false
+
+  always:
+    - name: Clean up OCI temp directory
+      ansible.builtin.file:
+        path: "{{ _oci_tmp.path }}"
+        state: absent
+      when: _oci_tmp is defined and _oci_tmp.path is defined
+
+- name: Report flavor cache status
+  ansible.builtin.debug:
+    msg: "Flavor {{ 'already cached' if _flavor_cached.stat.exists else 'pulled and cached' }} at {{ snapshot_flavor_dir }}"

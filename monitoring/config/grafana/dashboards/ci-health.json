@@ -1,0 +1,604 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Team-facing CI health summary for standups and sprint reviews: pass rate trend, flake rate, and MTTR. See OSAC CI - Workflow Jobs for the detailed engineering drill-down.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Pass Rate Trend",
+      "description": "Overall success rate over time (increase() of completed runs per interval). Native Prometheus query, not filtered by category/workflow -- only by repo.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(github_actions_completed_runs_total{conclusion=\"success\", repo=~\"$repo_regex\"}[$__interval])) / sum(increase(github_actions_completed_runs_total{repo=~\"$repo_regex\"}[$__interval]))",
+          "legendFormat": "Pass rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Overall Pass Rate",
+      "description": "Success rate over the selected time range and filters (excludes cancelled runs from the denominator).",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 1 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.8 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/success_rate/", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "success_rate", "text": "success_rate", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Overall MTTR",
+      "description": "Mean time from a failing run to the next run of the same workflow that succeeds, averaged across all workflows.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 5 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No recoveries yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/mttr?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "overall",
+          "columns": [
+            { "selector": "mttr_display", "text": "mttr_display", "type": "string" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Flake Rate by Workflow",
+      "description": "Fraction of successful runs that needed more than one attempt (run_attempt > 1) to go green -- a retry-to-green with no code change. Runs that never succeeded are real failures, not flakes, and aren't counted here.",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.15 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/flake_rate/", "values": true },
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "flaky_passes": true,
+              "total_successes": true
+            },
+            "renameByName": {}
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/flake-rate?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "flaky_passes", "text": "flaky_passes", "type": "number" },
+            { "selector": "total_successes", "text": "total_successes", "type": "number" },
+            { "selector": "flake_rate", "text": "flake_rate", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "MTTR by Workflow",
+      "description": "Per-workflow mean time to recovery. Click column headers to sort.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "workflow" },
+            "properties": [
+              { "id": "displayName", "value": "Workflow" },
+              { "id": "custom.width", "value": 260 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "mttr_display" },
+            "properties": [
+              { "id": "displayName", "value": "MTTR" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "num_recoveries" },
+            "properties": [
+              { "id": "displayName", "value": "Recoveries" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "mttr_seconds" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "mttr_seconds", "desc": true }],
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/mttr?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&job_type=${job_type}&merge_similar=${merge_similar}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "by_workflow",
+          "columns": [
+            { "selector": "workflow", "text": "workflow", "type": "string" },
+            { "selector": "mttr_display", "text": "mttr_display", "type": "string" },
+            { "selector": "num_recoveries", "text": "num_recoveries", "type": "number" },
+            { "selector": "mttr_seconds", "text": "mttr_seconds", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Time to Merge (First Approval, Median)",
+      "description": "Median time from a PR's first human-reviewer approval to merge, for PRs merged within the selected time range (filtered by merge time, not open time). Median, not mean -- a handful of PRs approved and then simply never merged for days/weeks skew the mean heavily (see the Outliers table); median reports the typical case. Excludes PRs with no human approval on record (e.g. admin-merged, or only bot-reviewed -- see approved_count/count for that ratio). Not affected by the Category/Workflow/Job Type filters, which don't apply to PRs -- only Repository does.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 17 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No merged PRs",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/pr-merge-time?repo=${repo_filter}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "",
+          "columns": [
+            { "selector": "median_approval_to_merge_display", "text": "median_approval_to_merge_display", "type": "string" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Time to Merge by Repo",
+      "description": "Per-repo PR timing/retest stats, for PRs merged within the selected time range. Approval→Merge excludes PRs with no human approval on record; Open→Merge is the full PR lifecycle (create to merge). Both report median (typical case) and mean (sensitive to outliers -- a big mean/median gap means outliers exist, see the Outliers table below). Retests (avg) counts e2e runs beyond the first per PR (each /retest or new push triggers another). Click column headers to sort.",
+      "type": "table",
+      "gridPos": { "h": 4, "w": 16, "x": 8, "y": 17 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "repo" },
+            "properties": [
+              { "id": "displayName", "value": "Repository" },
+              { "id": "custom.width", "value": 160 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "median_approval_to_merge_display" },
+            "properties": [
+              { "id": "displayName", "value": "Approval→Merge (median)" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "avg_approval_to_merge_display" },
+            "properties": [
+              { "id": "displayName", "value": "Approval→Merge (mean)" },
+              { "id": "custom.width", "value": 150 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "median_open_to_merge_display" },
+            "properties": [
+              { "id": "displayName", "value": "Open→Merge (median)" },
+              { "id": "custom.width", "value": 140 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "avg_retest_count" },
+            "properties": [
+              { "id": "displayName", "value": "Retests (avg)" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "approved_count" },
+            "properties": [
+              { "id": "displayName", "value": "Approved" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "count" },
+            "properties": [
+              { "id": "displayName", "value": "Merged" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "median_approval_to_merge_seconds" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "median_approval_to_merge_seconds", "desc": true }],
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/pr-merge-time?repo=${repo_filter}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "by_repo",
+          "columns": [
+            { "selector": "repo", "text": "repo", "type": "string" },
+            { "selector": "median_approval_to_merge_display", "text": "median_approval_to_merge_display", "type": "string" },
+            { "selector": "median_approval_to_merge_seconds", "text": "median_approval_to_merge_seconds", "type": "number" },
+            { "selector": "avg_approval_to_merge_display", "text": "avg_approval_to_merge_display", "type": "string" },
+            { "selector": "median_open_to_merge_display", "text": "median_open_to_merge_display", "type": "string" },
+            { "selector": "avg_retest_count", "text": "avg_retest_count", "type": "number" },
+            { "selector": "approved_count", "text": "approved_count", "type": "number" },
+            { "selector": "count", "text": "count", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Time to Merge Outliers",
+      "description": "PRs approved and then not merged for a long time (>3x the window's median approval→merge time, or >1h absolute floor). These are exactly what the median above is deliberately insensitive to -- surfaced here so a real \"approved, then forgotten\" PR doesn't just disappear from the reported numbers. Capped at the 5 worst per query.",
+      "type": "table",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 21 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No outliers in this window"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "repo" },
+            "properties": [{ "id": "displayName", "value": "Repository" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "number" },
+            "properties": [
+              { "id": "displayName", "value": "PR" },
+              { "id": "unit", "value": "none" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "title" },
+            "properties": [
+              { "id": "displayName", "value": "Title" },
+              { "id": "custom.width", "value": 400 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "approval_to_merge_display" },
+            "properties": [
+              { "id": "displayName", "value": "Approval→Merge" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "approval_to_merge_seconds" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "approval_to_merge_seconds", "desc": true }],
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/pr-merge-time?repo=${repo_filter}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "approval_outliers",
+          "columns": [
+            { "selector": "repo", "text": "repo", "type": "string" },
+            { "selector": "number", "text": "number", "type": "number" },
+            { "selector": "title", "text": "title", "type": "string" },
+            { "selector": "approval_to_merge_display", "text": "approval_to_merge_display", "type": "string" },
+            { "selector": "approval_to_merge_seconds", "text": "approval_to_merge_seconds", "type": "number" }
+          ]
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["osac", "ci", "health"],
+  "templating": {
+    "list": [
+      {
+        "name": "category",
+        "label": "Category",
+        "type": "custom",
+        "query": "All,e2e,ci,lint,release,automation",
+        "current": { "text": "All", "value": "All", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": true },
+          { "text": "E2E", "value": "e2e", "selected": false },
+          { "text": "CI/Build", "value": "ci", "selected": false },
+          { "text": "Lint/Quality", "value": "lint", "selected": false },
+          { "text": "Release/Publish", "value": "release", "selected": false },
+          { "text": "Automation", "value": "automation", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
+      {
+        "name": "repo_filter",
+        "label": "Repository",
+        "type": "custom",
+        "query": "All,osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer,bare-metal-fulfillment-operator,osac",
+        "current": { "text": "All", "value": "All", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": true },
+          { "text": "osac-aap", "value": "osac-aap", "selected": false },
+          { "text": "osac-operator", "value": "osac-operator", "selected": false },
+          { "text": "fulfillment-service", "value": "fulfillment-service", "selected": false },
+          { "text": "osac-test-infra", "value": "osac-test-infra", "selected": false },
+          { "text": "osac-installer", "value": "osac-installer", "selected": false },
+          { "text": "bare-metal-fulfillment-operator", "value": "bare-metal-fulfillment-operator", "selected": false },
+          { "text": "osac", "value": "osac", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
+      {
+        "name": "repo_regex",
+        "label": "Repository (trend panel)",
+        "type": "custom",
+        "query": "All,osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer,bare-metal-fulfillment-operator,osac",
+        "current": { "text": "All", "value": ".*", "selected": true },
+        "options": [
+          { "text": "All", "value": ".*", "selected": true },
+          { "text": "osac-aap", "value": "osac-aap", "selected": false },
+          { "text": "osac-operator", "value": "osac-operator", "selected": false },
+          { "text": "fulfillment-service", "value": "fulfillment-service", "selected": false },
+          { "text": "osac-test-infra", "value": "osac-test-infra", "selected": false },
+          { "text": "osac-installer", "value": "osac-installer", "selected": false },
+          { "text": "bare-metal-fulfillment-operator", "value": "bare-metal-fulfillment-operator", "selected": false },
+          { "text": "osac", "value": "osac", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
+      {
+        "name": "workflow_name",
+        "label": "Workflow",
+        "description": "Static allowlist snapshotted from live workflow names across all tracked repos -- it will go stale as workflows are added/renamed. Regenerate via: curl -s 'http://127.0.0.1:9103/api/workflows' | jq -r '.[].workflow' | sort -u -f",
+        "type": "custom",
+        "query": "All,.github/workflows/e2e-test.yml,Ansible Lint,Audit workflow logs,Build container image,Build execution environment,Bump submodules,Bump submodules and pinned refs,CI,CI daily digest,Check AuthConfig Rego matches base,Check Floating Image Tags,Check image tags match submodules,Check pull request,Cleanup nightly branches,Container image,Deploy monitoring stack,E2E BMaaS Full Install,E2E CaaS,E2E CaaS Full Install,E2E CaaS Full Install (EC2),E2E CaaS Netris,E2E CaaS Netris Full Install,E2E EC2 Ephemeral Runner,E2E Full Install Tests,E2E Tests,E2E VMaaS,E2E VMaaS Full Install,E2E VMaaS Full Install Tests,E2E VMaaS Tests,EC2 Ephemeral Runner Orphan Watchdog,Helm Integration Test,Helm Lint,Integration Tests,Kustomize Build,Mirror Envoy Image,Nightly Build,Publish Helm Charts,Publish OpenAPI,Publish binaries,Publish charts,Publish proto,Remove ok-to-test on new push,Scan E2E logs,Secret scanning,Slash Command,Unit Tests,Validate monitoring stack,check-generated-code,e2e,integration,pre-commit",
+        "current": { "text": "All", "value": "All", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": true },
+          { "text": ".github/workflows/e2e-test.yml", "value": ".github/workflows/e2e-test.yml", "selected": false },
+          { "text": "Ansible Lint", "value": "Ansible Lint", "selected": false },
+          { "text": "Audit workflow logs", "value": "Audit workflow logs", "selected": false },
+          { "text": "Build container image", "value": "Build container image", "selected": false },
+          { "text": "Build execution environment", "value": "Build execution environment", "selected": false },
+          { "text": "Bump submodules", "value": "Bump submodules", "selected": false },
+          { "text": "Bump submodules and pinned refs", "value": "Bump submodules and pinned refs", "selected": false },
+          { "text": "CI", "value": "CI", "selected": false },
+          { "text": "CI daily digest", "value": "CI daily digest", "selected": false },
+          { "text": "Check AuthConfig Rego matches base", "value": "Check AuthConfig Rego matches base", "selected": false },
+          { "text": "Check Floating Image Tags", "value": "Check Floating Image Tags", "selected": false },
+          { "text": "Check image tags match submodules", "value": "Check image tags match submodules", "selected": false },
+          { "text": "Check pull request", "value": "Check pull request", "selected": false },
+          { "text": "Cleanup nightly branches", "value": "Cleanup nightly branches", "selected": false },
+          { "text": "Container image", "value": "Container image", "selected": false },
+          { "text": "Deploy monitoring stack", "value": "Deploy monitoring stack", "selected": false },
+          { "text": "E2E BMaaS Full Install", "value": "E2E BMaaS Full Install", "selected": false },
+          { "text": "E2E CaaS", "value": "E2E CaaS", "selected": false },
+          { "text": "E2E CaaS Full Install", "value": "E2E CaaS Full Install", "selected": false },
+          { "text": "E2E CaaS Full Install (EC2)", "value": "E2E CaaS Full Install (EC2)", "selected": false },
+          { "text": "E2E CaaS Netris", "value": "E2E CaaS Netris", "selected": false },
+          { "text": "E2E CaaS Netris Full Install", "value": "E2E CaaS Netris Full Install", "selected": false },
+          { "text": "E2E EC2 Ephemeral Runner", "value": "E2E EC2 Ephemeral Runner", "selected": false },
+          { "text": "E2E Full Install Tests", "value": "E2E Full Install Tests", "selected": false },
+          { "text": "E2E Tests", "value": "E2E Tests", "selected": false },
+          { "text": "E2E VMaaS", "value": "E2E VMaaS", "selected": false },
+          { "text": "E2E VMaaS Full Install", "value": "E2E VMaaS Full Install", "selected": false },
+          { "text": "E2E VMaaS Full Install Tests", "value": "E2E VMaaS Full Install Tests", "selected": false },
+          { "text": "E2E VMaaS Tests", "value": "E2E VMaaS Tests", "selected": false },
+          { "text": "EC2 Ephemeral Runner Orphan Watchdog", "value": "EC2 Ephemeral Runner Orphan Watchdog", "selected": false },
+          { "text": "Helm Integration Test", "value": "Helm Integration Test", "selected": false },
+          { "text": "Helm Lint", "value": "Helm Lint", "selected": false },
+          { "text": "Integration Tests", "value": "Integration Tests", "selected": false },
+          { "text": "Kustomize Build", "value": "Kustomize Build", "selected": false },
+          { "text": "Mirror Envoy Image", "value": "Mirror Envoy Image", "selected": false },
+          { "text": "Nightly Build", "value": "Nightly Build", "selected": false },
+          { "text": "Publish Helm Charts", "value": "Publish Helm Charts", "selected": false },
+          { "text": "Publish OpenAPI", "value": "Publish OpenAPI", "selected": false },
+          { "text": "Publish binaries", "value": "Publish binaries", "selected": false },
+          { "text": "Publish charts", "value": "Publish charts", "selected": false },
+          { "text": "Publish proto", "value": "Publish proto", "selected": false },
+          { "text": "Remove ok-to-test on new push", "value": "Remove ok-to-test on new push", "selected": false },
+          { "text": "Scan E2E logs", "value": "Scan E2E logs", "selected": false },
+          { "text": "Secret scanning", "value": "Secret scanning", "selected": false },
+          { "text": "Slash Command", "value": "Slash Command", "selected": false },
+          { "text": "Unit Tests", "value": "Unit Tests", "selected": false },
+          { "text": "Validate monitoring stack", "value": "Validate monitoring stack", "selected": false },
+          { "text": "check-generated-code", "value": "check-generated-code", "selected": false },
+          { "text": "e2e", "value": "e2e", "selected": false },
+          { "text": "integration", "value": "integration", "selected": false },
+          { "text": "pre-commit", "value": "pre-commit", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
+      {
+        "name": "job_type",
+        "label": "Job Type",
+        "type": "custom",
+        "query": "All,periodic,presubmit,manual",
+        "current": { "text": "All", "value": "All", "selected": true },
+        "options": [
+          { "text": "All", "value": "All", "selected": true },
+          { "text": "Periodic (cron)", "value": "periodic", "selected": false },
+          { "text": "Presubmit (PRs)", "value": "presubmit", "selected": false },
+          { "text": "Manual", "value": "manual", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      },
+      {
+        "name": "merge_similar",
+        "label": "Merge Similar",
+        "type": "custom",
+        "query": "No,Yes",
+        "current": { "text": "No", "value": "No", "selected": true },
+        "options": [
+          { "text": "No", "value": "No", "selected": true },
+          { "text": "Yes", "value": "Yes", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "OSAC CI - Health Overview",
+  "uid": "osac-ci-health",
+  "version": 1
+}

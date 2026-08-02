@@ -1,0 +1,293 @@
+---
+- name: Read pull secret
+  ansible.builtin.slurp:
+    src: "{{ pull_secret_path }}"
+  register: _pull_secret
+  no_log: true
+
+- name: Read SSH public key
+  ansible.builtin.slurp:
+    src: "{{ ssh_public_key_path }}"
+  register: _ssh_pub_key
+
+- name: Find OCP server VM
+  ansible.builtin.shell:
+    cmd: virsh list --all --name | grep "{{ ocp_vm_name_pattern }}"
+  register: _vm_lookup
+  changed_when: false
+
+- name: Set VM name
+  ansible.builtin.set_fact:
+    ocp_vm_name: "{{ _vm_lookup.stdout_lines[0] }}"
+
+- name: Get mgmt NIC MAC address
+  ansible.builtin.shell:
+    cmd: virsh domiflist {{ ocp_vm_name }} | grep bridge | awk '{print $5}'
+  register: _mgmt_mac
+  changed_when: false
+
+- name: Get VNet NIC MAC address
+  ansible.builtin.shell:
+    cmd: virsh domiflist {{ ocp_vm_name }} | grep udp | head -1 | awk '{print $5}'
+  register: _vnet_mac
+  changed_when: false
+
+- name: Write static network config
+  ansible.builtin.copy:
+    content: |
+      static_network_config:
+        - network_yaml:
+            interfaces:
+              - name: ens4
+                type: ethernet
+                state: up
+                ipv4:
+                  enabled: true
+                  dhcp: true
+                ipv6:
+                  enabled: false
+              - name: ens5
+                type: ethernet
+                state: up
+                ipv4:
+                  enabled: true
+                  dhcp: false
+                  address:
+                    - ip: {{ ocp_node_ip }}
+                      prefix-length: {{ ocp_subnet_cidr | ansible.utils.ipaddr('prefix') }}
+                ipv6:
+                  enabled: false
+            dns-resolver:
+              config:
+                server:
+                  - 192.168.16.1
+                  - 8.8.8.8
+            routes:
+              config:
+                - destination: 0.0.0.0/0
+                  next-hop-address: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
+                  next-hop-interface: ens5
+                  metric: 50
+          mac_interface_map:
+            - logical_nic_name: ens4
+              mac_address: "{{ _mgmt_mac.stdout }}"
+            - logical_nic_name: ens5
+              mac_address: "{{ _vnet_mac.stdout }}"
+    dest: /tmp/aicli-static-network.yml
+    mode: "0600"
+
+- name: Write aicli parameters file
+  ansible.builtin.copy:
+    content: |
+      sno: true
+      sno_disk: /dev/vda
+      base_dns_domain: {{ ocp_base_domain }}
+      openshift_version: "{{ ocp_version }}"
+      pull_secret: '{{ _pull_secret.content | b64decode | trim }}'
+      ssh_public_key: {{ _ssh_pub_key.content | b64decode | trim }}
+      network_type: OVNKubernetes
+      static_network_config: /tmp/aicli-static-network.yml
+    dest: /tmp/aicli-params.yml
+    mode: "0600"
+  no_log: true
+
+- name: Check if cluster already exists
+  ansible.builtin.shell:
+    cmd: aicli -u {{ assisted_service_url }} info cluster {{ ocp_cluster_name }}
+  register: _cluster_check
+  failed_when: false
+  changed_when: false
+
+- name: Create OCP SNO cluster
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} create cluster {{ ocp_cluster_name }} --paramfile /tmp/aicli-params.yml
+  when: _cluster_check.rc != 0
+  register: _cluster_create
+  until: _cluster_create.rc == 0
+  retries: 10
+  delay: 15
+  changed_when: true
+
+- name: Check if infraenv already exists
+  ansible.builtin.shell:
+    cmd: aicli -u {{ assisted_service_url }} info infraenv {{ ocp_cluster_name }}_infra-env
+  register: _infraenv_check
+  failed_when: false
+  changed_when: false
+
+- name: Create infrastructure environment
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} create infraenv {{ ocp_cluster_name }}_infra-env --paramfile /tmp/aicli-params.yml
+  when: _infraenv_check.rc != 0
+  register: _infraenv_create
+  until: _infraenv_create.rc == 0
+  retries: 10
+  delay: 15
+  changed_when: true
+
+- name: Wait for ISO generation
+  ansible.builtin.pause:
+    seconds: 60
+  when: _infraenv_check.rc != 0
+
+- name: Download discovery ISO
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} download iso {{ ocp_cluster_name }}_infra-env -p /var/lib/libvirt/images/
+    creates: /var/lib/libvirt/images/{{ ocp_cluster_name }}_infra-env.iso
+  register: _iso_download
+  until: _iso_download.rc == 0
+  retries: 30
+  delay: 30
+
+- name: Create manifests directory
+  ansible.builtin.file:
+    path: /tmp/ocp-extra-manifests
+    state: directory
+    mode: "0755"
+
+- name: Write KubeletConfig manifest for maxPods
+  ansible.builtin.copy:
+    content: |
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: KubeletConfig
+      metadata:
+        name: increase-max-pods
+      spec:
+        kubeletConfig:
+          maxPods: 500
+        machineConfigPoolSelector:
+          matchLabels:
+            pools.operator.machineconfiguration.openshift.io/master: ""
+    dest: /tmp/ocp-extra-manifests/kubelet-max-pods.yaml
+    mode: "0644"
+
+- name: Inject extra manifests into cluster
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} create manifest {{ ocp_cluster_name }} --dir /tmp/ocp-extra-manifests
+  register: _manifest_create
+  changed_when: true
+  failed_when: false
+
+- name: Check cluster status
+  ansible.builtin.shell:
+    cmd: "aicli -u {{ assisted_service_url }} info cluster {{ ocp_cluster_name }} | grep '^status:' | awk '{print $2}'"
+  register: _cluster_status
+  changed_when: false
+  failed_when: false
+
+- name: Check VM state
+  ansible.builtin.shell:
+    cmd: virsh domstate {{ ocp_vm_name }}
+  register: _vm_state
+  changed_when: false
+
+- name: Shut down VM if running
+  ansible.builtin.command:
+    cmd: virsh destroy {{ ocp_vm_name }}
+  when:
+    - _vm_state.stdout | trim == 'running'
+    - _cluster_status.stdout | trim not in ['installed', 'installing', 'finalizing']
+  changed_when: true
+
+- name: Recreate blank install disk
+  ansible.builtin.command:
+    cmd: qemu-img create -f qcow2 /var/lib/libvirt/images/hgx-00-ocp.qcow2 {{ ocp_install_disk_gb }}G
+  when: _cluster_status.stdout | trim not in ['installed', 'installing', 'finalizing']
+  changed_when: true
+
+- name: Detach old cloud-init ISO if present
+  ansible.builtin.command:
+    cmd: virsh detach-disk {{ ocp_vm_name }} hdd --config
+  register: _detach_cloudinit
+  failed_when: false
+  changed_when: _detach_cloudinit.rc == 0
+
+- name: Check if discovery ISO is already attached
+  ansible.builtin.shell:
+    cmd: virsh domblklist {{ ocp_vm_name }} | grep -q "{{ ocp_cluster_name }}_infra-env.iso"
+  register: _iso_attached
+  failed_when: false
+  changed_when: false
+
+- name: Attach discovery ISO to VM
+  ansible.builtin.command:
+    cmd: virsh attach-disk {{ ocp_vm_name }} /var/lib/libvirt/images/{{ ocp_cluster_name }}_infra-env.iso sda --type cdrom --config
+  when: _iso_attached.rc != 0
+  changed_when: true
+
+- name: Set boot order to CDROM first
+  ansible.builtin.command:
+    cmd: virt-xml {{ ocp_vm_name }} --edit --boot hd,cdrom
+  when:
+    - _vm_state.stdout | trim != 'running'
+    - _cluster_status.stdout | trim not in ['installed', 'installing', 'finalizing']
+  changed_when: true
+
+- name: Start VM if shut off during install
+  ansible.builtin.command:
+    cmd: virsh start {{ ocp_vm_name }}
+  when:
+    - _vm_state.stdout | trim != 'running'
+    - _cluster_status.stdout | trim in ['installing', 'finalizing']
+  changed_when: true
+
+- name: Start VM with discovery ISO
+  ansible.builtin.command:
+    cmd: virsh start {{ ocp_vm_name }}
+  when:
+    - _vm_state.stdout | trim != 'running'
+    - _cluster_status.stdout | trim not in ['installed', 'installing', 'finalizing']
+  changed_when: true
+
+- name: Wait for host discovery
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} wait cluster {{ ocp_cluster_name }} --status ready
+  when: _cluster_status.stdout | trim not in ['installed', 'installing', 'finalizing']
+  register: _wait_ready
+  until: _wait_ready.rc == 0
+  retries: 5
+  delay: 30
+  changed_when: false
+
+- name: Start OCP installation
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} start cluster {{ ocp_cluster_name }}
+  when: _cluster_status.stdout | trim not in ['installed', 'installing', 'finalizing']
+  register: _start_install
+  until: _start_install.rc == 0
+  retries: 10
+  delay: 15
+  changed_when: true
+
+- name: Wait for installation to reach finalizing
+  ansible.builtin.shell:
+    cmd: |
+      status=$(aicli -u {{ assisted_service_url }} info cluster {{ ocp_cluster_name }} | grep '^status:' | awk '{print $2}')
+      [ "$status" = "finalizing" ] || [ "$status" = "installed" ]
+  register: _wait_finalizing
+  until: _wait_finalizing.rc == 0
+  retries: 120
+  delay: 30
+  changed_when: false
+
+- name: Download kubeconfig
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} download kubeconfig {{ ocp_cluster_name }} --path /root/
+    creates: "/root/kubeconfig.{{ ocp_cluster_name }}"
+
+- name: Create .kube directory
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: "0700"
+
+- name: Copy kubeconfig to default location
+  ansible.builtin.copy:
+    src: "/root/kubeconfig.{{ ocp_cluster_name }}"
+    dest: /root/.kube/config
+    remote_src: true
+    mode: "0600"
+
+- name: Report OCP installation complete
+  ansible.builtin.debug:
+    msg: "OCP SNO installed. Kubeconfig at /root/.kube/config"

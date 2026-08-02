@@ -1,0 +1,181 @@
+---
+- name: Check K3s is installed
+  command: k3s --version
+  register: k3s_check
+  changed_when: false
+  failed_when: false
+
+- name: Create K3s config directory
+  file:
+    path: /etc/rancher/k3s
+    state: directory
+
+- name: Write K3s config
+  copy:
+    dest: /etc/rancher/k3s/config.yaml
+    content: |
+      https-listen-port: {{ k3s_api_port }}
+
+- name: Install K3s
+  when: k3s_check.rc != 0
+  shell: "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -"
+  register: k3s_install
+
+- name: Ensure K3s is running
+  systemd:
+    name: k3s
+    state: started
+    enabled: true
+
+- name: Wait for K3s API
+  wait_for:
+    port: "{{ k3s_api_port }}"
+    host: 127.0.0.1
+    timeout: 60
+
+- name: Wait for K3s node ready
+  shell: kubectl get nodes --no-headers | grep -c " Ready"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: node_ready
+  until: node_ready.stdout | int >= 1
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Check for cached container images
+  stat:
+    path: "{{ k3s_image_cache_dir }}"
+  register: image_cache
+
+- name: Import cached container images
+  when: image_cache.stat.exists
+  shell: |
+    imported=0
+    for imgdir in {{ k3s_image_cache_dir }}/*/; do
+      [ -f "${imgdir}image-ref" ] || continue
+      img_ref=$(cat "${imgdir}image-ref")
+      if k3s ctr images check "name==${img_ref}" 2>/dev/null | grep -q "${img_ref}"; then
+        continue
+      fi
+      tmptar=$(mktemp /tmp/k3s-import-XXXXXX.tar)
+      if skopeo copy "dir:${imgdir}" "oci-archive:${tmptar}:${img_ref}" 2>/dev/null && \
+         k3s ctr images import "${tmptar}" 2>/dev/null; then
+        imported=$((imported + 1))
+      fi
+      rm -f "${tmptar}"
+    done
+    echo "Imported ${imported} images from cache"
+  register: _image_import
+  changed_when: "'Imported 0' not in _image_import.stdout"
+
+- name: Deploy cert-manager manifest
+  copy:
+    src: cert-manager.yaml
+    dest: /var/lib/rancher/k3s/server/manifests/cert-manager.yaml
+
+- name: Deploy netris-controller manifest
+  template:
+    src: netris-controller.yaml.j2
+    dest: /var/lib/rancher/k3s/server/manifests/netris-controller.yaml
+
+- name: Deploy traefik config
+  copy:
+    src: traefik-config.yaml
+    dest: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+
+- name: Wait for all netris-controller pods to be Running
+  shell: |
+    total=$(kubectl get pods -n netris-controller --no-headers 2>/dev/null | grep -v Completed | wc -l)
+    running=$(kubectl get pods -n netris-controller --no-headers 2>/dev/null | grep -v Completed | grep -c Running)
+    if [ "$total" -ge 10 ] && [ "$running" -eq "$total" ]; then echo "ready"; else echo "waiting ($running/$total)"; fi
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: pods_ready
+  until: pods_ready.stdout == "ready"
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Get traefik NodePort for web
+  shell: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: traefik_nodeport
+  changed_when: false
+
+- name: Set controller_nodeport fact
+  set_fact:
+    controller_nodeport: "{{ traefik_nodeport.stdout }}"
+
+- name: Create socat env directory
+  file:
+    path: /etc/netris-lab/socat
+    state: directory
+
+- name: Install socat-forwarder systemd template
+  copy:
+    dest: /etc/systemd/system/socat-forwarder@.service
+    content: |
+      [Unit]
+      Description=Socat forwarder %i
+      After=network-online.target k3s.service
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/socat TCP-LISTEN:${PORT},bind=${BIND_IP},fork,reuseaddr TCP:${TARGET_IP}:${TARGET_PORT}
+      Restart=always
+      RestartSec=5
+      EnvironmentFile=/etc/netris-lab/socat/%i.env
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Create controller UI socat env file (port {{ controller_ui_port }} -> traefik NodePort)
+  copy:
+    dest: "/etc/netris-lab/socat/0.0.0.0-{{ controller_ui_port }}.env"
+    content: |
+      BIND_IP=0.0.0.0
+      PORT={{ controller_ui_port }}
+      TARGET_IP=127.0.0.1
+      TARGET_PORT={{ traefik_nodeport.stdout }}
+
+- name: Start controller UI socat forwarder
+  systemd:
+    name: "socat-forwarder@0.0.0.0-{{ controller_ui_port }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Fix controller password
+  include_tasks: password_fix.yml
+
+- name: Verify controller API
+  uri:
+    url: "http://localhost:{{ controller_nodeport }}/api/auth"
+    method: POST
+    body_format: json
+    body: '{"user":"{{ netris_login }}","password":"{{ netris_password }}"}'
+    status_code: 200
+    timeout: 60
+  register: api_verify
+  retries: 10
+  delay: 10
+
+- name: Check if license file exists
+  stat:
+    path: "{{ netris_license_file }}"
+  register: license_file
+
+- name: Apply license via collection
+  when: license_file.stat.exists
+  ansible.builtin.include_role:
+    name: netris.controller.license
+  vars:
+    netris_controller_url: "http://localhost:{{ controller_nodeport }}"
+    netris_username: "{{ netris_login }}"
+    netris_validate_certs: false
+    netris_timeout: 30
+    license_state: present
+    license_key_file: "{{ netris_license_file }}"

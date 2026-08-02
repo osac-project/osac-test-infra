@@ -1,0 +1,97 @@
+---
+- name: Get Route 53 hosted zone ID
+  ansible.builtin.shell:
+    cmd: >-
+      aws route53 list-hosted-zones-by-name
+      --dns-name {{ dns_hosted_zone }}
+      --query "HostedZones[0].Id"
+      --output text
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+  register: _r53_zone_id
+  changed_when: false
+
+- name: Check for existing OCP record under this lab name
+  ansible.builtin.shell:
+    cmd: >-
+      aws route53 list-resource-record-sets
+      --hosted-zone-id {{ _r53_zone_id.stdout | trim }}
+      --query "ResourceRecordSets[?Name == 'api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}.'].ResourceRecords[0].Value"
+      --output text
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+  register: _r53_existing
+  changed_when: false
+
+- name: Fail if lab name is already in use by another lab
+  ansible.builtin.fail:
+    msg: >-
+      api.{{ ocp_cluster_name }}.{{ ocp_base_domain }} already exists in Route 53
+      pointing to {{ _r53_existing.stdout | trim }} (expected {{ ocp_dnat_ip }}) —
+      another lab is using LAB_NAME="{{ lab_name }}". Choose a different name.
+  when: >-
+    _r53_existing.stdout | trim | length > 0 and
+    _r53_existing.stdout | trim != 'None' and
+    _r53_existing.stdout | trim != ocp_dnat_ip
+
+- name: Create OCP DNS records in Route 53
+  ansible.builtin.shell:
+    cmd: >-
+      aws route53 change-resource-record-sets
+      --hosted-zone-id {{ _r53_zone_id.stdout | trim }}
+      --change-batch '{{ _r53_batch | to_json }}'
+  vars:
+    _r53_batch:
+      Changes:
+        - Action: UPSERT
+          ResourceRecordSet:
+            Name: "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+            Type: A
+            TTL: 300
+            ResourceRecords:
+              - Value: "{{ ocp_dnat_ip }}"
+        - Action: UPSERT
+          ResourceRecordSet:
+            Name: "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+            Type: A
+            TTL: 300
+            ResourceRecords:
+              - Value: "{{ ocp_dnat_ip }}"
+        - Action: UPSERT
+          ResourceRecordSet:
+            Name: "*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+            Type: A
+            TTL: 300
+            ResourceRecords:
+              - Value: "{{ ocp_dnat_ip }}"
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+  changed_when: true
+
+- name: Configure DNS for OCP SNO
+  ansible.builtin.copy:
+    content: |
+      address=/api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
+      address=/.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
+    dest: /etc/dnsmasq.d/ocp-sno.conf
+    mode: "0644"
+  notify: Restart dnsmasq
+
+- name: Enable and start dnsmasq
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: started
+    enabled: true
+
+- name: Add localhost as DNS resolver
+  ansible.builtin.lineinfile:
+    path: /etc/resolv.conf
+    insertbefore: BOF
+    line: "nameserver 127.0.0.1"
+    state: present

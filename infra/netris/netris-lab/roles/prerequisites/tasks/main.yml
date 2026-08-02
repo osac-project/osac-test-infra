@@ -1,0 +1,305 @@
+---
+# === Ansible collections ===
+
+- name: Install Ansible collections
+  command: ansible-galaxy collection install -r {{ role_path }}/../../requirements.yml -p {{ role_path }}/../../collections --force
+  changed_when: false
+
+# === Software tools ===
+
+- name: Check Go is installed
+  command: /usr/local/go/bin/go version
+  register: go_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Go
+  when: go_check.rc != 0
+  block:
+    - name: Download Go
+      get_url:
+        url: https://go.dev/dl/go1.21.13.linux-amd64.tar.gz
+        dest: /tmp/go1.21.13.linux-amd64.tar.gz
+    - name: Extract Go
+      unarchive:
+        src: /tmp/go1.21.13.linux-amd64.tar.gz
+        dest: /usr/local
+        remote_src: true
+    - name: Add Go to PATH
+      lineinfile:
+        path: /root/.bashrc
+        line: 'export PATH=$PATH:/usr/local/go/bin'
+        create: true
+
+- name: Check Pulumi is installed
+  command: /root/.pulumi/bin/pulumi version
+  register: pulumi_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Pulumi
+  when: pulumi_check.rc != 0
+  shell: curl -fsSL https://get.pulumi.com | sh
+  args:
+    creates: /root/.pulumi/bin/pulumi
+
+- name: Set PULUMI_CONFIG_PASSPHRASE
+  lineinfile:
+    path: /root/.bashrc
+    line: 'export PULUMI_CONFIG_PASSPHRASE=""'
+    create: true
+
+- name: Login Pulumi local backend
+  shell: /root/.pulumi/bin/pulumi login --local
+  environment:
+    PULUMI_CONFIG_PASSPHRASE: ""
+  changed_when: false
+
+- name: Check OpenTofu is installed
+  command: tofu version
+  register: tofu_check
+  changed_when: false
+  failed_when: false
+
+- name: Install OpenTofu
+  when: tofu_check.rc != 0
+  shell: |
+    curl -fsSL https://get.opentofu.org/install-opentofu.sh -o /tmp/install-opentofu.sh
+    chmod +x /tmp/install-opentofu.sh
+    /tmp/install-opentofu.sh --install-method rpm
+
+- name: Enable EPEL repository
+  dnf:
+    name: epel-release
+    state: present
+
+- name: Install required packages
+  dnf:
+    name:
+      - openvpn
+      - socat
+      - rsync
+      - libxslt
+      - genisoimage
+      - python3-pip
+      - libvirt
+      - libvirt-daemon-kvm
+      - qemu-kvm
+      - virt-install
+      - skopeo
+      - nftables
+    state: present
+
+- name: Install Python dependencies
+  pip:
+    name:
+      - bcrypt
+      - netaddr
+    state: present
+
+- name: Ensure root SSH key exists
+  command: ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa
+  args:
+    creates: /root/.ssh/id_rsa
+
+- name: Read root public key
+  slurp:
+    src: /root/.ssh/id_rsa.pub
+  register: root_pubkey
+
+- name: Ensure root key in authorized_keys
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ root_pubkey.content | b64decode }}"
+    state: present
+
+- name: Accept SSH host key for localhost
+  shell: |
+    ssh-keygen -R 127.0.0.1 2>/dev/null || true
+    ssh-keyscan -H 127.0.0.1 >> /root/.ssh/known_hosts 2>/dev/null
+  changed_when: false
+
+- name: Verify SSH to localhost
+  command: ssh -o BatchMode=yes root@127.0.0.1 echo OK
+  changed_when: false
+
+- name: Set rmem_default sysctl
+  ansible.posix.sysctl:
+    name: net.core.rmem_default
+    value: "2129920"
+    sysctl_set: true
+    reload: true
+
+# === Virtualization platform ===
+# Use monolithic libvirtd (not modular daemons) for compatibility with
+# Pulumi libvirt provider which expects /var/run/libvirt/libvirt-sock
+
+- name: Stop modular libvirt daemon sockets
+  systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - virtqemud.socket
+    - virtstoraged.socket
+    - virtnetworkd.socket
+    - virtnodedevd.socket
+  ignore_errors: true
+
+- name: Unmask monolithic libvirtd
+  command: systemctl unmask libvirtd
+  changed_when: true
+
+- name: Enable and start monolithic libvirtd
+  systemd:
+    name: libvirtd
+    state: started
+    enabled: true
+
+- name: Wait for libvirt to be ready
+  command: virsh pool-list
+  register: _virsh_ready
+  until: _virsh_ready.rc == 0
+  retries: 10
+  delay: 3
+  changed_when: false
+
+- name: Disable SELinux in libvirt qemu.conf
+  lineinfile:
+    path: /etc/libvirt/qemu.conf
+    regexp: '^#?security_driver\s*='
+    line: 'security_driver = "none"'
+  notify: Restart libvirtd
+
+- name: Bridge public interface to br-public (public mode)
+  when: connectivity_mode == "public" and public_interface is defined
+  block:
+    - name: Create VLAN subinterface if needed
+      when: "'.' in public_interface"
+      shell: |
+        PARENT="{{ public_interface.split('.')[0] }}"
+        VLAN="{{ public_interface.split('.')[1] }}"
+        ip link add link $PARENT name {{ public_interface }} type vlan id $VLAN 2>/dev/null || true
+        ip link set {{ public_interface }} up
+
+    - name: Add public interface to br-public
+      shell: |
+        ip link set {{ public_interface }} up
+        ip link set {{ public_interface }} master {{ public_bridge_name }} 2>/dev/null || true
+
+- name: Check default libvirt storage pool
+  command: virsh pool-info default
+  register: pool_check
+  changed_when: false
+  failed_when: false
+
+- name: Create default storage pool
+  when: pool_check.rc != 0
+  shell: |
+    virsh pool-define-as --name default --type dir --target {{ libvirt_images_dir }}
+    virsh pool-start default
+    virsh pool-autostart default
+
+- name: Check if firewalld is running
+  command: firewall-cmd --state
+  register: firewalld_state
+  changed_when: false
+  failed_when: false
+
+- name: Configure firewalld
+  when: firewalld_state.rc == 0
+  block:
+    - name: Configure firewalld trusted zone for lab interfaces
+      ansible.posix.firewalld:
+        zone: trusted
+        interface: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - virbr0
+        - "{{ mgmt_bridge_name }}"
+        - "{{ public_bridge_name }}"
+        - cni0
+        - flannel.1
+        - tun0
+        - lo
+      ignore_errors: true
+
+    - name: Configure firewalld trusted zone for pod/service CIDRs
+      ansible.posix.firewalld:
+        zone: trusted
+        source: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - 10.42.0.0/16
+        - 10.43.0.0/16
+        - 192.168.122.0/24
+
+    - name: Open required ports in public zone
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - "{{ k3s_api_port }}/tcp"
+        - 80/tcp
+        - 443/tcp
+        - 8472/udp
+        - 10250/tcp
+        - 50051/tcp
+        - 3033/tcp
+        - 3034/tcp
+        - 2003/tcp
+        - 2003/udp
+        - "{{ controller_ui_port }}/tcp"
+
+    - name: Open traefik NodePort in public zone
+      ansible.posix.firewalld:
+        port: "31000-32767/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Reload firewalld
+      command: firewall-cmd --reload
+      changed_when: false
+
+- name: Configure libvirt to use nftables backend
+  lineinfile:
+    path: /etc/libvirt/network.conf
+    regexp: '^#?firewall_backend\s*='
+    line: 'firewall_backend = "nftables"'
+  notify: Restart libvirtd
+
+- name: Flush restrictive libvirt nftables chains
+  shell: |
+    nft flush chain ip filter LIBVIRT_FWI 2>/dev/null || true
+    nft flush chain ip filter LIBVIRT_FWO 2>/dev/null || true
+    nft flush chain ip filter LIBVIRT_FWX 2>/dev/null || true
+    nft flush chain ip filter LIBVIRT_INP 2>/dev/null || true
+    if nft list chain ip libvirt_network guest_input &>/dev/null; then
+      nft flush chain ip libvirt_network guest_input
+      nft flush chain ip libvirt_network guest_output
+      nft add rule ip libvirt_network guest_input accept
+      nft add rule ip libvirt_network guest_output accept
+    fi
+  changed_when: false
+
+- name: Masquerade VM bridge traffic for internet access (isolated mode)
+  when: connectivity_mode == "isolated"
+  ansible.builtin.iptables:
+    table: nat
+    chain: POSTROUTING
+    source: "{{ item }}"
+    out_interface: "{{ ansible_default_ipv4.interface }}"
+    jump: MASQUERADE
+    state: present
+  loop:
+    - "{{ bgp_link_subnet }}"
+    - "{{ ns_fabric.mgmt_subnet }}"
+    - "{{ nat_cidr }}"
+    - "{{ l4lb_cidr }}"

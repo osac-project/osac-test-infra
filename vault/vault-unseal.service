@@ -1,0 +1,16 @@
+# Fallback unseal service for Vault.
+# The Quadlet ExecStartPost handles normal unsealing; this service
+# is a manual fallback (e.g., systemctl --user start vault-unseal.service).
+
+[Unit]
+Description=Unseal HashiCorp Vault (OSAC CI)
+After=vault.service
+Requires=vault.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.vault-server/scripts/vault-unseal.sh
+Environment=VAULT_ADDR=http://127.0.0.1:8200
+
+[Install]
+WantedBy=default.target

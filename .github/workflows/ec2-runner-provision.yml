@@ -1,0 +1,153 @@
+---
+name: EC2 Ephemeral Runner Provision
+
+# Generic, suite-agnostic: provisions a c5n.metal instance, registers it as
+# a single-use ("JIT") GitHub Actions runner, and outputs enough for a
+# calling workflow's own test job to target it via runs-on:. No trigger of
+# its own -- workflow_call only, meant to be used as a job
+# (jobs.<id>.uses: ./.github/workflows/ec2-runner-provision.yml) by a
+# suite-specific workflow (e.g. e2e-caas-netris.yml), paired with
+# ec2-runner-teardown.yml for cleanup. See docs/ec2-ephemeral-runner-setup.md.
+on:
+  workflow_call:
+    inputs:
+      instance-type:
+        description: "EC2 instance type"
+        required: false
+        type: string
+        default: "c5n.metal"
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        type: string
+        default: "us-east-1"
+      orchestrator-runner-label:
+        description: "Self-hosted runner label for the orchestrator (dedicated, not the shared osac-ci fleet, so it's never queued behind existing e2e jobs)"
+        required: false
+        type: string
+        default: "osac-ci-orchestrator"
+      tooling-check-cmds:
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Generic placeholder default -- callers with real prerequisites (e.g. e2e-caas-netris.yml) should pass their own value rather than relying on this default."
+        required: false
+        type: string
+        default: "command -v podman"
+    outputs:
+      instance-id:
+        value: ${{ jobs.provision.outputs.instance-id }}
+      public-ip:
+        value: ${{ jobs.provision.outputs.public-ip }}
+      ssh-user:
+        value: ${{ jobs.provision.outputs.ssh-user }}
+      runner-label:
+        value: ${{ jobs.provision.outputs.runner-label }}
+      runner-id:
+        value: ${{ jobs.provision.outputs.runner-id }}
+
+jobs:
+  provision:
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Run-specific, not the orchestrator's shared ~/.ssh/known_hosts --
+      # see provision.sh's header for why (recycled EC2 IPs can carry a
+      # stale cached host key in a shared file). Deterministically derived
+      # here (rather than passed as a job output) so the teardown workflow,
+      # which needs the identical path to clean it up, can compute the same
+      # value independently -- it only depends on github.run_id/run_attempt,
+      # available in any job regardless of which file it lives in.
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+    outputs:
+      instance-id: ${{ steps.provision.outputs.instance-id }}
+      public-ip: ${{ steps.provision.outputs.public-ip }}
+      ssh-user: ${{ steps.provision.outputs.ssh-user }}
+      runner-label: ${{ steps.register.outputs.runner-label }}
+      runner-id: ${{ steps.register.outputs.runner-id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch EC2 runner AWS credentials
+        id: aws-creds
+        uses: ./.github/actions/fetch-ec2-runner-aws-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch EC2 runner GitHub PAT
+        id: gh-pat
+        uses: ./.github/actions/fetch-ec2-runner-github-pat
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch EC2 runner network config
+        id: network-config
+        uses: ./.github/actions/fetch-ec2-runner-network-config
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Verify orchestrator SSH keypair exists
+        shell: bash
+        run: |
+          if [ ! -f "${HOME}/.ssh/osac_ec2_orchestrator" ] || [ ! -f "${HOME}/.ssh/osac_ec2_orchestrator.pub" ]; then
+            echo "::error::Orchestrator SSH keypair not found at ~/.ssh/osac_ec2_orchestrator{,.pub}."
+            echo "This is a static, non-rotating keypair generated once during orchestrator"
+            echo "runner setup (see docs/new-ci-machine-setup.md), not per-run -- it must"
+            echo "already exist on this machine."
+            exit 1
+          fi
+
+      - name: Provision ephemeral EC2 instance
+        id: provision
+        shell: bash
+        env:
+          AMI_ID: ${{ steps.network-config.outputs.AMI_ID }}
+          INSTANCE_TYPE: ${{ inputs.instance-type }}
+          SUBNET_ID: ${{ steps.network-config.outputs.SUBNET_ID }}
+          SECURITY_GROUP_ID: ${{ steps.network-config.outputs.SECURITY_GROUP_ID }}
+          # run_attempt (not just run_id) so a re-run after a failed teardown
+          # never collides with a still-registered runner/instance from the
+          # previous attempt.
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
+        run: |
+          export ORCHESTRATOR_PUBKEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator.pub"
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/provision.sh
+
+      - name: Verify tooling and register JIT runner
+        id: register
+        shell: bash
+        env:
+          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          GH_TOKEN: ${{ steps.gh-pat.outputs.GH_TOKEN }}
+          TOOLING_CHECK_CMDS: ${{ inputs.tooling-check-cmds }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/verify-and-register.sh
+
+      - name: Install and start runner
+        shell: bash
+        env:
+          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
+          JIT_CONFIG: ${{ steps.register.outputs.jit-config }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/start-runner.sh

@@ -1,0 +1,57 @@
+---
+- name: Check if cluster already exists
+  ansible.builtin.shell:
+    cmd: osac get clusters -o json | python3 -c "import sys,json; clusters=json.load(sys.stdin); print('exists' if any(c.get('name')=='{{ caas_cluster_name }}' for c in clusters) else 'absent')"
+  register: _cluster_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create cluster
+  ansible.builtin.command:
+    cmd: >-
+      osac create cluster
+      --template {{ caas_cluster_template }}
+      --release-image {{ caas_release_image }}
+      -f pull_secret={{ pull_secret_path }}
+      -f ssh_public_key={{ ssh_public_key_path }}
+      --name {{ caas_cluster_name }}
+  register: _cluster_create
+  when: _cluster_exists.stdout | default('') != 'exists'
+  changed_when: true
+
+- name: Get existing cluster ID
+  ansible.builtin.shell:
+    cmd: osac get clusters -o json | python3 -c "import sys,json; clusters=json.load(sys.stdin); print(next(c['id'] for c in clusters if c.get('name')=='{{ caas_cluster_name }}'))"
+  register: _existing_cluster_id
+  when: _cluster_exists.stdout | default('') == 'exists'
+  changed_when: false
+
+- name: Extract cluster ID
+  ansible.builtin.set_fact:
+    caas_cluster_id: "{{ _cluster_create.stdout | regex_search('[0-9a-f-]{36}') if _cluster_create is not skipped else _existing_cluster_id.stdout }}"
+
+- name: Report cluster creation started
+  ansible.builtin.debug:
+    msg: "Cluster '{{ caas_cluster_name }}' {{ 'created' if _cluster_create is not skipped else 'already exists' }} with ID {{ caas_cluster_id }}"
+
+- name: Wait for cluster to be ready
+  ansible.builtin.shell:
+    cmd: |
+      STATE=$(osac get clusters {{ caas_cluster_id }} -o json | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('state',''))")
+      echo "$STATE"
+      if [ "$STATE" = "CLUSTER_STATE_FAILED" ]; then exit 2; fi
+  register: _cluster_state
+  until: _cluster_state.stdout == "CLUSTER_STATE_READY"
+  retries: 120
+  delay: 30
+  failed_when: _cluster_state.rc == 2
+  changed_when: false
+
+- name: Fail if cluster ended in FAILED state
+  ansible.builtin.fail:
+    msg: "CaaS cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) is in FAILED state"
+  when: _cluster_state.stdout == "CLUSTER_STATE_FAILED"
+
+- name: Report cluster ready
+  ansible.builtin.debug:
+    msg: "CaaS cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) is READY"

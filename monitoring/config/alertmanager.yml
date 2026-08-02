@@ -1,0 +1,79 @@
+# Alertmanager configuration for OSAC CI runner monitoring
+# Deployed by monitoring-setup.sh to ~/.monitoring-server/config/alertmanager.yml
+#
+# Routes:
+#   - critical alerts -> Slack + email
+#   - warning alerts  -> Slack only
+#
+# TODO: Replace SLACK_WEBHOOK_URL and email settings with real values.
+
+global:
+  resolve_timeout: 5m
+  # Uncomment and configure for email alerts:
+  # smtp_smarthost: 'smtp.example.com:587'
+  # smtp_from: 'alerts@example.com'
+  # smtp_auth_username: ''
+  # smtp_auth_password: ''
+  # smtp_require_tls: true
+
+route:
+  # Default receiver
+  receiver: slack-warnings
+  # Group alerts by instance and alertname
+  group_by: ['alertname', 'instance']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Critical alerts go to Slack + email
+    - match:
+        severity: critical
+      receiver: slack-critical
+      repeat_interval: 1h
+
+    # Warning alerts go to Slack only
+    - match:
+        severity: warning
+      receiver: slack-warnings
+      repeat_interval: 4h
+
+receivers:
+  - name: slack-critical
+    slack_configs:
+      - api_url: 'SLACK_WEBHOOK_URL'
+        channel: '#osac-ci'
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        title: '{{ if eq .Status "firing" }}:red_circle: [CRITICAL]{{ else }}:white_check_mark: [RESOLVED]{{ end }} {{ .GroupLabels.alertname }}'
+        text: |-
+          {{ range .Alerts }}
+          {{ if eq .Status "firing" }}:red_circle:{{ else }}:white_check_mark:{{ end }} *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ end }}
+    # Uncomment for email alerts:
+    # email_configs:
+    #   - to: 'team@example.com'
+    #     send_resolved: true
+
+  - name: slack-warnings
+    slack_configs:
+      - api_url: 'SLACK_WEBHOOK_URL'
+        channel: '#osac-ci'
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}warning{{ else }}good{{ end }}'
+        title: '{{ if eq .Status "firing" }}:warning: [WARNING]{{ else }}:white_check_mark: [RESOLVED]{{ end }} {{ .GroupLabels.alertname }}'
+        text: |-
+          {{ range .Alerts }}
+          {{ if eq .Status "firing" }}:warning:{{ else }}:white_check_mark:{{ end }} *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ end }}
+
+# Inhibition rules: suppress warning-level alerts when a critical alert
+# is already firing for the same instance.
+inhibit_rules:
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ['instance']

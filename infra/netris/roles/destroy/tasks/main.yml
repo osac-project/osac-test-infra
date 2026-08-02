@@ -1,0 +1,57 @@
+---
+- name: Load netris-lab variables
+  ansible.builtin.include_vars:
+    file: "{{ netris_lab_dir }}/group_vars/all.yml"
+
+- name: Stop Assisted Service pods
+  ansible.builtin.command:
+    cmd: podman pod rm -f assisted-installer
+  register: _ai_destroy
+  failed_when: false
+  changed_when: _ai_destroy.rc == 0
+
+- name: Remove aicli state files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /root/pod.yml
+    - /root/configmap.yml
+    - /root/kubeconfig.{{ ocp_cluster_name | default('ocp-sno') }}
+    - /root/.kube/config
+
+- name: Remove osac-installer
+  ansible.builtin.file:
+    path: "{{ osac_installer_dir | default('/opt/osac-installer') }}"
+    state: absent
+
+- name: Remove OCP disks
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/libvirt/images/hgx-00-ocp.qcow2
+    - /var/lib/libvirt/images/hgx-00-lvm.qcow2
+    - /var/lib/libvirt/images/{{ ocp_cluster_name | default('ocp-sno') }}_infra-env.iso
+
+- name: Remove cached snapshot flavors (force fresh pull on next deploy)
+  ansible.builtin.file:
+    path: /var/cache/netris-lab/cluster-flavors
+    state: absent
+
+- name: Remove dnsmasq OCP config
+  ansible.builtin.file:
+    path: /etc/dnsmasq.d/ocp-sno.conf
+    state: absent
+  register: _dnsmasq_config_removed
+
+- name: Restart dnsmasq
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: restarted
+  when: _dnsmasq_config_removed is changed
+  failed_when: false
+
+- name: Destroy netris-lab
+  ansible.builtin.include_role:
+    name: lab_destroy

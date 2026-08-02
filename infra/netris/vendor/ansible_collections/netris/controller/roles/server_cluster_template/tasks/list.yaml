@@ -1,0 +1,23 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get all server cluster templates
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/server-cluster-template"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+    timeout: "{{ netris_timeout | default(30) }}"
+    status_code: 200
+  register: _sct_list_resp
+
+- name: Set server cluster template list facts
+  ansible.builtin.set_fact:
+    netris_server_cluster_templates: "{{ _sct_list_resp.json.data | default(_sct_list_resp.json) }}"
+    netris_sct_by_name: >-
+      {{ dict((_sct_list_resp.json.data | default(_sct_list_resp.json))
+         | map(attribute='name') | zip(_sct_list_resp.json.data | default(_sct_list_resp.json))) }}

@@ -1,0 +1,8 @@
+---
+- name: List server cluster templates
+  when: server_cluster_template_state == 'list'
+  ansible.builtin.include_tasks: list.yaml
+
+- name: Read server cluster template
+  when: server_cluster_template_state == 'read'
+  ansible.builtin.include_tasks: read.yaml

@@ -1,0 +1,100 @@
+---
+# --- Infrastructure checks ---
+- name: Check K3s
+  command: kubectl get nodes
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: k3s_nodes
+  ignore_errors: true
+
+- name: Check controller pods
+  shell: kubectl get pods -n netris-controller --no-headers | grep -v Completed | grep -c Running
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: pod_count
+  ignore_errors: true
+
+- name: Check VMs
+  shell: virsh list | grep -c running
+  register: vm_count
+  ignore_errors: true
+
+- name: Check VPN
+  shell: ip addr show tun0 | grep -c "inet "
+  register: vpn_status
+  ignore_errors: true
+
+- name: Authenticate to controller
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  ignore_errors: true
+
+- name: Get license status
+  ansible.builtin.include_role:
+    name: netris.controller.license
+  vars:
+    license_state: read
+  ignore_errors: true
+
+- name: Get inventory health
+  ansible.builtin.include_role:
+    name: netris.controller.inventory
+  vars:
+    inventory_state: read
+  ignore_errors: true
+
+- name: Get E-BGP status
+  ansible.builtin.include_role:
+    name: netris.controller.ebgp
+  vars:
+    ebgp_state: read
+  ignore_errors: true
+
+# --- Print results ---
+- name: Print status
+  debug:
+    msg: |
+      ============ Netris Lab Status ============
+      K3s:              {{ 'OK' if k3s_nodes.rc == 0 else 'FAIL' }}
+      Controller pods:  {{ pod_count.stdout | default('0') }} running
+      VMs:              {{ vm_count.stdout | default('0') }} running
+      VPN:              {{ 'UP' if vpn_status.rc == 0 else 'DOWN' }}
+      API:              {{ 'OK' if netris_session_cookie is defined else 'FAIL' }}
+      License:          {{ 'Valid' if netris_license_valid | default(false) else netris_license_message | default('unknown') }}
+      Mode:             {{ connectivity_mode }}
+      UI:               http://{{ ansible_default_ipv4.address }}:{{ controller_ui_port }}
+
+      -------- Inventory ({{ netris_inventory_healthy | default('?') }}/{{ netris_inventory_total | default('?') }} healthy) --------
+      {% for type, counts in (netris_inventory_by_type | default({})).items() %}
+        {{ type }}: {{ counts.ok }}/{{ counts.total }}
+      {% endfor %}
+
+      -------- E-BGP ({{ netris_ebgp_established | default('?') }}/{{ netris_ebgp_total | default('?') }} established) --------
+      {% for session in netris_ebgp_sessions | default([]) %}
+        {{ session.name }}: {{ session.bgp_state | default('not established') }}
+      {% endfor %}
+      ==========================================
+
+# --- Fail if anything is wrong ---
+- name: Count healthy switches and softgates
+  set_fact:
+    inventory_switches_ok: "{{ (netris_inventory_by_type | default({})).get('switch', {}).get('ok', 0) | int }}"
+    inventory_switches_total: "{{ (netris_inventory_by_type | default({})).get('switch', {}).get('total', 0) | int }}"
+    inventory_softgates_ok: "{{ (netris_inventory_by_type | default({})).get('softgate', {}).get('ok', 0) | int }}"
+    inventory_softgates_total: "{{ (netris_inventory_by_type | default({})).get('softgate', {}).get('total', 0) | int }}"
+
+- name: Verify all checks passed
+  assert:
+    that:
+      - k3s_nodes.rc == 0
+      - pod_count.stdout | default('0') | int >= 10
+      - vm_count.stdout | default('0') | int >= 1
+      - vpn_status.rc == 0
+      - netris_session_cookie is defined
+      - netris_license_valid | default(false)
+      - inventory_switches_ok | int == inventory_switches_total | int
+      - inventory_switches_total | int > 0
+      - inventory_softgates_ok | int >= 1
+      - netris_ebgp_established | default(0) | int >= 1
+    fail_msg: "One or more health checks failed — see status above"
+    success_msg: "All health checks passed"

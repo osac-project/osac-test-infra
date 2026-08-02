@@ -1,0 +1,57 @@
+---
+name: Fetch and write secrets
+description: Retrieve E2E secrets from Vault and write them to disk
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+
+outputs:
+  SLACK_WEBHOOK_URL:
+    value: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve E2E secrets from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: |
+          secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
+          secret/data/osac/e2e/aap-license license | AAP_LICENSE ;
+          secret/data/osac/e2e/snapshot-registry dockerconfigjson | SNAPSHOT_REGISTRY_AUTH ;
+          secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL
+
+    - name: Write secrets to disk
+      shell: bash
+      env:
+        PULL_SECRET: ${{ steps.vault.outputs.PULL_SECRET }}
+        AAP_LICENSE: ${{ steps.vault.outputs.AAP_LICENSE }}
+        SNAPSHOT_REGISTRY_AUTH: ${{ steps.vault.outputs.SNAPSHOT_REGISTRY_AUTH }}
+      run: |
+        echo "::group::Write pull secret and registry auth"
+        mkdir -p "${HOME}/.config/containers"
+        jq -s '.[0].auths * .[1].auths | {auths: .}' \
+          <(printf '%s' "${PULL_SECRET}") \
+          <(printf '%s' "${SNAPSHOT_REGISTRY_AUTH}") \
+          > "${HOME}/.config/containers/auth.json"
+        chmod 600 "${HOME}/.config/containers/auth.json"
+        sudo mkdir -p /root/.config/containers
+        sudo cp "${HOME}/.config/containers/auth.json" /root/.config/containers/auth.json
+        sudo chmod 600 /root/.config/containers/auth.json
+        printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
+        chmod 600 "$RUNNER_TEMP/pull-secret.json"
+        echo "::endgroup::"
+
+        echo "::group::Write AAP license"
+        printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
+        chmod 600 "$RUNNER_TEMP/aap-license.zip"
+        echo "::endgroup::"

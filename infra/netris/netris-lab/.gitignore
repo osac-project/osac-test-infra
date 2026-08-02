@@ -1,0 +1,7 @@
+license.key
+collections/
+playbooks/terraform.tfstate
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl

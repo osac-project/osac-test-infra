@@ -1,0 +1,6 @@
+---
+- name: Destroy Netris Lab
+  hosts: lab
+  become: true
+  roles:
+    - lab_destroy

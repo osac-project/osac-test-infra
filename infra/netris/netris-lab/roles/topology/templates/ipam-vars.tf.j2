@@ -1,0 +1,12 @@
+variable "pnap_ipam_public" {
+  type = object({
+    default_route            = string
+    netris_cloudsim_nat_cidr  = string
+    netris_cloudsim_l4lb_cidr = string
+  })
+  default = {
+    default_route            = "0.0.0.0/0"
+    netris_cloudsim_nat_cidr  = "{{ public_nat_cidr if connectivity_mode == 'public' and public_nat_cidr is defined else nat_cidr }}"
+    netris_cloudsim_l4lb_cidr = "{{ public_l4lb_cidr if connectivity_mode == 'public' and public_l4lb_cidr is defined else l4lb_cidr }}"
+  }
+}

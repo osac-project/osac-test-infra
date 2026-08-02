@@ -1,0 +1,13 @@
+*.retry
+*.pyc
+__pycache__/
+.vault_pass
+license.key
+license.zip
+config
+pod.yml
+configmap.yml
+/root/pull-secret
+logs/
+scripts/env*.sh
+!scripts/env.sh.example

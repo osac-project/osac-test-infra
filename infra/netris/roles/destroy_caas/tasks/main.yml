@@ -1,0 +1,85 @@
+---
+# Step 1: Delete clusters from OSAC API (fulfillment service)
+- name: Get all OSAC cluster IDs
+  ansible.builtin.shell:
+    cmd: osac get clusters 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+  register: _osac_clusters
+  failed_when: false
+  changed_when: false
+
+- name: Delete clusters via OSAC API
+  ansible.builtin.command:
+    cmd: osac delete cluster {{ item }}
+  loop: "{{ _osac_clusters.stdout_lines | default([]) }}"
+  register: _osac_delete
+  failed_when: false
+  changed_when: _osac_delete.rc == 0
+
+- name: Wait for OSAC clusters to be fully deleted
+  ansible.builtin.shell:
+    cmd: osac get clusters 2>/dev/null | grep -cE '[0-9a-f]{8}-' || true
+  register: _osac_count
+  until: _osac_count.stdout | trim | int == 0
+  retries: 40
+  delay: 15
+  failed_when: false
+  changed_when: false
+  when: _osac_clusters.stdout_lines | default([]) | length > 0
+
+# Step 2: Clean up agent namespace (InfraEnv, agents, secrets)
+- name: Delete CaaS InfraEnv namespace
+  ansible.builtin.command:
+    cmd: oc delete namespace {{ caas_discovery_infraenv_namespace }} --ignore-not-found --timeout=60s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ns_delete
+  failed_when: false
+  changed_when: "'deleted' in _ns_delete.stdout"
+
+# Step 3: Clean up discovery VMs and disks
+- name: Find CaaS discovery VMs
+  ansible.builtin.shell:
+    cmd: virsh list --all --name | grep -E '{{ caas_discovery_vm_patterns | join("|") }}'
+  register: _caas_vms
+  failed_when: false
+  changed_when: false
+
+- name: Shut down CaaS discovery VMs
+  ansible.builtin.command:
+    cmd: virsh destroy {{ item }}
+  loop: "{{ _caas_vms.stdout_lines | default([]) }}"
+  register: _vm_stop
+  failed_when: false
+  changed_when: _vm_stop.rc == 0
+
+- name: Remove CaaS discovery disks and ISO
+  ansible.builtin.shell:
+    cmd: rm -f /var/lib/libvirt/images/*-disk.qcow2 /var/lib/libvirt/images/caas-discovery.iso
+  changed_when: true
+
+# Step 4: Clean DNS and temp files
+- name: Remove CaaS DNS configs
+  ansible.builtin.shell:
+    cmd: rm -f /etc/dnsmasq.d/caas-*.conf
+  register: _dns_removed
+  changed_when: true
+
+- name: Restart dnsmasq if DNS configs were present
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: restarted
+  failed_when: false
+
+- name: Remove CaaS manifest files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/caas-infraenv.yml
+
+- name: Report CaaS teardown complete
+  ansible.builtin.debug:
+    msg: >-
+      CaaS teardown complete: {{ _osac_clusters.stdout_lines | default([]) | length }} clusters deleted from OSAC,
+      {{ _caas_vms.stdout_lines | default([]) | length }} VMs stopped,
+      discovery disks removed, namespace {{ caas_discovery_infraenv_namespace }} deleted

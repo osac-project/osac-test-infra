@@ -1,0 +1,119 @@
+# Netris Lab
+netris_lab_dir: "{{ inventory_dir }}/../netris-lab"
+ew_fabric_enable: 0
+
+# Netris Controller (URL is discovered dynamically by netris_configure role)
+netris_username: "netris"
+netris_password: "netris"
+netris_validate_certs: false
+
+# OCP Server VM
+ocp_vm_name_pattern: "hgx-pod00-su0-h00"
+ocp_server_vcpu: 20
+ocp_server_memory_gb: 64
+ocp_install_disk_gb: 100
+ocp_lvm_disk_gb: 200
+
+# Netris Networking for OCP
+ocp_vpc_name: "ocp-sno"
+ocp_vnet_name: "ocp-sno-vnet"
+ocp_subnet_cidr: "192.168.40.0/24"
+ocp_gateway: "192.168.40.1/24"
+ocp_node_ip: "192.168.40.2"
+ocp_server_ports:
+  - name: "eth9@hgx-pod00-su0-h00"
+    accessMode: true
+ocp_snat_ip: "198.51.100.1"
+ocp_dnat_ip: "198.51.100.2"
+
+# Configuration file (INI format, optional — values fall back to env vars)
+config_path: "{{ inventory_dir }}/../config"
+
+# Lab identity (each user sets their own to avoid DNS collisions)
+lab_name: "{{ lookup('ini', 'lab_name section=default file=' + config_path, errors='ignore') | default(lookup('env', 'LAB_NAME'), true) | default('default', true) }}"
+dns_hosted_zone: "{{ lookup('ini', 'dns_hosted_zone section=default file=' + config_path, errors='ignore') | default(lookup('env', 'DNS_HOSTED_ZONE'), true) | default('ecoeng-osac-ci.devcluster.openshift.com', true) }}"
+
+# OCP Installation
+ocp_version: "4.22"
+ocp_cluster_name: "ocp-sno"
+ocp_base_domain: "{{ lab_name }}.{{ dns_hosted_zone }}"
+pull_secret_path: "/root/pull-secret"
+ssh_public_key_path: "/root/.ssh/id_rsa.pub"
+assisted_service_url: "http://localhost:8090"
+assisted_service_ip: "198.51.100.9"
+
+# OSAC Installer
+osac_installer_repo: "https://github.com/osac-project/osac-installer.git"
+osac_installer_branch: "main"
+osac_installer_dir: "/opt/osac-installer"
+osac_namespace: "osac-devel"
+osac_kustomize_overlay: "osac-devel"
+osac_values_file: "values/development/values.yaml"
+osac_license_path: "{{ inventory_dir }}/../license.zip"
+
+# OSAC Component overrides
+# Set branch to test a specific version — the repo is cloned and overlaid
+# into the installer's submodule. Leave empty to use installer defaults.
+# Set image to override the runtime container image in Helm values.
+# For osac-aap, branch also sets AAP_PROJECT_GIT_BRANCH (no code overlay).
+osac_operator_repo: "https://github.com/osac-project/osac-operator.git"
+osac_operator_branch: ""
+osac_operator_image: ""
+# fulfillment-service now lives merged into the osac mono-repo (see OSAC-1732) --
+# a checkout of this repo has fulfillment-service's own code one level deeper,
+# under fulfillment-service/. roles/osac_refresh and roles/osac_install flatten
+# that subdirectory up into the installer submodule after cloning.
+fulfillment_service_repo: "https://github.com/osac-project/osac.git"
+fulfillment_service_branch: ""
+fulfillment_service_image: ""
+osac_aap_repo: "https://github.com/osac-project/osac-aap.git"
+osac_aap_branch: ""
+osac_aap_image: ""
+
+# Snapshot-based deployment (fast path)
+snapshot_flavor_image: "quay.io/osac-project/cluster-flavors:caas"
+snapshot_flavor_dir: "/var/cache/netris-lab/cluster-flavors/caas"
+snapshot_recert_image: "quay.io/osac-project/recert:latest"
+snapshot_osac_namespace: "osac-e2e-ci"
+snapshot_osac_values_file: "values/caas-ci/values.yaml"
+
+# AWS configuration for Route 53 DNS (read from config file or environment)
+aws_access_key_id: "{{ lookup('ini', 'aws_access_key_id section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_ACCESS_KEY_ID'), true) }}"
+aws_secret_access_key: "{{ lookup('ini', 'aws_secret_access_key section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_SECRET_ACCESS_KEY'), true) }}"
+aws_region: "{{ lookup('ini', 'aws_region section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_DEFAULT_REGION'), true) | default('us-east-1', true) }}"
+
+# CaaS OCP Version -- must match a version present in the golden caas
+# snapshot's AgentServiceConfig OS_IMAGES.
+caas_ocp_version: "4.22"
+caas_release_image: "quay.io/openshift-release-dev/ocp-release:{{ caas_ocp_version }}.0-multi"
+
+# CaaS Discovery (boot remaining servers with discovery ISO)
+caas_discovery_vm_patterns:
+  - "hgx-pod00-su0-h01"
+  - "hgx-pod00-su0-h02"
+  - "hgx-pod00-su0-h03"
+caas_discovery_vcpu: 4
+caas_discovery_memory_mb: 16384
+caas_discovery_disk_gb: 100
+caas_discovery_infraenv_name: "infraenv"
+caas_discovery_infraenv_namespace: "hardware-inventory"
+
+# CaaS Setup (host type, agent annotations, cluster creation)
+caas_agent_namespace: "{{ caas_discovery_infraenv_namespace }}"
+caas_server_cluster_template_name: "ns-only"
+caas_server_cluster_template_gateway: "192.168.101.1/24"
+caas_host_type_id: "ci-worker"
+caas_host_type_title: "CI Worker"
+caas_host_type_description: "Worker nodes for CI testing"
+caas_cluster_template: "osac.templates.ocp_ci_small"
+caas_catalog_item: "ci-ocp-small"
+caas_catalog_item_title: "CI OCP Small"
+caas_catalog_item_description: "Small OCP cluster for CI testing"
+caas_cluster_name: "caas-ci-cluster"
+caas_agents:
+  - vm_pattern: "hgx-pod00-su0-h01"
+    netris_server_name: "hgx-pod00-su0-h01"
+  - vm_pattern: "hgx-pod00-su0-h02"
+    netris_server_name: "hgx-pod00-su0-h02"
+  - vm_pattern: "hgx-pod00-su0-h03"
+    netris_server_name: "hgx-pod00-su0-h03"

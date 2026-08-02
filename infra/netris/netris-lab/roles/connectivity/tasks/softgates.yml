@@ -1,0 +1,97 @@
+---
+- name: Build softgate list
+  set_fact:
+    softgates: >-
+      {%- set result = [] -%}
+      {%- for i in range(ns_fabric.softgate_count) -%}
+        {%- set _ = result.append({
+          'name': 'ns-softgate-' ~ i,
+          'mgmt_ip': '10.3.3.' ~ (i + 1),
+          'main_ip': '10.2.3.' ~ (i + 1)
+        }) -%}
+      {%- endfor -%}
+      {{ result }}
+
+- name: Get traefik NodePort
+  shell: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: traefik_np
+  changed_when: false
+
+- name: Get auth token via collection
+  ansible.builtin.include_role:
+    name: netris.controller.general
+  vars:
+    netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"
+    netris_username: "{{ netris_login }}"
+    general_state: read
+
+- name: Wait for softgate VMs to be SSH-accessible
+  wait_for:
+    host: "{{ item.mgmt_ip }}"
+    port: 22
+    timeout: 600
+    sleep: 15
+  loop: "{{ softgates }}"
+  ignore_errors: true
+
+- name: Remove stale SSH host keys for softgates
+  shell: ssh-keygen -R {{ item.mgmt_ip }} 2>/dev/null || true
+  loop: "{{ softgates }}"
+  changed_when: false
+
+- name: Set softgate hostnames
+  shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
+      "hostnamectl set-hostname {{ item.name }}" 2>/dev/null
+  loop: "{{ softgates }}"
+  ignore_errors: true
+  changed_when: false
+
+- name: Check if netris agent is running on softgates
+  shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
+      "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null
+  loop: "{{ softgates }}"
+  register: sg_agent_check
+  changed_when: false
+  ignore_errors: true
+
+- name: Install netris agent on softgates and disable DPDK
+  shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@{{ item.item.mgmt_ip }} "
+      curl -fsSL https://get.netris.io | sh -s -- \
+        --lo {{ item.item.main_ip }} \
+        --controller 10.8.0.2 \
+        --hostname {{ item.item.name }} \
+        --auth {{ netris_auth_token }} \
+        --node-type {{ ns_fabric.softgate_node_type }}
+
+      if [ -f /opt/netris/etc/netris.conf ]; then
+        sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
+        systemctl restart netris-sg 2>/dev/null || true
+      fi
+    " 2>&1 | tail -5
+  loop: "{{ sg_agent_check.results }}"
+  when: item.stdout is not defined or item.stdout != "active"
+  ignore_errors: true
+
+- name: Wait for at least one softgate agent to become active
+  shell: |
+    for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
+      status=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null)
+      [ "$status" = "active" ] && echo "active:${ip}" && exit 0
+    done
+    exit 1
+  register: _sg_wait
+  until: _sg_wait.rc == 0
+  retries: 20
+  delay: 15
+  changed_when: false
+
+- name: Wait for E-BGP sessions to establish
+  ansible.builtin.include_tasks: ebgp_wait.yml
+  vars:
+    netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"
+    netris_username: "{{ netris_login }}"

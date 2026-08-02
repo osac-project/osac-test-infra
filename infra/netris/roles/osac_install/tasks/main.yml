@@ -1,0 +1,437 @@
+---
+- name: Download kubeconfig if missing
+  ansible.builtin.command:
+    cmd: aicli -u {{ assisted_service_url }} download kubeconfig {{ ocp_cluster_name }} --path /root/
+    creates: "/root/kubeconfig.{{ ocp_cluster_name }}"
+
+- name: Ensure .kube directory exists
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: "0700"
+
+- name: Copy kubeconfig to default location
+  ansible.builtin.copy:
+    src: "/root/kubeconfig.{{ ocp_cluster_name }}"
+    dest: /root/.kube/config
+    remote_src: true
+    mode: "0600"
+    force: false
+
+- name: Create OSAC namespace if missing
+  ansible.builtin.shell:
+    cmd: oc get namespace {{ osac_namespace }} || oc create namespace {{ osac_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ns_create
+  until: _ns_create.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: "'created' in _ns_create.stdout"
+
+- name: Check if osac-installer already exists
+  ansible.builtin.stat:
+    path: "{{ osac_installer_dir }}/scripts/setup.sh"
+  register: _installer_exists
+
+- name: Clone osac-installer
+  ansible.builtin.git:
+    repo: "{{ osac_installer_repo }}"
+    dest: "{{ osac_installer_dir }}"
+    version: "{{ osac_installer_branch }}"
+    force: true
+  when: not _installer_exists.stat.exists
+
+- name: Initialize submodules
+  ansible.builtin.command:
+    cmd: git submodule update --init --recursive
+    chdir: "{{ osac_installer_dir }}"
+  register: _submodule_update
+  changed_when: _submodule_update.stdout | length > 0
+  when: not _installer_exists.stat.exists
+
+- name: Override osac-operator code in installer
+  ansible.builtin.git:
+    repo: "{{ osac_operator_repo }}"
+    dest: "{{ osac_installer_dir }}/base/osac-operator"
+    version: "{{ osac_operator_branch }}"
+    force: true
+  when: osac_operator_branch | length > 0
+
+- name: Override fulfillment-service code in installer
+  ansible.builtin.git:
+    repo: "{{ fulfillment_service_repo }}"
+    dest: "{{ osac_installer_dir }}/base/osac-fulfillment-service"
+    version: "{{ fulfillment_service_branch }}"
+    force: true
+  when: fulfillment_service_branch | length > 0
+
+# fulfillment_service_repo now points at the osac mono-repo (see OSAC-1732), so
+# the clone above has fulfillment-service's own code one level deeper, under
+# fulfillment-service/, instead of at the checkout root the submodule directory
+# is expected to be (cmd/osac, charts/service/, etc.). Flatten it up so
+# consumers of base/osac-fulfillment-service keep seeing the same
+# single-component layout they always have. No-op for a non-mono-repo
+# fulfillment_service_repo override (no fulfillment-service/ subdir to
+# flatten). Mirrors the equivalent scoping in
+# .github/scripts/replace-installer-submodule.sh for GH Actions e2e runs.
+- name: Flatten mono-repo checkout to fulfillment-service's own subdirectory
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      cd "{{ osac_installer_dir }}/base/osac-fulfillment-service"
+      if [ -d fulfillment-service ]; then
+        find . -mindepth 1 -maxdepth 1 ! -name fulfillment-service -exec rm -rf {} +
+        find fulfillment-service -mindepth 1 -maxdepth 1 -exec mv -t . {} +
+        rmdir fulfillment-service
+      fi
+  when: fulfillment_service_branch | length > 0
+  changed_when: true
+
+- name: Copy development overlay to working overlay
+  ansible.builtin.copy:
+    src: "{{ osac_installer_dir }}/overlays/development/"
+    dest: "{{ osac_installer_dir }}/overlays/{{ osac_kustomize_overlay }}/"
+    remote_src: true
+    mode: preserve
+
+- name: Remove console-proxy-shared-dev from overlay
+  ansible.builtin.replace:
+    path: "{{ osac_installer_dir }}/overlays/{{ osac_kustomize_overlay }}/kustomization.yaml"
+    regexp: '^\s*-\s*\.\./_shared/console-proxy-shared-dev\s*$'
+    replace: ''
+
+- name: Fix console-proxy deployment name for helm mode
+  ansible.builtin.replace:
+    path: "{{ osac_installer_dir }}/scripts/setup.sh"
+    regexp: 'wait_for_resource deployment/osac-console-proxy'
+    replace: |-
+      if [[ "${DEPLOY_MODE}" == "helm" ]]; then
+        CONSOLE_PROXY_DEPLOY="fulfillment-console-proxy"
+      else
+        CONSOLE_PROXY_DEPLOY="osac-console-proxy"
+      fi
+      wait_for_resource deployment/${CONSOLE_PROXY_DEPLOY}
+
+- name: Fix operator env var name for latest osac-operator
+  ansible.builtin.replace:
+    path: "{{ osac_installer_dir }}/base/osac-operator/charts/operator/templates/deployment.yaml"
+    regexp: 'OSAC_ENABLE_CLUSTER_ORDER_CONTROLLER'
+    replace: 'OSAC_ENABLE_CLUSTER_CONTROLLER'
+
+- name: Configure AAP token secret reference in values file
+  block:
+    - name: Read values file for AAP token patch
+      ansible.builtin.slurp:
+        src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+      register: _values_aap_raw
+
+    - name: Write values file with AAP token secret
+      ansible.builtin.copy:
+        dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+        content: >-
+          {{ _values_aap_raw.content | b64decode | from_yaml
+             | combine({'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}}}, recursive=true)
+             | to_nice_yaml(indent=2) }}
+
+- name: Enable bundled PostgreSQL for CI
+  block:
+    - name: Read values file for bundledPostgres patch
+      ansible.builtin.slurp:
+        src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+      register: _values_pg_raw
+
+    - name: Write values file with bundledPostgres enabled
+      ansible.builtin.copy:
+        dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+        content: >-
+          {{ _values_pg_raw.content | b64decode | from_yaml
+             | combine({'bundledPostgres': {'enabled': true}}, recursive=true)
+             | to_nice_yaml(indent=2) }}
+
+- name: Disable bare-metal fulfillment operator
+  ansible.builtin.blockinfile:
+    path: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+    block: |
+      bmf:
+        enabled: false
+    marker: "# {mark} NETRIS-TEST-INFRA BMF OVERRIDE"
+
+- name: Override component images in values file
+  when: osac_operator_image or fulfillment_service_image or osac_aap_image
+  block:
+    - name: Read current values file
+      ansible.builtin.slurp:
+        src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+      register: _values_raw
+
+    - name: Build image overrides
+      ansible.builtin.set_fact:
+        _image_overrides: >-
+          {{ {}
+             | combine(({'operator': {'image': {
+                 'repository': osac_operator_image | regex_replace(':([^/]+)$', ''),
+                 'tag': (osac_operator_image | regex_search(':([^/]+)$', '\1') | first | default('latest'))
+               }}} if osac_operator_image else {}), recursive=true)
+             | combine(({'service': {'images': {'service': fulfillment_service_image}},
+                         'dbMigrate': {'image': fulfillment_service_image}}
+                        if fulfillment_service_image else {}), recursive=true)
+             | combine(({'aap': {'bootstrap': {'image': osac_aap_image}}}
+                        if osac_aap_image else {}), recursive=true)
+          }}
+
+    - name: Write patched values file
+      ansible.builtin.copy:
+        dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+        content: "{{ _values_raw.content | b64decode | from_yaml | combine(_image_overrides, recursive=true) | to_nice_yaml(indent=2) }}"
+
+- name: Set DNS and AWS settings in Helm values
+  block:
+    - name: Read values file for DNS settings
+      ansible.builtin.slurp:
+        src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+      register: _values_dns_raw
+
+    - name: Write values file with DNS and AWS settings
+      ansible.builtin.copy:
+        dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+        content: >-
+          {{ _values_dns_raw.content | b64decode | from_yaml
+             | combine({'clusterFulfillment': {'config': {
+                 'DNS_CLASS': 'dns.route53.dns',
+                 'DNS_ZONE': dns_hosted_zone
+               }, 'secret': {
+                 'AWS_ACCESS_KEY_ID': aws_access_key_id,
+                 'AWS_SECRET_ACCESS_KEY': aws_secret_access_key
+               }}}, recursive=true)
+             | to_nice_yaml(indent=2) }}
+
+- name: Ensure overlay files directory exists
+  ansible.builtin.file:
+    path: "{{ osac_installer_dir }}/overlays/{{ osac_kustomize_overlay }}/files"
+    state: directory
+    mode: "0755"
+
+- name: Create placeholder secrets for bmf-operator
+  ansible.builtin.shell:
+    cmd: >
+      oc create secret generic {{ item }}
+      --from-literal=placeholder=unused
+      -n {{ osac_namespace }}
+      --dry-run=client -o yaml | oc apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop:
+    - osac-management-config
+    - osac-inventory-config
+  changed_when: false
+  register: _secrets_result
+  until: _secrets_result.rc == 0
+  retries: 10
+  delay: 15
+
+- name: Create placeholder AAP API token secret
+  ansible.builtin.shell:
+    cmd: >
+      oc create secret generic osac-aap-api-token
+      --from-literal=token=placeholder
+      -n {{ osac_namespace }}
+      --dry-run=client -o yaml | oc apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  register: _aap_token_result
+  until: _aap_token_result.rc == 0
+  retries: 10
+  delay: 15
+
+- name: Copy AAP license file to overlay
+  ansible.builtin.copy:
+    src: "{{ osac_license_path }}"
+    dest: "{{ osac_installer_dir }}/overlays/{{ osac_kustomize_overlay }}/files/license.zip"
+    remote_src: true
+    mode: "0644"
+
+- name: Copy pull secret to overlay
+  ansible.builtin.copy:
+    src: "{{ pull_secret_path }}"
+    dest: "{{ osac_installer_dir }}/overlays/{{ osac_kustomize_overlay }}/files/quay-pull-secret.json"
+    remote_src: true
+    mode: "0644"
+
+- name: Get cluster apps domain
+  ansible.builtin.shell:
+    cmd: oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _apps_domain
+  changed_when: false
+  until: _apps_domain.rc == 0 and _apps_domain.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Set fulfillment hostnames in values file
+  ansible.builtin.replace:
+    path: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+    regexp: "^(\\s*){{ item.key }}:.*"
+    replace: "\\1{{ item.key }}: fulfillment-{{ item.suffix }}-{{ osac_namespace }}.{{ _apps_domain.stdout }}"
+  loop:
+    - { key: "externalHostname", suffix: "api" }
+    - { key: "internalHostname", suffix: "internal-api" }
+
+- name: Discover Netris controller URL
+  ansible.builtin.shell:
+    cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _traefik_nodeport
+  changed_when: false
+  until: _traefik_nodeport.rc == 0 and _traefik_nodeport.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Set Netris controller URL
+  ansible.builtin.set_fact:
+    _netris_ctl_url: "http://192.168.16.254:{{ _traefik_nodeport.stdout }}"
+
+- name: Get Netris site
+  ansible.builtin.include_role:
+    name: netris.controller.site
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    site_state: read
+
+- name: Set site ID
+  ansible.builtin.set_fact:
+    _netris_site_id: "{{ netris_site_id }}"
+
+- name: Get VPCs
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    vpc_state: read
+
+- name: Set OCP VPC ID
+  ansible.builtin.set_fact:
+    _netris_mgmt_vpc_id: "{{ netris_vpc_by_name[ocp_vpc_name].id }}"
+
+- name: Get server cluster templates
+  ansible.builtin.include_role:
+    name: netris.controller.server_cluster_template
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    server_cluster_template_state: list
+
+- name: Set server cluster template ID
+  ansible.builtin.set_fact:
+    _netris_sct_id: "{{ netris_sct_by_name[caas_server_cluster_template_name].id }}"
+
+- name: Build resource class map
+  ansible.builtin.set_fact:
+    _netris_resource_class_map: >-
+      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ _netris_sct_id }},"mgmt_interface":"ens4","vpc_interfaces":["ens5"]}}
+
+- name: Copy SSH keys for Netris integration
+  ansible.builtin.copy:
+    src: "{{ ssh_public_key_path | regex_replace('\\.pub$', '') }}"
+    dest: "{{ osac_installer_dir }}/overlays/{{ osac_kustomize_overlay }}/files/{{ item }}"
+    remote_src: true
+    mode: "0600"
+  loop:
+    - server-ssh-key
+    - server-ssh-bastion-key
+
+- name: Write AAP configuration env file
+  ansible.builtin.copy:
+    dest: "{{ osac_installer_dir }}/overlays/{{ osac_kustomize_overlay }}/files/osac-aap-configuration.env"
+    content: |
+      NETWORK_CLASS=netris
+      NETWORK_STEPS_COLLECTION=netris.steps
+      EXTERNAL_ACCESS_BASE_DOMAIN={{ ocp_base_domain }}
+      EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS={{ ocp_base_domain }}
+      EXTERNAL_ACCESS_API_INTERNAL_NETWORK=hypershift
+      HOSTED_CLUSTER_BASE_DOMAIN={{ ocp_base_domain }}
+      HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY=SingleReplica
+      HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY=SingleReplica
+      NETRIS_CONTROLLER_URL={{ _netris_ctl_url }}
+      NETRIS_USERNAME={{ netris_username }}
+      NETRIS_SITE_ID={{ _netris_site_id }}
+      NETRIS_TENANT_ID=1
+      NETRIS_TENANT_NAME=Admin
+      NETRIS_MGMT_VPC_ID={{ _netris_mgmt_vpc_id }}
+      NETRIS_MGMT_VPC_NAME={{ ocp_vpc_name }}
+      NETRIS_RESOURCE_CLASS_MAP={{ _netris_resource_class_map | to_json }}
+      SERVER_MGMT_ROUTE_DESTINATION=192.168.16.0/20
+      SERVER_MGMT_ROUTE_GATEWAY=192.168.16.1
+      SERVER_SSH_BASTION_HOST=192.168.16.254
+      SERVER_SSH_BASTION_USER=root
+      SERVER_SSH_USER=root
+      DNS_CLASS=dns.route53.dns
+      DNS_ZONE={{ dns_hosted_zone }}
+    mode: "0644"
+
+- name: Write AAP secrets env file
+  ansible.builtin.copy:
+    dest: "{{ osac_installer_dir }}/overlays/{{ osac_kustomize_overlay }}/files/osac-aap-secrets.env"
+    content: |
+      NETRIS_PASSWORD={{ netris_password }}
+      AWS_ACCESS_KEY_ID={{ aws_access_key_id }}
+      AWS_SECRET_ACCESS_KEY={{ aws_secret_access_key }}
+    mode: "0600"
+  no_log: true
+
+- name: Write setup.sh environment file
+  ansible.builtin.copy:
+    dest: /tmp/osac-setup.env
+    content: |
+      export KUBECONFIG=/root/.kube/config
+      export DEPLOY_MODE=helm
+      export INSTALLER_NAMESPACE={{ osac_namespace }}
+      export INSTALLER_KUSTOMIZE_OVERLAY={{ osac_kustomize_overlay }}
+      export VALUES_FILE={{ osac_values_file }}
+      export EXTRA_SERVICES=true
+      export AAP_PROJECT_GIT_BRANCH={{ osac_aap_branch | default('main', true) }}
+      export NETWORK_CLASS=netris
+      export NETWORK_STEPS_COLLECTION=netris.steps
+      export EXTERNAL_ACCESS_BASE_DOMAIN={{ ocp_base_domain }}
+      export EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS={{ ocp_base_domain }}
+      export EXTERNAL_ACCESS_API_INTERNAL_NETWORK=hypershift
+      export HOSTED_CLUSTER_BASE_DOMAIN={{ ocp_base_domain }}
+      export HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY=SingleReplica
+      export HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY=SingleReplica
+      export NETRIS_CONTROLLER_URL={{ _netris_ctl_url }}
+      export NETRIS_USERNAME={{ netris_username }}
+      export NETRIS_PASSWORD={{ netris_password }}
+      export NETRIS_SITE_ID={{ _netris_site_id }}
+      export NETRIS_TENANT_ID=1
+      export NETRIS_TENANT_NAME=Admin
+      export NETRIS_MGMT_VPC_ID={{ _netris_mgmt_vpc_id }}
+      export NETRIS_MGMT_VPC_NAME={{ ocp_vpc_name }}
+      export NETRIS_RESOURCE_CLASS_MAP='{{ _netris_resource_class_map | to_json }}'
+      export SERVER_SSH_BASTION_HOST=192.168.16.254
+      export SERVER_SSH_BASTION_USER=root
+      export SERVER_SSH_USER=root
+      export SERVER_MGMT_ROUTE_DESTINATION=192.168.16.0/20
+      export SERVER_MGMT_ROUTE_GATEWAY=192.168.16.1
+    mode: "0600"
+
+- name: Create socat env file for OCP ingress (port 9444 → OCP 443)
+  ansible.builtin.copy:
+    dest: /etc/netris-lab/socat/0.0.0.0-9444.env
+    content: |
+      BIND_IP=0.0.0.0
+      PORT=9444
+      TARGET_IP={{ ocp_dnat_ip }}
+      TARGET_PORT=443
+
+- name: Enable and start OCP ingress socat forwarder
+  ansible.builtin.systemd:
+    name: socat-forwarder@0.0.0.0-9444
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Report OSAC preparation complete
+  ansible.builtin.debug:
+    msg: "OSAC prepared. OCP routes accessible at https://<hostname>:9444. Run 'make run-osac-setup' to execute setup.sh with live output."

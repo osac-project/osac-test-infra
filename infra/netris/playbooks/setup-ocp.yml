@@ -1,0 +1,7 @@
+---
+- name: Configure OCP server VM and Netris networking
+  hosts: all
+  gather_facts: false
+  roles:
+    - vm_resize
+    - netris_configure

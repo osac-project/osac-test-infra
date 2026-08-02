@@ -1,0 +1,124 @@
+---
+- name: Discover Netris controller URL
+  ansible.builtin.shell:
+    cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _traefik_nodeport
+  changed_when: false
+  until: _traefik_nodeport.rc == 0 and _traefik_nodeport.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Set controller URL
+  ansible.builtin.set_fact:
+    netris_controller_url: "http://localhost:{{ _traefik_nodeport.stdout }}"
+
+- name: Authenticate to Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+
+- name: Create VPC for OCP
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+  vars:
+    vpc_name: "{{ ocp_vpc_name }}"
+    vpc_state: present
+    vpc_tenant_id: 1
+
+- name: Create IPAM allocation for OCP
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+  vars:
+    ipam_state: create_allocation
+    ipam_name: "{{ ocp_vpc_name }}-allocation"
+    ipam_cidr: "{{ ocp_subnet_cidr }}"
+    ipam_tenant_id: 1
+    ipam_vpc_id: "{{ vpc_id }}"
+
+- name: Create IPAM subnet for OCP
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+  vars:
+    ipam_state: create_subnet
+    ipam_name: "{{ ocp_vpc_name }}-subnet"
+    ipam_cidr: "{{ ocp_subnet_cidr }}"
+    ipam_purpose: common
+    ipam_site_id: 1
+    ipam_tenant_id: 1
+    ipam_vpc_id: "{{ vpc_id }}"
+
+- name: Create VNet for OCP server
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+  vars:
+    vnet_name: "{{ ocp_vnet_name }}"
+    vnet_state: present
+    vnet_vpc_id: "{{ vpc_id }}"
+    vnet_site_id: 1
+    vnet_tenant_id: 1
+    vnet_gateway: "{{ ocp_gateway }}"
+    vnet_dhcp_enabled: false
+    vnet_ports: "{{ ocp_server_ports }}"
+
+- name: Create SNAT rule for OCP VNet
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+  vars:
+    nat_name: "{{ ocp_vpc_name }}-snat"
+    nat_state: present
+    nat_action: snat
+    nat_site_id: 1
+    nat_vpc_id: "{{ vpc_id }}"
+    nat_source_address: "{{ ocp_subnet_cidr }}"
+    nat_snat_to_ip: "{{ ocp_snat_ip }}"
+
+- name: Create DNAT rule for OCP (API + Ingress)
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+  vars:
+    nat_name: "{{ ocp_vpc_name }}-dnat"
+    nat_state: present
+    nat_action: dnat
+    nat_protocol: all
+    nat_site_id: 1
+    nat_vpc_id: "{{ vpc_id }}"
+    nat_destination_address: "{{ ocp_dnat_ip }}/32"
+    nat_dnat_to_ip: "{{ ocp_node_ip }}"
+
+- name: Check if NS-only server cluster template exists
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/server-cluster-template"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    validate_certs: false
+  register: _sct_list
+  no_log: true
+
+- name: Create NS-only server cluster template for CaaS
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/server-cluster-template"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ caas_server_cluster_template_name }}"
+      vnets:
+        - postfix: "North-South"
+          type: "l2vpn"
+          vlan: "untagged"
+          vlanID: "auto"
+          serverNics: ["eth9"]
+          ipv4Gateway: "{{ caas_server_cluster_template_gateway }}"
+    validate_certs: false
+    status_code: [200, 201]
+  no_log: true
+  when: _sct_list.json.data | selectattr('name', 'equalto', caas_server_cluster_template_name) | list | length == 0
+
+- name: Report Netris networking configuration
+  ansible.builtin.debug:
+    msg: "Netris configured: VPC={{ ocp_vpc_name }}, VNet={{ ocp_vnet_name }}, Subnet={{ ocp_subnet_cidr }}, DNAT={{ ocp_dnat_ip }} → {{ ocp_node_ip }}"

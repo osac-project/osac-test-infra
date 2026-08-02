@@ -1,0 +1,6 @@
+---
+- name: Install OSAC on OCP SNO
+  hosts: all
+  gather_facts: false
+  roles:
+    - osac_install

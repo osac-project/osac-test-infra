@@ -1,0 +1,168 @@
+# ============================================================
+# Netris Lab Configuration
+# ============================================================
+
+# --- Lab Scale ---
+gpu_server_count: 4                     # minimum 1; EW fabric clamps leaf/spine counts to >= 1
+gpu_server_hostname: "hgx"
+site_name: "Datacenter-1"
+ew_fabric_enable: 0                     # 0 to disable East-West fabric (NS-only mode)
+
+# --- Netris Controller ---
+netris_controller_chart_version: "2.8.1"
+netris_controller_images:
+  backend: "4.9.0-012"
+  frontend: "4.9.0-006"
+  grpc: "4.9.0.005"
+  telescope: "4.9.0.002"
+  migration: "4.9.0"
+netris_login: "netris"
+netris_password: "netris"
+netris_validate_certs: false
+netris_timeout: 30
+
+# --- K3s ---
+k3s_version: "v1.23.14+k3s1"
+k3s_api_port: 6444
+
+# --- Controller UI ---
+# Fixed port for accessing the Netris web UI (avoids changing NodePorts)
+controller_ui_port: 9443
+
+# --- External Connectivity ---
+# Two modes:
+#   "isolated" - No public IPs. BGP uses TEST-NET ranges. ISP simulation is
+#                internal only. Egress via virbr0 NAT. No ingress.
+#   "public"   - Real public IPs. br-public is bridged to a physical interface.
+#                ISP server gets real IPs, BGP advertises routable subnets.
+#                Full ingress + egress.
+connectivity_mode: "isolated"
+
+# Required only when connectivity_mode: "public"
+# The interface carrying the public subnet — bridged to br-public.
+# Can be a bare interface (eth1) or VLAN subinterface (bond0.64).
+# public_interface: "eth1"
+# public_bgp_link_subnet: "125.253.67.64/29"
+# public_nat_cidr: "125.253.67.144/30"
+# public_l4lb_cidr: "125.253.67.12/30"
+# public_bgp_subnets_to_advertise:
+#   - "125.253.67.144/30"
+#   - "125.253.67.12/30"
+
+# --- Networking ---
+mgmt_bridge_name: "br-mgmt"
+mgmt_bridge_ip: "192.168.16.254"
+mgmt_bridge_cidr: "192.168.16.254/20"
+public_bridge_name: "br-public"
+
+# --- IPAM (all private, no public IPs needed) ---
+ipam_private_allocation: "10.0.0.0/8"
+ipam_mgmt: "10.253.0.0/18"
+ipam_mgmt_gateway: "10.253.63.254"
+ipam_switch_loopback: "10.253.128.0/24"
+
+# --- BGP (used when connectivity_mode: "isolated") ---
+bgp_link_subnet: "198.51.100.8/29"
+bgp_password: "newNet0ps"
+bgp_subnets_to_advertise:
+  - "198.51.100.0/29"
+  - "198.51.100.16/29"
+nat_cidr: "198.51.100.0/29"
+l4lb_cidr: "198.51.100.16/29"
+
+# --- North-South Fabric ---
+ns_fabric:
+  enable: 1
+  leaf_count: 2
+  leaf_port_count: 64
+  leaf_port_breakout: 4
+  leaf_to_spine_link_count: 4
+  leaf_to_spine_start_port: 192
+  oob_leaf_count: 1
+  oob_first_gpu_port: 0
+  oob_gpu_per_switch: 4
+  oob_uplink_into_spine: 1
+  softgate_count: 4
+  softgate_roles: '["general", "general", "snat", "snat"]'
+  softgate_leaf_list: "[0, 1]"
+  softgate_node_type: "softgate_hs"     # installer requires _hs to find the package; dpdk disabled post-install
+  leaf_to_softgate_start_port: 176
+  spine_count: 2
+  spine_port_count: 64
+  spine_port_breakout: 4
+  lo_subnet: "10.2.0.0/16"
+  mgmt_subnet: "10.3.0.0/16"
+  gpu_server_ns_subnet: "192.168.0.0/21"
+  gpu_server_ns_nexthop: "192.168.7.254/21"
+  gpu_server_ipmi_subnet: "192.168.8.0/21"
+  gpu_server_ipmi_nexthop: "192.168.15.254/21"
+  asn_start: 4200300001
+
+# --- Cloudsim ---
+servers_gw: "192.168.16.1/20"
+apt_repo: "main"
+hypers_ssh_user: "root"
+
+# --- VM Resources ---
+switch_vcpu: 4
+switch_memory: 2048              # MB
+server_vcpu: 1
+server_memory: 1024              # MB
+softgate_vcpu: 2
+softgate_memory: 4096            # MB
+
+# --- SSH keys (leave empty to auto-detect from /root/.ssh/id_rsa.pub) ---
+ssh_auth_keys: []
+
+# --- Paths ---
+project_dir: "/opt/netris-lab"
+topology_dir: "{{ project_dir }}/topology"
+cloudsim_dir: "{{ project_dir }}/cloudsim"
+
+# --- Image cache ---
+k3s_image_cache_dir: "/var/cache/netris-lab/k3s-images"
+container_images:
+  # Netris controller
+  - "docker.io/netrisai/controller-web-service-backend:{{ netris_controller_images.backend }}"
+  - "docker.io/netrisai/controller-web-service-frontend:{{ netris_controller_images.frontend }}"
+  - "docker.io/netrisai/controller-grpc:{{ netris_controller_images.grpc }}"
+  - "docker.io/netrisai/controller-telescope:{{ netris_controller_images.telescope }}"
+  - "docker.io/netrisai/controller-web-session-generator:0.2.0"
+  - "docker.io/netrisai/controller-telescope-notifier:3.0.4"
+  - "docker.io/netrisai/mariadb:10.11.4-debian-11-r46"
+  - "docker.io/netrisai/mongodb:4.4.4-debian-10-r0"
+  - "docker.io/netrisai/redis:6.0.12-debian-10-r3"
+  - "docker.io/graphiteapp/graphite-statsd:1.1.7-6"
+  - "docker.io/haproxytech/haproxy-alpine:2.8.0"
+  - "docker.io/namshi/smtp:latest"
+  - "docker.io/library/alpine:3.11"
+  # K3s system
+  - "docker.io/rancher/klipper-helm:v0.7.3-build20220613"
+  - "docker.io/rancher/local-path-provisioner:v0.0.23"
+  - "docker.io/rancher/mirrored-coredns-coredns:1.9.4"
+  - "docker.io/rancher/mirrored-library-busybox:1.34.1"
+  - "docker.io/rancher/mirrored-library-traefik:2.9.4"
+  - "docker.io/rancher/mirrored-metrics-server:v0.6.1"
+  - "docker.io/rancher/mirrored-pause:3.6"
+  # cert-manager
+  - "quay.io/jetstack/cert-manager-cainjector:v1.7.3"
+  - "quay.io/jetstack/cert-manager-controller:v1.7.3"
+  - "quay.io/jetstack/cert-manager-ctl:v1.7.3"
+  - "quay.io/jetstack/cert-manager-webhook:v1.7.3"
+
+# --- Base images ---
+cumulus_image_url: "http://downloads.netris.ai/cumulus-linux-5.11.3-vx-amd64-qemu.qcow2"
+cumulus_image_name: "cumulus-linux-5.11.3.qcow2"
+ubuntu_image_url: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+ubuntu_image_name: "ubuntu-24.04-server-cloudimg-amd64.img"
+libvirt_images_dir: "/var/lib/libvirt/images"
+
+# --- Socat port forwarding ---
+controller_service_ports:
+  - {name: "grpc", port: 50051}
+  - {name: "telescope", port: 3033}
+  - {name: "telescope-tls", port: 3034}
+  - {name: "graphite", port: 2003}
+
+# --- License (path to local file, not committed to git) ---
+netris_license_file: "{{ playbook_dir }}/../license.key"

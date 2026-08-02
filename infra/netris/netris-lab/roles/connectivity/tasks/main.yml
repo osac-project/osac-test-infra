@@ -1,0 +1,13 @@
+---
+- name: Setup VPN
+  include_tasks: vpn.yml
+
+- name: Setup socat port forwarding
+  include_tasks: socat.yml
+
+- name: Fix ISP server for isolated mode
+  include_tasks: isp_server.yml
+  when: connectivity_mode == "isolated"
+
+- name: Setup softgate agents
+  include_tasks: softgates.yml

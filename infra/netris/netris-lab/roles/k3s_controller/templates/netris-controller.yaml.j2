@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app: netris-controller
+  name: netris-controller
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: netris-controller
+  namespace: netris-controller
+spec:
+  failurePolicy: reinstall
+  chart: https://github.com/netrisai/charts/releases/download/netris-controller-{{ netris_controller_chart_version }}/netris-controller-{{ netris_controller_chart_version }}.tgz
+  targetNamespace: netris-controller
+  valuesContent: |-
+    web-service-backend:
+      image:
+        tag: {{ netris_controller_images.backend }}
+    web-service-frontend:
+      image:
+        tag: {{ netris_controller_images.frontend }}
+    grpc:
+      image:
+        tag: {{ netris_controller_images.grpc }}
+    telescope:
+      image:
+        tag: {{ netris_controller_images.telescope }}
+    migration:
+      image:
+        tag: {{ netris_controller_images.migration }}
+    redis:
+      master:
+        disableCommands: []
+    haproxy:
+      service:
+        type: ClusterIP
+        externalTrafficPolicy: ""
+    ingress:
+      hosts: []

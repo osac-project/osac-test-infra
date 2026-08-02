@@ -1,0 +1,78 @@
+---
+- name: Stop and disable all socat forwarders
+  shell: |
+    for svc in $(systemctl list-units --type=service --all 2>/dev/null | grep socat-forwarder | awk '{print $1}'); do
+      systemctl stop "$svc" 2>/dev/null
+      systemctl disable "$svc" 2>/dev/null
+    done
+  ignore_errors: true
+
+- name: Stop VPN
+  systemd:
+    name: openvpn-client@client
+    state: stopped
+  ignore_errors: true
+
+- name: Destroy Pulumi VMs
+  shell: |
+    export PATH=$PATH:/root/.pulumi/bin
+    export PULUMI_CONFIG_PASSPHRASE=""
+    cd {{ cloudsim_dir }}
+    pulumi destroy --yes
+  ignore_errors: true
+
+- name: Remove any orphaned VMs
+  shell: |
+    for vm in $(virsh list --all --name 2>/dev/null | grep -v '^$'); do
+      virsh destroy "$vm" 2>/dev/null
+      virsh undefine "$vm" --remove-all-storage 2>/dev/null
+    done
+  ignore_errors: true
+  changed_when: false
+
+- name: Destroy Terraform topology
+  shell: |
+    cd {{ topology_dir }}
+    tofu destroy -auto-approve
+  ignore_errors: true
+
+- name: Delete Netris controller from K3s
+  shell: |
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    kubectl delete namespace netris-controller --timeout=60s 2>/dev/null || true
+    rm -f /var/lib/rancher/k3s/server/manifests/netris-controller.yaml
+    rm -f /var/lib/rancher/k3s/server/manifests/cert-manager.yaml
+  ignore_errors: true
+
+- name: Uninstall K3s
+  shell: /usr/local/bin/k3s-uninstall.sh
+  ignore_errors: true
+
+- name: Remove bridges
+  shell: |
+    ip link set {{ item }} down 2>/dev/null && ip link del {{ item }} 2>/dev/null || true
+  loop:
+    - br-mgmt
+    - br-public
+  ignore_errors: true
+
+- name: Clean up working directory
+  file:
+    path: "{{ project_dir }}"
+    state: absent
+  ignore_errors: true
+
+- name: Kill any remaining socat processes
+  shell: pkill -9 socat 2>/dev/null || true
+  ignore_errors: true
+
+- name: Print status
+  shell: |
+    echo "VMs: $(virsh list 2>/dev/null | grep -c running)"
+    echo "K3s: $(systemctl is-active k3s 2>&1)"
+    echo "socat: $(pgrep -c socat 2>/dev/null || echo 0)"
+  register: cleanup_status
+
+- name: Cleanup result
+  debug:
+    msg: "{{ cleanup_status.stdout }}"

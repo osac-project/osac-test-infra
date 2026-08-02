@@ -1,0 +1,6 @@
+---
+- name: Generate cluster access documentation
+  hosts: all
+  gather_facts: false
+  roles:
+    - access_doc

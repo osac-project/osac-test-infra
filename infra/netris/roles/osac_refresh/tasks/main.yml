@@ -1,0 +1,263 @@
+---
+- name: Clone osac-installer
+  ansible.builtin.git:
+    repo: "{{ osac_installer_repo }}"
+    dest: "{{ osac_installer_dir }}"
+    version: "{{ osac_installer_branch }}"
+    force: true
+  when: not (osac_installer_skip_clone | default(false) | bool)
+
+- name: Initialize submodules
+  ansible.builtin.command:
+    cmd: git submodule update --init --recursive
+    chdir: "{{ osac_installer_dir }}"
+  register: _submodule_update
+  changed_when: _submodule_update.stdout | length > 0
+  when: not (osac_installer_skip_clone | default(false) | bool)
+
+- name: Override osac-operator code in installer
+  ansible.builtin.git:
+    repo: "{{ osac_operator_repo }}"
+    dest: "{{ osac_installer_dir }}/base/osac-operator"
+    version: "{{ osac_operator_branch }}"
+    force: true
+  when:
+    - not (osac_installer_skip_clone | default(false) | bool)
+    - osac_operator_branch | default('') | length > 0
+
+- name: Override fulfillment-service code in installer
+  ansible.builtin.git:
+    repo: "{{ fulfillment_service_repo }}"
+    dest: "{{ osac_installer_dir }}/base/osac-fulfillment-service"
+    version: "{{ fulfillment_service_branch }}"
+    force: true
+  when:
+    - not (osac_installer_skip_clone | default(false) | bool)
+    - fulfillment_service_branch | default('') | length > 0
+
+# fulfillment_service_repo now points at the osac mono-repo (see OSAC-1732), so
+# the clone above has fulfillment-service's own code one level deeper, under
+# fulfillment-service/, instead of at the checkout root the submodule directory
+# is expected to be (cmd/osac, charts/service/, etc.). Flatten it up so
+# consumers of base/osac-fulfillment-service keep seeing the same
+# single-component layout they always have. No-op for a non-mono-repo
+# fulfillment_service_repo override (no fulfillment-service/ subdir to
+# flatten). Mirrors the equivalent scoping in
+# .github/scripts/replace-installer-submodule.sh for GH Actions e2e runs.
+- name: Flatten mono-repo checkout to fulfillment-service's own subdirectory
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      cd "{{ osac_installer_dir }}/base/osac-fulfillment-service"
+      if [ -d fulfillment-service ]; then
+        find . -mindepth 1 -maxdepth 1 ! -name fulfillment-service -exec rm -rf {} +
+        find fulfillment-service -mindepth 1 -maxdepth 1 -exec mv -t . {} +
+        rmdir fulfillment-service
+      fi
+  when:
+    - not (osac_installer_skip_clone | default(false) | bool)
+    - fulfillment_service_branch | default('') | length > 0
+  changed_when: true
+
+# Job-scoped, non-root install -- consistent with roles/lab_setup's osac
+# build. Neither this task nor anything in its call chain
+# (playbooks/prep-snapshot-refresh.yml, ansible.cfg) sets become: true, so
+# this was already running as the unprivileged connecting user; it was just
+# pointed at a root-owned path (/usr/local/bin) it likely couldn't actually
+# write to. become: false is added explicitly so that stays true even if a
+# future caller wraps this role in a become: true play.
+#
+# lookup('env', 'HOME'), not ansible_env.HOME -- see the identical note in
+# roles/lab_setup/tasks/main.yml for why.
+- name: Ensure non-root install directory exists
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'HOME') }}/.local/bin"
+    state: directory
+    mode: "0755"
+  become: false
+  when: not (osac_installer_skip_clone | default(false) | bool)
+
+- name: Rebuild osac CLI from fulfillment-service
+  ansible.builtin.command:
+    cmd: /usr/local/go/bin/go build -o "{{ lookup('env', 'HOME') }}/.local/bin/osac" ./cmd/osac
+    chdir: "{{ osac_installer_dir }}/base/osac-fulfillment-service"
+  become: false
+  environment:
+    GOPATH: "{{ lookup('env', 'HOME') }}/go"
+    GOCACHE: "{{ lookup('env', 'HOME') }}/.cache/go-build"
+  when: not (osac_installer_skip_clone | default(false) | bool)
+
+- name: Determine values directory
+  ansible.builtin.set_fact:
+    _values_dir: "{{ snapshot_osac_values_file | dirname }}"
+
+- name: Ensure values directory exists
+  ansible.builtin.file:
+    path: "{{ osac_installer_dir }}/{{ _values_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Copy AAP license to values directory
+  ansible.builtin.copy:
+    src: "{{ osac_license_path }}"
+    dest: "{{ osac_installer_dir }}/{{ _values_dir }}/license.zip"
+    remote_src: true
+    mode: "0644"
+
+- name: Copy pull-secret to values directory
+  ansible.builtin.copy:
+    src: "{{ pull_secret_path }}"
+    dest: "{{ osac_installer_dir }}/{{ _values_dir }}/pull-secret.json"
+    remote_src: true
+    mode: "0644"
+
+- name: Override fulfillment-service image in values file
+  ansible.builtin.shell:
+    cmd: |
+      sed -i 's|[a-zA-Z0-9./_-]*fulfillment-service:[a-zA-Z0-9._-]*|{{ fulfillment_service_image }}|g' \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+  when: fulfillment_service_image | default('') | length > 0
+
+- name: Override osac-operator image in values file
+  ansible.builtin.shell:
+    cmd: |
+      REPO="{{ osac_operator_image | regex_replace(':[^/]+$', '') }}"
+      TAG="{{ osac_operator_image | regex_search(':[^/]+$') | regex_replace('^:', '') | default('latest', true) }}"
+      sed -i "s|[a-zA-Z0-9./_-]*osac-operator:[a-zA-Z0-9._-]*|{{ osac_operator_image }}|g" \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+      sed -i "/repository: .*osac-operator/{s|repository: .*|repository: ${REPO}|;n;s/tag: .*/tag: ${TAG}/}" \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+  when: osac_operator_image | default('') | length > 0
+
+- name: Override osac-aap image in values file
+  ansible.builtin.shell:
+    cmd: |
+      sed -i 's|[a-zA-Z0-9./_-]*osac-aap:[a-zA-Z0-9._-]*|{{ osac_aap_image }}|g' \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+  when: osac_aap_image | default('') | length > 0
+
+- name: Override AAP project git URI in values file
+  ansible.builtin.shell:
+    cmd: |
+      sed -i 's|projectGitUri: .*|projectGitUri: "{{ osac_aap_repo }}"|' \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+  # Unconditional (unlike the branch override below): osac_aap_repo always
+  # has a value (defaults to upstream, matching values.yaml.example
+  # projectGitUri), so re-applying it is a harmless no-op when not
+  # overridden -- same pattern osac_installer_repo/osac_operator_repo/
+  # fulfillment_service_repo already use for their own (unconditional)
+  # git-clone tasks.
+
+- name: Override AAP project git branch in values file
+  ansible.builtin.shell:
+    cmd: |
+      sed -i 's|projectGitBranch: .*|projectGitBranch: "{{ osac_aap_branch }}"|' \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+  when: osac_aap_branch | default('') | length > 0
+
+- name: Disable osac-ui (image not published yet)
+  ansible.builtin.shell:
+    cmd: |
+      if grep -q 'osac-ui' {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}; then
+        sed -i '/^ui:/,/^[a-z]/{s/enabled: true/enabled: false/}' \
+          {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+      fi
+  changed_when: false
+
+- name: Scale down osac-ui deployment if running
+  ansible.builtin.shell:
+    cmd: oc scale deployment/osac-ui --replicas=0 -n {{ snapshot_osac_namespace }} 2>/dev/null || true
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Build list of CI images to pre-pull
+  ansible.builtin.set_fact:
+    _prepull_images: >-
+      {{
+        ([] +
+         ([fulfillment_service_image] if fulfillment_service_image | default('') | length > 0 else []) +
+         ([osac_operator_image] if osac_operator_image | default('') | length > 0 else []) +
+         ([osac_aap_image] if osac_aap_image | default('') | length > 0 else []))
+      }}
+
+- name: Pre-pull CI images onto SNO node
+  ansible.builtin.shell:
+    cmd: >-
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -i {{ snapshot_flavor_dir }}/crypto/cluster-tool.key
+      core@{{ ocp_dnat_ip }}
+      "sudo crictl pull '{{ item }}'"
+  loop: "{{ _prepull_images }}"
+  loop_control:
+    label: "{{ item.split('/')[-1] }}"
+  register: _prepull_result
+  until: _prepull_result.rc == 0
+  retries: 5
+  delay: 30
+  when: _prepull_images | length > 0
+
+- name: Disable EDA in AAP platform CR (OSAC-1624 removed EDA)
+  ansible.builtin.shell:
+    cmd: |
+      if oc get ansibleautomationplatform osac-aap -n {{ snapshot_osac_namespace }} >/dev/null 2>&1; then
+        oc patch ansibleautomationplatform osac-aap -n {{ snapshot_osac_namespace }} \
+          --type merge -p '{"spec":{"eda":{"disabled":true}}}'
+      fi
+      oc delete eda osac-aap-eda -n {{ snapshot_osac_namespace }} --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+# On a cold SNO node just restored from a snapshot, CNI/CSI drivers and
+# image pulls (e.g. origin-cli) can take 15+ min to stabilize, causing
+# keycloak-service to exceed its rollout progress deadline. Once a
+# Deployment's ProgressDeadlineExceeded condition is set, `oc rollout
+# status` returns almost instantly reporting that stale condition rather
+# than waiting anywhere near its --timeout, so the retry count (not the
+# per-attempt timeout) is what has to cover the real wall-clock wait.
+- name: Wait for Keycloak to be ready
+  ansible.builtin.shell:
+    cmd: oc rollout status deploy/keycloak-service -n keycloak --timeout=300s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _keycloak_rollout
+  until: _keycloak_rollout.rc == 0
+  retries: 40
+  delay: 30
+
+- name: Read existing Keycloak client secrets and patch realm.json (OSAC-2115)
+  ansible.builtin.shell:
+    cmd: |
+      oc port-forward svc/keycloak -n keycloak 18443:443 &
+      PF_PID=$!
+      sleep 3
+      trap "kill $PF_PID 2>/dev/null" EXIT
+
+      KC_URL="https://localhost:18443"
+      TOKEN=$(curl -sk -X POST "${KC_URL}/realms/master/protocol/openid-connect/token" \
+        -d "client_id=admin-cli&username=admin&password=admin&grant_type=password" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+      REALM_FILE="{{ osac_installer_dir }}/prerequisites/keycloak/service/files/realm.json"
+      for CLIENT_ID in osac-controller osac-admin; do
+        UUID=$(curl -sk "${KC_URL}/admin/realms/osac/clients?clientId=${CLIENT_ID}" \
+          -H "Authorization: Bearer ${TOKEN}" \
+          | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')")
+        SECRET=$(curl -sk "${KC_URL}/admin/realms/osac/clients/${UUID}/client-secret" \
+          -H "Authorization: Bearer ${TOKEN}" \
+          | python3 -c "import sys,json; print(json.load(sys.stdin)['value'])")
+        [ -n "${SECRET}" ] || { echo "ERROR: empty secret for ${CLIENT_ID}" >&2; exit 1; }
+        if [ "$CLIENT_ID" = "osac-controller" ]; then
+          sed -i "s|__OSAC_CONTROLLER_CLIENT_SECRET__|${SECRET}|" "${REALM_FILE}"
+        else
+          sed -i "s|__OSAC_ADMIN_CLIENT_SECRET__|${SECRET}|" "${REALM_FILE}"
+        fi
+        echo "Resolved ${CLIENT_ID} secret from Keycloak"
+      done
+  environment:
+    KUBECONFIG: /root/.kube/config
+
+- name: Report OSAC prep completed
+  ansible.builtin.debug:
+    msg: "OSAC prep completed — ready for refresh script"

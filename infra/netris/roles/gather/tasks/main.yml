@@ -1,0 +1,36 @@
+---
+- name: Load netris-lab variables
+  ansible.builtin.include_vars:
+    file: "{{ netris_lab_dir }}/group_vars/all.yml"
+  ignore_errors: true
+
+- name: Set gather directory
+  ansible.builtin.set_fact:
+    _gather_dir: "/var/log/netris-gather/{{ ansible_date_time.iso8601_basic_short }}"
+
+- name: Create gather root directory
+  ansible.builtin.file:
+    path: "{{ _gather_dir }}"
+    state: directory
+    mode: "0755"
+  failed_when: false
+
+- name: Run lab gather
+  ansible.builtin.include_role:
+    name: gather_lab
+
+- name: Run caas gather
+  ansible.builtin.include_role:
+    name: gather_caas
+
+- name: Create latest symlink
+  ansible.builtin.file:
+    src: "{{ _gather_dir }}"
+    dest: /var/log/netris-gather/latest
+    state: link
+    force: true
+  failed_when: false
+
+- name: Print gather location
+  ansible.builtin.debug:
+    msg: "Diagnostics saved to {{ _gather_dir }} (symlinked at /var/log/netris-gather/latest)"

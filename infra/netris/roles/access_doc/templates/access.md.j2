@@ -1,0 +1,189 @@
+# {{ lab_name }} Cluster Access Guide
+
+BM Server: `{{ _bm_ip }}` (root)
+
+## Network Access from Laptop
+
+The clusters use `198.51.100.x` IPs which are only routable inside the BM server. Use **sshuttle** to tunnel all traffic through SSH:
+
+```bash
+# Install (one-time)
+pip install sshuttle
+
+# Connect — routes 198.51.100.0/24 through the BM server
+sshuttle -r root@{{ _bm_ip }} 198.51.100.0/24 192.168.40.0/24
+```
+
+Keep this running in a terminal. All cluster URLs below will work directly from your browser and CLI.
+
+---
+
+## OCP Management Cluster (SNO)
+
+| | |
+|---|---|
+| **API** | `{{ _ocp_api.stdout }}` |
+| **Console** | `https://{{ _ocp_console.stdout }}` |
+| **User** | `kubeadmin` |
+| **Password** | `{{ _ocp_kubeadmin.stdout }}` |
+| **IP** | `{{ ocp_dnat_ip }}` |
+
+### Copy kubeconfig to laptop
+
+```bash
+scp root@{{ _bm_ip }}:/root/.kube/config ~/.kube/ocp-{{ lab_name }}.yaml
+export KUBECONFIG=~/.kube/ocp-{{ lab_name }}.yaml
+oc whoami
+```
+
+### Login with oc CLI
+
+```bash
+oc login {{ _ocp_api.stdout }} \
+  --username=kubeadmin \
+  --password='{{ _ocp_kubeadmin.stdout }}' \
+  --insecure-skip-tls-verify
+```
+
+---
+{% if _hc_name %}
+
+## CaaS Hosted Cluster ({{ _hc_name }})
+
+| | |
+|---|---|
+| **API** | `https://{{ _hc_api }}` |
+| **Console** | `https://{{ _caas_console.stdout | default('console-openshift-console.apps.' + _hc_name + '.' + ocp_base_domain, true) }}` |
+| **User** | `kubeadmin` |
+| **Password** | `{{ _caas_kubeadmin.stdout }}` |
+| **Workers** | {{ _caas_nodes.stdout | default('N/A', true) }} |
+
+### Copy kubeconfig to laptop
+
+```bash
+scp root@{{ _bm_ip }}:/tmp/caas-kubeconfig.yaml ~/.kube/caas-{{ lab_name }}.yaml
+export KUBECONFIG=~/.kube/caas-{{ lab_name }}.yaml
+oc get nodes
+```
+
+Or regenerate from the management cluster:
+
+```bash
+export KUBECONFIG=~/.kube/ocp-{{ lab_name }}.yaml
+oc get secret -n {{ _hc_namespace }}-{{ _hc_name }} admin-kubeconfig \
+  -o jsonpath='{.data.kubeconfig}' | base64 -d > ~/.kube/caas-{{ lab_name }}.yaml
+```
+
+### Login with oc CLI
+
+```bash
+oc login https://{{ _hc_api }} \
+  --username=kubeadmin \
+  --password='{{ _caas_kubeadmin.stdout }}' \
+  --insecure-skip-tls-verify
+```
+
+---
+{% endif %}
+
+## OSAC UI & Services
+
+All URLs below require sshuttle (or access from the BM server). They resolve to `{{ ocp_dnat_ip }}`.
+
+### OSAC UI (Cluster Management Portal)
+
+| | |
+|---|---|
+| **URL** | `https://osac-ui-{{ osac_namespace }}.{{ _apps_domain }}` |
+| **Auth** | Keycloak SSO — `admin` / `admin` |
+
+### AAP Gateway (Ansible Automation Platform)
+
+| | |
+|---|---|
+| **URL** | `https://osac-aap-{{ osac_namespace }}.{{ _apps_domain }}` |
+| **User** | `admin` |
+| **Password** | `{{ _aap_gateway_pass.stdout }}` |
+
+### AAP Controller
+
+| | |
+|---|---|
+| **URL** | `https://osac-aap-controller-{{ osac_namespace }}.{{ _apps_domain }}` |
+| **User** | `admin` |
+| **Password** | `{{ _aap_controller_pass.stdout }}` |
+
+### AAP EDA (Event-Driven Ansible)
+
+| | |
+|---|---|
+| **URL** | `https://osac-aap-eda-{{ osac_namespace }}.{{ _apps_domain }}` |
+| **User** | `admin` |
+| **Password** | `{{ _aap_eda_pass.stdout }}` |
+
+### Keycloak (Identity Provider)
+
+| | |
+|---|---|
+| **URL** | `https://keycloak-keycloak.{{ _apps_domain }}` |
+| **User** | `{{ _keycloak_user }}` |
+| **Password** | `{{ _keycloak_pass }}` |
+
+### Fulfillment Service API
+
+| | |
+|---|---|
+| **URL** | `https://fulfillment-api-{{ osac_namespace }}.{{ _apps_domain }}` |
+| **Client ID** | `{{ _fulfillment_client_id }}` |
+| **Client Secret** | `{{ _fulfillment_client_secret }}` |
+
+---
+
+## Quick Status Checks
+
+```bash
+# From BM server (or laptop with sshuttle + kubeconfig)
+
+# OCP management cluster
+export KUBECONFIG=~/.kube/ocp-{{ lab_name }}.yaml
+oc get nodes
+oc get clusterversion
+oc get co                          # cluster operators
+oc get pods -n osac-system         # OSAC components
+oc get hostedclusters -A -o wide   # CaaS cluster overview
+
+# CaaS hosted cluster
+export KUBECONFIG=~/.kube/caas-{{ lab_name }}.yaml
+oc get nodes
+oc get clusterversion
+oc get co
+```
+
+---
+
+## Netris Controller UI
+
+Accessible without sshuttle (exposed on BM host port):
+
+```
+https://{{ _bm_ip }}:{{ _netris_port.stdout | default('9443', true) }}
+User: {{ netris_username }}
+Password: {{ netris_password }}
+```
+
+---
+
+## Alternative Access (without sshuttle)
+
+If sshuttle is not available:
+
+```bash
+# OCP console via port 9444 (already exposed by socat)
+# Add to /etc/hosts:
+# {{ _bm_ip }}  {{ _ocp_console.stdout }}
+# Then browse: https://{{ _bm_ip }}:9444
+
+# SSH SOCKS proxy (browser only)
+ssh -D 1080 root@{{ _bm_ip }}
+# Configure browser SOCKS5 proxy: localhost:1080
+```

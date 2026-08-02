@@ -1,0 +1,6 @@
+---
+- name: Setup Lab Connectivity
+  hosts: lab
+  become: true
+  roles:
+    - connectivity

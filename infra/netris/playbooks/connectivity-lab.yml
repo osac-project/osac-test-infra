@@ -1,0 +1,13 @@
+---
+- name: Re-run lab connectivity
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Load netris-lab variables
+      ansible.builtin.include_vars:
+        file: "{{ netris_lab_dir }}/group_vars/all.yml"
+
+    - name: Configure connectivity
+      ansible.builtin.include_role:
+        name: connectivity

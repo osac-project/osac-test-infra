@@ -1,0 +1,80 @@
+---
+- name: Reset OCP installation for re-deploy
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Find OCP server VM
+      ansible.builtin.shell:
+        cmd: virsh list --all --name | grep "{{ ocp_vm_name_pattern }}"
+      register: _vm_lookup
+      changed_when: false
+      failed_when: false
+
+    - name: Set VM name
+      ansible.builtin.set_fact:
+        ocp_vm_name: "{{ _vm_lookup.stdout_lines[0] | default('') }}"
+      when: _vm_lookup.rc == 0
+
+    - name: Shut down VM if running
+      ansible.builtin.command:
+        cmd: virsh destroy {{ ocp_vm_name }}
+      when: ocp_vm_name | default('') | length > 0
+      failed_when: false
+      changed_when: true
+
+    - name: Delete cluster from Assisted Service
+      ansible.builtin.command:
+        cmd: aicli -u {{ assisted_service_url }} delete cluster {{ ocp_cluster_name }} -y
+      failed_when: false
+      changed_when: true
+
+    - name: Delete infraenv from Assisted Service
+      ansible.builtin.command:
+        cmd: aicli -u {{ assisted_service_url }} delete infraenv {{ ocp_cluster_name }}_infra-env -y
+      failed_when: false
+      changed_when: true
+
+    - name: Remove discovery ISO
+      ansible.builtin.file:
+        path: /var/lib/libvirt/images/{{ ocp_cluster_name }}_infra-env.iso
+        state: absent
+
+    - name: Remove kubeconfig files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /root/kubeconfig.{{ ocp_cluster_name }}
+        - /root/.kube/config
+
+    - name: Recreate blank install disk
+      ansible.builtin.command:
+        cmd: qemu-img create -f qcow2 /var/lib/libvirt/images/hgx-00-ocp.qcow2 {{ ocp_install_disk_gb }}G
+      changed_when: true
+
+    - name: Detach discovery ISO if attached
+      ansible.builtin.shell:
+        cmd: |
+          if virsh domblklist {{ ocp_vm_name }} | grep -q 'infra-env.iso'; then
+            virsh detach-disk {{ ocp_vm_name }} sda --config
+          fi
+      when: ocp_vm_name | default('') | length > 0
+      changed_when: false
+      failed_when: false
+
+    - name: Set boot order to disk first, then cdrom
+      ansible.builtin.command:
+        cmd: virt-xml {{ ocp_vm_name }} --edit --boot hd,cdrom
+      when: ocp_vm_name | default('') | length > 0
+      changed_when: true
+
+    - name: Start VM
+      ansible.builtin.command:
+        cmd: virsh start {{ ocp_vm_name }}
+      when: ocp_vm_name | default('') | length > 0
+      changed_when: true
+
+    - name: Report reset complete
+      ansible.builtin.debug:
+        msg: "OCP reset complete. VM {{ ocp_vm_name | default('unknown') }} booted with fresh disk. Run 'make deploy-ocp' to reinstall."

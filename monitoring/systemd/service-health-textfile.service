@@ -1,0 +1,12 @@
+# Prometheus textfile-collector oneshot: writes systemd unit health metrics.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/service-health-textfile.service
+#
+# Triggered on a schedule by service-health-textfile.timer -- do not enable
+# or start this unit directly.
+
+[Unit]
+Description=OSAC service health textfile collector
+
+[Service]
+Type=oneshot
+ExecStart=%h/.monitoring-server/scripts/service-health-textfile.sh

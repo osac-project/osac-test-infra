@@ -1,0 +1,16 @@
+# Managed by Ansible — socat port forwarder for Netris controller services
+# Instance name format: BIND_IP-PORT  (e.g., 10.8.0.2-50051)
+[Unit]
+Description=Socat forwarder %i
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:${PORT},bind=${BIND_IP},fork,reuseaddr TCP:${TARGET_IP}:${TARGET_PORT}
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/netris-lab/socat/%i.env
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,577 @@
+---
+name: E2E CaaS Netris
+
+permissions:
+  contents: read
+
+# Suite-specific: provisions an ephemeral EC2 bare-metal box (via
+# ec2-runner-provision.yml), runs the real CaaS/Netris e2e flow on it, and
+# tears it down (via ec2-runner-teardown.yml). The provision/teardown
+# pieces are generic and suite-agnostic -- see those files' own headers --
+# split out specifically so a future suite needing the same bare-metal
+# provisioning doesn't have to copy this file's plumbing, only write its
+# own test job. See docs/ec2-ephemeral-runner-setup.md.
+on:
+  workflow_call:
+    inputs:
+      instance-type:
+        description: "EC2 instance type"
+        required: false
+        type: string
+        default: "c5n.metal"
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        type: string
+        default: "us-east-1"
+      orchestrator-runner-label:
+        description: "Self-hosted runner label for the orchestrator (dedicated, not the shared osac-ci fleet, so it's never queued behind existing e2e jobs)"
+        required: false
+        type: string
+        default: "osac-ci-orchestrator"
+      # The default installs real packages/network access (dnf + pip), unlike
+      # ec2-runner-provision.yml's own generic "command -v podman" default --
+      # this workflow supplies the CaaS/Netris-specific default itself,
+      # since the provisioner shouldn't hardcode one suite's prerequisites.
+      # Each semicolon-separated item runs as its own SSH call with no
+      # retry -- v1 accepts that a transient mirror/PyPI hiccup hard-fails
+      # verification (skipping JIT registration, same cost as any other
+      # tooling-check failure), matching this repo's existing
+      # accept-and-revisit-if-flaky precedent (see provision.sh's
+      # InsufficientInstanceCapacity handling for the same philosophy).
+      tooling-check-cmds:
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites (ansible-core, python3-pip, make -- matching what the equivalent Prow lab-setup step installed, and infra/netris/README.md's own documented setup)."
+        required: false
+        type: string
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+      osac-installer-image:
+        description: "Override osac-installer image (registry-pullable reference, e.g. from a component repo's own PR build) -- accepted but not yet consumed: infra/netris has no plain extra-var for this (see the test job's 'Build component image overrides' step comment), needs podman-extraction handling in a later PR"
+        required: false
+        type: string
+        default: ""
+      osac-operator-image:
+        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      fulfillment-service-image:
+        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      fulfillment-service-branch:
+        description: "Branch/tag of fulfillment-service to build the osac CLI from for this job (e.g. a feature branch or a released tag like v0.0.73) -- empty means main. Consumed by infra/netris/roles/lab_setup for both provisioning's own osac usage and the test container's osac binary."
+        required: false
+        type: string
+        default: ""
+      osac-aap-ee-image:
+        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      osac-aap-repo:
+        description: "Override osac-aap git URI the AAP Project syncs ansible content from (e.g. a personal fork, to test a PR pre-merge) -- empty means the upstream repo already baked into the snapshot's values file. Consumed by infra/netris/roles/osac_refresh."
+        required: false
+        type: string
+        default: ""
+      osac-aap-branch:
+        description: "Branch, tag, or commit of osac-aap for the AAP Project to sync ansible content from -- empty means whatever's already baked into the snapshot's values file. Consumed by infra/netris/roles/osac_refresh."
+        required: false
+        type: string
+        default: ""
+      osac-installer-repo:
+        description: "Override osac-installer git URI (e.g. a personal fork, to test a PR pre-merge) -- empty means the upstream repo. Consumed by infra/netris/roles/osac_refresh's existing 'Clone osac-installer' task."
+        required: false
+        type: string
+        default: ""
+      osac-installer-branch:
+        description: "Branch, tag, or commit of osac-installer to clone -- empty means main. Consumed by infra/netris/roles/osac_refresh's existing 'Clone osac-installer' task."
+        required: false
+        type: string
+        default: ""
+    outputs:
+      result:
+        description: "Overall result: PASSED or FAILED"
+        value: ${{ jobs.test.outputs.result }}
+
+jobs:
+  provision:
+    uses: ./.github/workflows/ec2-runner-provision.yml
+    permissions:
+      contents: read
+    with:
+      instance-type: ${{ inputs.instance-type }}
+      aws-region: ${{ inputs.aws-region }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds }}
+
+  # Fetches all 5 CaaS/Netris secrets and pushes them to the box, on the
+  # orchestrator -- not the box itself. The box was never bootstrapped with
+  # the Vault SSH-tunnel/AppRole setup persistent machines like the
+  # orchestrator have, confirmed the hard way (a real dispatch failed here:
+  # "AppRole credentials missing or empty in ~/.vault-server/.approle").
+  # See push-caas-netris-secrets.sh's header for the full rationale.
+  push-secrets:
+    needs: provision
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Must match ec2-runner-provision.yml's derivation exactly.
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      # Not ./.github/actions/fetch-and-write-secrets: that composite action
+      # also writes a merged podman auth.json to $HOME/.config/containers and
+      # (via sudo) /root/.config/containers -- appropriate for e2e-vmaas.yml,
+      # where it runs on the same box that later podman-pulls images with it,
+      # but wrong here: this job runs on the persistent orchestrator, not the
+      # disposable box, so it would leave standing registry credentials on a
+      # long-lived machine (the exact thing this fix is trying to avoid --
+      # see push-caas-netris-secrets.sh's header) and needs sudo, which isn't
+      # guaranteed on every orchestrator runner. infra/netris never reads
+      # auth.json (confirmed: no reference to it anywhere under infra/netris
+      # or the root Makefile) -- only the raw pull-secret JSON and AAP
+      # license zip are actually needed, so fetch just those two directly.
+      - name: Fetch pull secret and AAP license from Vault
+        id: vault-secrets
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.setup.outputs.role-id }}
+          secretId: ${{ steps.setup.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
+            secret/data/osac/e2e/aap-license license | AAP_LICENSE
+
+      - name: Write pull secret and AAP license to temp files
+        shell: bash
+        env:
+          PULL_SECRET: ${{ steps.vault-secrets.outputs.PULL_SECRET }}
+          AAP_LICENSE: ${{ steps.vault-secrets.outputs.AAP_LICENSE }}
+        run: |
+          printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
+          chmod 600 "$RUNNER_TEMP/pull-secret.json"
+          printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
+          chmod 600 "$RUNNER_TEMP/aap-license.zip"
+
+      - name: Fetch Netris license
+        id: netris-license
+        uses: ./.github/actions/fetch-netris-license
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch CaaS Route 53 credentials
+        id: route53-creds
+        uses: ./.github/actions/fetch-caas-route53-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Push CaaS/Netris secrets to ephemeral box
+        shell: bash
+        env:
+          SSH_USER: ${{ needs.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
+          NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
+          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
+          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
+          AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
+          PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
+          LAB_NAME: ci-${{ github.run_id }}
+          AWS_REGION: ${{ inputs.aws-region }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/push-caas-netris-secrets.sh
+
+  test:
+    needs: [provision, push-secrets]
+    # 360m (6h): the real CaaS/Netris flow's own Prow step timeouts summed
+    # to lab-setup(30m)+lab-deploy(90m)+lab-snapshot(3h)+caas-setup(45m)+
+    # caas-deploy(90m) -- several hours in the worst case. Self-hosted
+    # runners aren't bound by GitHub-hosted runners' 6h job cap, so this is
+    # just an explicit upper bound, not a platform limit.
+    runs-on: ${{ needs.provision.outputs.runner-label }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.run-tests.outcome == 'success' && 'PASSED' || 'FAILED' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # SECURITY: EXTRA_VARS ends up passed as EXTRA_VARS='$(EXTRA_VARS)' on
+      # a recipe line through several layers of make (root Makefile ->
+      # infra/netris/contract.mk -> infra/netris/Makefile) before reaching
+      # ansible-playbook. GNU Make recursively re-expands $(...) sequences
+      # every time a variable is dereferenced -- verified empirically that
+      # an image-override value containing e.g. $(shell <cmd>) gets executed
+      # for real by make itself during that expansion, independent of any
+      # shell-quoting concerns, giving anyone with write access to dispatch
+      # this workflow root code execution on the ephemeral box (with access
+      # to every secret staged there: pull secret, AAP/Netris licenses,
+      # Route53 AWS creds). Real container image references never contain
+      # anything outside this character set, so validate-and-reject instead
+      # of trying to escape -- escaping doesn't cleanly survive an unknown
+      # number of make-expansion layers (verified: a single $ -> $$ escape
+      # is consumed by the first layer and unprotected by the second). Runs
+      # first, before any Vault secret fetch, so a bad input fails fast.
+      - name: Validate component image override inputs
+        shell: bash
+        env:
+          OSAC_INSTALLER_IMAGE: ${{ inputs.osac-installer-image }}
+          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
+          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
+          FULFILLMENT_SERVICE_BRANCH: ${{ inputs.fulfillment-service-branch }}
+          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
+          OSAC_AAP_REPO: ${{ inputs.osac-aap-repo }}
+          OSAC_AAP_BRANCH: ${{ inputs.osac-aap-branch }}
+          OSAC_INSTALLER_REPO: ${{ inputs.osac-installer-repo }}
+          OSAC_INSTALLER_BRANCH: ${{ inputs.osac-installer-branch }}
+        run: |
+          # Branch/tag/commit-ish inputs are validated with git's own ref-name
+          # rules (git check-ref-format), not the shared character whitelist --
+          # the whitelist allows colons, which git considers invalid in branch
+          # names and are unsafe once these values reach real git operations.
+          for name in OSAC_INSTALLER_IMAGE OSAC_OPERATOR_IMAGE FULFILLMENT_SERVICE_IMAGE OSAC_AAP_EE_IMAGE OSAC_AAP_REPO OSAC_INSTALLER_REPO; do
+            value="${!name}"
+            if [[ -n "$value" ]] && [[ ! "$value" =~ ^[A-Za-z0-9._/:@-]+$ ]]; then
+              echo "::error::${name} contains characters outside a valid reference (letters, digits, and ._/:@- only): ${value}"
+              exit 1
+            fi
+          done
+          for name in FULFILLMENT_SERVICE_BRANCH OSAC_AAP_BRANCH OSAC_INSTALLER_BRANCH; do
+            value="${!name}"
+            if [[ -n "$value" ]]; then
+              # Both checks must pass: the character whitelist guards against
+              # $, backticks, parens, semicolons, etc. surviving into the
+              # make-expansion layers below (git's own ref-name rules don't
+              # forbid any of those -- confirmed structurally valid branch
+              # names can still contain them); check-ref-format catches
+              # git-invalid-but-whitelisted-character names (e.g. a lone "@").
+              if [[ ! "$value" =~ ^[A-Za-z0-9._/@-]+$ ]]; then
+                echo "::error::${name} contains characters outside a valid branch name (letters, digits, and ._/@- only): ${value}"
+                exit 1
+              fi
+              if ! git check-ref-format --branch "$value" >/dev/null 2>&1; then
+                echo "::error::${name} is not a valid git branch name: ${value}"
+                exit 1
+              fi
+            fi
+          done
+
+      # Unlike Prow's netris-caas job (which always gets fresh, ci-operator
+      # -resolved image references for all four of these via its
+      # `dependencies:` mechanism), these are optional overrides here --
+      # there's no equivalent automatic build/resolution graph in GitHub
+      # Actions, so a component repo's own CI is responsible for having
+      # already built and pushed an image before passing its reference in.
+      # Empty means "no override", not "override with an empty value" --
+      # only non-empty inputs are included, letting infra/netris's own
+      # Makefile/ansible defaults apply otherwise.
+      #
+      # osac-installer-image is deliberately NOT included in this JSON:
+      # infra/netris has no osac_installer_image ansible var. Prow's own
+      # handling of this exact input wasn't a simple extra-var either -- it
+      # podman-pulled the image, extracted the installer binary via
+      # `podman create`+`cp`, and set osac_installer_skip_clone: true so
+      # ansible wouldn't re-clone it. That extraction logic belongs in the
+      # real deploy step (a later PR in this series), not this
+      # plumbing-only step -- passing it through naively here would
+      # silently no-op since ansible ignores unknown extra-vars.
+      # osac_installer_repo/osac_installer_branch, by contrast, ARE real
+      # ansible vars (confirmed via infra/netris/inventory/group_vars/all.yml
+      # and roles/osac_refresh's "Clone osac-installer" task) and are
+      # included below.
+      - name: Build component image overrides
+        id: extra-vars
+        shell: bash
+        env:
+          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
+          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
+          FULFILLMENT_SERVICE_BRANCH: ${{ inputs.fulfillment-service-branch }}
+          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
+          OSAC_AAP_REPO: ${{ inputs.osac-aap-repo }}
+          OSAC_AAP_BRANCH: ${{ inputs.osac-aap-branch }}
+          OSAC_INSTALLER_REPO: ${{ inputs.osac-installer-repo }}
+          OSAC_INSTALLER_BRANCH: ${{ inputs.osac-installer-branch }}
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo dnf install -y jq
+          fi
+          EXTRA_VARS="{}"
+          declare -A OVERRIDES=(
+            [osac_operator_image]="$OSAC_OPERATOR_IMAGE"
+            [fulfillment_service_image]="$FULFILLMENT_SERVICE_IMAGE"
+            [fulfillment_service_branch]="$FULFILLMENT_SERVICE_BRANCH"
+            [osac_aap_image]="$OSAC_AAP_EE_IMAGE"
+            [osac_aap_repo]="$OSAC_AAP_REPO"
+            [osac_aap_branch]="$OSAC_AAP_BRANCH"
+            [osac_installer_repo]="$OSAC_INSTALLER_REPO"
+            [osac_installer_branch]="$OSAC_INSTALLER_BRANCH"
+          )
+          for key in "${!OVERRIDES[@]}"; do
+            value="${OVERRIDES[$key]}"
+            if [ -n "$value" ]; then
+              EXTRA_VARS=$(echo "$EXTRA_VARS" | jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}')
+              echo "Component image override: ${key}=${value}"
+            fi
+          done
+          echo "json=${EXTRA_VARS}" >> "$GITHUB_OUTPUT"
+
+      - name: Log unconsumed osac-installer-image input
+        shell: bash
+        env:
+          OSAC_INSTALLER_IMAGE: ${{ inputs.osac-installer-image }}
+        run: |
+          if [ -n "${OSAC_INSTALLER_IMAGE}" ]; then
+            echo "osac-installer-image was set (${OSAC_INSTALLER_IMAGE}) but is not consumed yet -- see the 'Build component image overrides' step's comment."
+          fi
+
+      # push-secrets already staged these on the box (before the JIT runner
+      # even started) since the box can't talk to Vault itself -- this just
+      # copies them from that fixed staging location into infra/netris/ and
+      # /root/pull-secret, which didn't exist until this job's own checkout
+      # above ran.
+      - name: Stage CaaS/Netris secrets into place
+        shell: bash
+        env:
+          NETRIS_DIR: infra/netris
+        run: ./scripts/ec2-runner/stage-caas-netris-secrets.sh
+
+      # Each stage is a separate step (rather than one `make e2e` call) for
+      # per-stage visibility/timing in the Actions UI, mirroring Prow's own
+      # per-step granularity (lab-setup/lab-deploy/lab-snapshot/caas-setup
+      # were all separate Prow steps too). make e2e INFRA=netris SUITE=caas
+      # is the equivalent single-command form if that granularity is ever
+      # not wanted.
+      - name: Setup infra prerequisites (make setup-infra)
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make setup-infra INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+
+      # setup-infra (roles/lab_setup) just built osac to $HOME/.local/bin,
+      # a job-scoped, non-root path instead of the old machine-wide
+      # /usr/local/bin -- which is not necessarily on PATH for the
+      # non-interactive shells make/ansible-playbook use. roles/caas_create
+      # and roles/caas_setup both invoke bare `osac ...` relying on PATH
+      # resolution, so every later step in this job needs it added
+      # explicitly via GITHUB_PATH (GITHUB_PATH changes apply to all
+      # subsequent steps in the job, not just this one).
+      - name: Add job-scoped osac CLI to PATH
+        shell: bash
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Deploy Netris lab (make deploy-infra)
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make deploy-infra INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Deploy OSAC from snapshot (make deploy-osac)
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make deploy-osac INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Setup CaaS suite (make setup-suite)
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make setup-suite INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+
+      # deploy-osac (make deploy-osac, above) wrote infra/netris/.env.infra --
+      # the documented "suite contract" interface between the infra backend
+      # and the test suite (infra/contract.md), previously consumed via
+      # `make run-tests`'s `set -a && . .env.infra && set +a`. Source it
+      # here too instead of hardcoding its current values, so this step
+      # keeps working if the backend ever changes what it writes there.
+      # KUBECONFIG/OSAC_PULL_SECRET_PATH end up root-owned since the ansible
+      # roles that produced them ran under become: true; copy to the job's
+      # own $RUNNER_TEMP so podman (run as this job's unprivileged user) can
+      # read/relabel them for :Z mounts, mirroring
+      # e2e-vmaas-full-install.yml's identical kubeconfig-staging step.
+      - name: Stage kubeconfig and pull secret for test container
+        id: stage-secrets
+        shell: bash
+        run: |
+          set -a
+          . infra/netris/.env.infra
+          set +a
+
+          sudo cp "${KUBECONFIG}" "$RUNNER_TEMP/kubeconfig"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
+          chmod 600 "$RUNNER_TEMP/kubeconfig"
+
+          sudo cp "${OSAC_PULL_SECRET_PATH}" "$RUNNER_TEMP/pull-secret.json"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/pull-secret.json"
+          chmod 600 "$RUNNER_TEMP/pull-secret.json"
+
+          # tests/caas/conftest.py's ssh_public_key_path fixture defaults to
+          # ~/.ssh/id_rsa.pub (root's, since the container runs as root), so
+          # it must be staged/mounted like the other secrets. Not sensitive
+          # like the other two (it's a public key), so no chmod/ownership
+          # tightening needed beyond matching them for consistency.
+          sudo cp /root/.ssh/id_rsa.pub "$RUNNER_TEMP/id_rsa.pub"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/id_rsa.pub"
+
+          # steps.output, not $GITHUB_ENV: the latter would leak
+          # OSAC_NAMESPACE into every later step in this job (gather-infra,
+          # gather-caas, upload-artifact), none of which need it -- scope it
+          # to just the one step that does.
+          echo "osac-namespace=${OSAC_NAMESPACE}" >> "$GITHUB_OUTPUT"
+
+      # Reuses the exact osac binary lab_setup already built for this job's
+      # fulfillment-service-branch (infra/netris/roles/lab_setup/tasks/main.yml)
+      # via the Containerfile's existing OSAC_CLI_BIN precedence, instead of
+      # re-resolving a version -- guarantees the test container's osac is
+      # byte-for-byte the same one that provisioned the cluster, with no
+      # risk of a branch-name-vs-release-tag mismatch between two
+      # independently-resolved builds. Same Containerfile the VMaaS/BMaaS
+      # flows already use -- it's suite-agnostic (just oc/kubectl/grpcurl/
+      # osac/python), so no CaaS-specific image is needed.
+      - name: Build test image
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+        run: |
+          cp "$HOME/.local/bin/osac" ./osac-cli-bin
+          podman build --no-cache --build-arg OSAC_CLI_BIN=osac-cli-bin \
+            -t "${E2E_IMAGE}" -f Containerfile .
+          rm -f ./osac-cli-bin
+
+      # The actual test: tests/caas/test_cluster_create.py creates a cluster
+      # via the osac CLI, waits for it to become Ready, deletes it, and
+      # verifies removal -- functionally the same thing Prow's separate
+      # deploy-caas/gather-caas shell steps did, but already implemented
+      # here as a real pytest test rather than something to re-port. Runs
+      # inside the per-job container built above instead of directly on the
+      # host (make run-tests), matching VMaaS/BMaaS's architecture and
+      # dropping the host-PATH/OSAC_CLI_PATH osac resolution entirely.
+      #
+      # -n0 overrides pyproject.toml's global `-n 4 --dist loadfile`: with
+      # only one test in this suite, xdist gives zero parallelism benefit
+      # while actively hiding progress -- pytest-xdist can't stream live
+      # output from worker processes (execnet doesn't forward worker
+      # stdout/stderr), so log_cli/print() progress from
+      # tests/core/runner.py's poll_until() (used by wait_for_cluster_ready,
+      # which alone can legitimately poll silently for up to ~60 minutes)
+      # would never reach this log otherwise. PYTHONUNBUFFERED=1 ensures
+      # Python itself flushes promptly too, since stdout isn't a TTY here.
+      - name: Run CaaS e2e tests
+        id: run-tests
+        # Legitimately-succeeding runs can take 60+ min (wait_for_cluster_ready's
+        # own retry/backoff plus deletion and gRPC-removal waits stacked after
+        # it -- see tests/core/helpers.py). 120m leaves real margin above that
+        # while still bounding worst-case runtime, well under the job's 360m cap.
+        timeout-minutes: 120
+        shell: bash
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+          # From the "Stage kubeconfig and pull secret" step's output, not
+          # hardcoded here -- tracks whatever the backend actually deployed
+          # into, and stays scoped to just this step instead of leaking via
+          # $GITHUB_ENV.
+          OSAC_NAMESPACE: ${{ steps.stage-secrets.outputs.osac-namespace }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/test-output"
+          podman run --rm --network=host \
+            -v "$RUNNER_TEMP/kubeconfig":/root/.kube/config:ro,Z \
+            -v "$RUNNER_TEMP/pull-secret.json":/root/pull-secret:ro,Z \
+            -v "$RUNNER_TEMP/id_rsa.pub":/root/.ssh/id_rsa.pub:ro,Z \
+            -v "$RUNNER_TEMP/test-output":/tmp/test-output:Z \
+            -e KUBECONFIG=/root/.kube/config \
+            -e OSAC_VM_KUBECONFIG=/root/.kube/config \
+            -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
+            -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+            -e PYTHONUNBUFFERED=1 \
+            "${E2E_IMAGE}" \
+            pytest tests/caas/ -n0 --junitxml=/tmp/test-output/junit.xml -v
+
+      # Raw secret copies staged above for the container mount -- clean them
+      # up explicitly rather than relying solely on this being an ephemeral,
+      # single-job EC2 box that gets terminated afterward (defense in depth,
+      # and correct regardless of how/whether teardown of the box itself
+      # runs). always(): must run even if the test step failed.
+      - name: Remove staged secret copies
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/kubeconfig" "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/id_rsa.pub"
+
+      # Two separate steps, each independently best-effort (rather than one
+      # script with both commands): GH Actions' default bash shell runs with
+      # -e, so if the first command failed inside a single multi-line step,
+      # the second would never even attempt to run despite
+      # continue-on-error -- that only stops a step's failure from failing
+      # the job, it doesn't help a step's own script recover mid-script.
+      - name: Gather infra diagnostics
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: make gather-infra INFRA=netris
+
+      - name: Gather CaaS diagnostics
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: make gather-suite INFRA=netris SUITE=caas
+
+      - name: Upload CaaS/Netris test artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: caas-netris-artifacts
+          # junit.xml now comes from the containerized pytest run's
+          # $RUNNER_TEMP/test-output mount (see "Run CaaS e2e tests" above)
+          # instead of the old host-side reports/caas.xml written by
+          # `make test-caas` directly.
+          path: |
+            ${{ runner.temp }}/test-output/junit.xml
+            infra/netris/logs/
+          if-no-files-found: ignore
+
+      # Not part of the formal backend contract (infra/contract.md's target
+      # list doesn't include it), so called directly against contract.mk
+      # rather than through a root Makefile wrapper -- see this PR's
+      # description for why a generic root-level wrapper would be
+      # misleading for a netris-specific extra.
+      - name: Cleanup Route 53 DNS records
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: make -C infra/netris -f contract.mk cleanup-dns
+
+      - name: Gather EC2 runner artifacts
+        if: always()
+        uses: ./.github/actions/gather-ec2-runner-artifacts
+
+  teardown:
+    needs: [provision, push-secrets, test]
+    if: always()
+    uses: ./.github/workflows/ec2-runner-teardown.yml
+    permissions:
+      contents: read
+    with:
+      instance-id: ${{ needs.provision.outputs.instance-id }}
+      runner-id: ${{ needs.provision.outputs.runner-id }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
+      aws-region: ${{ inputs.aws-region }}

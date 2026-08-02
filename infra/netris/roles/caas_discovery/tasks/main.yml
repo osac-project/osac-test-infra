@@ -1,0 +1,315 @@
+---
+# Without bind-interfaces, dnsmasq binds the wildcard address (0.0.0.0:53)
+# regardless of any interface= filters, which races with libvirt's "default"
+# network dnsmasq (bound to virbr0's 192.168.122.1:53, used for mgmt-server/
+# isp-server outbound NAT, so that network can't be removed) -- if libvirtd
+# already grabbed its specific-address bind first, the wildcard bind fails
+# outright ("Address already in use"). bind-interfaces makes dnsmasq bind
+# only its named interfaces (br-mgmt here, where the OCP node and discovery
+# agents actually live) instead of the wildcard address.
+- name: Ensure dnsmasq listens on br-mgmt for agent DNS
+  ansible.builtin.lineinfile:
+    path: /etc/dnsmasq.d/ocp-sno.conf
+    line: "{{ item }}"
+    state: present
+  loop:
+    - "interface=br-mgmt"
+    - "no-dhcp-interface=br-mgmt"
+    - "bind-interfaces"
+  register: _dnsmasq_mgmt
+  notify: restart dnsmasq
+
+- name: Restart dnsmasq if config changed
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: restarted
+  when: _dnsmasq_mgmt is changed
+
+- name: Configure OCP DNS on mgmt-server for agent discovery
+  ansible.builtin.shell:
+    cmd: |
+      ssh -o StrictHostKeyChecking=no root@192.168.16.1 "
+        changed=false
+
+        # Install dnsmasq if missing
+        if ! command -v dnsmasq &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq dnsmasq >/dev/null 2>&1
+          changed=true
+        fi
+
+        # Write OCP DNS config — listen on mgmt IP only to avoid conflict with systemd-resolved
+        mkdir -p /etc/dnsmasq.d
+        DESIRED='address=/api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
+      address=/.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
+      listen-address=192.168.16.1
+      bind-interfaces'
+        if [ ! -f /etc/dnsmasq.d/ocp-sno.conf ] || [ \"\$(cat /etc/dnsmasq.d/ocp-sno.conf)\" != \"\$DESIRED\" ]; then
+          echo \"\$DESIRED\" > /etc/dnsmasq.d/ocp-sno.conf
+          changed=true
+        fi
+
+        # Ensure dnsmasq has upstream resolvers
+        mkdir -p /run/dnsmasq
+        echo 'nameserver 8.8.8.8' > /run/dnsmasq/resolv.conf
+
+        # Point DHCP DNS to mgmt-server so agents use local dnsmasq
+        if grep -q 'option domain-name-servers 192.168.16.1' /etc/dhcp/dhcpd.conf; then
+          :
+        else
+          sed -i 's/option domain-name-servers .*/option domain-name-servers 192.168.16.1, 8.8.8.8;/' /etc/dhcp/dhcpd.conf
+          systemctl restart isc-dhcp-server 2>/dev/null || true
+          changed=true
+        fi
+
+        # Ensure dnsmasq is running
+        systemctl enable dnsmasq 2>/dev/null
+        systemctl restart dnsmasq
+
+        echo \$changed
+      "
+  register: _mgmt_dns_result
+  changed_when: "'true' in _mgmt_dns_result.stdout"
+
+- name: Read SSH public key
+  ansible.builtin.slurp:
+    src: "{{ ssh_public_key_path }}"
+  register: _ssh_pub_key
+
+- name: Read pull secret
+  ansible.builtin.slurp:
+    src: "{{ pull_secret_path }}"
+  register: _pull_secret
+  no_log: true
+
+- name: Regenerate assisted-service auth keypair
+  ansible.builtin.shell:
+    cmd: |
+      oc delete secret assisted-servicelocal-auth -n multicluster-engine --ignore-not-found
+      for i in $(seq 30); do
+        oc get secret assisted-servicelocal-auth -n multicluster-engine --no-headers 2>/dev/null && break
+        sleep 2
+      done
+      sleep 10
+      oc rollout restart deployment/assisted-service -n multicluster-engine
+      oc rollout status deployment/assisted-service -n multicluster-engine --timeout=120s
+      oc rollout restart statefulset/assisted-image-service -n multicluster-engine
+      oc rollout status statefulset/assisted-image-service -n multicluster-engine --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+
+- name: Create InfraEnv namespace
+  ansible.builtin.command:
+    cmd: oc create namespace {{ caas_discovery_infraenv_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ns_create
+  failed_when: false
+  changed_when: _ns_create.rc == 0
+
+- name: Ensure pull-secret exists in InfraEnv namespace
+  ansible.builtin.shell:
+    cmd: >
+      oc get secret pull-secret -n {{ caas_discovery_infraenv_namespace }} ||
+      oc create secret generic pull-secret -n {{ caas_discovery_infraenv_namespace }}
+      --from-literal=.dockerconfigjson='{{ _pull_secret.content | b64decode | trim }}'
+      --type=kubernetes.io/dockerconfigjson
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
+  register: _pull_secret_result
+  changed_when: "'created' in _pull_secret_result.stdout"
+  until: _pull_secret_result.rc == 0
+  retries: 10
+  delay: 15
+
+- name: Create InfraEnv CR
+  ansible.builtin.template:
+    src: infraenv.yml.j2
+    dest: /tmp/caas-infraenv.yml
+    mode: "0600"
+
+- name: Delete existing InfraEnv to regenerate ISO token
+  ansible.builtin.command:
+    cmd: oc delete infraenv {{ caas_discovery_infraenv_name }} -n {{ caas_discovery_infraenv_namespace }} --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Apply InfraEnv CR
+  ansible.builtin.command:
+    cmd: oc apply -f /tmp/caas-infraenv.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _infraenv_apply
+  changed_when: "'created' in _infraenv_apply.stdout or 'configured' in _infraenv_apply.stdout"
+  until: _infraenv_apply.rc == 0
+  retries: 10
+  delay: 15
+
+- name: Wait for discovery ISO URL
+  ansible.builtin.shell:
+    cmd: oc get infraenv {{ caas_discovery_infraenv_name }} -n {{ caas_discovery_infraenv_namespace }} -o jsonpath='{.status.isoDownloadURL}'
+  register: _iso_url
+  until: _iso_url.stdout | length > 0
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Download discovery ISO
+  ansible.builtin.get_url:
+    url: "{{ _iso_url.stdout }}"
+    dest: /var/lib/libvirt/images/caas-discovery.iso
+    mode: "0644"
+    validate_certs: false
+  register: _iso_download
+  until: _iso_download is success
+  retries: 30
+  delay: 10
+
+- name: Find discovery VMs
+  ansible.builtin.shell:
+    cmd: virsh list --all --name | grep "{{ item }}"
+  register: _discovery_vm_lookup
+  changed_when: false
+  loop: "{{ caas_discovery_vm_patterns }}"
+
+- name: Build VM name list
+  ansible.builtin.set_fact:
+    caas_discovery_vms: "{{ _discovery_vm_lookup.results | map(attribute='stdout_lines') | map('first') | list }}"
+
+- name: Get VM states
+  ansible.builtin.shell:
+    cmd: virsh domstate {{ item }}
+  register: _vm_states
+  changed_when: false
+  loop: "{{ caas_discovery_vms }}"
+
+- name: Shut down running VMs
+  ansible.builtin.command:
+    cmd: virsh destroy {{ item.item }}
+  when: item.stdout | trim == 'running'
+  loop: "{{ _vm_states.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  changed_when: true
+
+- name: Get current vCPU count
+  ansible.builtin.shell:
+    cmd: virsh vcpucount {{ item }} --config --maximum
+  register: _current_vcpus
+  changed_when: false
+  loop: "{{ caas_discovery_vms }}"
+
+- name: Set maximum vCPUs
+  ansible.builtin.command:
+    cmd: virsh setvcpus {{ item.item }} {{ caas_discovery_vcpu }} --config --maximum
+  when: item.stdout | int != caas_discovery_vcpu | int
+  loop: "{{ _current_vcpus.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  changed_when: true
+
+- name: Set vCPUs
+  ansible.builtin.command:
+    cmd: virsh setvcpus {{ item.item }} {{ caas_discovery_vcpu }} --config
+  when: item.stdout | int != caas_discovery_vcpu | int
+  loop: "{{ _current_vcpus.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  changed_when: true
+
+- name: Get current max memory
+  ansible.builtin.shell:
+    cmd: virsh dommemstat {{ item }} | awk '/actual/{print int($2/1024)}'
+  register: _current_memory
+  changed_when: false
+  loop: "{{ caas_discovery_vms }}"
+
+- name: Set maximum memory
+  ansible.builtin.command:
+    cmd: virsh setmaxmem {{ item.item }} {{ caas_discovery_memory_mb }}M --config
+  when: item.stdout | int != caas_discovery_memory_mb | int
+  loop: "{{ _current_memory.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  changed_when: true
+
+- name: Set memory
+  ansible.builtin.command:
+    cmd: virsh setmem {{ item.item }} {{ caas_discovery_memory_mb }}M --config
+  when: item.stdout | int != caas_discovery_memory_mb | int
+  loop: "{{ _current_memory.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  changed_when: true
+
+- name: Detach all existing disks
+  ansible.builtin.shell:
+    cmd: |
+      for target in $(virsh domblklist {{ item }} | awk 'NR>2 && NF>1 {print $1}'); do
+        virsh detach-disk {{ item }} "$target" --config 2>/dev/null || true
+      done
+  loop: "{{ caas_discovery_vms }}"
+  changed_when: true
+
+- name: Create empty boot disk for each VM
+  ansible.builtin.command:
+    cmd: qemu-img create -f qcow2 /var/lib/libvirt/images/{{ item }}-disk.qcow2 {{ caas_discovery_disk_gb }}G
+    creates: /var/lib/libvirt/images/{{ item }}-disk.qcow2
+  loop: "{{ caas_discovery_vms }}"
+
+- name: Check if boot disk is attached
+  ansible.builtin.shell:
+    cmd: virsh domblklist {{ item }} | grep -q '{{ item }}-disk.qcow2'
+  register: _boot_disk_attached
+  failed_when: false
+  changed_when: false
+  loop: "{{ caas_discovery_vms }}"
+
+- name: Attach boot disk
+  ansible.builtin.command:
+    cmd: virsh attach-disk {{ item.item }} /var/lib/libvirt/images/{{ item.item }}-disk.qcow2 vda --persistent --subdriver qcow2
+  when: item.rc != 0
+  loop: "{{ _boot_disk_attached.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  changed_when: true
+
+- name: Check if discovery ISO is attached
+  ansible.builtin.shell:
+    cmd: virsh domblklist {{ item }} | grep -q 'caas-discovery.iso'
+  register: _iso_attached
+  failed_when: false
+  changed_when: false
+  loop: "{{ caas_discovery_vms }}"
+
+- name: Attach discovery ISO as cdrom
+  ansible.builtin.command:
+    cmd: virsh attach-disk {{ item.item }} /var/lib/libvirt/images/caas-discovery.iso sda --type cdrom --config
+  when: item.rc != 0
+  loop: "{{ _iso_attached.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  changed_when: true
+
+- name: Set boot order to disk then cdrom
+  ansible.builtin.command:
+    cmd: virt-xml {{ item }} --edit --boot hd,cdrom
+  loop: "{{ caas_discovery_vms }}"
+  register: _boot_order
+  changed_when: "'--boot' not in _boot_order.stderr | default('')"
+
+- name: Start discovery VMs
+  ansible.builtin.command:
+    cmd: virsh start {{ item }}
+  loop: "{{ caas_discovery_vms }}"
+  register: _vm_start
+  failed_when: _vm_start.rc != 0 and 'already active' not in _vm_start.stderr
+  changed_when: _vm_start.rc == 0
+
+- name: Report CaaS discovery hosts started
+  ansible.builtin.debug:
+    msg: >-
+      CaaS discovery: {{ caas_discovery_vms | length }} VMs booted with discovery ISO
+      ({{ caas_discovery_vcpu }} vCPU, {{ caas_discovery_memory_mb }}MB RAM,
+      {{ caas_discovery_disk_gb }}GB disk, boot order: disk,cdrom)

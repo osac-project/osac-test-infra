@@ -1,0 +1,6 @@
+---
+- name: Tear down CaaS resources
+  hosts: all
+  gather_facts: false
+  roles:
+    - destroy_caas

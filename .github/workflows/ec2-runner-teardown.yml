@@ -1,0 +1,95 @@
+---
+name: EC2 Ephemeral Runner Teardown
+
+# Generic, suite-agnostic: terminates the EC2 instance a paired
+# ec2-runner-provision.yml call produced, and defensively deregisters the
+# GitHub runner if it's still registered. No trigger of its own --
+# workflow_call only, meant to be used as a job
+# (jobs.<id>.uses: ./.github/workflows/ec2-runner-teardown.yml) by a
+# suite-specific workflow (e.g. e2e-caas-netris.yml) with if: always(), so
+# it runs regardless of how the provision/test jobs concluded. See
+# docs/ec2-ephemeral-runner-setup.md.
+on:
+  workflow_call:
+    inputs:
+      instance-id:
+        description: "EC2 instance id to terminate (from ec2-runner-provision.yml's instance-id output) -- may be empty if provisioning failed before an instance was created"
+        required: false
+        type: string
+        default: ""
+      runner-id:
+        description: "GitHub runner id to defensively deregister (from ec2-runner-provision.yml's runner-id output) -- may be empty if registration never completed"
+        required: false
+        type: string
+        default: ""
+      orchestrator-runner-label:
+        description: "Self-hosted runner label for the orchestrator -- must match whatever ec2-runner-provision.yml was called with"
+        required: false
+        type: string
+        default: "osac-ci-orchestrator"
+      aws-region:
+        description: "AWS region the instance was launched into -- must match whatever ec2-runner-provision.yml was called with"
+        required: false
+        type: string
+        default: "us-east-1"
+
+jobs:
+  teardown:
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # Must match ec2-runner-provision.yml's derivation exactly -- see that
+      # file's provision job for why this is computed independently rather
+      # than passed as an output.
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # Every step below is if: always(): the job-level if: always() a
+      # caller sets on this job only guarantees the job STARTS regardless of
+      # provision/test outcome, it does not make a later step run if an
+      # earlier step in this job fails. Without this, a transient Vault
+      # hiccup while fetching credentials here would skip the "Teardown"
+      # step itself, leaving a real, billed instance running with no
+      # automated path to terminate it.
+      - name: Checkout repository
+        if: always()
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        if: always()
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch EC2 runner AWS credentials
+        if: always()
+        id: aws-creds
+        uses: ./.github/actions/fetch-ec2-runner-aws-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch EC2 runner GitHub PAT
+        if: always()
+        id: gh-pat
+        uses: ./.github/actions/fetch-ec2-runner-github-pat
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Teardown
+        if: always()
+        shell: bash
+        env:
+          INSTANCE_ID: ${{ inputs.instance-id }}
+          RUNNER_ID: ${{ inputs.runner-id }}
+          GH_TOKEN: ${{ steps.gh-pat.outputs.GH_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
+        run: ./scripts/ec2-runner/teardown.sh

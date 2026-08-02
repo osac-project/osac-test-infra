@@ -1,0 +1,88 @@
+---
+name: E2E CaaS Netris
+
+permissions:
+  contents: read
+
+# workflow_dispatch + a periodic schedule (8x/day) -- ec2-runner-orphan-watchdog.yml
+# (backstop for cancelled/hung runs that break the teardown chain) was the
+# specific prerequisite for opening this up beyond manual-only dispatch, and
+# now exists. No pull_request trigger yet -- that's a separate, deliberate
+# change (this repo is public; a PR trigger would let anyone with a PR spend
+# real EC2 money/time without review).
+#
+# AMI id, subnet id, and security group id are NOT dispatch inputs: this
+# repo is public, and workflow_dispatch inputs are visible forever in the
+# Actions run history/API to anyone. The reusable workflow fetches them from
+# Vault instead (see .github/actions/fetch-ec2-runner-network-config).
+on:
+  workflow_dispatch:
+    inputs:
+      instance-type:
+        description: "EC2 instance type -- curated allow-list, not free text, so a dispatch (available to anyone with write access) can't accidentally launch an unexpectedly expensive type. Add to `options` deliberately."
+        required: false
+        type: choice
+        options:
+          - "c5n.metal"
+        default: "c5n.metal"
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        default: "us-east-1"
+      tooling-check-cmds:
+        description: "Semicolon-separated commands to verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites -- override here to smoke-test against a stock AMI (e.g. 'true') or to check for something else, without editing the workflow file."
+        required: false
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+      osac-installer-image:
+        description: "Override osac-installer image (registry-pullable reference) -- accepted but not yet consumed, needs podman-extraction handling in a later PR. Not sensitive: just a container image tag."
+        required: false
+        default: ""
+      osac-operator-image:
+        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      fulfillment-service-image:
+        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      osac-aap-ee-image:
+        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      osac-aap-repo:
+        description: "Override osac-aap git URI the AAP Project syncs ansible content from (e.g. a personal fork, to test a PR pre-merge) -- empty means the upstream repo already baked into the snapshot's values file. Not sensitive: a public repo URL."
+        required: false
+        default: ""
+      osac-aap-branch:
+        description: "Branch, tag, or commit of osac-aap for the AAP Project to sync ansible content from -- empty means whatever's already baked into the snapshot's values file."
+        required: false
+        default: ""
+      osac-installer-repo:
+        description: "Override osac-installer git URI (e.g. a personal fork, to test a PR pre-merge) -- empty means the upstream repo. Not sensitive: a public repo URL."
+        required: false
+        default: ""
+      osac-installer-branch:
+        description: "Branch, tag, or commit of osac-installer to clone -- empty means main."
+        required: false
+        default: ""
+  # 8x/day (every 3h). Offset 17 minutes past the hour, not on the hour,
+  # since GitHub Actions' shared cron scheduler queues everyone's on-the-hour
+  # schedules together and can delay/drop them under load.
+  schedule:
+    - cron: "17 */3 * * *"
+
+jobs:
+  e2e-caas-netris:
+    uses: ./.github/workflows/e2e-caas-netris.yml
+    with:
+      instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
+      osac-installer-image: ${{ inputs.osac-installer-image || '' }}
+      osac-operator-image: ${{ inputs.osac-operator-image || '' }}
+      fulfillment-service-image: ${{ inputs.fulfillment-service-image || '' }}
+      osac-aap-ee-image: ${{ inputs.osac-aap-ee-image || '' }}
+      osac-aap-repo: ${{ inputs.osac-aap-repo || '' }}
+      osac-aap-branch: ${{ inputs.osac-aap-branch || '' }}
+      osac-installer-repo: ${{ inputs.osac-installer-repo || '' }}
+      osac-installer-branch: ${{ inputs.osac-installer-branch || '' }}

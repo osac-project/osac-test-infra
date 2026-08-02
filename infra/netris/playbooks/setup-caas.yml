@@ -1,0 +1,7 @@
+---
+- name: Set up CaaS — discover hosts, label agents, register host type
+  hosts: all
+  gather_facts: false
+  roles:
+    - caas_discovery
+    - caas_setup

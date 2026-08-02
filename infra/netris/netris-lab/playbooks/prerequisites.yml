@@ -1,0 +1,6 @@
+---
+- name: Install prerequisites
+  hosts: lab
+  become: true
+  roles:
+    - prerequisites

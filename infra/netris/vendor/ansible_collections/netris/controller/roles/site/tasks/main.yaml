@@ -1,0 +1,4 @@
+---
+- name: Read sites
+  when: site_state == 'read'
+  ansible.builtin.include_tasks: read.yaml

@@ -1,0 +1,8 @@
+---
+- name: Create VNet
+  when: vnet_state == 'present'
+  ansible.builtin.include_tasks: create.yaml
+
+- name: Delete VNet
+  when: vnet_state == 'absent'
+  ansible.builtin.include_tasks: delete.yaml

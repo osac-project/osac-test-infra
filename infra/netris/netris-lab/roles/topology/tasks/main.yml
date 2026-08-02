@@ -1,0 +1,62 @@
+---
+- name: Get traefik NodePort for controller access
+  shell: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: traefik_nodeport
+  changed_when: false
+
+- name: Set controller_url fact
+  set_fact:
+    controller_url: "http://localhost:{{ traefik_nodeport.stdout }}"
+
+- name: Create topology working directory
+  file:
+    path: "{{ topology_dir }}"
+    state: directory
+
+- name: Copy static .tf files
+  copy:
+    src: "{{ item }}"
+    dest: "{{ topology_dir }}/{{ item }}"
+  loop:
+    - east-west.tf
+    - north-south.tf
+    - bgp.tf
+    - server-cluster-template.tf
+
+- name: Render terraform.tf
+  template:
+    src: terraform.tf.j2
+    dest: "{{ topology_dir }}/terraform.tf"
+
+- name: Render terraform.tfvars
+  template:
+    src: terraform.tfvars.j2
+    dest: "{{ topology_dir }}/terraform.tfvars"
+
+- name: Render ipam-vars.tf
+  template:
+    src: ipam-vars.tf.j2
+    dest: "{{ topology_dir }}/ipam-vars.tf"
+
+- name: Initialize OpenTofu
+  shell: tofu init
+  args:
+    chdir: "{{ topology_dir }}"
+    creates: "{{ topology_dir }}/.terraform.lock.hcl"
+
+# The softgate and fabric-link resources have no explicit depends_on and
+# can be created concurrently under default parallelism, occasionally
+# causing "Softgate does not have link to the fabric" (Netris API 400).
+# `tofu apply` is idempotent, so retrying re-applies against the
+# partially-created state rather than starting over.
+- name: Apply topology
+  shell: tofu apply -auto-approve
+  args:
+    chdir: "{{ topology_dir }}"
+  register: tofu_apply
+  until: tofu_apply.rc == 0
+  retries: 3
+  delay: 10
+  changed_when: "'0 added, 0 changed' not in tofu_apply.stdout"

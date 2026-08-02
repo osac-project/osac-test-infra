@@ -1,0 +1,14 @@
+config:
+  # netris-air:controller_url: http://localhost
+  # netris-air:controller_login: netris
+  # netris-air:controller_password: CHANGEME
+  # netris-air:controller_insecure: true
+  netris-air:controller_site: Datacenter-1
+  netris-air:hypers_list:
+  - 127.0.0.1
+  netris-air:servers_gw: 192.168.16.1/20
+  netris-air:switch_vcpu: 4
+  netris-air:apt_repo: main
+  netris-air:sshAuthKeys: []
+  # netris-air:bgp_link_subnet: 198.51.100.8/29
+  # netris-air:bgp_password: CHANGEME

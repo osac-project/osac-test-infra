@@ -1,0 +1,13 @@
+---
+- name: Full Netris lab OCP SNO + OSAC deployment
+  hosts: all
+  gather_facts: true
+  become: true
+  roles:
+    - lab_setup
+    - lab_deploy
+    - vm_resize
+    - netris_configure
+    - assisted_service
+    - ocp_install
+    - osac_install

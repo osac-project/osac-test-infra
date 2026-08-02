@@ -1,0 +1,6 @@
+---
+- name: Cache container and cloud images
+  hosts: lab
+  become: true
+  roles:
+    - cache

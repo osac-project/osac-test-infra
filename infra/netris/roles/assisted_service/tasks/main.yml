@@ -1,0 +1,91 @@
+---
+- name: Check if Assisted Service is already running with correct IP
+  ansible.builtin.shell:
+    cmd: podman exec assisted-installer-service env 2>/dev/null | grep -q "SERVICE_BASE_URL=http://{{ assisted_service_ip }}:8090"
+  register: _ai_check
+  failed_when: false
+  changed_when: false
+
+- name: Remove Assisted Service with wrong IP
+  ansible.builtin.command:
+    cmd: podman pod rm -f assisted-installer
+  when: _ai_check.rc != 0
+  register: _ai_remove
+  failed_when: false
+  changed_when: _ai_remove.rc == 0
+
+- name: Remove stale aicli config files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ playbook_dir }}/pod.yml"
+    - "{{ playbook_dir }}/configmap.yml"
+    - /root/pod.yml
+    - /root/configmap.yml
+  when: _ai_check.rc != 0
+
+- name: Wait for pod cleanup
+  ansible.builtin.pause:
+    seconds: 5
+  when: _ai_remove is changed
+
+- name: Deploy local Assisted Service
+  ansible.builtin.command:
+    cmd: aicli create onprem -P onprem_ip={{ assisted_service_ip }}
+    chdir: /root
+  when: _ai_check.rc != 0
+  register: _ai_deploy
+  until: _ai_deploy.rc == 0
+  retries: 5
+  delay: 15
+  changed_when: true
+
+- name: Filter OS_IMAGES to x86_64 for target version
+  ansible.builtin.shell:
+    cmd: |
+      python3 -c "
+      import json, yaml
+      with open('/root/configmap.yml') as f:
+          cm = yaml.safe_load(f)
+      os_images = json.loads(cm['data']['OS_IMAGES'])
+      filtered = [i for i in os_images
+                  if i['cpu_architecture'] == 'x86_64'
+                  and i['openshift_version'] == '{{ ocp_version }}']
+      cm['data']['OS_IMAGES'] = json.dumps(filtered, separators=(',', ':'))
+      with open('/root/configmap.yml', 'w') as f:
+          yaml.safe_dump(cm, f, default_flow_style=False)
+      print(f'Filtered OS_IMAGES from {len(os_images)} to {len(filtered)} entries')
+      "
+  register: _os_images_filter
+  when: _ai_check.rc != 0
+  changed_when: true
+
+- name: Show OS_IMAGES filter result
+  ansible.builtin.debug:
+    msg: "{{ _os_images_filter.stdout }}"
+  when: _os_images_filter is changed
+
+- name: Recreate Assisted Service with filtered images
+  ansible.builtin.shell:
+    cmd: podman play kube --replace --configmap /root/configmap.yml /root/pod.yml
+  when: _ai_check.rc != 0
+  changed_when: true
+
+- name: Wait for Assisted Service API
+  ansible.builtin.uri:
+    url: "{{ assisted_service_url }}/api/assisted-install/v2/clusters"
+    method: GET
+    status_code: [200]
+  register: _ai_ready
+  until: _ai_ready is not failed
+  retries: 30
+  delay: 10
+
+- name: Configure DNS
+  ansible.builtin.include_role:
+    name: ocp_dns
+
+- name: Report Assisted Service status
+  ansible.builtin.debug:
+    msg: "Assisted Service ready at {{ assisted_service_url }}, DNS configured for {{ ocp_cluster_name }}.{{ ocp_base_domain }}"

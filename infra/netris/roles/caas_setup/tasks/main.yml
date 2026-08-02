@@ -1,0 +1,284 @@
+---
+# Step 1: Wait for all agents to register from the discovery ISO boot
+- name: Wait for expected number of agents
+  ansible.builtin.shell:
+    cmd: oc get agent -n {{ caas_agent_namespace }} --no-headers 2>/dev/null | wc -l
+  register: _agent_count
+  until: _agent_count.stdout | int >= caas_agents | length
+  retries: 120
+  delay: 15
+  changed_when: false
+
+- name: Get agent names
+  ansible.builtin.shell:
+    cmd: oc get agent -n {{ caas_agent_namespace }} -o jsonpath='{.items[*].metadata.name}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _agent_names
+  changed_when: false
+  until: _agent_names.rc == 0 and _agent_names.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Set agent name list
+  ansible.builtin.set_fact:
+    caas_agent_names: "{{ _agent_names.stdout.split() }}"
+
+# Step 2: Label agents with resource class and netris server name
+- name: Label agent with resource class
+  ansible.builtin.command:
+    cmd: >-
+      oc label agent/{{ item }} -n {{ caas_agent_namespace }}
+      osac.openshift.io/resource_class={{ caas_host_type_id }}
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ caas_agent_names }}"
+  register: _label_rc
+  changed_when: "'labeled' in _label_rc.stdout and 'not labeled' not in _label_rc.stdout"
+  until: _label_rc.rc == 0
+  retries: 5
+  delay: 10
+
+- name: Get agent hostnames
+  ansible.builtin.shell:
+    cmd: >-
+      oc get agent -n {{ caas_agent_namespace }} -o json |
+      python3 -c "import sys,json; agents=json.load(sys.stdin)['items'];
+      print(json.dumps({a['metadata']['name']: a['status']['inventory']['hostname'] for a in agents}))"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _agent_hostnames_raw
+  changed_when: false
+
+- name: Build agent-to-hostname map
+  ansible.builtin.set_fact:
+    _agent_hostname_map: "{{ _agent_hostnames_raw.stdout | from_json }}"
+
+- name: Label agent with netris server name
+  ansible.builtin.command:
+    cmd: >-
+      oc label agent/{{ item.key }} -n {{ caas_agent_namespace }}
+      netris.server/name={{ (caas_agents | selectattr('vm_pattern', 'search', item.value) | first).netris_server_name }}
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ _agent_hostname_map | dict2items }}"
+  loop_control:
+    label: "{{ item.value }}"
+  register: _label_ns
+  changed_when: "'labeled' in _label_ns.stdout and 'not labeled' not in _label_ns.stdout"
+  until: _label_ns.rc == 0
+  retries: 5
+  delay: 10
+
+- name: Check agent approval status
+  ansible.builtin.shell:
+    cmd: oc get agent/{{ item }} -n {{ caas_agent_namespace }} -o jsonpath='{.spec.approved}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _agent_approved
+  changed_when: false
+  until: _agent_approved.rc == 0
+  retries: 5
+  delay: 10
+  loop: "{{ caas_agent_names }}"
+
+- name: Approve agents
+  ansible.builtin.command:
+    cmd: >-
+      oc patch agent/{{ item.item }} -n {{ caas_agent_namespace }}
+      --type=merge -p '{"spec":{"approved":true}}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  when: item.stdout != 'true'
+  loop: "{{ _agent_approved.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: _approve_result
+  until: _approve_result.rc == 0
+  retries: 5
+  delay: 10
+  changed_when: true
+
+# Step 3: Register host type in fulfillment service
+- name: Get fulfillment internal API URL
+  ansible.builtin.shell:
+    cmd: oc get route fulfillment-internal-api -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.status.ingress[0].host}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _fulfillment_host
+  changed_when: false
+  until: _fulfillment_host.rc == 0 and _fulfillment_host.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Set fulfillment API URL
+  ansible.builtin.set_fact:
+    caas_fulfillment_api: "https://{{ _fulfillment_host.stdout }}"
+
+# Must run before any osac CLI invocation in this role, including "Wait for
+# cluster template to exist" below -- otherwise the CLI has no config yet
+# ("Error: there is no configuration, run the 'login' command").
+- name: Ensure osac CLI config directory exists
+  ansible.builtin.file:
+    path: /root/.config/osac
+    state: directory
+    mode: "0700"
+
+- name: Configure osac CLI
+  ansible.builtin.copy:
+    content: |
+      {
+        "token_script": "oc create token -n {{ snapshot_osac_namespace | default(osac_namespace) }} admin --duration 1h",
+        "insecure": true,
+        "address": "{{ _fulfillment_host.stdout }}:443"
+      }
+    dest: /root/.config/osac/config.json
+    mode: "0600"
+
+- name: Get service account token
+  ansible.builtin.shell:
+    cmd: oc create token -n {{ snapshot_osac_namespace | default(osac_namespace) }} admin
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _sa_token
+  changed_when: false
+  until: _sa_token.rc == 0 and _sa_token.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Create host type
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/host_types"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ caas_host_type_id }}"
+      title: "{{ caas_host_type_title }}"
+      description: "{{ caas_host_type_description }}"
+    validate_certs: false
+    status_code: [200, 201, 409]
+
+# Step 4: Trigger AAP publish-templates job and wait for cluster template
+- name: Get AAP route
+  ansible.builtin.shell:
+    cmd: oc get route osac-aap -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.spec.host}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _aap_route
+  changed_when: false
+  until: _aap_route.rc == 0 and _aap_route.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Get AAP admin password
+  ansible.builtin.shell:
+    cmd: oc get secret osac-aap-controller-admin-password -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.data.password}' | base64 -d
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _aap_admin_pw
+  changed_when: false
+  no_log: true
+
+- name: Wait for publish-templates job template to be available
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/job_templates/?name=osac-publish-templates"
+    method: GET
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _jt_check
+  until: _jt_check.status == 200 and (_jt_check.json.count | default(0)) > 0
+  retries: 40
+  delay: 15
+  no_log: true
+
+- name: Wait for AAP gateway to be fully ready
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/ping/"
+    method: GET
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200]
+  register: _gw_ping
+  until: _gw_ping.status == 200
+  retries: 20
+  delay: 10
+  no_log: true
+
+- name: Launch publish-templates job
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/job_templates/osac-publish-templates/launch/"
+    method: POST
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [201]
+  register: _publish_job
+  retries: 5
+  delay: 30
+  until: _publish_job.status == 201
+
+- name: Wait for publish-templates job to complete
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/jobs/{{ _publish_job.json.id }}/"
+    method: GET
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _publish_status
+  until: _publish_status.json.status in ['successful', 'failed', 'error', 'canceled']
+  retries: 60
+  delay: 15
+  no_log: true
+
+- name: Fail if publish-templates job did not succeed
+  ansible.builtin.fail:
+    msg: "publish-templates job {{ _publish_job.json.id }} finished with status: {{ _publish_status.json.status }}"
+  when: _publish_status.json.status != 'successful'
+
+- name: Wait for cluster template to exist
+  ansible.builtin.command:
+    cmd: osac get clustertemplates
+  register: _templates
+  until: caas_cluster_template in _templates.stdout
+  retries: 30
+  delay: 10
+  changed_when: false
+
+# Step 5: Create catalog item from template
+- name: Create cluster catalog item
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_catalog_items"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ caas_catalog_item }}"
+      title: "{{ caas_catalog_item_title }}"
+      description: "{{ caas_catalog_item_description }}"
+      template: "{{ caas_cluster_template }}"
+      published: true
+      field_definitions:
+        - path: "release_image"
+          display_name: "Release Image"
+          editable: true
+        - path: "pull_secret"
+          display_name: "Pull Secret"
+          editable: true
+        - path: "ssh_public_key"
+          display_name: "SSH Public Key"
+          editable: true
+    validate_certs: false
+    status_code: [200, 201, 409]

@@ -1,0 +1,6 @@
+---
+- name: Verify Netris Lab Health
+  hosts: lab
+  become: true
+  roles:
+    - verify

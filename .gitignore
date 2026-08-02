@@ -1,0 +1,28 @@
+# Binaries
+osac
+
+# Logs
+*.log
+
+# Temporary files
+*.retry
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Test reports
+reports/
+
+# Infrastructure backend outputs
+infra/*/.env.infra
+
+# Workflow artifacts
+# AI workflow artifacts
+.artifacts/

@@ -1,0 +1,8 @@
+# Vault backup service -- triggered by vault-backup.timer.
+
+[Unit]
+Description=Backup HashiCorp Vault data (OSAC CI)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.vault-server/scripts/vault-backup.sh

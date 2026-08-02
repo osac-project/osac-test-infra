@@ -1,0 +1,3 @@
+---
+netris_controller_url: "http://localhost:{{ controller_ui_port }}"
+netris_username: "{{ netris_login }}"

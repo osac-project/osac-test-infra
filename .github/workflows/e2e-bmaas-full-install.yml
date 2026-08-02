@@ -1,0 +1,659 @@
+---
+name: E2E BMaaS Full Install
+
+on:
+  workflow_call:
+    inputs:
+      test-suite:
+        description: "Test suite to run (default: bmaas)"
+        required: false
+        type: string
+        default: "bmaas"
+      test-filter:
+        description: "pytest -k filter expression (optional)"
+        required: false
+        type: string
+        default: ""
+      namespace:
+        description: "OSAC namespace on the cluster"
+        required: false
+        type: string
+        default: "osac-e2e-ci"
+      bmi-template:
+        description: "BareMetalInstance template"
+        required: false
+        type: string
+        default: "osac.templates.bm_host_provisioning"
+      bmh-namespace:
+        description: "Namespace for BareMetalHost resources"
+        required: false
+        type: string
+        default: "host-inventory"
+      flavor-image:
+        description: "OCI image containing the cluster-tool flavor"
+        required: false
+        type: string
+        default: "quay.io/osac-project/cluster-flavors:sno-4-22"
+      flavor-name:
+        description: "cluster-tool flavor name"
+        required: false
+        type: string
+        default: "sno-4-22"
+      image-overrides:
+        description: "JSON object mapping Helm value paths to image refs, e.g. '{\"service.images.service\":\"ghcr.io/osac-project/osac:pr-123\"}'"
+        required: false
+        type: string
+        default: "{}"
+      installer-ref:
+        description: "Branch/ref of osac-installer to clone for the deploy step"
+        required: false
+        type: string
+        default: "main"
+      installer-repo:
+        description: "GitHub repo (owner/name) of the OSAC monorepo"
+        required: false
+        type: string
+        default: "osac-project/osac"
+      test-infra-repository:
+        description: "Repository to checkout for tests/Containerfile (for cross-repo calls)"
+        required: false
+        type: string
+        default: ""
+      test-infra-ref:
+        description: "Git ref of test infrastructure repository"
+        required: false
+        type: string
+        default: ""
+      components:
+        description: >-
+          JSON array of components to build from source and load onto the cluster, e.g.
+          '[{"repo":"osac-project/osac","ref":"my-branch","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"osac-project/osac","ref":"my-branch","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'.
+          Each entry supports repo, ref, imageKey (required), and containerfile
+          (default "Containerfile"), buildType ("containerfile" default, or "ansible-builder").
+          Empty array (default) builds
+          nothing from source -- use image-overrides for pre-built images instead.
+        required: false
+        type: string
+        default: "[]"
+      osac-cli-version:
+        description: "OSAC CLI version for the test image (e.g. 0.0.73). Defaults to latest GitHub release."
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: "PR author_association from the caller (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc). Passed by callers for fork PR authorization since github.event context is not inherited by reusable workflows."
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: "GitHub login of the PR author (for fork PR org membership check)"
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: "PR number (for label-based authorization check)"
+        required: false
+        type: string
+        default: ""
+      notify-on-failure:
+        description: "Send Slack notification on failure (typically set for scheduled runs)"
+        required: false
+        type: boolean
+        default: false
+      runner-label:
+        description: "Self-hosted runner label to target. Defaults to the shared fleet-wide label; override with a host-specific label (e.g. osac-ci-1) to pin a run to one machine for verification/debugging."
+        required: false
+        type: string
+        default: "osac-ci"
+    outputs:
+      result:
+        description: "Test result: PASSED or FAILED"
+        value: ${{ jobs.e2e.outputs.result }}
+
+jobs:
+  e2e:
+    runs-on: ${{ inputs.runner-label }}
+    environment: e2e-test
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
+
+    env:
+      FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
+          ref: ${{ inputs.test-infra-ref || '' }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ${{ inputs.test-suite || 'e2e' }}
+          run-id: ${{ github.run_id }}
+
+      - name: Resolve and validate components input
+        id: components
+        env:
+          COMPONENTS_JSON: ${{ inputs.components }}
+        run: |
+          echo "::group::Resolve and validate components input"
+
+          if ! echo "${COMPONENTS_JSON}" | jq -e 'type == "array"' >/dev/null; then
+            echo "::error::components must be a JSON array"
+            exit 1
+          fi
+          COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
+          for i in $(seq 0 $((COUNT - 1))); do
+            repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo // empty")
+            ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref // empty")
+            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey // empty")
+            if [[ -z "${repo}" || -z "${ref}" || -z "${image_key}" ]]; then
+              echo "::error::components[$i] requires repo, ref, and imageKey"
+              exit 1
+            fi
+            if [[ ! "${repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::components[$i].repo '${repo}' is not a valid org/repo format"
+              exit 1
+            fi
+          done
+
+          {
+            echo "components<<EOF_RESOLVED_COMPONENTS"
+            echo "${COMPONENTS_JSON}"
+            echo "EOF_RESOLVED_COMPONENTS"
+          } >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      - name: Authorize fork PR
+        if: inputs.fork-pr-author-association != ''
+        uses: ./.github/actions/authorize-fork-pr
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          fork-pr-author: ${{ inputs.fork-pr-author }}
+          pr-number: ${{ inputs.pr-number }}
+
+      - name: Fetch and write secrets
+        id: secrets
+        uses: ./.github/actions/fetch-and-write-secrets
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Prepare cluster environment
+        env:
+          FLAVOR_IMAGE: ${{ inputs.flavor-image }}
+          FLAVOR_NAME: ${{ inputs.flavor-name }}
+        run: |
+          # --- Ensure cluster-tool is configured ---
+          CT_CONFIG="${HOME}/.config/cluster-tool"
+          ROOT_CONFIG="/root/.config/cluster-tool"
+          if [[ -f "${CT_CONFIG}/servers.json" ]] && [[ -f "${CT_CONFIG}/state.json" ]]; then
+            echo "cluster-tool already configured."
+          elif [[ -f "${ROOT_CONFIG}/servers.json" ]]; then
+            echo "Syncing cluster-tool config from root..."
+            mkdir -p "${CT_CONFIG}"
+            cp "${ROOT_CONFIG}"/{config,servers.json,state.json,cluster-tool.key,cluster-tool.key.pub} "${CT_CONFIG}/" 2>/dev/null || true
+          else
+            echo "ERROR: cluster-tool not configured. Run machine-init.sh first." >&2
+            exit 1
+          fi
+
+          # --- Pull cluster flavor if missing or outdated ---
+          DIGEST_FILE="/tmp/cluster-tool-flavor-${FLAVOR_NAME}.digest"
+          REMOTE_DIGEST=$(skopeo inspect "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' 2>/dev/null || echo "")
+
+          exec 9>"${FLAVOR_LOCK}"
+          flock --exclusive 9
+          echo "Acquired flavor lock."
+
+          LOCAL_DIGEST=""
+          if [[ -f "${DIGEST_FILE}" ]]; then
+            LOCAL_DIGEST=$(cat "${DIGEST_FILE}")
+          fi
+
+          FLAVOR_EXISTS=false
+          if sudo python3 /usr/local/bin/cluster-tool flavors 9>&- \
+               | grep -q "^${FLAVOR_NAME} "; then
+            FLAVOR_EXISTS=true
+          fi
+
+          NEED_PULL=false
+          if ${FLAVOR_EXISTS}; then
+            if [[ -n "${REMOTE_DIGEST}" ]] && [[ "${REMOTE_DIGEST}" == "${LOCAL_DIGEST}" ]]; then
+              echo "Flavor '${FLAVOR_NAME}' is up to date (digest: ${LOCAL_DIGEST}) — skipping pull."
+            elif [[ -n "${REMOTE_DIGEST}" ]] && [[ -z "${LOCAL_DIGEST}" ]]; then
+              echo "Flavor '${FLAVOR_NAME}' already present, seeding digest file (${REMOTE_DIGEST})."
+              echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
+            elif [[ -n "${REMOTE_DIGEST}" ]]; then
+              echo "Flavor '${FLAVOR_NAME}' exists but image changed (local: ${LOCAL_DIGEST}, remote: ${REMOTE_DIGEST}) — deleting and re-pulling..."
+              sudo python3 /usr/local/bin/cluster-tool flavors --delete "${FLAVOR_NAME}" 9>&- || true
+              NEED_PULL=true
+            else
+              echo "Flavor '${FLAVOR_NAME}' already present, could not check remote digest — skipping pull."
+            fi
+          else
+            echo "Flavor '${FLAVOR_NAME}' not found — pulling..."
+            NEED_PULL=true
+          fi
+
+          if ${NEED_PULL}; then
+            sudo python3 /usr/local/bin/cluster-tool pull "${FLAVOR_IMAGE}" 9>&-
+            if [[ -n "${REMOTE_DIGEST}" ]]; then
+              echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
+            fi
+          fi
+
+          exec 9>&-
+          echo "Released flavor lock."
+
+          # --- Clean up stale clone resources ---
+          sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>/dev/null || true
+          BRIDGE_PREFIX="br-${CLONE_NAME:0:8}"
+          for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
+            echo "Removing stale bridge ${br}..."
+            sudo ip link set "${br}" down 2>/dev/null || true
+            sudo ip link delete "${br}" 2>/dev/null || true
+          done
+
+      - name: Boot cluster clone
+        env:
+          FLAVOR_NAME: ${{ inputs.flavor-name }}
+        run: |
+          exec 9>"${FLAVOR_LOCK}"
+          flock --shared 9
+          sudo python3 /usr/local/bin/cluster-tool boot \
+            --flavor "${FLAVOR_NAME}" --name "${CLONE_NAME}" \
+            --pull-secret "$RUNNER_TEMP/pull-secret.json" 9>&-
+          exec 9>&-
+
+          echo "Cluster clone '${CLONE_NAME}' booted."
+
+          sudo cp "${HOME}/.kube/${CLONE_NAME}.kubeconfig" "$RUNNER_TEMP/kubeconfig"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
+          chmod 600 "$RUNNER_TEMP/kubeconfig"
+
+      - name: Setup virtual BareMetalHosts
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+        run: bash .github/scripts/setup-virtual-bmh.sh
+
+      # Loops over the `components` JSON array so any number of components
+      # (one, two, or the 5-8 this repo is headed toward) can be built from
+      # source in a single e2e run -- fixed named inputs (component-repo,
+      # a "component2-repo" for a second slot, and so on) don't scale past a
+      # handful without adding new inputs for every additional caller.
+      - name: Build and load component images
+        if: steps.components.outputs.components != '[]' && steps.components.outputs.components != ''
+        shell: bash
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          COMPONENTS_JSON: ${{ steps.components.outputs.components }}
+        run: |
+          RESULTS="[]"
+          COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
+          NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
+
+          for i in $(seq 0 $((COUNT - 1))); do
+            repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo")
+            ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref")
+            file=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].containerfile // \"Containerfile\"")
+            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey")
+            build_type=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildType // \"containerfile\"")
+
+            tag="localhost/component-${i}-pr:${GITHUB_RUN_ID}"
+            src="$RUNNER_TEMP/component-${i}-src"
+
+            echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
+            git clone --depth 1 --branch "${ref}" "https://github.com/${repo}.git" "${src}"
+            # Resolved commit, not just the ref name -- a branch can move between
+            # this clone and the installer's own clone later in the job, so
+            # comparing ref strings alone can't prove they're the same commit.
+            sha=$(git -C "${src}" rev-parse HEAD)
+
+            # When `file` has a directory component (e.g.
+            # "fulfillment-service/Containerfile" from a monorepo checkout),
+            # everything about this component -- build context, go.mod,
+            # cmd/, CRDs -- lives under that subdirectory, not at the
+            # checkout root.
+            build_dir="${src}"
+            containerfile_name="${file}"
+            if [[ "${file}" == */* ]]; then
+              build_dir="${src}/$(dirname "${file}")"
+              containerfile_name="$(basename "${file}")"
+            fi
+
+            if [[ "${build_type}" == "ansible-builder" ]]; then
+              python3 -m pip install --quiet 'ansible-builder~=3.0'
+              ansible-builder create --file "${build_dir}/${containerfile_name}" --context "${build_dir}/context"
+              podman build -t "${tag}" -f "${build_dir}/context/Containerfile" "${build_dir}/context"
+            else
+              podman build -t "${tag}" -f "${build_dir}/${containerfile_name}" "${build_dir}"
+            fi
+
+            # Build OSAC CLI from source when this component is fulfillment-service.
+            # Keyed off imageKey (not a repo-name substring), so this works whether
+            # repo is fulfillment-service's own repo or a monorepo like osac-project/osac.
+            if [[ "${image_key}" == "service.images.service" ]]; then
+              (cd "${build_dir}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
+              echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
+            fi
+
+            # Save CRDs from the component source so they can be applied after
+            # OSAC install. Without this, CRDs come from osac-installer's
+            # submodule pin and miss any CRD changes in the PR.
+            crds_dir=""
+            if [[ -d "${build_dir}/config/crd/bases" ]]; then
+              crds_dir="$RUNNER_TEMP/component-${i}-crds"
+              mkdir -p "${crds_dir}"
+              cp "${build_dir}"/config/crd/bases/*.yaml "${crds_dir}/"
+            fi
+
+            echo "Loading image onto node ${NODE_NAME}..."
+            podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+
+            RESULTS=$(echo "${RESULTS}" | jq -c \
+              --arg image "${tag}" --arg key "${image_key}" \
+              --arg repo "${repo}" --arg ref "${ref}" --arg sha "${sha}" --arg file "${file}" --arg crds "${crds_dir}" \
+              '. + [{"image":$image,"imageKey":$key,"repo":$repo,"ref":$ref,"sha":$sha,"containerfile":$file,"crdsDir":$crds}]')
+
+            # Recorded after every component, not just once at the end -- if
+            # a later component fails the loop, images already built and
+            # loaded by earlier ones are still tracked here so Teardown can
+            # still clean them up instead of leaking them on the runner.
+            {
+              echo "COMPONENT_BUILD_RESULTS<<EOF_COMPONENT_BUILD_RESULTS"
+              echo "${RESULTS}"
+              echo "EOF_COMPONENT_BUILD_RESULTS"
+            } >> "$GITHUB_ENV"
+            echo "::endgroup::"
+          done
+
+      - name: Build test image
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+          OSAC_VERSION: ${{ inputs.osac-cli-version }}
+        run: |
+          BUILD_ARGS="--build-arg OSAC_VERSION=${OSAC_VERSION}"
+          if [[ -n "${OSAC_CLI_BIN:-}" ]] && [[ -f "${OSAC_CLI_BIN}" ]]; then
+            cp "${OSAC_CLI_BIN}" ./osac-cli-bin
+            BUILD_ARGS="--build-arg OSAC_CLI_BIN=osac-cli-bin"
+          fi
+          podman build --no-cache ${BUILD_ARGS} -t "${E2E_IMAGE}" -f Containerfile .
+          rm -f ./osac-cli-bin
+
+      - name: Install infrastructure operators
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          INSTALLER_REF: ${{ inputs.installer-ref }}
+          INSTALLER_REPO: ${{ inputs.installer-repo }}
+        run: |
+          if ! command -v helm &>/dev/null; then
+            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          fi
+          if ! command -v yq &>/dev/null; then
+            YQ_VERSION="v4.53.3"
+            YQ_SHA256="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+            YQ_DIR="${RUNNER_TEMP}/bin"
+            mkdir -p "${YQ_DIR}"
+            curl -fsSL -o "${YQ_DIR}/yq" \
+              "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            echo "${YQ_SHA256}  ${YQ_DIR}/yq" | sha256sum -c -
+            chmod +x "${YQ_DIR}/yq"
+            export PATH="${YQ_DIR}:${PATH}"
+            echo "${YQ_DIR}" >> "$GITHUB_PATH"
+          fi
+
+          # Clone the OSAC monorepo for installer charts.  When components
+          # were built from source earlier in this job, pin to the same
+          # commit SHA — the branch may have moved since the component
+          # clone, and a second git-clone at the branch name would race.
+          INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
+          PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
+
+          if [[ -n "${PINNED_SHA}" ]]; then
+            echo "Cloning installer at component-resolved commit (${PINNED_SHA})."
+            git init "${INSTALLER_CLONE_DIR}"
+            git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 \
+              "https://github.com/${INSTALLER_REPO}.git" "${PINNED_SHA}"
+            git -C "${INSTALLER_CLONE_DIR}" checkout FETCH_HEAD
+            if [[ -f "${INSTALLER_CLONE_DIR}/.gitmodules" ]]; then
+              git -C "${INSTALLER_CLONE_DIR}" submodule update --init --recursive --depth 1
+            fi
+          else
+            git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
+              "https://github.com/${INSTALLER_REPO}.git" "${INSTALLER_CLONE_DIR}"
+          fi
+
+          if [[ -d "${INSTALLER_CLONE_DIR}/osac-installer" ]]; then
+            INSTALLER_DIR="${INSTALLER_CLONE_DIR}/osac-installer"
+          else
+            INSTALLER_DIR="${INSTALLER_CLONE_DIR}"
+          fi
+          echo "INSTALLER_DIR=${INSTALLER_DIR}" >> "$GITHUB_ENV"
+          cd "${INSTALLER_DIR}"
+
+          # OCP 4.22 catalogs don't carry older operator channels
+          yq -i '.aapOperator.channel = "stable-2.6-cluster-scoped"' values/bmaas-ci/values.yaml
+          yq -i '.lvms.channel = "stable-4.22"' values/bmaas-ci/values.yaml
+
+          make install-operators VALUES_FILE=values/bmaas-ci/values.yaml
+
+          make install-prereqs VALUES_FILE=values/bmaas-ci/values.yaml
+
+      - name: Create BMF secrets
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+        run: |
+          echo "Creating BMF operator secrets..."
+          oc create namespace "${INSTALLER_NAMESPACE}" 2>/dev/null || true
+          oc apply -f - <<EOF
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: osac-inventory-config
+            namespace: ${INSTALLER_NAMESPACE}
+          type: Opaque
+          stringData:
+            inventory.yaml: |
+              name: metal3-inventory
+              type: metal3
+              hostClass: metal3
+              networkClass: metal3
+              options:
+                metal3:
+                  namespace: ${BMH_NAMESPACE}
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: osac-management-config
+            namespace: ${INSTALLER_NAMESPACE}
+          type: Opaque
+          stringData:
+            management.yaml: |
+              name: metal3-management
+              type: metal3
+              options:
+                metal3:
+                  namespace: ${BMH_NAMESPACE}
+          EOF
+          echo "BMF secrets created."
+
+      - name: Install OSAC
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
+          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
+        run: |
+          # Reuse the osac-installer dir resolved by the previous step (via $GITHUB_ENV)
+          cd "${INSTALLER_DIR}"
+
+          make install-osac VALUES_FILE=values/bmaas-ci/values.yaml
+
+          for tenant in "${INSTALLER_NAMESPACE}" shared; do
+            echo "Creating Tenant: ${tenant}"
+            oc apply -f - <<EOF
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: ${tenant}
+            namespace: ${INSTALLER_NAMESPACE}
+          spec: {}
+          EOF
+          done
+
+          # --- Merge each built component's image into overrides, and apply any CRDs it shipped ---
+          MERGED_OVERRIDES="${IMAGE_OVERRIDES}"
+          COUNT=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq 'length')
+          for i in $(seq 0 $((COUNT - 1))); do
+            image=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].image")
+            image_key=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].imageKey")
+            repo=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].repo")
+            ref=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].ref")
+            crds_dir=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].crdsDir")
+
+            if [[ "${image_key}" == *.repository ]]; then
+              img_repo="${image%%:*}"
+              img_tag="${image#*:}"
+              tag_key="${image_key%.repository}.tag"
+              pull_key="${image_key%.repository}.pullPolicy"
+              MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
+                jq -c --arg rk "${image_key}" --arg rv "${img_repo}" \
+                      --arg tk "${tag_key}" --arg tv "${img_tag}" \
+                      --arg pk "${pull_key}" --arg pv "IfNotPresent" \
+                      '. + {($rk): $rv, ($tk): $tv, ($pk): $pv}')
+              echo "Component[$i] image override: ${image_key}=${img_repo}, ${tag_key}=${img_tag}, ${pull_key}=IfNotPresent"
+            else
+              MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
+                jq -c --arg k "${image_key}" --arg v "${image}" '. + {($k): $v}')
+              echo "Component[$i] image override: ${image_key}=${image}"
+            fi
+
+            if [[ "${image_key}" == "aap.bootstrap.image" ]]; then
+              aap_git_uri="https://github.com/${repo}"
+              MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
+                jq -c --arg bk "aap.configAsCode.projectGitBranch" --arg bv "${ref}" \
+                      --arg uk "aap.configAsCode.projectGitUri" --arg uv "${aap_git_uri}" \
+                      '. + {($bk): $bv, ($uk): $uv}')
+              echo "Component[$i] AAP project override: branch=${ref} uri=${aap_git_uri}"
+            fi
+
+            # If the component source contained CRDs (e.g. osac-operator PR
+            # changing CRD structure), apply them now so the cluster has the
+            # CRD definitions matching the new operator binary.
+            if [[ -n "${crds_dir}" ]] && [[ -d "${crds_dir}" ]]; then
+              echo "Applying component[$i] CRDs from PR..."
+              oc apply --server-side --force-conflicts -f "${crds_dir}/"
+            fi
+          done
+
+          if [[ -n "${MERGED_OVERRIDES}" ]] && [[ "${MERGED_OVERRIDES}" != "{}" ]]; then
+            echo "Applying image overrides..."
+            SET_ARGS=()
+            for key in $(echo "${MERGED_OVERRIDES}" | jq -r 'keys[]'); do
+              value=$(echo "${MERGED_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
+              SET_ARGS+=("--set-string" "${key}=${value}")
+              echo "  --set-string ${key}=${value}"
+            done
+
+            # Local (file://) dependencies: force to 0.0.0 so any real chart
+            # version there is ignored -- helm dependency update just copies
+            # whatever's on disk regardless of its declared version, so pinning
+            # to a fixed placeholder here avoids drift/mismatch churn. Real
+            # registry-hosted deps (e.g. osac-ui's oci:// chart) are left alone --
+            # "0.0.0" isn't a published version, so overwriting those breaks the
+            # actual chart pull.
+            yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
+            helm dependency update charts/osac/
+            helm upgrade osac charts/osac/ \
+              --namespace "${INSTALLER_NAMESPACE}" \
+              --reuse-values \
+              --no-hooks \
+              "${SET_ARGS[@]}" \
+              --timeout 10m \
+              --wait
+
+            echo "Waiting for rollout to complete..."
+            for deploy in $(oc get deploy -n "${INSTALLER_NAMESPACE}" -o name); do
+              oc rollout status "${deploy}" -n "${INSTALLER_NAMESPACE}" --timeout=300s
+            done
+          fi
+
+      - name: Run E2E tests
+        id: test
+        env:
+          TEST_SUITE: ${{ inputs.test-suite }}
+          TEST_FILTER: ${{ inputs.test-filter }}
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          OSAC_BMI_TEMPLATE: ${{ inputs.bmi-template }}
+          OSAC_BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+        run: |
+          KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
+
+          TEST_ARGS="tests/"
+          if [ -n "${TEST_SUITE}" ]; then
+            TEST_ARGS="tests/${TEST_SUITE}/"
+          fi
+
+          FILTER_ARGS=""
+          if [ -n "${TEST_FILTER}" ]; then
+            FILTER_ARGS="-k ${TEST_FILTER}"
+          fi
+
+          mkdir -p "$RUNNER_TEMP/test-output"
+
+          podman run --rm --network=host \
+            -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
+            -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
+            -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
+            -v "${RUNNER_TEMP}/test-output":/tmp/test-output:Z \
+            -e KUBECONFIG=/root/.kube/config \
+            -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
+            -e OSAC_BMI_TEMPLATE="${OSAC_BMI_TEMPLATE}" \
+            -e OSAC_BMH_NAMESPACE="${OSAC_BMH_NAMESPACE}" \
+            -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+            "${E2E_IMAGE}" \
+            pytest ${TEST_ARGS} ${FILTER_ARGS} \
+              --junitxml=/tmp/test-output/junit.xml -v
+
+      - name: Gather artifacts
+        if: always()
+        uses: ./.github/actions/gather-artifacts
+        with:
+          namespace: ${{ inputs.namespace }}
+          kubeconfig-path: ${{ runner.temp }}/kubeconfig
+          artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
+          junit-path: ${{ runner.temp }}/test-output/junit.xml
+
+      - name: Teardown
+        if: always()
+        env:
+          CLONE_NAME: ${{ steps.setup.outputs.clone-name }}
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+        run: bash .github/scripts/teardown.sh
+
+      - name: Notify Slack on failure
+        if: always() && failure() && inputs.notify-on-failure
+        uses: ./.github/actions/notify-slack
+        with:
+          status: failure
+          workflow-name: "E2E BMaaS Full Install"
+          slack-webhook-url: ${{ steps.secrets.outputs.SLACK_WEBHOOK_URL }}
+          workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch-name: ${{ github.ref_name }}
+          commit-sha: ${{ github.sha }}
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts

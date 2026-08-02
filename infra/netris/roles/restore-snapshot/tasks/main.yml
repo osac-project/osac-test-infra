@@ -1,0 +1,713 @@
+---
+- name: Find OCP server VM
+  ansible.builtin.shell:
+    cmd: virsh list --all --name | grep "{{ ocp_vm_name_pattern }}"
+  register: _vm_lookup
+  changed_when: false
+
+- name: Set VM name
+  ansible.builtin.set_fact:
+    ocp_vm_name: "{{ _vm_lookup.stdout_lines[0] }}"
+
+- name: Check if VM is running
+  ansible.builtin.shell:
+    cmd: virsh domstate {{ ocp_vm_name }}
+  register: _vm_state
+  changed_when: false
+
+- name: Shut down VM
+  ansible.builtin.command:
+    cmd: virsh destroy {{ ocp_vm_name }}
+  when: _vm_state.stdout | trim == 'running'
+  changed_when: true
+
+- name: Check which disks are attached
+  ansible.builtin.shell:
+    cmd: virsh domblklist {{ ocp_vm_name }}
+  register: _attached_disks
+  changed_when: false
+
+- name: Detach existing disks
+  ansible.builtin.command:
+    cmd: virsh detach-disk {{ ocp_vm_name }} {{ item }} --config
+  loop: [vda, vdb, hdd]
+  register: _detach
+  failed_when: false
+  changed_when: _detach.rc == 0
+
+- name: Remove old disk images
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/libvirt/images/hgx-00-ocp.qcow2
+    - /var/lib/libvirt/images/hgx-00-lvm.qcow2
+
+- name: Create CoW overlay for OS disk
+  ansible.builtin.command:
+    cmd: >-
+      qemu-img create -f qcow2
+      -b {{ snapshot_flavor_dir }}/disk-0.qcow2
+      -F qcow2
+      /var/lib/libvirt/images/hgx-00-ocp.qcow2
+
+- name: Create CoW overlay for LVM disk
+  ansible.builtin.command:
+    cmd: >-
+      qemu-img create -f qcow2
+      -b {{ snapshot_flavor_dir }}/disk-1.qcow2
+      -F qcow2
+      /var/lib/libvirt/images/hgx-00-lvm.qcow2
+
+- name: Set disk ownership
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: qemu
+    group: qemu
+  loop:
+    - /var/lib/libvirt/images/hgx-00-ocp.qcow2
+    - /var/lib/libvirt/images/hgx-00-lvm.qcow2
+
+- name: Mount OS disk and configure pre-boot settings
+  block:
+    - name: Load nbd kernel module
+      ansible.builtin.command:
+        cmd: modprobe nbd max_part=8
+
+    - name: Disconnect stale nbd device
+      ansible.builtin.shell:
+        cmd: umount /tmp/flavor-mount 2>/dev/null; qemu-nbd --disconnect /dev/nbd0 2>/dev/null; true
+      changed_when: false
+
+    - name: Connect OS disk overlay to nbd
+      ansible.builtin.command:
+        cmd: qemu-nbd --connect=/dev/nbd0 /var/lib/libvirt/images/hgx-00-ocp.qcow2
+
+    - name: Wait for nbd device
+      ansible.builtin.pause:
+        seconds: 2
+
+    - name: Create mount point
+      ansible.builtin.file:
+        path: /tmp/flavor-mount
+        state: directory
+
+    - name: Mount ostree partition
+      ansible.posix.mount:
+        path: /tmp/flavor-mount
+        src: /dev/nbd0p4
+        fstype: xfs
+        state: mounted
+
+    - name: Find ostree deploy directory
+      ansible.builtin.shell:
+        cmd: ls -d /tmp/flavor-mount/ostree/deploy/rhcos/deploy/*/ | head -1
+      register: _ostree_deploy
+      changed_when: false
+
+    - name: Set deploy dir fact
+      ansible.builtin.set_fact:
+        _deploy: "{{ _ostree_deploy.stdout | trim }}"
+
+    # --- Read source identity ---
+
+    - name: Read source hostname
+      ansible.builtin.slurp:
+        src: "{{ _deploy }}etc/hostname"
+      register: _src_hostname_raw
+
+    - name: Set source hostname fact
+      ansible.builtin.set_fact:
+        snapshot_source_hostname: "{{ _src_hostname_raw.content | b64decode | trim }}"
+
+    - name: Read source kubeconfig
+      ansible.builtin.slurp:
+        src: "{{ _deploy }}etc/kubernetes/static-pod-resources/kube-apiserver-certs/secrets/node-kubeconfigs/lb-ext.kubeconfig"
+      register: _src_kubeconfig_raw
+
+    - name: Parse source cluster name and domain from kubeconfig
+      ansible.builtin.set_fact:
+        _src_api_url: "{{ (_src_kubeconfig_raw.content | b64decode | from_yaml).clusters[0].cluster.server }}"
+
+    - name: Extract source cluster and domain
+      ansible.builtin.set_fact:
+        snapshot_source_cluster: "{{ _src_api_url | regex_search('api\\.([^.]+)\\.', '\\1') | first }}"
+        snapshot_source_domain: "{{ _src_api_url | regex_search('api\\.[^.]+\\.(.+):6443', '\\1') | first }}"
+
+    - name: Read source nodeip configuration
+      ansible.builtin.slurp:
+        src: "{{ _deploy }}etc/default/nodeip-configuration"
+      register: _src_nodeip_raw
+      failed_when: false
+
+    - name: Parse source IP from nodeip hint or NM connections
+      ansible.builtin.shell:
+        cmd: |
+          # Try nodeip hint first
+          if [ -f "{{ _deploy }}etc/default/nodeip-configuration" ]; then
+            hint=$(grep KUBELET_NODEIP_HINT "{{ _deploy }}etc/default/nodeip-configuration" | cut -d= -f2)
+            if [ -n "$hint" ]; then
+              # Find NM connections in the hinted subnet
+              for f in {{ _deploy }}etc/NetworkManager/system-connections/*.nmconnection; do
+                [ -f "$f" ] || continue
+                ip=$(grep -oP 'addresses=\K[0-9.]+' "$f" 2>/dev/null || true)
+                if [ -n "$ip" ]; then
+                  echo "$ip"
+                  exit 0
+                fi
+              done
+            fi
+          fi
+          # Fallback: scan dnsmasq overrides
+          if [ -f "{{ _deploy }}etc/default/sno_dnsmasq_configuration_overrides" ]; then
+            grep SNO_DNSMASQ_IP_OVERRIDE "{{ _deploy }}etc/default/sno_dnsmasq_configuration_overrides" | cut -d= -f2
+            exit 0
+          fi
+          echo "UNKNOWN"
+      register: _src_ip_result
+      changed_when: false
+
+    - name: Set source IP fact
+      ansible.builtin.set_fact:
+        snapshot_source_ip: "{{ _src_ip_result.stdout | trim }}"
+
+    - name: Read etcd image from static pod manifest
+      ansible.builtin.shell:
+        cmd: >-
+          python3 -c "import yaml;
+          d=yaml.safe_load(open('{{ _deploy }}etc/kubernetes/manifests/etcd-pod.yaml'));
+          print([c['image'] for c in d['spec']['containers'] if c['name']=='etcd'][0])"
+      register: _etcd_image_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set etcd image fact
+      ansible.builtin.set_fact:
+        snapshot_etcd_image: "{{ _etcd_image_result.stdout | default('') | trim }}"
+
+    - name: Read ingress CN from flavor
+      ansible.builtin.slurp:
+        src: "{{ snapshot_flavor_dir }}/crypto/ingress-cn.txt"
+      register: _ingress_cn_raw
+
+    - name: Set ingress CN fact
+      ansible.builtin.set_fact:
+        _ingress_cn: "{{ _ingress_cn_raw.content | b64decode | trim }}"
+
+    - name: Set shared var directory path
+      ansible.builtin.set_fact:
+        _var: "{{ _deploy | regex_replace('deploy/[^/]+/$', 'var/') }}"
+
+    - name: Report source identity
+      ansible.builtin.debug:
+        msg: >-
+          Source identity: hostname={{ snapshot_source_hostname }},
+          cluster={{ snapshot_source_cluster }}.{{ snapshot_source_domain }},
+          ip={{ snapshot_source_ip }},
+          etcd_image={{ snapshot_etcd_image | default('not found') }}
+
+    # --- Write target config ---
+
+    - name: Write target hostname
+      ansible.builtin.copy:
+        content: "{{ ocp_vm_name }}"
+        dest: "{{ _deploy }}etc/hostname"
+        mode: "0644"
+
+    - name: Write nodeip hint
+      ansible.builtin.copy:
+        content: |
+          KUBELET_NODEIP_HINT={{ ocp_subnet_cidr | ansible.utils.ipaddr('network') }}
+        dest: "{{ _deploy }}etc/default/nodeip-configuration"
+        mode: "0644"
+
+    - name: Write dnsmasq overrides
+      ansible.builtin.copy:
+        content: |
+          SNO_CLUSTER_NAME_OVERRIDE={{ ocp_cluster_name }}
+          SNO_BASE_DOMAIN_OVERRIDE={{ ocp_base_domain }}
+          SNO_DNSMASQ_IP_OVERRIDE={{ ocp_node_ip }}
+        dest: "{{ _deploy }}etc/default/sno_dnsmasq_configuration_overrides"
+        mode: "0644"
+
+    # --- Stage recert working directory ---
+
+    - name: Create recert working directory on disk
+      ansible.builtin.file:
+        path: "{{ _var }}lib/snapshot-recert/crypto"
+        state: directory
+        mode: "0755"
+
+    - name: Copy crypto directory to disk
+      ansible.builtin.shell:
+        cmd: cp -a {{ snapshot_flavor_dir }}/crypto/* {{ _var }}lib/snapshot-recert/crypto/
+      changed_when: true
+
+    - name: Copy pull-secret to disk
+      ansible.builtin.copy:
+        src: "{{ pull_secret_path }}"
+        dest: "{{ _var }}lib/snapshot-recert/crypto/pull-secret"
+        mode: "0600"
+        remote_src: true
+
+    - name: Write nmstate config to recert working directory
+      ansible.builtin.copy:
+        content: |
+          interfaces:
+          - name: ens5
+            type: ethernet
+            state: up
+            ipv4:
+              enabled: true
+              dhcp: false
+              address:
+              - ip: {{ ocp_node_ip }}
+                prefix-length: {{ ocp_subnet_cidr | ansible.utils.ipaddr('prefix') }}
+            ipv6:
+              enabled: false
+              dhcp: false
+              autoconf: false
+          routes:
+            config:
+            - destination: 0.0.0.0/0
+              next-hop-interface: ens5
+              next-hop-address: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
+              metric: 48
+              table-id: 254
+          dns-resolver:
+            config:
+              server:
+              - 192.168.16.1
+              - 8.8.8.8
+        dest: "{{ _var }}lib/snapshot-recert/nmstate.yaml"
+        mode: "0644"
+
+    - name: Template recert script to disk
+      ansible.builtin.template:
+        src: recert.sh.j2
+        dest: "{{ _var }}lib/snapshot-recert/recert.sh"
+        mode: "0755"
+
+    # --- Write systemd service and mask kubelet ---
+
+    - name: Write snapshot-recert systemd service
+      ansible.builtin.template:
+        src: snapshot-recert.service.j2
+        dest: "{{ _deploy }}etc/systemd/system/snapshot-recert.service"
+        mode: "0644"
+
+    - name: Enable snapshot-recert service
+      ansible.builtin.shell:
+        cmd: ln -sf /etc/systemd/system/snapshot-recert.service {{ _deploy }}etc/systemd/system/multi-user.target.wants/snapshot-recert.service
+      changed_when: true
+
+    - name: Disable kubelet so it does not start on boot
+      ansible.builtin.shell:
+        cmd: mv {{ _deploy }}etc/systemd/system/kubelet.service {{ _deploy }}etc/systemd/system/kubelet.service.snapshot-disabled
+      changed_when: true
+
+    - name: Add SSH public key to core user authorized_keys
+      ansible.builtin.shell:
+        cmd: |
+          mkdir -p {{ _var }}home/core/.ssh
+          cat {{ ssh_public_key_path }} >> {{ _var }}home/core/.ssh/authorized_keys
+          chmod 700 {{ _var }}home/core/.ssh
+          chmod 600 {{ _var }}home/core/.ssh/authorized_keys
+          chown -R 1000:1000 {{ _var }}home/core/.ssh
+      changed_when: true
+
+    - name: Disable reverse path filter on ens4 for management access
+      ansible.builtin.copy:
+        content: |
+          net.ipv4.conf.ens4.rp_filter=0
+        dest: "{{ _deploy }}etc/sysctl.d/99-snapshot-rp-filter.conf"
+        mode: "0644"
+
+    - name: Fix SELinux labels on written files
+      ansible.builtin.shell:
+        cmd: |
+          chcon system_u:object_r:bin_t:s0 {{ _var }}lib/snapshot-recert/recert.sh
+          chcon system_u:object_r:systemd_unit_file_t:s0 {{ _deploy }}etc/systemd/system/snapshot-recert.service
+          chcon -h system_u:object_r:systemd_unit_file_t:s0 {{ _deploy }}etc/systemd/system/multi-user.target.wants/snapshot-recert.service
+          chcon system_u:object_r:etc_t:s0 {{ _deploy }}etc/default/sno_dnsmasq_configuration_overrides
+          chcon system_u:object_r:system_conf_t:s0 {{ _deploy }}etc/sysctl.d/99-snapshot-rp-filter.conf
+      changed_when: true
+
+    # --- Delete OVN/OVS state ---
+
+    - name: Delete OVN/OVS databases and stale state
+      ansible.builtin.file:
+        path: "{{ _deploy }}{{ item }}"
+        state: absent
+      loop:
+        - etc/openvswitch/conf.db
+        - etc/openvswitch/.conf.db.~lock~
+        - etc/ovn/ovnsb_db.db
+        - etc/ovn/ovnnb_db.db
+        - etc/cni/multus/certs
+        - run/nodeip-configuration
+
+    - name: Delete OVN interconnect state
+      ansible.builtin.file:
+        path: "{{ _deploy }}var/lib/ovn-ic/etc"
+        state: absent
+
+  always:
+    - name: Unmount ostree partition
+      ansible.posix.mount:
+        path: /tmp/flavor-mount
+        state: unmounted
+      failed_when: false
+
+    - name: Disconnect nbd device
+      ansible.builtin.command:
+        cmd: qemu-nbd --disconnect /dev/nbd0
+      failed_when: false
+
+# --- Attach disks, resize VM, boot ---
+
+- name: Attach OS disk
+  ansible.builtin.command:
+    cmd: virsh attach-disk {{ ocp_vm_name }} /var/lib/libvirt/images/hgx-00-ocp.qcow2 vda --persistent --subdriver qcow2
+
+- name: Attach LVM disk
+  ansible.builtin.command:
+    cmd: virsh attach-disk {{ ocp_vm_name }} /var/lib/libvirt/images/hgx-00-lvm.qcow2 vdb --persistent --subdriver qcow2
+
+- name: Get current vCPU count
+  ansible.builtin.shell:
+    cmd: virsh dominfo {{ ocp_vm_name }} | grep 'CPU(s)' | head -1 | awk '{print $2}'
+  register: _current_vcpu
+  changed_when: false
+
+- name: Set maximum vCPUs
+  ansible.builtin.command:
+    cmd: virsh setvcpus {{ ocp_vm_name }} {{ ocp_server_vcpu }} --config --maximum
+  when: _current_vcpu.stdout | int != ocp_server_vcpu | int
+
+- name: Set vCPUs
+  ansible.builtin.command:
+    cmd: virsh setvcpus {{ ocp_vm_name }} {{ ocp_server_vcpu }} --config
+  when: _current_vcpu.stdout | int != ocp_server_vcpu | int
+
+- name: Get current max memory
+  ansible.builtin.shell:
+    cmd: virsh dominfo {{ ocp_vm_name }} | grep 'Max memory' | awk '{print $3}'
+  register: _current_mem_kb
+  changed_when: false
+
+- name: Set maximum memory
+  ansible.builtin.command:
+    cmd: virsh setmaxmem {{ ocp_vm_name }} {{ ocp_server_memory_gb }}G --config
+  when: (_current_mem_kb.stdout | int / 1048576) | round(0) | int != ocp_server_memory_gb | int
+
+- name: Set memory
+  ansible.builtin.command:
+    cmd: virsh setmem {{ ocp_vm_name }} {{ ocp_server_memory_gb }}G --config
+  when: (_current_mem_kb.stdout | int / 1048576) | round(0) | int != ocp_server_memory_gb | int
+
+- name: Boot VM
+  ansible.builtin.command:
+    cmd: virsh start {{ ocp_vm_name }}
+
+- name: Set SSH target IP (use DNAT IP since br-ex is on ens5, not management bridge)
+  ansible.builtin.set_fact:
+    _vm_ssh_ip: "{{ ocp_dnat_ip }}"
+
+- name: Wait for SSH via DNAT IP
+  ansible.builtin.command:
+    cmd: >-
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+      -i {{ snapshot_flavor_dir }}/crypto/cluster-tool.key
+      core@{{ _vm_ssh_ip }} hostname
+  register: _ssh_check
+  until: _ssh_check.rc == 0
+  retries: 60
+  delay: 5
+  changed_when: false
+
+- name: Report VM booted
+  ansible.builtin.debug:
+    msg: "VM {{ ocp_vm_name }} booted, SSH accessible at {{ _vm_ssh_ip }} (DNAT → {{ ocp_node_ip }})"
+
+- name: Set SSH command prefix
+  ansible.builtin.set_fact:
+    _ssh_cmd: >-
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -i {{ snapshot_flavor_dir }}/crypto/cluster-tool.key
+      core@{{ _vm_ssh_ip }}
+
+# --- Wait for snapshot-recert.service to complete ---
+
+- name: Wait for snapshot-recert service to finish
+  ansible.builtin.shell:
+    cmd: >-
+      {{ _ssh_cmd }} "systemctl is-active snapshot-recert.service 2>/dev/null; true"
+  register: _svc_status
+  until: _svc_status.stdout | trim in ['inactive', 'failed']
+  retries: 120
+  delay: 10
+  changed_when: false
+
+- name: Fetch service logs on failure
+  ansible.builtin.shell:
+    cmd: >-
+      {{ _ssh_cmd }} "sudo journalctl -u snapshot-recert.service --no-pager -n 100"
+  register: _svc_logs
+  when: _svc_status.stdout | trim == 'failed'
+
+- name: Fail if recert service failed
+  ansible.builtin.fail:
+    msg: |
+      snapshot-recert.service failed. Logs:
+      {{ _svc_logs.stdout | default('no logs available') }}
+  when: _svc_status.stdout | trim == 'failed'
+
+# --- Wait for cluster health ---
+
+- name: Wait for API server healthy
+  ansible.builtin.shell:
+    cmd: >-
+      {{ _ssh_cmd }} "curl -sk https://localhost:6443/healthz"
+  register: _api_health
+  until: _api_health.stdout | default('') == 'ok'
+  retries: 60
+  delay: 10
+
+# --- Extract kubeconfig ---
+
+- name: Ensure .kube directory exists
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: "0700"
+
+- name: Extract kubeconfig from VM
+  ansible.builtin.shell:
+    cmd: >-
+      {{ _ssh_cmd }} "sudo cat /etc/kubernetes/static-pod-resources/kube-apiserver-certs/secrets/node-kubeconfigs/lb-ext.kubeconfig"
+  register: _kubeconfig_content
+
+- name: Write kubeconfig
+  ansible.builtin.copy:
+    content: "{{ _kubeconfig_content.stdout }}"
+    dest: "/root/kubeconfig.{{ ocp_cluster_name }}"
+    mode: "0600"
+
+- name: Copy kubeconfig to default location
+  ansible.builtin.copy:
+    content: "{{ _kubeconfig_content.stdout }}"
+    dest: /root/.kube/config
+    mode: "0600"
+
+# --- Fix pull-secret in openshift-config (recert writes path instead of content) ---
+
+- name: Fix pull-secret in openshift-config
+  ansible.builtin.shell:
+    cmd: >-
+      oc set data secret/pull-secret -n openshift-config
+      --from-file=.dockerconfigjson={{ pull_secret_path }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _fix_pull_secret
+  until: _fix_pull_secret.rc == 0
+  retries: 10
+  delay: 10
+
+# --- Wait for cluster ready ---
+
+# recert finishes rewriting the node's identity after kubelet's on-disk
+# config.json is already written, so MachineConfigDaemon boots believing its
+# rendered-master content doesn't match disk and latches Degraded ("content
+# mismatch for file /var/lib/kubelet/config.json"). Forcing a resync clears
+# it in the common case; if not, clear the stuck annotations and restart.
+- name: Force machine-config-daemon to skip its on-disk drift check
+  ansible.builtin.shell:
+    cmd: >-
+      {{ _ssh_cmd }} "sudo touch /run/machine-config-daemon-force"
+  register: _mcd_force_sync
+  until: _mcd_force_sync.rc == 0
+  retries: 10
+  delay: 10
+
+- name: Wait for MachineConfigPool master to be fully synced
+  ansible.builtin.command:
+    cmd: >-
+      oc get mcp/master
+      -o 'jsonpath={.status.conditions[?(@.type=="Updated")].status}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _mcp_master_synced
+  until: _mcp_master_synced.stdout | default('') | trim == 'True'
+  retries: 90
+  delay: 10
+  changed_when: false
+  ignore_errors: true
+
+- name: Recover MachineConfigPool master from a stuck Degraded state
+  when: _mcp_master_synced.stdout | default('') | trim != 'True'
+  block:
+    - name: Clear stuck degraded annotations on the node
+      ansible.builtin.shell:
+        cmd: >-
+          oc patch node "$(oc get nodes -o jsonpath='{.items[0].metadata.name}')"
+          --type merge
+          --patch '{"metadata":{"annotations":{"machineconfiguration.openshift.io/reason":"","machineconfiguration.openshift.io/state":"Done"}}}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _clear_node_degraded_annotations
+      until: _clear_node_degraded_annotations.rc == 0
+      retries: 10
+      delay: 10
+
+    - name: Restart machine-config-daemon to pick up the cleared state
+      ansible.builtin.command:
+        cmd: oc delete pod -n openshift-machine-config-operator -l k8s-app=machine-config-daemon
+      environment:
+        KUBECONFIG: /root/.kube/config
+
+    - name: Wait for MachineConfigPool master to be fully synced (after recovery)
+      ansible.builtin.command:
+        cmd: >-
+          oc get mcp/master
+          -o 'jsonpath={.status.conditions[?(@.type=="Updated")].status}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _mcp_master_synced_recovered
+      until: _mcp_master_synced_recovered.stdout | default('') | trim == 'True'
+      retries: 60
+      delay: 10
+      changed_when: false
+
+- name: Wait for node Ready
+  ansible.builtin.shell:
+    cmd: >-
+      oc get nodes --no-headers 2>/dev/null | grep -q ' Ready'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _node_ready
+  until: _node_ready.rc == 0
+  retries: 60
+  delay: 30
+
+- name: Wait for all ClusterOperators healthy
+  ansible.builtin.shell:
+    cmd: |
+      oc get co -o json | python3 -c "
+      import json, sys
+      cos = json.load(sys.stdin)['items']
+      for co in cos:
+          name = co['metadata']['name']
+          conditions = {c['type']: c['status'] for c in co.get('status', {}).get('conditions', [])}
+          if conditions.get('Available') != 'True':
+              print(f'NOT READY: {name} (Available={conditions.get(\"Available\")})')
+              sys.exit(1)
+          if conditions.get('Degraded') == 'True':
+              print(f'DEGRADED: {name}')
+              sys.exit(1)
+      print(f'All {len(cos)} ClusterOperators healthy')
+      "
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _co_health
+  until: _co_health.rc == 0
+  retries: 40
+  delay: 30
+
+# recert's --extend-expiration regenerates every certificate it finds in
+# etcd, including MCE's self-signed cluster-proxy-signer CA. That CA has no
+# --use-key mapping, so recert generates a replacement key in PKCS#1
+# encoding, but cluster-proxy-addon-manager only accepts PKCS#8 and
+# crash-loops after any recert-based restore that bakes in MCE ("failed to
+# parse ca key: x509: failed to parse private key"). MCE's own controller
+# regenerates the secret correctly once it's missing, so delete the
+# corrupted secret and restart -- gated on the multicluster-engine namespace
+# existing, since flavors without MCE never hit this.
+- name: Check if multicluster-engine namespace exists
+  ansible.builtin.command:
+    cmd: oc get namespace multicluster-engine
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _mce_namespace_check
+  until: _mce_namespace_check.rc == 0 or 'NotFound' in (_mce_namespace_check.stderr | default(''))
+  retries: 90
+  delay: 10
+  changed_when: false
+  failed_when: false
+
+- name: Recover cluster-proxy-addon-manager from a corrupted signer key
+  when: _mce_namespace_check.rc == 0
+  block:
+    - name: Check for cluster-proxy-addon-manager crash loop
+      ansible.builtin.shell:
+        cmd: |
+          oc get pods -n multicluster-engine -l component=cluster-proxy-addon-manager -o json | python3 -c "
+          import json, sys
+          pods = json.load(sys.stdin)['items']
+          for pod in pods:
+              for cs in pod.get('status', {}).get('containerStatuses', []):
+                  if cs.get('restartCount', 0) > 1:
+                      print('CRASHING')
+                      sys.exit(0)
+                  waiting = cs.get('state', {}).get('waiting', {})
+                  if waiting.get('reason') == 'CrashLoopBackOff':
+                      print('CRASHING')
+                      sys.exit(0)
+          print('OK')
+          "
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _cpam_crash_check
+      until: _cpam_crash_check.stdout | default('') | trim in ['CRASHING', 'OK']
+      retries: 9
+      delay: 10
+      changed_when: false
+      failed_when: false
+
+    - name: Delete corrupted cluster-proxy-signer secret and restart
+      when: _cpam_crash_check.stdout | default('') | trim == 'CRASHING'
+      block:
+        - name: Delete cluster-proxy-signer secret
+          ansible.builtin.command:
+            cmd: oc delete secret cluster-proxy-signer -n multicluster-engine
+          environment:
+            KUBECONFIG: /root/.kube/config
+
+        - name: Restart cluster-proxy-addon-manager deployment
+          ansible.builtin.command:
+            cmd: oc rollout restart deployment/cluster-proxy-addon-manager -n multicluster-engine
+          environment:
+            KUBECONFIG: /root/.kube/config
+
+        # Rollout can stall on a stale watch connection at "1 old replicas
+        # pending termination" -- retry re-issues a fresh `oc rollout
+        # status` watch rather than waiting longer on one connection.
+        - name: Wait for cluster-proxy-addon-manager rollout
+          ansible.builtin.command:
+            cmd: oc rollout status deployment/cluster-proxy-addon-manager -n multicluster-engine --timeout=300s
+          environment:
+            KUBECONFIG: /root/.kube/config
+          register: _cpam_rollout
+          until: _cpam_rollout.rc == 0
+          retries: 2
+          delay: 5
+
+        # MCE can take longer than 120s to settle after the addon-manager
+        # restart, and on SNO the API server can also be transiently
+        # unreachable during kube-apiserver static-pod cycling -- retry with
+        # enough budget to cover both.
+        - name: Wait for MultiClusterEngine to be Available
+          ansible.builtin.command:
+            cmd: >-
+              oc wait --for=jsonpath='{.status.phase}'=Available
+              multiclusterengine/multiclusterengine --timeout=120s
+          environment:
+            KUBECONFIG: /root/.kube/config
+          register: _mce_available
+          until: _mce_available.rc == 0
+          retries: 10
+          delay: 10
+
+- name: Report cluster status
+  ansible.builtin.debug:
+    msg: "{{ _co_health.stdout }}"

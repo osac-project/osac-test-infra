@@ -1,0 +1,6 @@
+---
+- name: Post-refresh OSAC configuration (Netris, SSH keys, AAP token)
+  hosts: all
+  gather_facts: false
+  roles:
+    - osac_post_refresh

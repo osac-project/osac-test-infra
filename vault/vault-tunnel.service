@@ -1,0 +1,35 @@
+# SSH tunnel to the shared central Vault.
+# Installed by vault-setup.sh --agent to ~/.config/systemd/user/vault-tunnel.service
+#
+# Forwards remote 127.0.0.1:8200 to local 127.0.0.1:8200 so workflows
+# see Vault at the same address as before -- no config changes needed.
+#
+# SSH key must be pre-exchanged (vault-setup.sh --agent handles this).
+# The central host is read from an EnvironmentFile written during setup.
+
+[Unit]
+Description=SSH tunnel to shared Vault
+After=network-online.target
+Wants=network-online.target
+# Prevent running alongside a local vault (port 8200 collision)
+Conflicts=vault.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.vault-server/.tunnel-env
+ExecStart=/bin/bash -c 'exec ssh -N -T \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=%h/.vault-server/.ssh/known_hosts \
+    -o BatchMode=yes \
+    -i %h/.vault-server/.ssh/vault_tunnel_ed25519 \
+    -L 127.0.0.1:8200:127.0.0.1:8200 \
+    github-runner@${VAULT_CENTRAL_HOST}'
+Restart=always
+RestartSec=15
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

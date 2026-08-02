@@ -1,0 +1,60 @@
+---
+name: Gather OSAC Artifacts
+description: >-
+  Collect cluster diagnostics, redact sensitive data, and upload as a
+  workflow artifact. Wraps scripts/gather-osac-logs.sh.
+
+inputs:
+  namespace:
+    description: "OSAC E2E namespace"
+    required: false
+    default: "osac-e2e-ci"
+  kubeconfig-path:
+    description: "Path to the cluster kubeconfig"
+    required: true
+  artifact-name:
+    description: "Name for the uploaded artifact"
+    required: false
+    default: "osac-logs"
+  junit-path:
+    description: "Path to JUnit XML (included in artifact if it exists)"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Gather and redact
+      if: always()
+      shell: bash
+      env:
+        KUBECONFIG: ${{ inputs.kubeconfig-path }}
+        E2E_NAMESPACE: ${{ inputs.namespace }}
+        JUNIT_PATH: ${{ inputs.junit-path }}
+      run: |
+        ARTIFACT_DIR="${RUNNER_TEMP}/osac-artifacts"
+        if timeout 900 "$GITHUB_WORKSPACE/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}"; then
+          touch "${ARTIFACT_DIR}/.redaction-complete"
+        fi
+
+    - name: Verify redaction complete
+      if: always()
+      shell: bash
+      env:
+        ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
+      run: |
+        if [[ -d "${ARTIFACT_DIR}" ]] && [[ ! -f "${ARTIFACT_DIR}/.redaction-complete" ]]; then
+          echo "::error::Gather script did not complete — refusing to upload"
+          rm -rf "${ARTIFACT_DIR}"
+          exit 1
+        fi
+        rm -f "${ARTIFACT_DIR}/.redaction-complete" 2>/dev/null || true
+
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/osac-artifacts/
+        retention-days: 7
+        if-no-files-found: warn

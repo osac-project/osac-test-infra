@@ -1,0 +1,208 @@
+---
+# Dynamically detect the largest unused disk and set up data directories.
+# Symlinks /var/lib/libvirt/images, /var/lib/rancher, /var/lib/containers
+# to a mounted data partition to prevent root filesystem exhaustion.
+
+- name: Get root device
+  ansible.builtin.shell:
+    cmd: lsblk -ndo PKNAME $(findmnt -no SOURCE /) 2>/dev/null || findmnt -no SOURCE / | sed 's/[0-9]*$//'
+  register: _root_device_raw
+  changed_when: false
+
+- name: Set root device fact
+  ansible.builtin.set_fact:
+    _root_device: "/dev/{{ _root_device_raw.stdout | trim | basename }}"
+
+- name: Get all block devices
+  ansible.builtin.shell:
+    cmd: lsblk -dnpo NAME,SIZE,TYPE --bytes | awk '$3 == "disk" {print $1, $2}'
+  register: _all_disks
+  changed_when: false
+
+- name: Find largest unused disk
+  ansible.builtin.set_fact:
+    _data_disk: >-
+      {{ _all_disks.stdout_lines
+         | map('split', ' ')
+         | rejectattr('0', 'equalto', _root_device)
+         | sort(attribute='1', reverse=true)
+         | map(attribute='0')
+         | first
+         | default('')
+      }}
+
+- name: Check if data mount already exists
+  ansible.builtin.shell:
+    cmd: mountpoint -q /mnt/data && echo "mounted" || echo "not_mounted"
+  register: _data_mounted
+  changed_when: false
+
+- name: Check root filesystem free space (GB)
+  ansible.builtin.shell:
+    cmd: df / --output=avail -BG | tail -1 | tr -d ' G'
+  register: _root_free_gb
+  changed_when: false
+
+- name: Decide if disk setup is needed
+  ansible.builtin.set_fact:
+    _needs_disk_setup: >-
+      {{ _data_mounted.stdout == 'not_mounted' and
+         (_data_disk | trim | length > 0 or (_root_free_gb.stdout | int) < 200) }}
+
+- name: Skip disk setup (already mounted or root has enough space)
+  ansible.builtin.debug:
+    msg: >-
+      Disk setup skipped.
+      {% if _data_mounted.stdout == 'mounted' %}Already mounted at /mnt/data.
+      {% elif _data_disk | trim | length == 0 %}No unused disk found, root has {{ _root_free_gb.stdout }}GB free.
+      {% endif %}
+  when: not (_needs_disk_setup | bool)
+
+- name: Set up data disk
+  when: _needs_disk_setup | bool and (_data_disk | trim | length > 0)
+  block:
+    - name: Check if disk already has a single XFS data partition
+      ansible.builtin.shell:
+        cmd: |
+          parts=$(lsblk -lnpo NAME {{ _data_disk | trim }} | grep -v '^{{ _data_disk | trim }}$')
+          count=$(echo "$parts" | wc -l)
+          if [ "$count" -eq 1 ]; then
+            part=$(echo "$parts" | head -1)
+            fstype=$(blkid "$part" -o value -s TYPE 2>/dev/null || echo "")
+            if [ "$fstype" = "xfs" ]; then
+              echo "ready:$part"
+              exit 0
+            fi
+          fi
+          echo "needs_setup"
+      register: _disk_check
+      changed_when: false
+
+    - name: Wipe and create fresh partition table
+      ansible.builtin.shell:
+        cmd: |
+          existing=$(blkid {{ _data_disk | trim }} 2>/dev/null || true)
+          if [ -n "$existing" ]; then
+            echo "WARNING: wiping existing signatures on {{ _data_disk | trim }}: $existing"
+          fi
+          wipefs -a {{ _data_disk | trim }}
+          parted -s {{ _data_disk | trim }} mklabel gpt
+          parted -s {{ _data_disk | trim }} mkpart primary xfs 0% 100%
+          partprobe {{ _data_disk | trim }}
+          sleep 2
+      when: "'needs_setup' in _disk_check.stdout"
+
+    - name: Detect partition path
+      ansible.builtin.shell:
+        cmd: "lsblk -lnpo NAME {{ _data_disk | trim }} | grep -v '^{{ _data_disk | trim }}$' | head -1"
+      register: _data_partition
+      changed_when: false
+      until: _data_partition.stdout | trim | length > 0
+      retries: 5
+      delay: 2
+
+    - name: Format partition with XFS
+      ansible.builtin.command:
+        cmd: "mkfs.xfs -f {{ _data_partition.stdout | trim }}"
+      when: "'needs_setup' in _disk_check.stdout"
+
+    - name: Create mount point
+      ansible.builtin.file:
+        path: /mnt/data
+        state: directory
+        mode: "0755"
+
+    - name: Mount data partition
+      ansible.posix.mount:
+        path: /mnt/data
+        src: "{{ _data_partition.stdout | trim }}"
+        fstype: xfs
+        state: mounted
+
+    - name: Add to fstab
+      ansible.posix.mount:
+        path: /mnt/data
+        src: "{{ _data_partition.stdout | trim }}"
+        fstype: xfs
+        opts: defaults
+        state: present
+
+- name: Warn if no disk available and root is small
+  ansible.builtin.fail:
+    msg: >-
+      No unused disk found and root filesystem only has {{ _root_free_gb.stdout }}GB free.
+      The deployment requires ~200GB+ for libvirt images, K3s, and containers.
+      Please attach a secondary disk or free up space.
+  when: _needs_disk_setup | bool and (_data_disk | trim | length == 0)
+
+- name: Set up data directory symlinks
+  when: _data_mounted.stdout == 'mounted' or (_needs_disk_setup | bool and _data_disk | trim | length > 0)
+  block:
+    - name: Ensure target directories exist on data disk
+      ansible.builtin.file:
+        path: "/mnt/data/{{ item | basename }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /var/lib/libvirt/images
+        - /var/lib/rancher
+        - /var/lib/containers
+
+    - name: Check current state of directories
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _dir_stats
+      loop:
+        - /var/lib/libvirt/images
+        - /var/lib/rancher
+        - /var/lib/containers
+
+    - name: Move existing data and create symlinks
+      ansible.builtin.shell:
+        cmd: |
+          if [ -L "{{ item.item }}" ]; then
+            echo "already_symlink"
+          elif [ -d "{{ item.item }}" ]; then
+            cp -a "{{ item.item }}/." "/mnt/data/{{ item.item | basename }}/" 2>/dev/null || true
+            rm -rf "{{ item.item }}"
+            ln -s "/mnt/data/{{ item.item | basename }}" "{{ item.item }}"
+            echo "migrated"
+          else
+            mkdir -p "$(dirname {{ item.item }})"
+            ln -s "/mnt/data/{{ item.item | basename }}" "{{ item.item }}"
+            echo "created"
+          fi
+      register: _symlink_results
+      changed_when: "'migrated' in _symlink_results.stdout or 'created' in _symlink_results.stdout"
+      loop: "{{ _dir_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Set SELinux equivalence for data disk paths
+      ansible.builtin.command:
+        cmd: "semanage fcontext -a -e {{ item.original }} /mnt/data/{{ item.original | basename }}"
+      loop:
+        - { original: "/var/lib/libvirt/images", basename: "images" }
+        - { original: "/var/lib/rancher", basename: "rancher" }
+        - { original: "/var/lib/containers", basename: "containers" }
+      loop_control:
+        label: "{{ item.original }}"
+      register: _semanage
+      changed_when: _semanage.rc == 0
+      failed_when: false
+
+    - name: Restore SELinux labels on data disk
+      ansible.builtin.command:
+        cmd: "restorecon -R /mnt/data/{{ item | basename }}"
+      loop:
+        - /var/lib/libvirt/images
+        - /var/lib/rancher
+        - /var/lib/containers
+      changed_when: false
+
+    - name: Report symlink status
+      ansible.builtin.debug:
+        msg: "{{ item.item.item }}: {{ item.stdout }}"
+      loop: "{{ _symlink_results.results }}"
+      loop_control:
+        label: "{{ item.item.item }}"

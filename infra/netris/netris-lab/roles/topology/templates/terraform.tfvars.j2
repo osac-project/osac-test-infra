@@ -1,0 +1,39 @@
+controller_url      = "{{ controller_url }}"
+gpu-server-count    = {{ gpu_server_count }}
+gpu-server-hostname = "{{ gpu_server_hostname }}"
+site-name           = "{{ site_name }}"
+ew-fabric-enable    = {{ ew_fabric_enable | default(1) }}
+
+ipam = {
+  private-allocation = "{{ ipam_private_allocation }}"
+  mgmt               = "{{ ipam_mgmt }}"
+  mgmt-gateway        = "{{ ipam_mgmt_gateway }}"
+  switch-loopback     = "{{ ipam_switch_loopback }}"
+}
+
+north-south-fabric = {
+  enable                      = {{ ns_fabric.enable }}
+  leaf-count                  = {{ ns_fabric.leaf_count }}
+  leaf-port-count             = {{ ns_fabric.leaf_port_count }}
+  leaf-port-breakout          = {{ ns_fabric.leaf_port_breakout }}
+  leaf-to-spine-link-count    = {{ ns_fabric.leaf_to_spine_link_count }}
+  leaf-to-spine-start-port    = {{ ns_fabric.leaf_to_spine_start_port }}
+  oob-leaf-count              = {{ ns_fabric.oob_leaf_count }}
+  oob-first-gpu-port          = {{ ns_fabric.oob_first_gpu_port }}
+  oob-gpu-per-switch          = {{ ns_fabric.oob_gpu_per_switch }}
+  oob-uplink-into-spine       = {{ ns_fabric.oob_uplink_into_spine }}
+  softgate-count              = {{ ns_fabric.softgate_count }}
+  softgate-roles              = {{ ns_fabric.softgate_roles }}
+  softgate-leaf-list          = {{ ns_fabric.softgate_leaf_list }}
+  leaf-to-softgate-start-port = {{ ns_fabric.leaf_to_softgate_start_port }}
+  spine-count                 = {{ ns_fabric.spine_count }}
+  spine-port-count            = {{ ns_fabric.spine_port_count }}
+  spine-port-breakout         = {{ ns_fabric.spine_port_breakout }}
+  lo-subnet                   = "{{ ns_fabric.lo_subnet }}"
+  mgmt-subnet                 = "{{ ns_fabric.mgmt_subnet }}"
+  gpu-server-ns-subnet        = "{{ ns_fabric.gpu_server_ns_subnet }}"
+  gpu-server-ns-nexthop       = "{{ ns_fabric.gpu_server_ns_nexthop }}"
+  gpu-server-ipmi-subnet      = "{{ ns_fabric.gpu_server_ipmi_subnet }}"
+  gpu-server-ipmi-nexthop     = "{{ ns_fabric.gpu_server_ipmi_nexthop }}"
+  asn-start                   = {{ ns_fabric.asn_start }}
+}

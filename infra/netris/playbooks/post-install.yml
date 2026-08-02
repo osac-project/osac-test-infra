@@ -1,0 +1,7 @@
+---
+- name: Post-install — fix Keycloak UI redirect, generate access doc
+  hosts: all
+  gather_facts: false
+  roles:
+    - post_ui_fix
+    - access_doc

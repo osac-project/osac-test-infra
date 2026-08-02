@@ -1,0 +1,62 @@
+---
+- name: Check netris-lab directory exists
+  ansible.builtin.stat:
+    path: "{{ netris_lab_dir }}"
+  register: _lab_dir
+
+- name: Check license file exists
+  ansible.builtin.stat:
+    path: "{{ netris_license_file }}"
+  register: _license_file
+
+- name: Check pull secret exists
+  ansible.builtin.stat:
+    path: "{{ pull_secret_path }}"
+  register: _pull_secret
+
+- name: Check OSAC license exists
+  ansible.builtin.stat:
+    path: "{{ osac_license_path }}"
+  register: _osac_license
+
+- name: Check KVM support
+  ansible.builtin.command: grep -c vmx /proc/cpuinfo
+  register: _kvm_check
+  changed_when: false
+  failed_when: false
+
+- name: Check minimum memory (16GB)
+  ansible.builtin.set_fact:
+    _mem_total_gb: "{{ ansible_memtotal_mb / 1024 | round(1) }}"
+
+- name: Check LAB_NAME is set
+  ansible.builtin.set_fact:
+    _lab_name_ok: "{{ lab_name != 'default' }}"
+
+- name: Check AWS credentials
+  ansible.builtin.set_fact:
+    _aws_creds_ok: "{{ aws_access_key_id | length > 0 and aws_secret_access_key | length > 0 }}"
+
+- name: Collect preflight failures
+  ansible.builtin.set_fact:
+    _preflight_failures: >-
+      {{
+        []
+        + ([] if _lab_dir.stat.exists else ['netris-lab directory not found at ' + netris_lab_dir])
+        + ([] if _license_file.stat.exists else ['License file not found at ' + netris_license_file + ' — obtain one from Netris and place it there'])
+        + ([] if _pull_secret.stat.exists else ['Pull secret not found at ' + pull_secret_path + ' — download from console.redhat.com/openshift/downloads'])
+        + ([] if _osac_license.stat.exists else ['OSAC/AAP license not found at ' + osac_license_path])
+        + ([] if (_kvm_check.stdout | default('0') | int > 0) else ['KVM (vmx) not available — nested virtualization or bare metal required'])
+        + ([] if (_mem_total_gb | float >= 16.0) else ['Insufficient memory: ' + _mem_total_gb + 'GB available, 16GB minimum required'])
+        + ([] if (_lab_name_ok | bool) else ['LAB_NAME not set — export LAB_NAME=<your-name> to avoid DNS collisions'])
+        + ([] if (_aws_creds_ok | bool) else ['AWS credentials missing — export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for Route 53 DNS'])
+      }}
+
+- name: Fail on preflight errors
+  ansible.builtin.fail:
+    msg: |-
+      Pre-flight checks failed:
+      {% for f in _preflight_failures %}
+        - {{ f }}
+      {% endfor %}
+  when: _preflight_failures | length > 0

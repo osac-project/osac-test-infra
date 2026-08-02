@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OSAC CI Daily Digest — Full Report</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --seq-400:        #3987e5;
+    --seq-100:        #cde2fb;
+    --status-good:     #0ca30c;
+    --status-warning:  #fab219;
+    --status-critical: #d03b3b;
+    /* categorical palette, fixed order -- never cycled/reassigned per value */
+    --cat-1: #2a78d6; /* blue */
+    --cat-2: #eb6834; /* orange */
+    --cat-3: #1baf7a; /* aqua */
+    --cat-4: #eda100; /* yellow */
+    --cat-5: #e87ba4; /* magenta */
+    --cat-6: #008300; /* green */
+    --cat-7: #4a3aa7; /* violet */
+    --cat-8: #e34948; /* red */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #ffffff;
+      --text-secondary: #c3c2b7; --text-muted: #898781; --gridline: #2c2c2a;
+      --baseline: #383835; --border: rgba(255,255,255,0.10);
+      --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
+      --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #ffffff;
+    --text-secondary: #c3c2b7; --text-muted: #898781; --gridline: #2c2c2a;
+    --baseline: #383835; --border: rgba(255,255,255,0.10);
+    --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
+    --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--page); color: var(--text-primary); }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px 64px; }
+  .hero {
+    margin: 0 -24px 32px; padding: 40px 24px 28px;
+    background: linear-gradient(120deg, var(--cat-1) 0%, var(--cat-7) 55%, var(--cat-5) 100%);
+    color: #ffffff;
+  }
+  .hero h1 { font-size: 24px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .hero .subtitle { color: rgba(255,255,255,0.85); font-size: 13px; margin: 0; }
+  .theme-toggle { position: fixed; top: 16px; right: 16px; z-index: 20; font-size: 12px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+  .section-label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin: 40px 0 14px; }
+  .section-label:first-of-type { margin-top: 0; }
+  .section-label .dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .row { display: grid; gap: 16px; margin-bottom: 16px; }
+  .row-4 { grid-template-columns: repeat(4, 1fr); }
+  .row-2 { grid-template-columns: repeat(2, 1fr); }
+  .tile { position: relative; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px 16px 16px 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); overflow: hidden; }
+  .tile[title] { cursor: help; }
+  .tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--accent, var(--cat-1)); }
+  .tile .label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+  .tile .value { font-size: 26px; font-weight: 700; }
+  .tile .sub { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
+  .card { position: relative; background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 22px 26px 10px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+  .card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; border-radius: 14px 14px 0 0; background: var(--accent, var(--cat-1)); }
+  .card h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; margin: 4px 0 18px; }
+  .card .desc { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 26px; }
+  .help-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--gridline); color: var(--text-secondary);
+    font-size: 10.5px; font-weight: 700; font-style: normal;
+    cursor: help; flex-shrink: 0; user-select: none;
+  }
+  .help-icon:hover { background: var(--cat-1); color: #ffffff; }
+  svg { display: block; overflow: visible; }
+  .bar-label { font-size: 11px; fill: var(--text-secondary); text-anchor: middle; }
+  .axis-label { font-size: 11px; fill: var(--text-muted); }
+  .axis-line { stroke: var(--baseline); stroke-width: 1px; }
+  .gridline { stroke: var(--gridline); stroke-width: 1px; }
+  .cat-label { font-size: 12px; fill: var(--text-secondary); text-anchor: middle; font-weight: 500; }
+  .tooltip { position: absolute; pointer-events: none; z-index: 10; background: var(--text-primary); color: var(--surface-1); font-size: 12px; padding: 6px 9px; border-radius: 6px; opacity: 0; transition: opacity 0.1s; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 20px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--gridline); }
+  tbody tr:hover { background: color-mix(in srgb, var(--cat-1) 6%, transparent); }
+  th { color: var(--text-muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.02em; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  th.num { text-align: right; }
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 11.5px; font-weight: 700; }
+  .pill.good { background: color-mix(in srgb, var(--status-good) 18%, transparent); color: var(--status-good); }
+  .pill.warn { background: color-mix(in srgb, var(--status-warning) 24%, transparent); color: #a56600; }
+  .pill.crit { background: color-mix(in srgb, var(--status-critical) 18%, transparent); color: var(--status-critical); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .stat-line { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--gridline); font-size: 13.5px; }
+  .stat-line:last-child { border-bottom: none; }
+  .stat-line .k { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
+  .stat-line .k .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .stat-line .v { font-weight: 700; }
+  .note { font-size: 12px; color: var(--text-muted); margin: -4px 0 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 4px 0 16px; }
+  .legend .item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); }
+  .legend .swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="toggleTheme()">Toggle dark mode</button>
+<div class="hero">
+  <div class="wrap" style="padding:0;">
+    <h1>OSAC CI Daily Digest — Full Report</h1>
+    <p class="subtitle" id="genTime"></p>
+  </div>
+</div>
+<div class="wrap">
+  <div class="section-label"><span class="dot" style="background:var(--cat-1)"></span>Headline</div>
+  <div class="row row-4" id="headlineTiles"></div>
+
+  <div class="section-label"><span class="dot" style="background:var(--cat-2)"></span>E2E Failures — Infra vs. Test</div>
+  <div class="two-col">
+    <div class="card" style="--accent:var(--cat-2)">
+      <h2>Presubmit (PR-triggered) <span class="help-icon" onmouseenter="showTip(event, 'Infra = CI\'s own fault (setup/teardown/provisioning). Test = the product itself.')" onmouseleave="hideTip()">?</span></h2>
+      <div id="presubmitInfraTable"></div>
+    </div>
+    <div class="card" style="--accent:var(--cat-2)">
+      <h2>Periodic (scheduled) <span class="help-icon" onmouseenter="showTip(event, 'Same infra vs. test breakdown, for the periodic (scheduled) e2e runs instead of PR-triggered ones.')" onmouseleave="hideTip()">?</span></h2>
+      <div id="periodicInfraTable"></div>
+    </div>
+  </div>
+
+  <div class="section-label"><span class="dot" style="background:var(--cat-3)"></span>Time to Merge (7d)</div>
+  <div class="card" style="--accent:var(--cat-3)">
+    <h2>Median time from first approval to merge, by repo <span class="help-icon" onmouseenter="showTip(event, 'Median, not mean -- a few PRs approved then forgotten for days would otherwise dominate the average and make every normal repo look slow.')" onmouseleave="hideTip()">?</span></h2>
+    <p class="desc" id="mergeDesc"></p>
+    <div id="mergeLegend" class="legend"></div>
+    <div id="mergeChart"></div>
+  </div>
+
+  <div class="section-label"><span class="dot" style="background:var(--cat-1)"></span>E2E Jobs per PR (7d)</div>
+  <div class="row row-4" id="prTiles"></div>
+  <div class="card" style="--accent:var(--cat-1)">
+    <h2>Distribution <span class="help-icon" onmouseenter="showTip(event, 'How many e2e job runs (including retries/re-runs) a PR accumulates. Bucketed to keep long-tail outliers from flattening the chart. Each bar is split by the outcome of the underlying jobs in that bucket, proportionally.')" onmouseleave="hideTip()">?</span></h2>
+    <div id="histLegend" class="legend"></div>
+    <div id="histChart"></div>
+  </div>
+  <div class="two-col">
+    <div class="card" style="--accent:var(--cat-4)">
+      <h2>Top 10 PRs by e2e job count <span class="help-icon" onmouseenter="showTip(event, 'The specific PRs behind the long tail in the distribution above -- click through if a number looks surprising.')" onmouseleave="hideTip()">?</span></h2>
+      <table><thead><tr><th>Repo</th><th>PR</th><th class="num">Jobs</th></tr></thead><tbody id="topPrsBody"></tbody></table>
+    </div>
+    <div class="card" style="--accent:var(--status-good)">
+      <h2>E2E job outcomes <span class="help-icon" onmouseenter="showTip(event, 'Every e2e job run in the window, by final conclusion. High cancellation usually means a PR got pushed to again before its e2e run finished, not a real problem.')" onmouseleave="hideTip()">?</span></h2>
+      <div id="outcomesChart"></div>
+    </div>
+  </div>
+
+  <div class="section-label"><span class="dot" style="background:var(--cat-7)"></span>Other stability signals</div>
+  <div class="card" style="--accent:var(--cat-7)">
+    <div class="stat-line"><span class="k"><span class="dot" style="background:var(--cat-1)"></span>Flake rate (7d) <span class="help-icon" onmouseenter="showTip(event, 'Fraction of e2e runs that failed at least once, then passed on a re-run of the same commit -- no code change, so the first failure was noise, not a real bug.')" onmouseleave="hideTip()">?</span></span><span class="v" id="flakeVal"></span></div>
+    <div class="stat-line"><span class="k"><span class="dot" style="background:var(--cat-3)"></span>MTTR (7d) <span class="help-icon" onmouseenter="showTip(event, 'Mean Time To Recovery: average time from a failing e2e run to the next run of that same workflow succeeding.')" onmouseleave="hideTip()">?</span></span><span class="v" id="mttrVal"></span></div>
+    <div class="stat-line"><span class="k"><span class="dot" style="background:var(--status-critical)"></span>Top failing workflow (24h) <span class="help-icon" onmouseenter="showTip(event, 'The e2e workflow with the most failures in the last 24 hours, across all repos.')" onmouseleave="hideTip()">?</span></span><span class="v" id="topFailVal"></span></div>
+    <div class="stat-line"><span class="k"><span class="dot" style="background:var(--cat-4)"></span>Retests per PR, avg (7d) <span class="help-icon" onmouseenter="showTip(event, 'Average number of e2e re-runs a merged PR needed beyond its first attempt.')" onmouseleave="hideTip()">?</span></span><span class="v" id="retestVal"></span></div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const D = __DIGEST_DATA_JSON__;
+
+function toggleTheme() {
+  const root = document.documentElement;
+  root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+}
+const tooltip = document.getElementById('tooltip');
+function showTip(evt, text) { tooltip.textContent = text; tooltip.style.opacity = 1; tooltip.style.left = (evt.pageX + 12) + 'px'; tooltip.style.top = (evt.pageY - 10) + 'px'; }
+function hideTip() { tooltip.style.opacity = 0; }
+
+// Escapes a value for use as HTML element content (innerHTML text nodes,
+// e.g. `<td>${esc(p.repo)}</td>`) or as an HTML attribute value (e.g.
+// `data-tip="${esc(x)}"`). Most of what this wraps (bucket labels, outcome
+// names) is our own fixed backend output, but step names and repo names
+// ultimately trace back to GitHub Actions workflow YAML, so this is applied
+// at every such site rather than assuming that data stays clean. Quotes are
+// escaped too so the same function is safe in both contexts -- harmless in
+// plain text, required once a value is placed inside a quoted attribute.
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+// Tooltips are bound as data-tip attributes (escaped via esc() above) plus a
+// delegated mousemove/mouseleave listener, rather than inline
+// onmousemove="showTip(event, '...')" handlers -- an inline handler embeds
+// the value inside a JS string literal, which needs its own escaping pass
+// on top of HTML-attribute escaping (backslash/quote first, then &/") to
+// stay safe; reading the already HTML-decoded value from .dataset instead
+// avoids that second escaping pass entirely. Call this once after setting
+// a chart container's innerHTML.
+function bindTooltips(container) {
+  container.querySelectorAll('[data-tip]').forEach(el => {
+    el.addEventListener('mousemove', evt => showTip(evt, el.dataset.tip));
+    el.addEventListener('mouseleave', hideTip);
+  });
+}
+// Rounds up to a "nice" axis max (1/2/5/10 * a power of 10 matching maxVal's
+// magnitude) instead of a fixed step, so low-volume charts (maxVal ~5) don't
+// get rounded up to a fixed 10 or 100 and make every bar look near-full-scale.
+function niceAxisMax(maxVal) {
+  if (maxVal <= 0) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(maxVal)));
+  const normalized = maxVal / magnitude;
+  const niceNormalized = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return niceNormalized * magnitude;
+}
+function pct(r) { return r == null ? 'n/a' : (r * 100).toFixed(1) + '%'; }
+function pill(rate) {
+  if (rate == null) return '<span class="pill warn">n/a</span>';
+  const cls = rate < 0.5 ? 'crit' : rate < 0.8 ? 'warn' : 'good';
+  return `<span class="pill ${cls}">${pct(rate)}</span>`;
+}
+function decisiveRate(c) { return (c.success + c.failure) === 0 ? null : c.success_rate; }
+
+document.getElementById('genTime').textContent = `osac-project org · generated ${D.now}`;
+
+// headline tiles
+function statusAccent(rate) {
+  if (rate == null) return 'var(--text-muted)';
+  return rate < 0.5 ? 'var(--status-critical)' : rate < 0.8 ? 'var(--status-warning)' : 'var(--status-good)';
+}
+const r24 = decisiveRate(D.periodic_24h), r72 = decisiveRate(D.periodic_72h);
+document.getElementById('headlineTiles').innerHTML = [
+  { label: 'Periodic success (24h)', value: pct(r24), sub: `${D.periodic_24h.success}/${D.periodic_24h.success + D.periodic_24h.failure} runs`, accent: statusAccent(r24),
+    title: 'Pass rate of scheduled (cron) e2e runs in the last 24 hours -- not PR-triggered runs.' },
+  { label: 'Periodic success (72h)', value: pct(r72), sub: `${D.periodic_72h.success}/${D.periodic_72h.success + D.periodic_72h.failure} runs`, accent: statusAccent(r72),
+    title: 'Same, over a wider 72-hour window -- less noisy than the 24h figure on a quiet day.' },
+  { label: 'Flake rate (7d)', value: D.flake_rate == null ? 'n/a' : pct(D.flake_rate), sub: 'retry-to-green', accent: 'var(--cat-1)',
+    title: 'Share of e2e runs that failed once then passed on a re-run with no code change -- the failure was noise, not a real bug.' },
+  { label: 'MTTR (7d)', value: D.mttr ? D.mttr.mttr_display : 'n/a', sub: D.mttr ? `${D.mttr.num_recoveries} recoveries` : 'no recoveries yet', accent: 'var(--cat-3)',
+    title: 'Mean Time To Recovery -- average time from a failing e2e run to the next run of that workflow succeeding.' },
+].map(t => `<div class="tile" style="--accent:${t.accent}">
+  <div class="label" style="display:flex;align-items:center;gap:6px">${t.label} <span class="help-icon" onmouseenter="showTip(event, '${t.title}')" onmouseleave="hideTip()">?</span></div>
+  <div class="value">${t.value}</div><div class="sub">${t.sub}</div>
+</div>`).join('');
+
+// infra vs test donuts -- one per row (24h, 72h). Infra = red (CI's own
+// fault), Test = green (the product itself), matching the color
+// convention the PNG digest's gauge already uses.
+function arcPath(cx, cy, r, startDeg, endDeg) {
+  const toXY = (deg) => {
+    const rad = (deg - 90) * Math.PI / 180;
+    return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+  };
+  const [x1, y1] = toXY(startDeg), [x2, y2] = toXY(endDeg);
+  const largeArc = (endDeg - startDeg) > 180 ? 1 : 0;
+  return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`;
+}
+function donut(cx, cy, r, infraN, testN, label) {
+  const total = infraN + testN;
+  const stroke = r * 0.55;
+  if (total === 0) {
+    return `
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--gridline)" stroke-width="${stroke}"
+        onmousemove="showTip(event, '${label}: no failures')" onmouseleave="hideTip()"/>
+      <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" class="bar-label" style="font-weight:700;font-size:17px">0</text>
+      <text x="${cx}" y="${cy + r + 48}" text-anchor="middle" style="font-size:16px;font-weight:700;fill:var(--text-primary)">${label}</text>`;
+  }
+  // Full-circle special case: a 360deg arc has identical start/end points,
+  // which SVG renders as a zero-length (invisible) path -- clamp to
+  // 359.98 deg whenever one slice is the *entire* circle, for either color.
+  const infraDeg = infraN === total ? 359.98 : 360 * (infraN / total);
+  let svg = '';
+  if (infraN > 0) {
+    svg += `<path d="${arcPath(cx, cy, r, 0, infraDeg)}" fill="none" stroke="var(--status-critical)" stroke-width="${stroke}" stroke-linecap="round"
+              onmousemove="showTip(event, '${label} — Infra: ${infraN} (${(infraN/total*100).toFixed(0)}%)')" onmouseleave="hideTip()"/>`;
+  }
+  if (testN > 0) {
+    const testEnd = testN === total ? 359.98 : 360;
+    svg += `<path d="${arcPath(cx, cy, r, infraDeg, testEnd)}" fill="none" stroke="var(--status-good)" stroke-width="${stroke}" stroke-linecap="round"
+              onmousemove="showTip(event, '${label} — Test: ${testN} (${(testN/total*100).toFixed(0)}%)')" onmouseleave="hideTip()"/>`;
+  }
+  svg += `<text x="${cx}" y="${cy - 5}" text-anchor="middle" class="bar-label" style="font-weight:700;font-size:19px;fill:var(--text-primary)">${total}</text>`;
+  svg += `<text x="${cx}" y="${cy + 14}" text-anchor="middle" class="axis-label">failures</text>`;
+  svg += `<text x="${cx}" y="${cy + r + 48}" text-anchor="middle" style="font-size:16px;font-weight:700;fill:var(--text-primary)">${label}</text>`;
+  return svg;
+}
+function infraDonuts(elId, d24, d72) {
+  const r = 58, cx1 = 100, cx2 = 270, cy = 75, W = 370, H = 218;
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  svg += donut(cx1, cy, r, d24.infra_total, d24.test_total, '24h');
+  svg += donut(cx2, cy, r, d72.infra_total, d72.test_total, '72h');
+  svg += '</svg>';
+  let html = `<p class="note" style="margin-bottom:22px">Each ring is one time window. Red = infra-caused failures, green = product/test failures. Ring size shows the failure count for that window.</p>
+  <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;">
+    ${svg}
+    <div class="legend" style="margin:0;flex-direction:column;gap:8px;">
+      <div class="item"><span class="swatch" style="background:var(--status-critical);border-radius:50%"></span>Infra</div>
+      <div class="item"><span class="swatch" style="background:var(--status-good);border-radius:50%"></span>Test</div>
+    </div>
+  </div>`;
+  const steps = d72.infra_by_step.slice(0, 5);
+  if (steps.length) {
+    html += '<p class="note" style="margin-top:20px">Top infra steps (72h): ' + steps.map(s => `${esc(s.step)} (${s.count})`).join(', ') + '</p>';
+  }
+  document.getElementById(elId).innerHTML = html;
+}
+infraDonuts('presubmitInfraTable', D.infra_24h, D.infra_72h);
+infraDonuts('periodicInfraTable', D.periodic_infra_24h, D.periodic_infra_72h);
+
+// merge time chart -- one categorical color per repo (fixed, stable order
+// so the same repo gets the same color across daily reports, not
+// reassigned based on who happens to have data today)
+const REPO_ORDER = ['bare-metal-fulfillment-operator', 'fulfillment-service', 'osac-aap', 'osac-installer', 'osac-operator', 'osac-test-infra'];
+function repoColor(repo) {
+  const i = REPO_ORDER.indexOf(repo);
+  return `var(--cat-${(i >= 0 ? i : REPO_ORDER.length) % 8 + 1})`;
+}
+document.getElementById('mergeDesc').textContent =
+  `Median ${D.merge_time.median_approval_to_merge_display} overall · ${D.merge_time.approved_count} of ${D.merge_time.count} merged PRs had a human approval`;
+(function () {
+  const repos = D.merge_time.by_repo.filter(r => r.median_approval_to_merge_seconds != null)
+    .sort((a, b) => a.median_approval_to_merge_seconds - b.median_approval_to_merge_seconds);
+  if (!repos.length) { document.getElementById('mergeChart').innerHTML = '<p class="note">No merged PRs had a human approval in this window.</p>'; return; }
+
+  document.getElementById('mergeLegend').innerHTML = repos.map(r =>
+    `<div class="item"><span class="swatch" style="background:${repoColor(r.repo)}"></span>${esc(r.repo)}</div>`
+  ).join('');
+
+  // padL sized generously for the longest known repo name
+  // ("bare-metal-fulfillment-operator", 31 chars) at the larger label
+  // font size below -- measured empirically, not estimated, since a
+  // too-tight guess here is exactly what clipped the labels before.
+  const W = 1020, rowH = 56, padL = 340, padR = 140, padT = 6;
+  const H = padT + repos.length * rowH + 10;
+  const maxH = Math.max(...repos.map(r => r.median_approval_to_merge_seconds / 3600));
+  const plotW = W - padL - padR;
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  repos.forEach((r, i) => {
+    const y = padT + i * rowH;
+    const hours = r.median_approval_to_merge_seconds / 3600;
+    const barW = Math.max(3, (hours / maxH) * plotW);
+    svg += `<text x="${padL - 14}" y="${y + rowH/2 + 5}" text-anchor="end" style="font-size:14px;fill:var(--text-secondary);font-weight:500">${esc(r.repo)}</text>`;
+    svg += `<rect x="${padL}" y="${y + 7}" width="${barW}" height="${rowH - 18}" rx="6" fill="${repoColor(r.repo)}"
+              data-tip="${esc(r.repo)}: ${r.median_approval_to_merge_display} (${r.approved_count}/${r.count})"/>`;
+    svg += `<text x="${padL + barW + 12}" y="${y + rowH/2 + 5}" text-anchor="start" style="font-size:15px;font-weight:700;fill:var(--text-primary)">${r.median_approval_to_merge_display} (${r.approved_count}/${r.count})</text>`;
+  });
+  svg += '</svg>';
+  const mergeChartEl = document.getElementById('mergeChart');
+  mergeChartEl.innerHTML = svg;
+  bindTooltips(mergeChartEl);
+})();
+
+// e2e jobs-per-pr tiles
+const jp = D.jobs_per_pr;
+document.getElementById('prTiles').innerHTML = [
+  { label: 'PRs with e2e activity', value: jp.distinct_prs },
+  { label: 'Total e2e job runs', value: jp.total_jobs },
+  { label: 'Avg jobs / PR', value: jp.avg_jobs_per_pr },
+  { label: 'Median jobs / PR', value: jp.median_jobs_per_pr },
+].map(t => `<div class="tile"><div class="label">${t.label}</div><div class="value">${t.value}</div></div>`).join('');
+
+// histogram
+(function () {
+  const data = jp.histogram;
+  const W = 960, H = 260, padL = 40, padR = 10, padT = 10, padB = 34;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const maxVal = Math.max(...data.map(d => d.prs), 1);
+  const niceMax = niceAxisMax(maxVal);
+  const bandW = plotW / data.length;
+  const barW = Math.min(60, bandW * 0.82);
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + plotH - (plotH * i / 4);
+    svg += `<line class="gridline" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>`;
+    svg += `<text class="axis-label" x="${padL - 8}" y="${y + 4}" text-anchor="end">${Math.round(niceMax * i / 4)}</text>`;
+  }
+  svg += `<line class="axis-line" x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}"/>`;
+  const GAP = 2; // surface-color gap between stacked segments
+  data.forEach((d, i) => {
+    const cx = padL + bandW * i + bandW / 2;
+    const barH = (d.prs / niceMax) * plotH;
+    const yTop = padT + plotH - barH;
+    const xLeft = cx - barW / 2;
+    const jobTotal = d.success + d.cancelled + d.failure;
+
+    if (barH > 0) {
+      if (jobTotal > 0) {
+        // Stacked bottom-to-top: Success, Cancelled, Failure -- proportional
+        // to each outcome's *job-level* share, applied to this bar's PR-count
+        // height, so the bar's total height still means "PRs in this bucket".
+        const segs = [
+          { key: 'Success', n: d.success, color: 'var(--status-good)' },
+          { key: 'Cancelled', n: d.cancelled, color: 'var(--status-warning)' },
+          { key: 'Failure', n: d.failure, color: 'var(--status-critical)' },
+        ];
+        let yCursor = padT + plotH; // grows upward from the baseline
+        segs.forEach((seg, si) => {
+          if (seg.n <= 0) return;
+          const segH = (seg.n / jobTotal) * barH;
+          const isTop = si === segs.length - 1 || segs.slice(si + 1).every(s => s.n <= 0);
+          const drawH = Math.max(0, segH - (isTop ? 0 : GAP));
+          const y = yCursor - segH;
+          const pctv = ((seg.n / jobTotal) * 100).toFixed(0);
+          if (isTop) {
+            // Round only the outer (top) corners of the topmost segment --
+            // everything else stays square, per stacked-bar mark spec.
+            const r = 4;
+            svg += `<path d="M ${xLeft} ${y + r} A ${r} ${r} 0 0 1 ${xLeft + r} ${y}
+                     L ${xLeft + barW - r} ${y} A ${r} ${r} 0 0 1 ${xLeft + barW} ${y + r}
+                     L ${xLeft + barW} ${y + segH} L ${xLeft} ${y + segH} Z"
+                     fill="${seg.color}"
+                     data-tip="${esc(d.bucket)} jobs — ${seg.key}: ${seg.n} (${pctv}%)"/>`;
+          } else {
+            svg += `<rect x="${xLeft}" y="${y}" width="${barW}" height="${drawH}" fill="${seg.color}"
+                      data-tip="${esc(d.bucket)} jobs — ${seg.key}: ${seg.n} (${pctv}%)"/>`;
+          }
+          yCursor = y;
+        });
+      } else {
+        // No job-outcome data at all for this bucket (shouldn't normally
+        // happen if prs > 0, but keeps the bar visible rather than blank).
+        svg += `<rect x="${xLeft}" y="${yTop}" width="${barW}" height="${barH}" fill="var(--gridline)" rx="4"/>`;
+      }
+    }
+    svg += `<text class="bar-label" x="${cx}" y="${yTop - 6}">${d.prs}</text>`;
+    svg += `<text class="cat-label" x="${cx}" y="${padT + plotH + 18}">${esc(d.bucket)}</text>`;
+  });
+  svg += `<text class="axis-label" x="${W/2}" y="${H - 2}" text-anchor="middle" style="fill:var(--text-secondary)">e2e job runs on the PR</text>`;
+  svg += '</svg>';
+
+  const histChartEl = document.getElementById('histChart');
+  histChartEl.innerHTML = svg;
+  bindTooltips(histChartEl);
+
+  document.getElementById('histLegend').innerHTML = [
+    ['Success', 'var(--status-good)'], ['Cancelled', 'var(--status-warning)'], ['Failure', 'var(--status-critical)'],
+  ].map(([label, color]) => `<div class="item"><span class="swatch" style="background:${color}"></span>${label}</div>`).join('');
+})();
+
+document.getElementById('topPrsBody').innerHTML = jp.top_prs.map(p =>
+  `<tr><td>${esc(p.repo)}</td><td>${esc(p.pr)}</td><td class="num">${p.jobs}</td></tr>`).join('');
+
+// outcomes chart
+(function () {
+  const colors = { Success: 'var(--status-good)', Cancelled: 'var(--status-warning)', Failure: 'var(--status-critical)' };
+  const data = jp.outcomes;
+  const total = data.reduce((s, d) => s + d.count, 0);
+  const W = 480, H = 260, padL = 40, padR = 10, padT = 10, padB = 40;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const maxVal = Math.max(...data.map(d => d.count), 1);
+  const niceMax = niceAxisMax(maxVal);
+  const bandW = plotW / data.length;
+  const barW = Math.min(64, bandW * 0.5);
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + plotH - (plotH * i / 4);
+    svg += `<line class="gridline" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>`;
+    svg += `<text class="axis-label" x="${padL - 8}" y="${y + 4}" text-anchor="end">${Math.round(niceMax * i / 4).toLocaleString()}</text>`;
+  }
+  svg += `<line class="axis-line" x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}"/>`;
+  data.forEach((d, i) => {
+    const cx = padL + bandW * i + bandW / 2;
+    const barH = (d.count / niceMax) * plotH;
+    const y = padT + plotH - barH;
+    const pctv = total ? ((d.count / total) * 100).toFixed(1) : '0.0';
+    svg += `<rect x="${cx - barW/2}" y="${y}" width="${barW}" height="${barH}" fill="${colors[d.outcome]}" rx="4"
+              data-tip="${esc(d.outcome)}: ${d.count.toLocaleString()} (${pctv}%)"/>`;
+    svg += `<text class="bar-label" x="${cx}" y="${y - 6}" style="font-weight:600">${d.count.toLocaleString()}</text>`;
+    svg += `<text class="bar-label" x="${cx}" y="${y - 20}">${pctv}%</text>`;
+    svg += `<text class="cat-label" x="${cx}" y="${padT + plotH + 20}">${esc(d.outcome)}</text>`;
+  });
+  svg += '</svg>';
+  const outcomesChartEl = document.getElementById('outcomesChart');
+  outcomesChartEl.innerHTML = svg;
+  bindTooltips(outcomesChartEl);
+})();
+
+document.getElementById('flakeVal').textContent = D.flake_rate == null ? 'no successes yet' : pct(D.flake_rate);
+document.getElementById('mttrVal').textContent = D.mttr ? D.mttr.mttr_display : 'no recoveries yet';
+document.getElementById('topFailVal').textContent = D.top_failing ? `${D.top_failing.workflow} (${D.top_failing.failure} failures)` : 'None';
+document.getElementById('retestVal').textContent = D.merge_time.avg_retest_count;
+</script>
+</body>
+</html>

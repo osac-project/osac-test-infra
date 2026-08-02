@@ -1,0 +1,171 @@
+---
+- name: Load netris-lab variables
+  ansible.builtin.include_vars:
+    file: "{{ netris_lab_dir }}/group_vars/all.yml"
+
+- name: Pre-flight checks
+  ansible.builtin.include_tasks: "{{ role_path }}/../lab_deploy/tasks/preflight.yml"
+
+- name: Remove stale collections left by rsync
+  ansible.builtin.file:
+    path: "{{ netris_lab_dir }}/collections/ansible_collections"
+    state: absent
+
+- name: Install Ansible collections
+  ansible.builtin.command:
+    cmd: ansible-galaxy collection install -r requirements.yml -p collections --force
+    chdir: "{{ netris_lab_dir }}"
+  changed_when: false
+
+- name: Run prerequisites
+  ansible.builtin.include_role:
+    name: prerequisites
+
+# netris-lab's own prerequisites role drags in an openssl-libs upgrade as a
+# side effect of its package installs, and that OpenSSL version breaks
+# Python's ssl.SSLContext.load_verify_locations(cadata=...) bytes-based
+# multi-certificate loading path -- the exact path ansible.builtin.get_url
+# always uses for CA validation, breaking both downloads in the vendored
+# cache role's very next task.
+#
+# Two other fixes were rejected: excluding openssl-libs from dnf entirely
+# breaks installing libvirt/qemu-kvm (systemd-container, required by
+# libvirt-daemon-driver-qemu, hard-requires a systemd build that itself
+# requires libcrypto.so.3(OPENSSL_3.4.0)); disabling get_url's
+# validate_certs was rejected as an unnecessary security trade-off.
+#
+# Sidestep get_url's broken code path entirely instead: pre-fetch both
+# files ourselves via curl (unaffected by this bug -- never goes through
+# Python's cadata-based loading), then inject a matching checksum via
+# module_defaults (see playbooks/setup.yml) so the vendored cache role's
+# own get_url task takes its "file already exists" shortcut and exits
+# before ever calling url_get()/open_url()/make_context(). Full certificate
+# validation is preserved throughout (curl does its own TLS validation
+# normally); nothing here weakens security.
+- name: Ensure cloud image cache directory exists
+  ansible.builtin.file:
+    path: "{{ k3s_image_cache_dir }}/../cloud-images"
+    state: directory
+    mode: '0755'
+
+- name: Pre-fetch cloud images via curl (bypasses get_url's broken CA-cert loading)
+  ansible.builtin.command:
+    cmd: >-
+      curl -fSL --retry 5 --retry-delay 5
+      -o "{{ k3s_image_cache_dir }}/../cloud-images/{{ item.name }}"
+      "{{ item.url }}"
+    creates: "{{ k3s_image_cache_dir }}/../cloud-images/{{ item.name }}"
+  loop:
+    - { url: "{{ cumulus_image_url }}", name: "{{ cumulus_image_name }}" }
+    - { url: "{{ ubuntu_image_url }}", name: "{{ ubuntu_image_name }}" }
+
+- name: Compute checksums of pre-fetched cloud images
+  ansible.builtin.stat:
+    path: "{{ k3s_image_cache_dir }}/../cloud-images/{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - "{{ cumulus_image_name }}"
+    - "{{ ubuntu_image_name }}"
+  register: _cloud_image_stats
+
+- name: Record checksums for get_url's module_defaults shortcut
+  ansible.builtin.set_fact:
+    cache_role_checksums: "{{ cache_role_checksums | default({}) | combine({item.item: 'sha256:' + item.stat.checksum}) }}"
+  loop: "{{ _cloud_image_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Cache container and cloud images
+  ansible.builtin.include_role:
+    name: cache
+
+- name: Install OCP and OSAC dependencies
+  ansible.builtin.dnf:
+    name:
+      - podman
+      - dnsmasq
+      - zstd
+      - pigz
+    state: present
+
+- name: Install aicli and awscli
+  ansible.builtin.pip:
+    name:
+      - aicli
+      - awscli
+    state: present
+
+- name: Install oc CLI
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-client-linux.tar.gz \
+        | tar xzf - -C /usr/local/bin oc kubectl
+    creates: /usr/local/bin/oc
+
+- name: Install helm
+  ansible.builtin.command:
+    cmd: bash -c "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+    creates: /usr/local/bin/helm
+
+- name: Install Go toolchain
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://go.dev/dl/go1.24.4.linux-amd64.tar.gz \
+        | tar xzf - -C /usr/local
+    creates: /usr/local/go/bin/go
+
+# Job-scoped, non-root checkout: this role only ever runs on a freshly
+# provisioned, single-job EC2 instance (e2e-caas-netris.yml's "test" job),
+# so there's no actual concurrent-job interference on /opt today -- but
+# root-owning the source tree contradicts the rest of this change (job-
+# scoped, non-root osac tooling), and a non-root build step reading from a
+# root-owned checkout is an assumption, not something to keep relying on.
+#
+# lookup('env', 'HOME'), not ansible_env.HOME: this play sets gather_facts:
+# true + become: true, and Ansible's implicit fact-gathering task inherits
+# that become setting -- so ansible_env reflects root's environment
+# (HOME=/root), not the unprivileged connecting user's. lookup() evaluates
+# in the controller process's own environment instead (the same
+# unprivileged process ansible-playbook itself was invoked from), which is
+# correct here since ansible_connection: local makes controller and target
+# the same machine.
+- name: Clone fulfillment-service
+  ansible.builtin.git:
+    repo: "{{ fulfillment_service_repo }}"
+    dest: "{{ lookup('env', 'HOME') }}/.local/src/fulfillment-service"
+    version: "{{ fulfillment_service_branch | default('main', true) }}"
+    force: true
+  become: false
+  # No existence guard: ansible.builtin.git is already idempotent (no-ops
+  # if already at the requested ref) and a "only clone if the directory is
+  # missing" guard actively breaks re-running this role with a different
+  # fulfillment_service_branch on the same box -- it would silently keep
+  # whatever was cloned the first time.
+
+- name: Ensure non-root install directory exists
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'HOME') }}/.local/bin"
+    state: directory
+    mode: "0755"
+  become: false
+
+# fulfillment_service_repo now points at the osac mono-repo (fulfillment-service
+# merged in as a subtree -- see OSAC-1732), so the Go module that used to sit at
+# the checkout root now lives one level deeper, under fulfillment-service/. The
+# clone dest above keeps the name "fulfillment-service" as the logical source
+# directory for this component regardless of which repo backs it (same idiom as
+# infra/netris/roles/osac_refresh|osac_install's base/osac-fulfillment-service).
+- name: Build osac CLI
+  ansible.builtin.command:
+    cmd: /usr/local/go/bin/go build -o "{{ lookup('env', 'HOME') }}/.local/bin/osac" ./cmd/osac
+    chdir: "{{ lookup('env', 'HOME') }}/.local/src/fulfillment-service/fulfillment-service"
+  # No creates: guard -- always rebuild so a different fulfillment_service_branch
+  # actually takes effect instead of reusing whatever was built first.
+  become: false
+  environment:
+    GOPATH: "{{ lookup('env', 'HOME') }}/go"
+    GOCACHE: "{{ lookup('env', 'HOME') }}/.cache/go-build"
+
+- name: Cache snapshot flavor image
+  ansible.builtin.include_role:
+    name: snapshot_pull

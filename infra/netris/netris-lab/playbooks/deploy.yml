@@ -1,0 +1,10 @@
+---
+- name: Deploy Netris Spectrum-X Simulation Lab
+  hosts: lab
+  become: true
+  roles:
+    - prerequisites
+    - k3s_controller
+    - topology
+    - cloudsim
+    - connectivity

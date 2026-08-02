@@ -1,0 +1,83 @@
+---
+- name: Get traefik NodePort for controller access
+  shell: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: traefik_nodeport
+  changed_when: false
+
+- name: Set controller_url fact
+  set_fact:
+    controller_url: "http://localhost:{{ traefik_nodeport.stdout }}"
+
+- name: Create cloudsim working directory
+  file:
+    path: "{{ cloudsim_dir }}"
+    state: directory
+
+- name: Sync cloudsim code
+  synchronize:
+    src: "{{ role_path }}/../../netris-cloudsim/"
+    dest: "{{ cloudsim_dir }}/"
+    rsync_opts:
+      - "--exclude=.git"
+      - "--exclude=Pulumi.*.yaml"
+      - "--exclude=.pulumi"
+  delegate_to: "{{ inventory_hostname }}"
+
+- name: Render Pulumi config
+  template:
+    src: Pulumi.main.yaml.j2
+    dest: "{{ cloudsim_dir }}/Pulumi.main.yaml"
+
+- name: Check Pulumi stack exists
+  shell: |
+    cd {{ cloudsim_dir }}
+    /root/.pulumi/bin/pulumi stack ls 2>/dev/null | grep -c main
+  environment:
+    PULUMI_CONFIG_PASSPHRASE: ""
+  register: stack_check
+  changed_when: false
+  failed_when: false
+
+- name: Create Pulumi stack
+  when: stack_check.stdout | int == 0
+  shell: |
+    cd {{ cloudsim_dir }}
+    /root/.pulumi/bin/pulumi stack init main --non-interactive
+  environment:
+    PULUMI_CONFIG_PASSPHRASE: ""
+
+- name: Select Pulumi stack
+  shell: |
+    cd {{ cloudsim_dir }}
+    /root/.pulumi/bin/pulumi stack select main
+  environment:
+    PULUMI_CONFIG_PASSPHRASE: ""
+  changed_when: false
+
+- name: Refresh Pulumi state
+  shell: |
+    cd {{ cloudsim_dir }}
+    export PATH=$PATH:/root/.pulumi/bin:/usr/local/go/bin
+    pulumi refresh --yes 2>&1
+  environment:
+    PULUMI_CONFIG_PASSPHRASE: ""
+  changed_when: false
+  failed_when: false
+
+- name: Deploy cloudsim VMs
+  shell: |
+    cd {{ cloudsim_dir }}
+    export PATH=$PATH:/root/.pulumi/bin:/usr/local/go/bin
+    pulumi up --yes 2>&1
+  environment:
+    PULUMI_CONFIG_PASSPHRASE: ""
+  register: pulumi_up
+  changed_when: "'0 created' not in pulumi_up.stdout"
+
+- name: Verify VMs are running
+  shell: virsh list | grep -c running
+  register: vm_count
+  changed_when: false
+  failed_when: vm_count.stdout | int < 10

@@ -1,0 +1,124 @@
+---
+- name: Create socat env file for OCP ingress (port 9444 → OCP 443)
+  ansible.builtin.copy:
+    dest: /etc/netris-lab/socat/0.0.0.0-9444.env
+    content: |
+      BIND_IP=0.0.0.0
+      PORT=9444
+      TARGET_IP={{ ocp_dnat_ip }}
+      TARGET_PORT=443
+
+- name: Enable and start OCP ingress socat forwarder
+  ansible.builtin.systemd:
+    name: socat-forwarder@0.0.0.0-9444
+    state: started
+    enabled: true
+    daemon_reload: true
+
+# --- Update cluster-fulfillment-ig with lab's Netris config ---
+
+- name: Discover Netris controller URL
+  ansible.builtin.shell:
+    cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _traefik_nodeport
+  changed_when: false
+
+- name: Set Netris controller URL
+  ansible.builtin.set_fact:
+    _netris_ctl_url: "http://192.168.16.254:{{ _traefik_nodeport.stdout }}"
+
+- name: Authenticate to Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+
+- name: Get Netris site
+  ansible.builtin.include_role:
+    name: netris.controller.site
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    site_state: read
+
+- name: Get VPCs
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    vpc_state: read
+
+- name: Get server cluster templates
+  ansible.builtin.include_role:
+    name: netris.controller.server_cluster_template
+  vars:
+    netris_controller_url: "{{ _netris_ctl_url }}"
+    server_cluster_template_state: list
+
+- name: Build resource class map
+  ansible.builtin.set_fact:
+    _netris_resource_class_map: >-
+      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ netris_sct_by_name[caas_server_cluster_template_name].id }},"mgmt_interface":"ens4","vpc_interfaces":["ens5"]}}
+
+- name: Update cluster-fulfillment-ig configmap with lab Netris config
+  ansible.builtin.shell:
+    cmd: |
+      oc create configmap cluster-fulfillment-ig -n {{ snapshot_osac_namespace }} \
+        --from-literal=NETWORK_CLASS=netris \
+        --from-literal=NETWORK_STEPS_COLLECTION=netris.steps \
+        --from-literal=EXTERNAL_ACCESS_BASE_DOMAIN={{ ocp_base_domain }} \
+        --from-literal=EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS={{ ocp_base_domain }} \
+        --from-literal=EXTERNAL_ACCESS_API_INTERNAL_NETWORK=hypershift \
+        --from-literal=HOSTED_CLUSTER_BASE_DOMAIN={{ ocp_base_domain }} \
+        --from-literal=HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY=SingleReplica \
+        --from-literal=HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY=SingleReplica \
+        --from-literal=NETRIS_CONTROLLER_URL={{ _netris_ctl_url }} \
+        --from-literal=NETRIS_USERNAME={{ netris_username }} \
+        --from-literal=NETRIS_SITE_ID={{ netris_site_id }} \
+        --from-literal=NETRIS_TENANT_ID=1 \
+        --from-literal=NETRIS_TENANT_NAME=Admin \
+        --from-literal=NETRIS_MGMT_VPC_ID={{ netris_vpc_by_name[ocp_vpc_name].id }} \
+        --from-literal=NETRIS_MGMT_VPC_NAME={{ ocp_vpc_name }} \
+        --from-literal='NETRIS_RESOURCE_CLASS_MAP={{ _netris_resource_class_map | to_json }}' \
+        --from-literal=SERVER_MGMT_ROUTE_DESTINATION=192.168.16.0/20 \
+        --from-literal=SERVER_MGMT_ROUTE_GATEWAY=192.168.16.1 \
+        --from-literal=SERVER_SSH_BASTION_HOST=192.168.16.254 \
+        --from-literal=SERVER_SSH_BASTION_USER=root \
+        --from-literal=SERVER_SSH_USER=root \
+        --from-literal=DNS_CLASS=dns.route53.dns \
+        --from-literal=DNS_ZONE={{ dns_hosted_zone }} \
+        --dry-run=client -o yaml | oc apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+
+- name: Update cluster-fulfillment-ig secret with lab credentials and SSH keys
+  ansible.builtin.shell:
+    cmd: |
+      oc create secret generic cluster-fulfillment-ig -n {{ snapshot_osac_namespace }} \
+        --from-literal=NETRIS_PASSWORD={{ netris_password }} \
+        --from-literal=AWS_ACCESS_KEY_ID={{ aws_access_key_id }} \
+        --from-literal=AWS_SECRET_ACCESS_KEY={{ aws_secret_access_key }} \
+        --from-file=SERVER_SSH_KEY={{ ssh_public_key_path | regex_replace('\.pub$', '') }} \
+        --from-file=SERVER_SSH_BASTION_KEY={{ ssh_public_key_path | regex_replace('\.pub$', '') }} \
+        --dry-run=client -o yaml | oc apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
+
+# AAP API token refresh used to be a separate step here (scripts/prepare-aap.sh
+# in osac-installer), but that script was deleted upstream (osac-installer
+# commit d604478, "OSAC-1928: clean umbrella chart + add osac-prereqs chart")
+# and replaced by osac-aap's own create-api-token Helm hook
+# (base/osac-aap/charts/aap/templates/hooks/create-api-token.yaml), which
+# already fires automatically during the "helm upgrade osac" that
+# run-snapshot-refresh just performed, refreshing the osac-aap-api-token
+# secret and restarting osac-operator/bmf-operator on its own.
+# osac-operator's OSAC_AAP_URL also no longer needs patching after a
+# restore -- the modern chart points it at the in-cluster service DNS name
+# (http://osac-aap/api/controller), not an external route hostname that
+# would change when the snapshot's identity is refreshed.
+
+- name: Report OSAC post-refresh completed
+  ansible.builtin.debug:
+    msg: "OSAC post-refresh completed — Netris config, SSH keys, and socat configured (AAP token refresh now handled automatically by osac-aap's create-api-token Helm hook)"

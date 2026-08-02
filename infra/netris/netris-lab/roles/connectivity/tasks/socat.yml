@@ -1,0 +1,73 @@
+---
+- name: Get haproxy pod IP
+  shell: |
+    kubectl get pod -n netris-controller \
+      -l app.kubernetes.io/name=haproxy \
+      -o jsonpath='{.items[0].status.podIP}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: haproxy_pod_ip
+  changed_when: false
+
+- name: Create socat env directory
+  file:
+    path: /etc/netris-lab/socat
+    state: directory
+
+- name: Install socat-forwarder systemd template
+  template:
+    src: socat-forwarder@.service.j2
+    dest: /etc/systemd/system/socat-forwarder@.service
+  notify: Reload systemd
+
+- name: Create socat env files
+  copy:
+    dest: "/etc/netris-lab/socat/{{ item.0 }}-{{ item.1.port }}.env"
+    content: |
+      BIND_IP={{ item.0 }}
+      PORT={{ item.1.port }}
+      TARGET_IP={{ haproxy_pod_ip.stdout }}
+      TARGET_PORT={{ item.1.port }}
+  loop: "{{ ['10.8.0.2', ansible_default_ipv4.address] | product(controller_service_ports) | list }}"
+  notify: Restart socat forwarders
+
+- name: Enable and start socat forwarders
+  systemd:
+    name: "socat-forwarder@{{ item.0 }}-{{ item.1.port }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  loop: "{{ ['10.8.0.2', ansible_default_ipv4.address] | product(controller_service_ports) | list }}"
+
+- name: Get traefik NodePort for web API forwarding
+  shell: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: traefik_np
+  changed_when: false
+
+- name: Create web API socat env files (port 80 -> traefik NodePort)
+  copy:
+    dest: "/etc/netris-lab/socat/{{ item }}-80.env"
+    content: |
+      BIND_IP={{ item }}
+      PORT=80
+      TARGET_IP=127.0.0.1
+      TARGET_PORT={{ traefik_np.stdout }}
+  loop:
+    - "10.8.0.2"
+    - "{{ ansible_default_ipv4.address }}"
+
+- name: Enable web API socat forwarders
+  systemd:
+    name: "socat-forwarder@{{ item }}-80"
+    state: started
+    enabled: true
+    daemon_reload: true
+  loop:
+    - "10.8.0.2"
+    - "{{ ansible_default_ipv4.address }}"
+
+- name: Print controller UI URL
+  debug:
+    msg: "Controller UI: http://{{ ansible_default_ipv4.address }}:{{ controller_ui_port }}"
