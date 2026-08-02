@@ -23,7 +23,7 @@ on:
         description: "BareMetalInstance template"
         required: false
         type: string
-        default: "osac.templates.bm_host_provisioning"
+        default: "bm-host-provisioning"
       bmh-namespace:
         description: "Namespace for BareMetalHost resources"
         required: false

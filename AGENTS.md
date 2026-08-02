@@ -227,8 +227,8 @@ export OSAC_KEYCLOAK_ADMIN_PASSWORD=<password>       # Keycloak admin password (
 export OSAC_JWT_PASSWORD=<password>                  # Password for test JWT users (defaults to "foobar" in tests/conftest.py if unset)
 export OSAC_SERVICE_ACCOUNT=admin                    # ServiceAccount used for `oc create token` (default: admin)
 export OSAC_CLI_PATH=osac                            # Path to the osac CLI binary (default: osac)
-export OSAC_VM_TEMPLATE=osac.templates.ocp_virt_vm   # ComputeInstance template (vmaas tests, default shown)
-export OSAC_NETWORK_CLASS=cudn_net                   # NetworkClass for test networking (vmaas tests, default shown)
+export OSAC_VM_TEMPLATE=ocp-virt-vm                  # ComputeInstance template (vmaas tests, default shown)
+export OSAC_NETWORK_CLASS=cudn-net                    # NetworkClass for test networking (vmaas tests, default shown)
 ```
 
 Token creation is automatic: fixtures run `oc create token <service-account> -n <namespace> --as system:admin` (ServiceAccount) or fetch a JWT from Keycloak (tenant tests) — there is no token env var to set manually.
