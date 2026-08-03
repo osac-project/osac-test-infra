@@ -563,6 +563,20 @@ jobs:
                       '. + {($bk): $bv, ($uk): $uv}')
               echo "Component[$i] AAP project override: branch=${ref} uri=${aap_git_uri}"
             fi
+
+            # AWX's Kubernetes Container Group execution nodes hardcode
+            # imagePullPolicy: Always on their generated worker pods unless
+            # told otherwise -- fine for the shipped :latest default, but
+            # this override is a node-local-only image (loaded via podman
+            # load, never pushed to a real registry), so it must be
+            # IfNotPresent or every AWX job template execution using this EE
+            # fails trying to pull "eeImage" as if it were a real registry
+            # ref (see OSAC-3575).
+            if [[ "${image_key}" == "aap.configAsCode.eeImage" ]]; then
+              MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
+                jq -c '. + {"aap.configAsCode.eeImagePullPolicy": "IfNotPresent"}')
+              echo "Component[$i] AAP execution-environment pull policy override: IfNotPresent"
+            fi
           done
 
           SET_ARGS=()
