@@ -244,10 +244,40 @@
       ]
     },
     {
+      "title": "Queue Depth & In-Progress Runs",
+      "description": "Org-wide queued and in-progress workflow run counts over time -- the same signals the HighQueueDepth and SustainedQueueBacklog alerts fire on. Native Prometheus gauges, not filtered by this dashboard's category/repo/workflow/machine variables since the underlying metric is already org-wide.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Queued" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "In Progress" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        { "expr": "github_actions_queued_runs_org", "legendFormat": "Queued", "refId": "A" },
+        { "expr": "github_actions_in_progress_runs_org", "legendFormat": "In Progress", "refId": "B" }
+      ]
+    },
+    {
       "title": "Results by Workflow",
       "description": "Stacked bars: success (green), failure (red), cancelled (orange) per workflow.",
       "type": "barchart",
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 12 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -320,7 +350,7 @@
     {
       "title": "Success Rate by Workflow",
       "type": "bargauge",
-      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 4 },
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 12 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -384,7 +414,7 @@
       "title": "Most Failing Steps",
       "description": "Which steps fail most frequently.",
       "type": "piechart",
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 17 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -418,7 +448,7 @@
       "title": "Failures by Step (over time)",
       "description": "Step failures over time — shows which steps are breaking and when.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -448,7 +478,7 @@
       "title": "Avg Duration by Job Type",
       "description": "Average run duration grouped by trigger type: Periodic (cron), Presubmit (PRs), Manual.",
       "type": "bargauge",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -499,7 +529,7 @@
       "title": "Avg Duration by Step",
       "description": "Average duration of each workflow step, ordered by execution sequence. Helps identify the slowest steps.",
       "type": "bargauge",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -550,7 +580,7 @@
       "title": "E2E Jobs per PR",
       "description": "How many e2e job runs (including retries/re-runs) land on a PR, bucketed. Bars show the outcome breakdown of the underlying jobs in each bucket -- height is total jobs in that bucket, not PR count (see the PR-count histogram in the full HTML digest report for that view).",
       "type": "barchart",
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 29 },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 37 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -622,7 +652,7 @@
       "title": "Top 10 PRs by E2E Job Count",
       "description": "The specific PRs behind the long tail in the distribution above.",
       "type": "table",
-      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 29 },
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 37 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {},
@@ -669,7 +699,7 @@
       "title": "E2E Job Outcomes",
       "description": "Every e2e job run in the window, by final conclusion.",
       "type": "barchart",
-      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 29 },
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 37 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "unit": "short", "decimals": 0 },
@@ -727,7 +757,7 @@
       "title": "Recent Runs",
       "description": "All recent workflow runs with status, duration, trigger type, and links. Click column headers to sort.",
       "type": "table",
-      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 38 },
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 46 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {},
@@ -914,7 +944,7 @@
       "title": "Failed Runs Only",
       "description": "Only failed workflow runs, showing which step failed.",
       "type": "table",
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 54 },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 62 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {},
@@ -1092,7 +1122,7 @@
       "title": "Data Coverage",
       "description": "Oldest job record currently retained (JOBS_HISTORY_DAYS, see OSAC-2211). If this doesn't go back as far as expected, the exporter may have restarted recently or be mid-backfill.",
       "type": "stat",
-      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 66 },
+      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 74 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
