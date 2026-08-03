@@ -555,17 +555,18 @@ jobs:
                       '. + {($bk): $bv, ($uk): $uv}')
             fi
 
-            # AWX's Kubernetes Container Group execution nodes hardcode
-            # imagePullPolicy: Always on their generated worker pods unless
-            # told otherwise -- fine for the shipped :latest default, but
-            # this override is a node-local-only image (loaded via podman
-            # load, never pushed to a real registry), so it must be
-            # IfNotPresent or every AWX job template execution using this EE
-            # fails trying to pull "eeImage" as if it were a real registry
-            # ref (see OSAC-3575).
+            # ansible.controller.execution_environment's own `pull` field
+            # (always/missing/never) controls the imagePullPolicy AWX's
+            # Container Group execution nodes actually use for this EE --
+            # fine at its shipped "always" default for a mutable :latest
+            # tag, but this override is a node-local-only image (loaded via
+            # podman load, never pushed to a real registry), so it must be
+            # "missing" (Controller's IfNotPresent-equivalent) or every AWX
+            # job template execution using this EE fails trying to pull
+            # "eeImage" as if it were a real registry ref (see OSAC-3575).
             if [[ "${image_key}" == "aap.configAsCode.eeImage" ]]; then
               MERGED_OVERRIDES=$(echo "${MERGED_OVERRIDES}" | \
-                jq -c '. + {"aap.configAsCode.eeImagePullPolicy": "IfNotPresent"}')
+                jq -c '. + {"aap.configAsCode.eeImagePull": "missing"}')
             fi
           done
 
