@@ -501,21 +501,12 @@ jobs:
           # Reuse the osac-installer dir resolved by the previous step (via $GITHUB_ENV)
           cd "${INSTALLER_DIR}"
 
-          make install-osac VALUES_FILE=values/bmaas-ci/values.yaml
-
-          for tenant in "${INSTALLER_NAMESPACE}" shared; do
-            echo "Creating Tenant: ${tenant}"
-            oc apply -f - <<EOF
-          apiVersion: osac.openshift.io/v1alpha1
-          kind: Tenant
-          metadata:
-            name: ${tenant}
-            namespace: ${INSTALLER_NAMESPACE}
-          spec: {}
-          EOF
-          done
-
-          # --- Merge each built component's image into overrides, and apply any CRDs it shipped ---
+          # --- Merge each built component's image into overrides ---
+          # Computed BEFORE the install (not after) so the FIRST helm install
+          # already uses every component's PR-built image -- including for
+          # install-time hooks like AAP's post-install bootstrap Job, which
+          # only ever fire on this first install and can't be re-triggered
+          # safely afterward (see OSAC-3556).
           MERGED_OVERRIDES="${IMAGE_OVERRIDES}"
           COUNT=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq 'length')
           for i in $(seq 0 $((COUNT - 1))); do
@@ -523,7 +514,6 @@ jobs:
             image_key=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].imageKey")
             repo=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].repo")
             ref=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].ref")
-            crds_dir=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].crdsDir")
 
             if [[ "${image_key}" == *.repository ]]; then
               img_repo="${image%%:*}"
@@ -550,19 +540,10 @@ jobs:
                       '. + {($bk): $bv, ($uk): $uv}')
               echo "Component[$i] AAP project override: branch=${ref} uri=${aap_git_uri}"
             fi
-
-            # If the component source contained CRDs (e.g. osac-operator PR
-            # changing CRD structure), apply them now so the cluster has the
-            # CRD definitions matching the new operator binary.
-            if [[ -n "${crds_dir}" ]] && [[ -d "${crds_dir}" ]]; then
-              echo "Applying component[$i] CRDs from PR..."
-              oc apply --server-side --force-conflicts -f "${crds_dir}/"
-            fi
           done
 
+          SET_ARGS=()
           if [[ -n "${MERGED_OVERRIDES}" ]] && [[ "${MERGED_OVERRIDES}" != "{}" ]]; then
-            echo "Applying image overrides..."
-            SET_ARGS=()
             for key in $(echo "${MERGED_OVERRIDES}" | jq -r 'keys[]'); do
               value=$(echo "${MERGED_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
               SET_ARGS+=("--set-string" "${key}=${value}")
@@ -578,19 +559,34 @@ jobs:
             # actual chart pull.
             yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
             helm dependency update charts/osac/
-            helm upgrade osac charts/osac/ \
-              --namespace "${INSTALLER_NAMESPACE}" \
-              --reuse-values \
-              --no-hooks \
-              "${SET_ARGS[@]}" \
-              --timeout 10m \
-              --wait
-
-            echo "Waiting for rollout to complete..."
-            for deploy in $(oc get deploy -n "${INSTALLER_NAMESPACE}" -o name); do
-              oc rollout status "${deploy}" -n "${INSTALLER_NAMESPACE}" --timeout=300s
-            done
           fi
+
+          make install-osac VALUES_FILE=values/bmaas-ci/values.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+
+          for tenant in "${INSTALLER_NAMESPACE}" shared; do
+            echo "Creating Tenant: ${tenant}"
+            oc apply -f - <<EOF
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: ${tenant}
+            namespace: ${INSTALLER_NAMESPACE}
+          spec: {}
+          EOF
+          done
+
+          # --- Apply CRDs shipped by built components ---
+          # Helm's crds/ directory is only installed once on `helm install`
+          # and never updated by a later `helm upgrade`, so a PR that changes
+          # CRD structure (e.g. osac-operator) needs its CRDs re-applied here
+          # to win over whatever the chart's own submodule pin shipped.
+          for i in $(seq 0 $((COUNT - 1))); do
+            crds_dir=$(echo "${COMPONENT_BUILD_RESULTS}" | jq -r ".[$i].crdsDir")
+            if [[ -n "${crds_dir}" ]] && [[ -d "${crds_dir}" ]]; then
+              echo "Applying component[$i] CRDs from PR..."
+              oc apply --server-side --force-conflicts -f "${crds_dir}/"
+            fi
+          done
 
       - name: Run E2E tests
         id: test

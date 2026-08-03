@@ -516,11 +516,14 @@ jobs:
           # Reuse the osac-installer dir resolved by the earlier install step (via $GITHUB_ENV)
           cd "${INSTALLER_DIR}"
 
-          make install-osac VALUES_FILE=values/caas-ci/values.yaml
-
-          # Merge each built component's image into overrides. Unlike
-          # bmaas/vmaas, the build step above never captures component CRDs
-          # for caas, so there's no crdsDir handling to apply here.
+          # --- Merge each built component's image into overrides ---
+          # Computed BEFORE the install (not after) so the FIRST helm install
+          # already uses every component's PR-built image -- including for
+          # install-time hooks like AAP's post-install bootstrap Job, which
+          # only ever fire on this first install and can't be re-triggered
+          # safely afterward (see OSAC-3556). Unlike bmaas/vmaas, the build
+          # step above never captures component CRDs for caas, so there's no
+          # crdsDir handling to apply here.
           MERGED_OVERRIDES="${IMAGE_OVERRIDES}"
           COUNT=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq 'length')
           for i in $(seq 0 $((COUNT - 1))); do
@@ -553,9 +556,8 @@ jobs:
             fi
           done
 
+          SET_ARGS=()
           if [[ -n "${MERGED_OVERRIDES}" ]] && [[ "${MERGED_OVERRIDES}" != "{}" ]]; then
-            echo "Applying image overrides..."
-            SET_ARGS=()
             for key in $(echo "${MERGED_OVERRIDES}" | jq -r 'keys[]'); do
               value=$(echo "${MERGED_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
               SET_ARGS+=("--set-string" "${key}=${value}")
@@ -571,55 +573,50 @@ jobs:
             # actual chart pull.
             yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
             helm dependency update charts/osac/
-            helm upgrade osac charts/osac/ \
-              --namespace "${INSTALLER_NAMESPACE}" \
-              --reuse-values \
-              --no-hooks \
-              "${SET_ARGS[@]}" \
-              --timeout 10m \
-              --wait
-
-            # helm --wait only confirms the *new* pod/ReplicaSet is Ready -- it
-            # does not wait for the old pod to finish terminating or for the
-            # Service/route's endpoint list to fully converge, so a caller
-            # right after this (e.g. setup-caas-agents.sh registering the
-            # ci-worker host type) can race a stale or not-yet-routable
-            # backend and get a transient 503 from the gateway. Same fix as
-            # e2e-vmaas-full-install.yml's equivalent step (OSAC-2528) --
-            # confirm every Deployment has actually finished rolling out,
-            # then confirm the real external gRPC endpoint is reachable
-            # before proceeding.
-            echo "Waiting for rollout to complete..."
-            for deploy in $(oc get deploy -n "${INSTALLER_NAMESPACE}" -o name); do
-              oc rollout status "${deploy}" -n "${INSTALLER_NAMESPACE}" --timeout=300s
-            done
-
-            DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
-            # Public address with bearer-token auth, matching what the real
-            # E2E gRPC clients use (tests/conftest.py's `grpc` fixture) --
-            # the private address used before this could report reachable
-            # while the actual path tests use is still broken (missing
-            # route, UNAUTHENTICATED, etc).
-            GRPC_ADDR="fulfillment-api-${INSTALLER_NAMESPACE}.${DOMAIN}:443"
-            GRPC_TOKEN=$(oc create token admin -n "${INSTALLER_NAMESPACE}" --duration 10m --as system:admin)
-            echo "Waiting for gRPC endpoint ${GRPC_ADDR} to be reachable..."
-            for i in $(seq 1 30); do
-              # -format json + jq status check, not just exit code: grpcurl
-              # exits 0 even when the gRPC Health Checking Protocol response
-              # body reports NOT_SERVING.
-              if grpcurl -insecure -H "Authorization: Bearer ${GRPC_TOKEN}" -format json \
-                "${GRPC_ADDR}" grpc.health.v1.Health/Check 2>/dev/null | jq -e '.status == "SERVING"' >/dev/null 2>&1; then
-                echo "gRPC endpoint reachable (attempt ${i})"
-                break
-              fi
-              if [ "${i}" -eq 30 ]; then
-                echo "gRPC endpoint not reachable after 30 attempts"
-                exit 1
-              fi
-              echo "Attempt ${i}/30 failed, retrying in 2s..."
-              sleep 2
-            done
           fi
+
+          make install-osac VALUES_FILE=values/caas-ci/values.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+
+          # helm --wait only confirms the *new* pod/ReplicaSet is Ready -- it
+          # does not wait for the old pod to finish terminating or for the
+          # Service/route's endpoint list to fully converge, so a caller
+          # right after this (e.g. setup-caas-agents.sh registering the
+          # ci-worker host type) can race a stale or not-yet-routable
+          # backend and get a transient 503 from the gateway. Same fix as
+          # e2e-vmaas-full-install.yml's equivalent step (OSAC-2528) --
+          # confirm every Deployment has actually finished rolling out,
+          # then confirm the real external gRPC endpoint is reachable
+          # before proceeding.
+          echo "Waiting for rollout to complete..."
+          for deploy in $(oc get deploy -n "${INSTALLER_NAMESPACE}" -o name); do
+            oc rollout status "${deploy}" -n "${INSTALLER_NAMESPACE}" --timeout=300s
+          done
+
+          DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
+          # Public address with bearer-token auth, matching what the real
+          # E2E gRPC clients use (tests/conftest.py's `grpc` fixture) --
+          # the private address used before this could report reachable
+          # while the actual path tests use is still broken (missing
+          # route, UNAUTHENTICATED, etc).
+          GRPC_ADDR="fulfillment-api-${INSTALLER_NAMESPACE}.${DOMAIN}:443"
+          GRPC_TOKEN=$(oc create token admin -n "${INSTALLER_NAMESPACE}" --duration 10m --as system:admin)
+          echo "Waiting for gRPC endpoint ${GRPC_ADDR} to be reachable..."
+          for i in $(seq 1 30); do
+            # -format json + jq status check, not just exit code: grpcurl
+            # exits 0 even when the gRPC Health Checking Protocol response
+            # body reports NOT_SERVING.
+            if grpcurl -insecure -H "Authorization: Bearer ${GRPC_TOKEN}" -format json \
+              "${GRPC_ADDR}" grpc.health.v1.Health/Check 2>/dev/null | jq -e '.status == "SERVING"' >/dev/null 2>&1; then
+              echo "gRPC endpoint reachable (attempt ${i})"
+              break
+            fi
+            if [ "${i}" -eq 30 ]; then
+              echo "gRPC endpoint not reachable after 30 attempts"
+              exit 1
+            fi
+            echo "Attempt ${i}/30 failed, retrying in 2s..."
+            sleep 2
+          done
 
           # Configure CaaS domain (after image overrides so helm upgrade cannot overwrite)
           oc patch configmap cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
