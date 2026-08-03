@@ -83,6 +83,11 @@ on:
         required: false
         type: string
         default: "[]"
+      test-infra-repository:
+        description: "Repository to checkout for actions and scripts (for cross-repo calls)"
+        required: false
+        type: string
+        default: ""
     outputs:
       result:
         description: "Overall result: PASSED or FAILED"
@@ -119,6 +124,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
           persist-credentials: false
 
       - name: Validate and bootstrap
@@ -211,6 +217,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
           persist-credentials: false
 
       # SECURITY: EXTRA_VARS ends up passed as EXTRA_VARS='$(EXTRA_VARS)' on
