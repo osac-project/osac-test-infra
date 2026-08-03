@@ -179,12 +179,13 @@
          }
          | combine(({'operator': {'image': {
                'repository': osac_operator_image | regex_replace(':([^/]+)$', ''),
-               'tag': (osac_operator_image | regex_search(':([^/]+)$', '\1') | first | default('latest'))
+               'tag': (osac_operator_image | regex_search(':([^/]+)$', '\1') | first | default('latest')),
+               'pullPolicy': ('IfNotPresent' if osac_operator_image.startswith('localhost/') else 'Always')
              }}} if osac_operator_image | default('') | length > 0 else {}), recursive=true)
-         | combine(({'service': {'images': {'service': fulfillment_service_image}},
+         | combine(({'service': {'images': {'service': fulfillment_service_image}, 'imagePullPolicy': ('IfNotPresent' if fulfillment_service_image.startswith('localhost/') else 'Always')},
                      'dbMigrate': {'image': fulfillment_service_image}}
                     if fulfillment_service_image | default('') | length > 0 else {}), recursive=true)
-         | combine(({'aap': {'bootstrap': {'image': osac_aap_image}}}
+         | combine(({'aap': {'bootstrap': {'image': osac_aap_image, 'imagePullPolicy': ('IfNotPresent' if osac_aap_image.startswith('localhost/') else 'Always')}}}
                     if osac_aap_image | default('') | length > 0 else {}), recursive=true)
          | combine(({'images': {'ui': osac_ui_image}}
                     if osac_ui_image | default('') | length > 0 else {}), recursive=true)

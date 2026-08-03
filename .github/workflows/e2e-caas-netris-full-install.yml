@@ -74,6 +74,15 @@ on:
         required: false
         type: string
         default: ""
+      components:
+        description: >-
+          JSON array of components to build from source on the EC2 box and
+          load onto the SNO node. Each entry: repo, ref, containerfile,
+          imageKey (Helm value path), optional buildType ("ansible-builder").
+          Empty array (default) builds nothing from source.
+        required: false
+        type: string
+        default: "[]"
     outputs:
       result:
         description: "Overall result: PASSED or FAILED"
@@ -338,12 +347,78 @@ jobs:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make deploy-ocp INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
 
+      - name: Build and load component images
+        if: inputs.components != '[]' && inputs.components != ''
+        id: components
+        shell: bash
+        env:
+          COMPONENTS_JSON: ${{ inputs.components }}
+          KUBECONFIG: /root/.kube/config
+        run: |
+          COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
+          IMAGE_OVERRIDES="{}"
+          NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
+
+          for i in $(seq 0 $((COUNT - 1))); do
+            repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo")
+            ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref")
+            file=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].containerfile // \"Containerfile\"")
+            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey")
+            build_type=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildType // \"containerfile\"")
+
+            tag="localhost/component-${i}:${GITHUB_RUN_ID}"
+            src="$RUNNER_TEMP/component-${i}-src"
+
+            echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
+            git clone --depth 1 --branch "${ref}" "https://github.com/${repo}.git" "${src}"
+
+            build_dir="${src}"
+            containerfile_name="${file}"
+            if [[ "${file}" == */* ]]; then
+              build_dir="${src}/$(dirname "${file}")"
+              containerfile_name="$(basename "${file}")"
+            fi
+
+            if [[ "${build_type}" == "ansible-builder" ]]; then
+              pip3 install --quiet 'ansible-builder~=3.0'
+              ansible-builder create --file "${build_dir}/${containerfile_name}" --context "${build_dir}/context"
+              podman build -t "${tag}" -f "${build_dir}/context/Containerfile" "${build_dir}/context"
+            else
+              podman build -t "${tag}" -f "${build_dir}/${containerfile_name}" "${build_dir}"
+            fi
+
+            echo "Loading ${tag} onto node ${NODE_NAME}..."
+            podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+
+            # Map imageKey to ansible extra-var name
+            case "${image_key}" in
+              service.images.service)      var_name="fulfillment_service_image" ;;
+              operator.image.repository)   var_name="osac_operator_image" ;;
+              aap.bootstrap.image)         var_name="osac_aap_image" ;;
+              aap.configAsCode.eeImage)    var_name="osac_aap_ee_image" ;;
+              bmf.image.repository)        var_name="osac_bmf_image" ;;
+              *)
+                echo "::error::components[$i].imageKey '${image_key}' is not a recognized override key"
+                exit 1
+                ;;
+            esac
+
+            IMAGE_OVERRIDES=$(echo "${IMAGE_OVERRIDES}" | jq -c --arg k "${var_name}" --arg v "${tag}" '. + {($k): $v}')
+            echo "Built ${var_name}=${tag}"
+            echo "::endgroup::"
+          done
+
+          echo "overrides=${IMAGE_OVERRIDES}" >> "$GITHUB_OUTPUT"
+
       - name: Deploy OSAC
         timeout-minutes: 90
         shell: bash
         env:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make deploy-osac INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
+          COMPONENT_OVERRIDES: ${{ steps.components.outputs.overrides || '{}' }}
+        run: |
+          MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
+          make deploy-osac INFRA=netris SUITE=caas EXTRA_VARS="${MERGED}"
 
       - name: Setup CaaS hosts and catalog
         shell: bash
