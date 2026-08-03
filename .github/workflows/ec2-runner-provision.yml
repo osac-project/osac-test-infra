@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: "command -v podman"
+      test-infra-repository:
+        description: "Repository to checkout for actions and scripts (for cross-repo calls)"
+        required: false
+        type: string
+        default: ""
     outputs:
       instance-id:
         value: ${{ jobs.provision.outputs.instance-id }}
@@ -68,6 +73,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
           persist-credentials: false
 
       - name: Validate and bootstrap

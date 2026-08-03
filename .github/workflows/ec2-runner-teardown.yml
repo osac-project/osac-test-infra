@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: "us-east-1"
+      test-infra-repository:
+        description: "Repository to checkout for actions and scripts (for cross-repo calls)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   teardown:
@@ -56,6 +61,7 @@ jobs:
         if: always()
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
           persist-credentials: false
 
       - name: Validate and bootstrap
