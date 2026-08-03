@@ -103,6 +103,7 @@ jobs:
       aws-region: ${{ inputs.aws-region }}
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
       tooling-check-cmds: ${{ inputs.tooling-check-cmds }}
+      test-infra-repository: ${{ inputs.test-infra-repository }}
 
 
   # Fetches all 5 CaaS/Netris secrets and pushes them to the box, on the
@@ -499,3 +500,4 @@ jobs:
       runner-id: ${{ needs.provision.outputs.runner-id }}
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
       aws-region: ${{ inputs.aws-region }}
+      test-infra-repository: ${{ inputs.test-infra-repository }}
