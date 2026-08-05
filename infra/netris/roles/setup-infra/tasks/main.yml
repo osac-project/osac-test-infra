@@ -17,9 +17,46 @@
     chdir: "{{ netris_lab_dir }}"
   changed_when: false
 
+# Local BM install (no deploy-jump): same bootstrap as scripts/deploy-jump.sh.
+# ansible-core / ansible must already be present to run this playbook; the rest
+# is filled in here so `make setup` works after a minimal host bootstrap.
+- name: Install BM bootstrap packages
+  ansible.builtin.dnf:
+    name:
+      - git
+      - make
+      - ansible-core
+      - python3-pip
+      - sshpass
+      - tmux
+      - policycoreutils-python-utils
+    state: present
+
+# RHEL has no epel-release in base repos; netris-lab prerequisites does
+# `dnf install epel-release` which fails without this URL install first.
+- name: Pre-install EPEL from URL (RHEL has no epel-release in base repos)
+  ansible.builtin.shell:
+    cmd: |
+      if rpm -q epel-release &>/dev/null; then
+        echo "already_installed"
+      else
+        dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-$(rpm -E %rhel).noarch.rpm"
+        echo "installed"
+      fi
+  register: _epel_install
+  changed_when: "'installed' == _epel_install.stdout | trim"
+  when: ansible_os_family == "RedHat"
+
 - name: Run prerequisites
   ansible.builtin.include_role:
     name: prerequisites
+
+# kubernetes.core.k8s (caas_setup) needs the Python kubernetes client; not installed by
+# netris-lab prerequisites (only bcrypt/netaddr).
+- name: Install Python kubernetes client
+  ansible.builtin.pip:
+    name: kubernetes
+    state: present
 
 # netris-lab's own prerequisites role drags in an openssl-libs upgrade as a
 # side effect of its package installs, and that OpenSSL version breaks

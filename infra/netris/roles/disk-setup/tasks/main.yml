@@ -3,34 +3,59 @@
 # Symlinks /var/lib/libvirt/images, /var/lib/rancher, /var/lib/containers
 # to a mounted data partition to prevent root filesystem exhaustion.
 
-- name: Get root device
+# Resolve the physical disk backing / (plain partition or LVM/mapper).
+# `lsblk -ndo PKNAME` is empty for LVM roots (e.g. /dev/mapper/rhel-root),
+# which previously left _root_device as "/dev/" and allowed wiping the OS disk.
+- name: Resolve root physical disk
   ansible.builtin.shell:
-    cmd: lsblk -ndo PKNAME $(findmnt -no SOURCE /) 2>/dev/null || findmnt -no SOURCE / | sed 's/[0-9]*$//'
+    cmd: |
+      set -euo pipefail
+      src=$(findmnt -no SOURCE /)
+      # Walk parent devices until TYPE=disk (works for partitions and LVM).
+      disk=$(lsblk -nslo NAME,TYPE "$src" 2>/dev/null \
+        | awk '$2 == "disk" { print $1; exit }')
+      if [ -z "${disk}" ]; then
+        disk=$(lsblk -ndo PKNAME "$src" 2>/dev/null | awk 'NF { print; exit }')
+      fi
+      if [ -z "${disk}" ]; then
+        echo "ERROR: could not resolve root disk from SOURCE=${src}" >&2
+        exit 1
+      fi
+      echo "/dev/${disk}"
   register: _root_device_raw
   changed_when: false
 
 - name: Set root device fact
   ansible.builtin.set_fact:
-    _root_device: "/dev/{{ _root_device_raw.stdout | trim | basename }}"
+    _root_device: "{{ _root_device_raw.stdout | trim }}"
 
-- name: Get all block devices
+- name: Find largest unused data disk
   ansible.builtin.shell:
-    cmd: lsblk -dnpo NAME,SIZE,TYPE --bytes | awk '$3 == "disk" {print $1, $2}'
-  register: _all_disks
+    cmd: |
+      set -euo pipefail
+      root_disk="{{ _root_device }}"
+      # NAME SIZE for real disks, largest first; skip root, nbd, and any disk
+      # that already has a mounted filesystem (safety for LVM/multi-disk hosts).
+      while read -r name size; do
+        [ -n "$name" ] || continue
+        case "$name" in
+          "$root_disk"|/dev/nbd*) continue ;;
+        esac
+        if lsblk -npo MOUNTPOINT "$name" 2>/dev/null | grep -q '[^[:space:]]'; then
+          continue
+        fi
+        echo "$name"
+        exit 0
+      done < <(lsblk -dnpo NAME,SIZE,TYPE --bytes \
+        | awk '$3 == "disk" { print $1, $2 }' \
+        | sort -k2 -nr)
+      exit 0
+  register: _data_disk_raw
   changed_when: false
 
-- name: Find largest unused disk
+- name: Set data disk fact
   ansible.builtin.set_fact:
-    _data_disk: >-
-      {{ _all_disks.stdout_lines
-         | map('split', ' ')
-         | rejectattr('0', 'equalto', _root_device)
-         | sort(attribute='1', reverse=true)
-         | map(attribute='0')
-         | first
-         | default('')
-      }}
-
+    _data_disk: "{{ _data_disk_raw.stdout | trim }}"
 - name: Check if data mount already exists
   ansible.builtin.shell:
     cmd: mountpoint -q /mnt/data && echo "mounted" || echo "not_mounted"
@@ -76,6 +101,20 @@
           fi
           echo "needs_setup"
       register: _disk_check
+      changed_when: false
+
+    - name: Refuse to wipe a disk that still has mounted filesystems
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          mounts=$(lsblk -npo NAME,MOUNTPOINT {{ _data_disk | trim }} \
+            | awk 'NF == 2 { print $1 " -> " $2 }')
+          if [ -n "$mounts" ]; then
+            echo "Refusing to wipe {{ _data_disk | trim }}; mounted paths:" >&2
+            echo "$mounts" >&2
+            exit 1
+          fi
+      when: "'needs_setup' in _disk_check.stdout"
       changed_when: false
 
     - name: Wipe and create fresh partition table

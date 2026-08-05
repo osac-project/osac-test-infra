@@ -109,7 +109,7 @@ run_rsync \
     --exclude='config' \
     --exclude='license.key' \
     --exclude='license.zip' \
-    "${REPO_ROOT}/" "root@${SERVER}:/root/netris-test-infra/"
+    "${REPO_ROOT}/" "root@${SERVER}:/root/osac-test-infra/"
 echo "Repository synced."
 
 echo ""
@@ -130,7 +130,7 @@ run_ssh "rpm -q epel-release >/dev/null 2>&1 || dnf install -y https://dl.fedora
 
 echo ""
 echo "=== [7/9] Running disk setup on server ==="
-run_ssh "cd /root/netris-test-infra/infra/netris && make disk-setup"
+run_ssh "cd /root/osac-test-infra/infra/netris && make disk-setup"
 
 echo ""
 echo "=== [8/9] Writing config file ==="
@@ -145,20 +145,20 @@ else
 lab_name = ${LAB_NAME}
 dns_mode = local"
 fi
-run_ssh "cat > /root/netris-test-infra/infra/netris/config << 'CONFIGEOF'
+run_ssh "cat > /root/osac-test-infra/infra/netris/config << 'CONFIGEOF'
 ${AWS_CONFIG}
 CONFIGEOF"
-run_ssh "cp /root/netris-test-infra/infra/netris/config /root/.netris-config && chmod 0600 /root/.netris-config"
+run_ssh "cp /root/osac-test-infra/infra/netris/config /root/.netris-config && chmod 0600 /root/.netris-config"
 # Symlink license files into repo
-run_ssh "ln -sf /root/license.key /root/netris-test-infra/infra/netris/license.key"
-run_ssh "ln -sf /root/license.zip /root/netris-test-infra/infra/netris/license.zip"
+run_ssh "ln -sf /root/license.key /root/osac-test-infra/infra/netris/license.key"
+run_ssh "ln -sf /root/license.zip /root/osac-test-infra/infra/netris/license.zip"
 echo "Config written."
 
 echo ""
 echo "=== [9/9] Starting deploy in tmux session ==="
 DEPLOY_TARGET="${DEPLOY_TARGET:-redeploy-fresh}"
 run_ssh "tmux kill-session -t deploy 2>/dev/null || true"
-run_ssh "tmux new-session -d -s deploy -x 200 -y 50 'cd /root/netris-test-infra/infra/netris && make ${DEPLOY_TARGET} 2>&1 | tee -a /root/deploy.log; exec bash'"
+run_ssh "tmux new-session -d -s deploy -x 200 -y 50 'cd /root/osac-test-infra/infra/netris && make ${DEPLOY_TARGET} 2>&1 | tee -a /root/deploy.log; exec bash'"
 echo ""
 echo "============================================"
 echo "  Deploy started on ${SERVER} in tmux"

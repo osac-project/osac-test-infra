@@ -1,0 +1,10 @@
+---
+# Force destroy: normal destroy-caas (osac delete + agents/InfraEnv), then
+# force-destroy-caas (strip stuck orders/namespaces, wipe VMs, Netris orphans).
+# No graceful wait — force-clean runs immediately (like destroy-caas.sh --now).
+- name: Force destroy CaaS / MaaS
+  hosts: all
+  gather_facts: false
+  roles:
+    - destroy-caas
+    - force-destroy-caas

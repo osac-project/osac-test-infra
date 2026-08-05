@@ -5,6 +5,11 @@ EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_values_file=$(OSAC_VALUES_FILE)
 ENV_INFRA := .env.infra
 
+# Suite selects CaaS vs MaaS for restore disk grow + redeploy-server.sh flow.
+# SUITE=caas (default) — setup-caas / deploy-caas.
+# SUITE=maas — grow h00 to ocp_snapshot_disk_gb; setup-maas / deploy-maas.
+SUITE ?= caas
+
 OSAC_NAMESPACE ?= osac-e2e-ci
 OSAC_VALUES_FILE ?= values/caas-ci/values.yaml
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
@@ -39,7 +44,7 @@ deploy-infra:
 	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA)
 
 deploy-ocp:
-	ansible-playbook playbooks/deploy-ocp.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(ANSIBLE_EXTRA)
 
 deploy-osac:
 	@if [ "$(OSAC_DEPLOY_MODE)" = "snapshot" ]; then \
@@ -81,6 +86,9 @@ destroy-setup:
 destroy-caas:
 	ansible-playbook playbooks/destroy-caas.yml $(ANSIBLE_EXTRA)
 
+force-destroy-caas:
+	ansible-playbook playbooks/force-destroy-caas.yml $(ANSIBLE_EXTRA)
+
 gather-infra:
 	ansible-playbook playbooks/gather-infra.yml $(ANSIBLE_EXTRA)
 
@@ -102,6 +110,53 @@ destroy-bmaas:
 gather-bmaas:
 	ansible-playbook playbooks/gather-bmaas.yml $(ANSIBLE_EXTRA)
 
+# ---------------------------------------------------------------------------
+# MaaS — thin wrappers over CaaS playbooks with MaaS-specific variable overrides
+# Override any default with MAAS_CLUSTER_NAME=..., MAAS_HOST_TYPE_ID=..., etc.
+# ---------------------------------------------------------------------------
+MAAS_CLUSTER_NAME     ?= maas-cluster
+MAAS_HOST_TYPE_ID     ?= g5
+MAAS_CLUSTER_TEMPLATE ?= osac.templates.ocp_4_20_ai_maas
+MAAS_CATALOG_ITEM     ?= maas-ocp
+# Discovery VM sizing for setup-maas only (CaaS keeps inventory defaults: 4 vCPU / 16GiB).
+# Default MaaS: 10 vCPU / 20GiB for h02–h03; h01 stays at 4 (unused for MaaS workers).
+MAAS_DISCOVERY_VCPU      ?= 10
+MAAS_DISCOVERY_MEMORY_MB ?= 20480
+MAAS_DISCOVERY_VCPU_OVERRIDES ?= {"hgx-pod00-su0-h01":4}
+# Only these inventory hostnames get resource_class=g5 (and approval). Empty = all agents.
+# Comma-separated. Keeps h01 out of the MaaS claim pool; setup-caas still labels all as ci-worker.
+MAAS_LABEL_HOSTNAMES ?= hgx-pod00-su0-h02,hgx-pod00-su0-h03
+# Template -p flags for osac create (deploy-maas only). Comma-separated key=value.
+MAAS_CLUSTER_PARAMS   ?= enable_maas=true,enable_keycloak=true,enable_observability=true,enable_dashboard=true
+MAAS_PARAMS_JSON = $(shell python3 -c 'import json; print(json.dumps([p.strip() for p in """$(MAAS_CLUSTER_PARAMS)""".split(",") if p.strip()]))')
+MAAS_LABEL_HOSTNAMES_JSON = $(shell python3 -c 'import json; print(json.dumps([h.strip() for h in """$(MAAS_LABEL_HOSTNAMES)""".split(",") if h.strip()]))')
+
+MAAS_EXTRA = \
+  -e 'caas_cluster_name=$(MAAS_CLUSTER_NAME)' \
+  -e 'caas_host_type_id=$(MAAS_HOST_TYPE_ID)' \
+  -e 'caas_host_type_title=MaaS Node' \
+  -e 'caas_host_type_description=Bare-metal nodes for MaaS testing' \
+  -e 'caas_cluster_template=$(MAAS_CLUSTER_TEMPLATE)' \
+  -e 'caas_catalog_item=$(MAAS_CATALOG_ITEM)' \
+  -e 'caas_catalog_item_title=MaaS OCP' \
+  -e 'caas_catalog_item_description=OCP cluster for MaaS testing' \
+  -e 'caas_discovery_vcpu=$(MAAS_DISCOVERY_VCPU)' \
+  -e 'caas_discovery_memory_mb=$(MAAS_DISCOVERY_MEMORY_MB)' \
+  -e '{"caas_discovery_vcpu_overrides":$(MAAS_DISCOVERY_VCPU_OVERRIDES)}' \
+  -e '{"caas_resource_class_hostnames":$(MAAS_LABEL_HOSTNAMES_JSON)}'
+
+setup-maas:
+	ansible-playbook playbooks/setup-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
+
+deploy-maas:
+	ansible-playbook playbooks/deploy-caas.yml $(MAAS_EXTRA) -e '{"caas_cluster_params":$(MAAS_PARAMS_JSON)}' $(ANSIBLE_EXTRA)
+
+destroy-maas:
+	ansible-playbook playbooks/destroy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
+
+force-destroy-maas:
+	ansible-playbook playbooks/force-destroy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
+
 # ─── Internal sub-targets (deploy-osac implementation) ─────────────
 
 # Fresh install: clone mono-repo, patch Helm values, run make install
@@ -120,6 +175,7 @@ post-osac:
 	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
 
 # Snapshot refresh: clone mono-repo, patch values, run refresh-after-snapshot.py
+# post-refresh-osac → patch-osac-refresh (incl. AAP project pin sync + CaC)
 refresh-osac: prep-refresh-osac run-refresh-osac post-refresh-osac
 
 prep-refresh-osac:
@@ -157,15 +213,23 @@ cleanup-dns:
 destroy-full:
 	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
 
+# OSAC_DEPLOY_MODE=fresh (default) or snapshot — same meaning as deploy / deploy-fast.
+# SUITE=caas (default) or maas — selects setup/deploy flow in redeploy-server.sh.
 redeploy-fresh:
 	@echo "=== Destroying all infrastructure ==="
 	-$(MAKE) destroy-full
 	@sync
-	@echo "=== Starting fresh deploy ==="
-	scripts/redeploy-server.sh --fresh "$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
+	@echo "=== Starting deploy (SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)) ==="
+	SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+		scripts/redeploy-server.sh --fresh \
+		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
+		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 redeploy-continue:
-	scripts/redeploy-server.sh "$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
+	SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+		scripts/redeploy-server.sh \
+		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
+		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 deploy-jump:
 	@scripts/deploy-jump.sh
@@ -187,7 +251,9 @@ health-check:
 .PHONY: deploy deploy-fast \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
         setup-caas deploy-caas \
-        destroy-osac destroy-ocp destroy-infra destroy-setup destroy-caas destroy-full \
+		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
+		destroy-caas force-destroy-caas \
+        setup-maas deploy-maas destroy-maas force-destroy-maas \
         gather-infra gather-mgmt-cluster gather-caas \
         setup-bmc setup-bmaas destroy-bmaas gather-bmaas \
         install-osac prep-osac run-osac-setup post-osac \

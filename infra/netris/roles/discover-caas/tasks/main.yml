@@ -202,8 +202,8 @@
 
 - name: Set maximum vCPUs
   ansible.builtin.command:
-    cmd: virsh setvcpus {{ item.item }} {{ caas_discovery_vcpu }} --config --maximum
-  when: item.stdout | int != caas_discovery_vcpu | int
+    cmd: virsh setvcpus {{ item.item }} {{ caas_discovery_vcpu_overrides[item.item] | default(caas_discovery_vcpu) }} --config --maximum
+  when: item.stdout | int != (caas_discovery_vcpu_overrides[item.item] | default(caas_discovery_vcpu)) | int
   loop: "{{ _current_vcpus.results }}"
   loop_control:
     label: "{{ item.item }}"
@@ -211,8 +211,8 @@
 
 - name: Set vCPUs
   ansible.builtin.command:
-    cmd: virsh setvcpus {{ item.item }} {{ caas_discovery_vcpu }} --config
-  when: item.stdout | int != caas_discovery_vcpu | int
+    cmd: virsh setvcpus {{ item.item }} {{ caas_discovery_vcpu_overrides[item.item] | default(caas_discovery_vcpu) }} --config
+  when: item.stdout | int != (caas_discovery_vcpu_overrides[item.item] | default(caas_discovery_vcpu)) | int
   loop: "{{ _current_vcpus.results }}"
   loop_control:
     label: "{{ item.item }}"

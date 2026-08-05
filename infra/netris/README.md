@@ -34,7 +34,7 @@ Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softga
 ## Prerequisites
 
 - **Bare-metal host** running RHEL 9.x or Rocky Linux 9.x with KVM support
-- **System packages** — `dnf install -y git make python3-pip ansible-core && pip3 install ansible` (all other tools are installed automatically by `make setup-infra`)
+- **System packages** — `dnf install -y git make python3-pip ansible-core && pip3 install ansible`. `make setup-infra` then installs the rest of the BM bootstrap (`sshpass`, `tmux`, `policycoreutils-python-utils`), EPEL from the Fedora URL (required on RHEL), and the Python `kubernetes` client.
 - **Resources**: ~32+ CPU cores, 128+ GB RAM (lab VMs + OCP SNO VM)
 - **Storage**: ~400GB+ for OCP disk images, K3s, and containers. If the root partition is smaller, use a secondary data disk and enable automatic provisioning with `disk_setup_enabled=true` (via `EXTRA_VARS` or in the config). Run `make disk-setup` standalone or pass the variable during setup: `make setup-infra EXTRA_VARS="disk_setup_enabled=true"`
 - **Netris license key** — place at repo root as `license.key`
@@ -101,6 +101,8 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 |--------|-------------|------|
 | `make setup-caas` | Discover hosts, label agents, register host type, configure osac CLI | ~30 min |
 | `make deploy-caas` | Create CaaS cluster using `ocp_ci_small` template | ~60 min |
+| `make setup-maas` | Same as setup-caas with MaaS host type / sizing; labels only `MAAS_LABEL_HOSTNAMES` (default h02+h03) with `g5` | ~30 min |
+| `make deploy-maas` | Create MaaS cluster (`ocp_4_20_ai_maas` + `-p` template params) | ~60 min |
 
 ### Destroy
 
@@ -111,6 +113,10 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make destroy-ocp` | Reset OCP for reinstall: delete cluster, recreate disk, boot VM |
 | `make destroy-infra` | Tear down netris-lab (VMs, K3s, topology) |
 | `make destroy-caas` | CaaS teardown: stop discovery VMs, remove disks/ISO, delete namespace, clean DNS |
+| `make force-destroy-caas` | destroy-caas + strip stuck orders/namespaces, wipe VMs, Netris orphans |
+| `make destroy-maas` | destroy-caas with MaaS cluster/host-type overrides |
+| `make force-destroy-maas` | force-destroy-caas with MaaS overrides |
+| `make destroy-bmaas` | BMaaS teardown: remove BMH/K8s resources, stop BMaaS VMs, clean disks, delete BMH namespace |
 
 ### Recovery and Utilities
 
@@ -174,10 +180,28 @@ make setup-caas     # discover hosts, label agents, register host type
 make deploy-caas    # create cluster
 ```
 
+**Deploy MaaS after OSAC is up:**
+```bash
+make setup-maas     # same discovery path; labels only MAAS_LABEL_HOSTNAMES (default h02+h03) with g5
+make deploy-maas    # create cluster with ocp_4_20_ai_maas + enable_* params
+```
+
 **Rebuild from scratch:**
 ```bash
-make destroy        # tear down everything
+make destroy-full   # tear down everything
 make deploy-fast    # full redeploy (snapshot path)
+```
+
+**BM full pipeline (redeploy-server.sh):**
+```bash
+# CaaS + fresh OSAC install (default)
+make redeploy-fresh
+
+# CaaS + snapshot OSAC refresh (same mode as deploy-fast)
+make redeploy-fresh OSAC_DEPLOY_MODE=snapshot
+
+# MaaS + snapshot refresh (grows h00 disk; setup-maas / deploy-maas)
+make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot
 ```
 
 ### Bare-Metal Lab Deployment (from laptop)
@@ -222,11 +246,14 @@ source scripts/env-mylab.sh && make deploy-jump
 
 | Target | Description |
 |--------|-------------|
-| `make redeploy-fresh` | Destroy + wipe progress + full fresh deploy |
+| `make redeploy-fresh` | Destroy + wipe progress + full pipeline (`SUITE`, `OSAC_DEPLOY_MODE`) |
+| `make redeploy-continue` | Resume failed redeploy from last incomplete step |
 | `make disk-setup` | Auto-detect and mount data disk |
 | `make post-install` | Fix Keycloak/UI + generate access doc |
 | `make access-doc` | Generate handover documentation only |
 | `make health-check` | Quick status verification |
+
+`redeploy-server.sh` steps: `setup-infra` → `deploy-infra` → `deploy-ocp` → `deploy-osac` → `setup-caas|setup-maas` → `deploy-caas|deploy-maas` → `post-install`. Pass `OSAC_DEPLOY_MODE=snapshot` (or `--snapshot`) for refresh instead of Helm install; default is `fresh`.
 
 See the PR description for known issues and workarounds specific to BM/RHEL environments.
 
@@ -258,9 +285,11 @@ The flow runs three Ansible roles in sequence:
 
 1. **`configure-netris`** — creates VPC, VNet (DHCP disabled), subnet, SNAT/DNAT rules via Netris API
 2. **`configure-dns`** — creates Route 53 DNS records and local dnsmasq config for the cluster domain
-3. **`restore-ocp`** — creates copy-on-write disk overlays backed by the cached flavor, mounts the OS disk via qemu-nbd to write pre-boot config (hostname, nodeip hint, dnsmasq overrides, nmstate config for static IP, OVN/OVS cleanup), runs recert (via JSON config file, matching LCA's approach) to regenerate all TLS certificates and cluster identity, then waits for cluster health
+3. **`restore-ocp`** — creates copy-on-write disk overlays backed by the cached flavor, mounts the OS disk via qemu-nbd to write pre-boot config (hostname, nodeip hint, dnsmasq overrides, nmstate config for static IP, OVN/OVS cleanup), runs recert (via JSON config file, matching LCA's approach) to regenerate all TLS certificates and cluster identity, then waits for cluster health. When `suite=maas` (via `SUITE=maas`), also grows the h00 OS disk to `ocp_snapshot_disk_gb` before pre-boot config.
 
 The snapshot flavor is pulled and cached during `make setup-infra` (one-time ~60GB download). Subsequent deploys use copy-on-write overlays, so only changed blocks are written.
+
+OSAC itself is handled by `make deploy-osac` (not part of `deploy-ocp`). In `OSAC_DEPLOY_MODE=snapshot`, that runs `refresh-osac` → `post-refresh-osac` → **`patch-osac-refresh`**, which wires Netris/SSH/socat and then applies `config-as-code-ig`’s `AAP_PROJECT_GIT_*` pin onto the live AAP Project and launches `osac-config-as-code` once (snapshot AAP DB keeps the bake-time `scm_branch`; waiting for the hourly CaC schedule is too late for `setup-maas` / `publish-templates`).
 
 ## How deploy-osac Works
 

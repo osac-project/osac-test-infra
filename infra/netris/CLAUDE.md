@@ -1,6 +1,6 @@
 # netris-test-infra
 
-OSAC test infrastructure that deploys and tests OpenShift Assisted Cluster on a simulated Netris Spectrum-X GPU cluster. Tests three service models: VMaaS, BMaaS (planned), and CaaS.
+OSAC test infrastructure that deploys and tests OpenShift Assisted Cluster on a simulated Netris Spectrum-X GPU cluster. Tests three service models: VMaaS, BMaaS (planned), CaaS, and MaaS.
 
 Uses [netris-lab](netris-lab/) as a git submodule for the underlying network infrastructure.
 
@@ -16,12 +16,13 @@ roles/                          # Ansible roles (each has tasks/main.yml)
   cache-snapshot/               # Pull + cache flavor OCI image (skopeo)
   prep-osac/                    # Clone mono-repo, patch Helm values (fresh install)
   prep-refresh-osac/            # Clone mono-repo, patch values, rebuild CLI (snapshot refresh)
-  patch-osac-refresh/           # Post-refresh: patch Netris config + SSH keys into running cluster
+  patch-osac-refresh/           # Post-refresh: Netris/SSH + AAP project pin sync + CaC
   discover-caas/                # Boot discovery VMs with InfraEnv ISO
   setup-caas/                   # Label agents, register host type
-  create-caas/                  # Create CaaS cluster via fulfillment API
+  create-caas/                  # Create CaaS/MaaS cluster via fulfillment API
   destroy-infra/                # Teardown netris-lab
-  destroy-caas/                 # Teardown CaaS resources
+  destroy-caas/                 # Teardown CaaS/MaaS (osac delete + agents/InfraEnv/VMs)
+  force-destroy-caas/           # Force-clean stuck orders/namespaces + Netris orphans
 playbooks/                      # Ansible playbooks (one per workflow phase)
 inventory/
   local.yml                     # Inventory (localhost, local connection)
@@ -34,7 +35,7 @@ vendor/                         # Vendored Ansible collections
 
 ```
 make deploy                 # Full pipeline: deploy-infra + deploy-ocp + deploy-osac (fresh Helm install)
-make deploy-fast            # Snapshot pipeline: deploy-infra + deploy-ocp + deploy-osac (snapshot refresh)
+make deploy-fast            # Snapshot pipeline: same steps with OSAC_DEPLOY_MODE=snapshot
 make setup-infra            # Install prerequisites, cache images + snapshot flavor
 make deploy-infra           # Deploy netris-lab
 make deploy-ocp             # Configure Netris networking + restore OCP SNO from snapshot
@@ -42,15 +43,22 @@ make deploy-osac            # Deploy OSAC (fresh Helm install or snapshot refres
 make connectivity           # Re-run lab connectivity (VPN, BGP, softgate agents)
 make setup-caas             # CaaS setup: discover hosts, label agents, register host type
 make deploy-caas            # CaaS: create cluster
+make setup-maas             # MaaS setup (wrappers over setup-caas with MaaS overrides)
+make deploy-maas            # MaaS: create cluster (ocp_4_20_ai_maas + -p params)
 make destroy-full           # Teardown all infrastructure
 make destroy-osac           # Teardown OSAC only
 make destroy-ocp            # Reset OCP for reinstall
 make destroy-infra          # Teardown netris-lab
-make destroy-caas           # Teardown CaaS resources
+make destroy-caas           # Teardown CaaS/MaaS cluster + discovery
+make force-destroy-caas     # destroy-caas + strip stuck leftovers / Netris orphans
+make destroy-maas           # destroy-caas with MaaS overrides
+make force-destroy-maas     # force-destroy-caas with MaaS overrides
+make redeploy-fresh         # destroy-full + full BM pipeline (SUITE / OSAC_DEPLOY_MODE)
 make vendor-update          # Refresh vendored Ansible collections
 make gather-infra           # Gather diagnostic info from the cluster
 # Override variables: make <target> EXTRA_VARS="key=value"
 # Image overrides: make deploy-osac EXTRA_VARS="fulfillment_service_image=quay.io/..."
+# Suite / mode: make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot
 ```
 
 ## Workflow Order
@@ -60,6 +68,11 @@ make gather-infra           # Gather diagnostic info from the cluster
 **Snapshot deploy (fast):** deploy-fast (deploy-infra → deploy-ocp → deploy-osac with OSAC_DEPLOY_MODE=snapshot)
 
 **CaaS:** deploy or deploy-fast → setup-caas → deploy-caas
+
+**MaaS:** deploy or deploy-fast → setup-maas → deploy-maas  
+(or `make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot`)
+
+**VMaaS / BMaaS:** not yet implemented
 
 ## Ansible Configuration
 
@@ -79,7 +92,7 @@ All variables in `inventory/group_vars/all.yml`. Key sections:
 - **OSAC**: `osac_repo/branch`, `osac_namespace`, `osac_values_file`
 - **Component images**: `osac_operator_image`, `fulfillment_service_image` (empty = defaults)
 - **Snapshot**: `snapshot_flavor_image`, `snapshot_flavor_dir`, `snapshot_recert_image`, `snapshot_osac_namespace`, `snapshot_osac_values_file`
-- **CaaS**: `caas_discovery_vm_patterns`, `caas_host_type_id`, `caas_cluster_name`, `caas_agents`
+- **CaaS / MaaS**: `caas_discovery_vm_patterns`, `caas_host_type_id`, `caas_cluster_name`, `caas_agents`, `caas_resource_class_hostnames` (empty = all agents); MaaS overrides via Makefile `MAAS_*`
 
 ## External Dependencies
 

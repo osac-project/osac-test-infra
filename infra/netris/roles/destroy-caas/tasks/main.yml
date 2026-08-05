@@ -1,30 +1,96 @@
 ---
-# Step 1: Fire-and-forget cluster deletion via osac CLI
-- name: Get cluster ID
+# Delete the named CaaS/MaaS cluster via osac CLI, then tear down discovery
+# agents / InfraEnv / worker VM disks.
+#
+# Cluster delete previously no-oped: osac was never logged in in this role, so
+# "get clusters" returned nothing and the delete task was skipped.
+
+- name: Resolve OSAC namespace for destroy
+  ansible.builtin.set_fact:
+    _destroy_osac_ns: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+
+- name: Get fulfillment internal API host
   ansible.builtin.shell:
     cmd: >-
-      osac get clusters -o json |
-      python3 -c "import sys,json; clusters=json.load(sys.stdin);
-      matches=[c['id'] for c in clusters if c.get('name')=='{{ caas_cluster_name }}'];
-      print(matches[0] if matches else '')"
+      oc get route fulfillment-internal-api -n {{ _destroy_osac_ns }}
+      -o jsonpath='{.status.ingress[0].host}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _destroy_ful_host
+  changed_when: false
+  failed_when: _destroy_ful_host.rc != 0 or (_destroy_ful_host.stdout | trim | length) == 0
+
+- name: Ensure osac CLI config directory exists
+  ansible.builtin.file:
+    path: /root/.config/osac
+    state: directory
+    mode: "0700"
+
+- name: Log in osac CLI (admin token)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rm -f /root/.config/osac/secrets.json
+    osac logout >/dev/null 2>&1 || true
+    osac login --insecure --private \
+      --token-script "oc create token -n {{ _destroy_osac_ns }} admin --duration 1h" \
+      --address "https://{{ _destroy_ful_host.stdout | trim }}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Resolve cluster ID for {{ caas_cluster_name }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    osac get clusters -o json | python3 -c '
+    import json, sys
+    raw = json.load(sys.stdin)
+    clusters = raw if isinstance(raw, list) else (raw.get("items") or [raw])
+    name = sys.argv[1]
+
+    def cluster_name(c):
+        if not isinstance(c, dict):
+            return ""
+        # Table "NAME" column is metadata.name; top-level name is often unset.
+        meta = c.get("metadata") if isinstance(c.get("metadata"), dict) else {}
+        return (meta.get("name") or c.get("name") or "")
+
+    matches = [c.get("id", "") for c in clusters if cluster_name(c) == name and c.get("id")]
+    print(matches[0] if matches else "")
+    ' "{{ caas_cluster_name }}"
+  environment:
+    KUBECONFIG: /root/.kube/config
   register: _cluster_id
   changed_when: false
   failed_when: false
 
-# Fire-and-forget: async with no polling
-- name: Delete cluster
+- name: Report when named cluster is already absent
+  ansible.builtin.debug:
+    msg: "No osac cluster named '{{ caas_cluster_name }}' — skip osac delete"
+  when: (_cluster_id.stdout | trim | length) == 0
+
+- name: Delete cluster via osac CLI
   ansible.builtin.command:
-    cmd: osac delete cluster {{ _cluster_id.stdout }}
-  when: _cluster_id.stdout | length > 0
-  async: 1
-  poll: 0
-  changed_when: true
+    cmd: osac delete cluster {{ _cluster_id.stdout | trim }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _osac_delete
+  when: (_cluster_id.stdout | trim | length) > 0
+  changed_when: _osac_delete.rc == 0
   failed_when: false
+
+- name: Warn if osac delete failed
+  ansible.builtin.debug:
+    msg: >-
+      osac delete cluster {{ _cluster_id.stdout | trim }} failed
+      (rc={{ _osac_delete.rc }}): {{ _osac_delete.stderr | default(_osac_delete.stdout) | trim }}
+  when:
+    - _osac_delete is not skipped
+    - _osac_delete.rc | default(0) != 0
 
 # Step 2: Force-delete agents by removing finalizers
 - name: Get agent names
   ansible.builtin.shell:
-    cmd: oc get agent -n {{ caas_agent_namespace }} -o jsonpath='{.items[*].metadata.name}' 2>/dev/null
+    cmd: oc get agent -n {{ caas_agent_namespace }} -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true
   environment:
     KUBECONFIG: /root/.kube/config
   register: _agents
@@ -82,7 +148,7 @@
 # Step 5: Shut down discovery VMs and clean up disks
 - name: Find discovery VMs
   ansible.builtin.shell:
-    cmd: virsh list --all --name | grep "{{ item }}"
+    cmd: virsh list --all --name | grep "{{ item }}" || true
   register: _discovery_vm_lookup
   changed_when: false
   failed_when: false

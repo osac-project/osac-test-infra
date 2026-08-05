@@ -3,6 +3,8 @@
 - name: Wait for expected number of agents
   ansible.builtin.shell:
     cmd: oc get agent -n {{ caas_agent_namespace }} --no-headers 2>/dev/null | wc -l
+  environment:
+    KUBECONFIG: /root/.kube/config
   register: _agent_count
   until: _agent_count.stdout | int >= caas_agents | length
   retries: 120
@@ -25,6 +27,74 @@
     caas_agent_names: "{{ _agent_names.stdout.split() }}"
 
 # Step 2: Label agents with resource class and netris server name
+# Agent CRs appear before status.inventory is populated; wait until every
+# expected agent has a hostname before building the label map.
+- name: Get agent hostnames
+  ansible.builtin.shell:
+    cmd: |
+      oc get agent -n {{ caas_agent_namespace }} -o json | python3 -c '
+      import json, sys
+      agents = json.load(sys.stdin).get("items") or []
+      expected = {{ caas_agents | length }}
+      if len(agents) < expected:
+          raise SystemExit(f"only {len(agents)}/{expected} agents present")
+      missing = [
+          a["metadata"]["name"]
+          for a in agents
+          if not ((a.get("status") or {}).get("inventory") or {}).get("hostname")
+      ]
+      if missing:
+          raise SystemExit("inventory hostname missing for: " + ",".join(missing))
+      print(json.dumps({
+          a["metadata"]["name"]: a["status"]["inventory"]["hostname"]
+          for a in agents
+      }))
+      '
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _agent_hostnames_raw
+  until: _agent_hostnames_raw.rc == 0
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Build agent-to-hostname map
+  ansible.builtin.set_fact:
+    _agent_hostname_map: "{{ _agent_hostnames_raw.stdout | from_json }}"
+
+# caas_resource_class_hostnames empty → all agents (CaaS). Non-empty → only those
+# inventory hostnames get resource_class (MaaS defaults to h02+h03).
+- name: Build resource_class agent allow-list by hostname
+  ansible.builtin.set_fact:
+    _agents_for_resource_class: >-
+      {{
+        caas_agent_names
+        if (caas_resource_class_hostnames | default([]) | length) == 0 else
+        (
+          _agent_hostname_map
+          | dict2items
+          | selectattr('value', 'in', caas_resource_class_hostnames)
+          | map(attribute='key')
+          | list
+        )
+      }}
+
+- name: Show resource_class labeling plan
+  ansible.builtin.debug:
+    msg: >-
+      resource_class={{ caas_host_type_id }} on
+      {{ _agents_for_resource_class | length }}/{{ caas_agent_names | length }} agents
+      (filter={{ caas_resource_class_hostnames | default([]) }})
+
+- name: Fail if resource_class hostname filter matched no agents
+  ansible.builtin.fail:
+    msg: >-
+      caas_resource_class_hostnames={{ caas_resource_class_hostnames }} matched 0 agents.
+      Known hostnames: {{ _agent_hostname_map.values() | list }}
+  when:
+    - (caas_resource_class_hostnames | default([]) | length) > 0
+    - (_agents_for_resource_class | length) == 0
+
 - name: Label agent with resource class
   ansible.builtin.command:
     cmd: >-
@@ -33,27 +103,27 @@
       --overwrite
   environment:
     KUBECONFIG: /root/.kube/config
-  loop: "{{ caas_agent_names }}"
+  loop: "{{ _agents_for_resource_class }}"
   register: _label_rc
   changed_when: "'labeled' in _label_rc.stdout and 'not labeled' not in _label_rc.stdout"
   until: _label_rc.rc == 0
   retries: 5
   delay: 10
 
-- name: Get agent hostnames
-  ansible.builtin.shell:
+- name: Remove resource_class from agents outside the allow-list
+  ansible.builtin.command:
     cmd: >-
-      oc get agent -n {{ caas_agent_namespace }} -o json |
-      python3 -c "import sys,json; agents=json.load(sys.stdin)['items'];
-      print(json.dumps({a['metadata']['name']: a['status']['inventory']['hostname'] for a in agents}))"
+      oc label agent/{{ item }} -n {{ caas_agent_namespace }}
+      osac.openshift.io/resource_class- --overwrite
   environment:
     KUBECONFIG: /root/.kube/config
-  register: _agent_hostnames_raw
-  changed_when: false
-
-- name: Build agent-to-hostname map
-  ansible.builtin.set_fact:
-    _agent_hostname_map: "{{ _agent_hostnames_raw.stdout | from_json }}"
+  when:
+    - (caas_resource_class_hostnames | default([]) | length) > 0
+    - item not in _agents_for_resource_class
+  loop: "{{ caas_agent_names }}"
+  register: _unlabel_rc
+  changed_when: "'labeled' in _unlabel_rc.stdout or 'unlabeled' in _unlabel_rc.stdout"
+  failed_when: false
 
 - name: Label agent with netris server name
   ansible.builtin.command:
@@ -82,7 +152,7 @@
   until: _agent_approved.rc == 0
   retries: 5
   delay: 10
-  loop: "{{ caas_agent_names }}"
+  loop: "{{ _agents_for_resource_class }}"
 
 - name: Approve agents
   ansible.builtin.command:
@@ -163,6 +233,70 @@
       description: "{{ caas_host_type_description }}"
     validate_certs: false
     status_code: [200, 201, 409]
+
+# AAP netris.steps.cluster_infra looks up netris_resource_class_map[resourceClass]
+# from env NETRIS_RESOURCE_CLASS_MAP (cluster-fulfillment-ig). Install only seeds
+# the then-current caas_host_type_id (e.g. ci-worker); setup-maas needs g5 too.
+# Append only when the key is missing — never overwrite an existing entry.
+- name: Read NETRIS_RESOURCE_CLASS_MAP from cluster-fulfillment-ig
+  ansible.builtin.shell:
+    cmd: >-
+      oc get configmap cluster-fulfillment-ig
+      -n {{ snapshot_osac_namespace | default(osac_namespace) }}
+      -o jsonpath='{.data.NETRIS_RESOURCE_CLASS_MAP}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _netris_rc_map_raw
+  changed_when: false
+  failed_when: false
+
+- name: Ensure host type is present in NETRIS_RESOURCE_CLASS_MAP
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 <<'PY'
+    import json, os, subprocess, sys
+
+    raw = os.environ.get("NETRIS_RC_MAP_RAW") or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+
+    name = os.environ["NETRIS_RC_NAME"]
+    if name in data and isinstance(data[name], dict) and data[name]:
+        print(f"unchanged {name} already in NETRIS_RESOURCE_CLASS_MAP")
+        sys.exit(0)
+
+    entry = {
+        "server_cluster_template_id": int(os.environ["NETRIS_RC_TEMPLATE_ID"]),
+        "mgmt_interface": os.environ["NETRIS_RC_MGMT_IF"],
+        "vpc_interfaces": json.loads(os.environ["NETRIS_RC_VPC_IFS"]),
+    }
+    data[name] = entry
+    new_json = json.dumps(data, separators=(",", ":"))
+    patch = json.dumps({"data": {"NETRIS_RESOURCE_CLASS_MAP": new_json}})
+    subprocess.run(
+        [
+            "oc", "patch", "configmap", "cluster-fulfillment-ig",
+            "-n", os.environ["NETRIS_RC_NS"],
+            "--type=merge", "-p", patch,
+        ],
+        check=True,
+    )
+    print(f"patched added {name}={json.dumps(entry)}")
+    PY
+  environment:
+    KUBECONFIG: /root/.kube/config
+    NETRIS_RC_NS: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    NETRIS_RC_MAP_RAW: "{{ _netris_rc_map_raw.stdout | default('') }}"
+    NETRIS_RC_NAME: "{{ caas_host_type_id }}"
+    NETRIS_RC_TEMPLATE_ID: "{{ caas_netris_server_cluster_template_id | default(2) }}"
+    NETRIS_RC_MGMT_IF: "{{ caas_netris_mgmt_interface | default('ens4') }}"
+    NETRIS_RC_VPC_IFS: "{{ caas_netris_vpc_interfaces | default(['ens5']) | to_json }}"
+  register: _netris_rc_map_ensure
+  changed_when: "'patched ' in _netris_rc_map_ensure.stdout"
 
 # Step 4: Trigger AAP publish-templates job and wait for cluster template
 - name: Get AAP route

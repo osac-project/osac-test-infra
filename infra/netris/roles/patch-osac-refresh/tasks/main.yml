@@ -120,6 +120,15 @@
 # (http://osac-aap/api/controller), not an external route hostname that
 # would change when the snapshot's identity is refreshed.
 
+# Apply Helm/config-as-code-ig AAP project pin to the live Controller Project
+# and run CaC once. Snapshot AAP DB keeps the bake-time scm_branch; hourly
+# CaC alone is too late for setup-maas publish (see sync-aap-project-pin.yml).
+- name: Sync AAP project pin from config-as-code-ig and run CaC
+  ansible.builtin.include_tasks: sync-aap-project-pin.yml
+
 - name: Report OSAC post-refresh completed
   ansible.builtin.debug:
-    msg: "OSAC post-refresh completed — Netris config, SSH keys, and socat configured (AAP token refresh now handled automatically by osac-aap's create-api-token Helm hook)"
+    msg: >-
+      OSAC post-refresh completed — Netris config, SSH keys, socat, and AAP
+      project pin/CaC applied (AAP token refresh handled by osac-aap
+      create-api-token Helm hook)

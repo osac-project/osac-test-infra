@@ -1,12 +1,24 @@
 ---
 - name: Check if cluster already exists
   ansible.builtin.shell:
-    cmd: osac get clusters -o json | python3 -c "import sys,json; clusters=json.load(sys.stdin); print('exists' if any(c.get('name')=='{{ caas_cluster_name }}' for c in clusters) else 'absent')"
+    cmd: >-
+      osac get clusters -o json | python3 -c "
+      import sys, json
+      raw = json.load(sys.stdin)
+      clusters = raw if isinstance(raw, list) else (raw.get('items') or [raw])
+      def n(c):
+          meta = c.get('metadata') if isinstance(c.get('metadata'), dict) else {}
+          return meta.get('name') or c.get('name') or ''
+      print('exists' if any(n(c)=='{{ caas_cluster_name }}' for c in clusters if isinstance(c, dict)) else 'absent')
+      "
   register: _cluster_exists
   changed_when: false
   failed_when: false
 
-- name: Create cluster
+# Default CaaS path: pull_secret / ssh_public_key are template -f fields + release-image.
+# When caas_cluster_params is non-empty (e.g. deploy-maas), use --pull-secret-file /
+# --ssh-public-key-file plus -p for template-specific parameters instead.
+- name: Create cluster (CaaS template field params)
   ansible.builtin.command:
     cmd: >-
       osac create cluster
@@ -15,24 +27,110 @@
       -f pull_secret={{ pull_secret_path }}
       -f ssh_public_key={{ ssh_public_key_path }}
       --name {{ caas_cluster_name }}
-  register: _cluster_create
-  when: _cluster_exists.stdout | default('') != 'exists'
+  register: _cluster_create_fields
+  when:
+    - _cluster_exists.stdout | default('') != 'exists'
+    - (caas_cluster_params | default([]) | length) == 0
   changed_when: true
+
+- name: Create cluster (explicit -p params)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    args=(
+      osac create cluster
+      --template "{{ caas_cluster_template }}"
+      --pull-secret-file "{{ pull_secret_path }}"
+      --ssh-public-key-file "{{ ssh_public_key_path }}"
+      --name "{{ caas_cluster_name }}"
+    )
+    {% for p in caas_cluster_params | default([]) %}
+    args+=(-p {{ p | quote }})
+    {% endfor %}
+    printf '+';
+    printf ' %q' "${args[@]}"
+    printf '\n'
+    "${args[@]}"
+  args:
+    executable: /bin/bash
+  register: _cluster_create_params
+  when:
+    - _cluster_exists.stdout | default('') != 'exists'
+    - (caas_cluster_params | default([]) | length) > 0
+  changed_when: true
+
+- name: Select create result
+  ansible.builtin.set_fact:
+    _cluster_create: "{{ _cluster_create_params if (caas_cluster_params | default([]) | length) > 0 else _cluster_create_fields }}"
+  when: _cluster_exists.stdout | default('') != 'exists'
 
 - name: Get existing cluster ID
   ansible.builtin.shell:
-    cmd: osac get clusters -o json | python3 -c "import sys,json; clusters=json.load(sys.stdin); print(next(c['id'] for c in clusters if c.get('name')=='{{ caas_cluster_name }}'))"
+    cmd: >-
+      osac get clusters -o json | python3 -c "
+      import sys, json
+      raw = json.load(sys.stdin)
+      clusters = raw if isinstance(raw, list) else (raw.get('items') or [raw])
+      def n(c):
+          meta = c.get('metadata') if isinstance(c.get('metadata'), dict) else {}
+          return meta.get('name') or c.get('name') or ''
+      print(next(c['id'] for c in clusters if isinstance(c, dict) and n(c)=='{{ caas_cluster_name }}'))
+      "
   register: _existing_cluster_id
   when: _cluster_exists.stdout | default('') == 'exists'
   changed_when: false
 
 - name: Extract cluster ID
   ansible.builtin.set_fact:
-    caas_cluster_id: "{{ _cluster_create.stdout | regex_search('[0-9a-f-]{36}') if _cluster_create is not skipped else _existing_cluster_id.stdout }}"
+    caas_cluster_id: "{{ _existing_cluster_id.stdout if (_cluster_exists.stdout | default('')) == 'exists' else (_cluster_create.stdout | regex_search('[0-9a-f-]{36}')) }}"
 
 - name: Report cluster creation started
   ansible.builtin.debug:
-    msg: "Cluster '{{ caas_cluster_name }}' {{ 'created' if _cluster_create is not skipped else 'already exists' }} with ID {{ caas_cluster_id }}"
+    msg: "Cluster '{{ caas_cluster_name }}' {{ 'already exists' if (_cluster_exists.stdout | default('')) == 'exists' else 'created' }} with ID {{ caas_cluster_id }}"
+
+# The HyperShift operator creates the hosted control plane namespace with
+# PodSecurity enforce=restricted, which blocks ALL CP pods (etcd, apiserver,
+# capi-provider). We must relabel it to privileged before they can start.
+- name: Wait for hosted control plane namespace to appear
+  ansible.builtin.shell:
+    cmd: >-
+      oc get ns -l hypershift.openshift.io/hosted-control-plane=true --no-headers 2>/dev/null
+      | grep '{{ snapshot_osac_namespace | default(osac_namespace) }}'
+      | awk '{print $1}'
+      | grep -v '^$'
+      | head -1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _cp_namespace
+  until: _cp_namespace.stdout | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Label hosted control plane namespace with privileged PodSecurity
+  ansible.builtin.command:
+    cmd: >-
+      oc label ns {{ _cp_namespace.stdout }}
+      pod-security.kubernetes.io/enforce=privileged
+      pod-security.kubernetes.io/audit=privileged
+      pod-security.kubernetes.io/warn=privileged
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Also label the HostedCluster namespace with privileged PodSecurity
+  ansible.builtin.shell:
+    cmd: >-
+      HC_NS=$(oc get hostedcluster -A --no-headers 2>/dev/null
+      | grep '{{ snapshot_osac_namespace | default(osac_namespace) }}'
+      | awk '{print $1}'
+      | head -1);
+      [ -n "$HC_NS" ] && oc label ns "$HC_NS"
+      pod-security.kubernetes.io/enforce=privileged
+      --overwrite 2>/dev/null || true
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
 
 - name: Wait for cluster to be ready
   ansible.builtin.shell:
@@ -52,6 +150,9 @@
     msg: "CaaS cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) is in FAILED state"
   when: _cluster_state.stdout == "CLUSTER_STATE_FAILED"
 
-- name: Report cluster ready
+- name: Report final cluster state
   ansible.builtin.debug:
-    msg: "CaaS cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) is READY"
+    msg: >-
+      CaaS cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) is
+      {{ _cluster_state.stdout }}{% if _cluster_state.stdout == 'CLUSTER_STATE_PROGRESSING' %}.
+      Please keep on monitoring the cluster state manually{% endif %}

@@ -19,6 +19,13 @@
     timeout: 600
     sleep: 15
 
+- name: Remove stale SSH host key for mgmt-server
+  # After destroy/redeploy the mgmt-server VM gets a new host key; clear
+  # known_hosts so the OpenVPN SSH check below does not fail with
+  # "REMOTE HOST IDENTIFICATION HAS CHANGED".
+  shell: ssh-keygen -R 192.168.122.10 2>/dev/null || true
+  changed_when: false
+
 - name: Wait for mgmt-server OpenVPN server
   shell: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.122.10 "systemctl is-active openvpn@server"
   register: vpn_server_check

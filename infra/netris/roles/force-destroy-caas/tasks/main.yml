@@ -1,0 +1,321 @@
+---
+# Force-clean leftovers after destroy-caas (no graceful wait — equivalent to
+# destroy-caas.sh --now). Strips stuck HostedCluster / ClusterOrder / ManagedCluster
+# and related namespaces (incl. HCP ns + ghost ns with Terminating pods/deploys),
+# deletes leftover order-* apps LB services, detaches/wipes discovery worker VMs,
+# sweeps orphan Netris order-* server clusters and VPCs.
+
+- name: Resolve OSAC namespace for force destroy
+  ansible.builtin.set_fact:
+    _force_osac_ns: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    _force_agent_ns: "{{ caas_agent_namespace }}"
+
+- name: Collect leftover order names
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ns="{{ _force_osac_ns }}"
+    {
+      oc get clusterorder -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true
+      oc get hostedcluster -A --no-headers 2>/dev/null | awk '{print $2}' | grep '^order-' || true
+      oc get ns -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+        | while read -r n; do
+            case "$n" in
+              klusterlet-order-*) echo "order-${n#klusterlet-order-}" ;;
+              "${ns}"-order-*-order-*)
+                # HCP ns: osac-devel-order-xxx-order-xxx
+                if [[ "$n" =~ ${ns}-(order-[a-z0-9]+)-order- ]]; then
+                  echo "${BASH_REMATCH[1]}"
+                fi
+                ;;
+              "${ns}"-order-*) echo "${n#"${ns}-"}" ;;
+            esac
+          done
+      # Ghost ns: object gone but pods/deploys/HCP CRs remain
+      {
+        oc get pods -A --no-headers 2>/dev/null || true
+        oc get deploy -A --no-headers 2>/dev/null || true
+        oc get hostedcontrolplanes.hypershift.openshift.io -A --no-headers 2>/dev/null || true
+      } | awk -v pfx="${ns}-" '$1 ~ pfx"order-" {print $1}' | sort -u \
+        | while read -r n; do
+            if [[ "$n" =~ ${ns}-(order-[a-z0-9]+)-order- ]]; then
+              echo "${BASH_REMATCH[1]}"
+            elif [[ "$n" =~ ${ns}-(order-[a-z0-9]+)$ ]]; then
+              echo "${BASH_REMATCH[1]}"
+            fi
+          done
+      # Leftover apps LB services in OSAC ns (order-xxx-apps-wa-lb)
+      oc get svc -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+        | while read -r svc; do
+            if [[ "$svc" =~ ^(order-[a-z0-9]+) ]]; then
+              echo "${BASH_REMATCH[1]}"
+            fi
+          done
+    } | grep -E '^order-' | sort -u
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _force_orders_raw
+  changed_when: false
+  failed_when: false
+
+- name: Set order list
+  ansible.builtin.set_fact:
+    force_destroy_orders: "{{ _force_orders_raw.stdout_lines | map('trim') | reject('equalto', '') | list }}"
+
+- name: Report force-destroy plan
+  ansible.builtin.debug:
+    msg: >-
+      Force-destroy orders={{ force_destroy_orders | default([]) }}
+      worker_vms={{ caas_discovery_vm_patterns }}
+
+- name: Force-clean each leftover order
+  ansible.builtin.shell: |
+    set -euo pipefail
+    order="{{ item }}"
+    ns="{{ _force_osac_ns }}"
+    hc_ns="${ns}-${order}"
+    hcp_ns="${hc_ns}-${order}"
+
+    strip() {
+      local kind="$1" name="$2" n="${3:-}"
+      if [[ -n "$n" ]]; then
+        oc patch "$kind" "$name" -n "$n" -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
+        oc delete "$kind" "$name" -n "$n" --force --grace-period=0 --wait=false 2>/dev/null || true
+      else
+        oc patch "$kind" "$name" -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
+        oc delete "$kind" "$name" --force --grace-period=0 --wait=false 2>/dev/null || true
+      fi
+    }
+
+    ns_has_orphans() {
+      local n="$1"
+      oc get ns "$n" >/dev/null 2>&1 && return 0
+      oc get pods -n "$n" --no-headers 2>/dev/null | grep -q . && return 0
+      oc get hostedcontrolplanes.hypershift.openshift.io -n "$n" --no-headers 2>/dev/null | grep -q . && return 0
+      oc get deployments.apps -n "$n" --no-headers 2>/dev/null | grep -q . && return 0
+      return 1
+    }
+
+    force_ns_contents() {
+      local n="$1" kind name obj
+      echo "  force contents of ns ${n}"
+      for name in $(oc get pods -n "$n" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+        strip pod "$name" "$n"
+      done
+      for kind in \
+          hostedcontrolplanes.hypershift.openshift.io \
+          controlplanecomponents.hypershift.openshift.io \
+          hostedcluster nodepool clusterdeployment agentclusterinstall \
+          clusters.cluster.x-k8s.io \
+          agentclusters.capi-provider.agent-install.openshift.io \
+          agentmachinetemplates.capi-provider.agent-install.openshift.io \
+          machinedeployments.cluster.x-k8s.io machinesets.cluster.x-k8s.io machines.cluster.x-k8s.io \
+          machinedeployment machineset machine agents \
+          deployments.apps replicasets.apps statefulsets.apps daemonsets.apps \
+          jobs.batch cronjobs.batch \
+          services endpoints endpointslices.discovery.k8s.io \
+          persistentvolumeclaims configmaps secrets serviceaccounts \
+          roles.rbac.authorization.k8s.io rolebindings.rbac.authorization.k8s.io \
+          roles.authorization.openshift.io rolebindings.authorization.openshift.io \
+          leases.coordination.k8s.io controllerrevisions.apps \
+          networkpolicies.networking.k8s.io poddisruptionbudgets.policy \
+          imagestreams.image.openshift.io; do
+        for name in $(oc get "$kind" -n "$n" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+          strip "$kind" "$name" "$n"
+        done
+      done
+      if oc get pods -n "$n" --no-headers 2>/dev/null | grep -q . \
+         || oc get deployments.apps -n "$n" --no-headers 2>/dev/null | grep -q .; then
+        while read -r kind; do
+          [[ -z "$kind" ]] && continue
+          for obj in $(oc get "$kind" -n "$n" -o name 2>/dev/null); do
+            strip "${obj%%/*}" "${obj#*/}" "$n"
+          done
+        done < <(oc api-resources --verbs=delete --namespaced -o name 2>/dev/null || true)
+      fi
+    }
+
+    force_ns() {
+      local n="$1" i left
+      ns_has_orphans "$n" || return 0
+      echo "  force ns ${n}"
+      # Ghost ns: recreate so deletes can finish (premature finalize leaves orphans)
+      if ! oc get ns "$n" >/dev/null 2>&1; then
+        echo "  ns ${n} missing but orphans remain — recreating to finish purge"
+        oc create ns "$n" 2>/dev/null || true
+      fi
+      force_ns_contents "$n"
+      if oc get ns "$n" >/dev/null 2>&1; then
+        oc delete ns "$n" --wait=false 2>/dev/null || true
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          oc get ns "$n" >/dev/null 2>&1 || { echo "  ns ${n}: gone"; return 0; }
+          left=$(oc get pods,deployments.apps,hostedcontrolplanes.hypershift.openshift.io \
+            -n "$n" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+          if [[ "${left:-0}" -gt 0 ]]; then
+            echo "  ns ${n}: ${left} objs still present — re-force before finalize"
+            force_ns_contents "$n"
+            sleep 2
+            continue
+          fi
+          oc patch ns "$n" --type=json -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+          oc patch ns "$n" --type=merge -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
+          oc get ns "$n" -o json 2>/dev/null \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); d["metadata"].pop("finalizers",None); d.setdefault("spec",{})["finalizers"]=[]; json.dump(d,sys.stdout)' \
+            | oc replace --raw "/api/v1/namespaces/${n}/finalize" -f - >/dev/null 2>&1 || true
+          sleep 2
+        done
+      fi
+      left=$(oc get pods,deployments.apps -n "$n" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+      if oc get ns "$n" >/dev/null 2>&1 || [[ "${left:-0}" -gt 0 ]]; then
+        echo "  WARN: ns ${n} still present (objs left=${left:-0})"
+      else
+        echo "  ns ${n}: gone"
+      fi
+    }
+
+    force_order_services() {
+      local name
+      for name in $(oc get svc -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+          | grep -E "^${order}(-|$)" || true); do
+        echo "  delete leftover svc ${ns}/${name}"
+        strip service "$name" "$ns"
+      done
+      for name in $(oc get route -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+          | grep -E "^${order}" || true); do
+        echo "  delete leftover route ${ns}/${name}"
+        strip route "$name" "$ns"
+      done
+    }
+
+    echo "force-clean order ${order}"
+    for np in $(oc get nodepool -n "$hc_ns" -o name 2>/dev/null); do
+      strip "${np%%/*}" "${np#*/}" "$hc_ns"
+    done
+    strip hostedcluster "$order" "$hc_ns"
+    strip clusterorder "$order" "$ns"
+    strip managedcluster "$order"
+    force_order_services
+    # HCP ns first (Terminating control-plane pods/deploys), then HC ns
+    force_ns "$hcp_ns"
+    force_ns "$hc_ns"
+    force_ns "$order"
+    force_ns "klusterlet-${order}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ force_destroy_orders }}"
+  when: force_destroy_orders | length > 0
+  failed_when: false
+  changed_when: true
+
+- name: Wipe discovery worker VMs (detach disks/ISO + remove qcow2)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    vm="{{ item }}"
+    if ! virsh dominfo "$vm" >/dev/null 2>&1; then
+      echo "VM $vm not found — skip"
+      exit 0
+    fi
+    if virsh list --name 2>/dev/null | grep -qx "$vm"; then
+      virsh destroy "$vm" 2>/dev/null || true
+    fi
+    while read -r target; do
+      [[ -z "$target" ]] && continue
+      virsh change-media "$vm" "$target" --eject --config 2>/dev/null || true
+      virsh detach-disk "$vm" "$target" --config 2>/dev/null || true
+    done < <(virsh domblklist "$vm" 2>/dev/null | awk 'NR>2 && NF>=1 {print $1}')
+    rm -f "/var/lib/libvirt/images/${vm}-disk.qcow2"
+    echo "$vm powered off; disks/ISO detached; qcow2 removed"
+  loop: "{{ caas_discovery_vm_patterns }}"
+  failed_when: false
+  changed_when: true
+
+- name: Delete any remaining Agent CRs for wiped VMs
+  ansible.builtin.shell: |
+    set -euo pipefail
+    vm="{{ item }}"
+    agent_ns="{{ _force_agent_ns }}"
+    agent=$(oc get agent -n "$agent_ns" -o json 2>/dev/null | python3 -c '
+    import json, sys
+    vm = sys.argv[1]
+    data = json.load(sys.stdin)
+    for a in data.get("items") or []:
+        host = ((a.get("status") or {}).get("inventory") or {}).get("hostname") or ""
+        if host == vm:
+            print(a["metadata"]["name"])
+            break
+    ' "$vm" || true)
+    if [[ -n "$agent" ]]; then
+      oc delete agent "$agent" -n "$agent_ns" --wait=false 2>/dev/null || true
+      echo "deleted agent $agent ($vm)"
+    fi
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ caas_discovery_vm_patterns }}"
+  failed_when: false
+  changed_when: true
+
+- name: Resolve Netris controller URL
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ns="{{ _force_osac_ns }}"
+    url=$(oc get cm cluster-fulfillment-ig -n "$ns" \
+      -o jsonpath='{.data.NETRIS_CONTROLLER_URL}' 2>/dev/null || true)
+    if [[ -z "$url" && -f /etc/rancher/k3s/k3s.yaml ]]; then
+      port=$(KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get svc traefik -n kube-system \
+        -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}' 2>/dev/null || true)
+      [[ -n "$port" ]] && url="http://198.51.100.9:${port}"
+    fi
+    printf '%s' "${url%/}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _netris_url
+  changed_when: false
+  failed_when: false
+
+- name: Resolve Netris password
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ns="{{ _force_osac_ns }}"
+    pass=$(oc get secret cluster-fulfillment-ig -n "$ns" \
+      -o jsonpath='{.data.NETRIS_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    printf '%s' "${pass:-netris}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _netris_pass
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Write live-orders file for Netris sweep
+  ansible.builtin.copy:
+    dest: /tmp/force-destroy-live-orders.txt
+    mode: "0600"
+    content: ""
+  when: (_netris_url.stdout | trim | length) > 0
+
+- name: Sweep orphan Netris order resources
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 "{{ role_path }}/files/netris_orphan_cleanup.py" \
+      "{{ _netris_url.stdout | trim }}" \
+      /tmp/force-destroy-netris.ck \
+      "{{ force_destroy_netris_user | default('netris') }}" \
+      "$NETRIS_PASS" \
+      {{ force_destroy_orders | map('quote') | join(' ') }}
+  environment:
+    NETRIS_LIVE_ORDERS_FILE: /tmp/force-destroy-live-orders.txt
+    NETRIS_PASS: "{{ _netris_pass.stdout }}"
+  register: _netris_cleanup
+  when: (_netris_url.stdout | trim | length) > 0
+  failed_when: false
+  changed_when: "'deletes' in (_netris_cleanup.stdout | default(''))"
+  no_log: false
+
+- name: Warn if Netris URL undiscoverable
+  ansible.builtin.debug:
+    msg: "Netris URL undiscoverable — skipped orphan cleanup"
+  when: (_netris_url.stdout | trim | length) == 0
+
+- name: Show Netris cleanup output
+  ansible.builtin.debug:
+    msg: "{{ _netris_cleanup.stdout_lines | default([]) }}"
+  when: _netris_cleanup is not skipped

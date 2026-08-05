@@ -308,7 +308,9 @@
 
     - name: Remove stale Ansible collection artifacts from repo
       ansible.builtin.shell:
-        cmd: rm -rf /root/netris-test-infra/netris-lab/collections/ansible_collections 2>/dev/null || true
+        cmd: |
+          rm -rf /root/osac-test-infra/infra/netris/netris-lab/collections/ansible_collections 2>/dev/null || true
+          rm -rf /root/netris-test-infra/netris-lab/collections/ansible_collections 2>/dev/null || true
       changed_when: true
 
     # --- Phase 9: Final status ---

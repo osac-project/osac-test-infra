@@ -76,6 +76,8 @@ snapshot_flavor_dir: >-
 snapshot_recert_image: "quay.io/osac-project/recert:latest"
 snapshot_osac_namespace: "osac-e2e-ci"
 snapshot_osac_values_file: "values/caas-ci/values.yaml"
+# Grow CoW OS overlay during restore-snapshot when SUITE=maas (flavor is ~100Gi).
+ocp_snapshot_disk_gb: 150
 
 # AWS configuration for Route 53 DNS (read from config file or environment)
 aws_access_key_id: "{{ lookup('ini', 'aws_access_key_id section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_ACCESS_KEY_ID'), true) }}"
@@ -92,6 +94,8 @@ caas_discovery_vm_patterns:
   - "hgx-pod00-su0-h02"
   - "hgx-pod00-su0-h03"
 caas_discovery_vcpu: 4
+# Optional per-VM vCPU overrides (VM name → count). Empty = use caas_discovery_vcpu for all.
+caas_discovery_vcpu_overrides: {}
 caas_discovery_memory_mb: 16384
 caas_discovery_disk_gb: 100
 caas_discovery_infraenv_name: "infraenv"
@@ -104,11 +108,24 @@ caas_server_cluster_template_gateway: "192.168.101.1/24"
 caas_host_type_id: "ci-worker"
 caas_host_type_title: "CI Worker"
 caas_host_type_description: "Worker nodes for CI testing"
+# Netris per-resource-class entry merged into cluster-fulfillment-ig
+# NETRIS_RESOURCE_CLASS_MAP when the host type key is missing (setup-caas / setup-maas).
+caas_netris_server_cluster_template_id: 2
+caas_netris_mgmt_interface: "ens4"
+caas_netris_vpc_interfaces:
+  - "ens5"
 caas_cluster_template: "osac.templates.ocp_ci_small"
 caas_catalog_item: "ci-ocp-small"
 caas_catalog_item_title: "CI OCP Small"
 caas_catalog_item_description: "Small OCP cluster for CI testing"
 caas_cluster_name: "caas-ci-cluster"
+# When non-empty, osac create uses --pull-secret-file / --ssh-public-key-file and
+# -p for each entry instead of -f pull_secret= / -f ssh_public_key= (MaaS templates).
+caas_cluster_params: []
+# Empty = label/approve every discovered agent with resource_class (setup-caas).
+# Non-empty = only these inventory hostnames get osac.openshift.io/resource_class
+# (others are unlabeled). setup-maas defaults to h02+h03 so MaaS claims those workers.
+caas_resource_class_hostnames: []
 caas_agents:
   - vm_pattern: "hgx-pod00-su0-h01"
     netris_server_name: "hgx-pod00-su0-h01"

@@ -1,0 +1,287 @@
+# Apply aap.configAsCode.projectGit* from config-as-code-ig onto the live
+# AAP Project, then run osac-config-as-code once.
+#
+# Why: refresh-after-snapshot Helm-upgrades the secret/values pin, but the
+# golden snapshot's AAP DB keeps the bake-time scm_branch. Hourly CaC has
+# not necessarily run yet (and may never have on a fresh restore), so
+# publish-templates / setup-maas can still enumerate roles from the old
+# checkout (e.g. pre-OSAC-2816 → ocp_4_20_ai_maas skipped).
+#
+# Prefer an explicit Project PATCH + /update/ (same idea as installer
+# prepare-fulfillment sync_aap_project) over waiting on the schedule.
+# Launching CaC afterward reconciles EE image and other Controller objects
+# from the same secret.
+#
+# Mono-repo pins (…/osac, not …/osac-aap): snapshot JTs still use standalone
+# root playbook paths (playbook_osac_*.yml). After Project sync, rewrite those
+# to osac-aap/… before launching CaC, or CaC fails with "playbook could not
+# be found".
+
+- name: Get AAP route
+  ansible.builtin.shell:
+    cmd: oc get route osac-aap -n {{ snapshot_osac_namespace }} -o jsonpath='{.spec.host}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _aap_pin_route
+  changed_when: false
+  until: _aap_pin_route.rc == 0 and _aap_pin_route.stdout | length > 0
+  retries: 20
+  delay: 15
+
+- name: Get AAP admin password
+  ansible.builtin.shell:
+    cmd: >-
+      oc get secret osac-aap-controller-admin-password
+      -n {{ snapshot_osac_namespace }}
+      -o jsonpath='{.data.password}' | base64 -d
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _aap_pin_admin_pw
+  changed_when: false
+  no_log: true
+
+- name: Read intended AAP project pin from config-as-code-ig
+  ansible.builtin.shell:
+    cmd: |
+      echo "uri=$(oc get secret config-as-code-ig -n {{ snapshot_osac_namespace }} -o jsonpath='{.data.AAP_PROJECT_GIT_URI}' | base64 -d)"
+      echo "branch=$(oc get secret config-as-code-ig -n {{ snapshot_osac_namespace }} -o jsonpath='{.data.AAP_PROJECT_GIT_BRANCH}' | base64 -d)"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _aap_pin_secret
+  changed_when: false
+
+- name: Parse intended AAP project pin
+  ansible.builtin.set_fact:
+    _aap_expected_uri: "{{ _aap_pin_secret.stdout_lines | select('match', '^uri=') | first | regex_replace('^uri=', '') }}"
+    _aap_expected_branch: "{{ _aap_pin_secret.stdout_lines | select('match', '^branch=') | first | regex_replace('^branch=', '') }}"
+
+- name: Fail if config-as-code-ig pin is incomplete
+  ansible.builtin.fail:
+    msg: >-
+      config-as-code-ig missing AAP_PROJECT_GIT_URI/BRANCH
+      (uri={{ _aap_expected_uri | default('') }}, branch={{ _aap_expected_branch | default('') }})
+  when: (_aap_expected_uri | length) == 0 or (_aap_expected_branch | length) == 0
+
+- name: Wait for AAP controller API
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/ping/"
+    method: GET
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200]
+  register: _aap_pin_ping
+  until: _aap_pin_ping.status == 200
+  retries: 30
+  delay: 10
+  no_log: true
+
+- name: Resolve AAP project id from osac-publish-templates job template
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/job_templates/?name=osac-publish-templates"
+    method: GET
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _aap_pin_jt
+  until: _aap_pin_jt.status == 200 and (_aap_pin_jt.json.count | default(0)) > 0
+  retries: 30
+  delay: 10
+  no_log: true
+
+- name: Set AAP project id
+  ansible.builtin.set_fact:
+    _aap_project_id: "{{ _aap_pin_jt.json.results[0].project }}"
+
+- name: Read live AAP project SCM
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/projects/{{ _aap_project_id }}/"
+    method: GET
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _aap_project
+  no_log: true
+
+- name: Normalize SCM URIs for comparison (ignore trailing .git / slash)
+  ansible.builtin.set_fact:
+    _aap_live_uri_norm: "{{ (_aap_project.json.scm_url | default('')) | regex_replace('/$', '') | regex_replace('\\.git$', '') }}"
+    _aap_expected_uri_norm: "{{ _aap_expected_uri | regex_replace('/$', '') | regex_replace('\\.git$', '') }}"
+    _aap_live_branch: "{{ _aap_project.json.scm_branch | default('') }}"
+
+- name: Show AAP project pin plan
+  ansible.builtin.debug:
+    msg: >-
+      AAP project {{ _aap_project_id }}:
+      live={{ _aap_live_uri_norm }}@{{ _aap_live_branch }}
+      expected={{ _aap_expected_uri_norm }}@{{ _aap_expected_branch }}
+
+- name: Patch AAP project SCM to config-as-code-ig pin
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/projects/{{ _aap_project_id }}/"
+    method: PATCH
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      scm_url: "{{ _aap_expected_uri }}"
+      scm_branch: "{{ _aap_expected_branch }}"
+    status_code: [200]
+  register: _aap_project_patch
+  when: >-
+    _aap_live_uri_norm != _aap_expected_uri_norm
+    or _aap_live_branch != _aap_expected_branch
+  no_log: true
+
+- name: Trigger AAP project update
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/projects/{{ _aap_project_id }}/update/"
+    method: POST
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [202]
+  register: _aap_project_update
+  retries: 5
+  delay: 15
+  until: _aap_project_update.status == 202
+  no_log: true
+
+- name: Wait for AAP project sync to succeed
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/projects/{{ _aap_project_id }}/"
+    method: GET
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _aap_project_status
+  until: _aap_project_status.json.status in ['successful', 'failed', 'error']
+  retries: 40
+  delay: 10
+  no_log: true
+
+- name: Fail if AAP project sync did not succeed
+  ansible.builtin.fail:
+    msg: >-
+      AAP project {{ _aap_project_id }} sync finished with status
+      {{ _aap_project_status.json.status }} (expected successful;
+      pin {{ _aap_expected_uri }}@{{ _aap_expected_branch }})
+  when: _aap_project_status.json.status != 'successful'
+
+- name: Fail if synced revision does not match SHA pin
+  ansible.builtin.fail:
+    msg: >-
+      AAP project synced to {{ _aap_project_status.json.scm_revision }}
+      but config-as-code-ig pin is {{ _aap_expected_branch }}
+  when:
+    - _aap_expected_branch is match('^[0-9a-f]{40}$')
+    - (_aap_project_status.json.scm_revision | default('')) != _aap_expected_branch
+
+# Snapshot JTs assume standalone osac-aap (playbooks at repo root). Mono-repo
+# checkouts keep those files under osac-aap/. Rewrite before CaC or launch fails.
+- name: Detect mono-repo AAP project pin
+  ansible.builtin.set_fact:
+    _aap_pin_is_monorepo: >-
+      {{ (_aap_expected_uri_norm | regex_search('/osac-aap$')) is none
+         and (_aap_expected_uri_norm | regex_search('/osac$')) is not none }}
+
+- name: List job templates for AAP project
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/job_templates/?project={{ _aap_project_id }}&page_size=200"
+    method: GET
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _aap_project_jts
+  when: _aap_pin_is_monorepo | bool
+  no_log: true
+
+- name: Build JT playbook rewrites for mono-repo layout
+  ansible.builtin.set_fact:
+    _aap_jt_playbook_rewrites: "{{ (_aap_jt_playbook_rewrites | default([])) + [_aap_jt_rewrite] }}"
+  vars:
+    _aap_jt_rewrite:
+      id: "{{ item.id }}"
+      name: "{{ item.name }}"
+      playbook: "osac-aap/{{ item.playbook }}"
+  loop: "{{ _aap_project_jts.json.results | default([]) }}"
+  when:
+    - _aap_pin_is_monorepo | bool
+    - (item.playbook | default('')) is match('^(playbook_osac_.*\\.yml|collections/.*)$')
+    - not ((item.playbook | default('')) is match('^osac-aap/'))
+  no_log: true
+
+- name: Show mono-repo JT playbook rewrite plan
+  ansible.builtin.debug:
+    msg: >-
+      Mono-repo pin: rewriting {{ _aap_jt_playbook_rewrites | default([]) | length }}
+      job template playbook path(s) under osac-aap/
+  when: _aap_pin_is_monorepo | bool
+
+- name: Prefix mono-repo playbook paths with osac-aap/
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/job_templates/{{ item.id }}/"
+    method: PATCH
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      playbook: "{{ item.playbook }}"
+    status_code: [200]
+  loop: "{{ _aap_jt_playbook_rewrites | default([]) }}"
+  loop_control:
+    label: "{{ item.name | default(item.id) }} → {{ item.playbook }}"
+  when: (_aap_jt_playbook_rewrites | default([]) | length) > 0
+  no_log: true
+
+- name: Launch osac-config-as-code (apply pin-driven Controller config)
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/job_templates/osac-config-as-code/launch/"
+    method: POST
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [201]
+  register: _aap_cac_job
+  retries: 5
+  delay: 20
+  until: _aap_cac_job.status == 201
+
+- name: Wait for osac-config-as-code job to complete
+  ansible.builtin.uri:
+    url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/jobs/{{ _aap_cac_job.json.id }}/"
+    method: GET
+    user: admin
+    password: "{{ _aap_pin_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _aap_cac_status
+  until: _aap_cac_status.json.status in ['successful', 'failed', 'error', 'canceled']
+  retries: 60
+  delay: 15
+  no_log: true
+
+- name: Fail if osac-config-as-code did not succeed
+  ansible.builtin.fail:
+    msg: >-
+      osac-config-as-code job {{ _aap_cac_job.json.id }} finished with status
+      {{ _aap_cac_status.json.status }}
+  when: _aap_cac_status.json.status != 'successful'
+
+- name: Report AAP project pin applied
+  ansible.builtin.debug:
+    msg: >-
+      AAP project {{ _aap_project_id }} at
+      {{ _aap_project_status.json.scm_revision }}
+      (pin {{ _aap_expected_branch }}); CaC job {{ _aap_cac_job.json.id }} successful
