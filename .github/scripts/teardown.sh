@@ -71,6 +71,14 @@ if [[ -n "${COMPONENT_BUILD_RESULTS:-}" ]]; then
   fi
 fi
 
+# Multi-stage `podman build` leaves each superseded intermediate stage
+# behind as an untagged (<none>) image -- rmi above only removes the final
+# tagged image, not those. Left unpruned across runs this silently consumes
+# hundreds of GB per host (seen in production: 1TB+ of purely dangling
+# images on a single runner). Dangling-only prune never touches a tagged or
+# in-use image, so it's safe to run unconditionally after every job.
+podman image prune -f 2>/dev/null || true
+
 # --- Clean up BMaaS virtual BMH resources ---
 # All paths are derived from CLONE_NAME so teardown works even if setup
 # failed before exporting state. When no matching resources exist, cleanup
@@ -123,6 +131,27 @@ fi
 if [[ -d "${SUSHY_CONFIG_DIR}" ]]; then
   rm -rf "${SUSHY_CONFIG_DIR}"
 fi
+
+# sushy-tools caches each Redfish virtual-media boot ISO it serves in its
+# own tempfile.mkdtemp() directory under /tmp (e.g. /tmp/tmpXXXXXXXX/boot-
+# <uuid>.iso) and never removes it -- not even when the emulator process
+# above is killed cleanly. Left unswept this accumulates forever (seen in
+# production: 100+ GB of orphaned boot ISOs on a single host). Only remove
+# a candidate if lsof finds no process (sushy-emulator, or qemu while a VM
+# still has the media attached) holding it open, so this can't race a
+# still-running job -- on this host or, since the pattern isn't scoped to
+# CLONE_NAME, any other concurrent BMaaS job.
+for iso_dir in /tmp/tmp*/; do
+  iso_dir="${iso_dir%/}"
+  shopt -s nullglob
+  isos=("${iso_dir}"/boot-*.iso)
+  shopt -u nullglob
+  [[ ${#isos[@]} -eq 0 ]] && continue
+  if lsof -t -- "${isos[@]}" >/dev/null 2>&1; then
+    continue
+  fi
+  rm -rf "${iso_dir}"
+done
 
 # --- Verify BMaaS cleanup ---
 # Fail the job if critical resources leaked so we're notified early.
