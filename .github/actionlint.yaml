@@ -7,6 +7,22 @@ self-hosted-runner:
     - monitoring-central
     - osac-ci-orchestrator
     - osac-ci-small
+    # Per-host labels (fleet/inventory/hosts.yml's ci_runners group) -- used
+    # as literal matrix values in fleet-podman-cleanup.yml, which is why
+    # actionlint needs them even though other workflows only ever reference
+    # a host label indirectly via a runner-label input (an expression,
+    # which actionlint can't statically resolve against this list).
+    - osac-ci-1
+    - osac-1
+    - osac-2
+    - osac-3
+    - osac-4
+    - osac-5
+    - osac-6
+    - osac-7
+    - osac-8
+    - osac-9
+    - osac-10
 
 paths:
   .github/workflows/**/*.yml:

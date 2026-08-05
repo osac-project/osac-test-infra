@@ -75,9 +75,12 @@ fi
 # behind as an untagged (<none>) image -- rmi above only removes the final
 # tagged image, not those. Left unpruned across runs this silently consumes
 # hundreds of GB per host (seen in production: 1TB+ of purely dangling
-# images on a single runner). Dangling-only prune never touches a tagged or
-# in-use image, so it's safe to run unconditionally after every job.
-podman image prune -f 2>/dev/null || true
+# images on a single runner). Not cleaned up here: every host's 5 runner
+# instances share one rootless podman store, so a prune from this job could
+# race a concurrent job's still-in-progress multi-stage build on the same
+# host and delete an image it isn't done with yet. See the scheduled
+# "Fleet podman image cleanup" workflow instead, which is time-gated well
+# past any realistic single job's runtime instead of running mid-job.
 
 # --- Clean up BMaaS virtual BMH resources ---
 # All paths are derived from CLONE_NAME so teardown works even if setup
@@ -110,6 +113,8 @@ fi
 
 SUSHY_CONFIG_DIR="${HOME}/sushy-${CLONE_NAME}"
 SUSHY_PID_FILE="${SUSHY_CONFIG_DIR}/sushy.pid"
+# NOTE: must match setup-virtual-bmh.sh's SUSHY_VMEDIA_TMP exactly.
+SUSHY_VMEDIA_TMP="${HOME}/sushy-vmedia-tmp-${CLONE_NAME}"
 SUSHY_PID=""
 if [[ -f "${SUSHY_PID_FILE}" ]]; then
   SUSHY_PID=$(cat "${SUSHY_PID_FILE}")
@@ -128,30 +133,21 @@ if [[ -f "${SUSHY_PID_FILE}" ]]; then
   rm -f "${SUSHY_PID_FILE}"
 fi
 
+# sushy-tools caches each Redfish virtual-media boot ISO it serves via
+# plain tempfile.mkdtemp()/NamedTemporaryFile() calls with no explicit
+# dir= -- setup-virtual-bmh.sh points TMPDIR at SUSHY_VMEDIA_TMP (named
+# for CLONE_NAME) before starting this job's own sushy-emulator specifically
+# so that cache lives somewhere removable by name here, instead of
+# needing to guess which of /tmp's directories are its (left unswept this
+# accumulated 100+ GB of orphaned boot ISOs on a single host in
+# production).
+if [[ -d "${SUSHY_VMEDIA_TMP}" ]]; then
+  rm -rf "${SUSHY_VMEDIA_TMP}"
+fi
+
 if [[ -d "${SUSHY_CONFIG_DIR}" ]]; then
   rm -rf "${SUSHY_CONFIG_DIR}"
 fi
-
-# sushy-tools caches each Redfish virtual-media boot ISO it serves in its
-# own tempfile.mkdtemp() directory under /tmp (e.g. /tmp/tmpXXXXXXXX/boot-
-# <uuid>.iso) and never removes it -- not even when the emulator process
-# above is killed cleanly. Left unswept this accumulates forever (seen in
-# production: 100+ GB of orphaned boot ISOs on a single host). Only remove
-# a candidate if lsof finds no process (sushy-emulator, or qemu while a VM
-# still has the media attached) holding it open, so this can't race a
-# still-running job -- on this host or, since the pattern isn't scoped to
-# CLONE_NAME, any other concurrent BMaaS job.
-for iso_dir in /tmp/tmp*/; do
-  iso_dir="${iso_dir%/}"
-  shopt -s nullglob
-  isos=("${iso_dir}"/boot-*.iso)
-  shopt -u nullglob
-  [[ ${#isos[@]} -eq 0 ]] && continue
-  if lsof -t -- "${isos[@]}" >/dev/null 2>&1; then
-    continue
-  fi
-  rm -rf "${iso_dir}"
-done
 
 # --- Verify BMaaS cleanup ---
 # Fail the job if critical resources leaked so we're notified early.
@@ -176,6 +172,10 @@ if [[ -d "${BMH_DISK_DIR}" ]]; then
 fi
 if [[ -d "${SUSHY_CONFIG_DIR}" ]]; then
   echo "ERROR: Sushy config directory '${SUSHY_CONFIG_DIR}' still present after cleanup" >&2
+  BMH_LEAKED=true
+fi
+if [[ -d "${SUSHY_VMEDIA_TMP}" ]]; then
+  echo "ERROR: Sushy vmedia temp directory '${SUSHY_VMEDIA_TMP}' still present after cleanup" >&2
   BMH_LEAKED=true
 fi
 if [[ "${BMH_LEAKED}" == "true" ]]; then

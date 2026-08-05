@@ -99,6 +99,16 @@ SUSHY_EMULATOR_BOOT_LOADER_MAP = {
 }
 SEOF
 
+# sushy-tools caches each Redfish virtual-media boot ISO it serves via
+# plain tempfile.mkdtemp()/NamedTemporaryFile() calls with no explicit
+# dir=, so it resolves through tempfile.gettempdir() -- which honors
+# TMPDIR. Pointing TMPDIR at a directory named for this job means the
+# cache lives somewhere teardown.sh can remove deterministically by name,
+# instead of having to guess which /tmp/tmpXXXXXXXX dirs are its.
+export SUSHY_VMEDIA_TMP="${HOME}/sushy-vmedia-tmp-${CLONE_NAME}"
+mkdir -p "${SUSHY_VMEDIA_TMP}"
+export TMPDIR="${SUSHY_VMEDIA_TMP}"
+
 echo "Starting sushy-emulator on ${GW_IP}:${SUSHY_PORT}..."
 SUSHY_MAX_ATTEMPTS=3
 for sushy_attempt in $(seq 1 "${SUSHY_MAX_ATTEMPTS}"); do

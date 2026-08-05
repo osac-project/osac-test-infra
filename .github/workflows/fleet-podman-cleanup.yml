@@ -1,0 +1,65 @@
+---
+name: Fleet podman image cleanup
+
+# Every host's 5 runner instances (see fleet/inventory/group_vars/all.yml's
+# runner_count) run as the same github-runner Linux user, sharing one
+# rootless podman store. Multi-stage `podman build` in the e2e-*-full-
+# install workflows leaves each superseded intermediate stage behind as an
+# untagged (<none>) image, and teardown.sh deliberately does not prune
+# those itself: a prune from inside one job's teardown could race a
+# different job's still-in-progress build on the same host and delete an
+# image it isn't done with yet (seen in production: 1TB+ of dangling
+# images accumulated on a single host before this existed).
+#
+# Runs here instead, matrixed one job per host so each host prunes its own
+# store locally, gated on `until` well past the longest E2E run on record
+# (~2h45m as of writing) so it can never touch an image any real job --
+# on this host, this run or any other -- could still need.
+on:
+  schedule:
+    - cron: "13 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      until:
+        description: "Only remove dangling images older than this (podman image prune --filter until=). Floor is 6h -- comfortably past the longest E2E run on record (~2h45m) -- so a manual run can't be made to touch an image a real job could still need."
+        required: false
+        type: choice
+        default: "6h"
+        options:
+          - "6h"
+          - "12h"
+          - "24h"
+          - "48h"
+
+permissions: {}
+
+jobs:
+  prune:
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - osac-ci-1
+          - osac-1
+          - osac-2
+          - osac-3
+          - osac-4
+          - osac-5
+          - osac-6
+          - osac-7
+          - osac-8
+          - osac-9
+          - osac-10
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 10
+    steps:
+      - name: Prune dangling podman images
+        shell: bash
+        env:
+          UNTIL: ${{ inputs.until || '6h' }}
+        run: |
+          echo "-- before --"
+          podman system df
+          podman image prune -f --filter "until=${UNTIL}"
+          echo "-- after --"
+          podman system df
