@@ -84,6 +84,13 @@
         {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
   when: osac_aap_image | default('') | length > 0
 
+- name: Override osac-aap EE image in values file
+  ansible.builtin.shell:
+    cmd: |
+      sed -i '/^\s*eeImage:/s|:.*|: "{{ osac_aap_ee_image }}"|' \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+  when: osac_aap_ee_image | default('') | length > 0
+
 - name: Override osac-ui image in values file
   ansible.builtin.shell:
     cmd: |
@@ -115,7 +122,8 @@
         ([] +
          ([fulfillment_service_image] if fulfillment_service_image | default('') | length > 0 else []) +
          ([osac_operator_image] if osac_operator_image | default('') | length > 0 else []) +
-         ([osac_aap_image] if osac_aap_image | default('') | length > 0 else []))
+         ([osac_aap_image] if osac_aap_image | default('') | length > 0 else []) +
+         ([osac_aap_ee_image] if osac_aap_ee_image | default('') | length > 0 else []))
       }}
 
 - name: Pre-pull CI images onto SNO node

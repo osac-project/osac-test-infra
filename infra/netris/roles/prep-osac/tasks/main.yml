@@ -187,6 +187,8 @@
                     if fulfillment_service_image | default('') | length > 0 else {}), recursive=true)
          | combine(({'aap': {'bootstrap': {'image': osac_aap_image, 'imagePullPolicy': ('IfNotPresent' if osac_aap_image.startswith('localhost/') else 'Always')}}}
                     if osac_aap_image | default('') | length > 0 else {}), recursive=true)
+         | combine(({'aap': {'configAsCode': {'eeImage': osac_aap_ee_image}}}
+                    if osac_aap_ee_image | default('') | length > 0 else {}), recursive=true)
          | combine(({'images': {'ui': osac_ui_image}}
                     if osac_ui_image | default('') | length > 0 else {}), recursive=true)
       }}

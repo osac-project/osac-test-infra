@@ -55,6 +55,7 @@ osac_license_path: "{{ inventory_dir }}/../license.zip"
 osac_operator_image: ""
 fulfillment_service_image: ""
 osac_aap_image: ""
+osac_aap_ee_image: ""
 osac_ui_image: ""
 
 # Snapshot-based deployment (fast path)
