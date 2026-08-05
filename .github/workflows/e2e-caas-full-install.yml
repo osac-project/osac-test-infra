@@ -23,7 +23,7 @@ on:
         description: "Cluster template for CaaS tests"
         required: false
         type: string
-        default: "osac.templates.ocp_ci_small"
+        default: "ocp-ci-small"
       flavor-image:
         description: "OCI image containing the cluster-tool flavor"
         required: false

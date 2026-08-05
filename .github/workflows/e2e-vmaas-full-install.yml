@@ -23,7 +23,7 @@ on:
         description: "VM template for compute instances"
         required: false
         type: string
-        default: "osac.templates.ocp_virt_vm"
+        default: "ocp-virt-vm"
       cluster-template:
         description: "Cluster template for CaaS tests"
         required: false
