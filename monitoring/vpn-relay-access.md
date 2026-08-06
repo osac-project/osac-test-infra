@@ -65,6 +65,12 @@ Two scripts, one per side, mirroring the existing `--add-tunnel` pattern
 this tunnel runs in the opposite direction and for a different purpose
 (pushing central's own services out to a relay, not pulling metrics in).
 
+Before the first step below, consider running
+`sudo ./monitoring/scripts/audit-relay-host.sh` on the candidate relay —
+it's a read-only survey of what else is already on that machine (relays
+have turned out to be shared lab boxes in practice, not dedicated hosts).
+Cheap to run, and cheaper than finding out about a conflict later.
+
 ### 1. On the relay machine
 
 ```bash
@@ -138,6 +144,54 @@ detects the existing user/keypair/service and leaves it alone.
   same as above — distinct `<label>` and `<central-tunnel-user>` — so the
   two relays get fully separate identities and neither can be used to
   impersonate or interfere with the other.
+
+## Replacing the relay machine
+
+There's deliberately very little host-specific state to preserve here — a
+relay only ever holds tunnel identities (an SSH keypair per service group
+plus the systemd unit driving it), not data. When a relay is being retired
+for a new host, treat it as the "second, independent relay" case above
+rather than trying to transplant the old identities onto the new box:
+rotating keys during a hardware move is free security hygiene, and it's
+what the two setup scripts are already built for.
+
+1. **Audit the candidate relay first**, old and new: run
+   `sudo ./monitoring/scripts/audit-relay-host.sh` on each. Relay machines
+   in practice have turned out to be shared lab boxes, not dedicated
+   hosts — the audit surfaces anything else already living there (other
+   people's accounts, an unrelated reverse proxy already bound to one of
+   these ports) *before* it's lost or silently overwritten. See the script
+   header for a real example of exactly what this caught once.
+2. **Set up the new relay** with `setup-tunnel-relay.sh` for each identity
+   currently on the old relay (e.g. `osac-ci1` for
+   Grafana/Prometheus/Alertmanager, `osac-ci1-vault` for Vault) — see
+   "One-time setup" above. This is additive: the old relay keeps working
+   throughout, so there's no access gap.
+3. **Authorize both new keys** on the central host with
+   `authorize-tunnel-relay.sh`, same as any new relay.
+4. **Regenerate the self-signed certs** for the new relay's hostname (see
+   "Trusting the relay's self-signed certificates" below) and update the
+   fingerprint table in that section in the same change — the old
+   fingerprints are for the old hostname and won't match the new relay's
+   cert.
+5. **Update DNS.** If a hostname/CNAME (e.g. `osac-ci.redhat.com`) points at
+   the relay, it resolves directly to the *specific host being replaced* —
+   confirm with `dig +short <the-cname>` before assuming otherwise. This
+   has to be repointed at the new relay, or every client still resolves to
+   a host that's about to be gone.
+6. **Update the canonical host for Grafana OAuth**, if the new relay's
+   address differs from the old one — see "Grafana OAuth login only works
+   from one canonical host at a time" below for the exact order (OAuth
+   app callback URL first, then `GF_SERVER_ROOT_URL`).
+7. **Verify** the new relay end-to-end (see "Verifying" below) before
+   touching the old one.
+8. **Decommission the old relay**: remove its authorized keys from the
+   central host (delete the corresponding `<central-tunnel-user>` there,
+   or at minimum clear its `authorized_keys`), then the old relay's tunnel
+   services/users can be torn down independently of anything else that
+   might be running on that box — which is exactly why step 1's audit
+   matters, so "anything else on that box" is a known, deliberate answer
+   by this point rather than a surprise.
 
 ## Verifying
 
