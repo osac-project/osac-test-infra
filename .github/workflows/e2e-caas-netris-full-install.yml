@@ -111,7 +111,43 @@ on:
         value: ${{ jobs.e2e.outputs.result }}
 
 jobs:
+  # Runs before provision (not inside push-secrets, which only runs after
+  # provision) specifically so an unauthorized fork PR is rejected before
+  # a real EC2 instance is ever launched -- provisioning is exactly the
+  # cost/blast-radius this authorization gate exists to prevent, so it
+  # can't be allowed to happen first. Lightweight: only needs the local
+  # AppRole files (already present on the orchestrator) and a couple of
+  # GitHub API calls, no dependency on the box existing.
+  authorize:
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Authorize fork PR
+        if: inputs.fork-pr-author-association != ''
+        uses: ./.github/actions/authorize-fork-pr
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          fork-pr-author: ${{ inputs.fork-pr-author }}
+          pr-number: ${{ inputs.pr-number }}
+
   provision:
+    needs: authorize
     uses: ./.github/workflows/ec2-runner-provision.yml
     permissions:
       contents: read
@@ -152,14 +188,8 @@ jobs:
           test-suite: ec2-runner
           run-id: ${{ github.run_id }}
 
-      - name: Authorize fork PR
-        if: inputs.fork-pr-author-association != ''
-        uses: ./.github/actions/authorize-fork-pr
-        with:
-          role-id: ${{ steps.setup.outputs.role-id }}
-          secret-id: ${{ steps.setup.outputs.secret-id }}
-          fork-pr-author: ${{ inputs.fork-pr-author }}
-          pr-number: ${{ inputs.pr-number }}
+      # Authorization already happened in the authorize job, before
+      # provision -- not repeated here.
 
       # Not ./.github/actions/fetch-and-write-secrets: that composite action
       # also writes a merged podman auth.json to $HOME/.config/containers and
