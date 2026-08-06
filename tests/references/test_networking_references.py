@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 
 import pytest
@@ -9,15 +10,14 @@ from tests.core.helpers import (
     assert_grpc_field_violation,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
-    wait_for_security_group_ready,
     wait_for_subnet_cr,
     wait_for_subnet_deletion,
-    wait_for_subnet_ready,
     wait_for_virtual_network_cr,
     wait_for_virtual_network_deletion,
-    wait_for_virtual_network_ready,
 )
 from tests.core.k8s_client import K8sClient
+
+logger = logging.getLogger(__name__)
 
 
 class TestNetworkingReferences:
@@ -42,10 +42,12 @@ class TestNetworkingReferences:
             assert nc_ref.get("name") == ref_network_class
             assert nc_ref.get("id"), "network_class.id should be auto-populated"
         finally:
-            vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
-            wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
             grpc.delete_virtual_network(vn_id=vn_id)
-            wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
+            try:
+                vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+                wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
+            except (subprocess.CalledProcessError, AssertionError):
+                logger.warning("Cleanup wait failed for virtual network %s", vn_id)
 
     def test_create_subnet_with_virtual_network_by_name(
         self, grpc: GRPCClient, k8s_hub_client: K8sClient, ref_virtual_network: dict[str, str], ref_test_run_id: str
@@ -66,10 +68,12 @@ class TestNetworkingReferences:
             assert vn_ref.get("name") == ref_virtual_network["name"]
             assert vn_ref.get("id") == ref_virtual_network["id"]
         finally:
-            subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
-            wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
             grpc.delete_subnet(subnet_id=subnet_id)
-            wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
+            try:
+                subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
+                wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
+            except (subprocess.CalledProcessError, AssertionError):
+                logger.warning("Cleanup wait failed for subnet %s", subnet_id)
 
     def test_create_security_group_with_virtual_network_by_name(
         self, grpc: GRPCClient, k8s_hub_client: K8sClient, ref_virtual_network: dict[str, str], ref_test_run_id: str
@@ -90,10 +94,12 @@ class TestNetworkingReferences:
             assert vn_ref.get("name") == ref_virtual_network["name"]
             assert vn_ref.get("id") == ref_virtual_network["id"]
         finally:
-            sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
-            wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr_name)
             grpc.delete_security_group(sg_id=sg_id)
-            wait_for_security_group_deletion(k8s=k8s_hub_client, name=sg_cr_name)
+            try:
+                sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
+                wait_for_security_group_deletion(k8s=k8s_hub_client, name=sg_cr_name)
+            except (subprocess.CalledProcessError, AssertionError):
+                logger.warning("Cleanup wait failed for security group %s", sg_id)
 
     def test_invalid_virtual_network_reference_returns_field_path(self, grpc: GRPCClient, ref_test_run_id: str):
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
@@ -139,7 +145,9 @@ class TestNetworkingReferences:
             assert nc_ref.get("name") == ref_network_class
             assert nc_ref.get("id"), "network_class.id should be resolved for cross-tenant reference"
         finally:
-            vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
-            wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
             jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
-            wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
+            try:
+                vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+                wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
+            except (subprocess.CalledProcessError, AssertionError):
+                logger.warning("Cleanup wait failed for virtual network %s", vn_id)

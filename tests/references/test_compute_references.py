@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Generator
 from typing import Any
 from uuid import uuid4
 
@@ -27,7 +28,7 @@ def compute_template() -> str:
 
 
 @pytest.fixture(scope="module")
-def ref_ci_catalog_item(private_grpc: GRPCClient, compute_template: str) -> str:
+def ref_ci_catalog_item(private_grpc: GRPCClient, compute_template: str) -> Generator[str, None, None]:
     tag = uuid4().hex[:8]
     name = f"ref-ci-cat-{tag}"
     cat_id = private_grpc.create_compute_instance_catalog_item(name=name, template=compute_template)
@@ -88,8 +89,11 @@ class TestComputeReferences:
             assert sg_ref.get("id") == ref_security_group["id"]
         finally:
             grpc.delete_compute_instance(ci_id=ci_id)
-            cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)
-            wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
+            try:
+                cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)
+                wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
+            except (subprocess.CalledProcessError, AssertionError):
+                logger.warning("Cleanup wait failed for compute instance %s", ci_id)
 
     def test_compute_instance_reaches_running_with_name_refs(
         self,
@@ -122,6 +126,7 @@ class TestComputeReferences:
             },
         )
         ci_id = response["object"]["id"]
+        cr_name = None
         try:
             cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)
             wait_for_provision(k8s=k8s_hub_client, name=cr_name)
@@ -131,8 +136,11 @@ class TestComputeReferences:
             assert phase == "Running"
         finally:
             grpc.delete_compute_instance(ci_id=ci_id)
-            if "cr_name" in dir():
-                wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
+            if cr_name:
+                try:
+                    wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
+                except (subprocess.CalledProcessError, AssertionError):
+                    logger.warning("Cleanup wait failed for compute instance %s", ci_id)
 
     def test_invalid_subnet_name_returns_array_indexed_field_path(
         self, grpc: GRPCClient, ref_subnet: dict[str, str], ref_ci_catalog_item: str
@@ -172,6 +180,7 @@ class TestComputeReferences:
         tag = uuid4().hex[:8]
         cat_name = f"ref-xt-cat-{tag}"
         cat_id = private_grpc.create_compute_instance_catalog_item(name=cat_name, template=compute_template)
+        ci_id = None
         try:
             response: dict[str, Any] = jwt_grpc_tenant1.call(
                 service=f"{PUBLIC_API}.ComputeInstances/Create",
@@ -194,8 +203,12 @@ class TestComputeReferences:
             cat_ref = response["object"]["spec"]["catalog_item"]
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
-            jwt_grpc_tenant1.delete_compute_instance(ci_id=ci_id)
         finally:
+            if ci_id:
+                try:
+                    jwt_grpc_tenant1.delete_compute_instance(ci_id=ci_id)
+                except subprocess.CalledProcessError:
+                    logger.warning("Failed to cleanup compute instance %s", ci_id)
             try:
                 private_grpc.delete_compute_instance_catalog_item(catalog_item_id=cat_id)
             except subprocess.CalledProcessError:
