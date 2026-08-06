@@ -19,6 +19,7 @@ def test_compute_instance_api_fields(
     k8s_virt_client: K8sClient,
     namespace: str,
     default_subnet_ref: str,
+    vm_template: str,
 ) -> None:
     instance_name: str = f"e2e-test-api-fields-{uuid.uuid4().hex[:8]}"
 
@@ -32,7 +33,7 @@ def test_compute_instance_api_fields(
                 "annotations": {"osac.openshift.io/tenant": namespace},
             },
             "spec": {
-                "templateID": "osac.templates.ocp_virt_vm",
+                "templateID": vm_template,
                 "networkAttachments": [{"subnetRef": default_subnet_ref}],
                 "image": {"sourceType": "registry", "sourceRef": TEST_IMAGE_REF},
                 "cores": TEST_CORES,
