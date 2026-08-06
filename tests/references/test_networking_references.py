@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import subprocess
+
+import pytest
+
+from tests.core.grpc_client import PUBLIC_API, GRPCClient
+from tests.core.helpers import (
+    assert_grpc_field_violation,
+    wait_for_security_group_cr,
+    wait_for_security_group_deletion,
+    wait_for_security_group_ready,
+    wait_for_subnet_cr,
+    wait_for_subnet_deletion,
+    wait_for_subnet_ready,
+    wait_for_virtual_network_cr,
+    wait_for_virtual_network_deletion,
+    wait_for_virtual_network_ready,
+)
+from tests.core.k8s_client import K8sClient
+
+
+class TestNetworkingReferences:
+    """OSAC-3095: Networking resource reference tests."""
+
+    def test_create_virtual_network_with_network_class_by_name(
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, ref_network_class: str, ref_test_run_id: str
+    ):
+        vn_name = f"ref-vn-nc-{ref_test_run_id}"
+        response = grpc.call(
+            service=f"{PUBLIC_API}.VirtualNetworks/Create",
+            data={
+                "object": {
+                    "metadata": {"name": vn_name},
+                    "spec": {"network_class": {"name": ref_network_class}, "ipv4_cidr": "10.211.0.0/16"},
+                }
+            },
+        )
+        vn_id = response["object"]["id"]
+        try:
+            nc_ref = response["object"]["spec"]["network_class"]
+            assert nc_ref.get("name") == ref_network_class
+            assert nc_ref.get("id"), "network_class.id should be auto-populated"
+        finally:
+            vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+            wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
+            grpc.delete_virtual_network(vn_id=vn_id)
+            wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
+
+    def test_create_subnet_with_virtual_network_by_name(
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, ref_virtual_network: dict[str, str], ref_test_run_id: str
+    ):
+        subnet_name = f"ref-sub-vn-{ref_test_run_id}"
+        response = grpc.call(
+            service=f"{PUBLIC_API}.Subnets/Create",
+            data={
+                "object": {
+                    "metadata": {"name": subnet_name},
+                    "spec": {"virtual_network": {"name": ref_virtual_network["name"]}, "ipv4_cidr": "10.210.200.0/24"},
+                }
+            },
+        )
+        subnet_id = response["object"]["id"]
+        try:
+            vn_ref = response["object"]["spec"]["virtual_network"]
+            assert vn_ref.get("name") == ref_virtual_network["name"]
+            assert vn_ref.get("id") == ref_virtual_network["id"]
+        finally:
+            subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
+            wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
+            grpc.delete_subnet(subnet_id=subnet_id)
+            wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
+
+    def test_create_security_group_with_virtual_network_by_name(
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, ref_virtual_network: dict[str, str], ref_test_run_id: str
+    ):
+        sg_name = f"ref-sg-vn-{ref_test_run_id}"
+        response = grpc.call(
+            service=f"{PUBLIC_API}.SecurityGroups/Create",
+            data={
+                "object": {
+                    "metadata": {"name": sg_name},
+                    "spec": {"virtual_network": {"name": ref_virtual_network["name"]}},
+                }
+            },
+        )
+        sg_id = response["object"]["id"]
+        try:
+            vn_ref = response["object"]["spec"]["virtual_network"]
+            assert vn_ref.get("name") == ref_virtual_network["name"]
+            assert vn_ref.get("id") == ref_virtual_network["id"]
+        finally:
+            sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
+            wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr_name)
+            grpc.delete_security_group(sg_id=sg_id)
+            wait_for_security_group_deletion(k8s=k8s_hub_client, name=sg_cr_name)
+
+    def test_invalid_virtual_network_reference_returns_field_path(self, grpc: GRPCClient, ref_test_run_id: str):
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.call(
+                service=f"{PUBLIC_API}.Subnets/Create",
+                data={
+                    "object": {
+                        "metadata": {"name": f"ref-bad-vn-{ref_test_run_id}"},
+                        "spec": {"virtual_network": {"name": "nonexistent-vn"}, "ipv4_cidr": "10.212.0.0/24"},
+                    }
+                },
+            )
+        assert_grpc_field_violation(exc_info, field_path="spec.virtual_network")
+
+    def test_cel_filter_by_virtual_network_name(
+        self, grpc: GRPCClient, ref_subnet: dict[str, str], ref_virtual_network: dict[str, str]
+    ):
+        vn_name = ref_virtual_network["name"]
+        items = grpc.list_with_filter(
+            service=f"{PUBLIC_API}.Subnets/List", filter_expr=f'this.spec.virtual_network.name == "{vn_name}"'
+        )
+        found_ids = [item["id"] for item in items]
+        assert ref_subnet["id"] in found_ids, (
+            f"Expected subnet {ref_subnet['id']} in filter results for VN name '{vn_name}', got {found_ids}"
+        )
+
+    def test_cross_tenant_network_class_reference(
+        self, jwt_grpc_tenant1: GRPCClient, k8s_hub_client: K8sClient, ref_network_class: str, ref_test_run_id: str
+    ):
+        vn_name = f"ref-vn-xt-{ref_test_run_id}"
+        response = jwt_grpc_tenant1.call(
+            service=f"{PUBLIC_API}.VirtualNetworks/Create",
+            data={
+                "object": {
+                    "metadata": {"name": vn_name},
+                    "spec": {"network_class": {"name": ref_network_class}, "ipv4_cidr": "10.213.0.0/16"},
+                }
+            },
+        )
+        vn_id = response["object"]["id"]
+        try:
+            nc_ref = response["object"]["spec"]["network_class"]
+            assert nc_ref.get("name") == ref_network_class
+            assert nc_ref.get("id"), "network_class.id should be resolved for cross-tenant reference"
+        finally:
+            vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+            wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
+            jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
+            wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
