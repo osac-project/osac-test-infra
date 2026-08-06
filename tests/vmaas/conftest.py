@@ -190,13 +190,21 @@ def _wait_for_tenant_storage_ready(
     if it never appears the environment has no storage configured and we skip the wait.
     """
     condition: str = ""
-    for _ in range(6):  # 6 × 5s = 30s detection window
+    for attempt in range(6):  # 6 x 5s sleeps, 7 reads total
         condition = k8s_hub_client.get_tenant_condition_status(
             name=namespace, condition_type="ClusterStorageReady", checked=False
         )
         if condition:
             break
+        if attempt < 5:
+            time.sleep(5)
+    else:
+        # Final read after the last sleep — avoids missing the condition
+        # if it appears during the delay after the 6th check.
         time.sleep(5)
+        condition = k8s_hub_client.get_tenant_condition_status(
+            name=namespace, condition_type="ClusterStorageReady", checked=False
+        )
 
     if not condition or condition == "True":
         return
