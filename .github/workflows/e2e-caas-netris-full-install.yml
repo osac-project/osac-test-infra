@@ -90,6 +90,21 @@ on:
         required: false
         type: string
         default: ""
+      fork-pr-author-association:
+        description: "PR author_association from the caller"
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: "GitHub login of the PR author (for fork PR org membership check)"
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: "PR number (for label-based authorization check)"
+        required: false
+        type: string
+        default: ""
     outputs:
       result:
         description: "Overall result: PASSED or FAILED"
@@ -136,6 +151,15 @@ jobs:
         with:
           test-suite: ec2-runner
           run-id: ${{ github.run_id }}
+
+      - name: Authorize fork PR
+        if: inputs.fork-pr-author-association != ''
+        uses: ./.github/actions/authorize-fork-pr
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          fork-pr-author: ${{ inputs.fork-pr-author }}
+          pr-number: ${{ inputs.pr-number }}
 
       # Not ./.github/actions/fetch-and-write-secrets: that composite action
       # also writes a merged podman auth.json to $HOME/.config/containers and
