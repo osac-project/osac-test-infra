@@ -969,28 +969,43 @@ class WorkflowExporter:
     def _fetch_active_runs(self, repo):
         """Fetch current queued and in_progress runs for the active list.
 
-        Also resolves which machine each run is on -- the whole point of
-        the active list is "what's running right now", so runner_name
-        matters more here than anywhere else. Active runs are few (this
-        is only called when repo has queued/in_progress runs at all), so
-        the extra per-run _fetch_run_jobs call doesn't meaningfully add
-        to rate-limit usage.
+        Also resolves which machine each run is on for in_progress runs --
+        the whole point of the active list is "what's running right now",
+        so runner_name matters most there. A queued run has no runner
+        assigned yet, so _fetch_run_jobs on one would just burn an API
+        call for a jobs list with nothing meaningful to extract -- skipped
+        entirely for that status, which also keeps a large queued backlog
+        (exactly the scenario this list needs to represent accurately)
+        from multiplying into hundreds of near-useless extra calls per
+        collect() cycle.
+
+        Paginates fully rather than a single per_page page: a single busy
+        repo can queue more runs than one page during a real backlog (a
+        GitHub Actions incident, a capacity crunch), and this list backs
+        every "queued now"/"in progress now" stat panel -- silently
+        capping it at one page's worth understates the real number
+        exactly when an accurate one matters most.
         """
         runs = []
         for status in ("queued", "in_progress"):
-            resp = self._get(
+            url = (
                 f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
-                f"?status={status}&per_page=20"
+                f"?status={status}&per_page=100"
             )
-            if resp.ok:
+            while url:
+                resp = self._get(url)
+                if not resp.ok:
+                    break
                 for run in resp.json().get("workflow_runs", []):
                     if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
                         continue
                     record = self._make_job_record(run, repo)
-                    jobs = self._fetch_run_jobs(repo, run["id"])
-                    if jobs:
-                        record["runner_name"] = self._extract_runner_names(jobs)
+                    if status == "in_progress":
+                        jobs = self._fetch_run_jobs(repo, run["id"])
+                        if jobs:
+                            record["runner_name"] = self._extract_runner_names(jobs)
                     runs.append(record)
+                url = resp.links.get("next", {}).get("url")
         return runs
 
     def _recent_completed(self, repo):
