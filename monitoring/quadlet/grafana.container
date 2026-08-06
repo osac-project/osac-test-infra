@@ -40,8 +40,18 @@ Volume=%h/.monitoring-server/dashboards:/var/lib/grafana/dashboards:ro,Z
 Volume=%h/.monitoring-server/certs/grafana.crt:/etc/grafana/grafana.crt:ro,Z
 Volume=%h/.monitoring-server/certs/grafana.key:/etc/grafana/grafana.key:ro,Z
 
-# Install Infinity plugin for JSON API datasource (workflow exporter jobs API)
-Environment=GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource
+# Install Infinity plugin for JSON API datasource (workflow exporter jobs API).
+# Version pinned deliberately: GF_INSTALL_PLUGINS re-downloads from scratch on
+# every container restart (every deploy restarts this service), so an
+# unpinned version drifts to whatever's newest at that exact moment with zero
+# soak time. 3.11.2 (published only hours before a routine restart picked it
+# up) shipped a broken build that bundles react/jsx-runtime in a way
+# Grafana 12.0.1's import map can't resolve, breaking every panel using this
+# datasource ("Could not load plugin ... SystemJS Error#7"). Pinned to the
+# prior release, which had two weeks of real-world use with no such report.
+# Bump deliberately, not automatically, after confirming a new release is
+# actually good.
+Environment="GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource 3.11.1"
 
 # --- Server: direct HTTPS on all interfaces (no reverse proxy) ---
 Environment=GF_SERVER_HTTP_ADDR=0.0.0.0
