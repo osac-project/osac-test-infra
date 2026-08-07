@@ -10,9 +10,10 @@ that secret inside a base64 blob (SQL DEBUG JSON, etc.), so exact
 Secret string replace no-ops and the uploaded tree still re-triggers
 gitleaks. Columns help but do not reliably mark the real blob.
 
-All wipe targets (encoded fields, plaintext secrets, column spans) are
-computed against each file's pristine bytes, then applied in one pass
-so earlier replacements cannot shift later column offsets.
+All wipe targets (encoded fields, plaintext secrets, hex-encoded secrets,
+column spans) are computed against each file's pristine bytes, then
+applied in one pass so earlier replacements cannot shift later column
+offsets.
 """
 from __future__ import annotations
 
@@ -202,6 +203,29 @@ def plaintext_secret_ranges(content: bytes, secrets: list[bytes]) -> list[tuple[
     return ranges
 
 
+def hex_encoded_secret_ranges(content: bytes, secrets: list[bytes]) -> list[tuple[int, int]]:
+    """Half-open spans of hex-encoded Secret bytes (gitleaks decoded:hex).
+
+    Column spans usually cover encoded bounds when File resolves; this path
+    still wipes hex forms tree-wide when path resolution fails. Search is
+    case-insensitive so mixed-case hex (AbCd…) is wiped too.
+    """
+    ranges: list[tuple[int, int]] = []
+    content_lower = content.lower()
+    for secret in secrets:
+        if not secret:
+            continue
+        form = binascii.hexlify(secret)  # lowercase
+        start = 0
+        while True:
+            idx = content_lower.find(form, start)
+            if idx < 0:
+                break
+            ranges.append((idx, idx + len(form)))
+            start = idx + len(form)
+    return ranges
+
+
 def path_inside(root: pathlib.Path, path: pathlib.Path) -> bool:
     """True if path resolves inside root (blocks .. and symlink escape)."""
     try:
@@ -333,6 +357,7 @@ def redact_tree(findings: list[dict], redacted_dir: pathlib.Path) -> None:
         if secrets:
             ranges.extend(encoded_fields_containing_secrets(content, secrets))
             ranges.extend(plaintext_secret_ranges(content, secrets))
+            ranges.extend(hex_encoded_secret_ranges(content, secrets))
         ranges.extend(location_ranges(content, pending_cols.get(path, {})))
         if not ranges:
             continue

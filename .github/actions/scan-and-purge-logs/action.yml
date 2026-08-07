@@ -180,16 +180,21 @@ runs:
           fi
           echo "- Rotate any credential(s) below that are real (not test/dev-only values)."
           echo ""
-          echo "| Rule | File | Line |"
-          echo "|---|---|---|"
-          # Shared escape in .github/scripts/md-cell.jq (same as PR comment).
-          # Resolve via GITHUB_ACTION_PATH so cross-repo `uses:` callers that
-          # never check out osac-test-infra still find the jq module (same
+          echo "Rows are deduplicated by Rule + File (First line = earliest StartLine; Count = hits)."
+          echo ""
+          echo "| Rule | File | First line | Count |"
+          echo "|---|---|---|---|"
+          # Job-summary detail only (PR comments stay link-only). Resolve via
+          # GITHUB_ACTION_PATH so cross-repo `uses:` callers that never
+          # check out osac-test-infra still find the jq module (same
           # pattern as scan-run-logs.sh above).
           # File is already prefixed logs/ or artifacts/<name>/ by scan-run-logs.sh.
+          # Best-effort: missing/malformed findings must not fail the action.
           SCRIPTS_DIR="${GITHUB_ACTION_PATH}/../../scripts"
-          jq -r -L "${SCRIPTS_DIR}" '
-            include "md-cell";
-            .[] | "| \(.RuleID | cell) | \(.File | cell) | \(.StartLine) |"
-          ' "${OUTPUT_DIR}/findings.json"
+          if ! jq -r -L "${SCRIPTS_DIR}" '
+            include "findings-table";
+            findings_table_rows
+          ' "${OUTPUT_DIR}/findings.json"; then
+            echo "| _(findings.json unreadable -- see scan logs)_ | | | |"
+          fi
         } >> "$GITHUB_STEP_SUMMARY"

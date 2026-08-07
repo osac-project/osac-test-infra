@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Resolve an open PR for a completed e2e run and comment sanitized leak
-# findings (Rule / File / Line only -- never secret values).
+# Resolve an open PR for a completed e2e run and leave a short leak notice
+# with links to the scan run / redacted-logs artifact (no findings table --
+# details stay on the scan job summary and redacted artifact).
 #
 # Invoked by scan-workflow-logs.yml after scan-and-purge finds leaks.
 # Best-effort: resolve/comment failures warn and exit 0 so purge success
@@ -8,10 +9,10 @@
 #
 # Required env:
 #   GH_TOKEN, REPO, E2E_RUN_ID, E2E_RUN_URL, E2E_NAME, HEAD_SHA,
-#   FINDINGS_COUNT, PURGE_OK, OUTPUT_DIR, SCAN_RUN_URL, RUNNER_TEMP,
-#   GITHUB_WORKSPACE
+#   PURGE_OK, SCAN_RUN_URL, RUNNER_TEMP, GITHUB_WORKSPACE
 # Optional env:
-#   HEAD_BRANCH, PR_FROM_EVENT  -- workflow_run.pull_requests[0].number
+#   HEAD_BRANCH, HEAD_OWNER  -- workflow_run head repo owner (fork-aware)
+#   PR_FROM_EVENT  -- workflow_run.pull_requests[0].number
 #   UPLOAD_OK  -- 'true' if redacted-logs artifact uploaded on the scan run
 set -euo pipefail
 
@@ -21,13 +22,12 @@ set -euo pipefail
 : "${E2E_RUN_URL:?}"
 : "${E2E_NAME:?}"
 : "${HEAD_SHA:?}"
-: "${FINDINGS_COUNT:?}"
 : "${PURGE_OK:?}"
-: "${OUTPUT_DIR:?}"
 : "${SCAN_RUN_URL:?}"
 : "${RUNNER_TEMP:?}"
 : "${GITHUB_WORKSPACE:?}"
 : "${HEAD_BRANCH:=}"
+: "${HEAD_OWNER:=}"
 : "${PR_FROM_EVENT:=}"
 : "${UPLOAD_OK:=}"
 
@@ -112,17 +112,22 @@ fi
 # without a tip/association check can comment on a stale PR for a
 # rebased branch.
 if [[ -z "${PR_NUMBER}" && -n "${HEAD_BRANCH}" ]]; then
-  REPO_OWNER="${REPO%%/*}"
+  # pulls?head= requires the *head* owner (fork login), not the base repo
+  # owner. Prefer HEAD_OWNER from workflow_run.head_repository.owner.login.
+  HEAD_REF_OWNER="${HEAD_OWNER:-${REPO%%/*}}"
+  # -f encodes query values so branch names containing '&' stay one head=.
   if BRANCH_PRS_JSON=$(gh api \
-      "repos/${REPO}/pulls?state=open&head=${REPO_OWNER}:${HEAD_BRANCH}" \
+      -X GET "repos/${REPO}/pulls" \
+      -f state=open \
+      -f "head=${HEAD_REF_OWNER}:${HEAD_BRANCH}" \
       | jq --arg sha "${HEAD_SHA}" --argjson assoc "${COMMIT_OPEN_PRS_JSON}" \
           '[.[] | select(.head.sha == $sha or (.number as $n | $assoc | index($n) != null)) | .number] | unique'); then
     BRANCH_PR_COUNT=$(jq 'length' <<<"${BRANCH_PRS_JSON}")
     if [[ "${BRANCH_PR_COUNT}" -eq 1 ]]; then
       PR_NUMBER=$(jq -r '.[0]' <<<"${BRANCH_PRS_JSON}")
-      echo "Using branch head PR #${PR_NUMBER} (${REPO_OWNER}:${HEAD_BRANCH} @ ${HEAD_SHA})."
+      echo "Using branch head PR #${PR_NUMBER} (${HEAD_REF_OWNER}:${HEAD_BRANCH} @ ${HEAD_SHA})."
     elif [[ "${BRANCH_PR_COUNT}" -gt 1 ]]; then
-      echo "Ambiguous: ${BRANCH_PR_COUNT} open PRs for ${REPO_OWNER}:${HEAD_BRANCH} @ ${HEAD_SHA} -- skipping branch fallback."
+      echo "Ambiguous: ${BRANCH_PR_COUNT} open PRs for ${HEAD_REF_OWNER}:${HEAD_BRANCH} @ ${HEAD_SHA} -- skipping branch fallback."
     fi
   fi
 fi
@@ -165,16 +170,20 @@ md_cell() {
   printf '%s' "${1}" | jq -Rrs -L "${SCRIPTS_DIR}" 'include "md-cell"; cell'
 }
 
-E2E_NAME_SAFE=$(md_cell "${E2E_NAME}")
+# Body build + comment are best-effort: scan/purge already succeeded.
+# Guard md_cell / body write under set -e so a jq blip cannot fail the job.
+if ! E2E_NAME_SAFE=$(md_cell "${E2E_NAME}"); then
+  echo "::warning::Failed to escape workflow name for PR comment; skipping."
+  exit 0
+fi
 
 BODY_FILE="${RUNNER_TEMP}/pr-leak-comment.md"
-{
-  echo "### :rotating_light: Credential leak scan found secrets in e2e run logs/artifacts"
+if ! {
+  echo "### :rotating_light: Credential leak found in e2e run logs/artifacts"
   echo ""
   echo "**Workflow:** ${E2E_NAME_SAFE}"
   echo "**E2E run:** [${E2E_RUN_ID}](${E2E_RUN_URL})"
   echo "**Scan run:** [Scan workflow logs](${SCAN_RUN_URL})"
-  echo "**Findings:** ${FINDINGS_COUNT}"
   if [[ "${UPLOAD_OK}" == "true" ]]; then
     echo "**Redacted logs/artifacts:** [\`redacted-logs-${E2E_RUN_ID}\`](${SCAN_RUN_URL}#artifacts)"
   elif [[ "${UPLOAD_OK}" == "false" ]]; then
@@ -189,22 +198,11 @@ BODY_FILE="${RUNNER_TEMP}/pr-leak-comment.md"
     echo ":warning: **Purge incomplete** -- raw logs and/or artifacts may still be on GitHub. Check the scan run and delete manually if needed."
   fi
   echo ""
-  echo "Rotate any credential(s) below that are real (not test/dev-only values)."
-  echo ""
-  echo "| Rule | File | Line |"
-  echo "|---|---|---|"
-  if [[ -f "${OUTPUT_DIR}/findings.json" ]]; then
-    # Best-effort: malformed findings must not fail the step under set -e.
-    if ! jq -r -L "${SCRIPTS_DIR}" '
-      include "md-cell";
-      .[] | "| \(.RuleID | cell) | \(.File | cell) | \(.StartLine | cell) |"
-    ' "${OUTPUT_DIR}/findings.json"; then
-      echo "| _(findings.json unreadable -- see scan run)_ | | |"
-    fi
-  else
-    echo "| _(findings.json missing)_ | | |"
-  fi
-} > "${BODY_FILE}"
+  echo "Inspect the redacted artifact (and the scan job summary) for finding details. Rotate any real credentials."
+} > "${BODY_FILE}"; then
+  echo "::warning::Failed to write PR comment body; skipping."
+  exit 0
+fi
 
 # Comment is best-effort -- scan/purge already succeeded; a transient
 # API error or closed-PR race must not fail the job.

@@ -6,7 +6,8 @@
 
 # Allowlist for known false positives when scanning e2e workflow run
 # logs/artifacts (OSAC-1684). Typical FP RuleID under default rules is
-# generic-api-key (checksum / X.509 / pvc-as-secret / bare UUID).
+# generic-api-key (checksum / X.509 / pvc-as-secret) or curl-auth-user
+# (shell-var basic auth in Job templates).
 #
 # Do NOT use [[rules]] id="generic-api-key" + [[rules.allowlists]] to
 # "rule-scope" -- with useDefault, redeclaring that id replaces the
@@ -17,6 +18,11 @@
 #   - match: allowlist applies only when the rule's Match text fits
 #   - secret: allowlist applies only when the extracted Secret fits
 #   - line: would drop every finding on that line (rejected for keycloak)
+#
+# Do NOT allowlist bare UUIDs via regexTarget=secret: UUID-shaped client
+# secrets / API keys would suppress detect→purge→notify. Scope IdP id
+# FPs to Match text (resource id fields) and targetRules so a Match that
+# also spans Authorization: Bearer (curl-auth-header) is not suppressed.
 
 [[allowlists]]
   description = "K8s checksum-secret(s)-* annotations are SHA1 hashes of secret data, not the secrets (pods-describe / AAP operator logs)"
@@ -47,8 +53,24 @@
   ]
 
 [[allowlists]]
-  description = "Keycloak / bare UUID identifiers when extracted as the Secret (not line-scoped -- co-located Bearer/JWT must still fire)"
+  description = "Keycloak / IdP resource id fields in Match (not bare UUID Secrets)"
+  # Not global: omit curl-auth-header so client_id UUID + Bearer on one line
+  # still fires the Bearer finding.
+  targetRules = ["generic-api-key", "curl-auth-user"]
+  regexTarget = "match"
+  regexes = [
+    # IdP *id* field names only (Id suffix required -- bare client/user/realm
+    # must not suppress UUID-shaped secrets like CLIENT=<uuid>).
+    # co-located Bearer/JWT still fire. Delimiters: quote, backslash,
+    # whitespace (\s), colon, equals. Trailing boundary rejects UUID glued
+    # to secret text while allowing JSON/colon forms.
+    '''(?i)(?:^|[^A-Za-z0-9_-])(?:keycloak[_-]?user[_-]?id|realm[_-]?id|client[_-]?id|user[_-]?id|subject)["\\\s:=]+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:$|[^A-Za-z0-9_-])''',
+  ]
+
+[[allowlists]]
+  description = "AAP create-token Job template uses shell var admin:${AAP_PASSWORD}, not a live password (curl-auth-user)"
+  targetRules = ["curl-auth-user"]
   regexTarget = "secret"
   regexes = [
-    '''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''',
+    '''^admin:\$\{AAP_PASSWORD\}$''',
   ]

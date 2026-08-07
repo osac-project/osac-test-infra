@@ -69,8 +69,9 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Comment on an associated open PR when leaks were found. Schedule /
-      # dispatch / no-PR runs skip quietly. Body uses sanitized findings
-      # only (Rule / File / Line) -- never secret values.
+      # dispatch / no-PR runs skip quietly. Body is a short notice with
+      # scan/redacted-artifact links (no findings table -- details on the
+      # scan job summary / redacted artifact only).
       - name: Comment on PR if leaks found
         if: always() && steps.scan.outputs.leaks-found == 'true'
         env:
@@ -81,12 +82,12 @@ jobs:
           E2E_NAME: ${{ github.event.workflow_run.name }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # Head repo owner for pulls?head= (fork PRs); falls back to base owner in script.
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
           # Often empty on workflow_run (esp. fork PRs) -- fallback below.
           PR_FROM_EVENT: ${{ github.event.workflow_run.pull_requests[0].number }}
-          FINDINGS_COUNT: ${{ steps.scan.outputs.findings-count }}
           PURGE_OK: ${{ steps.scan.outputs.purge-ok }}
           UPLOAD_OK: ${{ steps.scan.outputs.upload-ok }}
-          OUTPUT_DIR: ${{ steps.scan.outputs.output-dir }}
           SCAN_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/comment-pr-leak-findings.sh"
       # --- Secret bootstrap (inline — must not run PR-controlled code) ---
@@ -293,5 +294,5 @@ jobs:
             echo ""
             echo "- **Alert:** ${alert}"
             echo "- **Upstream run:** ${WORKFLOW_URL}"
-            echo "- **Re-enable:** set \`MUTE_SLACK_ALERTS=false\` in \`scan-workflow-logs.yml\`"
+            echo "- **Re-enable:** add Slack webhook as a GitHub Actions secret, point notify at it (Vault@127.0.0.1 does not work on ubuntu-latest), then set \`MUTE_SLACK_ALERTS=false\`"
           } >> "${GITHUB_STEP_SUMMARY}"

@@ -484,8 +484,7 @@ fi
 PURGE_PHASE_DONE=true
 
 # Best-effort: mask found secrets in this job's own subsequent log output.
-# Also mask trailing-backslash-stripped variants -- gitleaks sometimes glues
-# JSON escape backslashes onto Secret (same issue redact.py handles).
+# Mirror redact.py secret_variants: trailing-\ strips and embedded JWT (eyJ...).
 while IFS= read -r secret; do
   [[ -z "${secret}" ]] && continue
   echo "::add-mask::${secret}"
@@ -494,6 +493,12 @@ while IFS= read -r secret; do
     stripped="${stripped%\\}"
     [[ -n "${stripped}" ]] && echo "::add-mask::${stripped}"
   done
+  if [[ "${secret}" == *eyJ* ]]; then
+    # Same shape as redact.py _JWT_RE (no capture of surrounding junk).
+    if [[ "${secret}" =~ eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ ]]; then
+      echo "::add-mask::${BASH_REMATCH[0]}"
+    fi
+  fi
 done < <(jq -r '.[].Secret // empty' "${FINDINGS_RAW_JSON}" | sort -u)
 
 # Sanitize CR/LF in RuleID/File so downstream Markdown tables (PR comment,
