@@ -92,7 +92,7 @@ All variables in `inventory/group_vars/all.yml`. Key sections:
 - **OSAC**: `osac_repo/branch`, `osac_namespace`, `osac_values_file`
 - **Component images**: `osac_operator_image`, `fulfillment_service_image` (empty = defaults)
 - **Snapshot**: `snapshot_flavor_image`, `snapshot_flavor_dir`, `snapshot_recert_image`, `snapshot_osac_namespace`, `snapshot_osac_values_file`
-- **CaaS / MaaS**: `caas_discovery_vm_patterns`, `caas_host_type_id`, `caas_cluster_name`, `caas_agents`, `caas_resource_class_hostnames` (empty = all agents); MaaS overrides via Makefile `MAAS_*`
+- **CaaS / MaaS**: `caas_discovery_vm_patterns`, `caas_host_type_id`, `caas_cluster_name`, `caas_agents`, `caas_resource_class_hostnames` (empty = all agents); per-VM sizing via `caas_discovery_vcpu_overrides` / `caas_discovery_memory_mb_overrides`; MaaS Makefile `MAAS_*` (incl. `MAAS_DISCOVERY_MEMORY_MB_OVERRIDES`, default h01→16GiB)
 
 ## External Dependencies
 

@@ -343,6 +343,10 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 ```bash
 make deploy-ocp EXTRA_VARS="ocp_version=4.18"
 make setup-caas EXTRA_VARS="caas_cluster_name=my-cluster caas_discovery_vcpu=8"
+
+# MaaS: default 10 vCPU / 20GiB for h02–h03; h01 stays 4 vCPU / 16GiB via overrides.
+# Grow workers only (e.g. real model headroom) without resizing h01:
+make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
 ```
 
 #### Lab & Identity
@@ -425,7 +429,9 @@ dns_server: "10.0.0.1"
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS | defaults only |
 | `caas_host_type_id` | `ci-worker` | Resource class label for CaaS agents | defaults only |
 | `caas_discovery_vcpu` | `4` | Discovery VM vCPUs | yes (8) |
+| `caas_discovery_vcpu_overrides` | `{}` | Per-VM vCPU map (VM name → count); empty = use `caas_discovery_vcpu` | defaults only |
 | `caas_discovery_memory_mb` | `16384` | Discovery VM memory in MB | yes (32768) |
+| `caas_discovery_memory_mb_overrides` | `{}` | Per-VM memory map (VM name → MB); empty = use `caas_discovery_memory_mb` | defaults only |
 | `caas_discovery_disk_gb` | `100` | Discovery VM disk in GB | yes (150) |
 | `caas_discovery_vm_patterns` | `[hgx-pod00-su0-h01..03]` | VM names for CaaS discovery | defaults only |
 

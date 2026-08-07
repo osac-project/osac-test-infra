@@ -227,8 +227,13 @@
 
 - name: Set maximum memory
   ansible.builtin.command:
-    cmd: virsh setmaxmem {{ item.item }} {{ caas_discovery_memory_mb }}M --config
-  when: item.stdout | int != caas_discovery_memory_mb | int
+    cmd: >-
+      virsh setmaxmem {{ item.item }}
+      {{ caas_discovery_memory_mb_overrides[item.item] | default(caas_discovery_memory_mb) }}M
+      --config
+  when: >-
+    item.stdout | int !=
+    (caas_discovery_memory_mb_overrides[item.item] | default(caas_discovery_memory_mb)) | int
   loop: "{{ _current_memory.results }}"
   loop_control:
     label: "{{ item.item }}"
@@ -236,8 +241,13 @@
 
 - name: Set memory
   ansible.builtin.command:
-    cmd: virsh setmem {{ item.item }} {{ caas_discovery_memory_mb }}M --config
-  when: item.stdout | int != caas_discovery_memory_mb | int
+    cmd: >-
+      virsh setmem {{ item.item }}
+      {{ caas_discovery_memory_mb_overrides[item.item] | default(caas_discovery_memory_mb) }}M
+      --config
+  when: >-
+    item.stdout | int !=
+    (caas_discovery_memory_mb_overrides[item.item] | default(caas_discovery_memory_mb)) | int
   loop: "{{ _current_memory.results }}"
   loop_control:
     label: "{{ item.item }}"

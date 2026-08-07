@@ -97,6 +97,8 @@ caas_discovery_vcpu: 4
 # Optional per-VM vCPU overrides (VM name → count). Empty = use caas_discovery_vcpu for all.
 caas_discovery_vcpu_overrides: {}
 caas_discovery_memory_mb: 16384
+# Optional per-VM memory overrides (VM name → MB). Empty = use caas_discovery_memory_mb for all.
+caas_discovery_memory_mb_overrides: {}
 caas_discovery_disk_gb: 100
 caas_discovery_infraenv_name: "infraenv"
 caas_discovery_infraenv_namespace: "hardware-inventory"

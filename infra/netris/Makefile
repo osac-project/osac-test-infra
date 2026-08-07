@@ -119,10 +119,11 @@ MAAS_HOST_TYPE_ID     ?= g5
 MAAS_CLUSTER_TEMPLATE ?= osac.templates.ocp_4_20_ai_maas
 MAAS_CATALOG_ITEM     ?= maas-ocp
 # Discovery VM sizing for setup-maas only (CaaS keeps inventory defaults: 4 vCPU / 16GiB).
-# Default MaaS: 10 vCPU / 20GiB for h02–h03; h01 stays at 4 (unused for MaaS workers).
+# Default MaaS: 10 vCPU / 20GiB for h02–h03; h01 stays at 4 vCPU / 16GiB (unused for MaaS workers).
 MAAS_DISCOVERY_VCPU      ?= 10
 MAAS_DISCOVERY_MEMORY_MB ?= 20480
 MAAS_DISCOVERY_VCPU_OVERRIDES ?= {"hgx-pod00-su0-h01":4}
+MAAS_DISCOVERY_MEMORY_MB_OVERRIDES ?= {"hgx-pod00-su0-h01":16384}
 # Only these inventory hostnames get resource_class=g5 (and approval). Empty = all agents.
 # Comma-separated. Keeps h01 out of the MaaS claim pool; setup-caas still labels all as ci-worker.
 MAAS_LABEL_HOSTNAMES ?= hgx-pod00-su0-h02,hgx-pod00-su0-h03
@@ -143,6 +144,7 @@ MAAS_EXTRA = \
   -e 'caas_discovery_vcpu=$(MAAS_DISCOVERY_VCPU)' \
   -e 'caas_discovery_memory_mb=$(MAAS_DISCOVERY_MEMORY_MB)' \
   -e '{"caas_discovery_vcpu_overrides":$(MAAS_DISCOVERY_VCPU_OVERRIDES)}' \
+  -e '{"caas_discovery_memory_mb_overrides":$(MAAS_DISCOVERY_MEMORY_MB_OVERRIDES)}' \
   -e '{"caas_resource_class_hostnames":$(MAAS_LABEL_HOSTNAMES_JSON)}'
 
 setup-maas:
