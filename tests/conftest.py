@@ -143,9 +143,7 @@ def keycloak_admin_password() -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_organization_memberships(
-    ensure_tenants: None, keycloak_url: str, keycloak_admin_password: str
-) -> None:
+def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keycloak_admin_password: str) -> None:
     """
     Add test users to their corresponding Keycloak organizations.
     This runs after ensure_tenants creates the Tenant resources, which the
@@ -155,10 +153,7 @@ def setup_organization_memberships(
     admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
 
     # Map of organization name -> list of usernames
-    org_users = {
-        "tenant1": ["tenant1_user", "tenant1_admin"],
-        "tenant2": ["tenant2_user", "tenant2_admin"],
-    }
+    org_users = {"tenant1": ["tenant1_user", "tenant1_admin"], "tenant2": ["tenant2_user", "tenant2_admin"]}
 
     for org_name, usernames in org_users.items():
         # Wait for the organization to be synced to Keycloak by the tenant controller
@@ -237,7 +232,9 @@ def ensure_k8s_only_network_class(private_grpc: GRPCClient, k8s_hub_client: K8sC
 
 
 @pytest.fixture(scope="session")
-def cli(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_username: str, jwt_password: str) -> Iterator[OsacCLI]:  # noqa: E501
+def cli(
+    namespace: str, fulfillment_address: str, keycloak_url: str, jwt_username: str, jwt_password: str
+) -> Iterator[OsacCLI]:
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",

@@ -266,6 +266,36 @@ def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> No
     )
 
 
+def wait_for_nat_gateway_cr(*, k8s: K8sClient, uuid: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_nat_gateway_name(uuid=uuid, checked=False),
+        until=lambda v: v != "",
+        retries=30,
+        delay=2,
+        description=f"NATGateway CR for {uuid}",
+    )
+
+
+def wait_for_nat_gateway_ready(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.get_nat_gateway_phase(name=name, checked=False),
+        until=lambda v: v == "Ready",
+        retries=60,
+        delay=5,
+        description=f"{name} NATGateway Ready",
+    )
+
+
+def wait_for_nat_gateway_deletion(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: not k8s.is_present(resource="natgateway", name=name),
+        until=lambda v: v is True,
+        retries=120,
+        delay=5,
+        description=f"{name} NATGateway deletion",
+    )
+
+
 def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
         fn=lambda: k8s.get_cluster_order_name(uuid=uuid, checked=False),
@@ -523,6 +553,18 @@ def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str,
         retries=120,
         delay=5,
         description=f"Tenant {name} {condition_type}={expected_status}",
+    )
+
+
+def wait_for_grpc_tenant_condition(
+    *, grpc: GRPCClient, name: str, condition_type: str, expected_status: str = "True"
+) -> None:
+    poll_until(
+        fn=lambda: grpc.get_tenant_condition_status(name=name, condition_type=condition_type),
+        until=lambda v: v == expected_status,
+        retries=120,
+        delay=5,
+        description=f"Tenant {name} {condition_type}={expected_status} (gRPC)",
     )
 
 
