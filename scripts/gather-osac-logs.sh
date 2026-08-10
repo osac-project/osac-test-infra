@@ -235,6 +235,9 @@ fi
 
 if [[ -n "${JUNIT_PATH}" && -f "${JUNIT_PATH}" ]]; then
     cp "${JUNIT_PATH}" "${ARTIFACT_DIR}/junit.xml"
+    for extra in "$(dirname "${JUNIT_PATH}")"/junit-*.xml; do
+        [[ -f "${extra}" ]] && cp "${extra}" "${ARTIFACT_DIR}/"
+    done
 fi
 
 if [[ -n "${JUNIT_PATH}" ]]; then
