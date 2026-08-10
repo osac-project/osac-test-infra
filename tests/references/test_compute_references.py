@@ -28,6 +28,18 @@ def compute_template() -> str:
 
 
 @pytest.fixture(scope="module")
+def ref_instance_type(private_grpc: GRPCClient) -> Generator[str, None, None]:
+    tag = uuid4().hex[:8]
+    name = f"ref-it-{tag}"
+    private_grpc.create_instance_type(name=name, cores=2, memory_gib=4)
+    yield name
+    try:
+        private_grpc.delete_instance_type(name=name)
+    except subprocess.CalledProcessError:
+        logger.warning("Failed to cleanup instance type %s", name)
+
+
+@pytest.fixture(scope="module")
 def ref_ci_catalog_item(private_grpc: GRPCClient, compute_template: str) -> Generator[str, None, None]:
     tag = uuid4().hex[:8]
     name = f"ref-ci-cat-{tag}"
@@ -37,6 +49,23 @@ def ref_ci_catalog_item(private_grpc: GRPCClient, compute_template: str) -> Gene
         private_grpc.delete_compute_instance_catalog_item(catalog_item_id=cat_id)
     except subprocess.CalledProcessError:
         logger.warning("Failed to cleanup catalog item %s", cat_id)
+
+
+def _ci_create_data(
+    name: str, cat_item_name: str, subnet_name: str, sg_name: str, instance_type: str
+) -> dict[str, Any]:
+    return {
+        "object": {
+            "metadata": {"name": name},
+            "spec": {
+                "catalog_item": {"name": cat_item_name},
+                "instance_type": {"name": instance_type},
+                "network_attachments": [
+                    {"subnet": {"name": subnet_name}, "security_groups": [{"name": sg_name}]}
+                ],
+            },
+        }
+    }
 
 
 class TestComputeReferences:
@@ -49,6 +78,7 @@ class TestComputeReferences:
         ref_subnet: dict[str, str],
         ref_security_group: dict[str, str],
         ref_ci_catalog_item: str,
+        ref_instance_type: str,
     ):
         tag = uuid4().hex[:8]
         ci_name = f"ref-ci-chain-{tag}"
@@ -57,20 +87,9 @@ class TestComputeReferences:
 
         response: dict[str, Any] = grpc.call(
             service=f"{PUBLIC_API}.ComputeInstances/Create",
-            data={
-                "object": {
-                    "metadata": {"name": ci_name},
-                    "spec": {
-                        "catalog_item": {"name": cat_item_name},
-                        "network_attachments": [
-                            {
-                                "subnet": {"name": ref_subnet["name"]},
-                                "security_groups": [{"name": ref_security_group["name"]}],
-                            }
-                        ],
-                    },
-                }
-            },
+            data=_ci_create_data(
+                ci_name, cat_item_name, ref_subnet["name"], ref_security_group["name"], ref_instance_type
+            ),
         )
         ci_id = response["object"]["id"]
         try:
@@ -102,6 +121,7 @@ class TestComputeReferences:
         ref_subnet: dict[str, str],
         ref_security_group: dict[str, str],
         ref_ci_catalog_item: str,
+        ref_instance_type: str,
     ):
         tag = uuid4().hex[:8]
         ci_name = f"ref-ci-run-{tag}"
@@ -110,20 +130,9 @@ class TestComputeReferences:
 
         response: dict[str, Any] = grpc.call(
             service=f"{PUBLIC_API}.ComputeInstances/Create",
-            data={
-                "object": {
-                    "metadata": {"name": ci_name},
-                    "spec": {
-                        "catalog_item": {"name": cat_item_name},
-                        "network_attachments": [
-                            {
-                                "subnet": {"name": ref_subnet["name"]},
-                                "security_groups": [{"name": ref_security_group["name"]}],
-                            }
-                        ],
-                    },
-                }
-            },
+            data=_ci_create_data(
+                ci_name, cat_item_name, ref_subnet["name"], ref_security_group["name"], ref_instance_type
+            ),
         )
         ci_id = response["object"]["id"]
         cr_name = None
@@ -143,7 +152,7 @@ class TestComputeReferences:
                     logger.warning("Cleanup wait failed for compute instance %s", ci_id)
 
     def test_invalid_subnet_name_returns_array_indexed_field_path(
-        self, grpc: GRPCClient, ref_subnet: dict[str, str], ref_ci_catalog_item: str
+        self, grpc: GRPCClient, ref_subnet: dict[str, str], ref_ci_catalog_item: str, ref_instance_type: str
     ):
         tag = uuid4().hex[:8]
         cat_item = grpc.get_compute_instance_catalog_item(catalog_item_id=ref_ci_catalog_item)
@@ -157,6 +166,7 @@ class TestComputeReferences:
                         "metadata": {"name": f"ref-ci-bad-sg-{tag}"},
                         "spec": {
                             "catalog_item": {"name": cat_item_name},
+                            "instance_type": {"name": ref_instance_type},
                             "network_attachments": [
                                 {
                                     "subnet": {"name": ref_subnet["name"]},
@@ -176,6 +186,7 @@ class TestComputeReferences:
         compute_template: str,
         ref_subnet: dict[str, str],
         ref_security_group: dict[str, str],
+        ref_instance_type: str,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-xt-cat-{tag}"
@@ -184,20 +195,9 @@ class TestComputeReferences:
         try:
             response: dict[str, Any] = jwt_grpc_tenant1.call(
                 service=f"{PUBLIC_API}.ComputeInstances/Create",
-                data={
-                    "object": {
-                        "metadata": {"name": f"ref-ci-xt-{tag}"},
-                        "spec": {
-                            "catalog_item": {"name": cat_name},
-                            "network_attachments": [
-                                {
-                                    "subnet": {"name": ref_subnet["name"]},
-                                    "security_groups": [{"name": ref_security_group["name"]}],
-                                }
-                            ],
-                        },
-                    }
-                },
+                data=_ci_create_data(
+                    f"ref-ci-xt-{tag}", cat_name, ref_subnet["name"], ref_security_group["name"], ref_instance_type
+                ),
             )
             ci_id = response["object"]["id"]
             cat_ref = response["object"]["spec"]["catalog_item"]

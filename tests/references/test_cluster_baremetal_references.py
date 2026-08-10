@@ -55,7 +55,12 @@ class TestClusterBareMetalReferences:
 
             cluster_response: dict[str, Any] = grpc.call(
                 service=f"{PUBLIC_API}.Clusters/Create",
-                data={"object": {"metadata": {"name": f"ref-cl-{tag}"}, "spec": {"catalog_item": {"name": cat_name}}}},
+                data={
+                    "object": {
+                        "metadata": {"name": f"ref-cl-{tag}"},
+                        "spec": {"catalog_item": {"name": cat_name}, "version": "1.0.0"},
+                    }
+                },
             )
             cluster_id = cluster_response["object"]["id"]
             cat_ref = cluster_response["object"]["spec"]["catalog_item"]
@@ -119,7 +124,10 @@ class TestClusterBareMetalReferences:
             cluster_response: dict[str, Any] = jwt_grpc_tenant1.call(
                 service=f"{PUBLIC_API}.Clusters/Create",
                 data={
-                    "object": {"metadata": {"name": f"ref-xt-cl-{tag}"}, "spec": {"catalog_item": {"name": cat_name}}}
+                    "object": {
+                        "metadata": {"name": f"ref-xt-cl-{tag}"},
+                        "spec": {"catalog_item": {"name": cat_name}, "version": "1.0.0"},
+                    }
                 },
             )
             cluster_id = cluster_response["object"]["id"]
