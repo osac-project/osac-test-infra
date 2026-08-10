@@ -48,7 +48,7 @@ class TestNetworkingReferences:
             try:
                 vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
                 wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
-            except (subprocess.CalledProcessError, AssertionError):
+            except (subprocess.CalledProcessError, AssertionError, TimeoutError):
                 logger.warning("Cleanup wait failed for virtual network %s", vn_id)
 
     def test_create_subnet_with_virtual_network_by_name(
@@ -74,7 +74,7 @@ class TestNetworkingReferences:
             try:
                 subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
                 wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
-            except (subprocess.CalledProcessError, AssertionError):
+            except (subprocess.CalledProcessError, AssertionError, TimeoutError):
                 logger.warning("Cleanup wait failed for subnet %s", subnet_id)
 
     def test_create_security_group_with_virtual_network_by_name(
@@ -100,7 +100,7 @@ class TestNetworkingReferences:
             try:
                 sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
                 wait_for_security_group_deletion(k8s=k8s_hub_client, name=sg_cr_name)
-            except (subprocess.CalledProcessError, AssertionError):
+            except (subprocess.CalledProcessError, AssertionError, TimeoutError):
                 logger.warning("Cleanup wait failed for security group %s", sg_id)
 
     def test_invalid_virtual_network_reference_returns_field_path(self, grpc: GRPCClient, ref_test_run_id: str):
@@ -153,5 +153,5 @@ class TestNetworkingReferences:
             try:
                 vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
                 wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
-            except (subprocess.CalledProcessError, AssertionError):
+            except (subprocess.CalledProcessError, AssertionError, TimeoutError):
                 logger.warning("Cleanup wait failed for virtual network %s", vn_id)

@@ -9,6 +9,7 @@ import pytest
 
 from tests.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.core.helpers import assert_grpc_field_violation
+from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ class TestClusterBareMetalReferences:
     """OSAC-3110: Cluster and bare metal resource reference tests."""
 
     def test_cluster_provisioning_chain_by_name(
-        self, private_grpc: GRPCClient, grpc: GRPCClient, cluster_template: str
+        self, private_grpc: GRPCClient, grpc: GRPCClient, cli: OsacCLI, cluster_template: str
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-cl-cat-{tag}"
@@ -53,23 +54,18 @@ class TestClusterBareMetalReferences:
             assert tmpl_ref.get("name") == cluster_template
             assert tmpl_ref.get("id"), "template.id should be auto-populated in catalog item"
 
-            cluster_response: dict[str, Any] = grpc.call(
-                service=f"{PUBLIC_API}.Clusters/Create",
-                data={
-                    "object": {
-                        "metadata": {"name": f"ref-cl-{tag}"},
-                        "spec": {"catalog_item": {"name": cat_name}, "version": "1.0.0"},
-                    }
-                },
+            cluster_id = cli.create_cluster_with_catalog_item(
+                catalog_item=cat_name, name=f"ref-cl-{tag}"
             )
-            cluster_id = cluster_response["object"]["id"]
-            cat_ref = cluster_response["object"]["spec"]["catalog_item"]
+            cluster = grpc.get_cluster(cluster_id=cluster_id)
+            spec = cluster["object"]["spec"]
+            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
         finally:
             if cluster_id:
                 try:
-                    grpc.call(service=f"{PUBLIC_API}.Clusters/Delete", data={"id": cluster_id})
+                    cli.delete_cluster(uuid=cluster_id)
                 except subprocess.CalledProcessError:
                     logger.warning("Failed to cleanup cluster %s", cluster_id)
             try:
@@ -98,7 +94,8 @@ class TestClusterBareMetalReferences:
                 data={"object": {"metadata": {"name": f"ref-bmi-{tag}"}, "spec": {"catalog_item": {"name": cat_name}}}},
             )
             bmi_id = bmi_response["object"]["id"]
-            cat_ref = bmi_response["object"]["spec"]["catalog_item"]
+            spec = bmi_response["object"]["spec"]
+            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
         finally:
@@ -113,7 +110,7 @@ class TestClusterBareMetalReferences:
                 logger.warning("Failed to cleanup BMI catalog item %s", cat_id)
 
     def test_cross_tenant_cluster_template_reference(
-        self, private_grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient, cluster_template: str
+        self, private_grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient, jwt_cli_user: OsacCLI, cluster_template: str
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-xt-cl-cat-{tag}"
@@ -121,23 +118,18 @@ class TestClusterBareMetalReferences:
         cat_id = private_grpc.create_cluster_catalog_item(name=cat_name, template=cluster_template)
         cluster_id: str | None = None
         try:
-            cluster_response: dict[str, Any] = jwt_grpc_tenant1.call(
-                service=f"{PUBLIC_API}.Clusters/Create",
-                data={
-                    "object": {
-                        "metadata": {"name": f"ref-xt-cl-{tag}"},
-                        "spec": {"catalog_item": {"name": cat_name}, "version": "1.0.0"},
-                    }
-                },
+            cluster_id = jwt_cli_user.create_cluster_with_catalog_item(
+                catalog_item=cat_name, name=f"ref-xt-cl-{tag}"
             )
-            cluster_id = cluster_response["object"]["id"]
-            cat_ref = cluster_response["object"]["spec"]["catalog_item"]
+            cluster = jwt_grpc_tenant1.get_cluster(cluster_id=cluster_id)
+            spec = cluster["object"]["spec"]
+            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
         finally:
             if cluster_id:
                 try:
-                    jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.Clusters/Delete", data={"id": cluster_id})
+                    jwt_cli_user.delete_cluster(uuid=cluster_id)
                 except subprocess.CalledProcessError:
                     logger.warning("Failed to cleanup cross-tenant cluster %s", cluster_id)
             try:
