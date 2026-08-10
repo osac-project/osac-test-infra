@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
+from collections.abc import Generator
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +16,19 @@ from tests.core.runner import env
 
 logger = logging.getLogger(__name__)
 
+_ENV_SKIP_PATTERNS = [re.compile(r"no host type"), re.compile(r"no instance type")]
+
+
+def _create_cluster_or_skip(cli: OsacCLI, *, catalog_item: str, name: str, version: str) -> str:
+    try:
+        return cli.create_cluster_with_catalog_item(catalog_item=catalog_item, name=name, version=version)
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stdout or "") + (exc.stderr or "")
+        for pat in _ENV_SKIP_PATTERNS:
+            if pat.search(output):
+                pytest.skip(f"Cluster creation not viable in this environment: {output.strip()}")
+        raise
+
 
 @pytest.fixture(scope="module")
 def cluster_template(private_grpc: GRPCClient) -> str:
@@ -24,6 +39,41 @@ def cluster_template(private_grpc: GRPCClient) -> str:
     items = response.get("items", [])
     assert items, "No ClusterTemplates found; set OSAC_CLUSTER_TEMPLATE or deploy a template"
     return items[0]["metadata"]["name"]
+
+
+@pytest.fixture(scope="module")
+def cluster_version(grpc: GRPCClient, private_grpc: GRPCClient) -> Generator[str, None, None]:
+    configured = env("OSAC_CLUSTER_VERSION", "")
+    if configured:
+        yield configured
+        return
+    response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.ClusterVersions/List")
+    items = response.get("items", [])
+    if items:
+        yield items[0]["metadata"]["name"]
+        return
+    tag = uuid4().hex[:8]
+    name = f"ref-cv-{tag}"
+    cv_response: dict[str, Any] = private_grpc.call(
+        service=f"{PRIVATE_API}.ClusterVersions/Create",
+        data={
+            "object": {
+                "metadata": {"name": name},
+                "spec": {
+                    "version": f"4.17.{int(tag, 16) % 10000}",
+                    "image": "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
+                },
+            }
+        },
+    )
+    cv_id = cv_response["object"]["id"]
+    try:
+        yield name
+    finally:
+        try:
+            private_grpc.call(service=f"{PRIVATE_API}.ClusterVersions/Delete", data={"id": cv_id})
+        except subprocess.CalledProcessError:
+            logger.warning("Failed to cleanup ClusterVersion %s", cv_id)
 
 
 @pytest.fixture(scope="module")
@@ -41,7 +91,7 @@ class TestClusterBareMetalReferences:
     """OSAC-3110: Cluster and bare metal resource reference tests."""
 
     def test_cluster_provisioning_chain_by_name(
-        self, private_grpc: GRPCClient, grpc: GRPCClient, cli: OsacCLI, cluster_template: str
+        self, private_grpc: GRPCClient, grpc: GRPCClient, cli: OsacCLI, cluster_template: str, cluster_version: str
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-cl-cat-{tag}"
@@ -54,8 +104,8 @@ class TestClusterBareMetalReferences:
             assert tmpl_ref.get("name") == cluster_template
             assert tmpl_ref.get("id"), "template.id should be auto-populated in catalog item"
 
-            cluster_id = cli.create_cluster_with_catalog_item(
-                catalog_item=cat_name, name=f"ref-cl-{tag}"
+            cluster_id = _create_cluster_or_skip(
+                cli, catalog_item=cat_name, name=f"ref-cl-{tag}", version=cluster_version
             )
             cluster = grpc.get_cluster(cluster_id=cluster_id)
             spec = cluster["object"]["spec"]
@@ -110,7 +160,8 @@ class TestClusterBareMetalReferences:
                 logger.warning("Failed to cleanup BMI catalog item %s", cat_id)
 
     def test_cross_tenant_cluster_template_reference(
-        self, private_grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient, jwt_cli_user: OsacCLI, cluster_template: str
+        self, private_grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient, jwt_cli_user: OsacCLI, cluster_template: str,
+        cluster_version: str,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-xt-cl-cat-{tag}"
@@ -118,8 +169,8 @@ class TestClusterBareMetalReferences:
         cat_id = private_grpc.create_cluster_catalog_item(name=cat_name, template=cluster_template)
         cluster_id: str | None = None
         try:
-            cluster_id = jwt_cli_user.create_cluster_with_catalog_item(
-                catalog_item=cat_name, name=f"ref-xt-cl-{tag}"
+            cluster_id = _create_cluster_or_skip(
+                jwt_cli_user, catalog_item=cat_name, name=f"ref-xt-cl-{tag}", version=cluster_version
             )
             cluster = jwt_grpc_tenant1.get_cluster(cluster_id=cluster_id)
             spec = cluster["object"]["spec"]
