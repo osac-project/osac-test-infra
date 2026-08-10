@@ -708,6 +708,28 @@ jobs:
             pytest ${TEST_ARGS} ${FILTER_ARGS} \
               --junitxml=/tmp/test-output/junit.xml -v
 
+      - name: Run references E2E tests
+        if: always() && steps.test.outcome != 'cancelled' && (inputs.test-suite == 'vmaas' || inputs.test-suite == '')
+        id: test-references
+        env:
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+        run: |
+          KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
+
+          podman run --rm --network=host \
+            -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
+            -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
+            -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
+            -v "${RUNNER_TEMP}/test-output":/tmp/test-output:Z \
+            -e KUBECONFIG=/root/.kube/config \
+            -e OSAC_VM_KUBECONFIG=/root/.kube/config \
+            -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
+            -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+            "${E2E_IMAGE}" \
+            pytest tests/references/ \
+              --junitxml=/tmp/test-output/junit-references.xml -v
+
       - name: Gather artifacts
         if: always()
         uses: ./.github/actions/gather-artifacts
