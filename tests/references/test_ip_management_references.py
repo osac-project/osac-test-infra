@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 def ref_eip_pool(private_grpc: GRPCClient) -> str:
     response: dict[str, Any] = private_grpc.call(service=f"{PRIVATE_API}.ExternalIPPools/List")
     items = response.get("items", [])
-    assert items, "No ExternalIPPools found; deploy at least one pool"
+    if not items:
+        pytest.skip("No ExternalIPPools found; deploy at least one pool")
     return items[0]["metadata"]["name"]
 
 
