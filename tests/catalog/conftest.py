@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -18,9 +19,43 @@ from tests.core.helpers import (
     wait_for_virtual_network_ready,
 )
 from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env
 
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture(scope="session")
+def default_storage_tier(private_grpc: GRPCClient) -> Generator[str, None, None]:
+    """Create a default StorageBackend + StorageTier for catalog tests; clean up after."""
+    tag = uuid4().hex[:8]
+    sb_name = f"e2e-cat-sb-{tag}"
+    st_name = f"e2e-cat-st-{tag}"
+    sb_id = private_grpc.create_storage_backend(name=sb_name)
+    try:
+        st_id = private_grpc.create_storage_tier(name=st_name, backend_id=sb_id)
+    except Exception:
+        private_grpc.delete_storage_backend(backend_id=sb_id)
+        raise
+    yield st_name
+    try:
+        private_grpc.delete_storage_tier(tier_id=st_id)
+    except subprocess.CalledProcessError as e:
+        output = ((e.stdout or "") + (e.stderr or "")).lower()
+        if "not found" not in output:
+            raise
+    try:
+        private_grpc.delete_storage_backend(backend_id=sb_id)
+    except subprocess.CalledProcessError as e:
+        output = ((e.stdout or "") + (e.stderr or "")).lower()
+        if "not found" not in output:
+            raise
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _set_cli_default_storage_tier(cli: OsacCLI, default_storage_tier: str) -> None:
+    """Wire the session-scoped default storage tier into the shared CLI fixture."""
+    cli.default_storage_tier = default_storage_tier
 
 
 def unique_name(prefix: str) -> str:

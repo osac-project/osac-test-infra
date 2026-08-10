@@ -378,6 +378,48 @@ class GRPCClient:
     def delete_baremetal_instance(self, *, bmi_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.BareMetalInstances/Delete", data={"id": bmi_id})
 
+    # StorageBackend operations (private API)
+
+    def create_storage_backend(self, *, name: str) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.StorageBackends/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {
+                        "provider": "test",
+                        "description": "E2E test storage backend",
+                        "endpoint": "https://test-backend.example.com",
+                        "credentials": {"username": "test-user", "password": "test-credential"},
+                    },
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def delete_storage_backend(self, *, backend_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.StorageBackends/Delete", data={"id": backend_id})
+
+    # StorageTier operations (private API)
+
+    def create_storage_tier(self, *, name: str, backend_id: str) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.StorageTiers/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {
+                        "description": "E2E test storage tier",
+                        "backends": [{"backend_id": backend_id}],
+                    },
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def delete_storage_tier(self, *, tier_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.StorageTiers/Delete", data={"id": tier_id})
+
     # BareMetalInstanceCatalogItem operations (private API for admin setup)
 
     def create_baremetal_instance_catalog_item(

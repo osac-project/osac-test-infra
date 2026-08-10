@@ -17,12 +17,14 @@ class OsacCLI:
         token_script: str,
         namespace: str,
         default_instance_type: str | None = None,
+        default_storage_tier: str | None = None,
     ) -> None:
         self.binary: str = binary
         self.namespace: str = namespace
         self._address: str = address
         self._token_script: str = token_script
         self.default_instance_type: str | None = default_instance_type
+        self.default_storage_tier: str | None = default_storage_tier
         # Each OsacCLI instance gets its own config directory so that parallel
         # xdist workers (or multiple CLI fixtures) don't overwrite each other's
         # login credentials via the shared ~/.config/osac/config.json.
@@ -61,6 +63,7 @@ class OsacCLI:
         name: str | None = None,
         network_attachments: list[dict[str, Any]] | None = None,
         boot_disk_size: int = 20,
+        boot_disk_storage_tier: str | None = None,
         image: str = "quay.io/containerdisks/fedora:latest",
         image_source_type: str = "registry",
         run_strategy: str = "Always",
@@ -89,6 +92,12 @@ class OsacCLI:
             args.extend(["--instance-type", effective_instance_type])
         else:
             raise ValueError("instance_type or default_instance_type must be set")
+
+        effective_storage_tier = (
+            boot_disk_storage_tier if boot_disk_storage_tier is not None else self.default_storage_tier
+        )
+        if effective_storage_tier is not None:
+            args.extend(["--boot-disk-storage-tier", effective_storage_tier])
 
         # Add network attachments
         if network_attachments is not None:

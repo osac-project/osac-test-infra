@@ -155,6 +155,32 @@ def default_subnet_ref(default_networking: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="session")
+def default_storage_tier(private_grpc: GRPCClient, test_run_id: str) -> Iterator[str]:
+    """Create a default StorageBackend + StorageTier for VM tests; clean up after."""
+    sb_name = f"e2e-sb-{test_run_id}"
+    st_name = f"e2e-st-{test_run_id}"
+    sb_id = private_grpc.create_storage_backend(name=sb_name)
+    try:
+        st_id = private_grpc.create_storage_tier(name=st_name, backend_id=sb_id)
+    except Exception:
+        private_grpc.delete_storage_backend(backend_id=sb_id)
+        raise
+    yield st_name
+    try:
+        private_grpc.delete_storage_tier(tier_id=st_id)
+    except subprocess.CalledProcessError as e:
+        output = ((e.stdout or "") + (e.stderr or "")).lower()
+        if "not found" not in output:
+            raise
+    try:
+        private_grpc.delete_storage_backend(backend_id=sb_id)
+    except subprocess.CalledProcessError as e:
+        output = ((e.stdout or "") + (e.stderr or "")).lower()
+        if "not found" not in output:
+            raise
+
+
+@pytest.fixture(scope="session")
 def default_instance_type(private_grpc: GRPCClient, test_run_id: str) -> Iterator[str]:
     """Create a default ACTIVE instance type for VM tests; clean up after."""
     it_name = f"e2e-default-it-{test_run_id}"
@@ -216,3 +242,9 @@ def _wait_for_tenant_storage_ready(
 def _set_cli_default_instance_type(cli: OsacCLI, default_instance_type: str) -> None:
     """Wire the session-scoped default instance type into the shared CLI fixture."""
     cli.default_instance_type = default_instance_type
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _set_cli_default_storage_tier(cli: OsacCLI, default_storage_tier: str) -> None:
+    """Wire the session-scoped default storage tier into the shared CLI fixture."""
+    cli.default_storage_tier = default_storage_tier
