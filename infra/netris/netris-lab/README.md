@@ -75,7 +75,7 @@ All variables are in `group_vars/all.yml`.
 | `leaf_count` | `2` | NS leaf switches |
 | `spine_count` | `2` | NS spine switches |
 | `softgate_count` | `4` | Softgate VMs |
-| `softgate_roles` | `'["general","general","snat","snat"]'` | Softgate role assignment |
+| `softgate_roles` | `'["general","general","general","general"]'` | Softgate role assignment |
 | `softgate_node_type` | `"softgate_hs"` | Installer node type (dpdk disabled post-install) |
 | `oob_leaf_count` | `1` | OOB leaf switches |
 | `oob_gpu_per_switch` | `4` | GPU servers per OOB leaf |
