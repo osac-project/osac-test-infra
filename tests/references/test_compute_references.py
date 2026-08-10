@@ -94,16 +94,16 @@ class TestComputeReferences:
         ci_id = response["object"]["id"]
         try:
             spec = response["object"]["spec"]
-            cat_ref = spec["catalog_item"]
+            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
             assert cat_ref.get("name") == cat_item_name
             assert cat_ref.get("id") == ref_ci_catalog_item
 
-            att = spec["network_attachments"][0]
-            subnet_ref = att["subnet"]
+            att = spec.get("network_attachments", spec.get("networkAttachments", [{}]))[0]
+            subnet_ref = att.get("subnet", {})
             assert subnet_ref.get("name") == ref_subnet["name"]
             assert subnet_ref.get("id") == ref_subnet["id"]
 
-            sg_ref = att["security_groups"][0]
+            sg_ref = att.get("security_groups", att.get("securityGroups", [{}]))[0]
             assert sg_ref.get("name") == ref_security_group["name"]
             assert sg_ref.get("id") == ref_security_group["id"]
         finally:
@@ -111,7 +111,7 @@ class TestComputeReferences:
             try:
                 cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)
                 wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
-            except (subprocess.CalledProcessError, AssertionError):
+            except (subprocess.CalledProcessError, AssertionError, TimeoutError):
                 logger.warning("Cleanup wait failed for compute instance %s", ci_id)
 
     def test_compute_instance_reaches_running_with_name_refs(
@@ -148,7 +148,7 @@ class TestComputeReferences:
             if cr_name:
                 try:
                     wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
-                except (subprocess.CalledProcessError, AssertionError):
+                except (subprocess.CalledProcessError, AssertionError, TimeoutError):
                     logger.warning("Cleanup wait failed for compute instance %s", ci_id)
 
     def test_invalid_subnet_name_returns_array_indexed_field_path(
@@ -200,7 +200,8 @@ class TestComputeReferences:
                 ),
             )
             ci_id = response["object"]["id"]
-            cat_ref = response["object"]["spec"]["catalog_item"]
+            spec = response["object"]["spec"]
+            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
         finally:

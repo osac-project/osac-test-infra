@@ -119,7 +119,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      result: ${{ steps.test.outcome == 'success' && (steps.test-references.outcome == 'success' || steps.test-references.outcome == 'skipped') && 'PASSED' || 'FAILED' }}
+      result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
 
     env:
       FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
@@ -705,6 +705,10 @@ jobs:
           TEST_ARGS="tests/"
           if [ -n "${TEST_SUITE}" ]; then
             TEST_ARGS="tests/${TEST_SUITE}/"
+            # Run references tests alongside vmaas suite
+            if [ "${TEST_SUITE}" = "vmaas" ]; then
+              TEST_ARGS="${TEST_ARGS} tests/references/"
+            fi
           fi
 
           FILTER_ARGS=""
@@ -729,28 +733,6 @@ jobs:
             "${E2E_IMAGE}" \
             pytest ${TEST_ARGS} ${FILTER_ARGS} \
               --junitxml=/tmp/test-output/junit.xml -v
-
-      - name: Run references E2E tests
-        if: always() && steps.test.outcome != 'cancelled' && (inputs.test-suite == 'vmaas' || inputs.test-suite == '')
-        id: test-references
-        env:
-          OSAC_NAMESPACE: ${{ inputs.namespace }}
-          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
-        run: |
-          KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
-
-          podman run --rm --network=host \
-            -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
-            -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
-            -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
-            -v "${RUNNER_TEMP}/test-output":/tmp/test-output:Z \
-            -e KUBECONFIG=/root/.kube/config \
-            -e OSAC_VM_KUBECONFIG=/root/.kube/config \
-            -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
-            -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
-            "${E2E_IMAGE}" \
-            pytest tests/references/ \
-              --junitxml=/tmp/test-output/junit-references.xml -v
 
       - name: Gather artifacts
         if: always()
