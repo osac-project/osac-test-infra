@@ -27,6 +27,17 @@ def cluster_template(private_grpc: GRPCClient) -> str:
 
 
 @pytest.fixture(scope="module")
+def cluster_version(grpc: GRPCClient) -> str:
+    configured = env("OSAC_CLUSTER_VERSION", "")
+    if configured:
+        return configured
+    response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.ClusterVersions/List")
+    items = response.get("items", [])
+    assert items, "No ClusterVersions found; set OSAC_CLUSTER_VERSION or deploy a version"
+    return items[0]["metadata"]["name"]
+
+
+@pytest.fixture(scope="module")
 def bmi_template(private_grpc: GRPCClient) -> str:
     configured = env("OSAC_BMI_TEMPLATE", "")
     if configured:
@@ -41,7 +52,7 @@ class TestClusterBareMetalReferences:
     """OSAC-3110: Cluster and bare metal resource reference tests."""
 
     def test_cluster_provisioning_chain_by_name(
-        self, private_grpc: GRPCClient, grpc: GRPCClient, cli: OsacCLI, cluster_template: str
+        self, private_grpc: GRPCClient, grpc: GRPCClient, cli: OsacCLI, cluster_template: str, cluster_version: str
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-cl-cat-{tag}"
@@ -55,7 +66,7 @@ class TestClusterBareMetalReferences:
             assert tmpl_ref.get("id"), "template.id should be auto-populated in catalog item"
 
             cluster_id = cli.create_cluster_with_catalog_item(
-                catalog_item=cat_name, name=f"ref-cl-{tag}"
+                catalog_item=cat_name, name=f"ref-cl-{tag}", version=cluster_version
             )
             cluster = grpc.get_cluster(cluster_id=cluster_id)
             spec = cluster["object"]["spec"]
@@ -110,7 +121,8 @@ class TestClusterBareMetalReferences:
                 logger.warning("Failed to cleanup BMI catalog item %s", cat_id)
 
     def test_cross_tenant_cluster_template_reference(
-        self, private_grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient, jwt_cli_user: OsacCLI, cluster_template: str
+        self, private_grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient, jwt_cli_user: OsacCLI, cluster_template: str,
+        cluster_version: str,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-xt-cl-cat-{tag}"
@@ -119,7 +131,7 @@ class TestClusterBareMetalReferences:
         cluster_id: str | None = None
         try:
             cluster_id = jwt_cli_user.create_cluster_with_catalog_item(
-                catalog_item=cat_name, name=f"ref-xt-cl-{tag}"
+                catalog_item=cat_name, name=f"ref-xt-cl-{tag}", version=cluster_version
             )
             cluster = jwt_grpc_tenant1.get_cluster(cluster_id=cluster_id)
             spec = cluster["object"]["spec"]
