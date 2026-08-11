@@ -1,18 +1,106 @@
 ---
-# Shared lab infrastructure — sushy-tools BMC emulator on br-mgmt.
-# Used by both BMaaS and CaaS (future) test suites.
+# Shared lab infrastructure: BMC network + sushy-tools BMC emulator.
+# Creates a dedicated libvirt network (bmc-net) for Ironic ↔ sushy-tools
+# communication, avoiding the br-mgmt VPN route conflict.
 
-- name: Check if sushy-tools IP is already assigned to br-mgmt
-  ansible.builtin.shell:
-    cmd: ip addr show dev br-mgmt | grep -q "{{ sushy_tools_ip }}/20"
-  register: _sushy_ip_check
+# ── Phase 1: BMC network ─────────────────────────────────────────────
+
+- name: Enable virtstoraged and virtnetworkd sockets
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - virtstoraged.socket
+    - virtnetworkd.socket
+
+- name: Check if bmc-net exists
+  ansible.builtin.command:
+    cmd: virsh net-info {{ bmc_net_name }}
+  register: _bmc_net_check
   failed_when: false
   changed_when: false
 
-- name: Assign sushy-tools IP to br-mgmt
-  ansible.builtin.command:
-    cmd: ip addr add {{ sushy_tools_ip }}/20 dev br-mgmt
-  when: _sushy_ip_check.rc != 0
+- name: Get OCP VM MAC on bmc-net (if already attached)
+  ansible.builtin.shell:
+    cmd: virsh domiflist {{ ocp_vm_name_pattern }} | grep {{ bmc_net_name }} | awk '{print $5}'
+  register: _ocp_bmc_mac_existing
+  failed_when: false
+  changed_when: false
+  when: _bmc_net_check.rc == 0
+
+- name: Create bmc-net libvirt network
+  when: _bmc_net_check.rc != 0
+  block:
+    - name: Write bmc-net XML
+      ansible.builtin.copy:
+        content: |
+          <network>
+            <name>{{ bmc_net_name }}</name>
+            <bridge name="{{ bmc_net_bridge }}"/>
+            <ip address="{{ bmc_net_host_ip }}" netmask="255.255.255.0">
+              <dhcp>
+                <range start="{{ bmc_net_dhcp_start }}" end="{{ bmc_net_dhcp_end }}"/>
+              </dhcp>
+            </ip>
+          </network>
+        dest: /tmp/bmc-net.xml
+        mode: "0644"
+
+    - name: Define bmc-net
+      ansible.builtin.command:
+        cmd: virsh net-define /tmp/bmc-net.xml
+
+    - name: Start bmc-net
+      ansible.builtin.command:
+        cmd: virsh net-start {{ bmc_net_name }}
+
+    - name: Autostart bmc-net
+      ansible.builtin.command:
+        cmd: virsh net-autostart {{ bmc_net_name }}
+
+- name: Attach bmc-net NIC to OCP VM
+  when: _bmc_net_check.rc != 0 or (_ocp_bmc_mac_existing.stdout | default('') | trim) == ''
+  block:
+    - name: Attach NIC
+      ansible.builtin.command:
+        cmd: >-
+          virsh attach-interface {{ ocp_vm_name_pattern }}
+          network {{ bmc_net_name }} --model virtio --live --config
+
+    - name: Get new NIC MAC
+      ansible.builtin.shell:
+        cmd: virsh domiflist {{ ocp_vm_name_pattern }} | grep {{ bmc_net_name }} | awk '{print $5}'
+      register: _ocp_bmc_mac_new
+      until: _ocp_bmc_mac_new.stdout | trim | length > 0
+      retries: 5
+      delay: 3
+
+    - name: Add static DHCP reservation for OCP VM
+      ansible.builtin.shell:
+        cmd: >-
+          virsh net-update {{ bmc_net_name }} add ip-dhcp-host
+          '<host mac="{{ _ocp_bmc_mac_new.stdout | trim }}" ip="{{ bmc_net_ocp_ip }}"/>'
+          --live --config
+
+    - name: Reconnect OCP NIC to pick up static lease
+      ansible.builtin.shell:
+        cmd: |
+          MAC="{{ _ocp_bmc_mac_new.stdout | trim }}"
+          virsh detach-interface {{ ocp_vm_name_pattern }} network --mac $MAC --live 2>/dev/null || true
+          sleep 2
+          virsh attach-interface {{ ocp_vm_name_pattern }} network {{ bmc_net_name }} --model virtio --mac $MAC --live --config
+
+- name: Wait for OCP VM to get bmc-net IP
+  ansible.builtin.shell:
+    cmd: virsh net-dhcp-leases {{ bmc_net_name }} | grep {{ bmc_net_ocp_ip }}
+  register: _bmc_lease
+  until: _bmc_lease.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+# ── Phase 2: sushy-tools ─────────────────────────────────────────────
 
 - name: Install sushy-tools and libvirt-python
   ansible.builtin.pip:
@@ -119,6 +207,8 @@
   retries: 15
   delay: 2
 
-- name: Report sushy-tools status
+- name: Report deploy-lab status
   ansible.builtin.debug:
-    msg: "sushy-tools running on {{ sushy_tools_ip }}:{{ sushy_tools_port }}"
+    msg: >-
+      deploy-lab complete: {{ bmc_net_name }} ({{ bmc_net_bridge }}) with OCP at {{ bmc_net_ocp_ip }},
+      sushy-tools on {{ sushy_tools_ip }}:{{ sushy_tools_port }}

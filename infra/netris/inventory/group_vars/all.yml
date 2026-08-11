@@ -115,8 +115,20 @@ caas_agents:
   - vm_pattern: "hgx-pod00-su0-h03"
     netris_server_name: "hgx-pod00-su0-h03"
 
+# ── BMC network (shared infrastructure) ──────────────────────────────
+# Dedicated libvirt network for Ironic ↔ sushy-tools communication.
+# Avoids the br-mgmt VPN route conflict (OpenVPN pushes a route for
+# 192.168.16.0/20 via tun0 that breaks direct L2 to the host).
+bmc_net_name: "bmc-net"
+bmc_net_bridge: "br-bmc"
+bmc_net_host_ip: "10.99.0.1"
+bmc_net_ocp_ip: "10.99.0.2"
+bmc_net_cidr: "10.99.0.0/24"
+bmc_net_dhcp_start: "10.99.0.10"
+bmc_net_dhcp_end: "10.99.0.50"
+
 # ── sushy-tools (shared infrastructure) ──────────────────────────────
-sushy_tools_ip: "192.168.16.253"
+sushy_tools_ip: "{{ bmc_net_host_ip }}"
 sushy_tools_port: 8000
 sushy_tools_config_dir: "/etc/sushy-tools"
 sushy_tools_disk_dir: "/tmp/virtual-bmh-disks"
