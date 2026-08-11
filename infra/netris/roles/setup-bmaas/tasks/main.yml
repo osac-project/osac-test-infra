@@ -161,6 +161,20 @@
   loop: "{{ bmaas_vms }}"
   changed_when: true
 
+- name: Attach bmc-net NIC to BMH VMs
+  ansible.builtin.shell:
+    cmd: |
+      existing=$(virsh domiflist {{ item }} | grep {{ bmc_net_name }} | awk '{print $5}')
+      if [ -z "$existing" ]; then
+        virsh attach-interface {{ item }} network {{ bmc_net_name }} --model virtio --config
+        echo "attached"
+      else
+        echo "already attached"
+      fi
+  loop: "{{ bmaas_vms }}"
+  register: _bmc_nic
+  changed_when: "'attached' in _bmc_nic.stdout and 'already' not in _bmc_nic.stdout"
+
 # Phase 3: Create BMH resources
 - name: Create BMH namespace
   ansible.builtin.command:
