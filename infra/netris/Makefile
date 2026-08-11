@@ -84,6 +84,18 @@ gather-mgmt-cluster:
 gather-caas:
 	ansible-playbook playbooks/gather-caas.yml $(ANSIBLE_EXTRA)
 
+deploy-lab:
+	ansible-playbook playbooks/deploy-lab.yml $(ANSIBLE_EXTRA)
+
+setup-bmaas:
+	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
+
+destroy-bmaas:
+	ansible-playbook playbooks/destroy-bmaas.yml $(ANSIBLE_EXTRA)
+
+gather-bmaas:
+	ansible-playbook playbooks/gather-bmaas.yml $(ANSIBLE_EXTRA)
+
 # ─── Internal sub-targets (deploy-osac implementation) ─────────────
 
 # Fresh install: clone mono-repo, patch Helm values, run make install
@@ -171,6 +183,7 @@ health-check:
         setup-caas deploy-caas \
         destroy-osac destroy-ocp destroy-infra destroy-caas destroy-full \
         gather-infra gather-mgmt-cluster gather-caas \
+        deploy-lab setup-bmaas destroy-bmaas gather-bmaas \
         install-osac prep-osac run-osac-setup post-osac \
         refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \
         connectivity vendor-update lint cleanup-dns \
