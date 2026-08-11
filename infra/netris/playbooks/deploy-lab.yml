@@ -1,0 +1,6 @@
+---
+- name: Deploy shared lab infrastructure (sushy-tools)
+  hosts: all
+  gather_facts: false
+  roles:
+    - deploy-lab

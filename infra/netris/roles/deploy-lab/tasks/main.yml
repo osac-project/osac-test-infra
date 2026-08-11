@@ -1,0 +1,124 @@
+---
+# Shared lab infrastructure — sushy-tools BMC emulator on br-mgmt.
+# Used by both BMaaS and CaaS (future) test suites.
+
+- name: Check if sushy-tools IP is already assigned to br-mgmt
+  ansible.builtin.shell:
+    cmd: ip addr show dev br-mgmt | grep -q "{{ sushy_tools_ip }}/20"
+  register: _sushy_ip_check
+  failed_when: false
+  changed_when: false
+
+- name: Assign sushy-tools IP to br-mgmt
+  ansible.builtin.command:
+    cmd: ip addr add {{ sushy_tools_ip }}/20 dev br-mgmt
+  when: _sushy_ip_check.rc != 0
+
+- name: Install sushy-tools and libvirt-python
+  ansible.builtin.pip:
+    name:
+      - sushy-tools
+      - libvirt-python
+    state: present
+
+- name: Create sushy-tools disk directory
+  ansible.builtin.file:
+    path: "{{ sushy_tools_disk_dir }}"
+    state: directory
+    mode: "0777"
+
+- name: Check if libvirt storage pool exists
+  ansible.builtin.shell:
+    cmd: virsh pool-info {{ sushy_tools_storage_pool }} 2>/dev/null
+  register: _pool_check
+  failed_when: false
+  changed_when: false
+
+- name: Define libvirt storage pool
+  ansible.builtin.command:
+    cmd: virsh pool-define-as {{ sushy_tools_storage_pool }} dir --target {{ sushy_tools_disk_dir }}
+  when: _pool_check.rc != 0
+
+- name: Start libvirt storage pool
+  ansible.builtin.command:
+    cmd: virsh pool-start {{ sushy_tools_storage_pool }}
+  when: _pool_check.rc != 0
+  register: _pool_start
+  failed_when: _pool_start.rc != 0 and 'already active' not in _pool_start.stderr
+
+- name: Detect OVMF firmware path
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: _ovmf_check
+  loop:
+    - /usr/share/OVMF/OVMF_CODE.secboot.fd
+    - /usr/share/edk2/ovmf/OVMF_CODE.secboot.fd
+    - /usr/share/OVMF/OVMF_CODE.fd
+    - /usr/share/edk2/ovmf/OVMF_CODE.fd
+
+- name: Set OVMF firmware path
+  ansible.builtin.set_fact:
+    _ovmf_code_path: "{{ (_ovmf_check.results | selectattr('stat.exists') | first).item }}"
+
+- name: Create sushy-tools config directory
+  ansible.builtin.file:
+    path: "{{ sushy_tools_config_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Write sushy-tools config
+  ansible.builtin.copy:
+    content: |
+      SUSHY_EMULATOR_LISTEN_IP = "{{ sushy_tools_ip }}"
+      SUSHY_EMULATOR_LISTEN_PORT = {{ sushy_tools_port }}
+      SUSHY_EMULATOR_SSL_CERT = None
+      SUSHY_EMULATOR_SSL_KEY = None
+      SUSHY_EMULATOR_LIBVIRT_URI = "qemu:///system"
+      SUSHY_EMULATOR_IGNORE_BOOT_DEVICE = False
+      SUSHY_EMULATOR_STORAGE_POOL = "{{ sushy_tools_storage_pool }}"
+      SUSHY_EMULATOR_BOOT_LOADER_MAP = {
+          "UEFI": {
+              "x86_64": "{{ _ovmf_code_path }}"
+          },
+          "Legacy": {
+              "x86_64": None
+          }
+      }
+    dest: "{{ sushy_tools_config_dir }}/sushy-emulator.conf"
+    mode: "0644"
+  register: _sushy_config
+
+- name: Check if sushy-emulator is already running
+  ansible.builtin.shell:
+    cmd: pgrep -f sushy-emulator
+  register: _sushy_running
+  failed_when: false
+  changed_when: false
+
+- name: Stop existing sushy-emulator if config changed
+  ansible.builtin.shell:
+    cmd: pkill -f sushy-emulator || true
+  when: _sushy_config is changed and _sushy_running.rc == 0
+
+- name: Start sushy-emulator
+  ansible.builtin.shell:
+    cmd: |
+      nohup sushy-emulator --config {{ sushy_tools_config_dir }}/sushy-emulator.conf \
+        > {{ sushy_tools_config_dir }}/sushy.log 2>&1 &
+      echo $!
+  register: _sushy_start
+  when: _sushy_running.rc != 0 or _sushy_config is changed
+
+- name: Wait for sushy-emulator to respond
+  ansible.builtin.uri:
+    url: "http://{{ sushy_tools_ip }}:{{ sushy_tools_port }}/redfish/v1/"
+    method: GET
+    status_code: 200
+  register: _sushy_health
+  until: _sushy_health.status == 200
+  retries: 15
+  delay: 2
+
+- name: Report sushy-tools status
+  ansible.builtin.debug:
+    msg: "sushy-tools running on {{ sushy_tools_ip }}:{{ sushy_tools_port }}"
