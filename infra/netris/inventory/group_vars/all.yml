@@ -114,3 +114,26 @@ caas_agents:
     netris_server_name: "hgx-pod00-su0-h02"
   - vm_pattern: "hgx-pod00-su0-h03"
     netris_server_name: "hgx-pod00-su0-h03"
+
+# ── sushy-tools (shared infrastructure) ──────────────────────────────
+sushy_tools_ip: "192.168.16.253"
+sushy_tools_port: 8000
+sushy_tools_config_dir: "/etc/sushy-tools"
+sushy_tools_disk_dir: "/tmp/virtual-bmh-disks"
+sushy_tools_storage_pool: "bmh-disks"
+
+# ── BMaaS ────────────────────────────────────────────────────────────
+bmaas_vm_patterns:
+  - "hgx-pod00-su0-h01"
+  - "hgx-pod00-su0-h02"
+bmaas_vm_vcpu: 4
+bmaas_vm_memory_mb: 8192
+bmaas_vm_disk_gb: 50
+bmaas_bmh_namespace: "host-inventory"
+bmaas_host_type: "default"
+bmaas_host_type_title: "Default Bare Metal Host"
+bmaas_host_type_description: "CI bare metal host type for BMaaS testing"
+bmaas_bmi_template: "bm-host-provisioning"
+bmaas_catalog_item: "ci-bm-default"
+bmaas_catalog_item_title: "CI Default Bare Metal Instance"
+bmaas_catalog_item_description: "Bare metal instance for CI testing"
