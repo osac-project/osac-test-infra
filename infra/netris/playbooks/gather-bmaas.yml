@@ -1,0 +1,6 @@
+---
+- name: Gather BMaaS diagnostic artifacts
+  hosts: all
+  gather_facts: false
+  roles:
+    - gather-bmaas

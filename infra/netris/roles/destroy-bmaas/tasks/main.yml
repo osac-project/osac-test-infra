@@ -1,0 +1,65 @@
+---
+- name: Find BMaaS VMs
+  ansible.builtin.shell:
+    cmd: virsh list --all --name | grep "{{ item }}"
+  register: _bmaas_vm_lookup
+  changed_when: false
+  failed_when: false
+  loop: "{{ bmaas_vm_patterns }}"
+
+- name: Build VM name list
+  ansible.builtin.set_fact:
+    bmaas_vms: "{{ _bmaas_vm_lookup.results | selectattr('stdout', 'ne', '') | map(attribute='stdout_lines') | map('first') | list }}"
+
+- name: Delete BareMetalHost CRs
+  ansible.builtin.command:
+    cmd: oc delete bmh {{ item }} -n {{ bmaas_bmh_namespace }} --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ bmaas_vms }}"
+  changed_when: true
+
+- name: Delete BMC credential secrets
+  ansible.builtin.command:
+    cmd: oc delete secret {{ item }}-bmc-secret -n {{ bmaas_bmh_namespace }} --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ bmaas_vms }}"
+  changed_when: true
+
+- name: Delete BMF config secrets
+  ansible.builtin.command:
+    cmd: oc delete secret {{ item }} -n {{ osac_namespace }} --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop:
+    - osac-inventory-config
+    - osac-management-config
+  changed_when: true
+
+- name: Delete Provisioning CR
+  ansible.builtin.command:
+    cmd: oc delete provisioning provisioning-configuration --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Shut down BMaaS VMs
+  ansible.builtin.command:
+    cmd: virsh destroy {{ item }}
+  loop: "{{ bmaas_vms }}"
+  failed_when: false
+  changed_when: true
+
+- name: Remove BMaaS disks
+  ansible.builtin.file:
+    path: "{{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2"
+    state: absent
+  loop: "{{ bmaas_vms }}"
+
+- name: Delete BMH namespace
+  ansible.builtin.command:
+    cmd: oc delete namespace {{ bmaas_bmh_namespace }} --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
