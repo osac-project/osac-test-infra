@@ -8,6 +8,7 @@ import pytest
 from tests.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.core.helpers import (
     assert_grpc_field_violation,
+    ref_field,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_subnet_cr,
@@ -39,10 +40,11 @@ class TestNetworkingReferences:
         vn_id = response["object"]["id"]
         try:
             vn = grpc.get_virtual_network(vn_id=vn_id)
-            nc_ref = vn["object"]["spec"].get("network_class", vn["object"]["spec"].get("networkClass", {}))
-            assert nc_ref.get("name") == ref_network_class or nc_ref.get("id"), (
-                "network_class reference should contain name or resolved id"
+            nc_ref = ref_field(vn["object"]["spec"], "network_class", {})
+            assert nc_ref.get("name") == ref_network_class, (
+                f"network_class name should be '{ref_network_class}', got '{nc_ref.get('name')}'"
             )
+            assert nc_ref.get("id"), "network_class reference should contain resolved id"
         finally:
             grpc.delete_virtual_network(vn_id=vn_id)
             try:
@@ -67,8 +69,9 @@ class TestNetworkingReferences:
         subnet_id = response["object"]["id"]
         try:
             subnet = grpc.call(service=f"{PUBLIC_API}.Subnets/Get", data={"id": subnet_id})
-            vn_ref = subnet["object"]["spec"].get("virtual_network", subnet["object"]["spec"].get("virtualNetwork", {}))
-            assert vn_ref.get("name") == ref_virtual_network["name"] or vn_ref.get("id") == ref_virtual_network["id"]
+            vn_ref = ref_field(subnet["object"]["spec"], "virtual_network", {})
+            assert vn_ref.get("name") == ref_virtual_network["name"]
+            assert vn_ref.get("id") == ref_virtual_network["id"]
         finally:
             grpc.delete_subnet(subnet_id=subnet_id)
             try:
@@ -93,8 +96,9 @@ class TestNetworkingReferences:
         sg_id = response["object"]["id"]
         try:
             sg = grpc.call(service=f"{PUBLIC_API}.SecurityGroups/Get", data={"id": sg_id})
-            vn_ref = sg["object"]["spec"].get("virtual_network", sg["object"]["spec"].get("virtualNetwork", {}))
-            assert vn_ref.get("name") == ref_virtual_network["name"] or vn_ref.get("id") == ref_virtual_network["id"]
+            vn_ref = ref_field(sg["object"]["spec"], "virtual_network", {})
+            assert vn_ref.get("name") == ref_virtual_network["name"]
+            assert vn_ref.get("id") == ref_virtual_network["id"]
         finally:
             grpc.delete_security_group(sg_id=sg_id)
             try:
@@ -144,10 +148,11 @@ class TestNetworkingReferences:
         vn_id = response["object"]["id"]
         try:
             vn = jwt_grpc_tenant1.get_virtual_network(vn_id=vn_id)
-            nc_ref = vn["object"]["spec"].get("network_class", vn["object"]["spec"].get("networkClass", {}))
-            assert nc_ref.get("name") == ref_network_class or nc_ref.get("id"), (
-                "network_class reference should contain name or resolved id for cross-tenant reference"
+            nc_ref = ref_field(vn["object"]["spec"], "network_class", {})
+            assert nc_ref.get("name") == ref_network_class, (
+                f"cross-tenant network_class name should be '{ref_network_class}', got '{nc_ref.get('name')}'"
             )
+            assert nc_ref.get("id"), "cross-tenant network_class reference should contain resolved id"
         finally:
             jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
             try:

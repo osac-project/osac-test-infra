@@ -13,6 +13,12 @@ from tests.core.runner import poll_until, run_unchecked
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 
 
+def ref_field(obj: dict[str, Any], snake_key: str, default: Any = None) -> Any:
+    """Look up a field by its snake_case key, falling back to its camelCase equivalent."""
+    camel_key = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), snake_key)
+    return obj.get(snake_key, obj.get(camel_key, default))
+
+
 def assert_grpc_rejected(exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError], code: str) -> None:
     exc = exc_info.value
     combined: str = (exc.stderr or "") + (exc.stdout or "")

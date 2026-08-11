@@ -11,6 +11,7 @@ import pytest
 from tests.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.core.helpers import (
     assert_grpc_field_violation,
+    ref_field,
     wait_for_cr,
     wait_for_deletion,
     wait_for_provision,
@@ -40,11 +41,11 @@ def ref_instance_type(private_grpc: GRPCClient) -> Generator[str, None, None]:
 
 
 @pytest.fixture(scope="module")
-def ref_ci_catalog_item(private_grpc: GRPCClient, compute_template: str) -> Generator[str, None, None]:
+def ref_ci_catalog_item(private_grpc: GRPCClient, compute_template: str) -> Generator[dict[str, str], None, None]:
     tag = uuid4().hex[:8]
     name = f"ref-ci-cat-{tag}"
     cat_id = private_grpc.create_compute_instance_catalog_item(name=name, template=compute_template)
-    yield cat_id
+    yield {"id": cat_id, "name": name}
     try:
         private_grpc.delete_compute_instance_catalog_item(catalog_item_id=cat_id)
     except subprocess.CalledProcessError:
@@ -77,38 +78,36 @@ class TestComputeReferences:
         k8s_hub_client: K8sClient,
         ref_subnet: dict[str, str],
         ref_security_group: dict[str, str],
-        ref_ci_catalog_item: str,
+        ref_ci_catalog_item: dict[str, str],
         ref_instance_type: str,
     ):
         tag = uuid4().hex[:8]
         ci_name = f"ref-ci-chain-{tag}"
-        cat_item = grpc.get_compute_instance_catalog_item(catalog_item_id=ref_ci_catalog_item)
-        cat_item_name = cat_item["object"]["metadata"]["name"]
 
         response: dict[str, Any] = grpc.call(
             service=f"{PUBLIC_API}.ComputeInstances/Create",
             data=_ci_create_data(
-                ci_name, cat_item_name, ref_subnet["name"], ref_security_group["name"], ref_instance_type
+                ci_name, ref_ci_catalog_item["name"], ref_subnet["name"], ref_security_group["name"], ref_instance_type
             ),
         )
         ci_id = response["object"]["id"]
         try:
             spec = response["object"]["spec"]
-            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
-            assert cat_ref.get("name") == cat_item_name
-            assert cat_ref.get("id") == ref_ci_catalog_item
+            cat_ref = ref_field(spec, "catalog_item", {})
+            assert cat_ref.get("name") == ref_ci_catalog_item["name"]
+            assert cat_ref.get("id") == ref_ci_catalog_item["id"]
 
-            att = spec.get("network_attachments", spec.get("networkAttachments", [{}]))[0]
+            att = ref_field(spec, "network_attachments", [{}])[0]
             subnet_ref = att.get("subnet", {})
             assert subnet_ref.get("name") == ref_subnet["name"]
             assert subnet_ref.get("id") == ref_subnet["id"]
 
-            sg_ref = att.get("security_groups", att.get("securityGroups", [{}]))[0]
+            sg_ref = ref_field(att, "security_groups", [{}])[0]
             assert sg_ref.get("name") == ref_security_group["name"]
             assert sg_ref.get("id") == ref_security_group["id"]
         finally:
-            grpc.delete_compute_instance(ci_id=ci_id)
             try:
+                grpc.delete_compute_instance(ci_id=ci_id)
                 cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)
                 wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
             except (subprocess.CalledProcessError, AssertionError, TimeoutError):
@@ -120,18 +119,16 @@ class TestComputeReferences:
         k8s_hub_client: K8sClient,
         ref_subnet: dict[str, str],
         ref_security_group: dict[str, str],
-        ref_ci_catalog_item: str,
+        ref_ci_catalog_item: dict[str, str],
         ref_instance_type: str,
     ):
         tag = uuid4().hex[:8]
         ci_name = f"ref-ci-run-{tag}"
-        cat_item = grpc.get_compute_instance_catalog_item(catalog_item_id=ref_ci_catalog_item)
-        cat_item_name = cat_item["object"]["metadata"]["name"]
 
         response: dict[str, Any] = grpc.call(
             service=f"{PUBLIC_API}.ComputeInstances/Create",
             data=_ci_create_data(
-                ci_name, cat_item_name, ref_subnet["name"], ref_security_group["name"], ref_instance_type
+                ci_name, ref_ci_catalog_item["name"], ref_subnet["name"], ref_security_group["name"], ref_instance_type
             ),
         )
         ci_id = response["object"]["id"]
@@ -144,19 +141,17 @@ class TestComputeReferences:
             phase = k8s_hub_client.get_compute_instance_phase(name=cr_name)
             assert phase == "Running"
         finally:
-            grpc.delete_compute_instance(ci_id=ci_id)
-            if cr_name:
-                try:
+            try:
+                grpc.delete_compute_instance(ci_id=ci_id)
+                if cr_name:
                     wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
-                except (subprocess.CalledProcessError, AssertionError, TimeoutError):
-                    logger.warning("Cleanup wait failed for compute instance %s", ci_id)
+            except (subprocess.CalledProcessError, AssertionError, TimeoutError):
+                logger.warning("Cleanup wait failed for compute instance %s", ci_id)
 
-    def test_invalid_subnet_name_returns_array_indexed_field_path(
-        self, grpc: GRPCClient, ref_subnet: dict[str, str], ref_ci_catalog_item: str, ref_instance_type: str
+    def test_invalid_security_group_name_returns_array_indexed_field_path(
+        self, grpc: GRPCClient, ref_subnet: dict[str, str], ref_ci_catalog_item: dict[str, str], ref_instance_type: str
     ):
         tag = uuid4().hex[:8]
-        cat_item = grpc.get_compute_instance_catalog_item(catalog_item_id=ref_ci_catalog_item)
-        cat_item_name = cat_item["object"]["metadata"]["name"]
 
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             grpc.call(
@@ -165,7 +160,7 @@ class TestComputeReferences:
                     "object": {
                         "metadata": {"name": f"ref-ci-bad-sg-{tag}"},
                         "spec": {
-                            "catalog_item": {"name": cat_item_name},
+                            "catalog_item": {"name": ref_ci_catalog_item["name"]},
                             "instance_type": {"name": ref_instance_type},
                             "network_attachments": [
                                 {
@@ -177,7 +172,7 @@ class TestComputeReferences:
                     }
                 },
             )
-        assert_grpc_field_violation(exc_info, field_path="security_groups")
+        assert_grpc_field_violation(exc_info, field_path="network_attachments[0].security_groups[0]")
 
     def test_cross_tenant_template_reference(
         self,
@@ -201,7 +196,7 @@ class TestComputeReferences:
             )
             ci_id = response["object"]["id"]
             spec = response["object"]["spec"]
-            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
+            cat_ref = ref_field(spec, "catalog_item", {})
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
         finally:

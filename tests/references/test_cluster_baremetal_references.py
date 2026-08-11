@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from tests.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
-from tests.core.helpers import assert_grpc_field_violation
+from tests.core.helpers import assert_grpc_field_violation, ref_field
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env
 
@@ -70,7 +70,7 @@ class TestClusterBareMetalReferences:
             )
             cluster = grpc.get_cluster(cluster_id=cluster_id)
             spec = cluster["object"]["spec"]
-            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
+            cat_ref = ref_field(spec, "catalog_item", {})
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
         finally:
@@ -106,7 +106,7 @@ class TestClusterBareMetalReferences:
             )
             bmi_id = bmi_response["object"]["id"]
             spec = bmi_response["object"]["spec"]
-            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
+            cat_ref = ref_field(spec, "catalog_item", {})
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
         finally:
@@ -135,7 +135,7 @@ class TestClusterBareMetalReferences:
             )
             cluster = jwt_grpc_tenant1.get_cluster(cluster_id=cluster_id)
             spec = cluster["object"]["spec"]
-            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
+            cat_ref = ref_field(spec, "catalog_item", {})
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
         finally:
