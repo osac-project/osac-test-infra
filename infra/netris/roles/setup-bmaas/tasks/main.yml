@@ -35,7 +35,7 @@
       spec:
         provisioningNetwork: "Disabled"
         watchAllNamespaces: true
-        virtualMediaViaExternalNetwork: true
+        disableVirtualMediaTLS: true
         externalIPs:
           - {{ ocp_mgmt_ip }}
       EOF
@@ -249,10 +249,6 @@
     index_var: idx
   register: _bmh_create
   changed_when: "'created' in _bmh_create.stdout or 'configured' in _bmh_create.stdout"
-  loop: "{{ bmaas_vms | zip(bmaas_vms) | list }}"
-  loop_control:
-    index_var: idx
-    label: "{{ item.0 }}"
 
 # Phase 4: Wait for BMH availability
 - name: Wait for BMHs to reach available state
