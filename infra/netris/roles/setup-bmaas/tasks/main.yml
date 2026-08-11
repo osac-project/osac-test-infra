@@ -1,9 +1,33 @@
 ---
 # Phase 1: Enable Ironic via Provisioning CR
+#
+# Ironic must serve virtual media images from the br-mgmt IP so sushy-tools
+# (also on br-mgmt) can download them over L2. Without externalIPs, Ironic
+# auto-detects the node's primary IP (the Netris VNet address), which is not
+# reachable from br-mgmt.
+
+- name: Discover OCP node br-mgmt IP
+  ansible.builtin.shell:
+    cmd: >-
+      oc debug node/$(oc get nodes -o jsonpath='{.items[0].metadata.name}') --
+      chroot /host ip -4 addr show ens4 2>/dev/null
+      | grep 'inet ' | awk '{print $2}' | cut -d/ -f1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ocp_mgmt_ip
+  changed_when: false
+  until: _ocp_mgmt_ip.stdout | trim | length > 0
+  retries: 3
+  delay: 10
+
+- name: Set OCP mgmt IP fact
+  ansible.builtin.set_fact:
+    ocp_mgmt_ip: "{{ _ocp_mgmt_ip.stdout_lines | reject('match', '.*debug.*|.*namespace.*|.*Removing.*') | select('match', '^[0-9]') | first }}"
+
 - name: Apply Provisioning CR
   ansible.builtin.shell:
     cmd: |
-      oc apply -f - <<'EOF'
+      oc apply -f - <<EOF
       apiVersion: metal3.io/v1alpha1
       kind: Provisioning
       metadata:
@@ -11,6 +35,9 @@
       spec:
         provisioningNetwork: "Disabled"
         watchAllNamespaces: true
+        virtualMediaViaExternalNetwork: true
+        externalIPs:
+          - {{ ocp_mgmt_ip }}
       EOF
   environment:
     KUBECONFIG: /root/.kube/config
