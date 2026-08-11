@@ -1,0 +1,60 @@
+---
+# Create BMF operator secrets before deploy-osac so the BMF pod can start
+# and Helm --wait doesn't time out waiting for the volume mounts.
+
+- name: Ensure OSAC namespace exists
+  ansible.builtin.command:
+    cmd: oc create namespace {{ osac_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ns_create
+  failed_when: false
+  changed_when: _ns_create.rc == 0
+
+- name: Create BMF inventory config secret
+  ansible.builtin.shell:
+    cmd: |
+      oc apply -f - <<'EOF'
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: osac-inventory-config
+        namespace: {{ osac_namespace }}
+      type: Opaque
+      stringData:
+        inventory.yaml: |
+          name: metal3-inventory
+          type: metal3
+          hostClass: metal3
+          networkClass: metal3
+          options:
+            metal3:
+              namespace: {{ bmaas_bmh_namespace }}
+      EOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _inv_secret
+  changed_when: "'created' in _inv_secret.stdout or 'configured' in _inv_secret.stdout"
+
+- name: Create BMF management config secret
+  ansible.builtin.shell:
+    cmd: |
+      oc apply -f - <<'EOF'
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: osac-management-config
+        namespace: {{ osac_namespace }}
+      type: Opaque
+      stringData:
+        management.yaml: |
+          name: metal3-management
+          type: metal3
+          options:
+            metal3:
+              namespace: {{ bmaas_bmh_namespace }}
+      EOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _mgmt_secret
+  changed_when: "'created' in _mgmt_secret.stdout or 'configured' in _mgmt_secret.stdout"

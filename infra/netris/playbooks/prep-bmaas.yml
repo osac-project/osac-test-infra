@@ -1,0 +1,6 @@
+---
+- name: Prepare BMF secrets before OSAC install
+  hosts: all
+  gather_facts: false
+  roles:
+    - prep-bmaas

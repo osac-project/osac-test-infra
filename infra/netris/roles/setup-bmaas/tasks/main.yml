@@ -1,9 +1,9 @@
 ---
 # Phase 1: Enable Ironic via Provisioning CR
 - name: Apply Provisioning CR
-  kubernetes.core.k8s:
-    state: present
-    definition:
+  ansible.builtin.shell:
+    cmd: |
+      oc apply -f - <<'EOF'
       apiVersion: metal3.io/v1alpha1
       kind: Provisioning
       metadata:
@@ -11,8 +11,11 @@
       spec:
         provisioningNetwork: "Disabled"
         watchAllNamespaces: true
+      EOF
   environment:
     KUBECONFIG: /root/.kube/config
+  register: _prov_cr
+  changed_when: "'created' in _prov_cr.stdout or 'configured' in _prov_cr.stdout"
 
 - name: Wait for metal3 pods to appear
   ansible.builtin.command:
@@ -150,15 +153,13 @@
 
 # Phase 3: Create BMH resources
 - name: Create BMH namespace
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: Namespace
-      metadata:
-        name: "{{ bmaas_bmh_namespace }}"
+  ansible.builtin.command:
+    cmd: oc create namespace {{ bmaas_bmh_namespace }}
   environment:
     KUBECONFIG: /root/.kube/config
+  register: _ns_create
+  failed_when: false
+  changed_when: _ns_create.rc == 0
 
 - name: Get VM UUIDs
   ansible.builtin.shell:
@@ -175,31 +176,34 @@
   loop: "{{ bmaas_vms }}"
 
 - name: Create BMC credential secrets
-  kubernetes.core.k8s:
-    state: present
-    definition:
+  ansible.builtin.shell:
+    cmd: |
+      oc apply -f - <<'EOF'
       apiVersion: v1
       kind: Secret
       metadata:
-        name: "{{ item }}-bmc-secret"
-        namespace: "{{ bmaas_bmh_namespace }}"
+        name: {{ item }}-bmc-secret
+        namespace: {{ bmaas_bmh_namespace }}
       type: Opaque
       stringData:
         username: admin
         password: password
+      EOF
   environment:
     KUBECONFIG: /root/.kube/config
   loop: "{{ bmaas_vms }}"
+  register: _bmc_secret
+  changed_when: "'created' in _bmc_secret.stdout or 'configured' in _bmc_secret.stdout"
 
 - name: Create BareMetalHost resources
-  kubernetes.core.k8s:
-    state: present
-    definition:
+  ansible.builtin.shell:
+    cmd: |
+      oc apply -f - <<EOF
       apiVersion: metal3.io/v1alpha1
       kind: BareMetalHost
       metadata:
-        name: "{{ item.0 }}"
-        namespace: "{{ bmaas_bmh_namespace }}"
+        name: {{ item }}
+        namespace: {{ bmaas_bmh_namespace }}
       spec:
         online: true
         bootMACAddress: "{{ _vm_macs.results[idx].stdout | trim }}"
@@ -209,9 +213,15 @@
           deviceName: /dev/vda
         bmc:
           address: "redfish-virtualmedia+http://{{ sushy_tools_ip }}:{{ sushy_tools_port }}/redfish/v1/Systems/{{ _vm_uuids.results[idx].stdout | trim }}"
-          credentialsName: "{{ item.0 }}-bmc-secret"
+          credentialsName: {{ item }}-bmc-secret
+      EOF
   environment:
     KUBECONFIG: /root/.kube/config
+  loop: "{{ bmaas_vms }}"
+  loop_control:
+    index_var: idx
+  register: _bmh_create
+  changed_when: "'created' in _bmh_create.stdout or 'configured' in _bmh_create.stdout"
   loop: "{{ bmaas_vms | zip(bmaas_vms) | list }}"
   loop_control:
     index_var: idx
@@ -244,69 +254,8 @@
   loop: "{{ bmaas_vms }}"
   changed_when: true
 
-# Phase 6: Create BMF configuration secrets
-- name: Create BMF inventory config secret
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: osac-inventory-config
-        namespace: "{{ osac_namespace }}"
-      type: Opaque
-      stringData:
-        inventory.yaml: |
-          name: metal3-inventory
-          type: metal3
-          hostClass: metal3
-          networkClass: metal3
-          options:
-            metal3:
-              namespace: {{ bmaas_bmh_namespace }}
-  environment:
-    KUBECONFIG: /root/.kube/config
-
-- name: Create BMF management config secret
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: osac-management-config
-        namespace: "{{ osac_namespace }}"
-      type: Opaque
-      stringData:
-        management.yaml: |
-          name: metal3-management
-          type: metal3
-          options:
-            metal3:
-              namespace: {{ bmaas_bmh_namespace }}
-  environment:
-    KUBECONFIG: /root/.kube/config
-
-- name: Restart bare-metal-fulfillment-operator to pick up config
-  ansible.builtin.shell:
-    cmd: >-
-      oc rollout restart deployment -n {{ osac_namespace }}
-      -l app.kubernetes.io/name=bare-metal-fulfillment-operator 2>/dev/null ||
-      oc rollout restart deployment bare-metal-fulfillment-operator -n {{ osac_namespace }}
-  environment:
-    KUBECONFIG: /root/.kube/config
-  changed_when: true
-
-- name: Wait for BMF operator to be ready
-  ansible.builtin.command:
-    cmd: >-
-      oc rollout status deployment -n {{ osac_namespace }}
-      -l app.kubernetes.io/name=bare-metal-fulfillment-operator --timeout=120s
-  environment:
-    KUBECONFIG: /root/.kube/config
-  changed_when: false
-  register: _bmf_rollout
-  failed_when: false
+# Phase 6: BMF secrets are created by prep-bmaas (runs before deploy-osac)
+# so the BMF pod can start without Helm --wait timing out.
 
 # Phase 7: Register in fulfillment service
 - name: Get fulfillment internal API URL
