@@ -207,8 +207,8 @@
   retries: 15
   delay: 2
 
-- name: Report deploy-lab status
+- name: Report setup-bmc status
   ansible.builtin.debug:
     msg: >-
-      deploy-lab complete: {{ bmc_net_name }} ({{ bmc_net_bridge }}) with OCP at {{ bmc_net_ocp_ip }},
+      setup-bmc complete: {{ bmc_net_name }} ({{ bmc_net_bridge }}) with OCP at {{ bmc_net_ocp_ip }},
       sushy-tools on {{ sushy_tools_ip }}:{{ sushy_tools_port }}

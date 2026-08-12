@@ -70,3 +70,7 @@
 - name: Verify netris-lab deployment
   ansible.builtin.include_role:
     name: verify
+
+- name: Set up BMC network and sushy-tools
+  ansible.builtin.include_role:
+    name: setup-bmc
