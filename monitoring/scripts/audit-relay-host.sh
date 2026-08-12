@@ -63,7 +63,7 @@ echo
 if [[ ${#OTHER_USERS[@]} -gt 0 ]]; then
     echo "OTHER accounts found (not ours -- flag before replacing this host):"
     for u in "${OTHER_USERS[@]}"; do
-        size="$(du -sh "/home/${u}" 2>/dev/null | cut -f1)"
+        size="$(du -sh "/home/${u}" 2>/dev/null | cut -f1)" || true
         echo "  - ${u} (home dir: ${size:-unknown size})"
     done
 else
@@ -78,7 +78,7 @@ for u in "${TUNNEL_USERS[@]}"; do
     if systemctl list-unit-files "${svc}" --no-legend 2>/dev/null | grep -q .; then
         FOUND_SERVICE=1
         state="$(systemctl is-active "${svc}" 2>/dev/null || true)"
-        target="$(systemctl show -p ExecStart "${svc}" 2>/dev/null | grep -oP '(?<=argv\[\]=)[^;]*' | head -1)"
+        target="$(systemctl show -p ExecStart "${svc}" 2>/dev/null | grep -oP '(?<=argv\[\]=)[^;]*' | head -1)" || true
         echo "  ${svc}: ${state}"
         [[ -n "${target}" ]] && echo "    ${target}" | head -c 400 && echo
     fi
@@ -114,8 +114,6 @@ if [[ -n "${MATCHES}" ]]; then
     echo
     echo "${MATCHES}" | while IFS= read -r f; do
         echo "--- ${f} ---"
-        cat "${f}"
-        echo
     done
 else
     echo "  None found."

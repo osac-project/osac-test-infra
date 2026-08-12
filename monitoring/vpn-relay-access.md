@@ -168,7 +168,14 @@ what the two setup scripts are already built for.
    "One-time setup" above. This is additive: the old relay keeps working
    throughout, so there's no access gap.
 3. **Authorize both new keys** on the central host with
-   `authorize-tunnel-relay.sh`, same as any new relay.
+   `authorize-tunnel-relay.sh` -- but under **temporary, distinct**
+   `<central-tunnel-user>` names (e.g. `grafana-tunnel-new`,
+   `vault-tunnel-new`), not the old relay's `grafana-tunnel`/`vault-tunnel`.
+   `authorize-tunnel-relay.sh` *overwrites* that user's `authorized_keys`
+   (single relay key per user, by design), so authorizing the new relay's
+   key under the same name the old relay is still actively using would cut
+   the old relay off immediately -- exactly the access gap step 2 above
+   says this process avoids.
 4. **Regenerate the self-signed certs** for the new relay's hostname (see
    "Trusting the relay's self-signed certificates" below) and update the
    fingerprint table in that section in the same change — the old
@@ -192,6 +199,12 @@ what the two setup scripts are already built for.
    might be running on that box — which is exactly why step 1's audit
    matters, so "anything else on that box" is a known, deliberate answer
    by this point rather than a surprise.
+9. **Move the new relay's keys onto the canonical names.** Now that the old
+   relay's `grafana-tunnel`/`vault-tunnel` users are gone, re-run
+   `authorize-tunnel-relay.sh` with the same public keys from step 3 but
+   the canonical `<central-tunnel-user>` names, then delete the temporary
+   `-new` users. Leaves the central host with the same identity names as
+   before the swap, rather than accumulating a `-new` suffix permanently.
 
 ## Verifying
 
