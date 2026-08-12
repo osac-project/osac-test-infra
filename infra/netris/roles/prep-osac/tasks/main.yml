@@ -122,7 +122,6 @@
     _values_overrides: >-
       {{ {'cliImage': _ocp_cli_image.stdout | trim,
           'bundledPostgres': {'enabled': true},
-          'bmf': {'enabled': false},
           'lvms': {'enabled': true, 'channel': 'stable-' + ocp_version},
           'metallb': {'enabled': true},
           'cnv': {'enabled': true},
@@ -242,6 +241,68 @@
     state: started
     enabled: true
     daemon_reload: true
+
+# --- BMF secrets (must exist before Helm install so BMF pod can mount them) ---
+
+- name: Ensure OSAC namespace exists for BMF secrets
+  when: bare_metal_services | bool
+  ansible.builtin.command:
+    cmd: oc create namespace {{ osac_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ns_create
+  failed_when: false
+  changed_when: _ns_create.rc == 0
+
+- name: Create BMF inventory config secret
+  when: bare_metal_services | bool
+  ansible.builtin.shell:
+    cmd: |
+      oc apply -f - <<'EOF'
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: osac-inventory-config
+        namespace: {{ osac_namespace }}
+      type: Opaque
+      stringData:
+        inventory.yaml: |
+          name: metal3-inventory
+          type: metal3
+          hostClass: metal3
+          networkClass: metal3
+          options:
+            metal3:
+              namespace: {{ bmaas_bmh_namespace }}
+      EOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _inv_secret
+  changed_when: "'created' in _inv_secret.stdout or 'configured' in _inv_secret.stdout"
+
+- name: Create BMF management config secret
+  when: bare_metal_services | bool
+  ansible.builtin.shell:
+    cmd: |
+      oc apply -f - <<'EOF'
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: osac-management-config
+        namespace: {{ osac_namespace }}
+      type: Opaque
+      stringData:
+        management.yaml: |
+          name: metal3-management
+          type: metal3
+          options:
+            metal3:
+              namespace: {{ bmaas_bmh_namespace }}
+      EOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _mgmt_secret
+  changed_when: "'created' in _mgmt_secret.stdout or 'configured' in _mgmt_secret.stdout"
 
 - name: Report OSAC preparation complete
   ansible.builtin.debug:

@@ -115,6 +115,11 @@ caas_agents:
   - vm_pattern: "hgx-pod00-su0-h03"
     netris_server_name: "hgx-pod00-su0-h03"
 
+# ── Bare metal services ──────────────────────────────────────────────
+# Enables BMC network, sushy-tools, and BMF operator secrets.
+# Required for both BMaaS and CaaS on bare metal.
+bare_metal_services: true
+
 # ── BMC network (shared infrastructure) ──────────────────────────────
 # Dedicated libvirt network for Ironic ↔ sushy-tools communication.
 # Avoids the br-mgmt VPN route conflict (OpenVPN pushes a route for

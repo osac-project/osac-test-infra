@@ -72,5 +72,6 @@
     name: verify
 
 - name: Set up BMC network and sushy-tools
+  when: bare_metal_services | bool
   ansible.builtin.include_role:
     name: setup-bmc
