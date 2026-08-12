@@ -51,7 +51,13 @@ jobs:
           - osac-9
           - osac-10
     runs-on: ${{ matrix.host }}
-    timeout-minutes: 10
+    # Generous on purpose: this job's first-ever run has to work through
+    # months of unbounded backlog (thousands of images, 600+GB on some
+    # hosts) one `podman rmi` at a time, which took over 10 minutes and
+    # hit the previous timeout on 7 of 11 hosts the first time this ran.
+    # Steady-state runs only have ~6h of new dangling images to catch up
+    # on and should finish in a small fraction of this.
+    timeout-minutes: 60
     steps:
       - name: Prune dangling podman images
         shell: bash
@@ -60,6 +66,31 @@ jobs:
         run: |
           echo "-- before --"
           podman system df
-          podman image prune -f --filter "until=${UNTIL}"
+
+          # `podman image prune` removes its whole candidate list as one
+          # operation -- if any single dangling image is still referenced
+          # by another image or a container (e.g. a live job's build still
+          # in progress on this host right now), the entire call aborts
+          # with a non-zero exit and every other image that pass WOULD
+          # have safely removed goes untouched too (seen in practice: one
+          # busy host, one in-progress job, and the whole host's prune for
+          # that cycle failed outright). Removing one at a time means a
+          # single busy image only costs that one image for this cycle --
+          # it's still dangling and still gated by the same `until` filter
+          # next run, so nothing is lost, just deferred.
+          mapfile -t dangling < <(podman images -f dangling=true -f "until=${UNTIL}" -q)
+          echo "Found ${#dangling[@]} dangling image(s) older than ${UNTIL}."
+          removed=0
+          skipped=0
+          for img in "${dangling[@]}"; do
+            if podman rmi "${img}" >/dev/null 2>&1; then
+              removed=$((removed + 1))
+            else
+              skipped=$((skipped + 1))
+              echo "Skipped ${img} -- still referenced by something (likely a live job's build in progress). Will retry next cycle."
+            fi
+          done
+          echo "Removed ${removed}, skipped ${skipped}."
+
           echo "-- after --"
           podman system df
