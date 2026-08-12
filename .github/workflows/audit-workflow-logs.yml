@@ -241,7 +241,8 @@ jobs:
             RUN_ID=$(echo "${ITEM}" | jq -r '.run_id')
             REPO=$(echo "${ITEM}" | jq -r '.repo')
             RUN_EVENT=$(echo "${ITEM}" | jq -r '.event // ""')
-            export SKIP_PURGE=$( [[ "${RUN_EVENT}" != "pull_request" ]] && echo true || echo false )
+            SKIP_PURGE=$( [[ "${RUN_EVENT}" != "pull_request" && "${RUN_EVENT}" != "merge_group" ]] && echo true || echo false )
+            export SKIP_PURGE
             SLUG="${REPO//\//_}-${RUN_ID}"
             echo "::group::Auditing run ${RUN_ID} (${REPO}) [event=${RUN_EVENT}, skip_purge=${SKIP_PURGE}]"
             OUTPUT_DIR="${AUDIT_DIR}/${SLUG}"

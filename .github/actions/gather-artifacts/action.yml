@@ -76,12 +76,13 @@ runs:
         fi
 
         SELINUX_SUFFIX=""
-        if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" != "Disabled" ]]; then
-          SELINUX_SUFFIX=",z"
+        if [[ -r /sys/fs/selinux/enforce ]] && [[ "$(</sys/fs/selinux/enforce)" == "1" ]]; then
+          SELINUX_SUFFIX=",Z"
         fi
 
         REPORT_DIR="${RUNNER_TEMP}/gitleaks-pre-upload"
         mkdir -p "${REPORT_DIR}"
+        chmod 777 "${REPORT_DIR}"
         trap 'rm -rf -- "${REPORT_DIR}"' EXIT
 
         MAX_PASSES=3
@@ -111,6 +112,10 @@ runs:
 
           FINDING_COUNT=$(jq 'length' "${REPORT}")
           echo "Pass ${pass}: ${FINDING_COUNT} finding(s)"
+          if [[ "${FINDING_COUNT}" -gt 0 ]]; then
+            echo "Findings (sanitized):"
+            jq -r '.[] | "  \(.RuleID) \(.File):\(.StartLine)"' "${REPORT}"
+          fi
           echo "::endgroup::"
 
           if [[ "${FINDING_COUNT}" -eq 0 ]]; then
@@ -143,7 +148,8 @@ runs:
             REMAINING=$(jq 'length' "${FINAL_REPORT}")
             if [[ "${REMAINING}" -gt 0 ]]; then
               echo "::warning::${REMAINING} finding(s) remain after ${MAX_PASSES} redaction passes — uploading anyway (post-upload scanner will cover)"
-            else
+              echo "Remaining findings (sanitized):"
+              jq -r '.[] | "  \(.RuleID) \(.File):\(.StartLine)"' "${FINAL_REPORT}"
             fi
           fi
         done
