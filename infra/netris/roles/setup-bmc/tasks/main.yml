@@ -140,10 +140,10 @@
     path: "{{ item }}"
   register: _ovmf_check
   loop:
-    - /usr/share/OVMF/OVMF_CODE.secboot.fd
-    - /usr/share/edk2/ovmf/OVMF_CODE.secboot.fd
     - /usr/share/OVMF/OVMF_CODE.fd
     - /usr/share/edk2/ovmf/OVMF_CODE.fd
+    - /usr/share/OVMF/OVMF_CODE.secboot.fd
+    - /usr/share/edk2/ovmf/OVMF_CODE.secboot.fd
 
 - name: Set OVMF firmware path
   ansible.builtin.set_fact:
