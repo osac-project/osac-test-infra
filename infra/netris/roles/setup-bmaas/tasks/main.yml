@@ -77,6 +77,22 @@
     label: "{{ item.item }}"
   changed_when: true
 
+- name: Remove stale UEFI loader from VM XML
+  ansible.builtin.shell:
+    cmd: |
+      if virsh dumpxml {{ item }} | grep -q '<loader'; then
+        virsh dumpxml {{ item }} > /tmp/{{ item }}.xml
+        sed -i '/<loader/d; /<nvram/d' /tmp/{{ item }}.xml
+        virsh define /tmp/{{ item }}.xml
+        rm -f /var/lib/libvirt/qemu/nvram/{{ item }}_VARS.fd
+        echo "cleaned"
+      else
+        echo "no loader"
+      fi
+  loop: "{{ bmaas_vms }}"
+  register: _uefi_cleanup
+  changed_when: "'cleaned' in _uefi_cleanup.stdout"
+
 - name: Get current vCPU count
   ansible.builtin.shell:
     cmd: virsh vcpucount {{ item }} --config --maximum
