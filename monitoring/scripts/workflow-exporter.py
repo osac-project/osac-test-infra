@@ -985,8 +985,21 @@ class WorkflowExporter:
         every "queued now"/"in progress now" stat panel -- silently
         capping it at one page's worth understates the real number
         exactly when an accurate one matters most.
+
+        The two status queries below aren't one atomic snapshot -- a run
+        can transition queued -> in_progress in the gap between them (the
+        queued query can take a while to fully paginate during a real
+        backlog), so the same run id can legitimately show up in both
+        results. Keyed by run id, with in_progress processed second, so
+        that a stale queued dupe is replaced by the current in_progress
+        record rather than double-counted.
+
+        Returns (runs, complete): complete is False if any page of either
+        status query failed, so a caller can avoid mistaking a partial,
+        truncated fetch for the real current state.
         """
-        runs = []
+        runs_by_id = {}
+        complete = True
         for status in ("queued", "in_progress"):
             url = (
                 f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
@@ -995,6 +1008,11 @@ class WorkflowExporter:
             while url:
                 resp = self._get(url)
                 if not resp.ok:
+                    logger.warning(
+                        "Active-runs fetch failed for %s (%s): %s %s",
+                        repo, status, resp.status_code, url,
+                    )
+                    complete = False
                     break
                 for run in resp.json().get("workflow_runs", []):
                     if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
@@ -1004,9 +1022,9 @@ class WorkflowExporter:
                         jobs = self._fetch_run_jobs(repo, run["id"])
                         if jobs:
                             record["runner_name"] = self._extract_runner_names(jobs)
-                    runs.append(record)
+                    runs_by_id[run["id"]] = record
                 url = resp.links.get("next", {}).get("url")
-        return runs
+        return list(runs_by_id.values()), complete
 
     def _recent_completed(self, repo):
         """Fetch recently completed runs to detect new completions.
@@ -1374,6 +1392,7 @@ class WorkflowExporter:
         tot_queued = 0
         tot_in_progress = 0
         current_active = []
+        active_runs_complete = True
 
         for repo in repos:
             try:
@@ -1387,7 +1406,9 @@ class WorkflowExporter:
 
                 # Collect active (queued/in_progress) runs for the active list
                 if q > 0 or ip > 0:
-                    current_active.extend(self._fetch_active_runs(repo))
+                    repo_active, repo_complete = self._fetch_active_runs(repo)
+                    current_active.extend(repo_active)
+                    active_runs_complete = active_runs_complete and repo_complete
 
                 # Track newly completed runs. Checked via a cheap existence
                 # query before spending the extra _fetch_run_jobs API call,
@@ -1457,8 +1478,13 @@ class WorkflowExporter:
         queued_total.labels(org=ORG).set(tot_queued)
         in_progress_total.labels(org=ORG).set(tot_in_progress)
 
-        with self._lock:
-            self.active_runs = current_active
+        if active_runs_complete:
+            with self._lock:
+                self.active_runs = current_active
+        else:
+            logger.warning(
+                "Active-runs fetch incomplete this cycle -- keeping last complete snapshot"
+            )
 
         with self._db() as conn:
             total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
