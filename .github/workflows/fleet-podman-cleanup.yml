@@ -78,17 +78,52 @@ jobs:
           # single busy image only costs that one image for this cycle --
           # it's still dangling and still gated by the same `until` filter
           # next run, so nothing is lost, just deferred.
-          mapfile -t dangling < <(podman images -f dangling=true -f "until=${UNTIL}" -q)
+          # Command substitution, not `mapfile -t x < <(cmd)` process
+          # substitution: the latter's $? reflects mapfile's own read, not
+          # the command's exit status, so a broken `podman images` call
+          # would silently look identical to "0 dangling images found"
+          # instead of the real error it is.
+          if ! images_output="$(podman images -f dangling=true -f "until=${UNTIL}" -q)"; then
+            echo "::error::Failed to list dangling images on this host" >&2
+            exit 1
+          fi
+          if [[ -z "${images_output}" ]]; then
+            dangling=()
+          else
+            mapfile -t dangling <<< "${images_output}"
+          fi
           echo "Found ${#dangling[@]} dangling image(s) older than ${UNTIL}."
+
           removed=0
           skipped=0
           for img in "${dangling[@]}"; do
-            if podman rmi "${img}" >/dev/null 2>&1; then
-              removed=$((removed + 1))
-            else
-              skipped=$((skipped + 1))
-              echo "Skipped ${img} -- still referenced by something (likely a live job's build in progress). Will retry next cycle."
-            fi
+            rc=0
+            podman rmi "${img}" >/dev/null 2>&1 || rc=$?
+            case "${rc}" in
+              0|1)
+                # 1 = image already gone (e.g. removed alongside a shared
+                # parent layer earlier in this same loop, or by a
+                # concurrent job's own cleanup) -- the goal (image gone)
+                # is already achieved, so this counts the same as removing
+                # it ourselves.
+                removed=$((removed + 1))
+                ;;
+              2)
+                # 2 = still referenced by a container specifically (not a
+                # generic failure) -- expected during a live job's build,
+                # and safe to defer: still dangling, still gated by the
+                # same `until` filter next run.
+                skipped=$((skipped + 1))
+                echo "Skipped ${img} -- still referenced by a container (likely a live job's build in progress). Will retry next cycle."
+                ;;
+              *)
+                # Anything else (125 = podman/runtime-level error, or an
+                # unrecognized code) is not a "busy image" case and
+                # shouldn't be silently swallowed alongside those.
+                echo "::error::podman rmi ${img} failed unexpectedly (exit ${rc})" >&2
+                exit 1
+                ;;
+            esac
           done
           echo "Removed ${removed}, skipped ${skipped}."
 
