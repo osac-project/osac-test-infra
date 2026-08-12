@@ -369,9 +369,9 @@
       title: "BMaaS CI Provisioning Template"
       description: "Bare metal provisioning template for CI"
       host_type: "{{ bmaas_host_type }}"
-      template_parameter_definitions:
+      parameters:
         - name: ssh_public_key
-          display_name: "SSH Public Key"
+          title: "SSH Public Key"
           type: TYPE_STRING
           required: true
     validate_certs: false
