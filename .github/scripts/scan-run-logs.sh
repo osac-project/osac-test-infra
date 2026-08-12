@@ -16,6 +16,9 @@
 #               delete them)
 # Optional env: GITLEAKS_CONFIG (default: .gitleaks.toml next to this script)
 #               CONTAINER_ENGINE (default: docker if present, else podman)
+#               SKIP_PURGE (default: false) -- when true, skip deleting raw
+#                 logs/artifacts after redaction (useful for periodic scans
+#                 where preserving the originals aids debugging)
 #
 # Writes to <output-dir>:
 #   findings.json   sanitized findings (always; "[]" if clean or the scan
@@ -412,16 +415,20 @@ while IFS= read -r art_json; do
     mkdir -p "${REDACTED_DIR}/artifacts"
     mv -- "${art_stage}" "${REDACTED_DIR}/artifacts/${art_slug}"
 
-    # 404 = already gone (e.g. first DELETE succeeded, retry saw 404 after
-    # a transport blip) -- exposure window is closed either way.
-    HTTP_CODE=$(fetch_with_retry /dev/null "204,404" \
-      -X DELETE \
-      "${GITHUB_API_URL}/repos/${REPO}/actions/artifacts/${art_id}")
-    if [[ "${HTTP_CODE}" != "204" && "${HTTP_CODE}" != "404" ]]; then
-      echo "::warning::Failed to delete artifact ${art_name} (${art_id}) (HTTP ${HTTP_CODE}) -- exposure window is NOT closed."
-      PURGE_OK=false
+    if [[ "${SKIP_PURGE:-false}" == "true" ]]; then
+      echo "SKIP_PURGE=true -- keeping raw artifact ${art_name} (${art_id})."
     else
-      echo "Artifact ${art_name} (${art_id}) deleted (HTTP ${HTTP_CODE})."
+      # 404 = already gone (e.g. first DELETE succeeded, retry saw 404 after
+      # a transport blip) -- exposure window is closed either way.
+      HTTP_CODE=$(fetch_with_retry /dev/null "204,404" \
+        -X DELETE \
+        "${GITHUB_API_URL}/repos/${REPO}/actions/artifacts/${art_id}")
+      if [[ "${HTTP_CODE}" != "204" && "${HTTP_CODE}" != "404" ]]; then
+        echo "::warning::Failed to delete artifact ${art_name} (${art_id}) (HTTP ${HTTP_CODE}) -- exposure window is NOT closed."
+        PURGE_OK=false
+      else
+        echo "Artifact ${art_name} (${art_id}) deleted (HTTP ${HTTP_CODE})."
+      fi
     fi
   fi
   echo "::endgroup::"
@@ -455,15 +462,19 @@ if (( LOG_LEAK_COUNT > 0 )); then
   mkdir -p "${REDACTED_DIR}"
   mv -- "${log_stage}" "${REDACTED_DIR}/logs"
 
-  # 404 = already gone (same retry race as artifact DELETE above).
-  HTTP_CODE=$(fetch_with_retry /dev/null "204,404" \
-    -X DELETE \
-    "${GITHUB_API_URL}/repos/${REPO}/actions/runs/${RUN_ID}/logs")
-  if [[ "${HTTP_CODE}" != "204" && "${HTTP_CODE}" != "404" ]]; then
-    echo "::warning::Failed to delete raw logs for run ${RUN_ID} (HTTP ${HTTP_CODE}) -- the exposure window is NOT closed, raw logs are still on GitHub."
-    PURGE_OK=false
+  if [[ "${SKIP_PURGE:-false}" == "true" ]]; then
+    echo "SKIP_PURGE=true -- keeping raw logs for run ${RUN_ID}."
   else
-    echo "Raw logs for run ${RUN_ID} deleted (HTTP ${HTTP_CODE})."
+    # 404 = already gone (same retry race as artifact DELETE above).
+    HTTP_CODE=$(fetch_with_retry /dev/null "204,404" \
+      -X DELETE \
+      "${GITHUB_API_URL}/repos/${REPO}/actions/runs/${RUN_ID}/logs")
+    if [[ "${HTTP_CODE}" != "204" && "${HTTP_CODE}" != "404" ]]; then
+      echo "::warning::Failed to delete raw logs for run ${RUN_ID} (HTTP ${HTTP_CODE}) -- the exposure window is NOT closed, raw logs are still on GitHub."
+      PURGE_OK=false
+    else
+      echo "Raw logs for run ${RUN_ID} deleted (HTTP ${HTTP_CODE})."
+    fi
   fi
   echo "::endgroup::"
 fi
@@ -474,6 +485,9 @@ fi
 # PURGE_PHASE_DONE so a later set -e abort cannot report a closed window
 # while SCAN_OK=false + CONTENT_FETCHED=true still holds.
 if [[ "${SCAN_OK}" != "true" && "${CONTENT_FETCHED}" == "true" ]]; then
+  PURGE_OK=false
+fi
+if [[ "${SKIP_PURGE:-false}" == "true" && "${LEAKS_FOUND}" == "true" ]]; then
   PURGE_OK=false
 fi
 

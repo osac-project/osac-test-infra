@@ -199,7 +199,7 @@ for TARGET in "${TARGETS[@]+"${TARGETS[@]}"}"; do
     fi
 
     PAGE_IDS=$(jq --arg repo "${REPO}" \
-      '[.workflow_runs[]? | {run_id: (.id | tostring), repo: $repo}]' "${page_file}")
+      '[.workflow_runs[]? | {run_id: (.id | tostring), repo: $repo, event}]' "${page_file}")
     target_ids=$(jq -cn --argjson a "${target_ids}" --argjson b "${PAGE_IDS}" '$a + $b')
     page_len=$(jq '.workflow_runs | length' "${page_file}")
     total_count=$(jq '.total_count' "${page_file}")

@@ -232,7 +232,7 @@ jobs:
             echo "::error::Invalid RUNS input -- refusing to audit with an unverified run list"
             exit 1
           fi
-          echo "${RUNS}" | jq -c '.[] | {run_id: (.run_id | tostring), repo}' > "${VALIDATED_RUNS}"
+          echo "${RUNS}" | jq -c '.[] | {run_id: (.run_id | tostring), repo, event}' > "${VALIDATED_RUNS}"
 
           # Reading a file (not a trailing pipe) so the loop runs in this
           # shell, not a subshell -- otherwise FLAGGED/SKIPPED_SCANS
@@ -240,8 +240,10 @@ jobs:
           while IFS= read -r ITEM; do
             RUN_ID=$(echo "${ITEM}" | jq -r '.run_id')
             REPO=$(echo "${ITEM}" | jq -r '.repo')
+            RUN_EVENT=$(echo "${ITEM}" | jq -r '.event // ""')
+            export SKIP_PURGE=$( [[ "${RUN_EVENT}" != "pull_request" ]] && echo true || echo false )
             SLUG="${REPO//\//_}-${RUN_ID}"
-            echo "::group::Auditing run ${RUN_ID} (${REPO})"
+            echo "::group::Auditing run ${RUN_ID} (${REPO}) [event=${RUN_EVENT}, skip_purge=${SKIP_PURGE}]"
             OUTPUT_DIR="${AUDIT_DIR}/${SLUG}"
             # `if ! process_one_run ...; then` (not a bare call), matching
             # this skill's own documented pattern for calling a function
