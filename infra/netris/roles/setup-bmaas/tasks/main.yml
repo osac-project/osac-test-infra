@@ -322,6 +322,12 @@
   retries: 10
   delay: 15
 
+- name: Ensure osac CLI config directory exists
+  ansible.builtin.file:
+    path: /root/.config/osac
+    state: directory
+    mode: "0700"
+
 - name: Configure osac CLI
   ansible.builtin.copy:
     content: |
