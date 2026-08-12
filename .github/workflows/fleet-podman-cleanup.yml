@@ -15,6 +15,30 @@ name: Fleet podman image cleanup
 # store locally, gated on `until` well past the longest E2E run on record
 # (~2h45m as of writing) so it can never touch an image any real job --
 # on this host, this run or any other -- could still need.
+#
+# Also reaps stale osac-e2e-tests containers before pruning images. A job
+# that gets killed abnormally (cancelled mid-run, host issue, a crashed
+# runner process) can leave its test container running/stuck behind --
+# teardown.sh's own force-remove only ever targets the CURRENT run's own
+# image, so it structurally can't clean up a different, older run's
+# leftover container. Found in production: 4 containers stuck for 3+
+# weeks across 3 hosts, all from the same few-day window -- each one
+# permanently blocking `podman rmi` on whatever image it references, so
+# that image would otherwise be skipped by the prune step below forever,
+# not just deferred one cycle like a genuinely in-progress job's image is.
+#
+# Also reaps stale *external* (buildah) working containers -- the actual
+# biggest blocker found in production, and invisible to plain `podman ps
+# -a` (needs --external). Every `podman build` stage that doesn't reach
+# its own cleanup leaves one of these behind in the underlying storage,
+# and each one pins its image layer exactly like a real container would.
+# Found on a single host: 743 of them, some over 6 weeks old, collectively
+# blocking every dangling image prune from removing anything at all no
+# matter how many cycles ran -- confirmed live: 33 images skipped every
+# single cycle before this, all 33 removed cleanly the moment these were
+# cleared. `podman rm` alone fails on these ("container is mounted");
+# `-f` is required, matching how teardown.sh already force-removes
+# regular leftover containers for the same underlying reason.
 on:
   schedule:
     - cron: "13 */6 * * *"
@@ -59,6 +83,66 @@ jobs:
     # on and should finish in a small fraction of this.
     timeout-minutes: 60
     steps:
+      - name: Reap stale E2E test containers
+        shell: bash
+        env:
+          UNTIL: ${{ inputs.until || '6h' }}
+        run: |
+          # Only ever targets localhost/osac-e2e-tests:* -- this is the
+          # single most important line in this step. node-exporter and,
+          # on osac-ci-1, prometheus/grafana/alertmanager/etc. are all
+          # *supposed* to run for weeks; matching on image name (not just
+          # age) is what keeps this from ever touching them.
+          if ! containers_output="$(podman ps -a --filter "until=${UNTIL}" --format '{{.ID}} {{.Image}}')"; then
+            echo "::error::Failed to list containers on this host" >&2
+            exit 1
+          fi
+
+          reaped=0
+          if [[ -n "${containers_output}" ]]; then
+            while IFS=' ' read -r cid cimage; do
+              case "${cimage}" in
+                localhost/osac-e2e-tests:*)
+                  echo "Reaping stale E2E container ${cid} (${cimage}, created more than ${UNTIL} ago)"
+                  podman rm -f "${cid}" >/dev/null 2>&1 || echo "::warning::Failed to remove container ${cid}"
+                  reaped=$((reaped + 1))
+                  ;;
+              esac
+            done <<< "${containers_output}"
+          fi
+          echo "Reaped ${reaped} stale E2E test container(s)."
+
+      - name: Reap stale external (buildah) working containers
+        shell: bash
+        env:
+          UNTIL: ${{ inputs.until || '6h' }}
+        run: |
+          # `--external` is required to see these at all -- they don't
+          # show up in a plain `podman ps -a`. Age-gated the same way as
+          # every other step here: anything from a build still genuinely
+          # in progress is younger than ${UNTIL} and left alone.
+          if ! ext_output="$(podman ps -a --external --filter "until=${UNTIL}" --format '{{.ID}}')"; then
+            echo "::error::Failed to list external containers on this host" >&2
+            exit 1
+          fi
+
+          reaped=0
+          failed=0
+          if [[ -n "${ext_output}" ]]; then
+            while IFS= read -r cid; do
+              # Plain `podman rm` fails on these ("container is mounted
+              # and cannot be removed without using force") even when
+              # genuinely stale -- confirmed live, -f is required.
+              if podman rm -f "${cid}" >/dev/null 2>&1; then
+                reaped=$((reaped + 1))
+              else
+                failed=$((failed + 1))
+                echo "::warning::Failed to remove external container ${cid}"
+              fi
+            done <<< "${ext_output}"
+          fi
+          echo "Reaped ${reaped} stale external container(s), ${failed} failed."
+
       - name: Prune dangling podman images
         shell: bash
         env:
