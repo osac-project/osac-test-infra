@@ -5,12 +5,13 @@
 
 # ── Phase 1: BMC network ─────────────────────────────────────────────
 
-- name: Enable virtstoraged and virtnetworkd sockets
+- name: Enable libvirt modular daemon sockets
   ansible.builtin.systemd:
     name: "{{ item }}"
     state: started
     enabled: true
   loop:
+    - virtqemud.socket
     - virtstoraged.socket
     - virtnetworkd.socket
 
