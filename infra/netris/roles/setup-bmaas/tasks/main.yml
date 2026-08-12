@@ -1,11 +1,12 @@
 ---
 # Phase 1: Enable Ironic via Provisioning CR
 #
-# Ironic serves virtual media images from the bmc-net IP (br-bmc) so
-# sushy-tools can download them over L2. Without externalIPs, Ironic
-# auto-detects the node's primary IP (the Netris VNet address), which
-# is not reachable from br-bmc. disableVirtualMediaTLS avoids TLS cert
-# issues on the isolated BMC network.
+# All Ironic traffic (virtual media, rootfs download, IPA callback) flows
+# over bmc-net (br-bmc, 10.99.0.0/24). The BMH VM's bootMACAddress is set
+# to its bmc-net NIC so IPA's BOOTIF kernel param matches that NIC, dracut
+# configures it via DHCP, and IPA can reach the rootfs URL + callback on
+# the same L2 segment. This mirrors dev-scripts' pattern where provisioning
+# and rootfs traffic share a single network.
 
 - name: Apply Provisioning CR
   ansible.builtin.shell:
@@ -19,6 +20,7 @@
         provisioningNetwork: "Disabled"
         watchAllNamespaces: true
         disableVirtualMediaTLS: true
+        provisioningIP: "{{ bmc_net_ocp_ip }}"
         externalIPs:
           - {{ bmc_net_ocp_ip }}
       EOF
@@ -192,9 +194,9 @@
   changed_when: false
   loop: "{{ bmaas_vms }}"
 
-- name: Get VM MAC addresses (first NIC — br-mgmt)
+- name: Get VM MAC addresses (bmc-net NIC)
   ansible.builtin.shell:
-    cmd: virsh domiflist {{ item }} | awk 'NR>2 && NF>0 {print $5; exit}'
+    cmd: virsh domiflist {{ item }} | awk '/{{ bmc_net_name }}/{print $5}'
   register: _vm_macs
   changed_when: false
   loop: "{{ bmaas_vms }}"
