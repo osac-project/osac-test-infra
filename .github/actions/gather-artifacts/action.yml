@@ -50,6 +50,106 @@ runs:
         fi
         rm -f "${ARTIFACT_DIR}/.redaction-complete" 2>/dev/null || true
 
+    - name: Scan artifacts with gitleaks
+      if: always()
+      shell: bash
+      env:
+        ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
+        GITLEAKS_CONFIG: ${{ github.workspace }}/.github/scripts/.gitleaks.toml
+        # Same pinned image as scan-run-logs.sh
+        GITLEAKS_IMAGE: "ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+      run: |
+        if [[ ! -d "${ARTIFACT_DIR}" ]]; then
+          echo "No artifact directory — skipping gitleaks scan"
+          exit 0
+        fi
+
+
+        ENGINE=""
+        if command -v docker &>/dev/null; then
+          ENGINE=docker
+        elif command -v podman &>/dev/null; then
+          ENGINE=podman
+        else
+          echo "::warning::Neither docker nor podman available — uploading without pre-scan (post-upload scanner will cover)"
+          exit 0
+        fi
+
+        SELINUX_SUFFIX=""
+        if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" != "Disabled" ]]; then
+          SELINUX_SUFFIX=",z"
+        fi
+
+        REPORT_DIR="${RUNNER_TEMP}/gitleaks-pre-upload"
+        mkdir -p "${REPORT_DIR}"
+        trap 'rm -rf -- "${REPORT_DIR}"' EXIT
+
+        MAX_PASSES=3
+        for pass in $(seq 1 ${MAX_PASSES}); do
+          echo "::group::Gitleaks pre-upload scan (pass ${pass}/${MAX_PASSES})"
+          REPORT="${REPORT_DIR}/findings-pass-${pass}.json"
+
+          if ! "${ENGINE}" run --rm --network=none \
+            --user "$(id -u):$(id -g)" \
+            -v "${ARTIFACT_DIR}:/scan:ro${SELINUX_SUFFIX}" \
+            -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro${SELINUX_SUFFIX}" \
+            -v "${REPORT_DIR}:/out${SELINUX_SUFFIX}" \
+            "${GITLEAKS_IMAGE}" dir /scan \
+            --config=/gitleaks.toml \
+            --report-format=json \
+            --report-path="/out/$(basename "${REPORT}")" \
+            --exit-code=0; then
+            echo "::warning::Gitleaks scan failed — uploading anyway (post-upload scanner will cover)"
+            echo "::endgroup::"
+            rm -rf "${REPORT_DIR}"
+            exit 0
+          fi
+
+          if [[ ! -f "${REPORT}" ]]; then
+            echo "[]" > "${REPORT}"
+          fi
+
+          FINDING_COUNT=$(jq 'length' "${REPORT}")
+          echo "Pass ${pass}: ${FINDING_COUNT} finding(s)"
+          echo "::endgroup::"
+
+          if [[ "${FINDING_COUNT}" -eq 0 ]]; then
+            echo "Artifacts are clean after pass ${pass}"
+            break
+          fi
+
+          echo "::group::Redacting ${FINDING_COUNT} finding(s) (pass ${pass})"
+          python3 "${{ github.workspace }}/.github/scripts/redact.py" "${REPORT}" "${ARTIFACT_DIR}"
+          echo "::endgroup::"
+
+          if [[ "${pass}" -eq "${MAX_PASSES}" ]]; then
+            FINAL_REPORT="${REPORT_DIR}/findings-final.json"
+            if ! "${ENGINE}" run --rm --network=none \
+              --user "$(id -u):$(id -g)" \
+              -v "${ARTIFACT_DIR}:/scan:ro${SELINUX_SUFFIX}" \
+              -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro${SELINUX_SUFFIX}" \
+              -v "${REPORT_DIR}:/out${SELINUX_SUFFIX}" \
+              "${GITLEAKS_IMAGE}" dir /scan \
+              --config=/gitleaks.toml \
+              --report-format=json \
+              --report-path="/out/findings-final.json" \
+              --exit-code=0; then
+              echo "::warning::Final gitleaks scan failed — uploading anyway (post-upload scanner will cover)"
+              break
+            fi
+            if [[ ! -f "${FINAL_REPORT}" ]]; then
+              echo "[]" > "${FINAL_REPORT}"
+            fi
+            REMAINING=$(jq 'length' "${FINAL_REPORT}")
+            if [[ "${REMAINING}" -gt 0 ]]; then
+              echo "::warning::${REMAINING} finding(s) remain after ${MAX_PASSES} redaction passes — uploading anyway (post-upload scanner will cover)"
+            else
+            fi
+          fi
+        done
+
+        rm -rf "${REPORT_DIR}"
+
     - name: Upload artifacts
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
