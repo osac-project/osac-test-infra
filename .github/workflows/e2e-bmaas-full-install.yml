@@ -612,26 +612,135 @@ jobs:
             fi
           done
 
-      - name: Start BMH state monitor
+      - name: Start diagnostic monitors
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
         run: |
           mkdir -p "$RUNNER_TEMP/test-output"
+          PIDS_FILE="$RUNNER_TEMP/diagnostic-monitor-pids"
+          : > "${PIDS_FILE}"
+
+          # --- Monitor 1: BMH state + errors (every 10s) ---
           BMH_LOG="$RUNNER_TEMP/test-output/bmh-monitor.log"
-          echo "Starting BMH state monitor (logging to ${BMH_LOG})..."
+          echo "Starting BMH state + error monitor..."
           (
             while true; do
               echo "--- $(date -u '+%Y-%m-%dT%H:%M:%SZ') ---"
               oc get bmh -n "${BMH_NAMESPACE}" \
-                -o custom-columns=NAME:.metadata.name,STATE:.status.provisioning.state,POWERED:.status.poweredOn,CONSUMER:.spec.consumerRef.name \
+                -o custom-columns=NAME:.metadata.name,STATE:.status.provisioning.state,POWERED:.status.poweredOn,ERROR_TYPE:.status.errorType,ERROR_MSG:.status.errorMessage,OP_STATUS:.status.operationalStatus,CONSUMER:.spec.consumerRef.name \
                 2>&1
               echo ""
               sleep 10
             done
           ) >> "${BMH_LOG}" 2>&1 &
-          echo $! > "$RUNNER_TEMP/bmh-monitor.pid"
-          echo "BMH state monitor started (PID $(cat "$RUNNER_TEMP/bmh-monitor.pid"))."
+          echo $! >> "${PIDS_FILE}"
+          echo "  BMH state monitor PID: $!"
+
+          # --- Monitor 2: BMH events stream (--watch-only) ---
+          BMH_EVENTS_LOG="$RUNNER_TEMP/test-output/bmh-events.log"
+          echo "Starting BMH events stream..."
+          (
+            echo "=== BMH event stream started at $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
+            oc get events -n "${BMH_NAMESPACE}" --watch-only \
+              -o custom-columns=TIME:.lastTimestamp,TYPE:.type,REASON:.reason,OBJECT:.involvedObject.name,MESSAGE:.message \
+              2>&1
+          ) >> "${BMH_EVENTS_LOG}" 2>&1 &
+          echo $! >> "${PIDS_FILE}"
+          echo "  BMH events stream PID: $!"
+
+          # --- Monitor 3: Ironic conductor log stream ---
+          IRONIC_LOG="$RUNNER_TEMP/test-output/ironic-conductor.log"
+          echo "Starting Ironic conductor log stream..."
+          (
+            echo "=== Ironic conductor log stream started at $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
+            # Find the metal3 pod running the ironic-conductor container
+            METAL3_POD=$(oc get pods -n openshift-machine-api \
+              -l baremetal.openshift.io/cluster-baremetal-operator=metal3-state \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            if [[ -n "${METAL3_POD}" ]]; then
+              echo "Following logs from pod ${METAL3_POD}, container ironic-conductor"
+              oc logs -f "${METAL3_POD}" -n openshift-machine-api -c ironic-conductor 2>&1
+            else
+              echo "WARNING: Could not find metal3 pod for ironic-conductor logs"
+            fi
+          ) >> "${IRONIC_LOG}" 2>&1 &
+          echo $! >> "${PIDS_FILE}"
+          echo "  Ironic conductor log stream PID: $!"
+
+          # --- Monitor 4: libvirt VM state monitor (every 10s) ---
+          VM_STATE_LOG="$RUNNER_TEMP/test-output/vm-state-monitor.log"
+          echo "Starting VM state monitor..."
+          (
+            VIRSH="virsh -c qemu:///system"
+            while true; do
+              echo "--- $(date -u '+%Y-%m-%dT%H:%M:%SZ') ---"
+              echo "== VM list =="
+              ${VIRSH} list --all 2>&1 | grep -E "virtual-bmh-|Id.*Name.*State" || true
+              echo ""
+              echo "== VM domstats =="
+              for vm in $(${VIRSH} list --name 2>/dev/null | grep "virtual-bmh-"); do
+                echo "  ${vm}:"
+                ${VIRSH} domstats "${vm}" --raw 2>&1 | grep -E "state\.|cpu\.|balloon\.|net\." || true
+                echo ""
+              done
+              sleep 10
+            done
+          ) >> "${VM_STATE_LOG}" 2>&1 &
+          echo $! >> "${PIDS_FILE}"
+          echo "  VM state monitor PID: $!"
+
+          # --- Monitor 5: sushy-emulator log tail ---
+          SUSHY_LOG_OUT="$RUNNER_TEMP/test-output/sushy-emulator.log"
+          SUSHY_LOG_SRC="${HOME}/sushy-${CLONE_NAME}/sushy.log"
+          echo "Starting sushy-emulator log tail..."
+          (
+            echo "=== sushy-emulator log tail started at $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
+            if [[ -f "${SUSHY_LOG_SRC}" ]]; then
+              tail -f "${SUSHY_LOG_SRC}" 2>&1
+            else
+              echo "WARNING: sushy log not found at ${SUSHY_LOG_SRC}"
+              echo "Waiting for log file to appear..."
+              for _ in $(seq 1 60); do
+                if [[ -f "${SUSHY_LOG_SRC}" ]]; then
+                  tail -f "${SUSHY_LOG_SRC}" 2>&1
+                  break
+                fi
+                sleep 5
+              done
+            fi
+          ) >> "${SUSHY_LOG_OUT}" 2>&1 &
+          echo $! >> "${PIDS_FILE}"
+          echo "  sushy-emulator log tail PID: $!"
+
+          # --- Monitor 6: System resources (every 30s) ---
+          SYS_LOG="$RUNNER_TEMP/test-output/system-resources.log"
+          echo "Starting system resource monitor..."
+          (
+            VIRSH="virsh -c qemu:///system"
+            while true; do
+              echo "--- $(date -u '+%Y-%m-%dT%H:%M:%SZ') ---"
+              echo "== Load average =="
+              cat /proc/loadavg 2>&1
+              echo ""
+              echo "== Memory =="
+              free -h 2>&1
+              echo ""
+              echo "== Disk =="
+              df -h / /tmp /var 2>&1 || true
+              echo ""
+              echo "== VM count =="
+              VM_TOTAL=$(${VIRSH} list --all 2>/dev/null | grep -c "running\|shut off\|paused" || echo 0)
+              VM_RUNNING=$(${VIRSH} list 2>/dev/null | grep -c "running" || echo 0)
+              echo "Total VMs: ${VM_TOTAL}, Running: ${VM_RUNNING}"
+              echo ""
+              sleep 30
+            done
+          ) >> "${SYS_LOG}" 2>&1 &
+          echo $! >> "${PIDS_FILE}"
+          echo "  System resource monitor PID: $!"
+
+          echo "All diagnostic monitors started. PIDs: $(cat "${PIDS_FILE}" | tr '\n' ' ')"
 
       - name: Run E2E tests
         id: test
@@ -671,23 +780,46 @@ jobs:
             pytest ${TEST_ARGS} ${FILTER_ARGS} \
               --junitxml=/tmp/test-output/junit.xml -v
 
-      - name: Stop BMH state monitor
+      - name: Stop diagnostic monitors
         if: always()
         run: |
-          if [[ -f "$RUNNER_TEMP/bmh-monitor.pid" ]]; then
-            BMH_PID=$(cat "$RUNNER_TEMP/bmh-monitor.pid")
-            echo "Stopping BMH state monitor (PID ${BMH_PID})..."
-            kill "${BMH_PID}" 2>/dev/null || true
+          PIDS_FILE="$RUNNER_TEMP/diagnostic-monitor-pids"
+          if [[ -f "${PIDS_FILE}" ]]; then
+            echo "Stopping all diagnostic monitors..."
+            while IFS= read -r pid; do
+              [[ -z "${pid}" ]] && continue
+              echo "  Stopping PID ${pid}..."
+              kill "${pid}" 2>/dev/null || true
+            done < "${PIDS_FILE}"
+            # Wait briefly for all to exit
             for _ in $(seq 1 5); do
-              kill -0 "${BMH_PID}" 2>/dev/null || break
+              ALL_STOPPED=true
+              while IFS= read -r pid; do
+                [[ -z "${pid}" ]] && continue
+                if kill -0 "${pid}" 2>/dev/null; then
+                  ALL_STOPPED=false
+                  break
+                fi
+              done < "${PIDS_FILE}"
+              ${ALL_STOPPED} && break
               sleep 1
             done
-            rm -f "$RUNNER_TEMP/bmh-monitor.pid"
-            echo "BMH state monitor stopped."
-            if [[ -f "$RUNNER_TEMP/test-output/bmh-monitor.log" ]]; then
-              echo "BMH monitor log: $(wc -l < "$RUNNER_TEMP/test-output/bmh-monitor.log") lines captured."
-            fi
+            rm -f "${PIDS_FILE}"
+            echo "All diagnostic monitors stopped."
           fi
+
+          # Report captured log sizes
+          echo "=== Diagnostic log summary ==="
+          for log in bmh-monitor.log bmh-events.log ironic-conductor.log vm-state-monitor.log sushy-emulator.log system-resources.log; do
+            LOG_PATH="$RUNNER_TEMP/test-output/${log}"
+            if [[ -f "${LOG_PATH}" ]]; then
+              LINES=$(wc -l < "${LOG_PATH}")
+              SIZE=$(du -h "${LOG_PATH}" | cut -f1)
+              echo "  ${log}: ${LINES} lines (${SIZE})"
+            else
+              echo "  ${log}: not found"
+            fi
+          done
 
       - name: Gather artifacts
         if: always()

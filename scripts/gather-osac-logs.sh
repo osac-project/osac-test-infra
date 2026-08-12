@@ -112,7 +112,7 @@ oc get certificates -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/certificate
 oc get routes -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/routes.txt" 2>&1 || true
 oc get routes -n keycloak -o wide > "${ARTIFACT_DIR}/routes-keycloak.txt" 2>&1 || true
 
-for ns in cert-manager openshift-machine-api osac-operators; do
+for ns in cert-manager openshift-machine-api osac-operators host-inventory; do
     if oc get namespace "${ns}" &>/dev/null; then
         echo "Gathering logs from namespace ${ns}..."
         collect_namespace_logs "${ns}" "${ARTIFACT_DIR}/${ns}"
@@ -248,6 +248,14 @@ if [[ -n "${JUNIT_PATH}" ]]; then
     if [[ -f "${BMH_MONITOR_LOG}" ]]; then
         cp "${BMH_MONITOR_LOG}" "${ARTIFACT_DIR}/bmh-monitor.log"
     fi
+
+    # Diagnostic monitor logs (written by the bmaas workflow's background monitors)
+    for diag_log in bmh-events.log ironic-conductor.log vm-state-monitor.log system-resources.log sushy-emulator.log; do
+        DIAG_LOG_PATH="$(dirname "${JUNIT_PATH}")/${diag_log}"
+        if [[ -f "${DIAG_LOG_PATH}" ]]; then
+            cp "${DIAG_LOG_PATH}" "${ARTIFACT_DIR}/${diag_log}"
+        fi
+    done
 fi
 
 # ── Redact ───────────────────────────────────────────────────────────
