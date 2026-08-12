@@ -39,6 +39,12 @@ name: Fleet podman image cleanup
 # cleared. `podman rm` alone fails on these ("container is mounted");
 # `-f` is required, matching how teardown.sh already force-removes
 # regular leftover containers for the same underlying reason.
+#
+# `--external` is NOT an external-only view, though -- it's a UNION of
+# those with every regular container `-a` would already show (confirmed
+# live: this included node-exporter, meant to run for weeks). The reap
+# step below filters on Command=="buildah" + Status=="Storage" as well
+# as age for exactly this reason.
 on:
   schedule:
     - cron: "13 */6 * * *"
@@ -104,8 +110,11 @@ jobs:
               case "${cimage}" in
                 localhost/osac-e2e-tests:*)
                   echo "Reaping stale E2E container ${cid} (${cimage}, created more than ${UNTIL} ago)"
-                  podman rm -f "${cid}" >/dev/null 2>&1 || echo "::warning::Failed to remove container ${cid}"
-                  reaped=$((reaped + 1))
+                  if podman rm -f "${cid}" >/dev/null 2>&1; then
+                    reaped=$((reaped + 1))
+                  else
+                    echo "::warning::Failed to remove container ${cid}"
+                  fi
                   ;;
               esac
             done <<< "${containers_output}"
@@ -117,11 +126,26 @@ jobs:
         env:
           UNTIL: ${{ inputs.until || '6h' }}
         run: |
-          # `--external` is required to see these at all -- they don't
-          # show up in a plain `podman ps -a`. Age-gated the same way as
-          # every other step here: anything from a build still genuinely
-          # in progress is younger than ${UNTIL} and left alone.
-          if ! ext_output="$(podman ps -a --external --filter "until=${UNTIL}" --format '{{.ID}}')"; then
+          # `--external` is NOT an external-only view -- it's a UNION of
+          # genuine external (buildah) artifacts with every regular
+          # container `-a` would already show. Confirmed live: this
+          # included node-exporter ("Up 3 hours", its own startup flags as
+          # Command) on every host tested. node-exporter is meant to run
+          # for weeks, so age alone would eventually mark it stale and
+          # this step would force-remove the fleet's own monitoring
+          # container. Command=="buildah" + Status=="Storage" is what
+          # actually identifies a genuine orphaned buildah working
+          # container -- confirmed live across both podman 5.8.3 and
+          # 6.0.x hosts in this fleet, which is the full version spread
+          # currently deployed.
+          #
+          # The age filter is still what protects a build genuinely in
+          # progress right now: unlike a full E2E job (up to ~2h45m on
+          # record), the `podman build` stage that creates one of these
+          # takes minutes, not hours, so ${UNTIL} (floor 6h) is a much
+          # larger safety margin here than it is for the image-prune step
+          # below, not a smaller one.
+          if ! ext_output="$(podman ps -a --external --filter "until=${UNTIL}" --format '{{.ID}}\t{{.Command}}\t{{.Status}}')"; then
             echo "::error::Failed to list external containers on this host" >&2
             exit 1
           fi
@@ -129,7 +153,8 @@ jobs:
           reaped=0
           failed=0
           if [[ -n "${ext_output}" ]]; then
-            while IFS= read -r cid; do
+            while IFS=$'\t' read -r cid cmd status; do
+              [[ "${cmd}" == "buildah" && "${status}" == "Storage" ]] || continue
               # Plain `podman rm` fails on these ("container is mounted
               # and cannot be removed without using force") even when
               # genuinely stale -- confirmed live, -f is required.
