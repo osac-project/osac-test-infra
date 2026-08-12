@@ -34,8 +34,13 @@ concurrency:
 permissions: {}
 
 jobs:
-  audit:
-    name: Cross-repo credential audit
+  # ─── Phase 1: Discover ─────────────────────────────────────────────────────
+  # Lists runs to audit and chunks them into matrix batches for parallel
+  # scanning. Split from the scan loop so that a large run count (common
+  # after the osac monorepo migration) no longer serializes into a single
+  # 2h+ job that times out.
+  discover:
+    name: Discover runs to audit
     # workflow_dispatch lets anyone with write access pick *any* branch to
     # run this job against, executing that branch's own copy of this file
     # with this job's full Vault/GH_ORG_TOKEN access -- a same-file `if:`
@@ -52,16 +57,21 @@ jobs:
     # 127.0.0.1. Per-run scan-workflow-logs.yml already moved to ubuntu-latest
     # + Docker; this job stays until audit secrets move off runner-local Vault.
     runs-on: osac-ci
+    timeout-minutes: 10
     permissions:
       # Only needed to check out the shared scripts (scan-run-logs.sh,
       # discover-audit-runs.sh) this job invokes -- this job never pushes
       # back to the repo.
       contents: read  # checkout only, no push
-      # The tracking issue lives in this repo, so issues:write is enough at
-      # the job-permissions level for that part. Cross-repo run listing and
-      # log fetch/delete use the Actions-scoped audit PAT from Vault instead
-      # (see "Scan each run's logs" below), not this job's own token.
-      issues: write  # create/update the credential-leak tracking issue
+    outputs:
+      matrix: ${{ steps.chunk.outputs.matrix }}
+      has-runs: ${{ steps.chunk.outputs.has-runs }}
+      skipped-targets: ${{ steps.list.outputs.skipped-targets }}
+      no-targets: ${{ steps.list.outputs.no-targets }}
+      runs-truncated: ${{ steps.list.outputs.runs-truncated }}
+      lookback-raw: ${{ steps.list.outputs.lookback-raw }}
+      lookback-hours: ${{ steps.list.outputs.lookback-hours }}
+      target-repo: ${{ steps.list.outputs.target-repo }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -87,8 +97,7 @@ jobs:
           secretId: ${{ steps.approle.outputs.secret-id }}
           exportEnv: false
           secrets: |
-            secret/data/osac/e2e/audit-log-cleaner-pat token | GH_ORG_TOKEN ;
-            secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL
+            secret/data/osac/e2e/audit-log-cleaner-pat token | GH_ORG_TOKEN
 
       - name: List recent e2e runs
         id: list
@@ -116,11 +125,85 @@ jobs:
           echo "lookback-hours=${LOOKBACK_HOURS}" >> "$GITHUB_OUTPUT"
           echo "target-repo=${TARGET_REPO}" >> "$GITHUB_OUTPUT"
 
+      - name: Chunk runs into matrix batches
+        id: chunk
+        env:
+          RUNS: ${{ steps.list.outputs.runs }}
+        run: |
+          # Split the flat run list into chunks of N so the scan phase can
+          # process them in parallel matrix legs. Each chunk is a JSON string
+          # (stringified array of {run_id, repo} objects) that the matrix leg
+          # parses back into its RUNS env var.
+          CHUNK_SIZE=20
+          TOTAL=$(echo "${RUNS}" | jq 'length')
+
+          if [[ "${TOTAL}" -eq 0 ]]; then
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            echo "has-runs=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          MATRIX=$(echo "${RUNS}" | jq -c --argjson size "${CHUNK_SIZE}" '
+            . as $all |
+            [ range(0; length; $size) | . as $start |
+              { chunk_index: ($start / $size | floor),
+                runs: ($all[$start:$start+$size] | tostring) }
+            ] | {include: .}
+          ')
+
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "has-runs=true" >> "$GITHUB_OUTPUT"
+          echo "Generated $(echo "${MATRIX}" | jq '.include | length') matrix chunk(s) for ${TOTAL} run(s)."
+
+  # ─── Phase 2: Scan (parallel matrix) ───────────────────────────────────────
+  # Each matrix leg scans a subset of runs. The scan logic is identical to
+  # the original monolithic "Scan each run's logs" step — only the input
+  # RUNS array is smaller (one chunk instead of all discovered runs).
+  scan:
+    name: "Scan chunk ${{ matrix.chunk_index }}"
+    needs: discover
+    if: needs.discover.outputs.has-runs == 'true'
+    environment: audit-privileged
+    runs-on: osac-ci
+    timeout-minutes: 45
+    permissions:
+      contents: read  # checkout only, no push
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # --- Secret bootstrap (inline — must not run PR-controlled code) ---
+      - name: Read AppRole credentials
+        id: approle
+        run: |
+          APPROLE_DIR="${HOME}/.vault-server/.approle"
+          echo "role-id=$(cat "${APPROLE_DIR}/role-id")" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$(cat "${APPROLE_DIR}/secret-id")"
+          echo "secret-id=$(cat "${APPROLE_DIR}/secret-id")" >> "$GITHUB_OUTPUT"
+
+      - name: Retrieve secrets from Vault
+        id: vault
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.approle.outputs.role-id }}
+          secretId: ${{ steps.approle.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/audit-log-cleaner-pat token | GH_ORG_TOKEN
+
       - name: Scan each run's logs
         id: scan
         env:
           GH_TOKEN: ${{ steps.vault.outputs.GH_ORG_TOKEN }}
-          RUNS: ${{ steps.list.outputs.runs }}
+          RUNS: ${{ matrix.runs }}
         run: |
           AUDIT_DIR="${RUNNER_TEMP}/audit"
           ALL_REDACTED_DIR="${RUNNER_TEMP}/all-redacted"
@@ -262,9 +345,188 @@ jobs:
           echo "SUMMARY_JSONL=${SUMMARY_JSONL}" >> "$GITHUB_ENV"
           echo "ALL_REDACTED_DIR=${ALL_REDACTED_DIR}" >> "$GITHUB_ENV"
 
+          # Persist counters for the report job to aggregate across chunks.
+          COUNTERS_FILE="${AUDIT_DIR}/counters.json"
+          jq -n --argjson f "${FLAGGED}" --argjson s "${SKIPPED_SCANS}" \
+            --argjson pf "${PURGE_FAILURES}" --argjson proc "${PROCESSING_FAILURES}" \
+            '{flagged: $f, skipped_scans: $s, purge_failures: $pf, processing_failures: $proc}' \
+            > "${COUNTERS_FILE}"
+          echo "COUNTERS_FILE=${COUNTERS_FILE}" >> "$GITHUB_ENV"
+
+      - name: Upload chunk redacted logs
+        if: steps.scan.outputs.flagged-count != '' && steps.scan.outputs.flagged-count != '0'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: audit-redacted-chunk-${{ matrix.chunk_index }}-${{ github.run_id }}
+          path: ${{ env.ALL_REDACTED_DIR }}
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Rename chunk summary for merge-safe download
+        if: always()
+        id: rename-summary
+        run: |
+          # merge-multiple flattens all artifacts into one dir; avoid
+          # filename collisions across chunks by giving each a unique name.
+          UPLOAD_DIR="${RUNNER_TEMP}/chunk-upload"
+          mkdir -p "${UPLOAD_DIR}"
+          if [[ -f "${SUMMARY_JSONL}" ]]; then
+            cp "${SUMMARY_JSONL}" "${UPLOAD_DIR}/summary-chunk-${{ matrix.chunk_index }}.jsonl"
+          fi
+          if [[ -f "${COUNTERS_FILE}" ]]; then
+            cp "${COUNTERS_FILE}" "${UPLOAD_DIR}/counters-chunk-${{ matrix.chunk_index }}.json"
+          fi
+          echo "path=${UPLOAD_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload chunk summary
+        if: always() && steps.rename-summary.outputs.path != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: audit-summary-chunk-${{ matrix.chunk_index }}-${{ github.run_id }}
+          path: ${{ steps.rename-summary.outputs.path }}
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ─── Phase 3: Report ───────────────────────────────────────────────────────
+  # Aggregates results from all scan matrix legs, writes the job summary,
+  # files/updates the tracking issue, and notifies Slack. Runs even when
+  # some scan legs fail (always() + explicit outcome checks).
+  report:
+    name: Aggregate and report
+    needs: [discover, scan]
+    # !cancelled(): must run even when scan legs fail -- that's exactly when
+    # reporting matters most (partial results, skipped scans, etc.) -- but a
+    # manual cancel is not an audit finding worth paging on.
+    if: ${{ !cancelled() }}
+    environment: audit-privileged
+    runs-on: osac-ci
+    timeout-minutes: 10
+    permissions:
+      contents: read  # checkout only, no push
+      # The tracking issue lives in this repo, so issues:write is enough at
+      # the job-permissions level for that part. Cross-repo run listing and
+      # log fetch/delete use the Actions-scoped audit PAT from Vault instead
+      # (see scan job above), not this job's own token.
+      issues: write  # create/update the credential-leak tracking issue
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # --- Secret bootstrap (inline — must not run PR-controlled code) ---
+      - name: Read AppRole credentials
+        id: approle
+        run: |
+          APPROLE_DIR="${HOME}/.vault-server/.approle"
+          echo "role-id=$(cat "${APPROLE_DIR}/role-id")" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$(cat "${APPROLE_DIR}/secret-id")"
+          echo "secret-id=$(cat "${APPROLE_DIR}/secret-id")" >> "$GITHUB_OUTPUT"
+
+      - name: Retrieve secrets from Vault
+        id: vault
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.approle.outputs.role-id }}
+          secretId: ${{ steps.approle.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL
+
+      - name: Download all chunk summaries
+        id: download-summaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: audit-summary-chunk-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/summaries
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download all chunk redacted logs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: audit-redacted-chunk-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/all-redacted
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Aggregate scan results
+        id: aggregate
+        env:
+          SCAN_RESULT: ${{ needs.scan.result }}
+          DISCOVER_RESULT: ${{ needs.discover.result }}
+          DOWNLOAD_SUMMARIES_OUTCOME: ${{ steps.download-summaries.outcome }}
+          MATRIX_JSON: ${{ needs.discover.outputs.matrix }}
+          HAS_RUNS: ${{ needs.discover.outputs.has-runs }}
+        run: |
+          SUMMARY_DIR="${RUNNER_TEMP}/summaries"
+          MERGED="${RUNNER_TEMP}/merged-summary.jsonl"
+          : > "${MERGED}"
+
+          if [[ -d "${SUMMARY_DIR}" ]]; then
+            find "${SUMMARY_DIR}" -name 'summary*.jsonl' -exec cat {} + >> "${MERGED}" 2>/dev/null || true
+          fi
+
+          # Sum per-chunk counters (authoritative) rather than inferring
+          # from JSONL line count (which misses runs where jq append failed).
+          FLAGGED_COUNT=0
+          SKIPPED_SCANS=0
+          PURGE_FAILURES=0
+          PROCESSING_FAILURES=0
+          if [[ -d "${SUMMARY_DIR}" ]]; then
+            while IFS= read -r cfile; do
+              if ! VALUES=$(jq -r '[(.flagged // 0), (.skipped_scans // 0), (.purge_failures // 0), (.processing_failures // 0)] | @tsv' "${cfile}"); then
+                echo "::warning::Unreadable counters file ${cfile} -- counting the chunk as unscanned."
+                SKIPPED_SCANS=$((SKIPPED_SCANS + 1))
+                continue
+              fi
+              read -r C_FLAGGED C_SKIPPED C_PURGE C_PROC <<< "${VALUES}"
+              FLAGGED_COUNT=$((FLAGGED_COUNT + C_FLAGGED))
+              SKIPPED_SCANS=$((SKIPPED_SCANS + C_SKIPPED))
+              PURGE_FAILURES=$((PURGE_FAILURES + C_PURGE))
+              PROCESSING_FAILURES=$((PROCESSING_FAILURES + C_PROC))
+            done < <(find "${SUMMARY_DIR}" -name 'counters-chunk-*.json' 2>/dev/null)
+          fi
+
+          # Fail closed: if scan succeeded but summary download failed, we
+          # cannot verify whether leaks were found -- mark as incomplete so
+          # the audit cannot look clean when it isn't.
+          if [[ "${SCAN_RESULT}" == "success" && "${DOWNLOAD_SUMMARIES_OUTCOME}" != "success" ]]; then
+            echo "::warning::Chunk summary download failed after successful scan -- cannot verify results, marking incomplete."
+            SKIPPED_SCANS=$((SKIPPED_SCANS + 1))
+          fi
+
+          # Detect missing chunk counters: if discover produced N chunks but
+          # we only found fewer counter files, the missing chunks were never
+          # aggregated (upload failure, leg timeout before counters written).
+          if [[ "${HAS_RUNS}" == "true" && -n "${MATRIX_JSON}" ]]; then
+            EXPECTED_CHUNKS=$(echo "${MATRIX_JSON}" | jq '.include | length')
+            FOUND_CHUNKS=$(find "${SUMMARY_DIR}" -name 'counters-chunk-*.json' 2>/dev/null | wc -l)
+            if (( FOUND_CHUNKS < EXPECTED_CHUNKS )); then
+              MISSING=$((EXPECTED_CHUNKS - FOUND_CHUNKS))
+              echo "::warning::${MISSING} chunk counter file(s) missing -- counting those chunks as unscanned."
+              SKIPPED_SCANS=$((SKIPPED_SCANS + MISSING))
+            fi
+          fi
+
+          # If the scan matrix itself failed (not just individual runs),
+          # mark as incomplete so the summary can't look clean.
+          if [[ "${SCAN_RESULT}" != "success" && "${SCAN_RESULT}" != "skipped" ]]; then
+            SKIPPED_SCANS=$((SKIPPED_SCANS + 1))
+          fi
+
+          echo "flagged-count=${FLAGGED_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "skipped-scans=${SKIPPED_SCANS}" >> "$GITHUB_OUTPUT"
+          echo "purge-failures=${PURGE_FAILURES}" >> "$GITHUB_OUTPUT"
+          echo "processing-failures=${PROCESSING_FAILURES}" >> "$GITHUB_OUTPUT"
+          echo "SUMMARY_JSONL=${MERGED}" >> "$GITHUB_ENV"
+          echo "ALL_REDACTED_DIR=${RUNNER_TEMP}/all-redacted" >> "$GITHUB_ENV"
+
       - name: Upload combined redacted logs
         id: upload-redacted
-        if: steps.scan.outputs.flagged-count != '0'
+        if: steps.aggregate.outputs.flagged-count != '0'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: audit-redacted-logs-${{ github.run_id }}
@@ -275,26 +537,27 @@ jobs:
         if: always()
         id: summary
         env:
-          # Not '|| success/failure' fallback -- steps.scan.outcome always
+          # Not '|| success/failure' fallback -- needs.scan.result always
           # resolves to one of success/failure/cancelled/skipped by the time
-          # this step (always()) runs, since "Scan each run's logs" is
-          # earlier in the job.
-          SCAN_OUTCOME: ${{ steps.scan.outcome }}
-          FLAGGED_COUNT: ${{ steps.scan.outputs.flagged-count || '0' }}
+          # this step (always()) runs.
+          SCAN_OUTCOME: ${{ needs.scan.result }}
+          DISCOVER_OUTCOME: ${{ needs.discover.result }}
+          AGGREGATE_OUTCOME: ${{ steps.aggregate.outcome }}
+          FLAGGED_COUNT: ${{ steps.aggregate.outputs.flagged-count || '0' }}
           # GitHub Actions expressions have no arithmetic operators, so the
           # two skip counters are added in bash below, not here.
-          SKIPPED_TARGETS: ${{ steps.list.outputs.skipped-targets || '0' }}
-          SKIPPED_SCANS: ${{ steps.scan.outputs.skipped-scans || '0' }}
-          PURGE_FAILURES: ${{ steps.scan.outputs.purge-failures || '0' }}
-          PROCESSING_FAILURES: ${{ steps.scan.outputs.processing-failures || '0' }}
-          NO_TARGETS: ${{ steps.list.outputs.no-targets || 'false' }}
-          RUNS_TRUNCATED: ${{ steps.list.outputs.runs-truncated || 'false' }}
+          SKIPPED_TARGETS: ${{ needs.discover.outputs.skipped-targets || '0' }}
+          SKIPPED_SCANS: ${{ steps.aggregate.outputs.skipped-scans || '0' }}
+          PURGE_FAILURES: ${{ steps.aggregate.outputs.purge-failures || '0' }}
+          PROCESSING_FAILURES: ${{ steps.aggregate.outputs.processing-failures || '0' }}
+          NO_TARGETS: ${{ needs.discover.outputs.no-targets || 'false' }}
+          RUNS_TRUNCATED: ${{ needs.discover.outputs.runs-truncated || 'false' }}
           # Fall back to the dispatch inputs (empty on schedule => 27h/all) so a
           # failed list step can't misreport the requested window/scope.
           # LOOKBACK_HOURS stays empty when never computed -- don't invent 27.
-          LOOKBACK_RAW: ${{ steps.list.outputs.lookback-raw || inputs.lookback || '27h' }}
-          LOOKBACK_HOURS: ${{ steps.list.outputs.lookback-hours || '' }}
-          TARGET_REPO: ${{ steps.list.outputs.target-repo || inputs.target-repo || 'all' }}
+          LOOKBACK_RAW: ${{ needs.discover.outputs.lookback-raw || inputs.lookback || '27h' }}
+          LOOKBACK_HOURS: ${{ needs.discover.outputs.lookback-hours || '' }}
+          TARGET_REPO: ${{ needs.discover.outputs.target-repo || inputs.target-repo || 'all' }}
           # 'skipped' (not just 'failure') when flagged-count is '0' -- the
           # upload step's own `if:` never runs it in that case. Only
           # meaningful when FLAGGED_COUNT != '0' below.
@@ -319,12 +582,18 @@ jobs:
             # be checked *before* falling back to the "no leaks" message.
             # Same for NO_TARGETS: zero resolved workflows means we never
             # checked anything -- not "checked, clean."
-            if [[ "${SCAN_OUTCOME}" != "success" ]]; then
-              echo ":x: Audit did not complete -- \"Scan each run's logs\" ended in **${SCAN_OUTCOME}** (likely an earlier step failed). Results below are incomplete, not a clean pass -- see job logs."
+            if [[ "${DISCOVER_OUTCOME}" != "success" ]]; then
+              echo ":x: Discover step failed -- no runs were scanned. This is **not** a clean pass -- see job logs."
+            elif [[ "${AGGREGATE_OUTCOME}" != "success" ]]; then
+              echo ":x: Result aggregation failed -- cannot determine whether leaks were found. This is **not** a clean pass -- see job logs."
+            elif [[ "${SCAN_OUTCOME}" != "success" && "${SCAN_OUTCOME}" != "skipped" ]]; then
+              echo ":x: Audit did not fully complete -- scan matrix ended in **${SCAN_OUTCOME}**. Results below are incomplete, not a clean pass -- see job logs."
             elif [[ "${NO_TARGETS}" == "true" ]]; then
               echo ":x: No audit targets resolved for \`${TARGET_REPO}\` -- nothing was scanned. This is **not** a clean pass (check EXTERNAL_CALLERS / target-repo selection)."
-            elif [[ "${FLAGGED_COUNT}" == "0" ]]; then
+            elif [[ "${FLAGGED_COUNT}" == "0" && "${SKIPPED_TOTAL}" == "0" ]]; then
               echo "No leaked credentials found in this audit window (logs + artifacts)."
+            elif [[ "${FLAGGED_COUNT}" == "0" ]]; then
+              echo ":warning: No leaked credentials found in runs that were successfully scanned, but **${SKIPPED_TOTAL}** target(s)/run(s) could not be fully verified -- this is **not** a confirmed clean pass."
             elif [[ "${UPLOAD_OUTCOME}" == "success" ]]; then
               echo ":rotating_light: **${FLAGGED_COUNT}** run(s) had leaked credential(s) in logs and/or artifacts -- see the tracking issue and \`audit-redacted-logs-${RUN_ID}\` artifact."
             else
@@ -353,7 +622,9 @@ jobs:
           echo "skipped-total=${SKIPPED_TOTAL}" >> "$GITHUB_OUTPUT"
 
           NOTIFY_PARTS=("lookback=${LOOKBACK_RAW}" "target=${TARGET_REPO}")
-          [[ "${SCAN_OUTCOME}" != "success" ]] && NOTIFY_PARTS+=("audit did not complete -- see job logs")
+          [[ "${DISCOVER_OUTCOME}" != "success" ]] && NOTIFY_PARTS+=("discover failed -- nothing scanned")
+          [[ "${AGGREGATE_OUTCOME}" != "success" ]] && NOTIFY_PARTS+=("aggregation failed -- cannot confirm clean pass")
+          [[ "${SCAN_OUTCOME}" != "success" && "${SCAN_OUTCOME}" != "skipped" ]] && NOTIFY_PARTS+=("scan matrix incomplete (${SCAN_OUTCOME})")
           [[ "${NO_TARGETS}" == "true" ]] && NOTIFY_PARTS+=("no audit targets resolved (nothing scanned)")
           [[ "${FLAGGED_COUNT}" != "0" ]] && NOTIFY_PARTS+=("${FLAGGED_COUNT} run(s) with leaked credential(s) in logs/artifacts")
           [[ "${SKIPPED_TOTAL}" != "0" ]] && NOTIFY_PARTS+=("${SKIPPED_TOTAL} target(s)/run(s) not scanned (partial audit)")
@@ -372,20 +643,20 @@ jobs:
         # prior step in the job, so if "Upload combined redacted logs" fails
         # *after* findings were already detected, incident reporting would
         # otherwise be skipped too -- exactly when it matters most. Gate on
-        # steps.scan.outcome explicitly rather than relying on always() alone,
+        # aggregate outcome explicitly rather than relying on always() alone,
         # so this doesn't also fire (and blow up on a missing SUMMARY_JSONL)
-        # if the scan step itself never got that far.
+        # if the aggregate step itself never got that far.
         if: >
           always() &&
-          steps.scan.outcome == 'success' &&
-          steps.scan.outputs.flagged-count != '0'
+          steps.aggregate.outcome == 'success' &&
+          steps.aggregate.outputs.flagged-count != '0'
         env:
           # This repo's own token is enough here: the tracking issue is
           # always created/updated in this repo, regardless of which repo
           # a flagged run came from (unlike run listing/log fetch above,
           # which need the org-scoped token to reach other repos).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FLAGGED_COUNT: ${{ steps.scan.outputs.flagged-count }}
+          FLAGGED_COUNT: ${{ steps.aggregate.outputs.flagged-count }}
           UPLOAD_OUTCOME: ${{ steps.upload-redacted.outcome || 'skipped' }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -457,7 +728,7 @@ jobs:
         # failed status is the fallback signal in that specific case. This is
         # an accepted gap (no secrets channel independent of Vault exists in
         # this project by design) rather than a fix.
-        # steps.scan.outputs.purge-failures isn't listed separately here --
+        # steps.aggregate.outputs.purge-failures isn't listed separately here --
         # a purge failure can only happen on a run that's already flagged
         # (flagged-count != '0'), so it's already implied by that condition.
         # steps.summary.outcome != 'success' is listed explicitly, though:
@@ -467,7 +738,7 @@ jobs:
         if: >
           always() &&
           steps.vault.outcome == 'success' &&
-          (steps.scan.outcome != 'success' || steps.summary.outcome != 'success' || steps.scan.outputs.flagged-count != '0' || steps.summary.outputs.skipped-total != '0' || steps.list.outputs.no-targets == 'true' || steps.list.outputs.runs-truncated == 'true')
+          (needs.discover.result != 'success' || steps.aggregate.outcome != 'success' || (needs.scan.result != 'success' && needs.scan.result != 'skipped') || steps.summary.outcome != 'success' || steps.aggregate.outputs.flagged-count != '0' || steps.summary.outputs.skipped-total != '0' || needs.discover.outputs.no-targets == 'true' || needs.discover.outputs.runs-truncated == 'true')
         uses: ./.github/actions/notify-slack
         with:
           status: failure
