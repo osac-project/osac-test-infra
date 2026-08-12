@@ -242,6 +242,12 @@ if [[ -n "${JUNIT_PATH}" ]]; then
     if [[ -e "${E2E_LOGS[0]}" ]]; then
         sort -m -t' ' -k1,1 "${E2E_LOGS[@]}" > "${ARTIFACT_DIR}/e2e.log"
     fi
+
+    # BMH state monitor log (written by the bmaas workflow's background monitor)
+    BMH_MONITOR_LOG="$(dirname "${JUNIT_PATH}")/bmh-monitor.log"
+    if [[ -f "${BMH_MONITOR_LOG}" ]]; then
+        cp "${BMH_MONITOR_LOG}" "${ARTIFACT_DIR}/bmh-monitor.log"
+    fi
 fi
 
 # ── Redact ───────────────────────────────────────────────────────────

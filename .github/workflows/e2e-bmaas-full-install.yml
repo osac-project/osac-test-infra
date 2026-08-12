@@ -612,6 +612,27 @@ jobs:
             fi
           done
 
+      - name: Start BMH state monitor
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/test-output"
+          BMH_LOG="$RUNNER_TEMP/test-output/bmh-monitor.log"
+          echo "Starting BMH state monitor (logging to ${BMH_LOG})..."
+          (
+            while true; do
+              echo "--- $(date -u '+%Y-%m-%dT%H:%M:%SZ') ---"
+              oc get bmh -n "${BMH_NAMESPACE}" \
+                -o custom-columns=NAME:.metadata.name,STATE:.status.provisioning.state,POWERED:.status.poweredOn,CONSUMER:.spec.consumerRef.name \
+                2>&1
+              echo ""
+              sleep 10
+            done
+          ) >> "${BMH_LOG}" 2>&1 &
+          echo $! > "$RUNNER_TEMP/bmh-monitor.pid"
+          echo "BMH state monitor started (PID $(cat "$RUNNER_TEMP/bmh-monitor.pid"))."
+
       - name: Run E2E tests
         id: test
         env:
@@ -649,6 +670,24 @@ jobs:
             "${E2E_IMAGE}" \
             pytest ${TEST_ARGS} ${FILTER_ARGS} \
               --junitxml=/tmp/test-output/junit.xml -v
+
+      - name: Stop BMH state monitor
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/bmh-monitor.pid" ]]; then
+            BMH_PID=$(cat "$RUNNER_TEMP/bmh-monitor.pid")
+            echo "Stopping BMH state monitor (PID ${BMH_PID})..."
+            kill "${BMH_PID}" 2>/dev/null || true
+            for _ in $(seq 1 5); do
+              kill -0 "${BMH_PID}" 2>/dev/null || break
+              sleep 1
+            done
+            rm -f "$RUNNER_TEMP/bmh-monitor.pid"
+            echo "BMH state monitor stopped."
+            if [[ -f "$RUNNER_TEMP/test-output/bmh-monitor.log" ]]; then
+              echo "BMH monitor log: $(wc -l < "$RUNNER_TEMP/test-output/bmh-monitor.log") lines captured."
+            fi
+          fi
 
       - name: Gather artifacts
         if: always()
