@@ -50,6 +50,22 @@
   changed_when: false
 
 # Phase 2: Prepare virtual BMH VMs (repurpose HGX VMs)
+# Skip if BMHs already exist and are available (idempotent re-run)
+- name: Check existing BMH states
+  ansible.builtin.shell:
+    cmd: >-
+      oc get bmh -n {{ bmaas_bmh_namespace }}
+      -o jsonpath='{range .items[*]}{.status.provisioning.state}{"\n"}{end}' 2>/dev/null
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _existing_bmh_states
+  changed_when: false
+  failed_when: false
+
+- name: Set BMH setup needed flag
+  ansible.builtin.set_fact:
+    _bmh_setup_needed: "{{ _existing_bmh_states.stdout_lines | select('equalto', 'available') | list | length < bmaas_vm_patterns | length }}"
+
 - name: Find BMaaS VMs
   ansible.builtin.shell:
     cmd: virsh list --all --name | grep "{{ item }}"
@@ -61,137 +77,140 @@
   ansible.builtin.set_fact:
     bmaas_vms: "{{ _bmaas_vm_lookup.results | map(attribute='stdout_lines') | map('first') | list }}"
 
-- name: Get VM states
-  ansible.builtin.shell:
-    cmd: virsh domstate {{ item }}
-  register: _vm_states
-  changed_when: false
-  loop: "{{ bmaas_vms }}"
+- name: Prepare BMH VMs
+  when: _bmh_setup_needed | bool
+  block:
+    - name: Get VM states
+      ansible.builtin.shell:
+        cmd: virsh domstate {{ item }}
+      register: _vm_states
+      changed_when: false
+      loop: "{{ bmaas_vms }}"
 
-- name: Shut down running VMs
-  ansible.builtin.command:
-    cmd: virsh destroy {{ item.item }}
-  when: item.stdout | trim == 'running'
-  loop: "{{ _vm_states.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  changed_when: true
+    - name: Shut down running VMs
+      ansible.builtin.command:
+        cmd: virsh destroy {{ item.item }}
+      when: item.stdout | trim == 'running'
+      loop: "{{ _vm_states.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      changed_when: true
 
-- name: Remove stale UEFI loader from VM XML
-  ansible.builtin.shell:
-    cmd: |
-      if virsh dumpxml {{ item }} | grep -q '<loader'; then
-        virsh dumpxml {{ item }} > /tmp/{{ item }}.xml
-        sed -i '/<loader/d; /<nvram/d' /tmp/{{ item }}.xml
-        virsh define /tmp/{{ item }}.xml
-        rm -f /var/lib/libvirt/qemu/nvram/{{ item }}_VARS.fd
-        echo "cleaned"
-      else
-        echo "no loader"
-      fi
-  loop: "{{ bmaas_vms }}"
-  register: _uefi_cleanup
-  changed_when: "'cleaned' in _uefi_cleanup.stdout"
+    - name: Remove stale UEFI loader from VM XML
+      ansible.builtin.shell:
+        cmd: |
+          if virsh dumpxml {{ item }} | grep -q '<loader'; then
+            virsh dumpxml {{ item }} > /tmp/{{ item }}.xml
+            sed -i '/<loader/d; /<nvram/d' /tmp/{{ item }}.xml
+            virsh define /tmp/{{ item }}.xml
+            rm -f /var/lib/libvirt/qemu/nvram/{{ item }}_VARS.fd
+            echo "cleaned"
+          else
+            echo "no loader"
+          fi
+      loop: "{{ bmaas_vms }}"
+      register: _uefi_cleanup
+      changed_when: "'cleaned' in _uefi_cleanup.stdout"
 
-- name: Get current vCPU count
-  ansible.builtin.shell:
-    cmd: virsh vcpucount {{ item }} --config --maximum
-  register: _current_vcpus
-  changed_when: false
-  loop: "{{ bmaas_vms }}"
+    - name: Get current vCPU count
+      ansible.builtin.shell:
+        cmd: virsh vcpucount {{ item }} --config --maximum
+      register: _current_vcpus
+      changed_when: false
+      loop: "{{ bmaas_vms }}"
 
-- name: Set maximum vCPUs
-  ansible.builtin.command:
-    cmd: virsh setvcpus {{ item.item }} {{ bmaas_vm_vcpu }} --config --maximum
-  when: item.stdout | int != bmaas_vm_vcpu | int
-  loop: "{{ _current_vcpus.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  changed_when: true
+    - name: Set maximum vCPUs
+      ansible.builtin.command:
+        cmd: virsh setvcpus {{ item.item }} {{ bmaas_vm_vcpu }} --config --maximum
+      when: item.stdout | int != bmaas_vm_vcpu | int
+      loop: "{{ _current_vcpus.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      changed_when: true
 
-- name: Set vCPUs
-  ansible.builtin.command:
-    cmd: virsh setvcpus {{ item.item }} {{ bmaas_vm_vcpu }} --config
-  when: item.stdout | int != bmaas_vm_vcpu | int
-  loop: "{{ _current_vcpus.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  changed_when: true
+    - name: Set vCPUs
+      ansible.builtin.command:
+        cmd: virsh setvcpus {{ item.item }} {{ bmaas_vm_vcpu }} --config
+      when: item.stdout | int != bmaas_vm_vcpu | int
+      loop: "{{ _current_vcpus.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      changed_when: true
 
-- name: Get current max memory
-  ansible.builtin.shell:
-    cmd: virsh dommemstat {{ item }} | awk '/actual/{print int($2/1024)}'
-  register: _current_memory
-  changed_when: false
-  loop: "{{ bmaas_vms }}"
+    - name: Get current max memory
+      ansible.builtin.shell:
+        cmd: virsh dommemstat {{ item }} | awk '/actual/{print int($2/1024)}'
+      register: _current_memory
+      changed_when: false
+      loop: "{{ bmaas_vms }}"
 
-- name: Set maximum memory
-  ansible.builtin.command:
-    cmd: virsh setmaxmem {{ item.item }} {{ bmaas_vm_memory_mb }}M --config
-  when: item.stdout | int != bmaas_vm_memory_mb | int
-  loop: "{{ _current_memory.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  changed_when: true
+    - name: Set maximum memory
+      ansible.builtin.command:
+        cmd: virsh setmaxmem {{ item.item }} {{ bmaas_vm_memory_mb }}M --config
+      when: item.stdout | int != bmaas_vm_memory_mb | int
+      loop: "{{ _current_memory.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      changed_when: true
 
-- name: Set memory
-  ansible.builtin.command:
-    cmd: virsh setmem {{ item.item }} {{ bmaas_vm_memory_mb }}M --config
-  when: item.stdout | int != bmaas_vm_memory_mb | int
-  loop: "{{ _current_memory.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  changed_when: true
+    - name: Set memory
+      ansible.builtin.command:
+        cmd: virsh setmem {{ item.item }} {{ bmaas_vm_memory_mb }}M --config
+      when: item.stdout | int != bmaas_vm_memory_mb | int
+      loop: "{{ _current_memory.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      changed_when: true
 
-- name: Detach all existing disks
-  ansible.builtin.shell:
-    cmd: |
-      for target in $(virsh domblklist {{ item }} | awk 'NR>2 && NF>1 {print $1}'); do
-        virsh detach-disk {{ item }} "$target" --config 2>/dev/null || true
-      done
-  loop: "{{ bmaas_vms }}"
-  changed_when: true
+    - name: Detach all existing disks
+      ansible.builtin.shell:
+        cmd: |
+          for target in $(virsh domblklist {{ item }} | awk 'NR>2 && NF>1 {print $1}'); do
+            virsh detach-disk {{ item }} "$target" --config 2>/dev/null || true
+          done
+      loop: "{{ bmaas_vms }}"
+      changed_when: true
 
-- name: Remove old BMaaS disk if present
-  ansible.builtin.file:
-    path: "{{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2"
-    state: absent
-  loop: "{{ bmaas_vms }}"
+    - name: Remove old BMaaS disk if present
+      ansible.builtin.file:
+        path: "{{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2"
+        state: absent
+      loop: "{{ bmaas_vms }}"
 
-- name: Create empty boot disk for each VM
-  ansible.builtin.command:
-    cmd: qemu-img create -f qcow2 {{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2 {{ bmaas_vm_disk_gb }}G
-  loop: "{{ bmaas_vms }}"
-  changed_when: true
+    - name: Create empty boot disk for each VM
+      ansible.builtin.command:
+        cmd: qemu-img create -f qcow2 {{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2 {{ bmaas_vm_disk_gb }}G
+      loop: "{{ bmaas_vms }}"
+      changed_when: true
 
-- name: Attach boot disk
-  ansible.builtin.command:
-    cmd: >-
-      virsh attach-disk {{ item }}
-      {{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2
-      vda --persistent --subdriver qcow2
-  loop: "{{ bmaas_vms }}"
-  changed_when: true
+    - name: Attach boot disk
+      ansible.builtin.command:
+        cmd: >-
+          virsh attach-disk {{ item }}
+          {{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2
+          vda --persistent --subdriver qcow2
+      loop: "{{ bmaas_vms }}"
+      changed_when: true
 
-- name: Set boot order to network then disk (for virtual media)
-  ansible.builtin.command:
-    cmd: virt-xml {{ item }} --edit --boot network,hd
-  loop: "{{ bmaas_vms }}"
-  changed_when: true
+    - name: Set boot order to network then disk (for virtual media)
+      ansible.builtin.command:
+        cmd: virt-xml {{ item }} --edit --boot network,hd
+      loop: "{{ bmaas_vms }}"
+      changed_when: true
 
-- name: Attach bmc-net NIC to BMH VMs
-  ansible.builtin.shell:
-    cmd: |
-      existing=$(virsh domiflist {{ item }} | grep {{ bmc_net_name }} | awk '{print $5}')
-      if [ -z "$existing" ]; then
-        virsh attach-interface {{ item }} network {{ bmc_net_name }} --model virtio --config
-        echo "attached"
-      else
-        echo "already attached"
-      fi
-  loop: "{{ bmaas_vms }}"
-  register: _bmc_nic
-  changed_when: "'attached' in _bmc_nic.stdout and 'already' not in _bmc_nic.stdout"
+    - name: Attach bmc-net NIC to BMH VMs
+      ansible.builtin.shell:
+        cmd: |
+          existing=$(virsh domiflist {{ item }} | grep {{ bmc_net_name }} | awk '{print $5}')
+          if [ -z "$existing" ]; then
+            virsh attach-interface {{ item }} network {{ bmc_net_name }} --model virtio --config
+            echo "attached"
+          else
+            echo "already attached"
+          fi
+      loop: "{{ bmaas_vms }}"
+      register: _bmc_nic
+      changed_when: "'attached' in _bmc_nic.stdout and 'already' not in _bmc_nic.stdout"
 
 # Phase 3: Create BMH resources
 - name: Create BMH namespace
