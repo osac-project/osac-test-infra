@@ -68,10 +68,18 @@
     chmod +x /tmp/install-opentofu.sh
     /tmp/install-opentofu.sh --install-method rpm
 
-- name: Enable EPEL repository
+- name: Enable EPEL repository (Rocky/CentOS)
   dnf:
     name: epel-release
     state: present
+  when: ansible_distribution in ['Rocky', 'CentOS']
+
+- name: Enable EPEL repository (RHEL)
+  dnf:
+    name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_distribution_major_version }}.noarch.rpm
+    state: present
+    disable_gpg_check: true
+  when: ansible_distribution == 'RedHat'
 
 - name: Install required packages
   dnf:
