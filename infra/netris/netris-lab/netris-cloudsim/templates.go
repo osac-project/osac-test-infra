@@ -152,7 +152,7 @@ runcmd:
     check_connectivity() {
         while true; do
             # Check basic internet connectivity
-            if ping -c 1 8.8.8.8 &> /dev/null; then
+            if ping -c 1 {{ .dnsServer }} &> /dev/null; then
                 echo "Internet is accessible."
                 # Check DNS resolution
                 if nslookup archive.ubuntu.com &> /dev/null; then
@@ -470,7 +470,7 @@ runcmd:
     check_connectivity() {
         while true; do
             # Check basic internet connectivity
-            if ping -c 1 8.8.8.8 &> /dev/null; then
+            if ping -c 1 {{ .dnsServer }} &> /dev/null; then
                 echo "Internet is accessible."
                 # Check DNS resolution
                 if nslookup archive.ubuntu.com &> /dev/null; then
@@ -584,8 +584,7 @@ ethernets:
         via: {{ .bgpLinkRemoteIp }}
     nameservers:
       addresses:
-        - 1.1.1.1
-        - 8.8.8.8
+        - {{ .dnsServer }}
     {{- end }}
   {{- end }}
   {{- range $item := .bgpPorts }}
@@ -774,8 +773,7 @@ ethernets:
     {{- end }}
     nameservers:
       addresses:
-        - 1.1.1.1
-        - 8.8.8.8
+        - {{ .dnsServer }}
   {{- end }}
   {{- $interfaces := dict -}}
   {{- range $item := .bgpPorts -}}
@@ -969,8 +967,7 @@ ethernets:
         via: 192.168.122.1
     nameservers:
       addresses:
-        - 8.8.8.8
-        - 8.8.4.4
+        - {{ .dnsServer }}
   ens4:
     dhcp4: false
     dhcp6: false
@@ -1207,7 +1204,7 @@ write_files:
 
       default-lease-time 172800;  #2 days
       max-lease-time 345600;      #4 days
-      option domain-name-servers 8.8.8.8, 8.8.4.4;
+      option domain-name-servers {{ .dnsServer }};
       option domain-name "sim.netris.local";
       option www-server code 72 = ip-address;
       option cumulus-provision-url code 239 = text;
