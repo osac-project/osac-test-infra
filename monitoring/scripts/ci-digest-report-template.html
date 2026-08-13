@@ -329,28 +329,29 @@ const WINDOW_COLOR_7D = 'var(--cat-1)';
 const WINDOW_LEGEND_HTML = `
   <div class="item"><span class="swatch" style="background:${WINDOW_COLOR_24H}"></span>24h</div>
   <div class="item"><span class="swatch" style="background:${WINDOW_COLOR_7D}"></span>7d</div>`;
-document.getElementById('mergeDesc').textContent =
-  `7d median ${D.merge_time.median_approval_to_merge_display} / avg ${D.merge_time.avg_approval_to_merge_display} overall (${D.merge_time.approved_count}/${D.merge_time.count} with an approval) · ` +
-  `24h median ${D.merge_time_24h.median_approval_to_merge_display} / avg ${D.merge_time_24h.avg_approval_to_merge_display} overall (${D.merge_time_24h.approved_count}/${D.merge_time_24h.count})`;
-(function () {
-  const repos = D.merge_time.by_repo.filter(r => r.median_approval_to_merge_seconds != null)
-    .sort((a, b) => a.median_approval_to_merge_seconds - b.median_approval_to_merge_seconds);
-  if (!repos.length) { document.getElementById('mergeChart').innerHTML = '<p class="note">No merged PRs had a human approval in this window.</p>'; return; }
+// Shared renderer for the merge-time and queue-wait charts below -- same
+// repo list, same 24h/7d grouped-bar geometry, same window colors; only
+// the underlying field names, the "n" in "n/count", and the empty-state
+// copy differ between the two.
+function renderWindowChart({ chartId, legendId, medianSecKey, medianDispKey, avgDispKey, countKey, emptyAll, emptyRow, tipSuffix }) {
+  const repos = D.merge_time.by_repo.filter(r => r[medianSecKey] != null)
+    .sort((a, b) => a[medianSecKey] - b[medianSecKey]);
+  const chartEl = document.getElementById(chartId);
+  if (!repos.length) { chartEl.innerHTML = `<p class="note">${emptyAll}</p>`; return; }
   const by24h = Object.fromEntries(D.merge_time_24h.by_repo.map(r => [r.repo, r]));
 
-  document.getElementById('mergeLegend').innerHTML = WINDOW_LEGEND_HTML;
+  document.getElementById(legendId).innerHTML = WINDOW_LEGEND_HTML;
 
   // padL sized for the longest active repo name ("osac-test-infra", 16
   // chars) at the label font size below -- only osac/osac-test-infra
   // report data now, so this no longer needs room for the much longer
   // archived-repo names it used to.
-  // rowH grown (56 -> 72) to fit two half-height bars (24h + 7d) per repo
-  // instead of one.
+  // rowH fits two half-height bars (24h + 7d) per repo.
   const W = 1020, rowH = 72, padL = 170, padR = 230, padT = 6;
   const H = padT + repos.length * rowH + 10;
   const maxH = Math.max(
-    ...repos.map(r => r.median_approval_to_merge_seconds / 3600),
-    ...repos.map(r => (by24h[r.repo]?.median_approval_to_merge_seconds ?? 0) / 3600),
+    ...repos.map(r => r[medianSecKey] / 3600),
+    ...repos.map(r => (by24h[r.repo]?.[medianSecKey] ?? 0) / 3600),
     0.001,
   );
   // Longest bar stops at 85% of the available plot width rather than
@@ -366,88 +367,58 @@ document.getElementById('mergeDesc').textContent =
 
     // 24h bar (top)
     const topY = y + 6;
-    if (r24 && r24.median_approval_to_merge_seconds != null) {
-      const hours24 = r24.median_approval_to_merge_seconds / 3600;
+    if (r24 && r24[medianSecKey] != null) {
+      const hours24 = r24[medianSecKey] / 3600;
       const barW24 = Math.max(3, (hours24 / maxH) * plotW);
       svg += `<rect x="${padL}" y="${topY}" width="${barW24}" height="${barH}" rx="5" fill="${WINDOW_COLOR_24H}"
-                data-tip="${esc(r.repo)} (24h): median ${r24.median_approval_to_merge_display} / avg ${r24.avg_approval_to_merge_display} (${r24.approved_count}/${r24.count})"/>`;
-      svg += `<text x="${padL + barW24 + 10}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r24.median_approval_to_merge_display} · avg ${r24.avg_approval_to_merge_display} (${r24.approved_count}/${r24.count})</text>`;
+                data-tip="${esc(r.repo)} (24h): median ${r24[medianDispKey]} / avg ${r24[avgDispKey]} (${r24[countKey]}/${r24.count}${tipSuffix})"/>`;
+      svg += `<text x="${padL + barW24 + 10}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r24[medianDispKey]} · avg ${r24[avgDispKey]} (${r24[countKey]}/${r24.count})</text>`;
     } else {
-      svg += `<text x="${padL + 6}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;fill:var(--text-muted);font-style:italic">no merges</text>`;
+      svg += `<text x="${padL + 6}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;fill:var(--text-muted);font-style:italic">${emptyRow}</text>`;
     }
 
     // 7d bar (bottom)
     const botY = y + rowH/2 + 2;
-    const hours7 = r.median_approval_to_merge_seconds / 3600;
+    const hours7 = r[medianSecKey] / 3600;
     const barW7 = Math.max(3, (hours7 / maxH) * plotW);
     svg += `<rect x="${padL}" y="${botY}" width="${barW7}" height="${barH}" rx="5" fill="${WINDOW_COLOR_7D}"
-              data-tip="${esc(r.repo)} (7d): median ${r.median_approval_to_merge_display} / avg ${r.avg_approval_to_merge_display} (${r.approved_count}/${r.count})"/>`;
-    svg += `<text x="${padL + barW7 + 10}" y="${botY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r.median_approval_to_merge_display} · avg ${r.avg_approval_to_merge_display} (${r.approved_count}/${r.count})</text>`;
+              data-tip="${esc(r.repo)} (7d): median ${r[medianDispKey]} / avg ${r[avgDispKey]} (${r[countKey]}/${r.count}${tipSuffix})"/>`;
+    svg += `<text x="${padL + barW7 + 10}" y="${botY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r[medianDispKey]} · avg ${r[avgDispKey]} (${r[countKey]}/${r.count})</text>`;
   });
   svg += '</svg>';
-  const mergeChartEl = document.getElementById('mergeChart');
-  mergeChartEl.innerHTML = svg;
-  bindTooltips(mergeChartEl);
-})();
+  chartEl.innerHTML = svg;
+  bindTooltips(chartEl);
+}
+
+document.getElementById('mergeDesc').textContent =
+  `7d median ${D.merge_time.median_approval_to_merge_display} / avg ${D.merge_time.avg_approval_to_merge_display} overall (${D.merge_time.approved_count}/${D.merge_time.count} with an approval) · ` +
+  `24h median ${D.merge_time_24h.median_approval_to_merge_display} / avg ${D.merge_time_24h.avg_approval_to_merge_display} overall (${D.merge_time_24h.approved_count}/${D.merge_time_24h.count})`;
+renderWindowChart({
+  chartId: 'mergeChart', legendId: 'mergeLegend',
+  medianSecKey: 'median_approval_to_merge_seconds',
+  medianDispKey: 'median_approval_to_merge_display',
+  avgDispKey: 'avg_approval_to_merge_display',
+  countKey: 'approved_count',
+  emptyAll: 'No merged PRs had a human approval in this window.',
+  emptyRow: 'no merges',
+  tipSuffix: '',
+});
 
 // time-in-merge-queue chart -- same window-colored, 24h-vs-7d grouped-bar
 // layout as the merge-time chart above.
 document.getElementById('queueDesc').textContent =
   `7d median ${D.merge_time.median_queue_wait_display} / avg ${D.merge_time.avg_queue_wait_display} overall (${D.merge_time.via_merge_queue_count}/${D.merge_time.count} via queue) · ` +
   `24h median ${D.merge_time_24h.median_queue_wait_display} / avg ${D.merge_time_24h.avg_queue_wait_display} overall (${D.merge_time_24h.via_merge_queue_count}/${D.merge_time_24h.count})`;
-(function () {
-  const repos = D.merge_time.by_repo.filter(r => r.median_queue_wait_seconds != null)
-    .sort((a, b) => a.median_queue_wait_seconds - b.median_queue_wait_seconds);
-  if (!repos.length) { document.getElementById('queueChart').innerHTML = '<p class="note">No merged PRs went through the merge queue in this window.</p>'; return; }
-  const by24h = Object.fromEntries(D.merge_time_24h.by_repo.map(r => [r.repo, r]));
-
-  document.getElementById('queueLegend').innerHTML = WINDOW_LEGEND_HTML;
-
-  // rowH grown (56 -> 72) to fit two half-height bars (24h + 7d) per repo,
-  // same layout (and padL/padR rationale) as the merge-time chart above.
-  const W = 1020, rowH = 72, padL = 170, padR = 230, padT = 6;
-  const H = padT + repos.length * rowH + 10;
-  const maxH = Math.max(
-    ...repos.map(r => r.median_queue_wait_seconds / 3600),
-    ...repos.map(r => (by24h[r.repo]?.median_queue_wait_seconds ?? 0) / 3600),
-    0.001,
-  );
-  // Longest bar stops at 85% of the available plot width rather than
-  // filling it edge-to-edge -- a bit of reserved whitespace between the
-  // longest bar and its value label reads less cramped.
-  const plotW = (W - padL - padR) * 0.85;
-  const barH = rowH / 2 - 10;
-  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
-  repos.forEach((r, i) => {
-    const y = padT + i * rowH;
-    const r24 = by24h[r.repo];
-    svg += `<text x="${padL - 14}" y="${y + rowH/2 + 5}" text-anchor="end" style="font-size:14px;fill:var(--text-secondary);font-weight:500">${esc(r.repo)}</text>`;
-
-    // 24h bar (top)
-    const topY = y + 6;
-    if (r24 && r24.median_queue_wait_seconds != null) {
-      const hours24 = r24.median_queue_wait_seconds / 3600;
-      const barW24 = Math.max(3, (hours24 / maxH) * plotW);
-      svg += `<rect x="${padL}" y="${topY}" width="${barW24}" height="${barH}" rx="5" fill="${WINDOW_COLOR_24H}"
-                data-tip="${esc(r.repo)} (24h): median ${r24.median_queue_wait_display} / avg ${r24.avg_queue_wait_display} (${r24.via_merge_queue_count}/${r24.count} via queue)"/>`;
-      svg += `<text x="${padL + barW24 + 10}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r24.median_queue_wait_display} · avg ${r24.avg_queue_wait_display} (${r24.via_merge_queue_count}/${r24.count})</text>`;
-    } else {
-      svg += `<text x="${padL + 6}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;fill:var(--text-muted);font-style:italic">no merge-queue PRs</text>`;
-    }
-
-    // 7d bar (bottom)
-    const botY = y + rowH/2 + 2;
-    const hours7 = r.median_queue_wait_seconds / 3600;
-    const barW7 = Math.max(3, (hours7 / maxH) * plotW);
-    svg += `<rect x="${padL}" y="${botY}" width="${barW7}" height="${barH}" rx="5" fill="${WINDOW_COLOR_7D}"
-              data-tip="${esc(r.repo)} (7d): median ${r.median_queue_wait_display} / avg ${r.avg_queue_wait_display} (${r.via_merge_queue_count}/${r.count} via queue)"/>`;
-    svg += `<text x="${padL + barW7 + 10}" y="${botY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r.median_queue_wait_display} · avg ${r.avg_queue_wait_display} (${r.via_merge_queue_count}/${r.count})</text>`;
-  });
-  svg += '</svg>';
-  const queueChartEl = document.getElementById('queueChart');
-  queueChartEl.innerHTML = svg;
-  bindTooltips(queueChartEl);
-})();
+renderWindowChart({
+  chartId: 'queueChart', legendId: 'queueLegend',
+  medianSecKey: 'median_queue_wait_seconds',
+  medianDispKey: 'median_queue_wait_display',
+  avgDispKey: 'avg_queue_wait_display',
+  countKey: 'via_merge_queue_count',
+  emptyAll: 'No merged PRs went through the merge queue in this window.',
+  emptyRow: 'no merge-queue PRs',
+  tipSuffix: ' via queue',
+});
 
 // e2e jobs-per-pr tiles
 const jp = D.jobs_per_pr;

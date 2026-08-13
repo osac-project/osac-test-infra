@@ -738,7 +738,7 @@ class WorkflowExporter:
         try:
             start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
             end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             return None
         return max(0, round((end_dt - start_dt).total_seconds()))
 
@@ -829,8 +829,10 @@ class WorkflowExporter:
             )
 
     def _backfill_queue_data_if_needed(self):
-        """One-time backfill of queue_wait_seconds/etc. for pr_merges rows
-        recorded before those columns existed.
+        """One-time-per-process backfill of queue_wait_seconds/etc. for
+        pr_merges rows recorded before those columns existed. Called once
+        from collect() (behind _pr_backfill_done), the same lifecycle as
+        _backfill_missing_pr_data -- not an _init_db migration.
 
         Unlike _backfill_pr_approval_data_if_needed, this makes no GitHub
         API calls (_lookup_queued_at is a pure local jobs-table query), so
@@ -838,7 +840,7 @@ class WorkflowExporter:
         pass rather than a rate-limit-driven cap. Targets rows where
         via_merge_queue IS NULL (never computed) -- 0 is a real, settled
         "confirmed not via the queue" answer and must not be re-checked
-        every startup, same NULL-vs-falsy distinction used for
+        on the next restart, same NULL-vs-falsy distinction used for
         first_approval_at elsewhere in this class.
         """
         with self._db() as conn:
@@ -849,18 +851,21 @@ class WorkflowExporter:
         if not rows:
             return
         updated = 0
-        for row in rows:
-            queued_at = self._lookup_queued_at(row["repo"], row["number"])
-            via_merge_queue = 1 if queued_at else 0
-            queue_wait_seconds = self._seconds_between(queued_at, row["merged_at"])
-            approval_to_queue_seconds = self._seconds_between(row["first_approval_at"], queued_at)
-            with self._db() as conn:
+        # One write connection reused for every row, not one per iteration
+        # -- _lookup_queued_at's own short-lived read connection per row
+        # is unaffected (and fine alongside this one under WAL).
+        with self._db() as conn:
+            for row in rows:
+                queued_at = self._lookup_queued_at(row["repo"], row["number"])
+                via_merge_queue = 1 if queued_at else 0
+                queue_wait_seconds = self._seconds_between(queued_at, row["merged_at"])
+                approval_to_queue_seconds = self._seconds_between(row["first_approval_at"], queued_at)
                 conn.execute(
                     "UPDATE pr_merges SET queued_at = ?, queue_wait_seconds = ?, "
                     "approval_to_queue_seconds = ?, via_merge_queue = ? WHERE id = ?",
                     (queued_at, queue_wait_seconds, approval_to_queue_seconds, via_merge_queue, row["id"]),
                 )
-            updated += 1
+                updated += 1
         logger.info("Backfilled merge-queue timing for %d pr_merges row(s)", updated)
 
     def _backfill_pr_approval_data_if_needed(self):
@@ -967,8 +972,14 @@ class WorkflowExporter:
 
     # GitHub's merge queue runs checks against a temporary branch named
     # "gh-readonly-queue/<base>/pr-<N>-<sha>" -- this is the only place
-    # the PR number is exposed for a merge_group-triggered run.
-    MERGE_QUEUE_BRANCH_RE = re.compile(r"^gh-readonly-queue/[^/]+/pr-(\d+)-")
+    # the PR number is exposed for a merge_group-triggered run. `.+`
+    # (not `[^/]+`) for <base>, anchored on the pr-<N>-<sha> suffix: a
+    # base branch containing its own "/" (e.g. "release/4.20") would
+    # otherwise shift <base>'s match short and miss the PR number
+    # entirely. Neither repo currently queues against anything but
+    # "main", but the anchored-suffix form costs nothing and doesn't
+    # silently break if that changes.
+    MERGE_QUEUE_BRANCH_RE = re.compile(r"^gh-readonly-queue/.+/pr-(\d+)-[0-9a-f]+$")
 
     @staticmethod
     def _extract_merge_queue_pr(branch):
@@ -1668,7 +1679,7 @@ class WorkflowExporter:
           active    - include queued/in_progress runs (true/false)
           since     - ISO 8601 timestamp, only return jobs created at or after
           until     - ISO 8601 timestamp, only return jobs created before
-          job_type  - periodic, presubmit, or manual
+          job_type  - periodic, presubmit, manual, or merge_queue
           failure_reason - infra or test (see _classify_failure_reason).
                       Implies status=failure and takes precedence over
                       the status param if both are given.
@@ -2156,6 +2167,7 @@ class WorkflowExporter:
         "schedule": "Periodic",
         "pull_request": "Presubmit",
         "workflow_dispatch": "Manual",
+        "merge_group": "Merge Queue",
     }
 
     def get_avg_duration_by_type_json(self, params):

@@ -514,9 +514,13 @@ def build_digest_image(data):
         )
     else:
         outcomes_str = "no e2e job runs"
+    # .get(), not direct indexing: the digest and exporter are separate
+    # processes/deploys, and these keys only exist on an exporter that's
+    # already been upgraded -- a digest run against a not-yet-redeployed
+    # exporter should degrade this one line, not crash the whole PNG build.
     queue_wait_str = (
-        f"{merge_time['median_queue_wait_display']} ({merge_time['via_merge_queue_count']} PRs)"
-        if merge_time["via_merge_queue_count"] else "no merge-queue PRs yet"
+        f"{merge_time.get('median_queue_wait_display', 'n/a')} ({merge_time.get('via_merge_queue_count', 0)} PRs)"
+        if merge_time.get("via_merge_queue_count") else "no merge-queue PRs yet"
     )
     lines = [
         ("Flake rate", flake_str),
