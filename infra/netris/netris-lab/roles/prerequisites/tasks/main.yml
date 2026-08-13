@@ -1,4 +1,16 @@
 ---
+# === Bootstrap packages (needed before anything else) ===
+
+- name: Install bootstrap packages
+  dnf:
+    name:
+      - tar
+      - gzip
+      - unzip
+      - curl
+      - python3-pip
+    state: present
+
 # === Ansible collections ===
 
 - name: Install Ansible collections
@@ -89,7 +101,6 @@
       - rsync
       - libxslt
       - genisoimage
-      - python3-pip
       - libvirt
       - libvirt-daemon-kvm
       - qemu-kvm
