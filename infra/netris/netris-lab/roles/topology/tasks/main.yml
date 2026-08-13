@@ -20,10 +20,16 @@
     src: "{{ item }}"
     dest: "{{ topology_dir }}/{{ item }}"
   loop:
-    - east-west.tf
-    - north-south.tf
     - bgp.tf
     - server-cluster-template.tf
+
+- name: Render topology templates
+  template:
+    src: "{{ item }}.j2"
+    dest: "{{ topology_dir }}/{{ item }}"
+  loop:
+    - east-west.tf
+    - north-south.tf
 
 - name: Render terraform.tf
   template:
