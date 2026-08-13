@@ -1,6 +1,7 @@
 # Netris Lab
 netris_lab_dir: "{{ inventory_dir }}/../netris-lab"
 ew_fabric_enable: 0
+dns_server: "8.8.8.8"
 
 # Netris Controller (URL is discovered dynamically by configure-netris role)
 netris_username: "netris"
