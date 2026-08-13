@@ -261,7 +261,7 @@
             config:
               server:
               - 192.168.16.1
-              - 8.8.8.8
+              - {{ dns_server }}
         dest: "{{ _var }}lib/snapshot-recert/nmstate.yaml"
         mode: "0644"
 
