@@ -584,7 +584,7 @@ ethernets:
         via: {{ .bgpLinkRemoteIp }}
     nameservers:
       addresses:
-        - {{ .dnsServer }}
+        - 192.168.122.1
     {{- end }}
   {{- end }}
   {{- range $item := .bgpPorts }}
@@ -773,7 +773,7 @@ ethernets:
     {{- end }}
     nameservers:
       addresses:
-        - {{ .dnsServer }}
+        - 192.168.122.1
   {{- end }}
   {{- $interfaces := dict -}}
   {{- range $item := .bgpPorts -}}
