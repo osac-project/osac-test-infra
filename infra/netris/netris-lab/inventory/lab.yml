@@ -1,4 +1,6 @@
 all:
+  vars:
+    dns_server: "8.8.8.8"
   hosts:
     lab:
       ansible_connection: local

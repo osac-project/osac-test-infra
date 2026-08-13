@@ -101,7 +101,6 @@ ns_fabric:
 # --- Cloudsim ---
 servers_gw: "192.168.16.1/20"
 apt_repo: "main"
-dns_server: "8.8.8.8"
 hypers_ssh_user: "root"
 
 # --- VM Resources ---
