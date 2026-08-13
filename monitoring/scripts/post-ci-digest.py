@@ -155,6 +155,7 @@ def gather_digest_data(now):
         "periodic_infra_24h": fetch_infra_failures(h24, "periodic"),
         "periodic_infra_72h": fetch_infra_failures(h72, "periodic"),
         "merge_time": fetch_pr_merge_time(d7),
+        "merge_time_24h": fetch_pr_merge_time(h24),
         "flake_rate": fetch_overall_flake_rate(d7),
         "mttr": fetch_overall_mttr(d7),
         "top_failing": fetch_top_failing_workflow(h24),
@@ -273,6 +274,7 @@ def build_digest_image(data):
     periodic_infra_24h = data["periodic_infra_24h"]
     periodic_infra_72h = data["periodic_infra_72h"]
     merge_time = data["merge_time"]
+    merge_time_24h = data["merge_time_24h"]
     flake_rate = data["flake_rate"]
     mttr = data["mttr"]
     top_failing = data["top_failing"]
@@ -389,6 +391,19 @@ def build_digest_image(data):
               "had a human approval"
           ),
           10.5, COLOR_TEXT_LIGHT)
+    # 24h vs 7d comparison, in text only (not a second bar chart -- this
+    # card's bar chart already fills the available height; the full
+    # by-repo 24h/7d breakdown lives in the HTML report instead). Flags a
+    # rollout-day shift (e.g. the merge queue adding structural wait) at a
+    # glance without needing to open the full report.
+    _text(fig, c_rect[0] + 0.02, c_rect[1] + c_rect[3] - 0.105,
+          (
+              f"24h: {merge_time_24h['median_approval_to_merge_display']} "
+              f"({merge_time_24h['approved_count']}/{merge_time_24h['count']}) · "
+              f"7d: {merge_time['median_approval_to_merge_display']} "
+              f"({merge_time['approved_count']}/{merge_time['count']})"
+          ),
+          9.5, COLOR_TEXT_MUTED)
 
     # Median, not mean -- a handful of PRs approved and then simply never
     # merged for days/weeks would otherwise dominate a mean-based bar
@@ -414,11 +429,12 @@ def build_digest_image(data):
         # Anchored to the same top edge regardless of count, so it doesn't
         # visually float when there are fewer bars.
         max_bars = 5
-        # Top reserve only needs to clear the title+subtitle text (which
-        # occupy roughly the top 0.10 of the card) -- the previous 0.20
-        # left a large dead gap above the bars that this space was never
-        # actually spent on.
-        full_height = c_rect[3] - 0.10 - reserved_bottom
+        # Top reserve only needs to clear the title+subtitle+24h-vs-7d text
+        # (which occupy roughly the top 0.135 of the card, up from 0.10
+        # before the 24h-vs-7d line was added) -- the original 0.20 left a
+        # large dead gap above the bars that this space was never actually
+        # spent on.
+        full_height = c_rect[3] - 0.135 - reserved_bottom
         n = len(approved_repos)
         bar_area_height = full_height * min(n, max_bars) / max_bars
         chart_ax = fig.add_axes((
@@ -498,20 +514,26 @@ def build_digest_image(data):
         )
     else:
         outcomes_str = "no e2e job runs"
+    queue_wait_str = (
+        f"{merge_time['median_queue_wait_display']} ({merge_time['via_merge_queue_count']} PRs)"
+        if merge_time["via_merge_queue_count"] else "no merge-queue PRs yet"
+    )
     lines = [
         ("Flake rate", flake_str),
         ("MTTR", mttr_str),
         ("Top failing workflow (24h)", top_str),
         ("E2E jobs per PR (7d)", jobs_per_pr_str),
         ("E2E outcomes (7d)", outcomes_str),
+        ("Median time in merge queue (7d)", queue_wait_str),
     ]
-    # Spacing shrunk (0.075 -> 0.048) and font size trimmed (12 -> 10.5) to
-    # fit 5 lines in the same card height that used to hold 3 -- see the
-    # full HTML report (linked in the caption) for the un-compressed charts.
+    # Spacing shrunk again (0.048 -> 0.039) and font trimmed (10.5 -> 10)
+    # to fit a 6th line (merge-queue wait) in the same card height that
+    # used to hold 5 -- see the full HTML report (linked in the caption)
+    # for the un-compressed charts.
     for i, (label, value) in enumerate(lines):
-        ly = d_rect[1] + d_rect[3] - 0.095 - i * 0.048
-        _text(fig, d_rect[0] + 0.03, ly, f"•  {label}:", 10.5, COLOR_TEXT_MUTED)
-        _text(fig, d_rect[0] + d_rect[2] - 0.03, ly, value, 10.5, COLOR_TEXT_LIGHT,
+        ly = d_rect[1] + d_rect[3] - 0.095 - i * 0.039
+        _text(fig, d_rect[0] + 0.03, ly, f"•  {label}:", 10, COLOR_TEXT_MUTED)
+        _text(fig, d_rect[0] + d_rect[2] - 0.03, ly, value, 10, COLOR_TEXT_LIGHT,
               weight="bold", ha="right")
 
     buf = io.BytesIO()

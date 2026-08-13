@@ -29,16 +29,10 @@
     --cat-7: #4a3aa7; /* violet */
     --cat-8: #e34948; /* red */
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      color-scheme: dark;
-      --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #ffffff;
-      --text-secondary: #c3c2b7; --text-muted: #898781; --gridline: #2c2c2a;
-      --baseline: #383835; --border: rgba(255,255,255,0.10);
-      --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
-      --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-    }
-  }
+  /* Deliberately no `@media (prefers-color-scheme: dark)` block -- this
+     report should always open in light mode regardless of the viewer's
+     OS/browser preference. Dark mode is opt-in only, via the toggle
+     button below setting data-theme="dark". */
   :root[data-theme="dark"] {
     color-scheme: dark;
     --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #ffffff;
@@ -135,12 +129,21 @@
     </div>
   </div>
 
-  <div class="section-label"><span class="dot" style="background:var(--cat-3)"></span>Time to Merge (7d)</div>
+  <div class="section-label"><span class="dot" style="background:var(--cat-3)"></span>Time to Merge (24h &amp; 7d)</div>
   <div class="card" style="--accent:var(--cat-3)">
     <h2>Median time from first approval to merge, by repo <span class="help-icon" onmouseenter="showTip(event, 'Median, not mean -- a few PRs approved then forgotten for days would otherwise dominate the average and make every normal repo look slow.')" onmouseleave="hideTip()">?</span></h2>
     <p class="desc" id="mergeDesc"></p>
+    <p class="note">Since the merge queue rolled out, this also includes label-gate and batch-wait time, not just review latency -- see <a href="#queueSection" style="color:var(--cat-1)">Time in Merge Queue</a> below for that split out separately.</p>
     <div id="mergeLegend" class="legend"></div>
     <div id="mergeChart"></div>
+  </div>
+
+  <div class="section-label" id="queueSection"><span class="dot" style="background:var(--cat-4)"></span>Time in Merge Queue (24h &amp; 7d)</div>
+  <div class="card" style="--accent:var(--cat-4)">
+    <h2>Median time from entering the merge queue to merge, by repo <span class="help-icon" onmouseenter="showTip(event, 'Approximated from the latest merge-queue check run before the PR merged -- a PR dequeued and re-queued (failed batch, bisection) only counts its final, successful attempt. Repos with no merge-queue PRs in a given window are omitted from that window\'s bar.')" onmouseleave="hideTip()">?</span></h2>
+    <p class="desc" id="queueDesc"></p>
+    <div id="queueLegend" class="legend"></div>
+    <div id="queueChart"></div>
   </div>
 
   <div class="section-label"><span class="dot" style="background:var(--cat-1)"></span>E2E Jobs per PR (7d)</div>
@@ -317,47 +320,133 @@ function infraDonuts(elId, d24, d72) {
 infraDonuts('presubmitInfraTable', D.infra_24h, D.infra_72h);
 infraDonuts('periodicInfraTable', D.periodic_infra_24h, D.periodic_infra_72h);
 
-// merge time chart -- one categorical color per repo (fixed, stable order
-// so the same repo gets the same color across daily reports, not
-// reassigned based on who happens to have data today)
-const REPO_ORDER = ['bare-metal-fulfillment-operator', 'fulfillment-service', 'osac-aap', 'osac-installer', 'osac-operator', 'osac-test-infra'];
-function repoColor(repo) {
-  const i = REPO_ORDER.indexOf(repo);
-  return `var(--cat-${(i >= 0 ? i : REPO_ORDER.length) % 8 + 1})`;
-}
+// merge time chart -- color encodes the time WINDOW (24h vs 7d), not
+// repo identity: repo names are already the row labels, and with only
+// two repos active a per-repo hue added a legend without adding any
+// information the labels didn't already give.
+const WINDOW_COLOR_24H = 'var(--cat-2)';
+const WINDOW_COLOR_7D = 'var(--cat-1)';
+const WINDOW_LEGEND_HTML = `
+  <div class="item"><span class="swatch" style="background:${WINDOW_COLOR_24H}"></span>24h</div>
+  <div class="item"><span class="swatch" style="background:${WINDOW_COLOR_7D}"></span>7d</div>`;
 document.getElementById('mergeDesc').textContent =
-  `Median ${D.merge_time.median_approval_to_merge_display} overall · ${D.merge_time.approved_count} of ${D.merge_time.count} merged PRs had a human approval`;
+  `7d median ${D.merge_time.median_approval_to_merge_display} / avg ${D.merge_time.avg_approval_to_merge_display} overall (${D.merge_time.approved_count}/${D.merge_time.count} with an approval) · ` +
+  `24h median ${D.merge_time_24h.median_approval_to_merge_display} / avg ${D.merge_time_24h.avg_approval_to_merge_display} overall (${D.merge_time_24h.approved_count}/${D.merge_time_24h.count})`;
 (function () {
   const repos = D.merge_time.by_repo.filter(r => r.median_approval_to_merge_seconds != null)
     .sort((a, b) => a.median_approval_to_merge_seconds - b.median_approval_to_merge_seconds);
   if (!repos.length) { document.getElementById('mergeChart').innerHTML = '<p class="note">No merged PRs had a human approval in this window.</p>'; return; }
+  const by24h = Object.fromEntries(D.merge_time_24h.by_repo.map(r => [r.repo, r]));
 
-  document.getElementById('mergeLegend').innerHTML = repos.map(r =>
-    `<div class="item"><span class="swatch" style="background:${repoColor(r.repo)}"></span>${esc(r.repo)}</div>`
-  ).join('');
+  document.getElementById('mergeLegend').innerHTML = WINDOW_LEGEND_HTML;
 
-  // padL sized generously for the longest known repo name
-  // ("bare-metal-fulfillment-operator", 31 chars) at the larger label
-  // font size below -- measured empirically, not estimated, since a
-  // too-tight guess here is exactly what clipped the labels before.
-  const W = 1020, rowH = 56, padL = 340, padR = 140, padT = 6;
+  // padL sized for the longest active repo name ("osac-test-infra", 16
+  // chars) at the label font size below -- only osac/osac-test-infra
+  // report data now, so this no longer needs room for the much longer
+  // archived-repo names it used to.
+  // rowH grown (56 -> 72) to fit two half-height bars (24h + 7d) per repo
+  // instead of one.
+  const W = 1020, rowH = 72, padL = 170, padR = 230, padT = 6;
   const H = padT + repos.length * rowH + 10;
-  const maxH = Math.max(...repos.map(r => r.median_approval_to_merge_seconds / 3600));
-  const plotW = W - padL - padR;
+  const maxH = Math.max(
+    ...repos.map(r => r.median_approval_to_merge_seconds / 3600),
+    ...repos.map(r => (by24h[r.repo]?.median_approval_to_merge_seconds ?? 0) / 3600),
+    0.001,
+  );
+  // Longest bar stops at 85% of the available plot width rather than
+  // filling it edge-to-edge -- a bit of reserved whitespace between the
+  // longest bar and its value label reads less cramped.
+  const plotW = (W - padL - padR) * 0.85;
+  const barH = rowH / 2 - 10;
   let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
   repos.forEach((r, i) => {
     const y = padT + i * rowH;
-    const hours = r.median_approval_to_merge_seconds / 3600;
-    const barW = Math.max(3, (hours / maxH) * plotW);
+    const r24 = by24h[r.repo];
     svg += `<text x="${padL - 14}" y="${y + rowH/2 + 5}" text-anchor="end" style="font-size:14px;fill:var(--text-secondary);font-weight:500">${esc(r.repo)}</text>`;
-    svg += `<rect x="${padL}" y="${y + 7}" width="${barW}" height="${rowH - 18}" rx="6" fill="${repoColor(r.repo)}"
-              data-tip="${esc(r.repo)}: ${r.median_approval_to_merge_display} (${r.approved_count}/${r.count})"/>`;
-    svg += `<text x="${padL + barW + 12}" y="${y + rowH/2 + 5}" text-anchor="start" style="font-size:15px;font-weight:700;fill:var(--text-primary)">${r.median_approval_to_merge_display} (${r.approved_count}/${r.count})</text>`;
+
+    // 24h bar (top)
+    const topY = y + 6;
+    if (r24 && r24.median_approval_to_merge_seconds != null) {
+      const hours24 = r24.median_approval_to_merge_seconds / 3600;
+      const barW24 = Math.max(3, (hours24 / maxH) * plotW);
+      svg += `<rect x="${padL}" y="${topY}" width="${barW24}" height="${barH}" rx="5" fill="${WINDOW_COLOR_24H}"
+                data-tip="${esc(r.repo)} (24h): median ${r24.median_approval_to_merge_display} / avg ${r24.avg_approval_to_merge_display} (${r24.approved_count}/${r24.count})"/>`;
+      svg += `<text x="${padL + barW24 + 10}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r24.median_approval_to_merge_display} · avg ${r24.avg_approval_to_merge_display} (${r24.approved_count}/${r24.count})</text>`;
+    } else {
+      svg += `<text x="${padL + 6}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;fill:var(--text-muted);font-style:italic">no merges</text>`;
+    }
+
+    // 7d bar (bottom)
+    const botY = y + rowH/2 + 2;
+    const hours7 = r.median_approval_to_merge_seconds / 3600;
+    const barW7 = Math.max(3, (hours7 / maxH) * plotW);
+    svg += `<rect x="${padL}" y="${botY}" width="${barW7}" height="${barH}" rx="5" fill="${WINDOW_COLOR_7D}"
+              data-tip="${esc(r.repo)} (7d): median ${r.median_approval_to_merge_display} / avg ${r.avg_approval_to_merge_display} (${r.approved_count}/${r.count})"/>`;
+    svg += `<text x="${padL + barW7 + 10}" y="${botY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r.median_approval_to_merge_display} · avg ${r.avg_approval_to_merge_display} (${r.approved_count}/${r.count})</text>`;
   });
   svg += '</svg>';
   const mergeChartEl = document.getElementById('mergeChart');
   mergeChartEl.innerHTML = svg;
   bindTooltips(mergeChartEl);
+})();
+
+// time-in-merge-queue chart -- same window-colored, 24h-vs-7d grouped-bar
+// layout as the merge-time chart above.
+document.getElementById('queueDesc').textContent =
+  `7d median ${D.merge_time.median_queue_wait_display} / avg ${D.merge_time.avg_queue_wait_display} overall (${D.merge_time.via_merge_queue_count}/${D.merge_time.count} via queue) · ` +
+  `24h median ${D.merge_time_24h.median_queue_wait_display} / avg ${D.merge_time_24h.avg_queue_wait_display} overall (${D.merge_time_24h.via_merge_queue_count}/${D.merge_time_24h.count})`;
+(function () {
+  const repos = D.merge_time.by_repo.filter(r => r.median_queue_wait_seconds != null)
+    .sort((a, b) => a.median_queue_wait_seconds - b.median_queue_wait_seconds);
+  if (!repos.length) { document.getElementById('queueChart').innerHTML = '<p class="note">No merged PRs went through the merge queue in this window.</p>'; return; }
+  const by24h = Object.fromEntries(D.merge_time_24h.by_repo.map(r => [r.repo, r]));
+
+  document.getElementById('queueLegend').innerHTML = WINDOW_LEGEND_HTML;
+
+  // rowH grown (56 -> 72) to fit two half-height bars (24h + 7d) per repo,
+  // same layout (and padL/padR rationale) as the merge-time chart above.
+  const W = 1020, rowH = 72, padL = 170, padR = 230, padT = 6;
+  const H = padT + repos.length * rowH + 10;
+  const maxH = Math.max(
+    ...repos.map(r => r.median_queue_wait_seconds / 3600),
+    ...repos.map(r => (by24h[r.repo]?.median_queue_wait_seconds ?? 0) / 3600),
+    0.001,
+  );
+  // Longest bar stops at 85% of the available plot width rather than
+  // filling it edge-to-edge -- a bit of reserved whitespace between the
+  // longest bar and its value label reads less cramped.
+  const plotW = (W - padL - padR) * 0.85;
+  const barH = rowH / 2 - 10;
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  repos.forEach((r, i) => {
+    const y = padT + i * rowH;
+    const r24 = by24h[r.repo];
+    svg += `<text x="${padL - 14}" y="${y + rowH/2 + 5}" text-anchor="end" style="font-size:14px;fill:var(--text-secondary);font-weight:500">${esc(r.repo)}</text>`;
+
+    // 24h bar (top)
+    const topY = y + 6;
+    if (r24 && r24.median_queue_wait_seconds != null) {
+      const hours24 = r24.median_queue_wait_seconds / 3600;
+      const barW24 = Math.max(3, (hours24 / maxH) * plotW);
+      svg += `<rect x="${padL}" y="${topY}" width="${barW24}" height="${barH}" rx="5" fill="${WINDOW_COLOR_24H}"
+                data-tip="${esc(r.repo)} (24h): median ${r24.median_queue_wait_display} / avg ${r24.avg_queue_wait_display} (${r24.via_merge_queue_count}/${r24.count} via queue)"/>`;
+      svg += `<text x="${padL + barW24 + 10}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r24.median_queue_wait_display} · avg ${r24.avg_queue_wait_display} (${r24.via_merge_queue_count}/${r24.count})</text>`;
+    } else {
+      svg += `<text x="${padL + 6}" y="${topY + barH/2 + 4}" text-anchor="start" style="font-size:12px;fill:var(--text-muted);font-style:italic">no merge-queue PRs</text>`;
+    }
+
+    // 7d bar (bottom)
+    const botY = y + rowH/2 + 2;
+    const hours7 = r.median_queue_wait_seconds / 3600;
+    const barW7 = Math.max(3, (hours7 / maxH) * plotW);
+    svg += `<rect x="${padL}" y="${botY}" width="${barW7}" height="${barH}" rx="5" fill="${WINDOW_COLOR_7D}"
+              data-tip="${esc(r.repo)} (7d): median ${r.median_queue_wait_display} / avg ${r.avg_queue_wait_display} (${r.via_merge_queue_count}/${r.count} via queue)"/>`;
+    svg += `<text x="${padL + barW7 + 10}" y="${botY + barH/2 + 4}" text-anchor="start" style="font-size:12px;font-weight:700;fill:var(--text-primary)">${r.median_queue_wait_display} · avg ${r.avg_queue_wait_display} (${r.via_merge_queue_count}/${r.count})</text>`;
+  });
+  svg += '</svg>';
+  const queueChartEl = document.getElementById('queueChart');
+  queueChartEl.innerHTML = svg;
+  bindTooltips(queueChartEl);
 })();
 
 // e2e jobs-per-pr tiles
@@ -447,8 +536,11 @@ document.getElementById('prTiles').innerHTML = [
   ].map(([label, color]) => `<div class="item"><span class="swatch" style="background:${color}"></span>${label}</div>`).join('');
 })();
 
-document.getElementById('topPrsBody').innerHTML = jp.top_prs.map(p =>
-  `<tr><td>${esc(p.repo)}</td><td>${esc(p.pr)}</td><td class="num">${p.jobs}</td></tr>`).join('');
+document.getElementById('topPrsBody').innerHTML = jp.top_prs.map(p => {
+  const num = String(p.pr).replace(/^#/, '');
+  const url = `https://github.com/osac-project/${encodeURIComponent(p.repo)}/pull/${encodeURIComponent(num)}`;
+  return `<tr><td>${esc(p.repo)}</td><td><a href="${esc(url)}" target="_blank" rel="noopener" style="color:var(--cat-1)">${esc(p.pr)}</a></td><td class="num">${p.jobs}</td></tr>`;
+}).join('');
 
 // outcomes chart
 (function () {

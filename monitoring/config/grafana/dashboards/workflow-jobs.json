@@ -1182,17 +1182,12 @@
         "name": "repo_filter",
         "label": "Repository",
         "type": "custom",
-        "query": "All,osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer,bare-metal-fulfillment-operator,osac",
+        "query": "All,osac,osac-test-infra",
         "current": { "text": "All", "value": "All", "selected": true },
         "options": [
           { "text": "All", "value": "All", "selected": true },
-          { "text": "osac-aap", "value": "osac-aap", "selected": false },
-          { "text": "osac-operator", "value": "osac-operator", "selected": false },
-          { "text": "fulfillment-service", "value": "fulfillment-service", "selected": false },
-          { "text": "osac-test-infra", "value": "osac-test-infra", "selected": false },
-          { "text": "osac-installer", "value": "osac-installer", "selected": false },
-          { "text": "bare-metal-fulfillment-operator", "value": "bare-metal-fulfillment-operator", "selected": false },
-          { "text": "osac", "value": "osac", "selected": false }
+          { "text": "osac", "value": "osac", "selected": false },
+          { "text": "osac-test-infra", "value": "osac-test-infra", "selected": false }
         ],
         "includeAll": false,
         "multi": false,

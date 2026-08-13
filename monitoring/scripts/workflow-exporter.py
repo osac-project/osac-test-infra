@@ -10,6 +10,7 @@ Polls the GitHub API for workflow run status across all repos in the org and exp
 """
 
 import os
+import re
 import sys
 import time
 import json
@@ -278,10 +279,11 @@ class WorkflowExporter:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_merges_merged_at ON pr_merges(merged_at)")
             pr_merges_cols = {row[1] for row in conn.execute("PRAGMA table_info(pr_merges)")}
-            for col in ("first_approval_at",):
+            for col in ("first_approval_at", "queued_at"):
                 if col not in pr_merges_cols:
                     conn.execute(f"ALTER TABLE pr_merges ADD COLUMN {col} TEXT")
-            for col in ("approval_to_merge_seconds", "retest_count"):
+            for col in ("approval_to_merge_seconds", "retest_count", "queue_wait_seconds",
+                        "approval_to_queue_seconds", "via_merge_queue"):
                 if col not in pr_merges_cols:
                     conn.execute(f"ALTER TABLE pr_merges ADD COLUMN {col} INTEGER")
         self._migrate_json_cache_if_needed()
@@ -701,6 +703,45 @@ class WorkflowExporter:
             ).fetchone()
         return max(0, (row["c"] if row else 0) - 1)
 
+    def _lookup_queued_at(self, repo, pr_number):
+        """Latest (not earliest) merge_group job's created_at for this PR,
+        i.e. when the queue attempt that actually led to the merge started
+        -- a PR that gets dequeued (failed batch, bisection) and re-enters
+        later would otherwise have its very first, unrelated attempt
+        counted as "entered queue", inflating queue-wait for a reason that
+        has nothing to do with the merge that eventually happened.
+
+        Pure local query against already-stored jobs (see _make_job_record's
+        merge_group branch, which populates pr_display the same way
+        pull_request runs already are) -- no GitHub API call, so safe to
+        call on every _upsert_pr_merge invocation rather than caching.
+        Returns None if this PR never went through the merge queue.
+        """
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT MAX(created_at) AS queued_at FROM jobs "
+                "WHERE repo = :repo AND pr_display = :pr_display AND event = 'merge_group'",
+                {"repo": repo, "pr_display": f"#{pr_number}"},
+            ).fetchone()
+        return row["queued_at"] if row else None
+
+    @staticmethod
+    def _seconds_between(start_iso, end_iso):
+        """max(0, end - start) in whole seconds between two ISO-8601
+        timestamps, or None if either is falsy/unparseable. Shared by
+        every pr_merges timing calculation (approval_to_merge_seconds and
+        now the queue-wait fields) to avoid re-deriving the same
+        try/except dance at each call site.
+        """
+        if not start_iso or not end_iso:
+            return None
+        try:
+            start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+        return max(0, round((end_dt - start_dt).total_seconds()))
+
     def _upsert_pr_merge(self, repo, pr):
         """Persist a merged PR's timing/retest data into pr_merges.
 
@@ -750,13 +791,24 @@ class WorkflowExporter:
 
         retest_count = self._count_e2e_retests(repo, pr["number"])
 
+        # Merge-queue timing -- pure local lookup (see _lookup_queued_at),
+        # so unlike first_approval_at this is always recomputed, never
+        # cached: merge_group jobs for a just-merged PR can still be
+        # trickling into the jobs table across polling cycles.
+        queued_at = self._lookup_queued_at(repo, pr["number"])
+        via_merge_queue = 1 if queued_at else 0
+        queue_wait_seconds = self._seconds_between(queued_at, pr["merged_at"])
+        approval_to_queue_seconds = self._seconds_between(first_approval_at, queued_at)
+
         with self._db() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO pr_merges "
                 "(id, repo, number, title, author, created_at, merged_at, merge_seconds, "
-                "first_approval_at, approval_to_merge_seconds, retest_count) "
+                "first_approval_at, approval_to_merge_seconds, retest_count, "
+                "queued_at, queue_wait_seconds, approval_to_queue_seconds, via_merge_queue) "
                 "VALUES (:id, :repo, :number, :title, :author, :created_at, :merged_at, :merge_seconds, "
-                ":first_approval_at, :approval_to_merge_seconds, :retest_count)",
+                ":first_approval_at, :approval_to_merge_seconds, :retest_count, "
+                ":queued_at, :queue_wait_seconds, :approval_to_queue_seconds, :via_merge_queue)",
                 {
                     "id": pr["id"],
                     "repo": repo,
@@ -769,8 +821,47 @@ class WorkflowExporter:
                     "first_approval_at": first_approval_at,
                     "approval_to_merge_seconds": approval_to_merge_seconds,
                     "retest_count": retest_count,
+                    "queued_at": queued_at,
+                    "queue_wait_seconds": queue_wait_seconds,
+                    "approval_to_queue_seconds": approval_to_queue_seconds,
+                    "via_merge_queue": via_merge_queue,
                 },
             )
+
+    def _backfill_queue_data_if_needed(self):
+        """One-time backfill of queue_wait_seconds/etc. for pr_merges rows
+        recorded before those columns existed.
+
+        Unlike _backfill_pr_approval_data_if_needed, this makes no GitHub
+        API calls (_lookup_queued_at is a pure local jobs-table query), so
+        it isn't gated on TOKEN and processes every affected row in one
+        pass rather than a rate-limit-driven cap. Targets rows where
+        via_merge_queue IS NULL (never computed) -- 0 is a real, settled
+        "confirmed not via the queue" answer and must not be re-checked
+        every startup, same NULL-vs-falsy distinction used for
+        first_approval_at elsewhere in this class.
+        """
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT id, repo, number, merged_at, first_approval_at FROM pr_merges "
+                "WHERE via_merge_queue IS NULL"
+            ).fetchall()
+        if not rows:
+            return
+        updated = 0
+        for row in rows:
+            queued_at = self._lookup_queued_at(row["repo"], row["number"])
+            via_merge_queue = 1 if queued_at else 0
+            queue_wait_seconds = self._seconds_between(queued_at, row["merged_at"])
+            approval_to_queue_seconds = self._seconds_between(row["first_approval_at"], queued_at)
+            with self._db() as conn:
+                conn.execute(
+                    "UPDATE pr_merges SET queued_at = ?, queue_wait_seconds = ?, "
+                    "approval_to_queue_seconds = ?, via_merge_queue = ? WHERE id = ?",
+                    (queued_at, queue_wait_seconds, approval_to_queue_seconds, via_merge_queue, row["id"]),
+                )
+            updated += 1
+        logger.info("Backfilled merge-queue timing for %d pr_merges row(s)", updated)
 
     def _backfill_pr_approval_data_if_needed(self):
         """One-time-ish startup backfill for pr_merges rows recorded before
@@ -828,28 +919,36 @@ class WorkflowExporter:
 
     def _backfill_missing_pr_data(self):
         """One-time catch-up pass: fill pr_url/pr_display for already-stored
-        pull_request jobs that predate PR tracking (or were collected while
-        it was broken).
+        pull_request and merge_group jobs that predate PR tracking (or were
+        collected while it was broken).
 
         _upsert_job only touches a row when a run's run_attempt increases,
         so an already-completed run is never revisited by normal polling
         -- without this, jobs stored before pr_url/pr_display existed
         would stay stuck with an empty PR column forever, even though
         _make_job_record now resolves it correctly for every newly
-        collected run. Only resolves branches still present in the live
-        PR map (recently open/closed, same as _lookup_pr elsewhere); PRs
-        old enough to have fallen out of that window stay unresolved --
-        called once per process lifetime since that's the only case that
-        can ever improve.
+        collected run. pull_request rows only resolve branches still
+        present in the live PR map (recently open/closed, same as
+        _lookup_pr elsewhere); PRs old enough to have fallen out of that
+        window stay unresolved. merge_group rows have no such limitation
+        -- the PR number is embedded in the branch name itself
+        (_extract_merge_queue_pr), so every historical merge_group row
+        resolves in one pass. Called once per process lifetime since
+        that's the only case that can ever improve for pull_request rows.
         """
         with self._db() as conn:
             rows = conn.execute(
-                "SELECT id, repo, branch FROM jobs "
-                "WHERE event = 'pull_request' AND (pr_url IS NULL OR pr_url = '')"
+                "SELECT id, repo, branch, event FROM jobs "
+                "WHERE event IN ('pull_request', 'merge_group') "
+                "AND (pr_url IS NULL OR pr_url = '')"
             ).fetchall()
             updated = 0
             for row in rows:
-                pr_num, pr_url = self._lookup_pr(row["repo"], row["branch"])
+                if row["event"] == "merge_group":
+                    pr_num = self._extract_merge_queue_pr(row["branch"])
+                    pr_url = ""
+                else:
+                    pr_num, pr_url = self._lookup_pr(row["repo"], row["branch"])
                 if not pr_num:
                     continue
                 pr_url = pr_url or f"https://github.com/{ORG}/{row['repo']}/pull/{pr_num}"
@@ -859,12 +958,23 @@ class WorkflowExporter:
                 )
                 updated += 1
         logger.info(
-            "PR backfill: resolved %d/%d already-stored pull_request jobs "
+            "PR backfill: resolved %d/%d already-stored pull_request/merge_group jobs "
             "missing PR info (rest not in the current open/recently-closed PR window)",
             updated, len(rows),
         )
 
     # -- helpers for detailed job info ---------------------------------------
+
+    # GitHub's merge queue runs checks against a temporary branch named
+    # "gh-readonly-queue/<base>/pr-<N>-<sha>" -- this is the only place
+    # the PR number is exposed for a merge_group-triggered run.
+    MERGE_QUEUE_BRANCH_RE = re.compile(r"^gh-readonly-queue/[^/]+/pr-(\d+)-")
+
+    @staticmethod
+    def _extract_merge_queue_pr(branch):
+        """PR number embedded in a merge-queue branch name, or None."""
+        m = WorkflowExporter.MERGE_QUEUE_BRANCH_RE.match(branch or "")
+        return int(m.group(1)) if m else None
 
     @staticmethod
     def _extract_trigger(run):
@@ -877,6 +987,9 @@ class WorkflowExporter:
                 return f"PR #{pr_num}"
             # head_branch may hint at the PR
             return f"PR ({run.get('head_branch', '?')})"
+        if event == "merge_group":
+            pr_num = WorkflowExporter._extract_merge_queue_pr(run.get("head_branch", ""))
+            return f"merge queue (PR #{pr_num})" if pr_num else "merge queue"
         if event == "push":
             return f"push ({run.get('head_branch', '?')})"
         if event == "schedule":
@@ -916,6 +1029,15 @@ class WorkflowExporter:
                 pr_num, pr_url = self._lookup_pr(repo, branch)
             if pr_num:
                 pr_url = pr_url or f"https://github.com/{ORG}/{repo}/pull/{pr_num}"
+                pr_display = f"#{pr_num}"
+        elif run.get("event") == "merge_group":
+            # GitHub's merge queue runs checks against a temporary branch
+            # named "gh-readonly-queue/<base>/pr-<N>-<sha>" -- the PR
+            # number is embedded in the branch name itself, so this needs
+            # no extra API call (unlike the pull_request fallback above).
+            pr_num = WorkflowExporter._extract_merge_queue_pr(branch)
+            if pr_num:
+                pr_url = f"https://github.com/{ORG}/{repo}/pull/{pr_num}"
                 pr_display = f"#{pr_num}"
 
         workflow_name = run.get("name", "unknown")
@@ -1370,6 +1492,9 @@ class WorkflowExporter:
         self._refresh_pr_map(repos)
         if not self._pr_backfill_done:
             self._backfill_missing_pr_data()
+            # Must run after the above: it depends on merge_group jobs'
+            # pr_display already being resolved.
+            self._backfill_queue_data_if_needed()
             self._pr_backfill_done = True
         tot_queued = 0
         tot_in_progress = 0
@@ -1473,9 +1598,10 @@ class WorkflowExporter:
 
     # Maps job_type filter values to GitHub Actions event names
     JOB_TYPE_EVENTS = {
-        "periodic":  {"schedule"},
-        "presubmit": {"pull_request"},
-        "manual":    {"workflow_dispatch"},
+        "periodic":    {"schedule"},
+        "presubmit":   {"pull_request"},
+        "manual":      {"workflow_dispatch"},
+        "merge_queue": {"merge_group"},
     }
 
     def _parse_grafana_param(self, params, key):
@@ -2223,10 +2349,25 @@ class WorkflowExporter:
         commits, no blocker, just forgotten) skew the mean heavily; median
         shows the typical case instead.
 
+        Also reports queue-wait stats (entered merge queue -> merged) and
+        approval-to-queue stats (first approval -> entered merge queue),
+        split out from approval-to-merge for exactly the reason described
+        in _upsert_pr_merge/_lookup_queued_at: since the merge queue
+        rolled out, approval-to-merge silently includes label-gate and
+        batch-wait time that has nothing to do with review speed.
+        approval-to-queue is the part that's still a genuine human/process
+        signal; queue-wait is the new structural cost. Both are None/"n/a"
+        for a window with no merge-queue PRs at all (e.g. before rollout).
+
         Returns: {"avg_open_to_merge_seconds": N, "avg_open_to_merge_display": "Xh Ym",
                   "median_open_to_merge_seconds": N, "median_open_to_merge_display": "Xh Ym",
                   "avg_approval_to_merge_seconds": N|None, "avg_approval_to_merge_display": "Xh Ym"|"n/a",
                   "median_approval_to_merge_seconds": N|None, "median_approval_to_merge_display": "Xh Ym"|"n/a",
+                  "avg_approval_to_queue_seconds": N|None, "avg_approval_to_queue_display": "Xh Ym"|"n/a",
+                  "median_approval_to_queue_seconds": N|None, "median_approval_to_queue_display": "Xh Ym"|"n/a",
+                  "avg_queue_wait_seconds": N|None, "avg_queue_wait_display": "Xh Ym"|"n/a",
+                  "median_queue_wait_seconds": N|None, "median_queue_wait_display": "Xh Ym"|"n/a",
+                  "via_merge_queue_count": N,
                   "approved_count": N, "avg_retest_count": N, "count": N,
                   "by_repo": [{"repo":.., ...same fields..}, ...]}
         """
@@ -2254,7 +2395,8 @@ class WorkflowExporter:
             except (ValueError, TypeError):
                 pass
 
-        sql = "SELECT repo, number, title, merge_seconds, approval_to_merge_seconds, retest_count FROM pr_merges"
+        sql = ("SELECT repo, number, title, merge_seconds, approval_to_merge_seconds, retest_count, "
+               "queue_wait_seconds, approval_to_queue_seconds, via_merge_queue FROM pr_merges")
         if where:
             sql += " WHERE " + " AND ".join(where)
 
@@ -2279,11 +2421,23 @@ class WorkflowExporter:
                 r["approval_to_merge_seconds"] for r in rs
                 if r["approval_to_merge_seconds"] is not None
             ]
+            queue_wait_vals = [
+                r["queue_wait_seconds"] for r in rs if r["queue_wait_seconds"] is not None
+            ]
+            approval_to_queue_vals = [
+                r["approval_to_queue_seconds"] for r in rs
+                if r["approval_to_queue_seconds"] is not None
+            ]
+            via_queue_count = sum(1 for r in rs if r["via_merge_queue"])
             retest_vals = [r["retest_count"] or 0 for r in rs]
             avg_open = avg(open_vals) or 0
             avg_approval = avg(approval_vals)
+            avg_queue_wait = avg(queue_wait_vals)
+            avg_approval_to_queue = avg(approval_to_queue_vals)
             median_open = median(open_vals) or 0
             median_approval = median(approval_vals)
+            median_queue_wait = median(queue_wait_vals)
+            median_approval_to_queue = median(approval_to_queue_vals)
             return {
                 "avg_open_to_merge_seconds": avg_open,
                 "avg_open_to_merge_display": self._fmt_duration(avg_open),
@@ -2297,6 +2451,23 @@ class WorkflowExporter:
                 "median_approval_to_merge_display": (
                     self._fmt_duration(median_approval) if median_approval is not None else "n/a"
                 ),
+                "avg_approval_to_queue_seconds": avg_approval_to_queue,
+                "avg_approval_to_queue_display": (
+                    self._fmt_duration(avg_approval_to_queue) if avg_approval_to_queue is not None else "n/a"
+                ),
+                "median_approval_to_queue_seconds": median_approval_to_queue,
+                "median_approval_to_queue_display": (
+                    self._fmt_duration(median_approval_to_queue) if median_approval_to_queue is not None else "n/a"
+                ),
+                "avg_queue_wait_seconds": avg_queue_wait,
+                "avg_queue_wait_display": (
+                    self._fmt_duration(avg_queue_wait) if avg_queue_wait is not None else "n/a"
+                ),
+                "median_queue_wait_seconds": median_queue_wait,
+                "median_queue_wait_display": (
+                    self._fmt_duration(median_queue_wait) if median_queue_wait is not None else "n/a"
+                ),
+                "via_merge_queue_count": via_queue_count,
                 "approved_count": len(approval_vals),
                 "avg_retest_count": round(sum(retest_vals) / len(retest_vals), 1) if retest_vals else 0,
                 "count": len(rs),

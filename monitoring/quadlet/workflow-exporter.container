@@ -24,7 +24,10 @@ EnvironmentFile=%h/.monitoring-server/.env
 Environment=GITHUB_ORG=osac-project
 Environment=PORT=9103
 Environment=POLL_INTERVAL=90
-Environment=REPOS=osac-aap,osac-operator,fulfillment-service,osac-test-infra,osac-installer,bare-metal-fulfillment-operator,osac
+# Only the two active repos -- osac-aap, osac-operator, fulfillment-service,
+# osac-installer, and bare-metal-fulfillment-operator are archived and no
+# longer produce CI activity worth tracking.
+Environment=REPOS=osac,osac-test-infra
 # Job history retention (SQLite-backed, see OSAC-2211): keep 2 months,
 # with a hard row-count cap as a disk safety net.
 Environment=JOBS_HISTORY_DAYS=60
