@@ -214,6 +214,28 @@ echo "Verifying sushy-tools connectivity..."
 curl -sf "http://${GW_IP}:${SUSHY_PORT}/redfish/v1/Systems/" > /dev/null \
   || { echo "ERROR: sushy-tools not responding at ${GW_IP}:${SUSHY_PORT}" >&2; exit 1; }
 
+echo "==> Waiting for the metal3 BareMetalHost webhook endpoint to be ready..."
+WEBHOOK_NS="openshift-machine-api"
+WEBHOOK_SVC="baremetal-operator-webhook-service"
+WEBHOOK_RETRIES=60
+WEBHOOK_DELAY=5
+for attempt in $(seq 1 "${WEBHOOK_RETRIES}"); do
+  ENDPOINT_IPS=$(oc get endpoints "${WEBHOOK_SVC}" -n "${WEBHOOK_NS}" \
+    -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || echo "")
+  if [[ -n "${ENDPOINT_IPS}" ]]; then
+    echo "  Webhook endpoint ready (${WEBHOOK_SVC}: ${ENDPOINT_IPS})."
+    break
+  fi
+  if [[ "${attempt}" -eq "${WEBHOOK_RETRIES}" ]]; then
+    echo "ERROR: ${WEBHOOK_SVC} in ${WEBHOOK_NS} has no ready endpoints after $((WEBHOOK_RETRIES * WEBHOOK_DELAY))s" >&2
+    oc get endpoints "${WEBHOOK_SVC}" -n "${WEBHOOK_NS}" -o yaml >&2 || true
+    oc get pods -n "${WEBHOOK_NS}" >&2 || true
+    exit 1
+  fi
+  echo "    attempt ${attempt}/${WEBHOOK_RETRIES}: no endpoints yet"
+  sleep "${WEBHOOK_DELAY}"
+done
+
 # --- Step 6: Create BMH resources ---
 echo "==> Creating BareMetalHost resources in namespace ${BMH_NAMESPACE}..."
 
