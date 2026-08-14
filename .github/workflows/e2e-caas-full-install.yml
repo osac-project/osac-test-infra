@@ -440,6 +440,9 @@ jobs:
           echo "Waiting 180s for MCP to settle..."
           sleep 180
 
+      - name: Install grpcurl
+        uses: ./.github/actions/install-grpcurl
+
       - name: Install infrastructure operators
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
@@ -462,32 +465,6 @@ jobs:
             chmod +x "${YQ_DIR}/yq"
             export PATH="${YQ_DIR}:${PATH}"
             echo "${YQ_DIR}" >> "$GITHUB_PATH"
-          fi
-          # Needed by "Install OSAC"'s post-rollout gRPC readiness check below.
-          # Fleet machines install this already (scripts/machine-init.sh
-          # grpcurl), but match e2e-vmaas-full-install.yml's own defensive
-          # fallback rather than assuming every runner has been re-provisioned.
-          if ! command -v grpcurl &>/dev/null; then
-            GRPCURL_VERSION="1.9.1"
-            GRPCURL_DIR="${RUNNER_TEMP}/bin"
-            mkdir -p "${GRPCURL_DIR}"
-            GRPCURL_TARBALL="grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz"
-            GRPCURL_ARCHIVE="${RUNNER_TEMP}/${GRPCURL_TARBALL}"
-            curl --retry 5 --retry-delay 2 -fsSL -o "${GRPCURL_ARCHIVE}" \
-              "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/${GRPCURL_TARBALL}"
-            # grpcurl publishes one combined checksums.txt per release (no
-            # per-asset .sha256), unlike yq above -- fetch it and verify
-            # against the matching line, rewriting the filename to the
-            # archive's actual local path so sha256sum -c can find it
-            # regardless of cwd.
-            curl --retry 5 --retry-delay 2 -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
-              | grep " ${GRPCURL_TARBALL}\$" \
-              | sed "s|${GRPCURL_TARBALL}|${GRPCURL_ARCHIVE}|" \
-              | sha256sum -c -
-            tar xz -C "${GRPCURL_DIR}" grpcurl -f "${GRPCURL_ARCHIVE}"
-            rm -f "${GRPCURL_ARCHIVE}"
-            export PATH="${GRPCURL_DIR}:${PATH}"
-            echo "${GRPCURL_DIR}" >> "$GITHUB_PATH"
           fi
 
           # Clone the OSAC monorepo for installer charts.  When components

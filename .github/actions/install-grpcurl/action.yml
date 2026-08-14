@@ -1,0 +1,44 @@
+---
+name: Install grpcurl
+description: >-
+  Install a checksum-verified grpcurl onto the runner PATH (via $GITHUB_PATH)
+  for later steps' gRPC readiness checks. No-op when grpcurl is already present
+  (fleet machines install it via scripts/machine-init.sh) -- this is the
+  defensive fallback for runners that have not been re-provisioned.
+
+inputs:
+  version:
+    description: "grpcurl release version to install (without the leading v)"
+    required: false
+    default: "1.9.1"
+
+runs:
+  using: composite
+  steps:
+    - name: Install grpcurl
+      shell: bash
+      env:
+        GRPCURL_VERSION: ${{ inputs.version }}
+      run: |
+        set -o pipefail
+        if command -v grpcurl &>/dev/null; then
+          echo "grpcurl already present ($(command -v grpcurl)); skipping install"
+          exit 0
+        fi
+        TOOL_DIR="${RUNNER_TEMP}/bin"
+        mkdir -p "${TOOL_DIR}"
+        GRPCURL_TARBALL="grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz"
+        GRPCURL_ARCHIVE="${RUNNER_TEMP}/${GRPCURL_TARBALL}"
+        curl --retry 5 --retry-delay 2 -fsSL -o "${GRPCURL_ARCHIVE}" \
+          "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/${GRPCURL_TARBALL}"
+        # grpcurl publishes one combined checksums.txt per release (no
+        # per-asset .sha256) -- fetch it and verify against the matching line,
+        # rewriting the filename to the archive's actual local path so
+        # sha256sum -c can find it regardless of cwd.
+        curl --retry 5 --retry-delay 2 -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
+          | grep " ${GRPCURL_TARBALL}\$" \
+          | sed "s|${GRPCURL_TARBALL}|${GRPCURL_ARCHIVE}|" \
+          | sha256sum -c -
+        tar xz -C "${TOOL_DIR}" grpcurl -f "${GRPCURL_ARCHIVE}"
+        rm -f "${GRPCURL_ARCHIVE}"
+        echo "${TOOL_DIR}" >> "$GITHUB_PATH"

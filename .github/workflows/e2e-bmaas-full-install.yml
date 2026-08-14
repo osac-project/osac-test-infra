@@ -412,6 +412,9 @@ jobs:
           podman build --no-cache ${BUILD_ARGS} -t "${E2E_IMAGE}" -f Containerfile .
           rm -f ./osac-cli-bin
 
+      - name: Install grpcurl
+        uses: ./.github/actions/install-grpcurl
+
       - name: Install infrastructure operators
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
@@ -434,25 +437,6 @@ jobs:
             chmod +x "${YQ_DIR}/yq"
             export PATH="${YQ_DIR}:${PATH}"
             echo "${YQ_DIR}" >> "$GITHUB_PATH"
-          fi
-          if ! command -v grpcurl &>/dev/null; then
-            GRPCURL_VERSION="1.9.1"
-            GRPCURL_TARBALL="grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz"
-            GRPCURL_ARCHIVE="${RUNNER_TEMP}/${GRPCURL_TARBALL}"
-            GRPCURL_DIR="${RUNNER_TEMP}/bin"
-            mkdir -p "${GRPCURL_DIR}"
-            curl -fsSL -o "${GRPCURL_ARCHIVE}" \
-              "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/${GRPCURL_TARBALL}"
-            # grpcurl ships one combined checksums.txt per release -- verify the
-            # matching line, rewriting the filename to the archive's local path.
-            curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
-              | grep " ${GRPCURL_TARBALL}\$" \
-              | sed "s|${GRPCURL_TARBALL}|${GRPCURL_ARCHIVE}|" \
-              | sha256sum -c -
-            tar xz -C "${GRPCURL_DIR}" grpcurl -f "${GRPCURL_ARCHIVE}"
-            rm -f "${GRPCURL_ARCHIVE}"
-            export PATH="${GRPCURL_DIR}:${PATH}"
-            echo "${GRPCURL_DIR}" >> "$GITHUB_PATH"
           fi
 
           # Clone the OSAC monorepo for installer charts.  When components

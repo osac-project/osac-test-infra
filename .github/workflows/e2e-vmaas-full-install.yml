@@ -430,6 +430,9 @@ jobs:
           podman build --no-cache ${BUILD_ARGS} -t "${E2E_IMAGE}" -f Containerfile .
           rm -f ./osac-cli-bin
 
+      - name: Install grpcurl
+        uses: ./.github/actions/install-grpcurl
+
       - name: Install infrastructure operators
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
@@ -438,7 +441,7 @@ jobs:
           INSTALLER_REPO: ${{ inputs.installer-repo }}
         run: |
           set -o pipefail
-          # Ensure helm, yq, and grpcurl are available
+          # Ensure helm and yq are available
           if ! command -v helm &>/dev/null; then
             curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           fi
@@ -451,24 +454,6 @@ jobs:
               "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
             echo "${YQ_SHA256}  ${TOOL_DIR}/yq" | sha256sum -c -
             chmod +x "${TOOL_DIR}/yq"
-          fi
-          if ! command -v grpcurl &>/dev/null; then
-            GRPCURL_VERSION="1.9.1"
-            GRPCURL_TARBALL="grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz"
-            GRPCURL_ARCHIVE="${RUNNER_TEMP}/${GRPCURL_TARBALL}"
-            curl --retry 5 --retry-delay 2 -fsSL -o "${GRPCURL_ARCHIVE}" \
-              "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/${GRPCURL_TARBALL}"
-            # grpcurl publishes one combined checksums.txt per release (no
-            # per-asset .sha256), unlike yq above -- fetch it and verify
-            # against the matching line, rewriting the filename to the
-            # archive's actual local path so sha256sum -c can find it
-            # regardless of cwd.
-            curl --retry 5 --retry-delay 2 -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
-              | grep " ${GRPCURL_TARBALL}\$" \
-              | sed "s|${GRPCURL_TARBALL}|${GRPCURL_ARCHIVE}|" \
-              | sha256sum -c -
-            tar xz -C "${TOOL_DIR}" grpcurl -f "${GRPCURL_ARCHIVE}"
-            rm -f "${GRPCURL_ARCHIVE}"
           fi
           export PATH="${TOOL_DIR}:${PATH}"
           echo "${TOOL_DIR}" >> "$GITHUB_PATH"
