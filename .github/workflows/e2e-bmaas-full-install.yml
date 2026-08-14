@@ -435,6 +435,25 @@ jobs:
             export PATH="${YQ_DIR}:${PATH}"
             echo "${YQ_DIR}" >> "$GITHUB_PATH"
           fi
+          if ! command -v grpcurl &>/dev/null; then
+            GRPCURL_VERSION="1.9.1"
+            GRPCURL_TARBALL="grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz"
+            GRPCURL_ARCHIVE="${RUNNER_TEMP}/${GRPCURL_TARBALL}"
+            GRPCURL_DIR="${RUNNER_TEMP}/bin"
+            mkdir -p "${GRPCURL_DIR}"
+            curl -fsSL -o "${GRPCURL_ARCHIVE}" \
+              "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/${GRPCURL_TARBALL}"
+            # grpcurl ships one combined checksums.txt per release -- verify the
+            # matching line, rewriting the filename to the archive's local path.
+            curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
+              | grep " ${GRPCURL_TARBALL}\$" \
+              | sed "s|${GRPCURL_TARBALL}|${GRPCURL_ARCHIVE}|" \
+              | sha256sum -c -
+            tar xz -C "${GRPCURL_DIR}" grpcurl -f "${GRPCURL_ARCHIVE}"
+            rm -f "${GRPCURL_ARCHIVE}"
+            export PATH="${GRPCURL_DIR}:${PATH}"
+            echo "${GRPCURL_DIR}" >> "$GITHUB_PATH"
+          fi
 
           # Clone the OSAC monorepo for installer charts.  When components
           # were built from source earlier in this job, pin to the same
@@ -627,6 +646,32 @@ jobs:
               echo "Applying component[$i] CRDs from PR..."
               oc apply --server-side --force-conflicts -f "${crds_dir}/"
             fi
+          done
+
+          # OSAC-3553: gate on a gRPC health check before pytest -- `helm --wait`
+          # only confirms the pod is Ready, not that the route endpoints have
+          # converged, so the suite's first call can fail with Code: Unavailable.
+          # Matches e2e-vmaas/e2e-caas-full-install (OSAC-2528, OSAC-3505).
+          DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
+          # Health-check the PUBLIC endpoint -- a past regression had the private
+          # address reachable while the public route was still not serving.
+          GRPC_ADDR="fulfillment-api-${INSTALLER_NAMESPACE}.${DOMAIN}:443"
+          GRPC_TOKEN=$(oc create token admin -n "${INSTALLER_NAMESPACE}" --duration 10m --as system:admin)
+          echo "Waiting for gRPC endpoint ${GRPC_ADDR} to be reachable..."
+          for i in $(seq 1 30); do
+            # -format json + jq: grpcurl exits 0 even when the server reports
+            # NOT_SERVING, so parse the response and assert status == SERVING.
+            if grpcurl -insecure -H "Authorization: Bearer ${GRPC_TOKEN}" -format json \
+              "${GRPC_ADDR}" grpc.health.v1.Health/Check 2>/dev/null | jq -e '.status == "SERVING"' >/dev/null 2>&1; then
+              echo "gRPC endpoint reachable (attempt ${i})"
+              break
+            fi
+            if [ "${i}" -eq 30 ]; then
+              echo "gRPC endpoint not reachable after 30 attempts"
+              exit 1
+            fi
+            echo "Attempt ${i}/30 failed, retrying in 2s..."
+            sleep 2
           done
 
       - name: Run E2E tests
