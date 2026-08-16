@@ -477,9 +477,9 @@ jobs:
           yq -i '.aapOperator.channel = "stable-2.6-cluster-scoped"' values/bmaas-ci/values.yaml
           yq -i '.lvms.channel = "stable-4.22"' values/bmaas-ci/values.yaml
 
-          make install-operators VALUES_FILE=values/bmaas-ci/values.yaml
+          make install-operators INFRA_VALUES=values/bmaas-ci/infra.yaml
 
-          make install-prereqs VALUES_FILE=values/bmaas-ci/values.yaml
+          make install-prereqs INFRA_VALUES=values/bmaas-ci/infra.yaml
 
       - name: Create BMF secrets
         env:
@@ -610,7 +610,7 @@ jobs:
             helm dependency update charts/osac/
           fi
 
-          make install-osac VALUES_FILE=values/bmaas-ci/values.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+          make install-osac INSTANCE_VALUES=values/bmaas-ci/instance.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           for tenant in "${INSTALLER_NAMESPACE}" shared; do
             echo "Creating Tenant: ${tenant}"

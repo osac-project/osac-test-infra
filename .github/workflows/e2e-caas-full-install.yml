@@ -499,8 +499,8 @@ jobs:
           echo "INSTALLER_DIR=${INSTALLER_DIR}" >> "$GITHUB_ENV"
           cd "${INSTALLER_DIR}"
 
-          make install-operators VALUES_FILE=values/caas-ci/values.yaml
-          make install-prereqs VALUES_FILE=values/caas-ci/values.yaml
+          make install-operators INFRA_VALUES=values/caas-ci/infra.yaml
+          make install-prereqs INFRA_VALUES=values/caas-ci/infra.yaml
 
       - name: Install OSAC
         env:
@@ -592,7 +592,7 @@ jobs:
             helm dependency update charts/osac/
           fi
 
-          make install-osac VALUES_FILE=values/caas-ci/values.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+          make install-osac INSTANCE_VALUES=values/caas-ci/instance.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           # helm --wait only confirms the *new* pod/ReplicaSet is Ready -- it
           # does not wait for the old pod to finish terminating or for the
