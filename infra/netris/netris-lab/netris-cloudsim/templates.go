@@ -87,6 +87,9 @@ ethernets:
     dhcp4: true
     dhcp6: false
     mtu: {{ .mtu }}
+    nameservers:
+      addresses:
+        - {{ .dnsServer }}
 `)
 		if err != nil {
 			panic(err)
@@ -403,6 +406,9 @@ ethernets:
     dhcp4: true
     dhcp6: false
     mtu: {{ .mtu }}
+    nameservers:
+      addresses:
+        - {{ .dnsServer }}
 `)
 		if err != nil {
 			panic(err)

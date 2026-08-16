@@ -61,6 +61,7 @@
 - name: Install netris agent on softgates and disable DPDK
   shell: |
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@{{ item.item.mgmt_ip }} "
+      rm -f /tmp/migrate2ifupdown
       curl -fsSL https://get.netris.io | sh -s -- \
         --lo {{ item.item.main_ip }} \
         --controller 10.8.0.2 \
