@@ -45,8 +45,8 @@ EXTRA_VARS         ?=
 OSAC_DEPLOY_MODE   ?= fresh
 INFRA_DIR           = infra/$(INFRA)
 
-.PHONY: e2e setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
-        destroy-ocp destroy-osac destroy-infra gather-infra gather-suite redeploy-osac \
+.PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
+        destroy-ocp destroy-osac destroy-infra destroy-setup gather-infra gather-suite redeploy-osac \
         _validate-backend _validate-suite-contract
 
 _validate-backend:
@@ -77,10 +77,13 @@ _validate-suite-contract:
 		fi; \
 	fi
 
-e2e: _validate-backend setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests
+e2e: _validate-backend deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
-setup-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) setup-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
+deploy-setup: _validate-backend
+	$(MAKE) -C $(INFRA_DIR) deploy-setup EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
+
+# Backward compatibility alias
+setup-infra: deploy-setup
 
 deploy-infra: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
@@ -106,6 +109,9 @@ destroy-osac:
 
 destroy-infra:
 	$(MAKE) -C $(INFRA_DIR) destroy-infra EXTRA_VARS='$(EXTRA_VARS)'
+
+destroy-setup:
+	$(MAKE) -C $(INFRA_DIR) destroy-setup EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-infra:
 	$(MAKE) -C $(INFRA_DIR) gather-infra EXTRA_VARS='$(EXTRA_VARS)'

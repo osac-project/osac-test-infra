@@ -1,0 +1,118 @@
+---
+- name: Revert setup-infra (full clean slate)
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Load netris-lab variables
+      ansible.builtin.include_vars:
+        file: "{{ netris_lab_dir }}/group_vars/all.yml"
+
+    - name: Remove cached snapshot flavors
+      ansible.builtin.file:
+        path: /var/cache/netris-lab/cluster-flavors
+        state: absent
+
+    - name: Remove cached cloud images
+      ansible.builtin.file:
+        path: "{{ k3s_image_cache_dir }}/../cloud-images"
+        state: absent
+
+    - name: Remove cached K3s images
+      ansible.builtin.file:
+        path: "{{ k3s_image_cache_dir }}"
+        state: absent
+
+    - name: Remove cached container images
+      ansible.builtin.shell: |
+        podman rmi --all --force 2>/dev/null || true
+      changed_when: false
+
+    - name: Remove osac CLI and source
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ lookup('env', 'HOME') }}/.local/src/osac"
+        - "{{ lookup('env', 'HOME') }}/.local/bin/osac"
+
+    - name: Remove bridges
+      ansible.builtin.shell: |
+        ip link set {{ item }} down 2>/dev/null && ip link del {{ item }} 2>/dev/null || true
+      loop:
+        - "{{ mgmt_bridge_name }}"
+        - "{{ public_bridge_name }}"
+      changed_when: false
+
+    - name: Remove masquerade rules (isolated mode)
+      when: connectivity_mode == "isolated"
+      ansible.builtin.iptables:
+        table: nat
+        chain: POSTROUTING
+        source: "{{ item }}"
+        out_interface: "{{ ansible_default_ipv4.interface }}"
+        jump: MASQUERADE
+        state: absent
+      loop:
+        - "{{ bgp_link_subnet }}"
+        - "{{ ns_fabric.mgmt_subnet }}"
+        - "{{ nat_cidr }}"
+        - "{{ l4lb_cidr }}"
+      ignore_errors: true
+
+    - name: Remove firewalld lab configuration
+      when: ansible_facts.services['firewalld.service'] is defined
+      block:
+        - name: Remove trusted zone interfaces
+          ansible.posix.firewalld:
+            zone: trusted
+            interface: "{{ item }}"
+            permanent: true
+            immediate: true
+            state: disabled
+          loop:
+            - virbr0
+            - "{{ mgmt_bridge_name }}"
+            - "{{ public_bridge_name }}"
+            - cni0
+            - flannel.1
+            - tun0
+          ignore_errors: true
+
+        - name: Remove trusted zone CIDRs
+          ansible.posix.firewalld:
+            zone: trusted
+            source: "{{ item }}"
+            permanent: true
+            immediate: true
+            state: disabled
+          loop:
+            - 10.42.0.0/16
+            - 10.43.0.0/16
+            - 192.168.122.0/24
+          ignore_errors: true
+
+    - name: Stop and disable monolithic libvirtd
+      ansible.builtin.systemd:
+        name: libvirtd
+        state: stopped
+        enabled: false
+      ignore_errors: true
+
+    - name: Remove Pulumi
+      ansible.builtin.file:
+        path: /root/.pulumi
+        state: absent
+
+    - name: Remove OpenTofu
+      ansible.builtin.shell: rpm -e tofu 2>/dev/null || true
+      changed_when: false
+
+    - name: Remove netris-lab collections
+      ansible.builtin.file:
+        path: "{{ netris_lab_dir }}/collections/ansible_collections"
+        state: absent
+
+    - name: Print cleanup status
+      ansible.builtin.debug:
+        msg: "Setup reverted. Run 'make deploy-setup' to re-provision."

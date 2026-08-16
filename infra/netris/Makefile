@@ -29,8 +29,11 @@ deploy-fast: OSAC_DEPLOY_MODE = snapshot
 # Called by the root Makefile (make -C infra/netris <target>).
 # See infra/contract.md for the interface spec.
 
-setup-infra:
-	ansible-playbook playbooks/setup-infra.yml $(ANSIBLE_EXTRA)
+deploy-setup:
+	ansible-playbook playbooks/deploy-setup.yml $(ANSIBLE_EXTRA)
+
+# Backward compatibility alias
+setup-infra: deploy-setup
 
 deploy-infra:
 	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA)
@@ -71,6 +74,9 @@ destroy-ocp:
 destroy-infra:
 	ansible-playbook playbooks/destroy-infra.yml $(ANSIBLE_EXTRA)
 	@rm -f $(ENV_INFRA)
+
+destroy-setup:
+	ansible-playbook playbooks/destroy-setup.yml $(ANSIBLE_EXTRA)
 
 destroy-caas:
 	ansible-playbook playbooks/destroy-caas.yml $(ANSIBLE_EXTRA)
@@ -179,9 +185,9 @@ health-check:
 # ─── .PHONY ────────────────────────────────────────────────────────
 
 .PHONY: deploy deploy-fast \
-        setup-infra deploy-infra deploy-ocp deploy-osac \
+        deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
         setup-caas deploy-caas \
-        destroy-osac destroy-ocp destroy-infra destroy-caas destroy-full \
+        destroy-osac destroy-ocp destroy-infra destroy-setup destroy-caas destroy-full \
         gather-infra gather-mgmt-cluster gather-caas \
         setup-bmc setup-bmaas destroy-bmaas gather-bmaas \
         install-osac prep-osac run-osac-setup post-osac \
