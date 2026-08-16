@@ -736,7 +736,7 @@ jobs:
 
           # Phase 2: serial disruptive tests — merge queue and periodic only
           if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ "$GITHUB_EVENT_NAME" != "pull_request_target" ]; then
-            podman run --rm --network=host \
+            timeout 5400 podman run --rm --network=host \
               -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
               -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
               -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
