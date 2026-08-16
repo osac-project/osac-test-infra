@@ -508,6 +508,10 @@ runcmd:
 
     curl -fsSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug
 
+    # Installer hardcodes 'nameserver 1.1.1.1' and removes isc-dhcp-client
+    echo 'nameserver {{ .dnsServer }}' | tee /etc/resolv.conf
+    apt-get install -y isc-dhcp-client 2>/dev/null || true
+
     reboot
 
 write_files:

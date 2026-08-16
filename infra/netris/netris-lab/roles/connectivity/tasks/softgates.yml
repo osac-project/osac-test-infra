@@ -49,6 +49,18 @@
   ignore_errors: true
   changed_when: false
 
+- name: Wait for cloud-init to finish on softgates
+  shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
+      "cloud-init status 2>/dev/null | grep -qE 'done|error'" 2>/dev/null
+  loop: "{{ softgates }}"
+  register: _sg_cloudinit
+  until: _sg_cloudinit is not failed
+  retries: 40
+  delay: 15
+  changed_when: false
+  ignore_errors: true
+
 - name: Check if netris agent is running on softgates
   shell: |
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
@@ -61,13 +73,16 @@
 - name: Install netris agent on softgates and disable DPDK
   shell: |
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@{{ item.item.mgmt_ip }} "
-      rm -f /tmp/migrate2ifupdown
       curl -fsSL https://get.netris.io | sh -s -- \
         --lo {{ item.item.main_ip }} \
         --controller 10.8.0.2 \
         --hostname {{ item.item.name }} \
         --auth {{ netris_auth_token }} \
         --node-type {{ ns_fabric.softgate_node_type }}
+
+      # Installer hardcodes 'nameserver 1.1.1.1' and removes isc-dhcp-client
+      echo 'nameserver {{ dns_server }}' | tee /etc/resolv.conf
+      apt-get install -y isc-dhcp-client 2>/dev/null || true
 
       if [ -f /opt/netris/etc/netris.conf ]; then
         sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
