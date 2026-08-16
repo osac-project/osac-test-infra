@@ -111,7 +111,7 @@ class K8sClient:
         if rc != 0:
             return ""
         jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            j for j in json.loads(output).get("status", {}).get("provisioningJobs", []) if j["type"] == job_type
         ]
         if not jobs:
             return ""
@@ -122,7 +122,7 @@ class K8sClient:
         if rc != 0:
             return ""
         jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            j for j in json.loads(output).get("status", {}).get("provisioningJobs", []) if j["type"] == job_type
         ]
         if not jobs:
             return ""
@@ -313,7 +313,7 @@ class K8sClient:
         if rc != 0:
             return ""
         jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            j for j in json.loads(output).get("status", {}).get("provisioningJobs", []) if j["type"] == job_type
         ]
         if not jobs:
             return ""
@@ -324,7 +324,7 @@ class K8sClient:
         if rc != 0:
             return ""
         jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            j for j in json.loads(output).get("status", {}).get("provisioningJobs", []) if j["type"] == job_type
         ]
         if not jobs:
             return ""
