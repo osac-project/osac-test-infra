@@ -307,18 +307,3 @@
       nft add rule ip libvirt_network guest_output accept
     fi
   changed_when: false
-
-- name: Masquerade VM bridge traffic for internet access (isolated mode)
-  when: connectivity_mode == "isolated"
-  ansible.builtin.iptables:
-    table: nat
-    chain: POSTROUTING
-    source: "{{ item }}"
-    out_interface: "{{ ansible_default_ipv4.interface }}"
-    jump: MASQUERADE
-    state: present
-  loop:
-    - "{{ bgp_link_subnet }}"
-    - "{{ ns_fabric.mgmt_subnet }}"
-    - "{{ nat_cidr }}"
-    - "{{ l4lb_cidr }}"

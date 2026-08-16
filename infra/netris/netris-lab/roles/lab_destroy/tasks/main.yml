@@ -48,14 +48,6 @@
   shell: /usr/local/bin/k3s-uninstall.sh
   ignore_errors: true
 
-- name: Remove bridges
-  shell: |
-    ip link set {{ item }} down 2>/dev/null && ip link del {{ item }} 2>/dev/null || true
-  loop:
-    - br-mgmt
-    - br-public
-  ignore_errors: true
-
 - name: Clean up working directory
   file:
     path: "{{ project_dir }}"
