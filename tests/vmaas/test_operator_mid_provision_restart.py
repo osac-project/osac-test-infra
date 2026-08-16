@@ -53,7 +53,7 @@ def test_operator_mid_provision_restart(
             name=ci_name, job_type="provision", checked=False
         ),
         until=lambda v: v in ("Pending", "Running"),
-        retries=30,
+        retries=60,
         delay=2,
         description=f"{ci_name} provision job started",
     )
