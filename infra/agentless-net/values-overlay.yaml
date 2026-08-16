@@ -1,0 +1,31 @@
+# Merged on top of osac-installer/values/caas-ci/values.yaml at deploy time.
+# Only contains keys that differ from the caas-ci base.
+
+# Disable Kafka/metering — not needed for agentless-net and the snapshot
+# doesn't have Strimzi CRDs installed.
+kafka:
+  enabled: false
+metering:
+  enabled: false
+
+aap:
+  instanceGroups:
+    clusterFulfillment:
+      config:
+        NETWORK_STEPS_COLLECTION: "agentless_net.steps"
+        NETWORK_CLASS: "agentless_net"
+        AGENTLESS_NET_VLAN_POOL_START: "100"
+        AGENTLESS_NET_VLAN_POOL_END: "199"
+        AGENTLESS_NET_TRUNK_INTERFACE: "eth1"
+        AGENTLESS_NET_EXTERNAL_INTERFACE: "eth2"
+        AGENTLESS_NET_EXTERNAL_GATEWAY: "172.20.20.1"
+        AGENTLESS_NET_SUBNET_CIDR: "10.100.0.0/24"
+        AGENTLESS_NET_PUBLIC_IP_POOL_START: "192.168.100.10"
+        AGENTLESS_NET_PUBLIC_IP_POOL_END: "192.168.100.50"
+        AGENTLESS_NET_DATA_INTERFACE: "ens3"
+        AGENTLESS_NET_MGMT_INTERFACE: "ens4"
+        SERVER_MGMT_ROUTE_DESTINATION: "192.168.162.0/24"
+        SERVER_MGMT_ROUTE_GATEWAY: "192.168.162.1"
+        HOSTED_CLUSTER_BASE_DOMAIN: "ecoeng-osac-ci.devcluster.openshift.com"
+        EXTERNAL_ACCESS_BASE_DOMAIN: "ecoeng-osac-ci.devcluster.openshift.com"
+        EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "ecoeng-osac-ci.devcluster.openshift.com"

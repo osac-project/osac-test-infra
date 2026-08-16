@@ -1,0 +1,243 @@
+---
+name: E2E CaaS Agentless-Net Full Install
+
+permissions:
+  contents: read
+
+# Provisions an ephemeral EC2 bare-metal box (via ec2-runner-provision.yml),
+# runs the real CaaS/agentless-net e2e flow on it, and tears it down (via
+# ec2-runner-teardown.yml). The provision/teardown pieces are generic and
+# suite-agnostic -- see those files' own headers. Unlike the netris flow this
+# owns its triggers directly (no separate caller file): there is no fork-PR /
+# slash-command entry point for this suite, only the periodic schedule and
+# manual dispatch below.
+on:
+  workflow_dispatch:
+    inputs:
+      instance-type:
+        description: "EC2 instance type"
+        required: false
+        type: choice
+        options:
+          - c5n.metal
+        default: c5n.metal
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        type: string
+        default: "us-east-1"
+      orchestrator-runner-label:
+        description: "Self-hosted runner label for the orchestrator (dedicated, not the shared osac-ci fleet, so it's never queued behind existing e2e jobs)"
+        required: false
+        type: string
+        default: "osac-ci-orchestrator"
+      tooling-check-cmds:
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the agentless-net flow's prerequisites."
+        required: false
+        type: string
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+      osac-repo:
+        description: "Override osac mono-repo git URI -- empty means upstream"
+        required: false
+        type: string
+        default: ""
+      osac-branch:
+        description: "Branch, tag, or commit of the osac mono-repo to clone -- empty means main"
+        required: false
+        type: string
+        default: ""
+  schedule:
+    # Every 3 hours, matching the netris full-install cadence.
+    - cron: "0 */3 * * *"
+
+concurrency:
+  group: e2e-caas-agentless-net
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    uses: ./.github/workflows/ec2-runner-provision.yml
+    permissions:
+      contents: read
+    with:
+      instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
+
+  # Fetches the CaaS/agentless-net secrets and pushes them to the box, on the
+  # orchestrator -- not the box itself, which was never bootstrapped with Vault
+  # trust. See push-caas-agentless-net-secrets.sh's header for the rationale.
+  push-secrets:
+    needs: provision
+    runs-on: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Must match ec2-runner-provision.yml's derivation exactly.
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      # infra/agentless-net never reads a merged podman auth.json -- only the
+      # raw pull-secret JSON and the AAP license zip are needed, so fetch just
+      # those two directly rather than via fetch-and-write-secrets (which would
+      # also leave standing registry credentials on the long-lived
+      # orchestrator).
+      - name: Fetch pull secret and AAP license from Vault
+        id: vault-secrets
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.setup.outputs.role-id }}
+          secretId: ${{ steps.setup.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
+            secret/data/osac/e2e/aap-license license | AAP_LICENSE
+
+      - name: Write pull secret and AAP license to temp files
+        shell: bash
+        env:
+          PULL_SECRET: ${{ steps.vault-secrets.outputs.PULL_SECRET }}
+          AAP_LICENSE: ${{ steps.vault-secrets.outputs.AAP_LICENSE }}
+        run: |
+          printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
+          chmod 600 "$RUNNER_TEMP/pull-secret.json"
+          printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
+          chmod 600 "$RUNNER_TEMP/aap-license.zip"
+
+      - name: Fetch CaaS Route 53 credentials
+        id: route53-creds
+        uses: ./.github/actions/fetch-caas-route53-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Push CaaS/agentless-net secrets to ephemeral box
+        shell: bash
+        env:
+          SSH_USER: ${{ needs.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
+          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
+          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
+          AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
+          PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
+          LAB_NAME: ci-${{ github.run_id }}
+          AWS_REGION: ${{ inputs.aws-region || 'us-east-1' }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/push-caas-agentless-net-secrets.sh
+
+  e2e:
+    needs: [provision, push-secrets]
+    # 360m (6h): the full agentless-net flow (snapshot restore + OSAC refresh +
+    # fabric bring-up + CaaS provisioning) can take several hours in the worst
+    # case. Self-hosted runners aren't bound by GitHub-hosted runners' 6h job
+    # cap, so this is just an explicit upper bound, not a platform limit.
+    runs-on: ${{ needs.provision.outputs.runner-label }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.test-e2e.outcome == 'success' && 'PASSED' || 'FAILED' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # push-secrets already staged these on the box (before the JIT runner even
+      # started) since the box can't talk to Vault itself -- this just copies
+      # them from that fixed staging location into the paths the backend scripts
+      # read: deploy-ocp.sh/deploy-osac.sh read the pull secret from
+      # /root/pull-secret, deploy-osac.sh reads the AAP license from
+      # /root/aap-license.zip and sources the DNS creds from
+      # infra/agentless-net/config.
+      - name: Stage secrets into place
+        run: |
+          STAGING_DIR="/root/agentless-net-secrets"
+          cp "${STAGING_DIR}/pull-secret" /root/pull-secret
+          chmod 600 /root/pull-secret
+          cp "${STAGING_DIR}/license.zip" /root/aap-license.zip
+          chmod 600 /root/aap-license.zip
+          cp "${STAGING_DIR}/config" infra/agentless-net/config
+          chmod 600 infra/agentless-net/config
+          echo "Secrets staged"
+
+      # Each backend stage is a separate step (rather than one `make e2e` call)
+      # for per-stage visibility/timing in the Actions UI. The targets are
+      # invoked directly against infra/agentless-net (the same targets tested
+      # locally), in the order the flow requires: SNO + OSAC come up first, then
+      # the fabric attaches the already-running mgmt VM and patches live
+      # MetalLB/L2Advertisement, then CaaS hosts, then the e2e checks.
+      - name: Install prerequisites
+        timeout-minutes: 30
+        run: make -C infra/agentless-net setup-infra
+
+      - name: Deploy OCP from snapshot
+        timeout-minutes: 60
+        run: make -C infra/agentless-net deploy-ocp
+
+      - name: Deploy OSAC
+        timeout-minutes: 90
+        env:
+          OSAC_REPO: ${{ inputs.osac-repo }}
+          OSAC_BRANCH: ${{ inputs.osac-branch }}
+        run: make -C infra/agentless-net deploy-osac
+
+      - name: Verify .env.infra was written
+        run: |
+          if [ ! -f infra/agentless-net/.env.infra ]; then
+            echo "ERROR: .env.infra not created by deploy-osac"
+            exit 1
+          fi
+          echo "=== .env.infra ==="
+          cat infra/agentless-net/.env.infra
+
+      - name: Deploy containerlab fabric
+        timeout-minutes: 30
+        run: make -C infra/agentless-net deploy-fabric
+
+      - name: Setup CaaS hosts
+        timeout-minutes: 45
+        run: make -C infra/agentless-net setup-caas
+
+      - name: Run e2e checks
+        id: test-e2e
+        timeout-minutes: 90
+        run: make -C infra/agentless-net test-e2e
+
+      - name: Gather infra diagnostics
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 10
+        run: make -C infra/agentless-net gather-infra
+
+      - name: Gather e2e diagnostics
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 10
+        run: make -C infra/agentless-net gather-e2e
+
+  teardown:
+    needs: [provision, push-secrets, e2e]
+    if: always()
+    uses: ./.github/workflows/ec2-runner-teardown.yml
+    permissions:
+      contents: read
+    with:
+      instance-id: ${{ needs.provision.outputs.instance-id }}
+      runner-id: ${{ needs.provision.outputs.runner-id }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}

@@ -1,0 +1,7 @@
+.mgmt-network
+.env.infra
+clab-agentless-net-lab/
+logs/
+# Staged at runtime by the CI push/stage steps -- never commit real secrets
+config
+license.zip
