@@ -1,6 +1,6 @@
 REPORTS_DIR ?= reports
 
-.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-disruptive
+.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-disruptive-vmaas test-disruptive-caas
 
 lint:
 	ruff check tests/
@@ -25,9 +25,13 @@ test-bmaas:
 	mkdir -p $(REPORTS_DIR)
 	pytest tests/bmaas/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
 
-test-disruptive:
+test-disruptive-vmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest -m disruptive -n 0 tests/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
+	pytest -m disruptive -n 0 tests/vmaas/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
+
+test-disruptive-caas:
+	mkdir -p $(REPORTS_DIR)
+	pytest -m disruptive -n 0 tests/caas/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
 
 # ─── Infrastructure orchestration ───────────────────────────────────
 

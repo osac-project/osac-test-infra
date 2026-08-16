@@ -751,6 +751,23 @@ jobs:
               make test-disruptive REPORTS_DIR=/tmp/test-output
           fi
 
+          # Phase 2: serial disruptive tests — merge queue and periodic only
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ "$GITHUB_EVENT_NAME" != "pull_request_target" ]; then
+            podman run --rm --network=host \
+              -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
+              -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
+              -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
+              -v "${RUNNER_TEMP}/caas_ssh_key.pub":/root/.ssh/id_rsa.pub:ro,Z \
+              -v "${RUNNER_TEMP}/test-output":/tmp/test-output:Z \
+              -e KUBECONFIG=/root/.kube/config \
+              -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
+              -e OSAC_CLUSTER_TEMPLATE="${OSAC_CLUSTER_TEMPLATE}" \
+              -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+              -e METERING_ADAPTER_URL="${METERING_ADAPTER_URL}" \
+              "${E2E_IMAGE}" \
+              make test-disruptive-caas REPORTS_DIR=/tmp/test-output/disruptive
+          fi
+
       - name: Gather artifacts
         if: always()
         uses: ./.github/actions/gather-artifacts

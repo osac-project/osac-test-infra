@@ -744,7 +744,7 @@ jobs:
               -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
               -e METERING_ADAPTER_URL="${METERING_ADAPTER_URL}" \
               "${E2E_IMAGE}" \
-              make test-disruptive REPORTS_DIR=/tmp/test-output/disruptive
+              make test-disruptive-vmaas REPORTS_DIR=/tmp/test-output/disruptive
           fi
 
           # Phase 2: serial disruptive tests — merge queue and periodic only
