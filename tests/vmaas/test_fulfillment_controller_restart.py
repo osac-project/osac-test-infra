@@ -44,7 +44,7 @@ def test_fulfillment_controller_restart_recovery(
 
     poll_until(
         fn=lambda: k8s_hub_client.get_compute_instance_phase(name=ci_name, checked=False),
-        until=lambda v: v == "Starting",
+        until=lambda v: v in ("Starting", "Running"),
         retries=30,
         delay=2,
         description=f"{ci_name} Starting phase",

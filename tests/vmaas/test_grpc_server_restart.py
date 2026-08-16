@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import logging
+import subprocess
 
 import pytest
 
@@ -38,15 +40,19 @@ def test_grpc_server_restart_recovery(grpc: GRPCClient, k8s_hub_client: K8sClien
     )
     logger.info("VirtualNetwork %s created after server restart", vn_id)
 
-    vn_cr_name: str = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
-    wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
+    try:
+        vn_cr_name: str = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+        wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
 
-    all_vn_ids: list[str] = grpc.list_virtual_network_ids()
-    duplicates = [vid for vid in all_vn_ids if vid == vn_id]
-    assert len(duplicates) == 1, f"Expected exactly 1 VirtualNetwork {vn_id}, found {len(duplicates)}"
+        all_vn_ids: list[str] = grpc.list_virtual_network_ids()
+        duplicates = [vid for vid in all_vn_ids if vid == vn_id]
+        assert len(duplicates) == 1, f"Expected exactly 1 VirtualNetwork {vn_id}, found {len(duplicates)}"
 
-    grpc.delete_virtual_network(vn_id=vn_id)
-    wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
+        grpc.delete_virtual_network(vn_id=vn_id)
+        wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
+    finally:
+        with contextlib.suppress(subprocess.CalledProcessError):
+            grpc.delete_virtual_network(vn_id=vn_id)
 
 
 def _try_create_virtual_network(grpc: GRPCClient) -> str:

@@ -54,23 +54,25 @@ def test_metering_pod_restart_recovery(
 
     logger.info("Scaling metering to 0 replicas")
     k8s_hub_client.scale_deployment(deployment=metering_deploy, namespace=namespace, replicas=0)
-    poll_until(
-        fn=lambda: k8s_hub_client.count_by_label_all_namespaces(resource="pod", label=METERING_COMPONENT_LABEL),
-        until=lambda count: count == 0,
-        retries=30,
-        delay=2,
-        description="metering pods terminated",
-    )
+    try:
+        poll_until(
+            fn=lambda: k8s_hub_client.count_by_label_all_namespaces(resource="pod", label=METERING_COMPONENT_LABEL),
+            until=lambda count: count == 0,
+            retries=30,
+            delay=2,
+            description="metering pods terminated",
+        )
 
-    logger.info("Deleting VM while metering is down")
-    cli.delete_compute_instance(uuid=uuid)
-    wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-    wait_for_grpc_removal(grpc=grpc, uuid=uuid)
-    logger.info("VM %s deleted while metering was down", uuid)
+        logger.info("Deleting VM while metering is down")
+        cli.delete_compute_instance(uuid=uuid)
+        wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+        wait_for_grpc_removal(grpc=grpc, uuid=uuid)
+        logger.info("VM %s deleted while metering was down", uuid)
+    finally:
+        logger.info("Scaling metering back to 1 replica")
+        k8s_hub_client.scale_deployment(deployment=metering_deploy, namespace=namespace, replicas=1)
+        k8s_hub_client.wait_for_rollout(deployment=metering_deploy, namespace=namespace)
 
-    logger.info("Scaling metering back to 1 replica")
-    k8s_hub_client.scale_deployment(deployment=metering_deploy, namespace=namespace, replicas=1)
-    k8s_hub_client.wait_for_rollout(deployment=metering_deploy, namespace=namespace)
     logger.info("Metering pod recovered, waiting for reconciler to detect missed deletion")
 
     metering.expect("osac.resource.correction.v1", resource_id=uuid, timeout=RECONCILER_TIMEOUT)
