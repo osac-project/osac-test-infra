@@ -21,7 +21,7 @@ from tests.core.osac_cli import OsacCLI
 
 logger = logging.getLogger(__name__)
 
-CONTROLLER_LABEL = "app=fulfillment-controller"
+CONTROLLER_DEPLOYMENT = "fulfillment-controller"
 
 
 @pytest.mark.disruptive
@@ -35,7 +35,7 @@ def test_fulfillment_controller_restart_recovery(
     ssh_public_key_path: str,
 ) -> None:
     """Kill fulfillment-controller mid-provision, verify cluster provisioning resumes."""
-    controller_deploy = k8s_hub_client.get_deployment_name_by_label(label=CONTROLLER_LABEL, namespace=namespace)
+    controller_deploy = CONTROLLER_DEPLOYMENT
 
     name = unique_name("e2e-cluster")
     uuid = cli.create_cluster(

@@ -17,13 +17,13 @@ from tests.core.runner import poll_until
 
 logger = logging.getLogger(__name__)
 
-GRPC_SERVER_LABEL = "app=fulfillment-grpc-server"
+GRPC_SERVER_DEPLOYMENT = "fulfillment-grpc-server"
 
 
 @pytest.mark.disruptive
 def test_grpc_server_restart_recovery(grpc: GRPCClient, k8s_hub_client: K8sClient, namespace: str) -> None:
     """Kill gRPC server, create resource after recovery, verify exactly-once semantics."""
-    server_deploy = k8s_hub_client.get_deployment_name_by_label(label=GRPC_SERVER_LABEL, namespace=namespace)
+    server_deploy = GRPC_SERVER_DEPLOYMENT
 
     logger.info("Killing gRPC server")
     k8s_hub_client.rollout_restart(deployment=server_deploy, namespace=namespace)

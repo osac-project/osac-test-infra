@@ -19,7 +19,7 @@ from tests.core.runner import poll_until
 
 logger = logging.getLogger(__name__)
 
-CONTROLLER_LABEL = "app=fulfillment-controller"
+CONTROLLER_DEPLOYMENT = "fulfillment-controller"
 
 
 @pytest.mark.disruptive
@@ -33,7 +33,7 @@ def test_fulfillment_controller_restart_recovery(
     default_subnet: str,
 ) -> None:
     """Kill fulfillment-controller mid-provision, verify Kick sync resumes reconciliation."""
-    controller_deploy = k8s_hub_client.get_deployment_name_by_label(label=CONTROLLER_LABEL, namespace=namespace)
+    controller_deploy = CONTROLLER_DEPLOYMENT
 
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
