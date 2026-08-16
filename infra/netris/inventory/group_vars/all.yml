@@ -118,7 +118,7 @@ caas_agents:
 # ── Bare metal services ──────────────────────────────────────────────
 # Enables BMC network, sushy-tools, and BMF operator secrets.
 # Required for both BMaaS and CaaS on bare metal.
-bare_metal_services: true
+bare_metal_services: false
 
 # ── BMC network (shared infrastructure) ──────────────────────────────
 # Dedicated libvirt network for Ironic ↔ sushy-tools communication.
