@@ -514,11 +514,7 @@ jobs:
           fi
           echo "CatalogSource is READY."
 
-          # Phase 1: Install OLM operators
-          make install-operators INFRA_VALUES=values/vmaas-ci/infra.yaml
-
-          # Phase 2: Configure prerequisites (certificates, keycloak, operator CRs)
-          make install-prereqs INFRA_VALUES=values/vmaas-ci/infra.yaml
+          make install-infra PLATFORM=openshift PROFILE=vmaas-ci NS="${INSTALLER_NAMESPACE}"
 
       - name: Install OSAC
         env:
@@ -615,7 +611,7 @@ jobs:
           fi
 
           # Deploy OSAC via Helm (includes publish-templates and create-hub hooks)
-          make install-osac INFRA_VALUES=values/vmaas-ci/infra.yaml INSTANCE_VALUES=values/vmaas-ci/instance.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+          make install-osac PLATFORM=openshift PROFILE=vmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           # Create test tenants (CI-only — the Tenant CRD exists after helm install)
           for tenant in "${INSTALLER_NAMESPACE}" shared; do
