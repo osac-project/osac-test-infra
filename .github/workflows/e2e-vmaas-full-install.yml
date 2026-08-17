@@ -615,7 +615,7 @@ jobs:
           fi
 
           # Deploy OSAC via Helm (includes publish-templates and create-hub hooks)
-          make install-osac INSTANCE_VALUES=values/vmaas-ci/instance.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+          make install-osac INFRA_VALUES=values/vmaas-ci/infra.yaml INSTANCE_VALUES=values/vmaas-ci/instance.yaml EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           # Create test tenants (CI-only — the Tenant CRD exists after helm install)
           for tenant in "${INSTALLER_NAMESPACE}" shared; do
