@@ -474,8 +474,8 @@ jobs:
           cd "${INSTALLER_DIR}"
 
           # OCP 4.22 catalogs don't carry older operator channels
-          yq -i '.aapOperator.channel = "stable-2.6-cluster-scoped"' values/bmaas-ci/values.yaml
-          yq -i '.lvms.channel = "stable-4.22"' values/bmaas-ci/values.yaml
+          yq -i '.aapOperator.channel = "stable-2.6-cluster-scoped"' values/bmaas-ci/infra.yaml
+          yq -i '.lvms.channel = "stable-4.22"' values/bmaas-ci/infra.yaml
 
           make install-operators INFRA_VALUES=values/bmaas-ci/infra.yaml
 
