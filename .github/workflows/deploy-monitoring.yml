@@ -153,26 +153,39 @@ jobs:
           # Best-effort per host: one unreachable/flaky runner shouldn't
           # block updating the other six. Failures are collected and the
           # step still exits non-zero at the end so CI surfaces the problem.
+          #
+          # Every `ssh` call below is redirected from /dev/null explicitly.
+          # Without it, `ssh` inherits this loop's own stdin (the registry
+          # file, via `done < "${REGISTRY}"`) and forwards it to the remote
+          # command -- draining the very stream `read` is iterating, so the
+          # loop's next `read` hits EOF and exits quietly after exactly one
+          # host. No error, no non-zero exit (there's no `set -e` here), so
+          # this silently updated only the first registered host on every
+          # run since this step was written -- confirmed live: 14 of 15
+          # registered agents were still running whatever agent-side
+          # script/quadlet content existed before this fan-out mechanism
+          # was added, discovered when OSAC-2207/2208's service-health-
+          # textfile.sh change reached osac-10 but not osac-1.
           while read -r label host _port; do
             [[ -z "${label}" ]] && continue
             echo "=== Updating ${label} (${host}) ==="
 
             if ! ssh "${SSH_OPTS[@]}" "github-runner@${host}" \
-                 "mkdir -p ${SYNC_DIR}/monitoring"; then
+                 "mkdir -p ${SYNC_DIR}/monitoring" < /dev/null; then
               echo "ERROR: mkdir on ${label} (${host}) failed"
               FAILED_HOSTS+=("${label}")
               continue
             fi
 
             if ! rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
-                 monitoring/ "github-runner@${host}:${SYNC_DIR}/monitoring/"; then
+                 monitoring/ "github-runner@${host}:${SYNC_DIR}/monitoring/" < /dev/null; then
               echo "ERROR: rsync to ${label} (${host}) failed"
               FAILED_HOSTS+=("${label}")
               continue
             fi
 
             if ! ssh "${SSH_OPTS[@]}" "github-runner@${host}" \
-                 "MONITORING_REPO_DIR=${SYNC_DIR}/monitoring bash ${SYNC_DIR}/monitoring/scripts/monitoring-setup.sh --update-agent"; then
+                 "MONITORING_REPO_DIR=${SYNC_DIR}/monitoring bash ${SYNC_DIR}/monitoring/scripts/monitoring-setup.sh --update-agent" < /dev/null; then
               echo "ERROR: --update-agent on ${label} (${host}) failed"
               FAILED_HOSTS+=("${label}")
               continue
