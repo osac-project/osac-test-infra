@@ -1,0 +1,45 @@
+# Podman Quadlet unit file for HAProxy Exporter
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/haproxy-exporter.container
+#
+# Deployed on EVERY runner machine (central + agents) -- haproxy itself runs
+# on every machine (see scripts/machine-init.sh), not just central.
+#
+# Reads HAProxy's local stats socket for request-rate/backend-health/error-rate
+# metrics, beyond the up/down state service-health-textfile.sh already
+# provides (OSAC-2203/2212). The socket is a Unix domain socket only (no TCP
+# stats port) -- this adds zero new network exposure (OSAC-2206).
+#
+# Requires the stats socket to be enabled in /etc/haproxy/haproxy.cfg's
+# global section (scripts/machine-init.sh writes it for new hosts;
+# already-provisioned hosts needed a one-time live patch, see OSAC-2206).
+# The socket is mode 666 ("level operator" already blocks admin commands
+# regardless of who connects) because this image runs as a fixed "nobody"
+# user rather than the host's github-runner UID -- a group-scoped mode
+# can't line up with that in general under rootless Podman.
+
+[Unit]
+Description=HAProxy Exporter (OSAC CI Monitoring)
+
+
+
+[Container]
+Image=quay.io/prometheus/haproxy-exporter:v0.15.0
+ContainerName=haproxy-exporter
+
+# Localhost-only binding -- no external exposure
+PublishPort=127.0.0.1:9104:9101
+
+# Read-only: this exporter only ever queries stats over the socket, and
+# "level operator" (set in haproxy.cfg) already forbids admin commands over
+# it even if this mount were writable.
+Volume=/var/lib/haproxy:/var/lib/haproxy:ro
+
+Exec=--haproxy.scrape-uri=unix:/var/lib/haproxy/stats.sock
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

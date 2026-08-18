@@ -35,6 +35,14 @@ scrape_configs:
           instance: central
           role: central
 
+  - job_name: haproxy-exporter
+    static_configs:
+      - targets:
+          - 127.0.0.1:9104
+        labels:
+          instance: central
+          role: central
+
   # runner-exporter disabled -- no published container image available yet.
   # Re-enable when a containerized per-runner exporter is available.
   # - job_name: runner-exporter

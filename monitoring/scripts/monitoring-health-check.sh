@@ -45,12 +45,29 @@ textfile_collector_fresh() {
 # Per-runner check: the tunnel is active AND Prometheus is actually
 # receiving scrapes from it -- a live tunnel with a dead remote node
 # exporter would pass a tunnel-only check but fail this one.
+#
+# Query is scoped to job="node-exporter-remote", not just instance="${label}"
+# -- since OSAC-2206 added a second remote job (haproxy-exporter-remote)
+# sharing the same instance label, an unscoped query could return either
+# series first and silently check the wrong one.
 check_remote_runner() {
     local label="$1" host="$2" port="$3"
     systemctl --user is-active --quiet "monitoring-tunnel@${host}--${port}.service" || return 1
     local up
     up=$(curl -sf --connect-timeout 5 --max-time 10 \
-        "http://127.0.0.1:9091/api/v1/query?query=up%7Binstance%3D%22${label}%22%7D" \
+        "http://127.0.0.1:9091/api/v1/query?query=up%7Bjob%3D%22node-exporter-remote%22%2Cinstance%3D%22${label}%22%7D" \
+        | jq -r '.data.result[0].value[1]' 2>/dev/null)
+    [[ "${up}" == "1" ]]
+}
+
+# Same as above but for the haproxy-exporter-remote job (OSAC-2206) -- no
+# tunnel-service check here, since both exporters share one tunnel unit
+# (see monitoring-tunnel@.service); check_remote_runner already covers that.
+check_remote_haproxy() {
+    local label="$1"
+    local up
+    up=$(curl -sf --connect-timeout 5 --max-time 10 \
+        "http://127.0.0.1:9091/api/v1/query?query=up%7Bjob%3D%22haproxy-exporter-remote%22%2Cinstance%3D%22${label}%22%7D" \
         | jq -r '.data.result[0].value[1]' 2>/dev/null)
     [[ "${up}" == "1" ]]
 }
@@ -84,6 +101,15 @@ check "node_exporter metrics endpoint reachable" \
 
 check "node-exporter.service is active" \
     systemctl --user is-active node-exporter.service
+
+check "haproxy-exporter container is running" \
+    bash -c 'test "$(podman inspect --format "{{.State.Running}}" haproxy-exporter 2>/dev/null)" = "true"'
+
+check "haproxy_exporter metrics endpoint reachable" \
+    curl -sf http://127.0.0.1:9104/metrics
+
+check "haproxy-exporter.service is active" \
+    systemctl --user is-active haproxy-exporter.service
 
 check "service-health-textfile.timer is active" \
     systemctl --user is-active service-health-textfile.timer
@@ -149,6 +175,8 @@ if [[ "${IS_CENTRAL}" == "true" ]]; then
             [[ -z "${label}" ]] && continue
             check "remote runner ${label} tunnel + scrape healthy" \
                 check_remote_runner "${label}" "${host}" "${port}"
+            check "remote runner ${label} haproxy-exporter scrape healthy" \
+                check_remote_haproxy "${label}"
         done < "${registry}"
     fi
 fi

@@ -306,6 +306,16 @@ enable_services() {
 global
     log stdout local0
     maxconn 4096
+    # Unix domain socket only -- no TCP stats port, so this adds zero new
+    # network exposure (OSAC-2206). "level operator" permits read-only
+    # stats queries but blocks admin commands (e.g. server enable/disable)
+    # regardless of who connects, which is what makes mode 666 acceptable
+    # here: haproxy-exporter's container image runs as a fixed "nobody"
+    # user, not github-runner's host UID (rootless Podman only remaps
+    # UID 0 to the host's calling user by default, not arbitrary image
+    # users) -- confirmed live that "group github-runner" doesn't map
+    # through to it, so a group-scoped mode can't work in general here.
+    stats socket /var/lib/haproxy/stats.sock mode 666 level operator
 
 defaults
     mode tcp

@@ -11,13 +11,17 @@
 #
 #   --add-tunnel <host> <base_port> [label]
 #               Set up a persistent SSH tunnel from the central machine to
-#               a remote runner. Forwards remote 9100/9101 to local ports.
-#               Also registers the runner in prometheus.yml and reloads
-#               Prometheus -- no manual scrape-config edit needed.
+#               a remote runner. Forwards remote 9100 (node_exporter) and
+#               9104 (haproxy_exporter) to local <base_port> and
+#               <base_port>+1 respectively. Also registers the runner in
+#               prometheus.yml and reloads Prometheus -- no manual
+#               scrape-config edit needed.
 #               <host> is the SSH target (IP or resolvable hostname). If
 #               <host> isn't a meaningful Prometheus instance label on its
 #               own (e.g. a bare IP), pass [label] to set a friendly
 #               "instance" label instead -- it defaults to <host>.
+#               Choose <base_port> values at least 2 apart so <base_port>+1
+#               never collides with another host's registered port.
 #
 #   --remove-tunnel <label>
 #               Tear down a remote runner's tunnel and remove it from
@@ -141,6 +145,19 @@ regenerate_remote_targets() {
                 [[ -z "${label}" ]] && continue
                 printf '      - targets:\n          - 127.0.0.1:%s\n        labels:\n          instance: %s\n          role: agent\n' \
                     "${port}" "${label}"
+            done < "${REMOTE_REGISTRY}"
+
+            # haproxy-exporter shares the same tunnel as node_exporter, one
+            # port higher (see monitoring-tunnel@.service) -- registered base
+            # ports are always allocated 10 apart specifically to leave room
+            # for this (OSAC-2206), so base_port+1 never collides with
+            # another host's registered port.
+            echo "  - job_name: haproxy-exporter-remote"
+            echo "    static_configs:"
+            while read -r label _host port; do
+                [[ -z "${label}" ]] && continue
+                printf '      - targets:\n          - 127.0.0.1:%s\n        labels:\n          instance: %s\n          role: agent\n' \
+                    "$(( port + 1 ))" "${label}"
             done < "${REMOTE_REGISTRY}"
         } > "${body}"
     fi
@@ -274,6 +291,7 @@ if [[ "${MODE}" == "tunnel" ]]; then
     systemctl --user enable --now "monitoring-tunnel@${INSTANCE}.service"
     info "Tunnel started: monitoring-tunnel@${INSTANCE}.service"
     info "  Remote 9100 -> local ${TUNNEL_BASE_PORT} (node_exporter)"
+    info "  Remote 9104 -> local $(( TUNNEL_BASE_PORT + 1 )) (haproxy_exporter)"
 
     phase 2 "Wiring ${TUNNEL_LABEL} (${TUNNEL_HOST}) into Prometheus"
     registry_upsert "${TUNNEL_LABEL}" "${TUNNEL_HOST}" "${TUNNEL_BASE_PORT}"
@@ -385,7 +403,7 @@ if [[ "${MODE}" == "update-central" ]]; then
     info "Remote-runner scrape targets restored from ${REMOTE_REGISTRY}."
 
     phase 2 "Installing Quadlet units"
-    for unit in node-exporter.container prometheus.container grafana.container \
+    for unit in node-exporter.container haproxy-exporter.container prometheus.container grafana.container \
                 alertmanager.container org-runner-exporter.container workflow-exporter.container \
                 caddy.container; do
         cp "${MONITORING_REPO_DIR}/quadlet/${unit}" "${QUADLET_DIR}/${unit}"
@@ -395,7 +413,22 @@ if [[ "${MODE}" == "update-central" ]]; then
        "${SYSTEMD_USER_DIR}/service-health-textfile.service"
     cp "${MONITORING_REPO_DIR}/systemd/service-health-textfile.timer" \
        "${SYSTEMD_USER_DIR}/service-health-textfile.timer"
+    # Refresh the tunnel template too (OSAC-2206 added a second -L forward
+    # to it) -- this was previously never refreshed by --update-central at
+    # all, so a template change would silently never reach production
+    # through the automated CI path. Existing tunnel instances are
+    # per-instance systemd units generated from this template at
+    # `systemctl --user enable` time, so they also need restarting to pick
+    # up the new ExecStart -- a plain daemon-reload only affects units not
+    # yet started.
+    cp "${MONITORING_REPO_DIR}/systemd/monitoring-tunnel@.service" \
+       "${SYSTEMD_USER_DIR}/monitoring-tunnel@.service"
     systemctl --user daemon-reload
+    while read -r tunnel_unit; do
+        [[ -z "${tunnel_unit}" ]] && continue
+        echo "  Restarting ${tunnel_unit} ..."
+        systemctl --user restart "${tunnel_unit}"
+    done < <(systemctl --user list-units 'monitoring-tunnel@*.service' --plain --no-legend --state=active | awk '{print $1}')
 
     phase 3 "Rebuilding workflow-exporter image"
     # Cheap/cached when Containerfile.workflow-exporter hasn't changed --
@@ -411,7 +444,7 @@ if [[ "${MODE}" == "update-central" ]]; then
     # rename; it always re-opens everything fresh.
     for svc in alertmanager.service prometheus.service grafana.service \
                org-runner-exporter.service workflow-exporter.service node-exporter.service \
-               caddy.service; do
+               haproxy-exporter.service caddy.service; do
         echo "  Restarting ${svc} ..."
         systemctl --user restart "${svc}"
     done
@@ -431,6 +464,7 @@ if [[ "${MODE}" == "update-agent" ]]; then
 
     phase 2 "Installing Quadlet units"
     cp "${MONITORING_REPO_DIR}/quadlet/node-exporter.container" "${QUADLET_DIR}/node-exporter.container"
+    cp "${MONITORING_REPO_DIR}/quadlet/haproxy-exporter.container" "${QUADLET_DIR}/haproxy-exporter.container"
     cp "${MONITORING_REPO_DIR}/systemd/service-health-textfile.service" \
        "${SYSTEMD_USER_DIR}/service-health-textfile.service"
     cp "${MONITORING_REPO_DIR}/systemd/service-health-textfile.timer" \
@@ -439,6 +473,7 @@ if [[ "${MODE}" == "update-agent" ]]; then
 
     phase 3 "Restarting agent services"
     systemctl --user restart node-exporter.service
+    systemctl --user restart haproxy-exporter.service
     systemctl --user restart service-health-textfile.timer
 
     info "Agent update complete."
@@ -538,6 +573,7 @@ mkdir -p "${QUADLET_DIR}" "${SYSTEMD_USER_DIR}"
 # Common units (deployed on all machines)
 COMMON_UNITS=(
     "node-exporter.container"
+    "haproxy-exporter.container"
 )
 
 # Central-only units
@@ -587,6 +623,7 @@ phase 4 "Starting services"
 # exist on agents too, not just the central box.
 COMMON_SERVICES=(
     "node-exporter.service"
+    "haproxy-exporter.service"
     "service-health-textfile.timer"
 )
 
@@ -614,7 +651,7 @@ fi
 # Wait for containers to be running
 echo ""
 echo "Waiting for containers to be healthy ..."
-ALL_CONTAINERS=("node-exporter")
+ALL_CONTAINERS=("node-exporter" "haproxy-exporter")
 if [[ "${MODE}" == "central" ]]; then
     ALL_CONTAINERS+=("prometheus" "grafana" "alertmanager" "org-runner-exporter" "workflow-exporter" "caddy")
 fi
@@ -732,6 +769,7 @@ if [[ "${MODE}" == "central" ]]; then
     echo "  - Grafana:             http://127.0.0.1:3000"
     echo "  - Alertmanager:        http://127.0.0.1:9093"
     echo "  - node_exporter:       http://127.0.0.1:9100"
+    echo "  - haproxy_exporter:    http://127.0.0.1:9104"
     echo "  - org-runner-exporter: http://127.0.0.1:9102"
     echo ""
     echo "Access Grafana via SSH tunnel:"
