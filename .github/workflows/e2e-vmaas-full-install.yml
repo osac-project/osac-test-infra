@@ -611,7 +611,7 @@ jobs:
           fi
 
           # Deploy OSAC via Helm (includes publish-templates and create-hub hooks)
-          make install-osac PLATFORM=openshift PROFILE=vmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+          make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=vmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           # Create test tenants (CI-only — the Tenant CRD exists after helm install)
           for tenant in "${INSTALLER_NAMESPACE}" shared; do

@@ -608,7 +608,7 @@ jobs:
             helm dependency update charts/osac/
           fi
 
-          make install-osac PLATFORM=openshift PROFILE=bmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+          make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=bmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           for tenant in "${INSTALLER_NAMESPACE}" shared; do
             echo "Creating Tenant: ${tenant}"
