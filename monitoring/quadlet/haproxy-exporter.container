@@ -12,7 +12,8 @@
 # Requires the stats socket to be enabled in /etc/haproxy/haproxy.cfg's
 # global section (scripts/machine-init.sh writes it for new hosts;
 # already-provisioned hosts needed a one-time live patch, see OSAC-2206).
-# The socket is mode 666 ("level operator" already blocks admin commands
+# The socket is mode 666 ("level user" -- HAProxy's most restricted socket
+# level, read-only "show" commands only -- already blocks any state change
 # regardless of who connects) because this image runs as a fixed "nobody"
 # user rather than the host's github-runner UID -- a group-scoped mode
 # can't line up with that in general under rootless Podman.
@@ -30,7 +31,7 @@ ContainerName=haproxy-exporter
 PublishPort=127.0.0.1:9104:9101
 
 # Read-only: this exporter only ever queries stats over the socket, and
-# "level operator" (set in haproxy.cfg) already forbids admin commands over
+# "level user" (set in haproxy.cfg) already forbids any state change over
 # it even if this mount were writable.
 Volume=/var/lib/haproxy:/var/lib/haproxy:ro
 

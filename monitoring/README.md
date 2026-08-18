@@ -12,9 +12,9 @@ document only covers the monitoring layer on top of that base.
 
 One **central** machine runs the full stack (Prometheus, Grafana,
 Alertmanager, plus two GitHub-API exporters). Every other CI machine
-(**agent**) runs only `node_exporter` plus a small textfile collector, and is
-reached over an SSH tunnel initiated *from* the central machine — agents
-never need to expose a port publicly.
+(**agent**) runs only `node_exporter`, `haproxy-exporter`, and a small
+textfile collector, and is reached over an SSH tunnel initiated *from* the
+central machine — agents never need to expose a port publicly.
 
 ```
                               central machine (osac-ci-1)

@@ -307,15 +307,19 @@ global
     log stdout local0
     maxconn 4096
     # Unix domain socket only -- no TCP stats port, so this adds zero new
-    # network exposure (OSAC-2206). "level operator" permits read-only
-    # stats queries but blocks admin commands (e.g. server enable/disable)
-    # regardless of who connects, which is what makes mode 666 acceptable
-    # here: haproxy-exporter's container image runs as a fixed "nobody"
-    # user, not github-runner's host UID (rootless Podman only remaps
-    # UID 0 to the host's calling user by default, not arbitrary image
-    # users) -- confirmed live that "group github-runner" doesn't map
-    # through to it, so a group-scoped mode can't work in general here.
-    stats socket /var/lib/haproxy/stats.sock mode 666 level operator
+    # network exposure (OSAC-2206). "level user" is HAProxy's most
+    # restricted socket level -- read-only "show" commands only, no state
+    # changes (server enable/disable, counter resets, etc.) even for the
+    # socket's owner -- and is all haproxy_exporter ever issues (confirmed
+    # against the binary: only "show info"/"show stat", no admin verbs).
+    # That minimal privilege is what makes mode 666 acceptable: this
+    # image runs as a fixed "nobody" user, not github-runner's host UID
+    # (rootless Podman only remaps UID 0 to the host's calling user by
+    # default, not arbitrary image users) -- confirmed live that
+    # "group github-runner" doesn't map through to it, so a group-scoped
+    # mode can't work in general here, and level user caps what that
+    # world-writable-in-appearance (but not in effect) socket can do.
+    stats socket /var/lib/haproxy/stats.sock mode 666 level user
 
 defaults
     mode tcp

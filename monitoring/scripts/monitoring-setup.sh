@@ -131,6 +131,33 @@ registry_lookup() {
     awk -v l="${label}" '$1 == l { print $2, $3; found=1 } END { exit !found }' "${REMOTE_REGISTRY}"
 }
 
+# Reject a --add-tunnel whose base_port (node_exporter) or base_port+1
+# (haproxy_exporter, see monitoring-tunnel@.service, OSAC-2206) collides
+# with any other registered runner's port pair. An unnoticed collision
+# would make the new tunnel's local -L bind fail (port already in use by
+# another host's tunnel), or worse, silently mix two hosts' metrics under
+# the wrong instance label if it didn't fail outright.
+#
+# Excludes the target label's own existing row -- re-running --add-tunnel
+# to change an already-registered host's port shouldn't be rejected as
+# colliding with itself.
+check_port_collision() {
+    local new_label="$1" new_port="$2"
+    [[ -f "${REMOTE_REGISTRY}" ]] || return 0
+    local existing_label existing_host existing_port
+    while read -r existing_label existing_host existing_port; do
+        [[ -z "${existing_label}" || "${existing_label}" == "${new_label}" ]] && continue
+        if (( new_port == existing_port || new_port == existing_port + 1 || \
+              new_port + 1 == existing_port || new_port + 1 == existing_port + 1 )); then
+            echo "ERROR: base port ${new_port} (and/or ${new_port}+1 for haproxy_exporter)" \
+                 "collides with ${existing_label}'s registered port ${existing_port}" \
+                 "(and its +1) at ${existing_host}." >&2
+            echo "  Choose a base_port at least 2 away from every registered port." >&2
+            return 1
+        fi
+    done < "${REMOTE_REGISTRY}"
+}
+
 regenerate_remote_targets() {
     local prom_config="${MONITORING_HOME}/config/prometheus.yml"
     [[ -f "${prom_config}" ]] || return 0
@@ -260,6 +287,10 @@ esac
 # central/agent setup phases below, so they exit early.
 ###############################################################################
 if [[ "${MODE}" == "tunnel" ]]; then
+    if ! check_port_collision "${TUNNEL_LABEL}" "${TUNNEL_BASE_PORT}"; then
+        exit 1
+    fi
+
     phase 1 "Setting up SSH tunnel to ${TUNNEL_HOST} (base port ${TUNNEL_BASE_PORT})"
 
     SSH_DIR="${MONITORING_HOME}/.ssh"
