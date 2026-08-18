@@ -1,5 +1,27 @@
 {
 	auto_https disable_redirects
+	# Unrestricted on-demand TLS (below) lets anyone who can reach :3443
+	# make Caddy mint a cert for ANY SNI hostname they claim -- unbounded
+	# storage/CPU spend, one new cert per unique name (Caddy's own
+	# startup warning: "YOUR SERVER MAY BE VULNERABLE TO ABUSE"). `ask`
+	# gates every issuance through the loopback-only check below, which
+	# only approves the specific hostnames this proxy is actually meant
+	# to serve. Add a name here if a legitimate new access path needs
+	# one -- don't just widen this to match everything, that's the exact
+	# hole this closes.
+	on_demand_tls {
+		ask http://127.0.0.1:2021/check-sni
+	}
+}
+
+# Loopback-only allowlist endpoint for on_demand_tls's `ask` check above --
+# Caddy calls itself here (never reachable from outside this host) with
+# ?domain=<requested-SNI> before issuing a cert; anything not explicitly
+# listed gets a 403 and no certificate.
+http://127.0.0.1:2021 {
+	@allowed query domain=osac-ci.redhat.com domain=127.0.0.1
+	respond @allowed 200
+	respond 403
 }
 
 :3443 {
