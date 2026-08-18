@@ -74,6 +74,95 @@ tmp="$(mktemp "${TEXTFILE_DIR}/.osac_service_health.XXXXXX")"
         fi
     done
     echo "osac_service_active{unit=\"libvirt\"} ${libvirt_state}"
+
+    # Podman container/image metrics (OSAC-2207): running container count and
+    # total image storage bytes, so a runaway container count or unbounded
+    # image growth shows up before it trickles down into a generic
+    # DiskAlmostFull alert with no earlier warning. `podman system df --format
+    # json`'s Images entry already reports RawSize as the total on-disk bytes
+    # across all images, not just the active/reclaimable split -- exactly
+    # "image storage bytes", no extra summing needed.
+    # `if var=$(cmd | cmd2); then` -- not `var=$(cmd | cmd2 2>/dev/null || echo 0)`:
+    # under `set -o pipefail`, a failing left-hand command in a piped command
+    # substitution assignment aborts the whole script (confirmed live), and
+    # a naive `|| echo 0` fallback risks double-output if the right-hand
+    # command in the pipe already printed something before the pipeline as a
+    # whole reported failure. Commands used as an `if` condition are exempt
+    # from `set -e`/`pipefail`-triggered abort, so this pattern is safe
+    # either way, and each branch controls its own single line of output.
+    echo "# HELP osac_podman_running_containers Number of currently-running podman containers."
+    echo "# TYPE osac_podman_running_containers gauge"
+    if podman_ps_output="$(podman ps -q 2>/dev/null)"; then
+        running_containers="$(printf '%s' "${podman_ps_output}" | grep -c . || true)"
+    else
+        running_containers=0
+    fi
+    echo "osac_podman_running_containers ${running_containers:-0}"
+
+    echo "# HELP osac_podman_image_storage_bytes Total on-disk size of all podman images, in bytes."
+    echo "# TYPE osac_podman_image_storage_bytes gauge"
+    # podman system df's Images entry already reports RawSize as the total
+    # on-disk bytes across all images, not just the active/reclaimable split
+    # -- exactly "image storage bytes", no extra summing needed.
+    if podman_df_json="$(podman system df --format json 2>/dev/null)"; then
+        image_bytes="$(printf '%s' "${podman_df_json}" | python3 -c \
+            'import json,sys; data=json.load(sys.stdin); print(next((e["RawSize"] for e in data if e.get("Type")=="Images"), 0))' \
+            2>/dev/null || true)"
+    else
+        image_bytes=0
+    fi
+    echo "osac_podman_image_storage_bytes ${image_bytes:-0}"
+
+    # cluster-tool VM overlay/flavor/container disk usage (OSAC-2208): broken
+    # out by subdirectory so a runaway overlay is identifiable by *what* grew,
+    # not just that the filesystem did -- generic root-filesystem metrics
+    # give no such breakdown, and on hosts where this data path is a
+    # separate mount (confirmed live: osac-ci-1's /disk1), a runaway overlay
+    # there wouldn't even show up in root-filesystem usage at all.
+    #
+    # scripts/machine-init.sh writes the real, authoritative path to
+    # ~/.config/cluster-tool/config as CLUSTER_TOOL_DATA=<path> (auto-detected
+    # from the largest partition at provisioning time, so it varies by host
+    # for reasons this script has no other way to know) -- read that first.
+    # /disk1/cluster-tool and /cluster-tool (confirmed live on osac-ci-1 and
+    # ordinary runner hosts respectively) are kept only as a fallback for a
+    # host where that config is missing or stale, not the primary source.
+    CLUSTER_TOOL_DIR=""
+    CT_CONFIG="${HOME}/.config/cluster-tool/config"
+    if [[ -f "${CT_CONFIG}" ]]; then
+        configured_data="$(grep '^CLUSTER_TOOL_DATA=' "${CT_CONFIG}" 2>/dev/null | cut -d= -f2- || true)"
+        if [[ -n "${configured_data}" ]] && [[ -d "${configured_data}" ]]; then
+            CLUSTER_TOOL_DIR="${configured_data}"
+        fi
+    fi
+    if [[ -z "${CLUSTER_TOOL_DIR}" ]]; then
+        for candidate in /disk1/cluster-tool /cluster-tool; do
+            if [[ -d "${candidate}" ]]; then
+                CLUSTER_TOOL_DIR="${candidate}"
+                break
+            fi
+        done
+    fi
+    if [[ -n "${CLUSTER_TOOL_DIR}" ]]; then
+        echo "# HELP osac_cluster_tool_disk_bytes Disk usage of cluster-tool's data subdirectories, in bytes."
+        echo "# TYPE osac_cluster_tool_disk_bytes gauge"
+        for subdir in flavors overlays containers; do
+            path="${CLUSTER_TOOL_DIR}/${subdir}"
+            if [[ -d "${path}" ]]; then
+                # --block-size=1, not -b/--bytes: -b implies --apparent-size,
+                # which reports sparse VM overlay files' logical length
+                # rather than actual disk consumption -- exactly the wrong
+                # number for a metric whose entire purpose is "is disk about
+                # to fill up". Plain `du` (no --apparent-size) already
+                # reports real block usage; --block-size=1 only changes the
+                # unit to bytes, cheap on this timer's 30s cadence same as
+                # before (confirmed live: a few hundred GB of VM images
+                # summed in single-digit milliseconds either way).
+                bytes="$(du -s --block-size=1 "${path}" 2>/dev/null | cut -f1 || true)"
+                echo "osac_cluster_tool_disk_bytes{path=\"${subdir}\"} ${bytes:-0}"
+            fi
+        done
+    fi
 } > "${tmp}"
 
 # node_exporter's textfile collector watches the DIRECTORY, not a specific
