@@ -1,0 +1,40 @@
+# Podman Quadlet unit file for Caddy (TLS reverse proxy)
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/caddy.container
+#
+# Deployed on the CENTRAL machine only.
+#
+# Retroactively committed (OSAC-2209): this unit and its Caddyfile were
+# already live on osac-ci-1, hand-created directly on the host, never
+# tracked in git or wired into monitoring-setup.sh -- found during an
+# audit of live config vs git. Fronts Grafana on :3443 with an
+# internally-issued (Caddy-managed) TLS cert, on-demand -- separate from
+# Grafana's own direct :3000 HTTPS listener (grafana.container), which
+# stays on its own manually-provisioned cert/key.
+#
+# Quadlet generates a systemd unit (caddy.service) from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=Caddy reverse proxy (OSAC CI Monitoring)
+After=grafana.service
+
+[Container]
+Image=docker.io/library/caddy:2-alpine
+ContainerName=caddy
+Network=host
+
+Volume=%h/.monitoring-server/config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro,Z
+Volume=%h/.monitoring-server/data/caddy:/data:Z
+
+# Run as the host user — keep-id maps the invoking user's UID into the
+# container so files written to the data volume are owned by the host user.
+UserNS=keep-id
+User=%U
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

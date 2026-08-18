@@ -338,7 +338,12 @@ if [[ "${MODE}" == "update-central" ]]; then
         # substitution or be misinterpreted as sed syntax.
         escaped_webhook="$(printf '%s' "${SLACK_WEBHOOK_URL}" | sed -e 's/[\&|]/\\&/g')"
         tmp_alertmanager="$(mktemp)"
-        sed "s|SLACK_WEBHOOK_URL|${escaped_webhook}|g" \
+        # Scoped to lines containing "api_url:" -- a blind file-wide
+        # substitution also matched the file's own introductory TODO
+        # comment ("Replace SLACK_WEBHOOK_URL and email settings..."),
+        # duplicating the real webhook into a comment where it serves no
+        # purpose (found live on osac-ci-1 during the OSAC-2209 audit).
+        sed "/api_url:/s|SLACK_WEBHOOK_URL|${escaped_webhook}|g" \
             "${MONITORING_REPO_DIR}/config/alertmanager.yml" > "${tmp_alertmanager}"
         # cp -f, not mv -- alertmanager.yml is bind-mounted as a single file
         # into the container (see the regenerate_remote_targets comment on
@@ -353,6 +358,8 @@ if [[ "${MODE}" == "update-central" ]]; then
     fi
     cp "${MONITORING_REPO_DIR}/config/grafana/datasources.yml" "${MONITORING_HOME}/config/grafana/datasources.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
+    mkdir -p "${MONITORING_HOME}/config/caddy"
+    cp "${MONITORING_REPO_DIR}/config/caddy/Caddyfile" "${MONITORING_HOME}/config/caddy/Caddyfile"
     # Remove stale dashboards first -- a plain cp only adds/overwrites, so a
     # dashboard removed from the repo would otherwise linger here and keep
     # being provisioned by Grafana indefinitely.
@@ -379,7 +386,8 @@ if [[ "${MODE}" == "update-central" ]]; then
 
     phase 2 "Installing Quadlet units"
     for unit in node-exporter.container prometheus.container grafana.container \
-                alertmanager.container org-runner-exporter.container workflow-exporter.container; do
+                alertmanager.container org-runner-exporter.container workflow-exporter.container \
+                caddy.container; do
         cp "${MONITORING_REPO_DIR}/quadlet/${unit}" "${QUADLET_DIR}/${unit}"
         info "Installed ${unit}"
     done
@@ -402,7 +410,8 @@ if [[ "${MODE}" == "update-central" ]]; then
     # stale config the way a reload can if a file was ever replaced via
     # rename; it always re-opens everything fresh.
     for svc in alertmanager.service prometheus.service grafana.service \
-               org-runner-exporter.service workflow-exporter.service node-exporter.service; do
+               org-runner-exporter.service workflow-exporter.service node-exporter.service \
+               caddy.service; do
         echo "  Restarting ${svc} ..."
         systemctl --user restart "${svc}"
     done
@@ -445,7 +454,8 @@ mkdir -p "${MONITORING_HOME}"/{config/grafana,data/textfile-collector,dashboards
 chmod 700 "${MONITORING_HOME}"
 
 if [[ "${MODE}" == "central" ]]; then
-    mkdir -p "${MONITORING_HOME}/data/"{prometheus,grafana,alertmanager}
+    mkdir -p "${MONITORING_HOME}/data/"{prometheus,grafana,alertmanager,caddy}
+    mkdir -p "${MONITORING_HOME}/config/caddy"
     mkdir -p "${MONITORING_HOME}/.ssh"
     chmod 700 "${MONITORING_HOME}/.ssh"
     # Grafana's TLS cert/key live here -- provisioned manually (real
@@ -469,6 +479,7 @@ if [[ "${MODE}" == "central" ]]; then
     cp "${MONITORING_REPO_DIR}/config/alertmanager.yml" "${MONITORING_HOME}/config/alertmanager.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/datasources.yml" "${MONITORING_HOME}/config/grafana/datasources.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
+    cp "${MONITORING_REPO_DIR}/config/caddy/Caddyfile" "${MONITORING_HOME}/config/caddy/Caddyfile"
 
     # Copy dashboards
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards/"*.json "${MONITORING_HOME}/dashboards/"
@@ -536,6 +547,7 @@ CENTRAL_UNITS=(
     "alertmanager.container"
     "org-runner-exporter.container"
     "workflow-exporter.container"
+    "caddy.container"
 )
 
 for unit in "${COMMON_UNITS[@]}"; do
@@ -584,6 +596,7 @@ CENTRAL_SERVICES=(
     "grafana.service"
     "org-runner-exporter.service"
     "workflow-exporter.service"
+    "caddy.service"
 )
 
 for svc in "${COMMON_SERVICES[@]}"; do
@@ -603,7 +616,7 @@ echo ""
 echo "Waiting for containers to be healthy ..."
 ALL_CONTAINERS=("node-exporter")
 if [[ "${MODE}" == "central" ]]; then
-    ALL_CONTAINERS+=("prometheus" "grafana" "alertmanager" "org-runner-exporter" "workflow-exporter")
+    ALL_CONTAINERS+=("prometheus" "grafana" "alertmanager" "org-runner-exporter" "workflow-exporter" "caddy")
 fi
 
 containers_ready=true

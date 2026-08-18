@@ -58,6 +58,7 @@ rootless setup: `haproxy.service`, `podman.socket`, `libvirtd`/`virtqemud`
 |---|---|---|---|
 | `prometheus` | central only | 127.0.0.1:9091 | Scrapes all exporters, evaluates `config/alert-rules.yml`, 30d retention |
 | `grafana` | central only | 0.0.0.0:3000 (HTTPS) | Dashboards, GitHub OAuth login (org: `osac-project`) |
+| `caddy` | central only | 0.0.0.0:3443 (HTTPS) | Reverse proxy to Grafana with an on-demand, self-signed cert matching whatever hostname/IP the client used — avoids the certificate-name-mismatch warning `grafana`'s own fixed-hostname cert (needed for OAuth callback matching) gives on any other address. See caveat below. |
 | `alertmanager` | central only | 127.0.0.1:9093 | Routes alerts to Slack `#osac-ci` |
 | `node-exporter` | every machine | 127.0.0.1:9100 | Host-level metrics (CPU, memory, disk, filesystem) |
 | `org-runner-exporter` | central only | 127.0.0.1:9102 | GitHub Actions runner online/offline status (org-wide, via GitHub API) |
@@ -69,6 +70,14 @@ rootless setup: `haproxy.service`, `podman.socket`, `libvirtd`/`virtqemud`
 deployed** — no published container image is available yet for it, so
 `monitoring-setup.sh` never installs it and its `prometheus.yml` scrape jobs
 are commented out. Re-enable it once an image exists.
+
+`caddy` was found already live on `osac-ci-1` (OSAC-2209 audit) — hand-created
+directly on the host, never committed or wired into `monitoring-setup.sh`
+until now. Its purpose above is inferred from its config (`tls internal {
+on_demand }` only makes sense as a name-mismatch workaround, and this repo
+uses that exact same pattern for Vault's relay-facing listener — see
+`vpn-relay-access.md`), not confirmed by whoever originally added it. If you
+know the real reason, update this note.
 
 Config lives under `config/` (Prometheus, Alertmanager, alert rules, Grafana
 provisioning + dashboards), container definitions under `quadlet/` (Podman
