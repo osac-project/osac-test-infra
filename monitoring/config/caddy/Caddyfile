@@ -6,5 +6,16 @@
 	tls internal {
 		on_demand
 	}
-	reverse_proxy 127.0.0.1:3000
+	# https, not plain http: Grafana's own listener is HTTPS-only
+	# (GF_SERVER_PROTOCOL=https in grafana.container) -- proxying to it
+	# over plain http gets "Client sent an HTTP request to an HTTPS
+	# server" for every single request (confirmed live, OSAC-2209 audit).
+	# tls_insecure_skip_verify because Grafana's cert is a manually-
+	# provisioned one for its own canonical hostname, not something
+	# Caddy's trust store has any reason to recognize.
+	reverse_proxy https://127.0.0.1:3000 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
 }
