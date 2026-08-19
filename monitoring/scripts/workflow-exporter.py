@@ -449,9 +449,15 @@ class WorkflowExporter:
         existed still have these), it's a gate-only failure by the same
         definition. Rows recorded after that filter existed have an empty
         failed_step for a true gate-only failure (the entries were already
-        dropped before storage) and fall back to the ordinary infra/test
-        split below -- a known, narrow gap for the short window between
-        that filter shipping and this detection being added.
+        dropped before storage) -- for those, an empty failed_step is
+        genuinely ambiguous from text alone (it could equally mean "no
+        data at all", which is legitimately "infra"), so a row already
+        classified "gate" is left as-is rather than re-derived here.
+        Without that, every exporter restart would silently flip an
+        already-correct "gate" row back to "infra" the moment its
+        failed_step happens to be empty -- confirmed live, e.g. osac run
+        #32265159432, reclassified back and forth across restarts before
+        this guard existed.
         """
         with self._db() as conn:
             rows = conn.execute(
@@ -464,6 +470,8 @@ class WorkflowExporter:
                 if row["category"] == "e2e" and entries and all(
                     self._is_gate_job(entry.split(" → ")[0]) for entry in entries
                 ):
+                    reason = "gate"
+                elif not entries and row["failure_reason"] == "gate":
                     reason = "gate"
                 else:
                     steps = [{"step": entry.split(" → ")[-1]} for entry in entries]
