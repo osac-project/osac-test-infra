@@ -202,7 +202,7 @@ def additional_storage_tiers(private_grpc: GRPCClient, test_run_id: str) -> Iter
     """
     # Get the real backend ID from the "local" tier
     local_tier = private_grpc.get_storage_tier(name="local")
-    real_backend_id = local_tier["spec"]["storage_backend"]["id"]
+    real_backend_id = local_tier["spec"]["backends"][0]["backendId"]
 
     created_tiers: dict[str, dict[str, str]] = {}
 
