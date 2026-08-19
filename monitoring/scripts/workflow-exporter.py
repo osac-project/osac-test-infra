@@ -471,7 +471,7 @@ class WorkflowExporter:
                     self._is_gate_job(entry.split(" → ")[0]) for entry in entries
                 ):
                     reason = "gate"
-                elif not entries and row["failure_reason"] == "gate":
+                elif row["category"] == "e2e" and not entries and row["failure_reason"] == "gate":
                     reason = "gate"
                 else:
                     steps = [{"step": entry.split(" → ")[-1]} for entry in entries]
