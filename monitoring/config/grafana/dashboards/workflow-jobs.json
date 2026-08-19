@@ -275,7 +275,7 @@
     },
     {
       "title": "E2E Queue Depth & In-Progress Runs",
-      "description": "Same signal as \"Queue Depth & In-Progress Runs\" above, scoped to category=e2e only -- e2e runs on this fleet's self-hosted runners (a fixed-size pool: ~16 hosts), a completely different resource from the GitHub-hosted runners every other category uses, so its own queue depth is what actually indicates whether the self-hosted fleet needs more capacity. Not filtered by this dashboard's category/repo/workflow/machine variables, same reason as the panel above -- the underlying metric is already org-wide (by design, so this panel always shows e2e specifically regardless of what the category dropdown is set to).",
+      "description": "Same signal as \"Queue Depth & In-Progress Runs\" above, scoped to category=e2e only -- e2e runs on this fleet's self-hosted runners (a fixed-size pool: ~16 hosts), a completely different resource from the GitHub-hosted runners every other category uses, so its own queue depth is what actually indicates whether the self-hosted fleet needs more capacity. Not filtered by this dashboard's category/repo/workflow/machine variables, same reason as the panel above -- the underlying metric is already org-wide (by design, so this panel always shows e2e specifically regardless of what the category dropdown is set to). Y-axis capped at 100 for now -- revisit if the fleet's runner-instance count changes enough to make that ceiling wrong.",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -283,6 +283,7 @@
         "defaults": {
           "unit": "short",
           "min": 0,
+          "max": 100,
           "custom": {
             "drawStyle": "line",
             "fillOpacity": 15,
