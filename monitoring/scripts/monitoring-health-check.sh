@@ -13,6 +13,12 @@ set -euo pipefail
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
 
+# This checks the shared default podman storage's quadlet containers --
+# see the same unset in monitoring-setup.sh for why a runner-inherited
+# CONTAINERS_STORAGE_CONF (isolated per-runner e2e build storage) must
+# not leak into the `podman inspect` calls below.
+unset CONTAINERS_STORAGE_CONF
+
 MONITORING_HOME="${MONITORING_HOME:-${HOME}/.monitoring-server}"
 
 passed=0

@@ -56,6 +56,23 @@ set -euo pipefail
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
 
+# This script manages the host's own quadlet-run containers, which always
+# use the shared default podman storage -- never a per-runner isolated one.
+# But when it runs as a step inside a GitHub Actions job (see above), it
+# inherits that job's shell environment, and the runner instance executing
+# it may have CONTAINERS_STORAGE_CONF set to an isolated, runner-specific
+# storage.conf (see setup-runner-podman.sh's concurrent-e2e-build race
+# fix). Left set, `podman build`/`podman inspect` here would silently
+# target that isolated storage instead of the shared one the quadlets
+# actually run from -- confirmed live on the "monitoring-central"-labeled
+# runner (osac-ci-1-runner-04), which doubles as a member of the isolated
+# e2e runner pool: deploys reported success while building into storage
+# nothing was actually serving from, and health-check container-inspect
+# checks failed outright. Unset unconditionally so this script's own
+# podman calls always see the real, shared storage regardless of which
+# runner instance happens to execute it.
+unset CONTAINERS_STORAGE_CONF
+
 MONITORING_HOME="${HOME}/.monitoring-server"
 # Resolve to the monitoring/ directory: scripts live at monitoring/scripts/
 MONITORING_REPO_DIR="${MONITORING_REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
