@@ -64,7 +64,13 @@ Examples:
 sudo bash scripts/runners/setup-runner-podman.sh
 ```
 
-This configures the newly created runner services to use podman.
+This configures the newly created runner services to use podman, and gives
+each runner instance its own isolated podman storage graphroot/runroot --
+multiple runner instances on one host all run as the same `github-runner`
+user, so without this they'd share one podman storage backend, which
+`containers/storage` doesn't support safely under concurrent builds (see the
+comment in the script for the live-confirmed failure mode this caused:
+intermittent "no such file or directory" errors mid-build, not a workflow bug).
 
 ### Step 5: Verify
 

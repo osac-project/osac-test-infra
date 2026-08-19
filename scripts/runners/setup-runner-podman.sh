@@ -170,13 +170,57 @@ if [ -n "$RUNNER_SERVICES" ]; then
 # Use system podman socket via /var/run/docker.sock
 Environment="DOCKER_HOST=unix:///var/run/docker.sock"
 EOF
+
+        # Isolate each runner instance's rootless podman storage. Multiple
+        # runner instances on this host all run as the same Linux user
+        # (github-runner), so by default they share ONE podman storage
+        # graphroot -- e.g. every "podman build" invocation in every e2e
+        # workflow, across every concurrently-running runner instance,
+        # writes to the exact same ~/.local/share/containers/storage.
+        # containers/storage was never designed to be safely shared across
+        # concurrent, uncoordinated build processes (see
+        # https://github.com/containers/buildah/issues/5805 and Red Hat KB
+        # solution 6375131) -- confirmed live on this fleet: intermittent
+        # "no such file or directory" COPY failures during concurrent e2e
+        # component-image builds, traced to this exact shared-storage race,
+        # not a workflow logic bug (the affected COPY source files
+        # genuinely exist in the correct build context; the race is in
+        # buildah/containers-storage's shared layer bookkeeping).
+        RUNNER_DIR=$(systemctl show "${service}" --property=WorkingDirectory --value 2>/dev/null)
+        if [ -n "${RUNNER_DIR}" ]; then
+            STORAGE_CONF="${RUNNER_DIR}/podman-storage.conf"
+            cat > "${STORAGE_CONF}" <<EOF
+[storage]
+driver = "overlay"
+graphroot = "${RUNNER_DIR}/podman-storage"
+runroot = "/run/user/$(id -u github-runner)/containers-$(basename "${RUNNER_DIR}")"
+EOF
+            chown github-runner:github-runner "${STORAGE_CONF}"
+
+            cat > "${OVERRIDE_DIR}/podman-storage-isolation.conf" <<EOF
+[Service]
+Environment="CONTAINERS_STORAGE_CONF=${STORAGE_CONF}"
+EOF
+            info "  Isolated podman storage: ${RUNNER_DIR}/podman-storage"
+        else
+            warn "  Could not determine WorkingDirectory for ${service} -- skipping storage isolation"
+        fi
+
         info "  Configured $service"
     done
 
-    info "Reloading systemd and restarting runners..."
+    info "Reloading systemd..."
     systemctl daemon-reload
 
+    info "Restarting runners (skipping any currently running a job)..."
     for service in $RUNNER_SERVICES; do
+        RUNNER_DIR=$(systemctl show "${service}" --property=WorkingDirectory --value 2>/dev/null)
+        if [ -n "${RUNNER_DIR}" ] && pgrep -f "${RUNNER_DIR}/bin[^ ]*/Runner\.Worker" >/dev/null 2>&1; then
+            warn "  ${service} is currently running a job -- skipping restart, its new"
+            warn "    storage config takes effect on its next natural restart. Re-run"
+            warn "    this script later (or restart it manually once idle) to apply now."
+            continue
+        fi
         systemctl restart "$service"
     done
     sleep 3
