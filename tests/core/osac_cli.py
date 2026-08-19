@@ -18,6 +18,7 @@ class OsacCLI:
         namespace: str,
         default_instance_type: str | None = None,
         default_disk_image: str | None = None,
+        default_storage_tier: str | None = None,
         private: bool = False,
     ) -> None:
         self.binary: str = binary
@@ -27,6 +28,7 @@ class OsacCLI:
         self._private: bool = private
         self.default_instance_type: str | None = default_instance_type
         self.default_disk_image: str | None = default_disk_image
+        self.default_storage_tier: str | None = default_storage_tier
         # Each OsacCLI instance gets its own config directory so that parallel
         # xdist workers (or multiple CLI fixtures) don't overwrite each other's
         # login credentials via the shared ~/.config/osac/config.json.
@@ -72,6 +74,7 @@ class OsacCLI:
         network_attachments: list[dict[str, Any]] | None = None,
         boot_disk_size: int = 20,
         disk_image: str | None = None,
+        boot_disk_storage_tier: str | None = None,
         run_strategy: str = "Always",
         user_data_secret_ref: str | None = None,
         instance_type: str | None = None,
@@ -100,6 +103,14 @@ class OsacCLI:
             args.extend(["--disk-image", effective_disk_image])
         else:
             raise ValueError("disk_image or default_disk_image must be set")
+
+        effective_storage_tier = (
+            boot_disk_storage_tier if boot_disk_storage_tier is not None else self.default_storage_tier
+        )
+        if effective_storage_tier is not None:
+            args.extend(["--boot-disk-storage-tier", effective_storage_tier])
+        else:
+            raise ValueError("boot_disk_storage_tier or default_storage_tier must be set")
 
         # Add network attachments
         if network_attachments is not None:
