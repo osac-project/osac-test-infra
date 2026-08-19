@@ -1219,8 +1219,17 @@ class WorkflowExporter:
         every "queued now"/"in progress now" stat panel -- silently
         capping it at one page's worth understates the real number
         exactly when an accurate one matters most.
+
+        Returns (runs, complete). complete is False if any page fetch
+        failed partway through a repo's pagination -- runs is then a
+        partial list that undercounts the real total, not "there
+        genuinely are only this many". Callers deriving counts from this
+        list (e.g. the by-category queued/in-progress gauges) should skip
+        publishing on an incomplete fetch rather than publish an
+        undercount that looks like a real drop.
         """
         runs = []
+        complete = True
         for status in ("queued", "in_progress"):
             url = (
                 f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
@@ -1229,6 +1238,7 @@ class WorkflowExporter:
             while url:
                 resp = self._get(url)
                 if not resp.ok:
+                    complete = False
                     break
                 for run in resp.json().get("workflow_runs", []):
                     if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
@@ -1240,7 +1250,7 @@ class WorkflowExporter:
                             record["runner_name"] = self._extract_runner_names(jobs)
                     runs.append(record)
                 url = resp.links.get("next", {}).get("url")
-        return runs
+        return runs, complete
 
     def _recent_completed(self, repo):
         """Fetch recently completed runs to detect new completions.
@@ -1615,6 +1625,12 @@ class WorkflowExporter:
         tot_queued = 0
         tot_in_progress = 0
         current_active = []
+        # False if any repo's active-runs fetch was partial/failed this
+        # cycle -- gates the by-category gauge update below (see
+        # _fetch_active_runs' docstring): publishing counts derived from
+        # an incomplete current_active would look like a real drop in
+        # queued/in-progress e2e work rather than "we couldn't fetch it".
+        active_runs_complete = True
 
         for repo in repos:
             try:
@@ -1628,7 +1644,14 @@ class WorkflowExporter:
 
                 # Collect active (queued/in_progress) runs for the active list
                 if q > 0 or ip > 0:
-                    current_active.extend(self._fetch_active_runs(repo))
+                    try:
+                        active_runs, was_complete = self._fetch_active_runs(repo)
+                        current_active.extend(active_runs)
+                        if not was_complete:
+                            active_runs_complete = False
+                    except Exception:
+                        logger.exception("Error fetching active runs for %s", repo)
+                        active_runs_complete = False
 
                 # Track newly completed runs. Checked via a cheap existence
                 # query before spending the extra _fetch_run_jobs API call,
@@ -1706,21 +1729,38 @@ class WorkflowExporter:
         # (already fully fetched above for the active-run list) rather
         # than making extra API calls -- each record already carries its
         # category from _make_job_record.
-        category_queued = {}
-        category_in_progress = {}
-        for run in current_active:
-            cat = run.get("category", "ci")
-            if run.get("status") == "queued":
-                category_queued[cat] = category_queued.get(cat, 0) + 1
-            elif run.get("status") == "in_progress":
-                category_in_progress[cat] = category_in_progress.get(cat, 0) + 1
-        # Explicitly zero every known category every cycle -- a Gauge
-        # holds its last value forever otherwise, so a category that
-        # drops to zero active runs would otherwise show a stale
-        # nonzero count rather than actually reaching zero.
-        for cat in set(WorkflowExporter.WORKFLOW_CATEGORIES.keys()) | {"ci"}:
-            queued_by_category.labels(org=ORG, category=cat).set(category_queued.get(cat, 0))
-            in_progress_by_category.labels(org=ORG, category=cat).set(category_in_progress.get(cat, 0))
+        #
+        # Skipped entirely when active_runs_complete is False: unlike
+        # tot_queued/tot_in_progress above (each repo's own reliable
+        # total_count from a single API call, unaffected by pagination
+        # failures), these gauges are derived from current_active itself,
+        # so a partial fetch would publish an undercount that looks like a
+        # real drop in queued/in-progress work rather than "we couldn't
+        # fetch it this cycle" -- leaving the previous values in place
+        # (Gauges hold their last value until explicitly set) is more
+        # honest than overwriting them with a known-wrong number.
+        if active_runs_complete:
+            category_queued = {}
+            category_in_progress = {}
+            for run in current_active:
+                cat = run.get("category", "ci")
+                if run.get("status") == "queued":
+                    category_queued[cat] = category_queued.get(cat, 0) + 1
+                elif run.get("status") == "in_progress":
+                    category_in_progress[cat] = category_in_progress.get(cat, 0) + 1
+            # Explicitly zero every known category every cycle -- a Gauge
+            # holds its last value forever otherwise, so a category that
+            # drops to zero active runs would otherwise show a stale
+            # nonzero count rather than actually reaching zero.
+            for cat in set(WorkflowExporter.WORKFLOW_CATEGORIES.keys()) | {"ci"}:
+                queued_by_category.labels(org=ORG, category=cat).set(category_queued.get(cat, 0))
+                in_progress_by_category.labels(org=ORG, category=cat).set(category_in_progress.get(cat, 0))
+        else:
+            logger.warning(
+                "Active-runs fetch incomplete this cycle -- skipping "
+                "by-category queued/in-progress gauge update, keeping "
+                "previous values"
+            )
 
         with self._lock:
             self.active_runs = current_active
