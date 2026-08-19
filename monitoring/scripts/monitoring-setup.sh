@@ -70,6 +70,13 @@ SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 # BEGIN/END REMOTE TARGETS block in prometheus.yml -- see
 # regenerate_remote_targets() below.
 REMOTE_REGISTRY="${MONITORING_HOME}/config/remote-runners.txt"
+# Serializes --add-tunnel / --remove-tunnel against each other: both do a
+# read-check-then-write on REMOTE_REGISTRY (port collision check, or lookup,
+# followed by upsert/remove), which isn't safe if two invocations overlap --
+# e.g. two concurrent --add-tunnel calls could both pass the collision check
+# against the pre-write registry state before either writes, allocating the
+# same port pair to two hosts.
+REGISTRY_LOCK_FILE="${MONITORING_HOME}/config/.remote-runners.lock"
 
 ###############################################################################
 phase() { echo -e "\n==> Phase $1: $2"; }
@@ -287,8 +294,29 @@ esac
 # central/agent setup phases below, so they exit early.
 ###############################################################################
 if [[ "${MODE}" == "tunnel" ]]; then
+    mkdir -p "$(dirname "${REGISTRY_LOCK_FILE}")"
+    exec 200>"${REGISTRY_LOCK_FILE}"
+    flock -x 200
+
     if ! check_port_collision "${TUNNEL_LABEL}" "${TUNNEL_BASE_PORT}"; then
         exit 1
+    fi
+
+    # If this label is already registered under a different host/port,
+    # re-registering it here would otherwise leave the OLD
+    # monitoring-tunnel@<old_host>--<old_port>.service running forever --
+    # an orphaned SSH connection holding a local port bound to a host this
+    # label no longer points at. --remove-tunnel already stops the right
+    # instance via the same registry lookup; do the same here before
+    # starting the new one.
+    old_lookup="$(registry_lookup "${TUNNEL_LABEL}")" || true
+    if [[ -n "${old_lookup}" ]]; then
+        read -r old_host old_port <<< "${old_lookup}"
+        if [[ "${old_host}" != "${TUNNEL_HOST}" || "${old_port}" != "${TUNNEL_BASE_PORT}" ]]; then
+            old_instance="${old_host}--${old_port}"
+            systemctl --user disable --now "monitoring-tunnel@${old_instance}.service" 2>/dev/null || true
+            info "Stopped superseded tunnel: monitoring-tunnel@${old_instance}.service"
+        fi
     fi
 
     phase 1 "Setting up SSH tunnel to ${TUNNEL_HOST} (base port ${TUNNEL_BASE_PORT})"
@@ -339,6 +367,10 @@ if [[ "${MODE}" == "tunnel" ]]; then
 fi
 
 if [[ "${MODE}" == "remove-tunnel" ]]; then
+    mkdir -p "$(dirname "${REGISTRY_LOCK_FILE}")"
+    exec 200>"${REGISTRY_LOCK_FILE}"
+    flock -x 200
+
     phase 1 "Removing SSH tunnel for ${TUNNEL_LABEL}"
 
     lookup_result="$(registry_lookup "${TUNNEL_LABEL}")" || true
