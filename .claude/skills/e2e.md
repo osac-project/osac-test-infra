@@ -37,7 +37,7 @@ ls osac-test-infra/tests/caas/
 
 Then read the infrastructure files:
 1. `osac-test-infra/tests/conftest.py` — session fixtures (grpc, k8s_hub_client, cli, namespace)
-2. `osac-test-infra/tests/vmaas/conftest.py` — VMaaS fixtures (k8s_virt_client, vm_template, network_class)
+2. `osac-test-infra/tests/vmaas/conftest.py` — VMaaS fixtures (k8s_virt_client, vm_template)
 3. `osac-test-infra/tests/core/grpc_client.py` — available gRPC methods
 4. `osac-test-infra/tests/core/k8s_client.py` — available K8s query methods
 5. `osac-test-infra/tests/core/helpers.py` — available wait helpers
@@ -203,7 +203,6 @@ Report the PR URL when done.
 - `cli` — `OsacCLI` logged in
 - `k8s_virt_client` — `K8sClient` for the VM cluster (VMaaS only, from `OSAC_VM_KUBECONFIG`)
 - `vm_template` — from `OSAC_VM_TEMPLATE` env var
-- `network_class` — from `OSAC_NETWORK_CLASS` env var
 
 **gRPC API package:** `osac.public.v1` (public), `osac.private.v1` (private)
 
