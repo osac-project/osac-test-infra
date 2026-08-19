@@ -93,6 +93,16 @@ in_progress_total = Gauge(
     "Total in-progress workflow runs across all repos",
     ["org"],
 )
+queued_by_category = Gauge(
+    "github_actions_queued_runs_by_category",
+    "Queued workflow runs by category (e2e, lint, ci, automation, release)",
+    ["org", "category"],
+)
+in_progress_by_category = Gauge(
+    "github_actions_in_progress_runs_by_category",
+    "In-progress workflow runs by category (e2e, lint, ci, automation, release)",
+    ["org", "category"],
+)
 completed_runs = Counter(
     "github_actions_completed_runs_total",
     "Completed workflow runs",
@@ -1687,6 +1697,30 @@ class WorkflowExporter:
 
         queued_total.labels(org=ORG).set(tot_queued)
         in_progress_total.labels(org=ORG).set(tot_in_progress)
+
+        # By-category breakdown of the same org-wide totals above -- e2e
+        # runs on self-hosted runners, a completely different resource
+        # pool/queue from the GitHub-hosted runners lint/build/automation
+        # workflows use, so the combined total can look calm while e2e's
+        # own queue is backed up (or vice versa). Reuses current_active
+        # (already fully fetched above for the active-run list) rather
+        # than making extra API calls -- each record already carries its
+        # category from _make_job_record.
+        category_queued = {}
+        category_in_progress = {}
+        for run in current_active:
+            cat = run.get("category", "ci")
+            if run.get("status") == "queued":
+                category_queued[cat] = category_queued.get(cat, 0) + 1
+            elif run.get("status") == "in_progress":
+                category_in_progress[cat] = category_in_progress.get(cat, 0) + 1
+        # Explicitly zero every known category every cycle -- a Gauge
+        # holds its last value forever otherwise, so a category that
+        # drops to zero active runs would otherwise show a stale
+        # nonzero count rather than actually reaching zero.
+        for cat in set(WorkflowExporter.WORKFLOW_CATEGORIES.keys()) | {"ci"}:
+            queued_by_category.labels(org=ORG, category=cat).set(category_queued.get(cat, 0))
+            in_progress_by_category.labels(org=ORG, category=cat).set(category_in_progress.get(cat, 0))
 
         with self._lock:
             self.active_runs = current_active
