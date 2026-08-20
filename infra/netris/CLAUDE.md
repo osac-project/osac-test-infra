@@ -69,7 +69,7 @@ make gather-infra           # Gather diagnostic info from the cluster
 
 **CaaS:** deploy or deploy-fast → setup-caas → deploy-caas
 
-**MaaS:** deploy or deploy-fast → setup-maas → deploy-maas  
+**MaaS:** deploy or deploy-fast → setup-maas → deploy-maas
 (or `make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot`)
 
 **VMaaS / BMaaS:** not yet implemented
