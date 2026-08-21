@@ -72,6 +72,17 @@
         sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
         systemctl restart netris-sg 2>/dev/null || true
       fi
+
+      # get.netris.io replaces netplan with /etc/network/interfaces but leaves ens4
+      # unconfigured — add a static entry so the management IP survives reboots.
+      if ! grep -q ens4 /etc/network/interfaces 2>/dev/null; then
+        printf '\nauto ens4\niface ens4 inet static\n  address {{ item.item.mgmt_ip }}\n  netmask 255.255.0.0\n  gateway 10.3.255.254\n' >> /etc/network/interfaces
+      fi
+
+      # The installer resets bgpd=no and does not create plugins.conf — fix both.
+      sed -i '/bgpd=no/c\bgpd=yes' /etc/frr/daemons
+      cp /opt/netris/etc/plugins.conf_dpdkno /opt/netris/etc/plugins.conf 2>/dev/null || true
+      systemctl restart frr 2>/dev/null || true
     " 2>&1 | tail -5
   loop: "{{ sg_agent_check.results }}"
   when: item.stdout is not defined or item.stdout != "active"

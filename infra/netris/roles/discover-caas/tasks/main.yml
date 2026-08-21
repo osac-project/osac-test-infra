@@ -50,13 +50,13 @@
 
         # Ensure dnsmasq has upstream resolvers
         mkdir -p /run/dnsmasq
-        echo 'nameserver 8.8.8.8' > /run/dnsmasq/resolv.conf
+        echo 'nameserver {{ dns_server }}' > /run/dnsmasq/resolv.conf
 
         # Point DHCP DNS to mgmt-server so agents use local dnsmasq
         if grep -q 'option domain-name-servers 192.168.16.1' /etc/dhcp/dhcpd.conf; then
           :
         else
-          sed -i 's/option domain-name-servers .*/option domain-name-servers 192.168.16.1, 8.8.8.8;/' /etc/dhcp/dhcpd.conf
+          sed -i 's/option domain-name-servers .*/option domain-name-servers 192.168.16.1, {{ dns_server }};/' /etc/dhcp/dhcpd.conf
           systemctl restart isc-dhcp-server 2>/dev/null || true
           changed=true
         fi

@@ -87,6 +87,9 @@ ethernets:
     dhcp4: true
     dhcp6: false
     mtu: {{ .mtu }}
+    nameservers:
+      addresses:
+        - {{ .dnsServer }}
 `)
 		if err != nil {
 			panic(err)
@@ -125,8 +128,6 @@ bootcmd:
 # run once for setup
 runcmd:
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/runcmd.log' ]
-  - [ sh, -c, 'apt-get update && apt-get install isc-dhcp-client -y' ]
-  - [dhclient, -v]
   - |
     #!/bin/bash
 
@@ -403,6 +404,9 @@ ethernets:
     dhcp4: true
     dhcp6: false
     mtu: {{ .mtu }}
+    nameservers:
+      addresses:
+        - {{ .dnsServer }}
 `)
 		if err != nil {
 			panic(err)
@@ -443,15 +447,12 @@ bootcmd:
 # run once for setup
 runcmd:
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/runcmd.log' ]
-  - [ sh, -c, 'apt-get update && apt-get install isc-dhcp-client -y' ]
-  - [dhclient, -v]
   - |
     #!/bin/bash
 
     # Function to check if the network interface is up and has an IP address
     check_interface_ip() {
         while true; do
-            # Replace 'ens4' with your actual interface name, e.g., 'ens3'
             IP_ADDRESS=$(ip -4 addr show ens4 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
             if [ -n "$IP_ADDRESS" ]; then
                 echo "Network interface ens4 is up and has IP: $IP_ADDRESS"
@@ -486,23 +487,38 @@ runcmd:
         done
     }
 
-    MAINIP=$(grep -w "^$(hostname)" /tmp/netris-devices | awk '{print $2}')
+    # Look up by ens4 IP (not hostname) — cloud-init hostname: overrides the
+    # DHCP-provided name before runcmd runs, making $(hostname) unreliable.
+    MY_IP=$(ip -4 addr show ens4 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+    MAINIP=$(awk -v ip="$MY_IP" '{split($3,a,"/"); if(a[1]==ip) print $2}' /tmp/netris-devices)
+    VHOSTNAME=$(awk -v ip="$MY_IP" '{split($3,a,"/"); if(a[1]==ip) print $1}' /tmp/netris-devices)
 
     if [ -z "$MAINIP" ]; then
         exit 0
     fi
 
-    HOSTNAME=$(hostname)
-    echo hostname: $HOSTNAME
-    AUTHKEY={{ $dot.ctlInfo.AuthKey }}
-    VERSION={{ $dot.ctlInfo.Version }}
-    APT_REPO={{ $dot.ctlInfo.AptRepo }}
+    hostnamectl set-hostname "$VHOSTNAME"
+    echo "hostname: $VHOSTNAME mainip: $MAINIP"
 
     bash /etc/network_nics_up.sh
 
-    curl -fsSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug
+    # Persist ens4 DHCP in /etc/network/interfaces so the interface survives reboots.
+    # get.netris.io (run by the connectivity role) replaces netplan but leaves ens4
+    # unconfigured; without this entry ens4 loses its IP on every reboot.
+    if ! grep -q ens4 /etc/network/interfaces 2>/dev/null; then
+      printf '\nauto ens4\niface ens4 inet dhcp\n' >> /etc/network/interfaces
+    fi
 
-    reboot
+    # Pre-configure loopback IP so netris-sg can start even if connectivity role is slow
+    ip addr add ${MAINIP}/32 dev lo 2>/dev/null || true
+
+    # Enable bgpd so the Netris controller can push BGP config immediately
+    sed -i '/bgpd=no/c\bgpd=yes' /etc/frr/daemons
+    systemctl restart frr || true
+
+    # NOTE: get.netris.io is intentionally NOT called here — the auth key baked
+    # into this cloud-init ISO is stale after any controller redeployment.
+    # The connectivity Ansible role runs get.netris.io with the live auth token.
 
 write_files:
   - path: /etc/network_nics_up.sh
@@ -529,7 +545,7 @@ write_files:
     {{- range $hyper := $dot.allVms }}
       {{- range $eachvm := $hyper }}
         {{- if eq $eachvm.Type "softgate" }}
-      {{ $eachvm.Name }} {{ $eachvm.MainAddress }}
+      {{ $eachvm.Name }} {{ $eachvm.MainAddress }} {{ $eachvm.MgmtAddress }}
         {{- end }}
       {{- end }}
     {{- end }}
@@ -584,8 +600,7 @@ ethernets:
         via: {{ .bgpLinkRemoteIp }}
     nameservers:
       addresses:
-        - 1.1.1.1
-        - 8.8.8.8
+        - {{ .dnsServer }}
     {{- end }}
   {{- end }}
   {{- range $item := .bgpPorts }}
@@ -774,8 +789,7 @@ ethernets:
     {{- end }}
     nameservers:
       addresses:
-        - 1.1.1.1
-        - 8.8.8.8
+        - {{ .dnsServer }}
   {{- end }}
   {{- $interfaces := dict -}}
   {{- range $item := .bgpPorts -}}
@@ -969,8 +983,7 @@ ethernets:
         via: 192.168.122.1
     nameservers:
       addresses:
-        - 8.8.8.8
-        - 8.8.4.4
+        - {{ .dnsServer }}
   ens4:
     dhcp4: false
     dhcp6: false
@@ -1207,7 +1220,7 @@ write_files:
 
       default-lease-time 172800;  #2 days
       max-lease-time 345600;      #4 days
-      option domain-name-servers 8.8.8.8, 8.8.4.4;
+      option domain-name-servers {{ .dnsServer }};
       option domain-name "sim.netris.local";
       option www-server code 72 = ip-address;
       option cumulus-provision-url code 239 = text;

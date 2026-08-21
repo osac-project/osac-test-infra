@@ -43,6 +43,19 @@
   delay: 5
   changed_when: false
 
+- name: Patch CoreDNS to use dns_server directly
+  shell: |
+    kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}' \
+      | grep -q 'forward . /etc/resolv.conf' || exit 0
+    kubectl get configmap coredns -n kube-system -o yaml \
+      | sed 's|forward . /etc/resolv.conf|forward . {{ dns_server }}|g' \
+      | kubectl apply -f -
+    kubectl rollout restart deployment/coredns -n kube-system
+    kubectl rollout status deployment/coredns -n kube-system --timeout=60s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: true
+
 - name: Check for cached container images
   stat:
     path: "{{ k3s_image_cache_dir }}"

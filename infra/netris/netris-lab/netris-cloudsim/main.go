@@ -94,6 +94,7 @@ func main() {
 			if aptRepo == "" {
 				aptRepo = "main"
 			}
+			dnsServer := conf.Require("dns_server")
 			hyperSSHUser := conf.Get("hypers_ssh_user")
 			if hyperSSHUser == "" {
 				hyperSSHUser = "ubuntu"
@@ -301,6 +302,7 @@ func main() {
 					"allVms":            hypervisorToVMs,
 					"ctlInfo":           netrisInfo.ControllerInfo,
 					"links":             hypervisorToLinks,
+					"dnsServer":         dnsServer,
 				}, "mgmt-server")
 				if err != nil {
 					return err
@@ -313,6 +315,7 @@ func main() {
 					"sshAuthKey":        sshAuthKeys,
 					"installedPackages": installedPackages,
 					"ctlInfo":           netrisInfo.ControllerInfo,
+					"dnsServer":         dnsServer,
 				}, "server")
 				if err != nil {
 					return err
@@ -326,6 +329,7 @@ func main() {
 					"installedPackages": installedPackages,
 					"allVms":            hypervisorToVMs,
 					"ctlInfo":           netrisInfo.ControllerInfo,
+					"dnsServer":         dnsServer,
 				}, "softgate")
 				if err != nil {
 					return err
@@ -403,6 +407,7 @@ func main() {
 						"bgpPorts":              netrisInfo.BGPLinks,
 						"netrisASN":             netrisInfo.SiteObject.PublicAsn,
 						"bgpPassword":           conf.Get("bgp_password"),
+						"dnsServer":             dnsServer,
 					}, "isp-server")
 					if err != nil {
 						return err
@@ -424,6 +429,7 @@ func main() {
 						"bgpPorts":              netrisInfo.BGPLinks,
 						"netrisASN":             netrisInfo.SiteObject.PublicAsn,
 						"bgpPassword":           conf.Get("bgp_password"),
+						"dnsServer":             dnsServer,
 					}, "isp-server")
 					if err != nil {
 						return err

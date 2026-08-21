@@ -52,8 +52,7 @@ resource "netris_inventory_profile" "inv-profile-1" {
   timezone                        = "America/Los_Angeles"
   ntpservers                      = ["0.us.pool.ntp.org"]
   dnsservers                      = [
-                                      "1.0.0.1",
-                                      "8.8.4.4"
+                                      "{{ dns_server }}"
   ]
   fabricsettings                  {
     optimisebgpoverlay              = true
