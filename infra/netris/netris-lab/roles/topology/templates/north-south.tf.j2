@@ -160,14 +160,14 @@ resource "netris_softgate" "north-south-softgate" {
 
 #GPU server links to NS Leaf switches
 resource "netris_link" "north-south-leaf-to-gpu-server" {
-  count                           = (var.north-south-fabric.enable * var.gpu-server-count * 2)
+  count                           = (var.north-south-fabric.enable * var.gpu-server-count * var.north-south-fabric.leaf-count)
   ports                           = [
-                                      "swp${ (  floor ( (floor(count.index/2) -  ( (var.gpu-server-count/var.north-south-fabric.leaf-count*2) * floor(count.index/(var.gpu-server-count/var.north-south-fabric.leaf-count*4)))) / var.north-south-fabric.leaf-port-breakout )+1  )}s${(floor(count.index/2) - ((var.gpu-server-count/var.north-south-fabric.leaf-count*2) * floor(count.index/(var.gpu-server-count/var.north-south-fabric.leaf-count*4)))) - var.north-south-fabric.leaf-port-breakout*floor((floor(count.index/2) - ((var.gpu-server-count/var.north-south-fabric.leaf-count*2) * floor(count.index/(var.gpu-server-count/var.north-south-fabric.leaf-count*4))))/var.north-south-fabric.leaf-port-breakout) }@${netris_switch.north-south-leaf[(count.index - (2*floor(count.index/2)) + (2*(floor(count.index/(var.gpu-server-count/var.north-south-fabric.leaf-count*4) )) ) )].name}",
-                                      "eth${(count.index - (2*floor(count.index/2)) + local.gpu-server-first-ns-port)}@${netris_server.hgx[(floor(count.index/2))].name}"
+                                      "swp${ (  floor ( (floor(count.index/var.north-south-fabric.leaf-count) -  ( var.gpu-server-count * floor(count.index/(var.gpu-server-count*2)))) / var.north-south-fabric.leaf-port-breakout )+1  )}s${(floor(count.index/var.north-south-fabric.leaf-count) - (var.gpu-server-count * floor(count.index/(var.gpu-server-count*2)))) - var.north-south-fabric.leaf-port-breakout*floor((floor(count.index/var.north-south-fabric.leaf-count) - (var.gpu-server-count * floor(count.index/(var.gpu-server-count*2))))/var.north-south-fabric.leaf-port-breakout) }@${netris_switch.north-south-leaf[(count.index - (var.north-south-fabric.leaf-count*floor(count.index/var.north-south-fabric.leaf-count)) + (var.north-south-fabric.leaf-count*(floor(count.index/(var.gpu-server-count*2)))))].name}",
+                                      "eth${(count.index - (var.north-south-fabric.leaf-count*floor(count.index/var.north-south-fabric.leaf-count)) + local.gpu-server-first-ns-port)}@${netris_server.hgx[(floor(count.index/var.north-south-fabric.leaf-count))].name}"
   ]
   ipv4                            = [
                                       "${var.north-south-fabric.gpu-server-ns-nexthop}",
-                                      "${cidrhost(var.north-south-fabric.gpu-server-ns-subnet, (floor(count.index/2) + 1) )}/${replace(var.north-south-fabric.gpu-server-ns-subnet, "/.*//", "")}"
+                                      "${cidrhost(var.north-south-fabric.gpu-server-ns-subnet, (floor(count.index/var.north-south-fabric.leaf-count) + 1) )}/${replace(var.north-south-fabric.gpu-server-ns-subnet, "/.*//", "")}"
   ]
   underlay                        = "disabled"
   depends_on                      = [
@@ -249,7 +249,7 @@ resource "netris_link" "softgates-eth1" {
 }
 
 resource "netris_link" "softgates-eth2" {
-  count                           = (var.north-south-fabric.enable * var.north-south-fabric.softgate-count)
+  count                           = (var.north-south-fabric.enable * var.north-south-fabric.softgate-count * (length(var.north-south-fabric.softgate-leaf-list) > 1 ? 1 : 0))
   ports                           = [
                                       "eth2@${netris_softgate.north-south-softgate[count.index].name}",
                                       "swp${ floor((var.north-south-fabric.leaf-to-softgate-start-port+count.index)/var.north-south-fabric.leaf-port-breakout)+1 }s${((var.north-south-fabric.leaf-to-softgate-start-port+count.index) - (var.north-south-fabric.leaf-port-breakout*floor((var.north-south-fabric.leaf-to-softgate-start-port+count.index)/var.north-south-fabric.leaf-port-breakout)))}@${netris_switch.north-south-leaf[var.north-south-fabric.softgate-leaf-list[1]].name}"

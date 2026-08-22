@@ -20,14 +20,14 @@
     src: "{{ item }}"
     dest: "{{ topology_dir }}/{{ item }}"
   loop:
-    - bgp.tf
     - server-cluster-template.tf
 
-- name: Render DNS-configurable .tf files
+- name: Render .tf files from templates
   template:
     src: "{{ item }}.j2"
     dest: "{{ topology_dir }}/{{ item }}"
   loop:
+    - bgp.tf
     - east-west.tf
     - north-south.tf
 
