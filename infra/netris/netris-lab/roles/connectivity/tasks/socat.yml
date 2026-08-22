@@ -1,9 +1,9 @@
 ---
-- name: Get haproxy pod IP
+- name: Get haproxy service ClusterIP
   shell: |
-    kubectl get pod -n netris-controller \
-      -l app.kubernetes.io/name=haproxy \
-      -o jsonpath='{.items[0].status.podIP}'
+    kubectl get svc -n netris-controller \
+      -l app.kubernetes.io/name=netris-controller,app.kubernetes.io/component=haproxy \
+      -o jsonpath='{.items[0].spec.clusterIP}'
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: haproxy_pod_ip
