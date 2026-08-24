@@ -1,6 +1,6 @@
 REPORTS_DIR ?= reports
 
-.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-bmaas-networking test-metering test-references
+.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-metering test-references
 
 test:
 	mkdir -p $(REPORTS_DIR)
@@ -29,11 +29,7 @@ test-storage:
 # -n 0 for local full-suite runs so BMH-consuming tests do not race.
 test-bmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/bmaas/ --ignore=tests/bmaas/networking -n 0 -v --tb=short $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas.xml
-
-test-bmaas-networking:
-	mkdir -p $(REPORTS_DIR)
-	pytest tests/bmaas/networking/ -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas-networking.xml
+	pytest tests/bmaas/ -n 0 -v $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas.xml
 
 test-metering:
 	mkdir -p $(REPORTS_DIR)

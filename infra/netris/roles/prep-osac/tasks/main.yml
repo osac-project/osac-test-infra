@@ -117,18 +117,15 @@
     src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
   register: _values_raw
 
-# Operator enablement (cnv, mce, metallb) is intentionally NOT overridden here:
-# each values profile declares what it needs (e.g. bmaas-ci disables cnv/mce/metallb,
-# vmaas-ci disables mce, caas-ci disables cnv). Force-enabling them clobbered the
-# profile and installed CNV on BMaaS, whose golden-image DataVolumes filled the LVMS
-# pool and starved the AAP postgres PVC. lvms/bundledPostgres stay overridden because
-# every profile needs them (lvms also gets the OCP-version-matched channel here).
 - name: Build values overrides
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ {'cliImage': _ocp_cli_image.stdout | trim,
           'bundledPostgres': {'enabled': true},
           'lvms': {'enabled': true, 'channel': 'stable-' + ocp_version},
+          'metallb': {'enabled': true},
+          'cnv': {'enabled': true},
+          'mce': {'enabled': true},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
               'NETWORK_CLASS': 'netris',
@@ -146,7 +143,6 @@
               'NETRIS_TENANT_NAME': 'Admin',
               'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
               'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
-              'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name,
               'NETRIS_RESOURCE_CLASS_MAP': _netris_resource_class_map | to_json,
               'SERVER_MGMT_ROUTE_DESTINATION': '192.168.16.0/20',
               'SERVER_MGMT_ROUTE_GATEWAY': '192.168.16.1',
@@ -167,8 +163,7 @@
               'NETRIS_USERNAME': netris_username,
               'NETRIS_SITE_ID': _netris_site_id | string,
               'NETRIS_TENANT_ID': '1',
-              'NETRIS_TENANT_NAME': 'Admin',
-              'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name
+              'NETRIS_TENANT_NAME': 'Admin'
             }, 'secret': {
               'NETRIS_PASSWORD': netris_password
             }}
@@ -199,10 +194,6 @@
                'pullPolicy': ('IfNotPresent' if bmf_operator_image.startswith('localhost/') else 'Always')
              }}}
                     if bmf_operator_image | default('') | length > 0 else {}), recursive=true)
-         | combine(({'aap': {'configAsCode': {'projectGitUri': aap_project_git_uri}}}
-                    if aap_project_git_uri | default('') | length > 0 else {}), recursive=true)
-         | combine(({'aap': {'configAsCode': {'projectGitBranch': aap_project_git_branch}}}
-                    if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
       }}
 
 - name: Write patched values file

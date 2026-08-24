@@ -12,7 +12,7 @@ netris_validate_certs: false
 ocp_vm_name_pattern: "hgx-pod00-su0-h00"
 ocp_server_vcpu: 20
 ocp_server_memory_gb: 64
-ocp_install_disk_gb: 200
+ocp_install_disk_gb: 100
 ocp_lvm_disk_gb: 200
 
 # Netris Networking for OCP
@@ -26,13 +26,6 @@ ocp_server_ports:
     accessMode: true
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
-
-# OSAC tenant ExternalIPPool CIDR. The host routes this toward the softgate/ISP
-# (see deploy-infra) so tenant ExternalIPs are reachable. Must not overlap the
-# mgmt pools (nat_cidr 198.51.100.0/29, bgp_link 198.51.100.8/29,
-# l4lb 198.51.100.16/29). OSAC creates the Netris allocation itself when a
-# tenant ExternalIP is requested; the lab only prepares host routing/masquerade.
-osac_external_ip_pool_cidr: "198.51.100.24/29"
 
 # Configuration file (INI format, optional — values fall back to env vars)
 config_path: "{{ inventory_dir }}/../config"
@@ -65,13 +58,6 @@ fulfillment_service_image: ""
 osac_aap_image: ""
 osac_ui_image: ""
 bmf_operator_image: ""
-
-# AAP config-as-code project git overrides (leave empty to use installer defaults).
-# Point AAP at a PR branch to test osac-aap playbook/collection changes; the
-# mono-repo clone (osac_branch) only controls the installer Helm charts, not
-# where AAP syncs its playbooks from at runtime.
-aap_project_git_uri: ""
-aap_project_git_branch: ""
 
 # Snapshot-based deployment (fast path)
 # Deploy mode: "fresh" (OCP-only snapshot + Helm install) or
@@ -178,7 +164,6 @@ sushy_tools_storage_pool: "bmh-disks"
 bmaas_vm_patterns:
   - "hgx-pod00-su0-h01"
   - "hgx-pod00-su0-h02"
-  - "hgx-pod00-su0-h03"
 bmaas_vm_vcpu: 4
 bmaas_vm_memory_mb: 8192
 bmaas_vm_disk_gb: 50
@@ -186,53 +171,7 @@ bmaas_bmh_namespace: "host-inventory"
 bmaas_host_type: "default"
 bmaas_host_type_title: "Default Bare Metal Host"
 bmaas_host_type_description: "CI bare metal host type for BMaaS testing"
-# Physical network interfaces of the BM host type. Tenants select an interface
-# by name in the BMI network attachment; the fulfillment-service validates the
-# name against this list (for templates that set host_type). Roles: fabric =
-# tenant east-west data, lifecycle = PXE/BMC (not tenant-attachable). eth9 is
-# the tenant data NIC on the sim-lab BMH VMs (see the Netris V-Net port).
-bmaas_host_type_interfaces:
-  - name: eth9
-    role: fabric
-    description: "Tenant data interface (100GbE)"
-  - name: eth10
-    role: fabric
-    description: "Ultra-fast storage / AI workload interface (400GbE RoCE)"
-  - name: eth0
-    role: lifecycle
-    description: "PXE/BMC provisioning interface"
 bmaas_bmi_template: "osac.templates.bm_host_provisioning"
 bmaas_catalog_item: "ci-bm-default"
 bmaas_catalog_item_title: "CI Default Bare Metal Instance"
 bmaas_catalog_item_description: "Bare metal instance for CI testing"
-bmaas_auto_eip_catalog_item: "ci-bm-auto-eip"
-bmaas_auto_eip_catalog_item_title: "CI Bare Metal Instance with Auto External IP"
-bmaas_auto_eip_catalog_item_description: "Bare metal instance with automatic ExternalIP attachment for CI testing"
-
-# ── BM provisioning V-Net ────────────────────────────────────────────
-# Unassigned BM servers' fabric NIC (eth9) sits on this Netris V-Net, which has
-# DHCP + a default gateway + SNAT, so the metal3 IPA has internet egress during
-# inspection/cleaning (bmc-net stays isolated with no default route). The OSAC
-# operator moves the port bm-provisioning -> tenant V-Net on provision and back
-# on delete (bmf-operator env NETRIS_BM_PROVISIONING_VNET).
-bmaas_provisioning_enabled: true
-bmaas_provisioning_vnet_name: "bm-provisioning"
-bmaas_provisioning_vpc_name: "bm-provisioning"
-bmaas_provisioning_cidr: "10.98.0.0/24"
-bmaas_provisioning_gateway: "10.98.0.1/24"
-bmaas_provisioning_dhcp_start: "10.98.0.2"
-# Exactly bmaas_vm_patterns-count addresses (3) — keeps VMs on .2/.3/.4 so the
-# per-host 1:1 DNATs (sequential from dhcp_start) always match. A wider range
-# lets stale leases push new VMs past the DNAT targets after destroy/recreate.
-bmaas_provisioning_dhcp_end: "10.98.0.4"
-bmaas_provisioning_fabric_iface: "eth9"   # must match bmaas_host_type_interfaces fabric NIC
-# External IP the provisioning SNAT maps egress to. Must be host-routed to the
-# ISP (see deploy-infra) and not overlap the other 198.51.100.0/24 pools
-# (nat .0/29, bgp .8/29, l4lb .16/29, tenant .24/29, ocp .1/.2, assisted .9).
-bmaas_provisioning_snat_ip: "198.51.100.33"
-bmaas_provisioning_snat_cidr: "198.51.100.32/29"
-# The provisioning SNAT target must live in a Netris IPAM subnet with purpose
-# "nat" (mirrors the mgmt "Public NAT Allocation"/"NAT pool" that backs
-# ocp_snat_ip), created in the Default (system) VPC — id 1 — where the other
-# NAT pools live.
-bmaas_provisioning_snat_vpc_id: 1

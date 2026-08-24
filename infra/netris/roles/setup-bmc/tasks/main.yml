@@ -38,14 +38,6 @@
         content: |
           <network>
             <name>{{ bmc_net_name }}</name>
-            <!-- Isolated (no <forward>, so libvirt hands out no default route).
-                 bmc-net only carries provisioning traffic on the connected /24:
-                 redfish virtual-media (sushy {{ bmc_net_host_ip }}) and the IPA ->
-                 Ironic callback ({{ bmc_net_ocp_ip }}). Internet egress for the IPA
-                 (pulling the ironic-agent image from quay.io) comes from the tenant
-                 fabric NIC on the Netris "bm-provisioning" V-Net (see setup-bmaas), NOT
-                 from bmc-net — so the running tenant BMI only ever has one default
-                 route, out its tenant NIC. -->
             <bridge name="{{ bmc_net_bridge }}"/>
             <ip address="{{ bmc_net_host_ip }}" netmask="255.255.255.0">
               <dhcp>

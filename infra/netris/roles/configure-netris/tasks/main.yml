@@ -18,42 +18,6 @@
   ansible.builtin.include_role:
     name: netris.controller.auth
 
-# Point the Default DHCP option set at the lab's configurable DNS server. This
-# option set is what every V-Net DHCP hands out (the OCP mgmt-cluster V-Net and
-# the BMaaS provisioning V-Net included); Netris ships it with public resolvers
-# (1.1.1.1/8.8.8.8), which are unreachable on labs that only allow an internal
-# resolver — leaving DHCP clients (e.g. the metal3 IPA) unable to resolve quay.io.
-- name: Get DHCP option sets
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/dhcp-option-set"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    status_code: 200
-    validate_certs: "{{ netris_validate_certs | default(false) }}"
-  register: _dhcp_option_sets
-
-- name: Find default DHCP option set
-  ansible.builtin.set_fact:
-    _default_dhcp_option_set: >-
-      {{ (_dhcp_option_sets.json.data | default([]))
-         | selectattr('isDefault', 'equalto', true) | list | first | default({}) }}
-
-- name: Set lab DNS server on the default DHCP option set
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/dhcp-option-set/{{ _default_dhcp_option_set.id }}"
-    method: PUT
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      name: "{{ _default_dhcp_option_set.name }}"
-      dnsServers: ["{{ dns_server }}"]
-    status_code: [200]
-    validate_certs: "{{ netris_validate_certs | default(false) }}"
-  when: _default_dhcp_option_set.id is defined
-
 - name: Create VPC for OCP
   ansible.builtin.include_role:
     name: netris.controller.vpc

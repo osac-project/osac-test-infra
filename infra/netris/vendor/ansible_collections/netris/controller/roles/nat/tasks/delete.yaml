@@ -10,7 +10,6 @@
     method: GET
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
-      Cache-Control: "no-cache"
     return_content: true
     status_code: 200
     validate_certs: "{{ netris_validate_certs | default(true) }}"
@@ -23,12 +22,12 @@
   when: _nat_list_resp.json is mapping
 
 - name: Delete NAT rule
-  when: _existing_nat is defined and _existing_nat is mapping
+  when: _existing_nat is defined and _existing_nat is not none
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/nat/{{ _existing_nat.id }}"
     method: DELETE
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
-    status_code: [200, 204, 404]
+    status_code: [200, 204]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
   no_log: true
