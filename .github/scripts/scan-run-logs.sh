@@ -30,7 +30,12 @@
 #                   to `source`.
 #                     - SCAN_OK=false means the scan did not complete for
 #                       logs and/or artifacts (fetch/list/download/scan
-#                       failure, or an oversize artifact skipped).
+#                       failure, or an oversize artifact skipped). A run
+#                       with 0 jobs and no log archive (action_required,
+#                       skipped, cancelled-before-start) is N/A, not
+#                       SCAN_OK=false. Discover already omits
+#                       action_required/skipped; this path still covers
+#                       cancelled-before-start and any leftover 0-job run.
 #                     - PURGE_OK=false means raw content may still be on
 #                       GitHub: a delete failed after a confirmed leak, or
 #                       we fetched content and then aborted before finishing
@@ -272,6 +277,27 @@ run_gitleaks() {
   fi
 }
 
+# True when the run never scheduled a job (fork/env action_required,
+# skipped, or cancelled before GitHub created jobs). Those have no log
+# archive: the logs API 404s or returns a zip unzip cannot open. Discover
+# already drops action_required/skipped; this still catches
+# cancelled-before-start. Fail closed (return 1) if the jobs list cannot
+# be fetched -- we cannot prove emptiness.
+run_has_no_jobs() {
+  local jobs_file="${OUTPUT_DIR}/jobs-probe.json"
+  local code count
+  code=$(fetch_with_retry "${jobs_file}" "200" \
+    -G "${GITHUB_API_URL}/repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
+    --data-urlencode "per_page=1")
+  if [[ "${code}" != "200" ]] \
+    || ! jq -e '(.total_count | type) == "number" and .total_count >= 0' "${jobs_file}" >/dev/null 2>&1; then
+    echo "Could not list jobs for run ${RUN_ID} (HTTP ${code}) -- treating log-fetch failure as incomplete."
+    return 1
+  fi
+  count=$(jq '.total_count' "${jobs_file}")
+  [[ "${count}" == "0" ]]
+}
+
 # --- Logs -----------------------------------------------------------------
 
 echo "::group::Fetch logs for run ${RUN_ID} (${REPO})"
@@ -284,15 +310,24 @@ if ! HTTP_CODE=$(curl -sL -o "${LOGS_ZIP}" -w '%{http_code}' \
   HTTP_CODE="curl-transport-error"
 fi
 if [[ "${HTTP_CODE}" != "200" ]]; then
-  echo "::warning::Could not download logs for run ${RUN_ID} (HTTP ${HTTP_CODE}) -- continuing with artifact scan."
-  SCAN_OK=false
+  if run_has_no_jobs; then
+    echo "Run ${RUN_ID} has 0 jobs -- logs unavailable (HTTP ${HTTP_CODE}); nothing to scan (not an incomplete audit)."
+  else
+    echo "::warning::Could not download logs for run ${RUN_ID} (HTTP ${HTTP_CODE}) -- continuing with artifact scan."
+    SCAN_OK=false
+  fi
   rm -f -- "${LOGS_ZIP}"
   echo "::endgroup::"
 else
   CONTENT_FETCHED=true
   if ! unzip -q "${LOGS_ZIP}" -d "${LOGS_DIR}"; then
-    echo "::warning::Failed to unzip logs for run ${RUN_ID} -- continuing with artifact scan."
-    SCAN_OK=false
+    if run_has_no_jobs; then
+      echo "Run ${RUN_ID} has 0 jobs -- log zip unreadable; nothing to scan (not an incomplete audit)."
+      CONTENT_FETCHED=false
+    else
+      echo "::warning::Failed to unzip logs for run ${RUN_ID} -- continuing with artifact scan."
+      SCAN_OK=false
+    fi
     rm -f -- "${LOGS_ZIP}"
     echo "::endgroup::"
   else

@@ -18,7 +18,10 @@
 # is only needed later by scan-run-logs.sh when purging)
 #
 # Writes to <output-dir>:
-#   runs.json    JSON array of {run_id, repo} for every completed run found
+#   runs.json    JSON array of {run_id, repo} for completed runs that may
+#                have logs (action_required / skipped conclusions omitted --
+#                those never started jobs; logs API 404s). Cancelled runs
+#                are kept; scan-run-logs.sh treats 0-job cancelled as N/A.
 #   status.env   SKIPPED_TARGETS=N, NO_TARGETS=true|false,
 #                RUNS_TRUNCATED=true|false, LOOKBACK_HOURS=N,
 #                LOOKBACK_RAW=..., TARGET_REPO=...
@@ -106,6 +109,7 @@ echo "Auditing completed runs created since ${SINCE} (lookback=${LOOKBACK_RAW} =
 
 TARGETS=()
 # Append LOCAL_CALLERS as GITHUB_REPOSITORY:<workflow> targets.
+# Mutates TARGETS. No args.
 add_local_callers() {
   local caller
   for caller in "${LOCAL_CALLERS[@]}"; do
@@ -126,8 +130,9 @@ add_external_callers() {
   done
 }
 
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/lib-github.sh"
+source "${SCRIPT_DIR}/lib-github.sh"
 
 IS_LOCAL_SCOPE=false
 if [[ "${TARGET_REPO}" == "${GITHUB_REPOSITORY}" || "${TARGET_REPO}" == "osac-project/osac-test-infra" ]]; then
@@ -177,6 +182,10 @@ for TARGET in "${TARGETS[@]+"${TARGETS[@]}"}"; do
   # are not silently truncated at per_page=100.
   page=1
   target_ids="[]"
+  # Unfiltered API row count -- used for truncation detection. Must not use
+  # the post-filter target_ids length: dropping action_required/skipped
+  # would otherwise look like a 1000-cap truncation on every short page.
+  listed_count=0
   # Incomplete = page fetch failed and/or PAGE_CAP truncation. We still keep
   # any runs collected from earlier pages (partial beat nothing) but always
   # bump SKIPPED_TARGETS so the summary cannot report a silent clean pass.
@@ -198,20 +207,25 @@ for TARGET in "${TARGETS[@]+"${TARGETS[@]}"}"; do
       break
     fi
 
-    PAGE_IDS=$(jq --arg repo "${REPO}" \
-      '[.workflow_runs[]? | {run_id: (.id | tostring), repo: $repo, event}]' "${page_file}")
+    # status=completed includes action_required / skipped (0 jobs, no log
+    # archive). Omit those so the audit does not report them as unverified.
+    PAGE_IDS=$(jq --arg repo "${REPO}" -f "${SCRIPT_DIR}/select-auditable-runs.jq" "${page_file}")
+    dropped=$(jq '[.workflow_runs[]? | select(.conclusion == "action_required" or .conclusion == "skipped")] | length' "${page_file}")
+    if (( dropped > 0 )); then
+      echo "Omitted ${dropped} action_required/skipped run(s) on ${TARGET} page ${page} (no jobs/logs to audit)."
+    fi
     target_ids=$(jq -cn --argjson a "${target_ids}" --argjson b "${PAGE_IDS}" '$a + $b')
     page_len=$(jq '.workflow_runs | length' "${page_file}")
     total_count=$(jq '.total_count' "${page_file}")
-    collected=$(echo "${target_ids}" | jq 'length')
+    listed_count=$((listed_count + page_len))
     # Short/empty page normally means "done". The workflow-runs API can also
     # stop after ~1000 created-filtered results while still advertising a
-    # higher total_count -- treat collected < total_count as truncation.
-    # (Do not key off collected>=1000 alone: exactly 1000 runs yields an
+    # higher total_count -- treat listed_count < total_count as truncation.
+    # (Do not key off listed_count>=1000 alone: exactly 1000 runs yields an
     # empty page 11 with total_count==1000 and would false-positive.)
     if (( page_len < 100 )); then
-      if (( collected < total_count )); then
-        echo "::warning::Run listing for ${TARGET} truncated (got ${collected} of total_count=${total_count}; GitHub caps created-filtered workflow-run lists around 1000). Marking target incomplete."
+      if (( listed_count < total_count )); then
+        echo "::warning::Run listing for ${TARGET} truncated (got ${listed_count} of total_count=${total_count}; GitHub caps created-filtered workflow-run lists around 1000). Marking target incomplete."
         target_incomplete=true
       fi
       break
