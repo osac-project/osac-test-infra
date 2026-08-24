@@ -2,19 +2,42 @@
 name: Fleet podman image cleanup
 
 # Every host's 5 runner instances (see fleet/inventory/group_vars/all.yml's
-# runner_count) run as the same github-runner Linux user, sharing one
-# rootless podman store. Multi-stage `podman build` in the e2e-*-full-
-# install workflows leaves each superseded intermediate stage behind as an
-# untagged (<none>) image, and teardown.sh deliberately does not prune
-# those itself: a prune from inside one job's teardown could race a
-# different job's still-in-progress build on the same host and delete an
-# image it isn't done with yet (seen in production: 1TB+ of dangling
-# images accumulated on a single host before this existed).
+# runner_count) used to run as the same github-runner Linux user, sharing
+# one rootless podman store -- setup-runner-podman.sh's storage-isolation
+# step (rolled out fleet-wide 2026-08-19) gave each instance its OWN store
+# instead (CONTAINERS_STORAGE_CONF pointing at
+# action-runners/runner-<N>/podman-storage.conf), to stop concurrent builds
+# on the same host from racing each other's shared containers/storage.
 #
-# Runs here instead, matrixed one job per host so each host prunes its own
-# store locally, gated on `until` well past the longest E2E run on record
-# (~2h45m as of writing) so it can never touch an image any real job --
-# on this host, this run or any other -- could still need.
+# That isolation silently broke this job's coverage: `runs-on: <host>`
+# dispatches to whichever ONE of that host's 5 runner processes is idle,
+# so a single run only ever saw/cleaned that one instance's store -- the
+# other 4 kept accumulating untouched, invisible to `podman system df`
+# under this job's own ambient environment. Confirmed live: osac-1 (in
+# this job's matrix since it existed) was silently carrying 227GB+ spread
+# across its 5 per-instance stores despite `df` on the host looking
+# healthy (394GB/1.8TB, 23%) -- the low overall percentage was headroom
+# from a large disk, not evidence this job was actually keeping the host
+# clean. Newly-added hosts hit the same blind spot and less accumulated
+# lucky-instance-selection history, so it surfaced there first as a
+# disk-space page. Fixed below by looping over every discovered
+# per-instance store on the host in one job run, instead of relying on
+# whichever store the job's own ambient environment happened to be in.
+#
+# The pre-2026-08-19 default (non-isolated) store is also included in that
+# loop, one time and every time: it stopped receiving new writes the
+# moment isolation took effect (confirmed via mtime on every host checked),
+# so nothing else will ever clean the real backlog still sitting there
+# (53GB on osac-1, 274GB on osac-11) unless this job explicitly visits it
+# too. Including it is nearly free once drained -- it will keep finding
+# nothing there on future runs, cheaply, unless something ever writes to
+# it again.
+#
+# Runs here instead of from inside each job's own teardown.sh, matrixed
+# one job per host so each host prunes its own stores locally, gated on
+# `until` well past the longest E2E run on record (~2h45m as of writing)
+# so it can never touch an image any real job -- on this host, this run or
+# any other -- could still need.
 #
 # Also reaps stale osac-e2e-tests containers before pruning images. A job
 # that gets killed abnormally (cancelled mid-run, host issue, a crashed
@@ -50,14 +73,12 @@ name: Fleet podman image cleanup
 # group (see the generate-matrix job below), not hardcoded here -- a
 # hardcoded list previously went stale for 11+ days when the fleet grew
 # from 11 to 16 hosts (osac-11..15 added, never added to this workflow),
-# during which those 5 hosts accumulated 270-310GB of unpruned dangling
-# podman images each (confirmed live, one host up to 73% disk usage)
-# with zero local cleanup mechanism of any kind -- there never was a
-# per-machine timer/cron for this; it has only ever run here. Generating
-# from the same inventory file the fleet's own Ansible provisioning
-# already treats as the source of truth means adding a host to the fleet
-# and making it eligible for cleanup become the same one-line change,
-# instead of two separate lists that can silently disagree again.
+# during which those 5 hosts accumulated real unpruned dangling podman
+# images with zero cleanup mechanism reaching them at all. Generating from
+# the same inventory file the fleet's own Ansible provisioning already
+# treats as the source of truth means adding a host to the fleet and
+# making it eligible for cleanup become the same one-line change, instead
+# of two separate lists that can silently disagree again.
 on:
   schedule:
     - cron: "13 */6 * * *"
@@ -110,160 +131,205 @@ jobs:
       matrix:
         host: ${{ fromJson(needs.generate-matrix.outputs.hosts) }}
     runs-on: ${{ matrix.host }}
-    # Generous on purpose: this job's first-ever run has to work through
-    # months of unbounded backlog (thousands of images, 600+GB on some
-    # hosts) one `podman rmi` at a time, which took over 10 minutes and
-    # hit the previous timeout on 7 of 11 hosts the first time this ran.
-    # Steady-state runs only have ~6h of new dangling images to catch up
-    # on and should finish in a small fraction of this.
-    timeout-minutes: 60
+    # Per-host, not per-run: a run that's still working through a large
+    # backlog on this host must never overlap a second run starting on the
+    # same host 6h later -- they'd fight over the same podman stores.
+    # cancel-in-progress: false because letting an in-progress cleanup
+    # finish is always safe; cancelling one mid-`podman rmi` is not
+    # obviously safe and buys nothing a queued next run doesn't already
+    # give you.
+    concurrency:
+      group: fleet-podman-cleanup-${{ matrix.host }}
+      cancel-in-progress: false
+    # Generous on purpose, now covering every isolated per-instance store
+    # on the host plus the pre-isolation default store in one run instead
+    # of just one store: the single-store version of this job already hit
+    # its 60-minute timeout on 7 of 11 hosts the first time it ran against
+    # months of unbounded backlog. This run may have to do that up to 6
+    # times over (5 instances + the pre-isolation default), so budget
+    # accordingly for the first pass on each host. Steady-state runs only
+    # have ~6h of new dangling images per store to catch up on and should
+    # finish in a small fraction of this once every store's initial
+    # backlog is drained.
+    timeout-minutes: 360
     steps:
-      - name: Reap stale E2E test containers
+      - name: Clean every podman storage location on this host
         shell: bash
         env:
           UNTIL: ${{ inputs.until || '6h' }}
         run: |
-          # Only ever targets localhost/osac-e2e-tests:* -- this is the
-          # single most important line in this step. node-exporter and,
-          # on osac-ci-1, prometheus/grafana/alertmanager/etc. are all
-          # *supposed* to run for weeks; matching on image name (not just
-          # age) is what keeps this from ever touching them.
-          if ! containers_output="$(podman ps -a --filter "until=${UNTIL}" --format '{{.ID}} {{.Image}}')"; then
-            echo "::error::Failed to list containers on this host" >&2
-            exit 1
-          fi
+          set -uo pipefail
+          # Not `-e`: one store hitting an unexpected error must not skip
+          # every store after it in the loop below. Failures are tracked
+          # in overall_rc and surfaced via the job's final exit code.
 
-          reaped=0
-          if [[ -n "${containers_output}" ]]; then
-            while IFS=' ' read -r cid cimage; do
-              case "${cimage}" in
-                localhost/osac-e2e-tests:*)
-                  echo "Reaping stale E2E container ${cid} (${cimage}, created more than ${UNTIL} ago)"
-                  if podman rm -f "${cid}" >/dev/null 2>&1; then
-                    reaped=$((reaped + 1))
-                  else
-                    echo "::warning::Failed to remove container ${cid}"
-                  fi
+          reap_e2e_containers() {
+            local label="$1"
+            local containers_output reaped=0 cid cimage
+            if ! containers_output="$(podman ps -a --filter "until=${UNTIL}" --format '{{.ID}} {{.Image}}')"; then
+              echo "::error::[${label}] Failed to list containers" >&2
+              return 1
+            fi
+            # Only ever targets localhost/osac-e2e-tests:* -- this is the
+            # single most important line in this function. node-exporter
+            # and, on osac-ci-1, prometheus/grafana/alertmanager/etc. are
+            # all *supposed* to run for weeks; matching on image name (not
+            # just age) is what keeps this from ever touching them.
+            if [[ -n "${containers_output}" ]]; then
+              while IFS=' ' read -r cid cimage; do
+                case "${cimage}" in
+                  localhost/osac-e2e-tests:*)
+                    echo "[${label}] Reaping stale E2E container ${cid} (${cimage}, created more than ${UNTIL} ago)"
+                    if podman rm -f "${cid}" >/dev/null 2>&1; then
+                      reaped=$((reaped + 1))
+                    else
+                      echo "::warning::[${label}] Failed to remove container ${cid}"
+                    fi
+                    ;;
+                esac
+              done <<< "${containers_output}"
+            fi
+            echo "[${label}] Reaped ${reaped} stale E2E test container(s)."
+          }
+
+          reap_external_containers() {
+            local label="$1"
+            local ext_output reaped=0 failed=0 cid cmd status
+            # `--external` is NOT an external-only view -- it's a UNION of
+            # genuine external (buildah) artifacts with every regular
+            # container `-a` would already show (confirmed live: this
+            # included node-exporter on every host tested, meant to run
+            # for weeks). Command=="buildah" + Status=="Storage" is what
+            # actually identifies a genuine orphaned buildah working
+            # container.
+            if ! ext_output="$(podman ps -a --external --filter "until=${UNTIL}" --format '{{.ID}}\t{{.Command}}\t{{.Status}}')"; then
+              echo "::error::[${label}] Failed to list external containers" >&2
+              return 1
+            fi
+            if [[ -n "${ext_output}" ]]; then
+              while IFS=$'\t' read -r cid cmd status; do
+                [[ "${cmd}" == "buildah" && "${status}" == "Storage" ]] || continue
+                # Plain `podman rm` fails on these ("container is mounted
+                # and cannot be removed without using force") even when
+                # genuinely stale -- confirmed live, -f is required.
+                if podman rm -f "${cid}" >/dev/null 2>&1; then
+                  reaped=$((reaped + 1))
+                else
+                  failed=$((failed + 1))
+                  echo "::warning::[${label}] Failed to remove external container ${cid}"
+                fi
+              done <<< "${ext_output}"
+            fi
+            echo "[${label}] Reaped ${reaped} stale external container(s), ${failed} failed."
+          }
+
+          prune_dangling_images() {
+            local label="$1"
+            local images_output dangling=() removed=0 skipped=0 img rc
+            echo "[${label}] -- before --"
+            podman system df
+
+            # `podman image prune` removes its whole candidate list as one
+            # operation -- if any single dangling image is still
+            # referenced by another image or a container (e.g. a live
+            # job's build still in progress in this store right now), the
+            # entire call aborts and every other image that pass WOULD
+            # have safely removed goes untouched too. Removing one at a
+            # time means a single busy image only costs that one image
+            # this cycle -- it's still dangling and still gated by the
+            # same `until` filter next run, so nothing is lost, just
+            # deferred.
+            if ! images_output="$(podman images -f dangling=true -f "until=${UNTIL}" -q)"; then
+              echo "::error::[${label}] Failed to list dangling images" >&2
+              return 1
+            fi
+            if [[ -n "${images_output}" ]]; then
+              mapfile -t dangling <<< "${images_output}"
+            fi
+            echo "[${label}] Found ${#dangling[@]} dangling image(s) older than ${UNTIL}."
+
+            for img in "${dangling[@]}"; do
+              rc=0
+              podman rmi "${img}" >/dev/null 2>&1 || rc=$?
+              case "${rc}" in
+                0|1)
+                  # 1 = image already gone (e.g. removed alongside a
+                  # shared parent layer earlier in this same loop) --
+                  # the goal is already achieved.
+                  removed=$((removed + 1))
+                  ;;
+                2)
+                  # 2 = still referenced by a container specifically --
+                  # expected during a live job's build, safe to defer.
+                  skipped=$((skipped + 1))
+                  echo "[${label}] Skipped ${img} -- still referenced by a container (likely a live job's build in progress). Will retry next cycle."
+                  ;;
+                *)
+                  echo "::error::[${label}] podman rmi ${img} failed unexpectedly (exit ${rc})" >&2
+                  return 1
                   ;;
               esac
-            done <<< "${containers_output}"
-          fi
-          echo "Reaped ${reaped} stale E2E test container(s)."
+            done
+            echo "[${label}] Removed ${removed}, skipped ${skipped}."
+            echo "[${label}] -- after --"
+            podman system df
+          }
 
-      - name: Reap stale external (buildah) working containers
-        shell: bash
-        env:
-          UNTIL: ${{ inputs.until || '6h' }}
-        run: |
-          # `--external` is NOT an external-only view -- it's a UNION of
-          # genuine external (buildah) artifacts with every regular
-          # container `-a` would already show. Confirmed live: this
-          # included node-exporter ("Up 3 hours", its own startup flags as
-          # Command) on every host tested. node-exporter is meant to run
-          # for weeks, so age alone would eventually mark it stale and
-          # this step would force-remove the fleet's own monitoring
-          # container. Command=="buildah" + Status=="Storage" is what
-          # actually identifies a genuine orphaned buildah working
-          # container -- confirmed live across both podman 5.8.3 and
-          # 6.0.x hosts in this fleet, which is the full version spread
-          # currently deployed.
-          #
-          # The age filter is still what protects a build genuinely in
-          # progress right now: unlike a full E2E job (up to ~2h45m on
-          # record), the `podman build` stage that creates one of these
-          # takes minutes, not hours, so ${UNTIL} (floor 6h) is a much
-          # larger safety margin here than it is for the image-prune step
-          # below, not a smaller one.
-          if ! ext_output="$(podman ps -a --external --filter "until=${UNTIL}" --format '{{.ID}}\t{{.Command}}\t{{.Status}}')"; then
-            echo "::error::Failed to list external containers on this host" >&2
-            exit 1
-          fi
+          clean_store() {
+            local conf="$1" label="$2" rc=0
+            if [[ -n "${conf}" ]]; then
+              export CONTAINERS_STORAGE_CONF="${conf}"
+            else
+              unset CONTAINERS_STORAGE_CONF
+            fi
+            reap_e2e_containers "${label}" || rc=1
+            reap_external_containers "${label}" || rc=1
+            prune_dangling_images "${label}" || rc=1
+            return "${rc}"
+          }
 
-          reaped=0
-          failed=0
-          if [[ -n "${ext_output}" ]]; then
-            while IFS=$'\t' read -r cid cmd status; do
-              [[ "${cmd}" == "buildah" && "${status}" == "Storage" ]] || continue
-              # Plain `podman rm` fails on these ("container is mounted
-              # and cannot be removed without using force") even when
-              # genuinely stale -- confirmed live, -f is required.
-              if podman rm -f "${cid}" >/dev/null 2>&1; then
-                reaped=$((reaped + 1))
-              else
-                failed=$((failed + 1))
-                echo "::warning::Failed to remove external container ${cid}"
-              fi
-            done <<< "${ext_output}"
-          fi
-          echo "Reaped ${reaped} stale external container(s), ${failed} failed."
+          overall_rc=0
 
-      - name: Prune dangling podman images
-        shell: bash
-        env:
-          UNTIL: ${{ inputs.until || '6h' }}
-        run: |
-          echo "-- before --"
-          podman system df
+          echo "::group::default (pre-isolation store)"
+          clean_store "" "default" || overall_rc=1
+          echo "::endgroup::"
 
-          # `podman image prune` removes its whole candidate list as one
-          # operation -- if any single dangling image is still referenced
-          # by another image or a container (e.g. a live job's build still
-          # in progress on this host right now), the entire call aborts
-          # with a non-zero exit and every other image that pass WOULD
-          # have safely removed goes untouched too (seen in practice: one
-          # busy host, one in-progress job, and the whole host's prune for
-          # that cycle failed outright). Removing one at a time means a
-          # single busy image only costs that one image for this cycle --
-          # it's still dangling and still gated by the same `until` filter
-          # next run, so nothing is lost, just deferred.
-          # Command substitution, not `mapfile -t x < <(cmd)` process
-          # substitution: the latter's $? reflects mapfile's own read, not
-          # the command's exit status, so a broken `podman images` call
-          # would silently look identical to "0 dangling images found"
-          # instead of the real error it is.
-          if ! images_output="$(podman images -f dangling=true -f "until=${UNTIL}" -q)"; then
-            echo "::error::Failed to list dangling images on this host" >&2
-            exit 1
-          fi
-          if [[ -z "${images_output}" ]]; then
-            dangling=()
-          else
-            mapfile -t dangling <<< "${images_output}"
-          fi
-          echo "Found ${#dangling[@]} dangling image(s) older than ${UNTIL}."
-
-          removed=0
-          skipped=0
-          for img in "${dangling[@]}"; do
-            rc=0
-            podman rmi "${img}" >/dev/null 2>&1 || rc=$?
-            case "${rc}" in
-              0|1)
-                # 1 = image already gone (e.g. removed alongside a shared
-                # parent layer earlier in this same loop, or by a
-                # concurrent job's own cleanup) -- the goal (image gone)
-                # is already achieved, so this counts the same as removing
-                # it ourselves.
-                removed=$((removed + 1))
-                ;;
-              2)
-                # 2 = still referenced by a container specifically (not a
-                # generic failure) -- expected during a live job's build,
-                # and safe to defer: still dangling, still gated by the
-                # same `until` filter next run.
-                skipped=$((skipped + 1))
-                echo "Skipped ${img} -- still referenced by a container (likely a live job's build in progress). Will retry next cycle."
-                ;;
-              *)
-                # Anything else (125 = podman/runtime-level error, or an
-                # unrecognized code) is not a "busy image" case and
-                # shouldn't be silently swallowed alongside those.
-                echo "::error::podman rmi ${img} failed unexpectedly (exit ${rc})" >&2
-                exit 1
-                ;;
-            esac
+          # One store per runner instance -- see setup-runner-podman.sh's
+          # storage-isolation step for how each podman-storage.conf gets
+          # created and wired into that instance's systemd service. Unlike
+          # the pre-isolation default store above (confirmed dead: nothing
+          # has written to it since isolation rolled out), these ARE each
+          # actively owned by a specific runner instance that could be
+          # mid-job on a completely different schedule than this cleanup
+          # job's own dispatch -- the `until` age filter inside clean_store
+          # only protects individual images/containers by age, so it's not
+          # on its own a strong enough guarantee that we never touch a
+          # store while its owning instance is actively writing to it.
+          # Skip a store outright, this cycle, whenever its owning instance
+          # currently has a job in flight -- same live-process check
+          # setup-runner-podman.sh already uses in production to decide
+          # whether a runner is safe to restart. Deferring a busy store
+          # costs nothing: it's still gated by the same age filter next
+          # cycle, so nothing is lost, only delayed one cycle, exactly like
+          # a single busy image already is inside prune_dangling_images.
+          shopt -s nullglob
+          for conf in "${HOME}"/action-runners/runner-*/podman-storage.conf; do
+            runner_dir="$(dirname "${conf}")"
+            instance="$(basename "${runner_dir}")"
+            if pgrep -f "${runner_dir}/bin[^ ]*/Runner\.Worker" >/dev/null 2>&1; then
+              # Also catches this job's OWN instance, since a Runner.Worker
+              # is by definition running right now to execute this very
+              # script -- harmless: that store is genuinely safe to clean
+              # from inside its own job, but skipping it here too just
+              # defers it one cycle, same as any other busy instance, and
+              # some other idle instance's turn to run this job will get
+              # to it later.
+              echo "::warning::[${instance}] currently running a job -- skipping this store entirely this cycle rather than touching a live build. Will retry next cycle."
+              continue
+            fi
+            echo "::group::${instance}"
+            clean_store "${conf}" "${instance}" || overall_rc=1
+            echo "::endgroup::"
           done
-          echo "Removed ${removed}, skipped ${skipped}."
 
-          echo "-- after --"
-          podman system df
+          exit "${overall_rc}"
