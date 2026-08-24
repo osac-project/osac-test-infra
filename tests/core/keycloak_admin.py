@@ -217,3 +217,64 @@ def add_user_to_organization_group(
             f"Failed to add user '{username}' to group in organization '{org_name}': "
             f"status={status} body={body.decode()}"
         )
+
+
+def wait_for_project_in_keycloak(
+    *, keycloak_url: str, admin_token: str, org_id: str, project_name: str, timeout_seconds: int = 300
+) -> str:
+    """
+    Wait for a project (group) to be synced to Keycloak and return its ID.
+    Polls with exponential backoff until the project exists or timeout is reached.
+    Default timeout increased to 300s (5 minutes) to accommodate sync delays.
+    """
+    start_time = time.time()
+    interval = 1.0
+    max_interval = 10.0
+    last_groups: list[dict[str, Any]] = []
+
+    while time.time() - start_time < timeout_seconds:
+        status, body = keycloak_admin_request(
+            keycloak_url=keycloak_url, admin_token=admin_token, method="GET", path=f"/organizations/{org_id}/groups"
+        )
+
+        if status != 200:
+            raise RuntimeError(f"Failed to query organization groups: status={status} body={body.decode()}")
+
+        groups: list[dict[str, Any]] = json.loads(body)
+        last_groups = groups  # Save for debugging if we time out
+
+        # Try multiple name formats in case the sync uses different conventions
+        for group in groups:
+            group_name = group.get("name", "")
+            if group_name in (f"/{project_name}", project_name, f"{project_name}"):
+                group_id: str = group["id"]
+                return group_id
+
+        time.sleep(interval)
+        interval = min(interval * 2, max_interval)
+
+    # Debug output to help diagnose sync issues
+    group_names = [g.get("name", "<unnamed>") for g in last_groups]
+    raise RuntimeError(
+        f"Project group '/{project_name}' (or variant) not found in Keycloak after {timeout_seconds}s. "
+        f"Organization ID: {org_id}. Found {len(last_groups)} groups: {group_names}"
+    )
+
+
+def check_project_not_in_keycloak(*, keycloak_url: str, admin_token: str, org_id: str, project_name: str) -> bool:
+    """
+    Check that a project (group) does NOT exist in Keycloak.
+    Returns True if the project is not found, False if it exists.
+    """
+    status, body = keycloak_admin_request(
+        keycloak_url=keycloak_url, admin_token=admin_token, method="GET", path=f"/organizations/{org_id}/groups"
+    )
+
+    if status != 200:
+        raise RuntimeError(f"Failed to query organization groups: status={status} body={body.decode()}")
+
+    groups: list[dict[str, Any]] = json.loads(body)
+    for group in groups:
+        if group.get("name") == f"/{project_name}":
+            return False
+    return True
