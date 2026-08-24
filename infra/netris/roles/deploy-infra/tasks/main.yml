@@ -59,6 +59,21 @@
     - "{{ ns_fabric.mgmt_subnet }}"
     - "{{ nat_cidr }}"
     - "{{ l4lb_cidr }}"
+    - "{{ osac_external_ip_pool_cidr }}"
+    - "{{ bmaas_provisioning_snat_cidr }}"
+
+# The mgmt-cluster pools (nat_cidr/l4lb_cidr) are allocated in Netris and
+# routed by netris-lab at provision time. The OSAC tenant ExternalIPPool CIDR
+# is different: OSAC creates the Netris allocation later (when a tenant
+# ExternalIP is requested), so the only host-side prep the lab must do is route
+# the CIDR toward the softgate/ISP, mirroring the mgmt pools' route.
+- name: Route OSAC tenant external IP pool via ISP server (isolated mode)
+  when: connectivity_mode == "isolated"
+  ansible.builtin.command: >-
+    ip route replace {{ osac_external_ip_pool_cidr }}
+    via {{ bgp_link_subnet | ansible.utils.ipaddr('network') | ansible.utils.ipmath(2) }}
+    dev {{ public_bridge_name }}
+  changed_when: true
 
 # k3s_controller's vendored "Verify controller API" task hits the same
 # OpenSSL CA-cert-loading bug documented in playbooks/deploy-infra.yml's own

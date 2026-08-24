@@ -153,9 +153,15 @@ make deploy-fast EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-
 ```bash
 make deploy-ocp
 make deploy-osac OSAC_VALUES_FILE=values/bmaas-ci/values.yaml \
-  EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true"
+  EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true aap_project_git_branch=my-feature-branch"
 make setup-bmaas
 ```
+
+> `aap_project_git_branch` (and `aap_project_git_uri`) point the AAP config-as-code project
+> at a specific branch, so AAP syncs osac-aap playbooks/collections from that branch at
+> runtime. This is separate from `osac_branch`, which only controls the mono-repo clone used
+> for the installer Helm charts — to fully test a PR whose changes include osac-aap Ansible,
+> set both `osac_branch` and `aap_project_git_branch` to the PR branch.
 
 **Re-deploy OSAC after code changes:**
 ```bash
@@ -377,6 +383,7 @@ make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
 | `ocp_node_ip` | `192.168.40.2` | OCP node static IP | defaults only |
 | `ocp_snat_ip` | `198.51.100.1` | SNAT translated IP | defaults only |
 | `ocp_dnat_ip` | `198.51.100.2` | DNAT IP for API/apps access | defaults only |
+| `osac_external_ip_pool_cidr` | `198.51.100.24/29` | OSAC tenant ExternalIPPool CIDR; host routes/masquerades it toward the softgate. Must not overlap the mgmt nat/l4lb/bgp pools. OSAC creates the Netris allocation itself. | defaults only |
 | `netris_username` | `netris` | Netris API username | defaults only |
 | `netris_password` | `netris` | Netris API password | defaults only |
 | `dns_server` | `8.8.8.8` | Upstream DNS server threaded through cloud-init, Netris topology, dnsmasq/DHCP, and the OCP NMState resolver. Override in environments where public DNS (8.8.8.8, 1.1.1.1) is unreachable | yes |
@@ -411,6 +418,8 @@ dns_server: "10.0.0.1"
 | `osac_aap_image` | `""` | osac-aap bootstrap image override | no |
 | `osac_ui_image` | `""` | osac-ui container image override | no |
 | `bmf_operator_image` | `""` | bare-metal-fulfillment-operator container image override | no |
+| `aap_project_git_uri` | `""` | AAP config-as-code project git URI override (defaults to installer value) | no |
+| `aap_project_git_branch` | `""` | AAP config-as-code project git branch override (test PR playbooks/collections) | no |
 
 #### Snapshot Deployment (fast path)
 

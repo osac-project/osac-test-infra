@@ -1244,7 +1244,9 @@ write_files:
         option www-server {{ $item.DefaultGateway }};
         option default-url = "http://{{ $item.DefaultGateway }}/onie-installer";
         option cumulus-provision-url "http://{{ $item.DefaultGateway }}/cumulus-ztp";
+      {{- if not (hasSuffix "_servers_mgmt" $item.Name) }}
         option routers {{ $item.DefaultGateway }};
+      {{- end }}
       {{- range $hyper := $dot.allVms }}
         {{- range $eachvm := $hyper }}
           {{- if ne $eachvm.Type "mgmt-server" }}
