@@ -165,7 +165,7 @@ jobs:
 
           reap_e2e_containers() {
             local label="$1"
-            local containers_output reaped=0 cid cimage
+            local containers_output reaped=0 failed=0 cid cimage
             if ! containers_output="$(podman ps -a --filter "until=${UNTIL}" --format '{{.ID}} {{.Image}}')"; then
               echo "::error::[${label}] Failed to list containers" >&2
               return 1
@@ -183,13 +183,15 @@ jobs:
                     if podman rm -f "${cid}" >/dev/null 2>&1; then
                       reaped=$((reaped + 1))
                     else
+                      failed=$((failed + 1))
                       echo "::warning::[${label}] Failed to remove container ${cid}"
                     fi
                     ;;
                 esac
               done <<< "${containers_output}"
             fi
-            echo "[${label}] Reaped ${reaped} stale E2E test container(s)."
+            echo "[${label}] Reaped ${reaped} stale E2E test container(s), ${failed} failed."
+            [[ "${failed}" -eq 0 ]]
           }
 
           reap_external_containers() {
@@ -221,6 +223,7 @@ jobs:
               done <<< "${ext_output}"
             fi
             echo "[${label}] Reaped ${reaped} stale external container(s), ${failed} failed."
+            [[ "${failed}" -eq 0 ]]
           }
 
           prune_dangling_images() {
