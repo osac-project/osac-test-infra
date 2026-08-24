@@ -65,7 +65,7 @@ resource "netris_bgp" "upstream1" {
   localip                         = "10.10.0.1/30"
   remoteip                        = "10.10.0.2/30"
   prefixlistinbound               = null
-  prefixlistoutbound              = null
+  prefixlistoutbound              = var.north-south-fabric.bgp-prefix-list-outbound != "" ? var.north-south-fabric.bgp-prefix-list-outbound : null
   sendbgpcommunity                = null
   depends_on                      = [netris_softgate.north-south-softgate]
 }
@@ -81,7 +81,7 @@ resource "netris_bgp" "upstream2" {
   localip                         = "10.10.0.5/30"
   remoteip                        = "10.10.0.6/30"
   prefixlistinbound               = null
-  prefixlistoutbound              = null
+  prefixlistoutbound              = var.north-south-fabric.bgp-prefix-list-outbound != "" ? var.north-south-fabric.bgp-prefix-list-outbound : null
   sendbgpcommunity                = null
   depends_on                      = [netris_softgate.north-south-softgate]
 }
@@ -97,7 +97,7 @@ resource "netris_bgp" "upstream3" {
   localip                         = "10.10.0.9/30"
   remoteip                        = "10.10.0.10/30"
   prefixlistinbound               = null
-  prefixlistoutbound              = null
+  prefixlistoutbound              = var.north-south-fabric.bgp-prefix-list-outbound != "" ? var.north-south-fabric.bgp-prefix-list-outbound : null
   sendbgpcommunity                = null
   depends_on                      = [netris_softgate.north-south-softgate]
 }
@@ -113,7 +113,7 @@ resource "netris_bgp" "upstream4" {
   localip                         = "10.10.0.13/30"
   remoteip                        = "10.10.0.14/30"
   prefixlistinbound               = null
-  prefixlistoutbound              = null
+  prefixlistoutbound              = var.north-south-fabric.bgp-prefix-list-outbound != "" ? var.north-south-fabric.bgp-prefix-list-outbound : null
   sendbgpcommunity                = null
   depends_on                      = [netris_softgate.north-south-softgate]
 }

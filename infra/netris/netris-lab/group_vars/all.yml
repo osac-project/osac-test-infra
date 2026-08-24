@@ -83,7 +83,8 @@ ns_fabric:
   oob_gpu_per_switch: 4
   oob_uplink_into_spine: 1
   softgate_count: 4
-  softgate_roles: '["general", "general", "general", "general"]'
+  softgate_roles: '["general", "general", "snat", "snat"]'
+  bgp_prefix_list_outbound: "permit 0.0.0.0/0 le 32"
   softgate_leaf_list: "[0, 1]"
   softgate_node_type: "softgate_hs"     # installer requires _hs to find the package; dpdk disabled post-install
   leaf_to_softgate_start_port: 176

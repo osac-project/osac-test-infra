@@ -49,6 +49,198 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+# Phase 1b: BM provisioning V-Net
+# Create the Netris "bm-provisioning" V-Net (gateway + DHCP + SNAT) and attach
+# every server's fabric port (eth9) to it, BEFORE the BMHs boot for inspection.
+# This gives the metal3 IPA internet egress (to pull the ironic-agent image from
+# quay.io) via its fabric NIC, so bmc-net can stay isolated (no default route,
+# no multi-NIC default-route conflict). The OSAC operator later moves the port
+# bm-provisioning -> tenant V-Net on provision and back on delete
+# (NETRIS_BM_PROVISIONING_VNET). The vendored netris.controller.vnet role only
+# exposes dhcpEnabled (no range), so the V-Net is created via a direct API call
+# to set the explicit DHCP range; VPC/IPAM/SNAT reuse the roles (mirrors
+# configure-netris).
+- name: Set up BM provisioning V-Net
+  when: bmaas_provisioning_enabled | bool
+  block:
+    - name: Discover Netris controller URL (k3s)
+      ansible.builtin.shell:
+        cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: _provisioning_traefik_nodeport
+      changed_when: false
+      until: _provisioning_traefik_nodeport.rc == 0 and _provisioning_traefik_nodeport.stdout | length > 0
+      retries: 10
+      delay: 15
+
+    - name: Set Netris controller URL
+      ansible.builtin.set_fact:
+        netris_controller_url: "http://localhost:{{ _provisioning_traefik_nodeport.stdout }}"
+
+    - name: Authenticate to Netris controller
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+
+    - name: Create provisioning VPC
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+      vars:
+        vpc_name: "{{ bmaas_provisioning_vpc_name }}"
+        vpc_state: present
+        vpc_tenant_id: 1
+
+    - name: Create IPAM allocation for provisioning
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+      vars:
+        ipam_state: create_allocation
+        ipam_name: "{{ bmaas_provisioning_vnet_name }}-allocation"
+        ipam_cidr: "{{ bmaas_provisioning_cidr }}"
+        ipam_tenant_id: 1
+        ipam_vpc_id: "{{ vpc_id }}"
+
+    - name: Create IPAM subnet for provisioning
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+      vars:
+        ipam_state: create_subnet
+        ipam_name: "{{ bmaas_provisioning_vnet_name }}-subnet"
+        ipam_cidr: "{{ bmaas_provisioning_cidr }}"
+        ipam_purpose: common
+        ipam_site_id: 1
+        ipam_tenant_id: 1
+        ipam_vpc_id: "{{ vpc_id }}"
+
+    - name: Build provisioning fabric port list
+      ansible.builtin.set_fact:
+        _provisioning_ports: "{{ _provisioning_ports | default([]) + [{'name': bmaas_provisioning_fabric_iface ~ '@' ~ item, 'accessMode': true}] }}"
+      loop: "{{ bmaas_vm_patterns }}"
+
+    - name: Get existing V-Nets
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet"
+        method: GET
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+        status_code: 200
+        validate_certs: "{{ netris_validate_certs | default(false) }}"
+      register: _provisioning_vnet_list
+      no_log: true
+
+    - name: Create provisioning V-Net (gateway + DHCP range + fabric ports)
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet"
+        method: POST
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ bmaas_provisioning_vnet_name }}"
+          # Single Jinja expression so the dict (and its int id) survives as JSON;
+          # a quoted "{{ vpc_id | int }}" would stringify id and Netris rejects it
+          # ("Invalid vpc/id: must be integer").
+          vpc: "{{ {'id': vpc_id | int} }}"
+          sites: [{id: 1}]
+          state: active
+          vlan: auto
+          tenant: {id: 1}
+          gateways:
+            - prefix: "{{ bmaas_provisioning_gateway }}"
+              dhcpEnabled: true
+              dhcpStartIp: "{{ bmaas_provisioning_dhcp_start }}"
+              dhcpEndIp: "{{ bmaas_provisioning_dhcp_end }}"
+          ports: "{{ _provisioning_ports }}"
+        status_code: [200, 201]
+        validate_certs: "{{ netris_validate_certs | default(false) }}"
+      register: _provisioning_vnet_create
+      changed_when: true
+      when: >-
+        (_provisioning_vnet_list.json.data | default([])
+         | selectattr('name', 'equalto', bmaas_provisioning_vnet_name) | list | length) == 0
+
+    - name: Resolve existing provisioning V-Net id (for port update)
+      ansible.builtin.set_fact:
+        _provisioning_vnet_id: >-
+          {{ (_provisioning_vnet_list.json.data | default([])
+              | selectattr('name', 'equalto', bmaas_provisioning_vnet_name)
+              | map(attribute='id') | list | first) | default('') }}
+      when: _provisioning_vnet_create is skipped
+
+    - name: Ensure provisioning V-Net has fabric ports attached
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet/{{ _provisioning_vnet_id }}"
+        method: PUT
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          ports: "{{ _provisioning_ports }}"
+        status_code: [200]
+        validate_certs: "{{ netris_validate_certs | default(false) }}"
+      when:
+        - _provisioning_vnet_create is skipped
+        - _provisioning_vnet_id | length > 0
+        - (_provisioning_vnet_list.json.data | default([])
+           | selectattr('name', 'equalto', bmaas_provisioning_vnet_name)
+           | map(attribute='ports') | first | default([]) | length) == 0
+      changed_when: true
+
+    # The SNAT target IP must belong to a Netris IPAM subnet with purpose "nat",
+    # in the Default VPC (mirrors the mgmt "Public NAT Allocation"/"NAT pool" that
+    # backs ocp_snat_ip). Without it Netris rejects the SNAT rule with
+    # "Destination address is out of any defined subnets."
+    - name: Create IPAM allocation for provisioning SNAT pool
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+      vars:
+        ipam_state: create_allocation
+        ipam_name: "{{ bmaas_provisioning_vnet_name }}-snat-allocation"
+        ipam_cidr: "{{ bmaas_provisioning_snat_cidr }}"
+        ipam_tenant_id: 1
+        ipam_vpc_id: "{{ bmaas_provisioning_snat_vpc_id }}"
+
+    - name: Create IPAM subnet for provisioning SNAT pool (purpose nat)
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+      vars:
+        ipam_state: create_subnet
+        ipam_name: "{{ bmaas_provisioning_vnet_name }}-snat-pool"
+        ipam_cidr: "{{ bmaas_provisioning_snat_cidr }}"
+        ipam_purpose: nat
+        ipam_site_id: 1
+        ipam_tenant_id: 1
+        ipam_vpc_id: "{{ bmaas_provisioning_snat_vpc_id }}"
+
+    - name: Create provisioning SNAT rule
+      ansible.builtin.include_role:
+        name: netris.controller.nat
+      vars:
+        nat_name: "{{ bmaas_provisioning_vnet_name }}-snat"
+        nat_state: present
+        nat_action: snat
+        nat_protocol: all
+        nat_site_id: 1
+        nat_vpc_id: "{{ vpc_id }}"
+        nat_source_address: "{{ bmaas_provisioning_cidr }}"
+        nat_snat_to_ip: "{{ bmaas_provisioning_snat_ip }}"
+
+    - name: Create V-Net lock Lease for provisioning network
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: coordination.k8s.io/v1
+          kind: Lease
+          metadata:
+            name: "netris-vnet-lock-{{ bmaas_provisioning_vnet_name }}"
+            namespace: "{{ osac_namespace }}"
+          spec:
+            leaseDurationSeconds: 120
+      environment:
+        KUBECONFIG: /root/.kube/config
+
 # Phase 2: Prepare virtual BMH VMs (repurpose HGX VMs)
 # Skip if BMHs already exist and are available (idempotent re-run)
 - name: Check existing BMH states
@@ -236,6 +428,26 @@
   changed_when: false
   loop: "{{ bmaas_vms }}"
 
+# The tenant data interfaces (eth9, eth10, ...) are the Netris fabric NICs,
+# which appear as the "udp"-type interfaces in domiflist, in order. This is a
+# DIFFERENT MAC than bootMACAddress (the bmc-net NIC) — the DHCP lease the
+# operator's IP-discovery matches against is on the fabric NIC, not the boot
+# NIC. Order matches bmaas_host_type_interfaces' non-lifecycle entries:
+# 1st udp NIC = eth9, 2nd = eth10, ...
+- name: Get VM tenant fabric NIC MACs (Netris udp NICs, ordered)
+  ansible.builtin.shell:
+    cmd: virsh domiflist {{ item }} | awk '$2=="udp"{print $5}'
+  register: _vm_fabric_macs
+  changed_when: false
+  loop: "{{ bmaas_vms }}"
+
+- name: Compute tenant (non-lifecycle) host type interface names
+  ansible.builtin.set_fact:
+    _tenant_iface_names: >-
+      {{ bmaas_host_type_interfaces
+         | rejectattr('role', 'equalto', 'lifecycle')
+         | map(attribute='name') | list }}
+
 - name: Create BMC credential secrets
   ansible.builtin.shell:
     cmd: |
@@ -265,6 +477,12 @@
       metadata:
         name: {{ item }}
         namespace: {{ bmaas_bmh_namespace }}
+        annotations:
+          # Map each tenant data interface (eth9, eth10, role: fabric) to its
+          # Netris fabric NIC MAC so the operator's IP-discovery job matches the
+          # DHCP lease by MAC. These are the "udp"-type NICs (not bootMACAddress,
+          # which is the bmc-net NIC). Names come from bmaas_host_type_interfaces.
+          osac.openshift.io/interface-macs: '{{ dict(_tenant_iface_names | zip(_vm_fabric_macs.results[idx].stdout_lines)) | to_json }}'
       spec:
         online: true
         bootMACAddress: "{{ _vm_macs.results[idx].stdout | trim }}"
@@ -284,7 +502,7 @@
   register: _bmh_create
   changed_when: "'created' in _bmh_create.stdout or 'configured' in _bmh_create.stdout"
 
-# Phase 4: Wait for BMH availability
+# Phase 4: Wait for BMH availability (IPA can now pull its image via SNAT)
 - name: Wait for BMHs to reach available state
   ansible.builtin.shell:
     cmd: >-
@@ -371,8 +589,29 @@
         name: "{{ bmaas_host_type }}"
       title: "{{ bmaas_host_type_title }}"
       description: "{{ bmaas_host_type_description }}"
+      interfaces: "{{ bmaas_host_type_interfaces }}"
     validate_certs: false
     status_code: [200, 201, 409]
+
+# The template's host_type must be the host type's ID, not its name — the
+# fulfillment-service resolves it as an ID at BMI-create time (host_type by
+# name yields "host type 'default' ... not found"). Look it up by name.
+- name: List host types
+  ansible.builtin.uri:
+    url: "{{ _fulfillment_api }}/api/private/v1/host_types"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _host_types
+
+- name: Resolve host type id
+  ansible.builtin.set_fact:
+    _host_type_id: >-
+      {{ (_host_types.json.get('items', [])
+          | selectattr('metadata.name', 'equalto', bmaas_host_type)
+          | map(attribute='id') | list | first) }}
 
 - name: Wait for BMI template to be published by AAP
   ansible.builtin.uri:
@@ -386,6 +625,23 @@
   until: _bmi_template.status == 200
   retries: 40
   delay: 15
+
+# The published template has no host_type, so the fulfillment-service skips
+# interface validation for BMIs created from it. Link it to the host type so the
+# tenant's network-attachment interface is validated against the interfaces list.
+- name: Link BMI template to host type
+  ansible.builtin.uri:
+    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=host_type"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ bmaas_bmi_template }}"
+      host_type: "{{ _host_type_id }}"
+    validate_certs: false
+    status_code: [200]
 
 - name: Create BMI catalog item
   ansible.builtin.uri:
@@ -407,15 +663,47 @@
         - path: "ssh_public_key"
           display_name: "SSH Public Key"
           editable: true
+        - path: "network_attachments"
+          display_name: "Network Attachments"
+          editable: true
     validate_certs: false
     status_code: [200, 201, 409]
 
-- name: Verify catalog item is accessible
+- name: Create BMI catalog item with auto ExternalIP
+  ansible.builtin.uri:
+    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      metadata:
+        name: "{{ bmaas_auto_eip_catalog_item }}"
+      title: "{{ bmaas_auto_eip_catalog_item_title }}"
+      description: "{{ bmaas_auto_eip_catalog_item_description }}"
+      template:
+        id: "{{ _bmi_template.json.id }}"
+      published: true
+      field_definitions:
+        - path: "ssh_public_key"
+          display_name: "SSH Public Key"
+          editable: true
+        - path: "network_attachments"
+          display_name: "Network Attachments"
+          editable: true
+        - path: "auto_external_ip_attachment"
+          display_name: "Auto External IP"
+          editable: true
+    validate_certs: false
+    status_code: [200, 201, 409]
+
+- name: Verify catalog items are accessible
   ansible.builtin.command:
     cmd: osac get baremetalinstancecatalogitems
   register: _catalog_check
   changed_when: false
-  until: bmaas_catalog_item in _catalog_check.stdout
+  until: bmaas_catalog_item in _catalog_check.stdout and bmaas_auto_eip_catalog_item in _catalog_check.stdout
   retries: 10
   delay: 5
 
@@ -423,5 +711,5 @@
   ansible.builtin.debug:
     msg: >-
       BMaaS setup complete. {{ bmaas_vms | length }} virtual BMHs available in namespace {{ bmaas_bmh_namespace }}.
-      Catalog item '{{ bmaas_catalog_item }}' ready.
+      Catalog items '{{ bmaas_catalog_item }}' and '{{ bmaas_auto_eip_catalog_item }}' ready.
       Create a BMI with: osac create baremetalinstance --catalog-item {{ bmaas_catalog_item }}

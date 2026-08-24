@@ -36,4 +36,5 @@ north-south-fabric = {
   gpu-server-ipmi-subnet      = "{{ ns_fabric.gpu_server_ipmi_subnet }}"
   gpu-server-ipmi-nexthop     = "{{ ns_fabric.gpu_server_ipmi_nexthop }}"
   asn-start                   = {{ ns_fabric.asn_start }}
+  bgp-prefix-list-outbound    = "{{ ns_fabric.bgp_prefix_list_outbound | default('') }}"
 }
