@@ -351,7 +351,7 @@ class TestBmaasNetworking:
             except subprocess.CalledProcessError:
                 return ""
 
-        hostname = poll_until(
+        poll_until(
             fn=_try_ssh_eip,
             until=lambda h: bool(h),
             retries=5,

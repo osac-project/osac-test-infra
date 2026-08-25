@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.core.grpc_client import GRPCClient
 from tests.core.runner import env
 
 

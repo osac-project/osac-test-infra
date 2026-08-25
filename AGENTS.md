@@ -56,9 +56,10 @@ osac-test-infra/
 │   ├── caas/           # ClusterOrder lifecycle, credentials, templates
 │   ├── storage/        # Tenant storage lifecycle
 │   ├── catalog/        # CatalogItem lifecycle
-│   ├── bmaas/          # BareMetalInstance lifecycle
-│   │                   # Cross-cutting concern fixtures live in tests/conftest.py
-│   └── core/           # Client wrappers, helpers, runner primitives
+│   ├── bmaas/              # BareMetalInstance lifecycle
+│   ├── bmaas_networking/   # BMaaS networking E2E
+│   │                       # Cross-cutting concern fixtures live in tests/conftest.py
+│   └── core/               # Client wrappers, helpers, runner primitives
 ├── Makefile            # Build targets: test, lint, format, test-<suite>, plus infra orchestration
 ├── Containerfile       # UBI9 + oc/kubectl/grpcurl/osac CLI
 ├── pyproject.toml      # Python dependencies, ruff/basedpyright config
@@ -96,6 +97,7 @@ Place tests in the appropriate suite directory:
 - `tests/storage/` — Tenant storage
 - `tests/catalog/` — CatalogItem features
 - `tests/bmaas/` — BareMetalInstance features
+- `tests/bmaas_networking/` — BMaaS networking E2E
 
 ### Naming Convention
 
