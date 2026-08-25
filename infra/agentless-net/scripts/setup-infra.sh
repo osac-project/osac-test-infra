@@ -52,15 +52,25 @@ fi
 
 if ! command -v cluster-tool &>/dev/null; then
     info "Installing cluster-tool..."
-    curl -sL https://github.com/openshift-assisted/cluster-tool/releases/latest/download/cluster-tool-linux-amd64 \
-        -o /usr/local/bin/cluster-tool
-    chmod +x /usr/local/bin/cluster-tool
+    # cluster-tool is a stdlib-only Python script (shebang #!/usr/bin/env
+    # python3) distributed as a git repo, not a release binary -- install it
+    # the same way scripts/machine-init.sh does. The previous
+    # releases/latest/download URL pointed at a nonexistent repo, so curl
+    # silently wrote the "Not Found" error page to the binary.
+    CLUSTER_TOOL_DIR="/opt/cluster-tool"
+    if [ ! -d "${CLUSTER_TOOL_DIR}/.git" ]; then
+        git clone https://github.com/osac-project/cluster-tool.git "${CLUSTER_TOOL_DIR}"
+    fi
+    install -m 0755 "${CLUSTER_TOOL_DIR}/cluster-tool" /usr/local/bin/cluster-tool
 fi
 
 if ! cluster-tool servers 2>/dev/null | grep -q "local"; then
     info "Setting up cluster-tool local server..."
     cluster-tool connect local --host local --data-path /var/lib/cluster-tool
-    sudo cluster-tool setup client
+    # Full path: sudo's secure_path does not include /usr/local/bin, so
+    # `sudo cluster-tool` fails with "command not found" even though the bare
+    # calls above resolve fine (same reason bmaas uses an absolute path).
+    sudo /usr/local/bin/cluster-tool setup client
 else
     info "cluster-tool already configured"
 fi
