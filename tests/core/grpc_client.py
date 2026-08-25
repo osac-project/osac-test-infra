@@ -661,3 +661,16 @@ class GRPCClient:
 
     def delete_project_membership(self, *, membership_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.ProjectMemberships/Delete", data={"id": membership_id})
+
+    # NetworkClass operations (private API only)
+
+    def list_network_classes(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.NetworkClasses/List")
+        return response.get("items", [])
+
+    def update_network_class(self, *, network_class_id: str, **fields: Any) -> dict[str, Any]:
+        if not fields:
+            raise ValueError("update_network_class requires at least one field to update")
+        obj: dict[str, Any] = {"id": network_class_id, **fields}
+        data: dict[str, Any] = {"object": obj, "updateMask": {"paths": list(fields.keys())}}
+        return self.call(service=f"{PRIVATE_API}.NetworkClasses/Update", data=data)
