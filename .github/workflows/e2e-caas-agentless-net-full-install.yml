@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         default: ""
+  schedule:
+    # Every 3 hours, matching the netris full-install cadence.
+    - cron: "0 */3 * * *"
+  pull_request:
+    branches: [main]
 
 concurrency:
   group: e2e-caas-agentless-net
