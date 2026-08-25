@@ -34,7 +34,7 @@ and [README.md](README.md) for the human-facing overview):
   OSAC. Each backend implements `Makefile` (targets `setup-infra`, `deploy-infra`, `deploy-osac`,
   `setup-<suite>`, `destroy-osac`, `destroy-infra`, `gather-infra`, `gather-<suite>`) and a
   `capabilities` file declaring `SUPPORTED_SUITES`. `deploy-osac` writes `.env.infra` with the
-  cluster config tests need. Currently only `infra/netris/` is implemented (`SUPPORTED_SUITES="caas"`
+  cluster config tests need. Currently only `infra/netris/` is implemented (`SUPPORTED_SUITES="caas bmaas bmaas_networking"`
   per `infra/netris/capabilities`).
 - **`tests/<suite>/`** — the pytest suites documented throughout this file. They are
   infrastructure-agnostic: they only consume environment variables, never which backend provisioned

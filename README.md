@@ -49,14 +49,16 @@ infra/<backend>/                    tests/<suite>/
 | **caas** | Cluster lifecycle, credentials, template immutability, API fields |
 | **catalog** | Catalog item lifecycle |
 | **storage** | Tenant storage lifecycle |
+| **bmaas** | BareMetalInstance lifecycle |
+| **bmaas_networking** | BMaaS networking E2E |
 
 ### Compatibility Matrix
 
 Not every backend supports every test suite. Each backend declares its supported suites in a `capabilities` file. The system validates this before any deployment starts.
 
-| Backend | vmaas | caas | catalog | storage |
-|---------|:-----:|:----:|:-------:|:-------:|
-| netris  | no    | yes  | no      | no      |
+| Backend | vmaas | caas | catalog | storage | bmaas | bmaas_networking |
+|---------|:-----:|:----:|:-------:|:-------:|:-----:|:----------------:|
+| netris  | no    | yes  | no      | no      | yes   | yes              |
 
 Running an unsupported combination (e.g., `make e2e INFRA=netris SUITE=storage`) fails immediately with a clear error message — no time wasted on provisioning.
 
@@ -78,6 +80,7 @@ lab_name = <unique-name>
 aws_access_key_id = <your-key>
 aws_secret_access_key = <your-secret>
 aws_region = us-east-1
+netris_password = <your-netris-password>
 ```
 
 - `lab_name` — unique identifier for your lab to avoid DNS collisions in Route 53
