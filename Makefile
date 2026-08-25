@@ -52,8 +52,8 @@ OSAC_DEPLOY_MODE   ?= fresh
 INFRA_DIR           = infra/$(INFRA)
 
 .PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
-        destroy-ocp destroy-osac destroy-infra destroy-setup gather-infra gather-suite redeploy-osac \
-        _validate-backend _validate-suite-contract
+        destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
+        redeploy-osac _validate-backend _validate-suite-contract
 
 _validate-backend:
 	@if [ ! -f $(INFRA_DIR)/Makefile ]; then \
@@ -118,6 +118,9 @@ destroy-infra:
 
 destroy-setup:
 	$(MAKE) -C $(INFRA_DIR) destroy-setup EXTRA_VARS='$(EXTRA_VARS)'
+
+destroy-suite:
+	$(MAKE) -C $(INFRA_DIR) destroy-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-infra:
 	$(MAKE) -C $(INFRA_DIR) gather-infra EXTRA_VARS='$(EXTRA_VARS)'

@@ -110,6 +110,11 @@ destroy-bmaas:
 gather-bmaas:
 	ansible-playbook playbooks/gather-bmaas.yml $(ANSIBLE_EXTRA)
 
+# bmaas_networking shares infra with bmaas (same BMHs, same sushy-tools)
+setup-bmaas_networking: setup-bmaas
+destroy-bmaas_networking: destroy-bmaas
+gather-bmaas_networking: gather-bmaas
+
 # ---------------------------------------------------------------------------
 # MaaS — thin wrappers over CaaS playbooks with MaaS-specific variable overrides
 # Override any default with MAAS_CLUSTER_NAME=..., MAAS_HOST_TYPE_ID=..., etc.
@@ -258,6 +263,7 @@ health-check:
         setup-maas deploy-maas destroy-maas force-destroy-maas \
         gather-infra gather-mgmt-cluster gather-caas \
         setup-bmc setup-bmaas destroy-bmaas gather-bmaas \
+        setup-bmaas_networking destroy-bmaas_networking gather-bmaas_networking \
         install-osac prep-osac run-osac-setup post-osac \
         refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \
         connectivity vendor-update lint cleanup-dns \
