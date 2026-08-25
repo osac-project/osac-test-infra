@@ -52,6 +52,10 @@ make destroy-infra          # Teardown netris-lab
 make destroy-caas           # Teardown CaaS/MaaS cluster + discovery
 make force-destroy-caas     # destroy-caas + strip stuck leftovers / Netris orphans
 make destroy-maas           # destroy-caas with MaaS overrides
+make setup-bmaas            # BMaaS setup: sushy-tools, BMHs, host type, catalog items
+make destroy-bmaas          # Teardown BMaaS (BMHs, sushy-tools, BMC network)
+make setup-bmc              # BMC network + sushy-tools only (subset of setup-bmaas)
+make destroy-setup          # Revert setup-infra (caches, bridges, tools)
 make force-destroy-maas     # force-destroy-caas with MaaS overrides
 make redeploy-fresh         # destroy-full + full BM pipeline (SUITE / OSAC_DEPLOY_MODE)
 make vendor-update          # Refresh vendored Ansible collections

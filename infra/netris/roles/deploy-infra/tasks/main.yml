@@ -75,6 +75,18 @@
     dev {{ public_bridge_name }}
   changed_when: true
 
+- name: Ensure K3s config directory exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+
+- name: Write K3s upstream DNS so CoreDNS can resolve external domains
+  ansible.builtin.copy:
+    dest: /etc/rancher/k3s/resolv.conf
+    content: "nameserver {{ dns_server }}\n"
+    mode: "0644"
+
 # k3s_controller's vendored "Verify controller API" task hits the same
 # OpenSSL CA-cert-loading bug documented in playbooks/deploy-infra.yml's own
 # comment; the play-level module_defaults' ca_path fix (cafile-based
