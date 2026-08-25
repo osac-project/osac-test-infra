@@ -50,6 +50,7 @@
         + ([] if (_mem_total_gb | float >= 16.0) else ['Insufficient memory: ' + _mem_total_gb + 'GB available, 16GB minimum required'])
         + ([] if (_lab_name_ok | bool) else ['LAB_NAME not set — export LAB_NAME=<your-name> to avoid DNS collisions'])
         + ([] if (_aws_creds_ok | bool) else ['AWS credentials missing — export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for Route 53 DNS'])
+        + ([] if (netris_password is defined and netris_password | length > 0) else ['netris_password not set — add it to your local config (e.g. netris-lab/group_vars/all.yml)'])
       }}
 
 - name: Fail on preflight errors

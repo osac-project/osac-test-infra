@@ -63,6 +63,7 @@ lab_name = <unique-lab-name>
 aws_access_key_id = <your-key>
 aws_secret_access_key = <your-secret>
 aws_region = us-east-1
+netris_password = <your-netris-password>
 EOF
 
 # Install prerequisites and cache images (shared, run once)
@@ -336,7 +337,7 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 | `osac_values_file` | `values/caas-ci/values.yaml` | Helm values file |
 | `osac_branch` | `main` | osac mono-repo branch |
 | `netris_username` | `netris` | Netris API username |
-| `netris_password` | `netris` | Netris API password |
+| `netris_password` | *(required)* | Netris API password — set in your local config, validated at deploy time |
 | `ew_fabric_enable` | `0` | East-West fabric (0=NS only) |
 | `dns_server` | `8.8.8.8` | Upstream DNS server for the lab (override in environments where public DNS is blocked) |
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS cluster creation |
@@ -385,7 +386,7 @@ make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
 | `ocp_dnat_ip` | `198.51.100.2` | DNAT IP for API/apps access | defaults only |
 | `osac_external_ip_pool_cidr` | `198.51.100.24/29` | OSAC tenant ExternalIPPool CIDR; host routes/masquerades it toward the softgate. Must not overlap the mgmt nat/l4lb/bgp pools. OSAC creates the Netris allocation itself. | defaults only |
 | `netris_username` | `netris` | Netris API username | defaults only |
-| `netris_password` | `netris` | Netris API password | defaults only |
+| `netris_password` | *(required)* | Netris API password — no default, set in local config | yes |
 | `dns_server` | `8.8.8.8` | Upstream DNS server threaded through cloud-init, Netris topology, dnsmasq/DHCP, and the OCP NMState resolver. Override in environments where public DNS (8.8.8.8, 1.1.1.1) is unreachable | yes |
 
 Set `dns_server` when the lab host cannot reach public DNS resolvers. Override per-run via `EXTRA_VARS`, or set it permanently in [`inventory/group_vars/all.yml`](inventory/group_vars/all.yml):

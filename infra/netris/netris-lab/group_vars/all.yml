@@ -17,7 +17,7 @@ netris_controller_images:
   telescope: "4.9.0.002"
   migration: "4.9.0"
 netris_login: "netris"
-netris_password: "netris"
+# netris_password: set in your local config — no default for security
 netris_validate_certs: false
 netris_timeout: 30
 

@@ -55,7 +55,7 @@ All variables are in `group_vars/all.yml`.
 |----------|---------|-------------|
 | `netris_controller_chart_version` | `"2.8.1"` | Helm chart version |
 | `netris_login` | `"netris"` | Controller username |
-| `netris_password` | `"netris"` | Controller password |
+| `netris_password` | *(required)* | Controller password — set in your local config |
 | `k3s_api_port` | `6444` | K3s API port (6443 often in use) |
 | `controller_ui_port` | `9443` | Fixed port for controller web UI |
 
