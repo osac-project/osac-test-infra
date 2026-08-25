@@ -24,6 +24,7 @@ This repository contains pytest-based E2E test infrastructure for OSAC. Tests ex
   - `storage/` - Tenant storage tests
   - `catalog/` - CatalogItem tests
   - `bmaas/` - BareMetalInstance lifecycle tests
+  - `bmaas_networking/` - BMaaS networking E2E
   - `core/` - Client wrappers (grpc_client, k8s_client, osac_cli) and helpers
   - `conftest.py` - Session fixtures (cli, grpc, k8s_hub_client, jwt tokens)
 
@@ -66,6 +67,7 @@ make test-vmaas
 make test-caas
 make test-storage
 make test-bmaas
+make test-bmaas-networking
 
 # Run single test by name
 TEST=test_compute_instance_lifecycle make test-vmaas
