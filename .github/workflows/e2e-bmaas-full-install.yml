@@ -334,7 +334,9 @@ jobs:
               git -C "${src}" fetch --depth 1 "https://github.com/${repo}.git" "${sha}"
               git -C "${src}" checkout FETCH_HEAD
             else
-              git clone --depth 1 --branch "${ref}" "https://github.com/${repo}.git" "${src}"
+              git init "${src}"
+              git -C "${src}" fetch --depth 1 "https://github.com/${repo}.git" "${ref}"
+              git -C "${src}" checkout FETCH_HEAD
               sha=$(git -C "${src}" rev-parse HEAD)
               REPO_PINNED_SHA[$repo]="${sha}"
               echo "Pinned ${repo} to SHA ${sha} (resolved from ref '${ref}')."
