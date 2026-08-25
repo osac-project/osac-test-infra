@@ -84,6 +84,51 @@ for tool in sshpass envsubst jq; do
     fi
 done
 
+# ---------- OpenShift / OSAC CLIs ----------
+#
+# The deploy/setup/test scripts call oc, osac, and (via osac-installer's
+# `make install`) helm. Install them the same way scripts/machine-init.sh
+# does. Idempotent -- each guarded by command -v.
+
+if ! command -v oc &>/dev/null; then
+    info "Installing oc/kubectl..."
+    OC_URL="https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz"
+    TMP_OC=$(mktemp -d)
+    curl -sL "$OC_URL" | tar xz -C "$TMP_OC"
+    install -m 0755 "$TMP_OC/oc" /usr/local/bin/oc
+    install -m 0755 "$TMP_OC/kubectl" /usr/local/bin/kubectl 2>/dev/null || true
+    rm -rf "$TMP_OC"
+fi
+
+if ! command -v osac &>/dev/null; then
+    info "Installing osac CLI..."
+    # osac-project/osac hosts releases for multiple components tagged
+    # <component>/vX.Y.Z, so releases/latest can redirect to a different
+    # component -- filter for fulfillment-service's own tag explicitly.
+    OSAC_TAG=$(curl -sfL "https://api.github.com/repos/osac-project/osac/releases?per_page=100" \
+        | jq -r '[.[] | select(.tag_name | test("^fulfillment-service/v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].tag_name // empty')
+    if [ -z "$OSAC_TAG" ]; then
+        echo "ERROR: no fulfillment-service release found on osac-project/osac" >&2
+        exit 1
+    fi
+    curl -fL -o /usr/local/bin/osac \
+        "https://github.com/osac-project/osac/releases/download/${OSAC_TAG}/osac_Linux_x86_64"
+    chmod +x /usr/local/bin/osac
+fi
+
+if ! command -v helm &>/dev/null; then
+    info "Installing helm..."
+    HELM_VERSION="3.21.2"
+    HELM_TARBALL="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+    HELM_SHA256="0a745198de24545d0055cd8414bc8d2ba10363ef5f5d38369ea1b399671cc083"
+    TMP_HELM=$(mktemp -d)
+    curl -sL -o "${TMP_HELM}/${HELM_TARBALL}" "https://get.helm.sh/${HELM_TARBALL}"
+    echo "${HELM_SHA256}  ${TMP_HELM}/${HELM_TARBALL}" | sha256sum -c -
+    tar xzf "${TMP_HELM}/${HELM_TARBALL}" -C "$TMP_HELM"
+    install -m 0755 "${TMP_HELM}/linux-amd64/helm" /usr/local/bin/helm
+    rm -rf "$TMP_HELM"
+fi
+
 # ---------- Docker iptables workaround ----------
 #
 # Docker sets the iptables FORWARD chain policy to DROP.
