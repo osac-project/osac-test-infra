@@ -3,6 +3,13 @@
   ansible.builtin.include_vars:
     file: "{{ netris_lab_dir }}/group_vars/all.yml"
 
+- name: Destroy bmc-net if exists
+  ansible.builtin.shell:
+    cmd: |
+      virsh net-destroy {{ bmc_net_name }} 2>/dev/null || true
+      virsh net-undefine {{ bmc_net_name }} 2>/dev/null || true
+  changed_when: false
+
 - name: Destroy netris-lab
   ansible.builtin.include_role:
     name: lab_destroy
