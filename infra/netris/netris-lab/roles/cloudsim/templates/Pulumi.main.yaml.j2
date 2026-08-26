@@ -37,3 +37,6 @@ config:
   netris-air:bgp_password: {{ bgp_password }}
   netris-air:dns_server: {{ dns_server }}
   netris-air:vm_root_password_hash: {{ vm_root_password | password_hash('sha512') }}
+{% if bmc_net_name is defined and bare_metal_services | default(false) | bool %}
+  netris-air:bmc_network: {{ bmc_net_name }}
+{% endif %}
