@@ -5,16 +5,6 @@
 
 # ── Phase 1: BMC network ─────────────────────────────────────────────
 
-- name: Enable libvirt modular daemon sockets
-  ansible.builtin.systemd:
-    name: "{{ item }}"
-    state: started
-    enabled: true
-  loop:
-    - virtqemud.socket
-    - virtstoraged.socket
-    - virtnetworkd.socket
-
 - name: Check if bmc-net exists
   ansible.builtin.command:
     cmd: virsh net-info {{ bmc_net_name }}
