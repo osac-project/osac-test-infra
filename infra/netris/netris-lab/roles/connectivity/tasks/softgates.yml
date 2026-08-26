@@ -89,21 +89,15 @@
         --controller 10.8.0.2 \
         --hostname {{ item.item.name }} \
         --auth {{ netris_auth_token }} \
-        --node-type {{ ns_fabric.softgate_node_type }} \
-        --skip-ifupdown-migration
+        --node-type {{ ns_fabric.softgate_node_type }}
 
-      # Installer replaces netplan with ifupdown2 and hardcodes DNS
+      # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
       echo 'nameserver {{ dns_server }}' | tee /etc/resolv.conf
-      apt-get install -y isc-dhcp-client 2>/dev/null || true
 
       if [ -f /opt/netris/etc/netris.conf ]; then
         sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
         systemctl restart netris-sg 2>/dev/null || true
       fi
-
-      # Renew DHCP after agent restart (agent may kill dhclient)
-      sleep 2
-      dhclient ens4 2>/dev/null || true
     " 2>&1 | tail -5
   loop: "{{ sg_agent_check.results }}"
   when: item.stdout is not defined or item.stdout != "active"
