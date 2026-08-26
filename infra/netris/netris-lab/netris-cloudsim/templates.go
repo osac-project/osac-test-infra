@@ -500,13 +500,19 @@ runcmd:
         done
     }
 
-    MAINIP=$(grep -w "^$(hostname)" /etc/netris-devices | awk '{print $2}')
+    # Match this VM's entry by mgmt IP (ens4) rather than hostname, since
+    # networkd acquires the DHCP lease — not dhclient — so the dhclient
+    # exit hook that sets the hostname from DHCP never fires.
+    MY_IP=$(ip -4 addr show ens4 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+    ENTRY=$(awk -v ip="$MY_IP" '$3 == ip {print; exit}' /etc/netris-devices)
 
-    if [ -z "$MAINIP" ]; then
+    if [ -z "$ENTRY" ]; then
         exit 0
     fi
 
-    HOSTNAME=$(hostname)
+    HOSTNAME=$(echo "$ENTRY" | awk '{print $1}')
+    MAINIP=$(echo "$ENTRY" | awk '{print $2}')
+    hostnamectl set-hostname "$HOSTNAME"
     echo hostname: $HOSTNAME
     AUTHKEY={{ $dot.ctlInfo.AuthKey }}
     VERSION={{ $dot.ctlInfo.Version }}
@@ -547,7 +553,7 @@ write_files:
     {{- range $hyper := $dot.allVms }}
       {{- range $eachvm := $hyper }}
         {{- if eq $eachvm.Type "softgate" }}
-      {{ $eachvm.Name }} {{ $eachvm.MainAddress }}
+      {{ $eachvm.Name }} {{ $eachvm.MainAddress }} {{ index (splitList "/" $eachvm.MgmtAddress) 0 }}
         {{- end }}
       {{- end }}
     {{- end }}
