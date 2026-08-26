@@ -81,27 +81,43 @@
   changed_when: false
   ignore_errors: true
 
-- name: Install netris agent on softgates and disable DPDK
+- name: Launch netris installer on softgates (detached)
   shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@{{ item.item.mgmt_ip }} "
-      curl -fsSL https://get.netris.io | sh -s -- \
-        --lo {{ item.item.main_ip }} \
-        --controller 10.8.0.2 \
-        --hostname {{ item.item.name }} \
-        --auth {{ netris_auth_token }} \
-        --node-type {{ ns_fabric.softgate_node_type }}
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{{ item.item.mgmt_ip }} "
+      nohup bash -c '
+        curl -fsSL https://get.netris.io | sh -s -- \
+          --lo {{ item.item.main_ip }} \
+          --controller 10.8.0.2 \
+          --hostname {{ item.item.name }} \
+          --auth {{ netris_auth_token }} \
+          --node-type {{ ns_fabric.softgate_node_type }}
 
-      # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
-      echo 'nameserver {{ dns_server }}' | tee /etc/resolv.conf
+        # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
+        echo nameserver {{ dns_server }} > /etc/resolv.conf
 
-      if [ -f /opt/netris/etc/netris.conf ]; then
-        sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
-        systemctl restart netris-sg 2>/dev/null || true
-      fi
-    " 2>&1 | tail -5
+        # Disable DPDK
+        if [ -f /opt/netris/etc/netris.conf ]; then
+          sed -i \"s/^dpdk.*/dpdk = no/\" /opt/netris/etc/netris.conf
+          systemctl restart netris-sg
+        fi
+
+        touch /tmp/netris-install-done
+      ' > /tmp/netris-install.log 2>&1 &
+    "
   loop: "{{ sg_agent_check.results }}"
   when: item.stdout is not defined or item.stdout != "active"
-  ignore_errors: true
+  changed_when: true
+
+- name: Wait for netris installer to finish on all softgates
+  shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
+      "test -f /tmp/netris-install-done" 2>/dev/null
+  loop: "{{ softgates }}"
+  register: _sg_install_wait
+  until: _sg_install_wait is not failed
+  retries: 40
+  delay: 15
+  changed_when: false
 
 - name: Wait for all softgate agents to become active
   shell: |
