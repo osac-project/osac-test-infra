@@ -40,6 +40,18 @@ locals {
     gpu-server-first-ns-port      = 9
 }
 
+import {
+  to = netris_dhcp_option_set.default
+  id = "1"
+}
+
+resource "netris_dhcp_option_set" "default" {
+  name        = "Default"
+  description = "System generated"
+  dnsservers  = ["{{ dns_server }}"]
+  ntpservers  = ["pool.ntp.org"]
+}
+
 resource "netris_inventory_profile" "inv-profile-north-south" {
   count                           = var.north-south-fabric.enable
   name                            = "North-South"

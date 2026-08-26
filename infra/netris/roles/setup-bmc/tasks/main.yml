@@ -81,6 +81,9 @@
           virsh net-update {{ bmc_net_name }} add ip-dhcp-host
           '<host mac="{{ _ocp_bmc_mac_new.stdout | trim }}" ip="{{ bmc_net_ocp_ip }}"/>'
           --live --config
+      register: _dhcp_add
+      failed_when: _dhcp_add.rc != 0 and 'existing dhcp host entry' not in _dhcp_add.stderr
+      changed_when: _dhcp_add.rc == 0
 
     - name: Reconnect OCP NIC to pick up static lease
       ansible.builtin.shell:
