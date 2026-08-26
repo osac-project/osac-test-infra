@@ -31,6 +31,10 @@
     value: "0"
     sysctl_set: true
 
+- name: Disable STP on virbr0 (physical NICs in VEPA mode cause STP port blocking)
+  ansible.builtin.command: ip link set dev virbr0 type bridge stp_state 0
+  changed_when: true
+
 - name: Flush restrictive libvirt nftables chains
   ansible.builtin.shell: |
     nft flush chain ip filter LIBVIRT_FWI 2>/dev/null || true
