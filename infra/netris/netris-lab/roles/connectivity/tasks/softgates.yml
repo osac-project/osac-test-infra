@@ -27,14 +27,25 @@
     netris_username: "{{ netris_login }}"
     general_state: read
 
-- name: Wait for softgate VMs to be SSH-accessible
+- name: Wait for mgmt-server DHCP to be active
+  ansible.builtin.shell:
+    cmd: >-
+      sshpass -p "{{ vm_root_password | default('netris') }}"
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+      root@192.168.122.10 "systemctl is-active isc-dhcp-server"
+  register: _dhcp_status
+  until: _dhcp_status.stdout == "active"
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for all softgate VMs to be SSH-accessible
   wait_for:
     host: "{{ item.mgmt_ip }}"
     port: 22
     timeout: 600
     sleep: 15
   loop: "{{ softgates }}"
-  ignore_errors: true
 
 - name: Remove stale SSH host keys for softgates
   shell: ssh-keygen -R {{ item.mgmt_ip }} 2>/dev/null || true
