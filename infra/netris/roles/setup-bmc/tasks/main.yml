@@ -93,6 +93,26 @@
           sleep 2
           virsh attach-interface {{ ocp_vm_name_pattern }} network {{ bmc_net_name }} --model virtio --mac $MAC --live --config
 
+- name: Get OCP VM br-mgmt IP
+  ansible.builtin.shell:
+    cmd: >-
+      virsh domifaddr {{ ocp_vm_name_pattern }} --source agent 2>/dev/null
+      | grep -oP '192\.168\.16\.\d+'
+      || echo "192.168.16.2"
+  register: _ocp_mgmt_ip
+  changed_when: false
+
+- name: Trigger DHCP on bmc-net NIC inside OCP VM
+  ansible.builtin.shell:
+    cmd: >-
+      sshpass -p "{{ vm_root_password | default('netris') }}"
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      root@{{ _ocp_mgmt_ip.stdout | trim }}
+      "NIC=$(ip -br link | awk 'NR>1 {print $1}' | tail -1);
+       dhclient $NIC 2>/dev/null || dhcpcd $NIC 2>/dev/null || true"
+  retries: 3
+  delay: 5
+
 - name: Wait for OCP VM to get bmc-net IP
   ansible.builtin.shell:
     cmd: virsh net-dhcp-leases {{ bmc_net_name }} | grep {{ bmc_net_ocp_ip }}
