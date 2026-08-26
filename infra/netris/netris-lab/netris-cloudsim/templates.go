@@ -500,7 +500,7 @@ runcmd:
         done
     }
 
-    MAINIP=$(grep -w "^$(hostname)" /tmp/netris-devices | awk '{print $2}')
+    MAINIP=$(grep -w "^$(hostname)" /etc/netris-devices | awk '{print $2}')
 
     if [ -z "$MAINIP" ]; then
         exit 0
@@ -541,7 +541,7 @@ write_files:
               ethtool -s $nic speed 1000 duplex full
           fi
       done
-  - path: /tmp/netris-devices
+  - path: /etc/netris-devices
     permissions: '0644'
     content: |
     {{- range $hyper := $dot.allVms }}
@@ -1130,7 +1130,7 @@ write_files:
       echo "cumulus ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/10_cumulus
 
 
-      tee /tmp/netris-devices <<EOF
+      tee /etc/netris-devices <<EOF
       {{- range $hyper := $dot.allVms }}
         {{- range $eachvm := $hyper }}
           {{- if eq $eachvm.Type "switch" }}
@@ -1189,13 +1189,13 @@ write_files:
       sudo update-initramfs -u
 
 
-      MAINIP=$(grep -w "^$(hostname)" /tmp/netris-devices | awk '{print $2}')
+      MAINIP=$(grep -w "^$(hostname)" /etc/netris-devices | awk '{print $2}')
 
       if [ -z "$MAINIP" ]; then
           exit 0
       fi
 
-      NOS=$(grep -w "^$(hostname)" /tmp/netris-devices | awk {'print $3'})
+      NOS=$(grep -w "^$(hostname)" /etc/netris-devices | awk {'print $3'})
       HOSTNAME=$(hostname)
       echo hostname: $HOSTNAME
       AUTHKEY={{ $dot.ctlInfo.AuthKey }}
