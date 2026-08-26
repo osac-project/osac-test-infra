@@ -138,7 +138,9 @@ for i in "${!CLUSTER_NAMES[@]}"; do
 
         if [ "$state" = "CLUSTER_STATE_FAILED" ]; then
             echo "ERROR: $name FAILED"
-            osac get cluster "$id" -o yaml
+            # Drop template_parameters -- it embeds the pull secret, which
+            # would otherwise leak into the CI log.
+            osac get cluster "$id" -o yaml | yq 'del(.spec.template_parameters)'
             exit 1
         fi
 

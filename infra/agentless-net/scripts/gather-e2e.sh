@@ -26,6 +26,18 @@ OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 # ---------- cluster state ----------
 
 info "Gathering hosted cluster diagnostics..."
+
+# Mgmt-side hosted-cluster CRs whose .status.conditions carry the provisioning
+# failure reason. They reference the pull secret by NAME (not exposed here);
+# strip AgentClusterInstall's signed debugInfo URLs (eventsURL/logsURL tokens)
+# that would otherwise land in this raw-uploaded dir. (Hardware-inventory CRs
+# -- agents, infraenvs -- live in gather-infra.sh.)
+oc get hostedclusters -A > "$LOG_DIR/hostedclusters.txt" 2>&1 || true
+oc get hostedclusters -A -o yaml > "$LOG_DIR/hostedclusters.yaml" 2>&1 || true
+oc get nodepools -A -o yaml > "$LOG_DIR/nodepools.yaml" 2>&1 || true
+oc get agentclusterinstalls -A -o yaml 2>/dev/null \
+    | yq 'del(.items[].status.debugInfo)' > "$LOG_DIR/agentclusterinstalls.yaml" 2>/dev/null || true
+
 for order in $(oc get clusterorders -n "$OSAC_NAMESPACE" --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null); do
     hc_ns="${OSAC_NAMESPACE}-${order}"
     kc_secret="${order}-admin-kubeconfig"
