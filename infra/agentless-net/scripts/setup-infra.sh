@@ -129,6 +129,18 @@ if ! command -v helm &>/dev/null; then
     rm -rf "$TMP_HELM"
 fi
 
+if ! command -v yq &>/dev/null; then
+    info "Installing yq..."
+    YQ_VERSION="v4.53.3"
+    YQ_SHA256="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+    TMP_YQ=$(mktemp -d)
+    curl -sL -o "${TMP_YQ}/yq" \
+        "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+    echo "${YQ_SHA256}  ${TMP_YQ}/yq" | sha256sum -c -
+    install -m 0755 "${TMP_YQ}/yq" /usr/local/bin/yq
+    rm -rf "$TMP_YQ"
+fi
+
 # ---------- Docker iptables workaround ----------
 #
 # Docker sets the iptables FORWARD chain policy to DROP.
