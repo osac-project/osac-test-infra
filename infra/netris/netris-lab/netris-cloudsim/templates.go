@@ -90,6 +90,12 @@ ethernets:
     nameservers:
       addresses:
         - {{ .dnsServer }}
+{{- if .bmcNetwork }}
+  ens5:
+    dhcp4: true
+    dhcp6: false
+    optional: true
+{{- end }}
 `)
 		if err != nil {
 			panic(err)
