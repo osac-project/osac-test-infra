@@ -86,6 +86,7 @@ ethernets:
   ens4:
     dhcp4: true
     dhcp6: false
+    critical: true
     mtu: {{ .mtu }}
     nameservers:
       addresses:
@@ -411,6 +412,7 @@ ethernets:
   ens4:
     dhcp4: true
     dhcp6: false
+    critical: true
     mtu: {{ .mtu }}
     nameservers:
       addresses:
