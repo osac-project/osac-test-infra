@@ -36,3 +36,4 @@ config:
 {% endif %}
   netris-air:bgp_password: {{ bgp_password }}
   netris-air:dns_server: {{ dns_server }}
+  netris-air:vm_root_password_hash: {{ vm_root_password | password_hash('sha512') }}

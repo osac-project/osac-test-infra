@@ -102,6 +102,10 @@ func main() {
 			if dnsServer == "" {
 				dnsServer = "8.8.8.8"
 			}
+			vmRootPasswordHash := conf.Get("vm_root_password_hash")
+			if vmRootPasswordHash == "" {
+				vmRootPasswordHash = "$6$netrislab$5/Mp4SqWPZ0K4b5.CgvmirF5rn0M34HmAUPxgr2DP8FwVzPP/OeoIq6m8Ljwzsr138kz4LWdOjvqiQ1Nes5JE."
+			}
 			netrisInfo, err := getFromNetris(ctx, ctlCfg, serversGW, aptRepo)
 			if err != nil {
 				return err
@@ -306,6 +310,7 @@ func main() {
 					"ctlInfo":           netrisInfo.ControllerInfo,
 					"links":             hypervisorToLinks,
 					"dnsServer":         dnsServer,
+					"passwordHash":      vmRootPasswordHash,
 				}, "mgmt-server")
 				if err != nil {
 					return err
@@ -319,6 +324,7 @@ func main() {
 					"installedPackages": installedPackages,
 					"ctlInfo":           netrisInfo.ControllerInfo,
 					"dnsServer":         dnsServer,
+					"passwordHash":      vmRootPasswordHash,
 				}, "server")
 				if err != nil {
 					return err
@@ -333,6 +339,7 @@ func main() {
 					"allVms":            hypervisorToVMs,
 					"ctlInfo":           netrisInfo.ControllerInfo,
 					"dnsServer":         dnsServer,
+					"passwordHash":      vmRootPasswordHash,
 				}, "softgate")
 				if err != nil {
 					return err
@@ -411,6 +418,7 @@ func main() {
 						"netrisASN":             netrisInfo.SiteObject.PublicAsn,
 						"bgpPassword":           conf.Get("bgp_password"),
 						"dnsServer":             dnsServer,
+							"passwordHash":          vmRootPasswordHash,
 					}, "isp-server")
 					if err != nil {
 						return err
@@ -433,6 +441,7 @@ func main() {
 						"netrisASN":             netrisInfo.SiteObject.PublicAsn,
 						"bgpPassword":           conf.Get("bgp_password"),
 						"dnsServer":             dnsServer,
+							"passwordHash":          vmRootPasswordHash,
 					}, "isp-server")
 					if err != nil {
 						return err
