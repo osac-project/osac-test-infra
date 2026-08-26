@@ -698,6 +698,22 @@
           retries: 2
           delay: 5
 
+- name: Patch SSH key in cluster-config-v1 install-config
+  ansible.builtin.shell:
+    cmd: |
+      SSH_KEY=$(cat {{ ssh_public_key_path }})
+      oc get configmap cluster-config-v1 -n kube-system -o json \
+        | python3 -c "
+      import sys, json, yaml
+      obj = json.load(sys.stdin)
+      ic = yaml.safe_load(obj['data']['install-config'])
+      ic['sshKey'] = '''${SSH_KEY}'''
+      obj['data']['install-config'] = yaml.dump(ic, default_flow_style=False)
+      json.dump(obj, sys.stdout)
+      " | oc replace -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+
 - name: Report cluster status
   ansible.builtin.debug:
     msg: "{{ _co_health.stdout }}"
