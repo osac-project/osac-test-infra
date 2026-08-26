@@ -94,20 +94,16 @@
 
       # Installer replaces netplan with ifupdown2 and hardcodes DNS
       echo 'nameserver {{ dns_server }}' | tee /etc/resolv.conf
-
-      # Restore DHCP on mgmt interface via ifupdown2
-      grep -q ens4 /etc/network/interfaces 2>/dev/null || {
-        cat >> /etc/network/interfaces <<IFACE
-auto ens4
-iface ens4 inet dhcp
-IFACE
-        ifup ens4 2>/dev/null || true
-      }
+      apt-get install -y isc-dhcp-client 2>/dev/null || true
 
       if [ -f /opt/netris/etc/netris.conf ]; then
         sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
         systemctl restart netris-sg 2>/dev/null || true
       fi
+
+      # Renew DHCP after agent restart (agent may kill dhclient)
+      sleep 2
+      dhclient ens4 2>/dev/null || true
     " 2>&1 | tail -5
   loop: "{{ sg_agent_check.results }}"
   when: item.stdout is not defined or item.stdout != "active"
