@@ -43,6 +43,16 @@
   delay: 10
   changed_when: false
 
+- name: Fix OpenVPN server topology
+  shell: |
+    ssh -o StrictHostKeyChecking=no root@192.168.122.10 "
+      if ! grep -q 'topology subnet' /etc/openvpn/server.conf; then
+        sed -i '/^server /a topology subnet' /etc/openvpn/server.conf
+        systemctl restart openvpn@server
+      fi
+    "
+  changed_when: false
+
 - name: Create RHEL openvpn client directory
   file:
     path: /etc/openvpn/client
@@ -65,6 +75,13 @@
     path: /etc/openvpn/client/client.conf
     regexp: '^remote\s+'
     line: 'remote 192.168.122.10 1194'
+
+- name: Set VPN client topology to subnet
+  lineinfile:
+    path: /etc/openvpn/client/client.conf
+    regexp: '^topology\s+'
+    line: 'topology subnet'
+    insertafter: '^dev tun'
 
 - name: Install VPN route fix script
   template:
