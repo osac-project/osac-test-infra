@@ -10,11 +10,19 @@
     path: /etc/rancher/k3s
     state: directory
 
+- name: Write K3s resolv.conf
+  copy:
+    dest: /etc/rancher/k3s/resolv.conf
+    content: |
+      nameserver {{ dns_server | default('8.8.8.8') }}
+    mode: "0644"
+
 - name: Write K3s config
   copy:
     dest: /etc/rancher/k3s/config.yaml
     content: |
       https-listen-port: {{ k3s_api_port }}
+      resolv-conf: /etc/rancher/k3s/resolv.conf
 
 - name: Install K3s
   when: k3s_check.rc != 0
