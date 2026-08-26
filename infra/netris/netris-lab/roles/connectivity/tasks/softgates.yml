@@ -89,11 +89,20 @@
         --controller 10.8.0.2 \
         --hostname {{ item.item.name }} \
         --auth {{ netris_auth_token }} \
-        --node-type {{ ns_fabric.softgate_node_type }}
+        --node-type {{ ns_fabric.softgate_node_type }} \
+        --skip-ifupdown-migration
 
-      # Installer hardcodes 'nameserver 1.1.1.1' and removes isc-dhcp-client
+      # Installer replaces netplan with ifupdown2 and hardcodes DNS
       echo 'nameserver {{ dns_server }}' | tee /etc/resolv.conf
-      apt-get install -y isc-dhcp-client 2>/dev/null || true
+
+      # Restore DHCP on mgmt interface via ifupdown2
+      grep -q ens4 /etc/network/interfaces 2>/dev/null || {
+        cat >> /etc/network/interfaces <<IFACE
+auto ens4
+iface ens4 inet dhcp
+IFACE
+        ifup ens4 2>/dev/null || true
+      }
 
       if [ -f /opt/netris/etc/netris.conf ]; then
         sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
@@ -104,13 +113,20 @@
   when: item.stdout is not defined or item.stdout != "active"
   ignore_errors: true
 
-- name: Wait for at least one softgate agent to become active
+- name: Wait for all softgate agents to become active
   shell: |
+    failed=""
     for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
       status=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null)
-      [ "$status" = "active" ] && echo "active:${ip}" && exit 0
+      if [ "$status" != "active" ]; then
+        failed="${failed} ${ip}"
+      fi
     done
-    exit 1
+    if [ -n "$failed" ]; then
+      echo "not ready:${failed}"
+      exit 1
+    fi
+    echo "all active"
   register: _sg_wait
   until: _sg_wait.rc == 0
   retries: 20
