@@ -705,7 +705,7 @@ jobs:
             TEST_ARGS="tests/${TEST_SUITE}/"
             # Run references tests alongside vmaas suite
             if [ "${TEST_SUITE}" = "vmaas" ]; then
-              TEST_ARGS="${TEST_ARGS} tests/references/"
+              TEST_ARGS="${TEST_ARGS} tests/references/ tests/projects/"
             fi
           fi
 

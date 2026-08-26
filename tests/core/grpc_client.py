@@ -661,3 +661,22 @@ class GRPCClient:
 
     def delete_project_membership(self, *, membership_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.ProjectMemberships/Delete", data={"id": membership_id})
+
+    # Project operations (public API)
+
+    def create_project(self, *, name: str, parent_project_id: str | None = None) -> str:
+        obj: dict[str, Any] = {"metadata": {"name": name}}
+        if parent_project_id is not None:
+            obj["spec"] = {"parent_project": {"id": parent_project_id}}
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.Projects/Create", data={"object": obj})
+        return response["object"]["id"]
+
+    def get_project(self, *, project_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.Projects/Get", data={"id": project_id})
+
+    def list_project_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.Projects/List")
+        return [item["id"] for item in response.get("items", [])]
+
+    def delete_project(self, *, project_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.Projects/Delete", data={"id": project_id})
