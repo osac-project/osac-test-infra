@@ -95,14 +95,14 @@
         # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
         echo nameserver {{ dns_server }} > /etc/resolv.conf
 
-        # Disable DPDK
+        # Ensure plugins.conf symlink and disable DPDK
+        [ -e /opt/netris/etc/plugins.conf ] || ln -sf plugins.conf_dpdkno /opt/netris/etc/plugins.conf
         if [ -f /opt/netris/etc/netris.conf ]; then
           sed -i \"s/^dpdk.*/dpdk = no/\" /opt/netris/etc/netris.conf
-          systemctl restart netris-sg
         fi
 
-        touch /tmp/netris-install-done
-      ' > /tmp/netris-install.log 2>&1 &
+        touch /opt/netris/install-done
+      ' > /opt/netris/install.log 2>&1 &
     "
   loop: "{{ sg_agent_check.results }}"
   when: item.stdout is not defined or item.stdout != "active"
@@ -111,13 +111,29 @@
 - name: Wait for netris installer to finish on all softgates
   shell: |
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
-      "test -f /tmp/netris-install-done" 2>/dev/null
+      "test -f /opt/netris/install-done" 2>/dev/null
   loop: "{{ softgates }}"
   register: _sg_install_wait
   until: _sg_install_wait is not failed
   retries: 40
   delay: 15
   changed_when: false
+
+- name: Reboot softgates and wait for them to come back
+  shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
+      "nohup bash -c 'sleep 2 && reboot' &>/dev/null &" 2>/dev/null || true
+  loop: "{{ softgates }}"
+  changed_when: true
+
+- name: Wait for softgates to come back after reboot
+  wait_for:
+    host: "{{ item.mgmt_ip }}"
+    port: 22
+    timeout: 300
+    sleep: 10
+    delay: 15
+  loop: "{{ softgates }}"
 
 - name: Wait for all softgate agents to become active
   shell: |
