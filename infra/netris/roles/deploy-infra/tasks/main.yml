@@ -99,20 +99,6 @@
       ansible.builtin.include_role:
         name: k3s_controller
 
-- name: Deploy coredns-custom manifest to override upstream DNS
-  ansible.builtin.copy:
-    dest: /var/lib/rancher/k3s/server/manifests/coredns-custom.yaml
-    content: |
-      apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: coredns-custom
-        namespace: kube-system
-      data:
-        forward.override: |
-          forward . {{ dns_server }}
-    mode: "0644"
-
 - name: Deploy network topology
   ansible.builtin.include_role:
     name: topology
