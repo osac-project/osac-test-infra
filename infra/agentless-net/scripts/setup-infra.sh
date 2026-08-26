@@ -141,6 +141,20 @@ if ! command -v yq &>/dev/null; then
     rm -rf "$TMP_YQ"
 fi
 
+# The agentless-net flow needs a self-consistent SSH keypair on the box. The
+# AAP runner SSHes into the servers (NMState live apply), the switches, and the
+# net-node; setup-caas.sh puts ~/.ssh/id_rsa.pub into the InfraEnv's
+# sshAuthorizedKey (so discovery agents trust it) and deploy-osac.sh injects the
+# matching ~/.ssh/id_rsa as SERVER_SSH_KEY. Dev boxes already have one; the
+# ephemeral EC2 box does not, so generate it here (idempotent — any
+# self-consistent keypair works).
+if [ ! -f "${HOME}/.ssh/id_rsa" ]; then
+    info "Generating SSH keypair for AAP runner (NMState / switches / net-node)..."
+    mkdir -p "${HOME}/.ssh"
+    chmod 700 "${HOME}/.ssh"
+    ssh-keygen -t rsa -b 4096 -N "" -f "${HOME}/.ssh/id_rsa" -q
+fi
+
 # ---------- Docker iptables workaround ----------
 #
 # Docker sets the iptables FORWARD chain policy to DROP.
