@@ -86,6 +86,16 @@
       ansible.builtin.include_role:
         name: k3s_controller
 
+- name: Allow virbr0 VM traffic past kube-router bridge rules
+  ansible.builtin.shell: |
+    iptables -C FORWARD -i virbr0 -o virbr0 -j ACCEPT 2>/dev/null || \
+      iptables -I FORWARD 1 -i virbr0 -o virbr0 -j ACCEPT
+    iptables -C FORWARD -i virbr0 -j ACCEPT 2>/dev/null || \
+      iptables -I FORWARD 2 -i virbr0 -j ACCEPT
+    iptables -C FORWARD -o virbr0 -j ACCEPT 2>/dev/null || \
+      iptables -I FORWARD 3 -o virbr0 -j ACCEPT
+  changed_when: false
+
 - name: Deploy network topology
   ansible.builtin.include_role:
     name: topology
