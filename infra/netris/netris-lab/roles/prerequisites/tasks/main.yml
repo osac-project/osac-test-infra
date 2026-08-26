@@ -219,12 +219,6 @@
     virsh pool-start default
     virsh pool-autostart default
 
-- name: Ensure firewalld is enabled and running
-  ansible.builtin.systemd:
-    name: firewalld
-    state: started
-    enabled: true
-
 - name: Check if firewalld is running
   command: firewall-cmd --state
   register: firewalld_state

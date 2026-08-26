@@ -12,15 +12,6 @@
     fi
   changed_when: false
 
-- name: Ensure virbr0 is in firewalld trusted zone
-  ansible.posix.firewalld:
-    zone: trusted
-    interface: virbr0
-    permanent: true
-    immediate: true
-    state: enabled
-  when: ansible_facts.services['firewalld.service'] is defined
-
 - name: Wait for mgmt-server VM to be reachable
   wait_for:
     host: 192.168.122.10
