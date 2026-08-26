@@ -109,7 +109,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: $6$netrislab$5/Mp4SqWPZ0K4b5.CgvmirF5rn0M34HmAUPxgr2DP8FwVzPP/OeoIq6m8Ljwzsr138kz4LWdOjvqiQ1Nes5JE.
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -429,7 +429,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: $6$netrislab$5/Mp4SqWPZ0K4b5.CgvmirF5rn0M34HmAUPxgr2DP8FwVzPP/OeoIq6m8Ljwzsr138kz4LWdOjvqiQ1Nes5JE.
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -625,7 +625,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: $6$netrislab$5/Mp4SqWPZ0K4b5.CgvmirF5rn0M34HmAUPxgr2DP8FwVzPP/OeoIq6m8Ljwzsr138kz4LWdOjvqiQ1Nes5JE.
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -823,7 +823,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: $6$netrislab$5/Mp4SqWPZ0K4b5.CgvmirF5rn0M34HmAUPxgr2DP8FwVzPP/OeoIq6m8Ljwzsr138kz4LWdOjvqiQ1Nes5JE.
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -1008,7 +1008,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: $6$netrislab$5/Mp4SqWPZ0K4b5.CgvmirF5rn0M34HmAUPxgr2DP8FwVzPP/OeoIq6m8Ljwzsr138kz4LWdOjvqiQ1Nes5JE.
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
