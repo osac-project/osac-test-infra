@@ -344,6 +344,7 @@ func main() {
 					"installedPackages": installedPackages,
 					"ctlInfo":           netrisInfo.ControllerInfo,
 					"dnsServer":         dnsServer,
+					"bmcNetwork":        bmcNetwork,
 					"passwordHash":      vmRootPasswordHash,
 				}, "server")
 				if err != nil {
