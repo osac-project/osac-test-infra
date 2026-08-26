@@ -126,10 +126,9 @@
       - pigz
     state: present
 
-- name: Install aicli and awscli
+- name: Install awscli
   ansible.builtin.pip:
     name:
-      - aicli
       - awscli
     state: present
 

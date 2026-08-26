@@ -1,24 +1,9 @@
 ---
-- name: Download kubeconfig if missing
-  ansible.builtin.command:
-    cmd: aicli -u {{ assisted_service_url }} download kubeconfig {{ ocp_cluster_name }} --path /root/
-    creates: "/root/kubeconfig.{{ ocp_cluster_name }}"
-
-- name: Ensure .kube directory exists
-  ansible.builtin.file:
-    path: /root/.kube
-    state: directory
-    mode: "0700"
-
-- name: Copy kubeconfig to default location
-  ansible.builtin.copy:
-    src: "/root/kubeconfig.{{ ocp_cluster_name }}"
-    dest: /root/.kube/config
-    remote_src: true
-    mode: "0600"
-    force: false
-
-# --- Clone osac mono-repo ---
+- name: Verify kubeconfig exists
+  ansible.builtin.stat:
+    path: /root/.kube/config
+  register: _kubeconfig
+  failed_when: not _kubeconfig.stat.exists
 
 - name: Clone osac
   ansible.builtin.git:

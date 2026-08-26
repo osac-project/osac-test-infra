@@ -23,23 +23,6 @@
       failed_when: false
       changed_when: true
 
-    - name: Delete cluster from Assisted Service
-      ansible.builtin.command:
-        cmd: aicli -u {{ assisted_service_url }} delete cluster {{ ocp_cluster_name }} -y
-      failed_when: false
-      changed_when: true
-
-    - name: Delete infraenv from Assisted Service
-      ansible.builtin.command:
-        cmd: aicli -u {{ assisted_service_url }} delete infraenv {{ ocp_cluster_name }}_infra-env -y
-      failed_when: false
-      changed_when: true
-
-    - name: Remove discovery ISO
-      ansible.builtin.file:
-        path: /var/lib/libvirt/images/{{ ocp_cluster_name }}_infra-env.iso
-        state: absent
-
     - name: Remove kubeconfig files
       ansible.builtin.file:
         path: "{{ item }}"
@@ -58,27 +41,24 @@
         cmd: qemu-img create -f qcow2 /var/lib/libvirt/images/hgx-00-lvm.qcow2 {{ ocp_lvm_disk_gb }}G
       changed_when: true
 
-    - name: Detach discovery ISO if attached
-      ansible.builtin.shell:
-        cmd: |
-          if virsh domblklist {{ ocp_vm_name }} | grep -q 'infra-env.iso'; then
-            virsh detach-disk {{ ocp_vm_name }} sda --config
-          fi
-      when: ocp_vm_name | default('') | length > 0
-      changed_when: false
-      failed_when: false
-
-    - name: Set boot order to disk first, then cdrom
-      ansible.builtin.command:
-        cmd: virt-xml {{ ocp_vm_name }} --edit --boot hd,cdrom
-      when: ocp_vm_name | default('') | length > 0
-      changed_when: true
-
     - name: Start VM
       ansible.builtin.command:
         cmd: virsh start {{ ocp_vm_name }}
       when: ocp_vm_name | default('') | length > 0
       changed_when: true
+
+    - name: Remove dnsmasq OCP config
+      ansible.builtin.file:
+        path: /etc/dnsmasq.d/ocp-sno.conf
+        state: absent
+      register: _dnsmasq_config_removed
+
+    - name: Restart dnsmasq
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: restarted
+      when: _dnsmasq_config_removed is changed
+      failed_when: false
 
     - name: Report reset complete
       ansible.builtin.debug:

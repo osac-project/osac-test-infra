@@ -47,8 +47,6 @@ ocp_cluster_name: "ocp-sno"
 ocp_base_domain: "{{ lab_name }}.{{ dns_hosted_zone }}"
 pull_secret_path: "/root/pull-secret"
 ssh_public_key_path: "/root/.ssh/id_rsa.pub"
-assisted_service_url: "http://localhost:8090"
-assisted_service_ip: "198.51.100.9"
 
 # OSAC mono-repo
 osac_repo: "https://github.com/osac-project/osac.git"
