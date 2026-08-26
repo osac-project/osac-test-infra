@@ -86,6 +86,37 @@
     dest: /etc/rancher/k3s/resolv.conf
     content: "nameserver {{ dns_server }}\n"
     mode: "0644"
+  register: _k3s_resolv
+
+- name: Restart K3s to pick up new resolv.conf
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+  when: _k3s_resolv is changed
+
+- name: Wait for K3s API after restart
+  ansible.builtin.wait_for:
+    port: 6444
+    host: 127.0.0.1
+    timeout: 60
+  when: _k3s_resolv is changed
+
+- name: Patch CoreDNS to forward to configured DNS server
+  ansible.builtin.shell: |
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    kubectl get configmap coredns -n kube-system -o json | \
+      python3 -c "
+    import sys, json
+    cm = json.load(sys.stdin)
+    cm['data']['Corefile'] = cm['data']['Corefile'].replace(
+        'forward . /etc/resolv.conf',
+        'forward . {{ dns_server }}')
+    json.dump(cm, sys.stdout)
+    " | kubectl apply -f -
+    kubectl rollout restart deploy/coredns -n kube-system
+  register: _coredns_patch
+  changed_when: "'configured' in _coredns_patch.stdout"
+  when: dns_server != '8.8.8.8'
 
 # k3s_controller's vendored "Verify controller API" task hits the same
 # OpenSSL CA-cert-loading bug documented in playbooks/deploy-infra.yml's own
