@@ -23,6 +23,7 @@
     content: |
       https-listen-port: {{ k3s_api_port }}
       resolv-conf: /etc/rancher/k3s/resolv.conf
+      disable-network-policy: true
 
 - name: Install K3s
   when: k3s_check.rc != 0
