@@ -86,7 +86,7 @@
       ansible.builtin.include_role:
         name: k3s_controller
 
-- name: Disable bridge-nf-call-iptables for VM traffic
+- name: Disable bridge-nf so kube-router does not filter VM traffic
   ansible.posix.sysctl:
     name: "{{ item }}"
     value: "0"
