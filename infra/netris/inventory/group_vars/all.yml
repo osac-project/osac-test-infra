@@ -163,7 +163,7 @@ bare_metal_services: false
 bmc_net_name: "bmc-net"
 bmc_net_bridge: "br-bmc"
 bmc_net_host_ip: "10.99.0.1"
-bmc_net_ocp_ip: "10.99.0.2"
+# bmc_net_ocp_ip is discovered dynamically by setup-bmc from DHCP leases
 bmc_net_cidr: "10.99.0.0/24"
 bmc_net_dhcp_start: "10.99.0.10"
 bmc_net_dhcp_end: "10.99.0.50"
