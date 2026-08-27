@@ -298,6 +298,10 @@
             rm -f /var/lib/libvirt/qemu/nvram/{{ item }}_VARS.fd
             changed=true
           fi
+          if grep -q "<boot order=" /tmp/{{ item }}.xml; then
+            sed -i '/<boot order=/d' /tmp/{{ item }}.xml
+            changed=true
+          fi
           if ! grep -q '<boot dev=' /tmp/{{ item }}.xml; then
             sed -i '/<\/type>/a\    <boot dev="network"\/>\n    <boot dev="hd"\/>' /tmp/{{ item }}.xml
             changed=true
