@@ -95,7 +95,7 @@
       SUSHY_EMULATOR_STORAGE_POOL = "{{ sushy_tools_storage_pool }}"
       SUSHY_EMULATOR_BOOT_LOADER_MAP = {
           "UEFI": {
-              "x86_64": "{{ _ovmf_code_path }}"
+              "x86_64": None
           },
           "Legacy": {
               "x86_64": None
