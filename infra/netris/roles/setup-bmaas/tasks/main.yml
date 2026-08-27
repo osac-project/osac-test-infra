@@ -288,17 +288,25 @@
         label: "{{ item.item }}"
       changed_when: true
 
-    - name: Remove stale UEFI loader from VM XML
+    - name: Remove UEFI firmware and set BIOS boot order
       ansible.builtin.shell:
         cmd: |
-          if virsh dumpxml {{ item }} | grep -q '<loader'; then
-            virsh dumpxml {{ item }} > /tmp/{{ item }}.xml
+          virsh dumpxml {{ item }} > /tmp/{{ item }}.xml
+          changed=false
+          if grep -q '<loader' /tmp/{{ item }}.xml; then
             sed -i '/<loader/d; /<nvram/d' /tmp/{{ item }}.xml
-            virsh define /tmp/{{ item }}.xml
             rm -f /var/lib/libvirt/qemu/nvram/{{ item }}_VARS.fd
+            changed=true
+          fi
+          if ! grep -q '<boot dev=' /tmp/{{ item }}.xml; then
+            sed -i '/<\/type>/a\    <boot dev="network"\/>\n    <boot dev="hd"\/>' /tmp/{{ item }}.xml
+            changed=true
+          fi
+          if [ "$changed" = true ]; then
+            virsh define /tmp/{{ item }}.xml
             echo "cleaned"
           else
-            echo "no loader"
+            echo "no change"
           fi
       loop: "{{ bmaas_vms }}"
       register: _uefi_cleanup
@@ -381,12 +389,6 @@
           virsh attach-disk {{ item }}
           {{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2
           vda --persistent --subdriver qcow2
-      loop: "{{ bmaas_vms }}"
-      changed_when: true
-
-    - name: Set boot order to network then disk (for virtual media)
-      ansible.builtin.command:
-        cmd: virt-xml {{ item }} --edit --boot network,hd
       loop: "{{ bmaas_vms }}"
       changed_when: true
 
