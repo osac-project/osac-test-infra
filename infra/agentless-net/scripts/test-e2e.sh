@@ -41,6 +41,20 @@ for c in json.load(sys.stdin):
 "
 }
 
+# Print agent + clusterorder progression so the long PROGRESSING waits are
+# actionable. Selects only benign agent debugInfo fields (state/stateInfo),
+# never the token-bearing eventsURL/logsURL.
+print_progress() {
+    echo "    agents:"
+    KUBECONFIG="$KUBECONFIG" oc get agents -A --no-headers \
+        -o 'custom-columns=HOST:.metadata.annotations.osac\.openshift\.io/host_uuid,APPROVED:.spec.approved,ROLE:.status.role,STATE:.status.debugInfo.state,INFO:.status.debugInfo.stateInfo' \
+        2>/dev/null | sed 's/^/      /' || true
+    echo "    clusterorders:"
+    KUBECONFIG="$KUBECONFIG" oc get clusterorder -n "$OSAC_NAMESPACE" --no-headers \
+        -o 'custom-columns=NAME:.metadata.name,PHASE:.status.phase' \
+        2>/dev/null | sed 's/^/      /' || true
+}
+
 # ---------- preflight ----------
 
 info "Running preflight checks..."
@@ -162,6 +176,7 @@ for i in "${!CLUSTER_NAMES[@]}"; do
 
         sleep 60; elapsed=$((elapsed + 60))
         echo "  ${elapsed}s — $name state: $state"
+        print_progress
 
         if [ "$elapsed" -ge 3600 ]; then
             echo "ERROR: $name not ready after ${elapsed}s (state: $state)"
