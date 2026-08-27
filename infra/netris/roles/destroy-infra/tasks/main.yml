@@ -3,13 +3,15 @@
   ansible.builtin.include_vars:
     file: "{{ netris_lab_dir }}/group_vars/all.yml"
 
-- name: Destroy bmc-net if exists
+- name: Destroy netris-lab
+  ansible.builtin.include_role:
+    name: lab_destroy
+
+# bmc-net is created by Pulumi (cloudsim), so pulumi destroy above handles it.
+# Clean up any orphans left if Pulumi state was already cleared.
+- name: Destroy bmc-net if orphaned
   ansible.builtin.shell:
     cmd: |
       virsh net-destroy {{ bmc_net_name }} 2>/dev/null || true
       virsh net-undefine {{ bmc_net_name }} 2>/dev/null || true
   changed_when: false
-
-- name: Destroy netris-lab
-  ansible.builtin.include_role:
-    name: lab_destroy
