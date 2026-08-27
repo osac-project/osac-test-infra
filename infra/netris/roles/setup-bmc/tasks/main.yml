@@ -126,6 +126,34 @@
   register: _sushy_start
   when: _sushy_running.rc != 0 or _sushy_config is changed
 
+- name: Allow sushy-tools traffic through firewalld on bmc-net bridge
+  block:
+    - name: Add bmc-net bridge to libvirt firewalld zone
+      ansible.builtin.command:
+        cmd: firewall-cmd --zone=libvirt --add-interface={{ bmc_net_bridge }} --permanent
+      register: _fw_iface
+      changed_when: "'ALREADY_ENABLED' not in _fw_iface.stderr"
+      failed_when: _fw_iface.rc != 0 and 'ALREADY_ENABLED' not in _fw_iface.stderr
+
+    - name: Remove libvirt zone reject-all rich rule
+      ansible.builtin.command:
+        cmd: firewall-cmd --zone=libvirt --remove-rich-rule='rule priority="32767" reject' --permanent
+      register: _fw_reject
+      changed_when: _fw_reject.rc == 0
+      failed_when: false
+
+    - name: Open sushy-tools port in libvirt zone
+      ansible.builtin.command:
+        cmd: firewall-cmd --zone=libvirt --add-port={{ sushy_tools_port }}/tcp --permanent
+      register: _fw_port
+      changed_when: "'ALREADY_ENABLED' not in _fw_port.stderr"
+      failed_when: _fw_port.rc != 0 and 'ALREADY_ENABLED' not in _fw_port.stderr
+
+    - name: Reload firewalld
+      ansible.builtin.command:
+        cmd: firewall-cmd --reload
+      when: _fw_iface is changed or _fw_reject is changed or _fw_port is changed
+
 - name: Wait for sushy-emulator to respond
   ansible.builtin.uri:
     url: "http://{{ sushy_tools_ip }}:{{ sushy_tools_port }}/redfish/v1/"
