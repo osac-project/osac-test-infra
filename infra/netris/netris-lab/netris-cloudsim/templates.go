@@ -520,13 +520,18 @@ runcmd:
 
     bash /etc/network_nics_up.sh
 
+    # The installer's netris-sg-hs postinst disables systemd-resolved.
+    # On Ubuntu, resolv.conf is a symlink to resolved's stub — once
+    # resolved stops, DNS breaks and the remaining apt installs fail.
+    # Replace the symlink with a static file before the installer runs.
+    rm -f /etc/resolv.conf
+    echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
+
     curl -fsSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug
 
-    # Installer hardcodes 'nameserver 1.1.1.1' and removes isc-dhcp-client
-    echo 'nameserver {{ .dnsServer }}' | tee /etc/resolv.conf
-    apt-get install -y isc-dhcp-client 2>/dev/null || true
+    # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
+    echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
 
-    sleep 600
     reboot
 
 write_files:
