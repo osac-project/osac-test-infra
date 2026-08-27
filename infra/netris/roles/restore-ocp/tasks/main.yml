@@ -259,7 +259,7 @@
       ansible.builtin.copy:
         content: |
           interfaces:
-          - name: ens5
+          - name: ens6
             type: ethernet
             state: up
             ipv4:
@@ -275,7 +275,7 @@
           routes:
             config:
             - destination: 0.0.0.0/0
-              next-hop-interface: ens5
+              next-hop-interface: ens6
               next-hop-address: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
               metric: 48
               table-id: 254
@@ -415,7 +415,7 @@
   ansible.builtin.command:
     cmd: virsh start {{ ocp_vm_name }}
 
-# Use DNAT IP since br-ex is on ens5, not management bridge
+# Use DNAT IP since br-ex is on ens6, not management bridge
 - name: Set SSH target IP
   ansible.builtin.set_fact:
     _vm_ssh_ip: "{{ ocp_dnat_ip }}"
