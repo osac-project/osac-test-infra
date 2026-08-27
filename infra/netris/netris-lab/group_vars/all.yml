@@ -106,11 +106,11 @@ hypers_ssh_user: "root"
 
 # --- VM Resources ---
 switch_vcpu: 4
-switch_memory: 2048              # MB
+switch_memory: 8192              # MB
 server_vcpu: 1
 server_memory: 1024              # MB
 softgate_vcpu: 2
-softgate_memory: 4096            # MB
+softgate_memory: 8192            # MB
 
 # --- SSH keys (leave empty to auto-detect from /root/.ssh/id_rsa.pub) ---
 ssh_auth_keys: []
