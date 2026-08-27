@@ -547,14 +547,6 @@ write_files:
               ethtool -s $nic speed 1000 duplex full
           fi
       done
-  - path: /etc/network/interfaces
-    permissions: '0644'
-    content: |
-      auto lo
-      iface lo inet loopback
-
-      auto ens4
-      iface ens4 inet dhcp
   - path: /etc/netris-devices
     permissions: '0644'
     content: |
