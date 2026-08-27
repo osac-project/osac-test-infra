@@ -123,6 +123,20 @@
     nat_destination_address: "{{ ocp_dnat_ip }}/32"
     nat_dnat_to_ip: "{{ ocp_node_ip }}"
 
+- name: Create ACL permit rule for mgmt cluster
+  ansible.builtin.include_role:
+    name: netris.controller.acl
+  vars:
+    acl_state: present
+    acl_name: "{{ ocp_vpc_name }}-permit-all"
+    acl_action: permit
+    acl_proto: all
+    acl_vpc_id: "{{ vpc_id }}"
+    acl_src_prefix: "{{ ocp_subnet_cidr }}"
+    acl_dst_prefix: "0.0.0.0/0"
+    acl_reverse: "yes"
+    acl_comment: "Allow all traffic from mgmt cluster subnet"
+
 - name: Check if NS-only server cluster template exists
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster-template"
