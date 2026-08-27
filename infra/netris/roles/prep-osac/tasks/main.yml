@@ -75,7 +75,7 @@
 - name: Build resource class map
   ansible.builtin.set_fact:
     _netris_resource_class_map: >-
-      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ _netris_sct_id }},"mgmt_interface":"ens4","vpc_interfaces":["ens5"]}}
+      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ _netris_sct_id }},"mgmt_interface":"ens4","vpc_interfaces":["ens6"]}}
 
 # --- Read SSH private key for instance group secrets ---
 

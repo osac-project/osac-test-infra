@@ -294,7 +294,7 @@
     NETRIS_RC_NAME: "{{ caas_host_type_id }}"
     NETRIS_RC_TEMPLATE_ID: "{{ caas_netris_server_cluster_template_id | default(2) }}"
     NETRIS_RC_MGMT_IF: "{{ caas_netris_mgmt_interface | default('ens4') }}"
-    NETRIS_RC_VPC_IFS: "{{ caas_netris_vpc_interfaces | default(['ens5']) | to_json }}"
+    NETRIS_RC_VPC_IFS: "{{ caas_netris_vpc_interfaces | default(['ens6']) | to_json }}"
   register: _netris_rc_map_ensure
   changed_when: "'patched ' in _netris_rc_map_ensure.stdout"
 

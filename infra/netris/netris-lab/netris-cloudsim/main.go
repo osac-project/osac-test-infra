@@ -148,7 +148,6 @@ func main() {
 				maxIPs = countIPsInCIDR(ipNet) - 1 // -1 to account for the gateway
 			}
 
-			firstServer := true
 			for i, vm := range netrisInfo.Hardware {
 				hypervisor := hypersList[i%len(hypersList)]
 				if i == 0 {
@@ -538,14 +537,13 @@ func main() {
 								Mac:    pulumi.String(vmSpec.MacAddress),
 							},
 						}
-						if firstServer && bmcNetwork != "" {
+						if bmcNetwork != "" {
 							if netID, ok := bmcNetworkIDs[hyperHost]; ok {
 								bridgeForServer = append(bridgeForServer, libvirt.DomainNetworkInterfaceArgs{
 									NetworkId: netID.ToStringOutput(),
 								})
 							}
 						}
-						firstServer = false
 					case "softgate":
 						vmResource.vcpu = setResource(-1, conf.GetInt("softgate_vcpu"), 2, false)
 						vmResource.memory = setResource(-1, conf.GetInt("softgate_memory"), 4096, false)

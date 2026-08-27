@@ -130,7 +130,7 @@ caas_host_type_description: "Worker nodes for CI testing"
 caas_netris_server_cluster_template_id: 2
 caas_netris_mgmt_interface: "ens4"
 caas_netris_vpc_interfaces:
-  - "ens5"
+  - "ens6"
 caas_cluster_template: "osac.templates.ocp_ci_small"
 caas_catalog_item: "ci-ocp-small"
 caas_catalog_item_title: "CI OCP Small"

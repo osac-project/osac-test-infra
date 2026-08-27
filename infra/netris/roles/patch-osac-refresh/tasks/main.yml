@@ -60,7 +60,7 @@
 - name: Build resource class map
   ansible.builtin.set_fact:
     _netris_resource_class_map: >-
-      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ netris_sct_by_name[caas_server_cluster_template_name].id }},"mgmt_interface":"ens4","vpc_interfaces":["ens5"]}}
+      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ netris_sct_by_name[caas_server_cluster_template_name].id }},"mgmt_interface":"ens4","vpc_interfaces":["ens6"]}}
 
 - name: Update cluster-fulfillment-ig configmap with lab Netris config
   ansible.builtin.shell:
