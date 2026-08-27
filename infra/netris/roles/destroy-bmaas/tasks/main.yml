@@ -27,16 +27,6 @@
   loop: "{{ bmaas_vms }}"
   changed_when: true
 
-- name: Delete BMF config secrets
-  ansible.builtin.command:
-    cmd: oc delete secret {{ item }} -n {{ osac_namespace }} --ignore-not-found
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop:
-    - osac-inventory-config
-    - osac-management-config
-  changed_when: true
-
 - name: Delete Provisioning CR
   ansible.builtin.command:
     cmd: oc delete provisioning provisioning-configuration --ignore-not-found

@@ -539,52 +539,11 @@ jobs:
 
           make install-infra PLATFORM=openshift PROFILE=bmaas-ci NS="${INSTALLER_NAMESPACE}"
 
-      - name: Create BMF secrets
-        env:
-          KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
-          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
-        run: |
-          echo "Creating BMF operator secrets..."
-          oc create namespace "${INSTALLER_NAMESPACE}" 2>/dev/null || true
-          oc apply -f - <<EOF
-          ---
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: osac-inventory-config
-            namespace: ${INSTALLER_NAMESPACE}
-          type: Opaque
-          stringData:
-            inventory.yaml: |
-              name: metal3-inventory
-              type: metal3
-              hostClass: metal3
-              networkClass: metal3
-              options:
-                metal3:
-                  namespace: ${BMH_NAMESPACE}
-          ---
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: osac-management-config
-            namespace: ${INSTALLER_NAMESPACE}
-          type: Opaque
-          stringData:
-            management.yaml: |
-              name: metal3-management
-              type: metal3
-              options:
-                metal3:
-                  namespace: ${BMH_NAMESPACE}
-          EOF
-          echo "BMF secrets created."
-
       - name: Install OSAC
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
           AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
         run: |
@@ -650,6 +609,12 @@ jobs:
           done
 
           SET_ARGS=()
+
+          # The bmaas-ci profile Helm-manages the Metal3 inventory/management
+          # secrets (bmf.metal3.enabled=true in values/bmaas-ci/instance.yaml);
+          # point them at this run's BareMetalHost namespace (OSAC-4139).
+          SET_ARGS+=("--set-string" "bmf.metal3.namespace=${BMH_NAMESPACE}")
+
           if [[ -n "${MERGED_OVERRIDES}" ]] && [[ "${MERGED_OVERRIDES}" != "{}" ]]; then
             for key in $(echo "${MERGED_OVERRIDES}" | jq -r 'keys[]'); do
               value=$(echo "${MERGED_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
