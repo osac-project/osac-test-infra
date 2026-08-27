@@ -56,7 +56,10 @@ on:
 
 concurrency:
   group: e2e-caas-agentless-net
-  cancel-in-progress: false
+  # Cancel a superseded pull_request run (a new push shouldn't leave the old
+  # ~6h run burning the shared orchestrator), but never cancel scheduled or
+  # manual runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   provision:
