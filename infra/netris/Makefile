@@ -2,7 +2,7 @@
 
 OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_values_file=$(OSAC_VALUES_FILE)
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
 # Suite selects CaaS vs MaaS for restore disk grow + redeploy-server.sh flow.
@@ -11,7 +11,7 @@ ENV_INFRA := .env.infra
 SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci
-OSAC_VALUES_FILE ?= values/caas-ci/values.yaml
+OSAC_PROFILE ?= caas-ci
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 
 # ─── Convenience targets ───────────────────────────────────────────
@@ -68,8 +68,9 @@ deploy-caas:
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
 	cd /opt/osac/osac-installer && make uninstall \
-		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
-		VALUES_FILE=$(OSAC_VALUES_FILE) 2>/dev/null || true
+		PLATFORM=openshift \
+		PROFILE=$(OSAC_PROFILE) \
+		NS=$(OSAC_NAMESPACE) 2>/dev/null || true
 	rm -rf /opt/osac
 	@rm -f $(ENV_INFRA)
 
@@ -175,8 +176,9 @@ prep-osac:
 run-osac-setup:
 	@echo "=== Installing OSAC via Helm (make install) ==="
 	cd /opt/osac/osac-installer && make install \
-		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
-		VALUES_FILE=$(OSAC_VALUES_FILE)
+		PLATFORM=openshift \
+		PROFILE=$(OSAC_PROFILE) \
+		NS=$(OSAC_NAMESPACE)
 
 post-osac:
 	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
@@ -192,7 +194,7 @@ run-refresh-osac:
 	@echo "=== Running OSAC refresh ==="
 	cd /opt/osac/osac-installer && \
 		KUBECONFIG=/root/.kube/config \
-		VALUES_FILE=$(OSAC_VALUES_FILE) \
+		VALUES_FILE=values/$(OSAC_PROFILE)/instance.yaml \
 		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
 		python3 -u scripts/refresh-after-snapshot.py
 
