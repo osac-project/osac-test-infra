@@ -126,8 +126,8 @@
 - name: Create ACL permit rule for mgmt cluster
   ansible.builtin.include_role:
     name: netris.controller.acl
+    tasks_from: create
   vars:
-    acl_state: present
     acl_name: "{{ ocp_vpc_name }}-permit-all"
     acl_action: permit
     acl_proto: all
