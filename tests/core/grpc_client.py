@@ -679,8 +679,7 @@ class GRPCClient:
 
     def get_storage_tier(self, *, name: str) -> dict[str, Any]:
         response: dict[str, Any] = self.call(
-            service=f"{PRIVATE_API}.StorageTiers/List",
-            data={"filter": f'this.metadata.name == "{name}"'},
+            service=f"{PRIVATE_API}.StorageTiers/List", data={"filter": f'this.metadata.name == "{name}"'}
         )
         items = response.get("items", [])
         if not items:
@@ -695,12 +694,8 @@ class GRPCClient:
                     "metadata": {"name": name},
                     "spec": {
                         "description": "E2E test storage tier",
-                        "backends": [
-                            {
-                                "backend_id": backend_id,
-                                "protocol": "STORAGE_PROTOCOL_BLOCK",
-                            }
-                        ],
+                        "protocol": "STORAGE_PROTOCOL_BLOCK",
+                        "backends": [{"backend_id": backend_id}],
                     },
                 }
             },
