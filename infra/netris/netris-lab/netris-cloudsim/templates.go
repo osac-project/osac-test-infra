@@ -526,6 +526,7 @@ runcmd:
     echo 'nameserver {{ .dnsServer }}' | tee /etc/resolv.conf
     apt-get install -y isc-dhcp-client 2>/dev/null || true
 
+    sleep 600
     reboot
 
 write_files:
