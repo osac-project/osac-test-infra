@@ -175,7 +175,7 @@ prep-osac:
 
 run-osac-setup:
 	@echo "=== Installing OSAC via Helm (make install) ==="
-	cd /opt/osac/osac-installer && make install \
+	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE)
