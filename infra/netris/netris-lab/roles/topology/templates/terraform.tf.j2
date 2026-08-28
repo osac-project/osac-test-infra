@@ -31,7 +31,7 @@ variable "site" {
   })
   default = {
     publicasn           = 655001
-    acldefaultpolicy    = "deny"
+    acldefaultpolicy    = "{{ acl_default_policy | default('deny') }}"
     rohroutingprofile   = "default_agg"
     sitemesh            = "disabled"
     vlanrangeautoassign = "2-3999"
