@@ -343,6 +343,14 @@
           when: _provisioning_vpc_id | length > 0
           ignore_errors: true
 
+        - name: Delete provisioning ACL permit rule
+          ansible.builtin.include_role:
+            name: netris.controller.acl
+            tasks_from: delete
+          vars:
+            acl_name: "{{ bmaas_provisioning_vnet_name }}-permit-all"
+          ignore_errors: true
+
         - name: Delete provisioning VPC
           ansible.builtin.include_role:
             name: netris.controller.vpc

@@ -111,12 +111,15 @@
   ansible.builtin.include_role:
     name: connectivity
 
-- name: Route OSAC tenant external IP pool via ISP server (isolated mode)
+- name: Route OSAC traffic via ISP server (isolated mode)
   when: connectivity_mode == "isolated"
   ansible.builtin.command: >-
-    ip route replace {{ osac_external_ip_pool_cidr }}
+    ip route replace {{ item }}
     via {{ bgp_link_subnet | ansible.utils.ipaddr('network') | ansible.utils.ipmath(2) }}
     dev {{ public_bridge_name }}
+  loop:
+    - "{{ osac_external_ip_pool_cidr }}"
+    - "{{ bmaas_provisioning_snat_cidr }}"
   changed_when: true
 
 - name: Verify netris-lab deployment
