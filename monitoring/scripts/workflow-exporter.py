@@ -1841,7 +1841,30 @@ class WorkflowExporter:
                     )
                     if not resp.ok:
                         continue
-                    self._process_completed_run(dropped_repo, resp.json())
+                    run_json = resp.json()
+                    if run_json.get("status") != "completed":
+                        # Dropping out of current_active doesn't always mean
+                        # the run finished -- _run_count silently returns 0
+                        # on a transient API failure (it doesn't flip
+                        # active_runs_complete), which skips
+                        # _fetch_active_runs for that repo entirely this
+                        # cycle even though the run is still genuinely
+                        # queued/in_progress. Calling _process_completed_run
+                        # on a non-completed run would upsert a premature
+                        # row with an empty conclusion under this run's
+                        # current run_attempt -- and since _needs_upsert
+                        # only compares run_attempt, the real completion
+                        # later (same attempt number) would then never
+                        # overwrite it, permanently freezing the row on
+                        # "in_progress". Re-add it to this cycle's active
+                        # list instead, so it's retained for next cycle's
+                        # diff and this catch-up gets another chance once
+                        # it's actually done.
+                        current_active.append(
+                            self._make_job_record(run_json, dropped_repo)
+                        )
+                        continue
+                    self._process_completed_run(dropped_repo, run_json)
                 except Exception:
                     logger.exception(
                         "Error catching up dropped-active run %s (%s)",
