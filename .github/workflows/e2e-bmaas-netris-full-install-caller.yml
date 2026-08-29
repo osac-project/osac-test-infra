@@ -1,0 +1,68 @@
+---
+name: E2E BMaaS Netris Full Install
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+    inputs:
+      instance-type:
+        description: "EC2 instance type -- curated allow-list, not free text, so a dispatch can't accidentally launch an unexpectedly expensive type."
+        required: false
+        type: choice
+        options:
+          - "c5n.metal"
+        default: "c5n.metal"
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        default: "us-east-1"
+      tooling-check-cmds:
+        description: "Semicolon-separated commands to verify on the box before JIT registration."
+        required: false
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+      osac-operator-image:
+        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      fulfillment-service-image:
+        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      osac-aap-ee-image:
+        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      bmf-operator-image:
+        description: "Override bare-metal-fulfillment-operator image (registry-pullable reference) -- empty means no override"
+        required: false
+        default: ""
+      osac-repo:
+        description: "Override osac mono-repo git URI -- empty means upstream"
+        required: false
+        default: ""
+      osac-branch:
+        description: "Branch, tag, or commit of the osac mono-repo to clone -- empty means main"
+        required: false
+        default: ""
+
+concurrency:
+  group: e2e-bmaas-netris-full-install-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-bmaas-netris:
+    uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
+    with:
+      instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
+      osac-operator-image: ${{ inputs.osac-operator-image || '' }}
+      fulfillment-service-image: ${{ inputs.fulfillment-service-image || '' }}
+      osac-aap-ee-image: ${{ inputs.osac-aap-ee-image || '' }}
+      bmf-operator-image: ${{ inputs.bmf-operator-image || '' }}
+      osac-repo: ${{ inputs.osac-repo || '' }}
+      osac-branch: ${{ inputs.osac-branch || '' }}
