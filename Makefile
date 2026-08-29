@@ -31,7 +31,7 @@ test-bmaas:
 	mkdir -p $(REPORTS_DIR)
 	pytest tests/bmaas/ --ignore=tests/bmaas/networking -n 0 -v --tb=short $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas.xml
 
-test-bmaas-networking:
+test-bmaas-networking test-bmaas_networking:
 	mkdir -p $(REPORTS_DIR)
 	pytest tests/bmaas/networking/ -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas-networking.xml
 
@@ -49,7 +49,9 @@ INFRA              ?= netris
 SUITE              ?= caas
 EXTRA_VARS         ?=
 OSAC_DEPLOY_MODE   ?= fresh
+OSAC_PROFILE       ?=
 INFRA_DIR           = infra/$(INFRA)
+_FWD_PROFILE        = $(if $(OSAC_PROFILE),OSAC_PROFILE=$(OSAC_PROFILE))
 
 .PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
@@ -86,22 +88,22 @@ _validate-suite-contract:
 e2e: _validate-backend deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
 deploy-setup: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-setup EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
+	$(MAKE) -C $(INFRA_DIR) deploy-setup EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
 
 # Backward compatibility alias
 setup-infra: deploy-setup
 
 deploy-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
+	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
 
 deploy-ocp: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
+	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
 
 deploy-osac: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
+	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
 
 setup-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
+	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
 
 run-tests: _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
@@ -111,7 +113,7 @@ destroy-ocp:
 	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)'
 
 destroy-osac:
-	$(MAKE) -C $(INFRA_DIR) destroy-osac EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) destroy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PROFILE)
 
 destroy-infra:
 	$(MAKE) -C $(INFRA_DIR) destroy-infra EXTRA_VARS='$(EXTRA_VARS)'
