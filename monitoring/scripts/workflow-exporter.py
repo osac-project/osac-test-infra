@@ -1263,11 +1263,25 @@ class WorkflowExporter:
     def _recent_completed(self, repo):
         """Fetch recently completed runs to detect new completions.
 
-        The GitHub API returns completed runs sorted by updated_at descending,
-        so the most recently finished runs come first. We fetch 50 per page
-        and rely on _needs_upsert() to skip already-processed ones.
-        This correctly catches long-running jobs (e.g. created 2h ago,
-        just now completed) that a created-time filter would miss.
+        Fetches 50 per page and relies on _needs_upsert() to skip
+        already-processed ones. Correctly, cheaply catches short-lived runs
+        (created and completed within roughly one poll interval), which
+        always sort near the top regardless of ordering.
+
+        Does NOT reliably catch long-running runs on a busy repo: this
+        endpoint's default sort is by created_at descending (confirmed
+        live against the real API -- this docstring previously assumed
+        updated_at descending, which is not what GitHub actually returns),
+        so a run's position here is fixed by when it STARTED, not when it
+        finished. A run that takes hours to complete sinks in this
+        ordering for its entire runtime, and on a repo producing 50+ other
+        completions in that window (confirmed live on osac-test-infra),
+        it can be pushed past this single, unpaginated 50-item page before
+        ever being looked at again -- silently and permanently, not just
+        delayed, since nothing before it in created_at order will ever
+        rank lower. See collect()'s dropped-from-active-list catch-up for
+        the mechanism that actually covers long-running runs; this
+        function alone is not sufficient for them.
         """
         resp = self._get(
             f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
@@ -1619,6 +1633,77 @@ class WorkflowExporter:
 
         logger.info("Initial load: %d jobs seeded", loaded)
 
+    def _process_completed_run(self, repo, run):
+        """Fetch job-level detail for one completed run and upsert it,
+        incrementing the completed/duration/failed-step metrics on
+        success. Returns True if the row was actually (newly) upserted.
+
+        Shared by collect()'s two independent ways of finding a candidate
+        run -- _recent_completed's polling loop, and the dropped-from-
+        active-list catch-up below -- so both go through identical
+        processing. Safe to call twice for the same run (e.g. if both
+        paths happen to surface it in the same cycle): _needs_upsert/
+        _upsert_job are the actual dedup point, keyed on run id + attempt.
+        """
+        if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
+            return False
+        run_id = run["id"]
+        if not self._needs_upsert(run):
+            return False
+
+        conclusion = run.get("conclusion") or "unknown"
+        workflow_name = run.get("name", "unknown")
+
+        record = self._make_job_record(run, repo)
+        jobs = self._fetch_run_jobs(repo, run_id)
+        if jobs is None:
+            logger.warning(
+                "Skipping run %s (%s): job-details fetch failed, will retry next pass",
+                run_id, repo,
+            )
+            return False
+        failed = []
+        if jobs:
+            record["runner_name"] = self._extract_runner_names(jobs)
+            record["steps"] = self._extract_step_durations(jobs)
+        if conclusion == "failure":
+            # jobs may be [] (fetch succeeded, zero job entries)
+            # -- classify anyway rather than leaving
+            # failure_reason unset; _classify_failure_reason
+            # treats "no per-step detail at all" as infra,
+            # which is correct here too.
+            failed = self._extract_failed_steps(jobs or [])
+            record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed, jobs)
+            if failed:
+                record["failed_step"] = "; ".join(
+                    f["display"] for f in failed
+                )
+
+        if not self._upsert_job(record):
+            return False  # stored row's run_attempt was already current
+
+        completed_runs.labels(
+            org=ORG, repo=repo, workflow=workflow_name, conclusion=conclusion
+        ).inc()
+
+        started = run.get("run_started_at")
+        ended = run.get("updated_at")
+        if started and ended:
+            t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            t1 = datetime.fromisoformat(ended.replace("Z", "+00:00"))
+            dur = (t1 - t0).total_seconds()
+            if dur > 0:
+                run_duration.labels(
+                    org=ORG, repo=repo, conclusion=conclusion
+                ).observe(dur)
+
+        for f in failed:
+            failed_step_total.labels(
+                org=ORG, workflow=workflow_name, step=f["step"]
+            ).inc()
+
+        return True
+
     def collect(self):
         self._prune_jobs()
         self._prune_pr_merges()
@@ -1639,6 +1724,13 @@ class WorkflowExporter:
         # an incomplete current_active would look like a real drop in
         # queued/in-progress e2e work rather than "we couldn't fetch it".
         active_runs_complete = True
+
+        # Snapshot before this cycle's active-runs fetch overwrites it --
+        # see the dropped-from-active-list catch-up after the main loop
+        # below for why. {run_id: repo}; a run id is globally unique
+        # across repos so this can't collide.
+        with self._lock:
+            previous_active_by_id = {r["id"]: r["repo"] for r in self.active_runs}
 
         for repo in repos:
             try:
@@ -1661,67 +1753,15 @@ class WorkflowExporter:
                         logger.exception("Error fetching active runs for %s", repo)
                         active_runs_complete = False
 
-                # Track newly completed runs. Checked via a cheap existence
-                # query before spending the extra _fetch_run_jobs API call,
-                # so already-recorded (and not-newer-attempt) runs don't
-                # burn rate-limit budget.
+                # Track newly completed runs. _process_completed_run checks
+                # for an existing up-to-date row (cheaply) before spending
+                # the extra _fetch_run_jobs API call, so already-recorded
+                # (and not-newer-attempt) runs don't burn rate-limit budget.
+                # This alone only reliably catches short-lived runs -- see
+                # _recent_completed's docstring and the dropped-from-active
+                # catch-up after this loop for long-running ones.
                 for run in self._recent_completed(repo):
-                    if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
-                        continue
-                    run_id = run["id"]
-                    if not self._needs_upsert(run):
-                        continue
-
-                    conclusion = run.get("conclusion") or "unknown"
-                    workflow_name = run.get("name", "unknown")
-
-                    record = self._make_job_record(run, repo)
-                    jobs = self._fetch_run_jobs(repo, run_id)
-                    if jobs is None:
-                        logger.warning(
-                            "Skipping run %s (%s): job-details fetch failed, will retry next pass",
-                            run_id, repo,
-                        )
-                        continue
-                    failed = []
-                    if jobs:
-                        record["runner_name"] = self._extract_runner_names(jobs)
-                        record["steps"] = self._extract_step_durations(jobs)
-                    if conclusion == "failure":
-                        # jobs may be [] (fetch succeeded, zero job entries)
-                        # -- classify anyway rather than leaving
-                        # failure_reason unset; _classify_failure_reason
-                        # treats "no per-step detail at all" as infra,
-                        # which is correct here too.
-                        failed = self._extract_failed_steps(jobs or [])
-                        record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed, jobs)
-                        if failed:
-                            record["failed_step"] = "; ".join(
-                                f["display"] for f in failed
-                            )
-
-                    if not self._upsert_job(record):
-                        continue  # stored row's run_attempt was already current
-
-                    completed_runs.labels(
-                        org=ORG, repo=repo, workflow=workflow_name, conclusion=conclusion
-                    ).inc()
-
-                    started = run.get("run_started_at")
-                    ended = run.get("updated_at")
-                    if started and ended:
-                        t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
-                        t1 = datetime.fromisoformat(ended.replace("Z", "+00:00"))
-                        dur = (t1 - t0).total_seconds()
-                        if dur > 0:
-                            run_duration.labels(
-                                org=ORG, repo=repo, conclusion=conclusion
-                            ).observe(dur)
-
-                    for f in failed:
-                        failed_step_total.labels(
-                            org=ORG, workflow=workflow_name, step=f["step"]
-                        ).inc()
+                    self._process_completed_run(repo, run)
 
             except Exception:
                 logger.exception("Error collecting metrics for %s", repo)
@@ -1769,6 +1809,44 @@ class WorkflowExporter:
                 "by-category queued/in-progress gauge update, keeping "
                 "previous values"
             )
+
+        # Catch-up for runs that dropped out of the active list since last
+        # cycle -- i.e. they must have finished (or been cancelled) in the
+        # meantime. This is the actual fix for long-running runs, which
+        # _recent_completed alone cannot reliably catch on a busy repo (see
+        # its docstring): rather than hoping a completed run resurfaces in
+        # that noisy, unpaginated top-50 feed before it's pushed out, fetch
+        # each one directly by the id+repo we already know from tracking it
+        # as active. Confirmed live: two ~2.5h E2E CaaS runs on
+        # osac-test-infra were silently and permanently dropped this way --
+        # _process_completed_run is idempotent, so any overlap with
+        # _recent_completed above is harmless.
+        #
+        # Gated on active_runs_complete for the same reason the by-category
+        # gauges are: if this cycle's active-runs fetch was itself partial
+        # (an API error mid-pagination, not a genuine drop), a run missing
+        # from current_active could just be a fetch gap, not a real
+        # completion -- treating that as "finished" would risk recording a
+        # wrong conclusion (or none) for a run that's actually still going.
+        # Skipping the whole catch-up this cycle just retries next cycle,
+        # same as the gauge update's own skip does.
+        if active_runs_complete:
+            still_active_ids = {r["id"] for r in current_active}
+            for run_id, dropped_repo in previous_active_by_id.items():
+                if run_id in still_active_ids:
+                    continue
+                try:
+                    resp = self._get(
+                        f"{API_URL}/repos/{ORG}/{dropped_repo}/actions/runs/{run_id}"
+                    )
+                    if not resp.ok:
+                        continue
+                    self._process_completed_run(dropped_repo, resp.json())
+                except Exception:
+                    logger.exception(
+                        "Error catching up dropped-active run %s (%s)",
+                        run_id, dropped_repo,
+                    )
 
         with self._lock:
             self.active_runs = current_active
