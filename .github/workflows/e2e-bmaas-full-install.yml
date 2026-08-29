@@ -464,19 +464,6 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Build test image
-        env:
-          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
-          OSAC_VERSION: ${{ inputs.osac-cli-version }}
-        run: |
-          BUILD_ARGS="--build-arg OSAC_VERSION=${OSAC_VERSION}"
-          if [[ -n "${OSAC_CLI_BIN:-}" ]] && [[ -f "${OSAC_CLI_BIN}" ]]; then
-            cp "${OSAC_CLI_BIN}" ./osac-cli-bin
-            BUILD_ARGS="--build-arg OSAC_CLI_BIN=osac-cli-bin"
-          fi
-          podman build --no-cache ${BUILD_ARGS} -t "${E2E_IMAGE}" -f Containerfile .
-          rm -f ./osac-cli-bin
-
       - name: Install grpcurl
         uses: ./.github/actions/install-grpcurl
 
@@ -538,6 +525,74 @@ jobs:
           yq -i '.lvms.channel = "stable-4.22"' values/bmaas-ci/infra.yaml
 
           make install-infra PLATFORM=openshift PROFILE=bmaas-ci NS="${INSTALLER_NAMESPACE}"
+
+      # Build the CLI from the same mono-repo checkout the server images
+      # come from, so the proto wire format always matches. When components
+      # were built from source earlier, OSAC_CLI_BIN is already set and
+      # this step is skipped.
+      - name: Build CLI from installer source
+        if: env.OSAC_CLI_BIN == ''
+        run: |
+          INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
+          FS_DIR="${INSTALLER_CLONE_DIR}/fulfillment-service"
+          echo "Building OSAC CLI from installer clone..."
+          (cd "${FS_DIR}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
+          echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
+
+      - name: Build test image
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+          OSAC_VERSION: ${{ inputs.osac-cli-version }}
+        run: |
+          BUILD_ARGS="--build-arg OSAC_VERSION=${OSAC_VERSION}"
+          if [[ -n "${OSAC_CLI_BIN:-}" ]] && [[ -f "${OSAC_CLI_BIN}" ]]; then
+            cp "${OSAC_CLI_BIN}" ./osac-cli-bin
+            BUILD_ARGS="--build-arg OSAC_CLI_BIN=osac-cli-bin"
+          fi
+          podman build --no-cache ${BUILD_ARGS} -t "${E2E_IMAGE}" -f Containerfile .
+          rm -f ./osac-cli-bin
+
+      - name: Create BMF secrets
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+        run: |
+          echo "Creating BMF operator secrets..."
+          oc create namespace "${INSTALLER_NAMESPACE}" 2>/dev/null || true
+          oc apply -f - <<EOF
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: osac-inventory-config
+            namespace: ${INSTALLER_NAMESPACE}
+          type: Opaque
+          stringData:
+            inventory.yaml: |
+              name: metal3-inventory
+              type: metal3
+              hostClass: metal3
+              networkClass: metal3
+              options:
+                metal3:
+                  namespace: ${BMH_NAMESPACE}
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: osac-management-config
+            namespace: ${INSTALLER_NAMESPACE}
+          type: Opaque
+          stringData:
+            management.yaml: |
+              name: metal3-management
+              type: metal3
+              options:
+                metal3:
+                  namespace: ${BMH_NAMESPACE}
+          EOF
+          echo "BMF secrets created."
 
       - name: Install OSAC
         env:
