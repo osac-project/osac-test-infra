@@ -14,10 +14,6 @@ on:
     - cron: "0 */3 * * *"
   workflow_dispatch:
     inputs:
-      test-suite:
-        description: "Test suite (bmaas, or empty for all)"
-        required: false
-        default: "bmaas"
       test-filter:
         description: "pytest -k filter"
         required: false
@@ -55,7 +51,6 @@ jobs:
   e2e-bmaas-full-install:
     uses: ./.github/workflows/e2e-bmaas-full-install.yml
     with:
-      test-suite: ${{ inputs.test-suite || 'bmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}
       # PR: sanity (lifecycle only). Schedule: regression (inventory exhaust).
       # workflow_dispatch: honor input, or empty for full suite.

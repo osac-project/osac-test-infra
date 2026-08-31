@@ -4,11 +4,6 @@ name: E2E VMaaS
 on:
   workflow_call:
     inputs:
-      test-suite:
-        description: "Test suite to run: vmaas, caas, or empty string for all"
-        required: false
-        type: string
-        default: "vmaas"
       test-filter:
         description: "pytest -k filter expression (optional)"
         required: false
@@ -90,7 +85,7 @@ jobs:
       - name: Set clone name
         id: clone-name
         env:
-          SUITE: ${{ inputs.test-suite || 'e2e' }}
+          SUITE: vmaas
           RUN_ID: ${{ github.run_id }}
         run: |
           # Sanitize suite to lowercase alphanumeric/hyphens only
@@ -375,7 +370,6 @@ jobs:
       - name: Run E2E tests
         id: test
         env:
-          TEST_SUITE: ${{ inputs.test-suite }}
           TEST_FILTER: ${{ inputs.test-filter }}
           OSAC_NAMESPACE: ${{ inputs.namespace }}
           OSAC_VM_TEMPLATE: ${{ inputs.vm-template }}
@@ -383,16 +377,6 @@ jobs:
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
         run: |
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
-
-          TEST_ARGS="tests/"
-          if [ -n "${TEST_SUITE}" ]; then
-            TEST_ARGS="tests/${TEST_SUITE}/"
-          fi
-
-          FILTER_ARGS=""
-          if [ -n "${TEST_FILTER}" ]; then
-            FILTER_ARGS="-k ${TEST_FILTER}"
-          fi
 
           mkdir -p "$RUNNER_TEMP/test-output"
 
@@ -407,9 +391,9 @@ jobs:
             -e OSAC_VM_TEMPLATE="${OSAC_VM_TEMPLATE}" \
             -e OSAC_CLUSTER_TEMPLATE="${OSAC_CLUSTER_TEMPLATE}" \
             -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+            -e "TEST_FILTER=${TEST_FILTER}" \
             "${E2E_IMAGE}" \
-            pytest ${TEST_ARGS} ${FILTER_ARGS} \
-              --junitxml=/tmp/test-output/junit.xml -v
+            make test-vmaas REPORTS_DIR=/tmp/test-output
 
       - name: Gather artifacts
         if: always()

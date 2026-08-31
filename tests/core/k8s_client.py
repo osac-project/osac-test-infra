@@ -48,6 +48,29 @@ class K8sClient:
             args.append("--wait=false")
         run(*args, timeout=600)
 
+    def rollout_restart(self, *, deployment: str, namespace: str) -> None:
+        run(*self._base(), "rollout", "restart", f"deployment/{deployment}", "-n", namespace)
+
+    def wait_for_rollout(self, *, deployment: str, namespace: str, timeout: int = 120) -> None:
+        run(
+            *self._base(),
+            "rollout",
+            "status",
+            f"deployment/{deployment}",
+            "-n",
+            namespace,
+            f"--timeout={timeout}s",
+            timeout=timeout + 30,
+        )
+
+    def scale_deployment(self, *, deployment: str, namespace: str, replicas: int) -> None:
+        run(*self._base(), "scale", f"deployment/{deployment}", f"--replicas={replicas}", "-n", namespace)
+
+    def get_deployment_name_by_label(self, *, label: str, namespace: str) -> str:
+        return run(
+            *self._base(), "get", "deployment", "-n", namespace, "-l", label, "-o", "jsonpath={.items[0].metadata.name}"
+        )
+
     def is_present(self, *, resource: str, name: str) -> bool:
         _, rc = run_unchecked(*self._base(), "get", resource, name, "-n", self.namespace)
         return rc == 0
@@ -88,7 +111,7 @@ class K8sClient:
         if rc != 0:
             return ""
         jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            j for j in json.loads(output).get("status", {}).get("provisioningJobs", []) if j["type"] == job_type
         ]
         if not jobs:
             return ""
@@ -99,7 +122,7 @@ class K8sClient:
         if rc != 0:
             return ""
         jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            j for j in json.loads(output).get("status", {}).get("provisioningJobs", []) if j["type"] == job_type
         ]
         if not jobs:
             return ""
@@ -308,7 +331,7 @@ class K8sClient:
         if rc != 0:
             return ""
         jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            j for j in json.loads(output).get("status", {}).get("provisioningJobs", []) if j["type"] == job_type
         ]
         if not jobs:
             return ""
@@ -319,7 +342,7 @@ class K8sClient:
         if rc != 0:
             return ""
         jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            j for j in json.loads(output).get("status", {}).get("provisioningJobs", []) if j["type"] == job_type
         ]
         if not jobs:
             return ""

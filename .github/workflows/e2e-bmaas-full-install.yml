@@ -4,11 +4,6 @@ name: E2E BMaaS Full Install
 on:
   workflow_call:
     inputs:
-      test-suite:
-        description: "Test suite to run (default: bmaas)"
-        required: false
-        type: string
-        default: "bmaas"
       test-filter:
         description: "pytest -k filter expression (optional)"
         required: false
@@ -141,7 +136,7 @@ jobs:
         id: setup
         uses: ./.github/actions/validate-and-bootstrap
         with:
-          test-suite: ${{ inputs.test-suite || 'e2e' }}
+          test-suite: bmaas
           run-id: ${{ github.run_id }}
 
       - name: Resolve and validate components input
@@ -666,7 +661,6 @@ jobs:
       - name: Run E2E tests
         id: test
         env:
-          TEST_SUITE: ${{ inputs.test-suite }}
           TEST_FILTER: ${{ inputs.test-filter }}
           TEST_MARKER: ${{ inputs.test-marker }}
           OSAC_NAMESPACE: ${{ inputs.namespace }}
@@ -675,28 +669,6 @@ jobs:
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
         run: |
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
-
-          TEST_ARGS=("tests/")
-          if [ -n "${TEST_SUITE}" ]; then
-            TEST_ARGS=("tests/${TEST_SUITE}/")
-          fi
-
-          FILTER_ARGS=()
-          if [ -n "${TEST_FILTER}" ]; then
-            FILTER_ARGS=(-k "${TEST_FILTER}")
-          fi
-
-          MARKER_ARGS=()
-          if [ -n "${TEST_MARKER}" ]; then
-            MARKER_ARGS=(-m "${TEST_MARKER}")
-          fi
-
-          # Single marker cohort (sanity XOR regression) → one BMH-consuming path → -n 4.
-          # Full suite (no marker) can run lifecycle + inventory together → -n 0.
-          XDIST_ARGS="-n 4"
-          if [ -z "${TEST_MARKER}" ]; then
-            XDIST_ARGS="-n 0"
-          fi
 
           mkdir -p "$RUNNER_TEMP/test-output"
 
@@ -710,10 +682,10 @@ jobs:
             -e OSAC_BMI_TEMPLATE="${OSAC_BMI_TEMPLATE}" \
             -e OSAC_BMH_NAMESPACE="${OSAC_BMH_NAMESPACE}" \
             -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+            -e "TEST_FILTER=${TEST_FILTER}" \
+            -e "MARKER=${TEST_MARKER}" \
             "${E2E_IMAGE}" \
-            pytest "${TEST_ARGS[@]}" "${FILTER_ARGS[@]}" "${MARKER_ARGS[@]}" \
-              ${XDIST_ARGS} \
-              --junitxml=/tmp/test-output/junit.xml -v
+            make test-bmaas REPORTS_DIR=/tmp/test-output
 
       - name: Gather artifacts
         if: always()

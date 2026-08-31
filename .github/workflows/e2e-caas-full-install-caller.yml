@@ -9,10 +9,6 @@ on:
     - cron: "0 */4 * * *"
   workflow_dispatch:
     inputs:
-      test-suite:
-        description: "Test suite (caas, or empty for all)"
-        required: false
-        default: "caas"
       test-filter:
         description: "pytest -k filter"
         required: false
@@ -46,7 +42,6 @@ jobs:
   e2e-caas-full-install:
     uses: ./.github/workflows/e2e-caas-full-install.yml
     with:
-      test-suite: ${{ inputs.test-suite || 'caas' }}
       test-filter: ${{ inputs.test-filter || '' }}
       installer-ref: ${{ inputs.installer-ref || 'main' }}
       installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}

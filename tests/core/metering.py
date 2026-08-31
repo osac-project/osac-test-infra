@@ -84,11 +84,14 @@ class MeteringCollector:
         events = self._fetch_events(event_type, resource_id)
         since_dt = datetime.fromisoformat(since)
         matching = [
-            ev for ev in events
+            ev
+            for ev in events
             if ev.get("type") == event_type
-            and (ev.get("resource_id") == resource_id
-                 or ev.get("osacresourceid") == resource_id
-                 or ev.get("data", {}).get("resource_id") == resource_id)
+            and (
+                ev.get("resource_id") == resource_id
+                or ev.get("osacresourceid") == resource_id
+                or ev.get("data", {}).get("resource_id") == resource_id
+            )
             and _parse_time(ev.get("time", "")) >= since_dt
         ]
         assert not matching, (
@@ -101,17 +104,13 @@ class MeteringCollector:
         return self._fetch_events(event_type, resource_id)
 
     def _fetch_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
-        params = urlencode({
-            "type": event_type,
-            "resource_id": resource_id,
-            "since": self._start_time,
-        })
+        params = urlencode({"type": event_type, "resource_id": resource_id, "since": self._start_time})
         url = f"{self._base_url}/events?{params}"
         last_exc: OSError | None = None
         for attempt in range(3):
             try:
                 req = Request(url)
-                with urlopen(req, timeout=10) as resp:  # noqa: S310
+                with urlopen(req, timeout=10) as resp:
                     return json.loads(resp.read().decode("utf-8"))
             except (urllib.error.URLError, OSError) as exc:
                 last_exc = exc
@@ -155,14 +154,17 @@ class MeteringCollector:
     @staticmethod
     def _validate_structure(event: dict[str, Any], expected: ExpectedEvent) -> None:
         assert event.get("specversion") == "1.0", f"Wrong specversion: {event.get('specversion')}"
-        assert event.get("source") in ("osac-metering", "osac-metering/reconciler"), \
+        assert event.get("source") in ("osac-metering", "osac-metering/reconciler"), (
             f"Wrong source: {event.get('source')}"
+        )
         assert event.get("id"), "Missing event id"
         assert event.get("time"), "Missing event time"
-        assert event.get("osacresourceid") == expected.resource_id, \
+        assert event.get("osacresourceid") == expected.resource_id, (
             f"Wrong osacresourceid: {event.get('osacresourceid')}"
-        assert event.get("osacresourcetype") in ("compute_instance", "cluster_order"), \
+        )
+        assert event.get("osacresourcetype") in ("compute_instance", "cluster_order"), (
             f"Wrong osacresourcetype: {event.get('osacresourcetype')}"
+        )
         assert event.get("osactenant"), "Missing osactenant"
 
         data = event.get("data", {})
@@ -173,18 +175,14 @@ class MeteringCollector:
         assert "project_id" in data, "Missing project_id in data"
         assert "billing_dimensions" in data, "Missing billing_dimensions in data"
 
-        if expected.event_type != "osac.resource.heartbeat.v1":
+        if expected.event_type not in ("osac.resource.heartbeat.v1", "osac.resource.correction.v1"):
             assert data.get("transition_time"), "Missing transition_time in data"
             try:
                 datetime.fromisoformat(data["transition_time"])
             except (ValueError, TypeError) as exc:
                 raise AssertionError(f"Invalid RFC3339 transition_time: {data.get('transition_time')}") from exc
 
-        transition_types = {
-            "osac.resource.started.v1",
-            "osac.resource.suspended.v1",
-            "osac.resource.resumed.v1",
-        }
+        transition_types = {"osac.resource.started.v1", "osac.resource.suspended.v1", "osac.resource.resumed.v1"}
         if expected.event_type in transition_types:
             assert "previous_state" in data, f"Missing previous_state in {expected.event_type}"
             assert "duration_seconds" in data, f"Missing duration_seconds in {expected.event_type}"
@@ -192,15 +190,13 @@ class MeteringCollector:
         if expected.event_type == "osac.resource.suspended.v1":
             valid = ("RUNNING", "STOPPING", "STARTING", "PROGRESSING", "READY")
             assert data.get("previous_state") in valid, (
-                f"suspended.v1 previous_state should be one of {valid}, "
-                f"got {data.get('previous_state')!r}"
+                f"suspended.v1 previous_state should be one of {valid}, got {data.get('previous_state')!r}"
             )
 
         if expected.event_type == "osac.resource.resumed.v1":
             valid = ("STOPPED", "PAUSED", "FAILED", "DELETE_FAILED")
             assert data.get("previous_state") in valid, (
-                f"resumed.v1 previous_state should be one of {valid}, "
-                f"got {data.get('previous_state')!r}"
+                f"resumed.v1 previous_state should be one of {valid}, got {data.get('previous_state')!r}"
             )
 
         resource_type = event.get("osacresourcetype")
@@ -215,9 +211,9 @@ def _validate_vmaas_billing(event: dict[str, Any]) -> None:
     assert bd.get("instance_type"), "Missing or empty instance_type in billing_dimensions"
     assert bd.get("image_ref"), "Missing or empty image_ref in billing_dimensions"
     assert "boot_disk_size_gib" in bd, "Missing boot_disk_size_gib in billing_dimensions"
-    assert isinstance(
-        bd["boot_disk_size_gib"], (int, float)
-    ), f"boot_disk_size_gib should be numeric, got {type(bd['boot_disk_size_gib']).__name__}"
+    assert isinstance(bd["boot_disk_size_gib"], (int, float)), (
+        f"boot_disk_size_gib should be numeric, got {type(bd['boot_disk_size_gib']).__name__}"
+    )
 
 
 def _validate_caas_billing(event: dict[str, Any], event_type: str) -> None:
@@ -228,9 +224,11 @@ def _validate_caas_billing(event: dict[str, Any], event_type: str) -> None:
     if event_type in ("osac.resource.created.v1", "osac.resource.deleted.v1"):
         assert bd.get("release_image"), "Missing release_image in billing_dimensions"
         return
-    assert bd.get("component") in ("control_plane", "worker"), \
+    assert bd.get("component") in ("control_plane", "worker"), (
         f"component should be control_plane or worker, got {bd.get('component')!r}"
+    )
     assert bd.get("node_set"), "Missing node_set in billing_dimensions"
     assert bd.get("host_type"), "Missing host_type in billing_dimensions"
-    assert isinstance(bd.get("node_count"), (int, float)) and bd["node_count"] > 0, \
+    assert isinstance(bd.get("node_count"), (int, float)) and bd["node_count"] > 0, (
         f"node_count should be positive number, got {bd.get('node_count')!r}"
+    )

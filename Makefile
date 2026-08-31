@@ -1,10 +1,6 @@
 REPORTS_DIR ?= reports
 
-.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-metering test-references
-
-test:
-	mkdir -p $(REPORTS_DIR)
-	pytest tests/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/results.xml
+.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-disruptive-vmaas test-disruptive-caas
 
 lint:
 	ruff check tests/
@@ -15,29 +11,29 @@ format:
 
 test-vmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/vmaas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/vmaas.xml
+	pytest tests/vmaas/ tests/references/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
 
 test-caas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/caas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/caas.xml
+	pytest tests/caas/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
 
 test-storage:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/storage/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/storage.xml
+	pytest tests/storage/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
 
 # Optional: MARKER=sanity or MARKER=regression (pytest -m)
 # -n 0 for local full-suite runs so BMH-consuming tests do not race.
 test-bmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/bmaas/ -n 0 -v $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas.xml
+	pytest tests/bmaas/ -n 0 -v $(if $(MARKER),-m "$(MARKER)") $${TEST_FILTER:+-k "$$TEST_FILTER"} $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/junit.xml
 
-test-metering:
+test-disruptive-vmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest -m metering tests/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/metering.xml
+	pytest -m disruptive -n 0 tests/vmaas/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
 
-test-references:
+test-disruptive-caas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/references/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/references.xml
+	pytest -m disruptive -n 0 tests/caas/ -v $${TEST_FILTER:+-k "$$TEST_FILTER"} --junitxml=$(REPORTS_DIR)/junit.xml
 
 # ─── Infrastructure orchestration ───────────────────────────────────
 

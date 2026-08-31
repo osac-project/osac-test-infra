@@ -33,6 +33,7 @@ def pytest_configure(config: pytest.Config) -> None:
     e2e.log artifact.
     """
     config.addinivalue_line("markers", "metering: test verifies metering events via the test adapter HTTP API")
+    config.addinivalue_line("markers", "disruptive: test kills pods and must run serially with -n 0")
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     if worker_id is not None:
         log_dir = Path(config.getini("log_file")).parent
@@ -143,9 +144,7 @@ def keycloak_admin_password() -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_organization_memberships(
-    ensure_tenants: None, keycloak_url: str, keycloak_admin_password: str
-) -> None:
+def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keycloak_admin_password: str) -> None:
     """
     Add test users to their corresponding Keycloak organizations.
     This runs after ensure_tenants creates the Tenant resources, which the
@@ -155,10 +154,7 @@ def setup_organization_memberships(
     admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
 
     # Map of organization name -> list of usernames
-    org_users = {
-        "tenant1": ["tenant1_user", "tenant1_admin"],
-        "tenant2": ["tenant2_user", "tenant2_admin"],
-    }
+    org_users = {"tenant1": ["tenant1_user", "tenant1_admin"], "tenant2": ["tenant2_user", "tenant2_admin"]}
 
     for org_name, usernames in org_users.items():
         # Wait for the organization to be synced to Keycloak by the tenant controller
@@ -349,7 +345,13 @@ def jwt_grpc_tenant2(fulfillment_address: str, keycloak_url: str, jwt_password: 
 # --- Cross-cutting concern: Metering ---
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if os.environ.get("PYTEST_XDIST_WORKER") is not None:
+        deselected = [item for item in items if item.get_closest_marker("disruptive")]
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = [item for item in items if not item.get_closest_marker("disruptive")]
+
     metering_tests = [item for item in items if item.get_closest_marker("metering")]
     if metering_tests and not os.environ.get("METERING_ADAPTER_URL"):
         pytest.fail(

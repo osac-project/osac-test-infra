@@ -4,11 +4,6 @@ name: E2E VMaaS Full Install
 on:
   workflow_call:
     inputs:
-      test-suite:
-        description: "Test suite to run: vmaas, caas, or empty string for all"
-        required: false
-        type: string
-        default: "vmaas"
       test-filter:
         description: "pytest -k filter expression (optional)"
         required: false
@@ -136,7 +131,7 @@ jobs:
         id: setup
         uses: ./.github/actions/validate-and-bootstrap
         with:
-          test-suite: ${{ inputs.test-suite || 'e2e' }}
+          test-suite: vmaas
           run-id: ${{ github.run_id }}
 
       - name: Resolve and validate components input
@@ -690,7 +685,6 @@ jobs:
       - name: Run E2E tests
         id: test
         env:
-          TEST_SUITE: ${{ inputs.test-suite }}
           TEST_FILTER: ${{ inputs.test-filter }}
           OSAC_NAMESPACE: ${{ inputs.namespace }}
           OSAC_VM_TEMPLATE: ${{ inputs.vm-template }}
@@ -699,20 +693,6 @@ jobs:
           METERING_ADAPTER_URL: ${{ steps.metering-adapter.outputs.url }}
         run: |
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
-
-          TEST_ARGS="tests/"
-          if [ -n "${TEST_SUITE}" ]; then
-            TEST_ARGS="tests/${TEST_SUITE}/"
-            # Run references tests alongside vmaas suite
-            if [ "${TEST_SUITE}" = "vmaas" ]; then
-              TEST_ARGS="${TEST_ARGS} tests/references/"
-            fi
-          fi
-
-          FILTER_ARGS=""
-          if [ -n "${TEST_FILTER}" ]; then
-            FILTER_ARGS="-k ${TEST_FILTER}"
-          fi
 
           mkdir -p "$RUNNER_TEMP/test-output"
 
@@ -728,9 +708,27 @@ jobs:
             -e OSAC_CLUSTER_TEMPLATE="${OSAC_CLUSTER_TEMPLATE}" \
             -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
             -e METERING_ADAPTER_URL="${METERING_ADAPTER_URL}" \
+            -e "TEST_FILTER=${TEST_FILTER}" \
             "${E2E_IMAGE}" \
-            pytest ${TEST_ARGS} ${FILTER_ARGS} \
-              --junitxml=/tmp/test-output/junit.xml -v
+            make test-vmaas REPORTS_DIR=/tmp/test-output
+
+          # Phase 2: serial disruptive tests — merge queue and periodic only
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            timeout 5400 podman run --rm --network=host \
+              -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
+              -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
+              -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
+              -v "${RUNNER_TEMP}/test-output":/tmp/test-output:Z \
+              -e KUBECONFIG=/root/.kube/config \
+              -e OSAC_VM_KUBECONFIG=/root/.kube/config \
+              -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
+              -e OSAC_VM_TEMPLATE="${OSAC_VM_TEMPLATE}" \
+              -e OSAC_CLUSTER_TEMPLATE="${OSAC_CLUSTER_TEMPLATE}" \
+              -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+              -e METERING_ADAPTER_URL="${METERING_ADAPTER_URL}" \
+              "${E2E_IMAGE}" \
+              make test-disruptive-vmaas REPORTS_DIR=/tmp/test-output/disruptive
+          fi
 
       - name: Gather artifacts
         if: always()
