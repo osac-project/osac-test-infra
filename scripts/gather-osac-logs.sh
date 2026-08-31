@@ -6,9 +6,10 @@
 #   KUBECONFIG=/path/to/kubeconfig ./scripts/gather-osac-logs.sh [output-dir]
 #
 # Environment:
-#   KUBECONFIG        — path to cluster kubeconfig (required)
-#   E2E_NAMESPACE     — OSAC namespace (default: osac-e2e-ci)
-#   JUNIT_PATH        — path to JUnit XML to include (optional)
+#   KUBECONFIG             — path to cluster kubeconfig (required)
+#   E2E_NAMESPACE          — OSAC namespace (default: osac-e2e-ci)
+#   OSAC_AGENT_NAMESPACE   — namespace where Assisted Installer Agent CRs live (default: hardware-inventory)
+#   JUNIT_PATH             — path to JUnit XML to include (optional)
 #
 set -o nounset
 set -o pipefail
@@ -97,6 +98,15 @@ oc get clusterorders -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/clusterord
 oc get clusterorders -n "${E2E_NAMESPACE}" -o json 2>"${ARTIFACT_DIR}/clusterorders-errors.txt" \
     | jq 'del(.items[]?.spec.templateParameters)' \
     > "${ARTIFACT_DIR}/clusterorders.json" || true
+
+echo "Collecting agent status..."
+AGENT_NAMESPACE="${OSAC_AGENT_NAMESPACE:-hardware-inventory}"
+if oc get namespace "${AGENT_NAMESPACE}" &>/dev/null; then
+    oc get agents.agent-install.openshift.io -n "${AGENT_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/agents.txt" 2>&1 || true
+    oc get agents.agent-install.openshift.io -n "${AGENT_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/agents.yaml" 2>&1 || true
+else
+    echo "  Agent namespace ${AGENT_NAMESPACE} not found, skipping agent collection"
+fi
 
 echo "Collecting networking status..."
 oc get virtualnetworks -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/virtualnetworks.txt" 2>&1 || true
