@@ -117,6 +117,11 @@ on:
         required: false
         type: string
         default: "main"
+      test-repository:
+        description: "GitHub repo (owner/name) to checkout for e2e tests when test-source is osac"
+        required: false
+        type: string
+        default: "osac-project/osac"
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -146,18 +151,23 @@ jobs:
         if: inputs.test-source == 'osac'
         env:
           TEST_REF: ${{ inputs.test-ref }}
+          TEST_REPOSITORY: ${{ inputs.test-repository }}
         run: |
+          if [[ ! "${TEST_REPOSITORY}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::test-repository must be owner/name, got '${TEST_REPOSITORY}'"
+            exit 1
+          fi
           OSAC_CLONE_DIR="$RUNNER_TEMP/osac-test-source"
           git init "$OSAC_CLONE_DIR"
           git -C "$OSAC_CLONE_DIR" sparse-checkout init --cone
           git -C "$OSAC_CLONE_DIR" sparse-checkout set tests
           git -C "$OSAC_CLONE_DIR" fetch --depth 1 \
-            https://github.com/osac-project/osac.git "${TEST_REF}"
+            "https://github.com/${TEST_REPOSITORY}.git" "${TEST_REF}"
           git -C "$OSAC_CLONE_DIR" checkout FETCH_HEAD
-          # Replace tests/ and pyproject.toml with osac mono-repo versions
+          # Overlay tests/ only. Do not copy pyproject.toml: osac's is named
+          # osac-e2e and has no uv.lock, which breaks uv sync --frozen.
           rm -rf tests/
           cp -r "$OSAC_CLONE_DIR/tests" ./tests
-          cp "$OSAC_CLONE_DIR/pyproject.toml" ./pyproject.toml
 
       - name: Validate and bootstrap
         id: setup
@@ -696,8 +706,10 @@ jobs:
           fi
           echo "url=http://${ROUTE_HOST}" >> "$GITHUB_OUTPUT"
       - name: Compute test path prefix
+        env:
+          TEST_SOURCE: ${{ inputs.test-source }}
         run: |
-          if [ "${{ inputs.test-source }}" = "osac" ]; then
+          if [ "${TEST_SOURCE}" = "osac" ]; then
             echo "TEST_PATH_PREFIX=tests/e2e" >> "$GITHUB_ENV"
           else
             echo "TEST_PATH_PREFIX=tests" >> "$GITHUB_ENV"
