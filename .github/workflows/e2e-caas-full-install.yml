@@ -64,6 +64,11 @@ on:
         required: false
         type: string
         default: ""
+      test-ref:
+        description: "Git ref of osac-project/osac to checkout for e2e tests"
+        required: false
+        type: string
+        default: "main"
       components:
         description: >-
           JSON array of components to build from source and load onto the cluster, e.g.
@@ -131,6 +136,25 @@ jobs:
           repository: ${{ inputs.test-infra-repository || github.repository }}
           ref: ${{ inputs.test-infra-ref || '' }}
           persist-credentials: false
+
+      - name: Checkout e2e tests from osac
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: osac-project/osac
+          ref: ${{ inputs.test-ref }}
+          sparse-checkout: |
+            tests/
+            pyproject.toml
+          sparse-checkout-cone-mode: true
+          path: __osac-tests
+          persist-credentials: false
+
+      - name: Overlay e2e tests onto workspace
+        run: |
+          rm -rf tests/
+          cp -r __osac-tests/tests/ ./tests/
+          cp __osac-tests/pyproject.toml ./pyproject.toml
+          rm -rf __osac-tests
 
       - name: Validate and bootstrap
         id: setup
@@ -680,9 +704,9 @@ jobs:
         run: |
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
 
-          TEST_ARGS="tests/"
+          TEST_ARGS="tests/e2e/"
           if [ -n "${TEST_SUITE}" ]; then
-            TEST_ARGS="tests/${TEST_SUITE}/"
+            TEST_ARGS="tests/e2e/${TEST_SUITE}/"
           fi
 
           FILTER_ARGS=""
