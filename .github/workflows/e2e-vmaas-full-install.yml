@@ -107,6 +107,16 @@ on:
         required: false
         type: string
         default: "osac-ci"
+      test-source:
+        description: "Where to run tests from: 'test-infra' (this repo, default) or 'osac' (mono-repo)"
+        required: false
+        type: string
+        default: "test-infra"
+      test-ref:
+        description: "Git ref for the test source repo when test-source is 'osac'"
+        required: false
+        type: string
+        default: "main"
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -131,6 +141,23 @@ jobs:
           repository: ${{ inputs.test-infra-repository || github.repository }}
           ref: ${{ inputs.test-infra-ref || '' }}
           persist-credentials: false
+
+      - name: Overlay tests from osac mono-repo
+        if: inputs.test-source == 'osac'
+        env:
+          TEST_REF: ${{ inputs.test-ref }}
+        run: |
+          OSAC_CLONE_DIR="$RUNNER_TEMP/osac-test-source"
+          git init "$OSAC_CLONE_DIR"
+          git -C "$OSAC_CLONE_DIR" sparse-checkout init --cone
+          git -C "$OSAC_CLONE_DIR" sparse-checkout set tests
+          git -C "$OSAC_CLONE_DIR" fetch --depth 1 \
+            https://github.com/osac-project/osac.git "${TEST_REF}"
+          git -C "$OSAC_CLONE_DIR" checkout FETCH_HEAD
+          # Replace tests/ and pyproject.toml with osac mono-repo versions
+          rm -rf tests/
+          cp -r "$OSAC_CLONE_DIR/tests" ./tests
+          cp "$OSAC_CLONE_DIR/pyproject.toml" ./pyproject.toml
 
       - name: Validate and bootstrap
         id: setup
@@ -687,6 +714,14 @@ jobs:
             exit 1
           fi
           echo "url=http://${ROUTE_HOST}" >> "$GITHUB_OUTPUT"
+      - name: Compute test path prefix
+        run: |
+          if [ "${{ inputs.test-source }}" = "osac" ]; then
+            echo "TEST_PATH_PREFIX=tests/e2e" >> "$GITHUB_ENV"
+          else
+            echo "TEST_PATH_PREFIX=tests" >> "$GITHUB_ENV"
+          fi
+
       - name: Run E2E tests
         id: test
         env:
@@ -700,12 +735,12 @@ jobs:
         run: |
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
 
-          TEST_ARGS="tests/"
+          TEST_ARGS="${TEST_PATH_PREFIX}/"
           if [ -n "${TEST_SUITE}" ]; then
-            TEST_ARGS="tests/${TEST_SUITE}/"
+            TEST_ARGS="${TEST_PATH_PREFIX}/${TEST_SUITE}/"
             # Run references tests alongside vmaas suite
             if [ "${TEST_SUITE}" = "vmaas" ]; then
-              TEST_ARGS="${TEST_ARGS} tests/references/"
+              TEST_ARGS="${TEST_ARGS} ${TEST_PATH_PREFIX}/references/"
             fi
           fi
 
