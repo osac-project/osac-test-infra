@@ -1,5 +1,13 @@
 # OSAC Test Infrastructure
 
+> [!IMPORTANT]
+> **The e2e test suite has moved (OSAC-3593).** Test suites now live in the
+> [osac mono-repo](https://github.com/osac-project/osac). **Do not add, modify,
+> or delete tests in this repository** — make those changes in the mono-repo
+> instead. The `tests/` directory here is retained only for the infrastructure
+> backend contract and a placeholder; new tests added here will not be
+> maintained.
+
 Unified repo for OSAC end-to-end testing. Provisions infrastructure via pluggable backends and runs pytest test suites against it.
 
 **AI coding agents**: see [AGENTS.md](AGENTS.md) for test framework architecture, fixtures, and conventions. Claude Code additionally reads [CLAUDE.md](CLAUDE.md) for pytest configuration and environment variables.

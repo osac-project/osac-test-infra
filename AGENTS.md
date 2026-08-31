@@ -1,5 +1,12 @@
 # AGENTS.md
 
+> [!IMPORTANT]
+> **The e2e test suite has moved (OSAC-3593).** Test suites now live in the
+> [osac mono-repo](https://github.com/osac-project/osac). **Do not add, modify,
+> or delete tests in this repository** — make those changes in the mono-repo
+> instead. The test-writing guidance below is retained for reference but applies
+> to the suites in their new mono-repo home.
+
 AI agent documentation for osac-test-infra. Read this before working in this repository.
 
 ## What This Repo Does
@@ -87,6 +94,11 @@ osac-test-infra/
 - `keycloak.py` / `keycloak_admin.py` — JWT retrieval and Keycloak admin API helpers for tenant/user setup
 
 ## Writing New Tests
+
+> [!IMPORTANT]
+> **OSAC-3593: write new tests in the [osac mono-repo](https://github.com/osac-project/osac), not here.**
+> The conventions below still describe how the suites are structured, but any new
+> or changed test must land in the mono-repo.
 
 ### Test Organization
 

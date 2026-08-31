@@ -2,6 +2,12 @@
 
 # CLAUDE.md
 
+> [!IMPORTANT]
+> **The e2e test suite has moved (OSAC-3593).** Test suites now live in the
+> [osac mono-repo](https://github.com/osac-project/osac). **Do not add, modify,
+> or delete tests in this repository** — make those changes in the mono-repo
+> instead.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Overview
