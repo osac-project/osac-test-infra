@@ -340,6 +340,11 @@ jobs:
         env:
           FLAVOR_NAME: ${{ inputs.flavor-name }}
         run: |
+          # TEMPORARY -- OSAC-4741 validation only, DO NOT MERGE. Forces an
+          # immediate failure here (before any real VM/cluster is touched)
+          # to test multi-suite sections in the sticky PR comment.
+          echo "::error::Forced failure for OSAC-4741 AI diagnostic validation -- not a real cluster-boot failure."
+          exit 1
           # Shared lock ensures no boot runs while a flavor pull is in progress.
           # Multiple boots can run in parallel (shared locks are compatible).
           # Use fd-based locking with `9>&-` on the child so an orphaned
