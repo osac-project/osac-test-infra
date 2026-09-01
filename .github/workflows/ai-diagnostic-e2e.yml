@@ -33,7 +33,16 @@ on:
       - E2E BMaaS Full Install
       - E2E VMaaS Full Install
     types: [completed]
-  workflow_call: {}
+  workflow_call:
+    secrets:
+      AI_DIAGNOSTIC_TOKEN:
+        description: >-
+          Fine-grained PAT for the osac-ai-diagnostic-bot account (Issues +
+          Commit statuses only) used to post the diagnostic status/comment.
+          Declared explicitly (rather than relying on a caller's `secrets:
+          inherit`) so the interface is self-documenting and doesn't depend
+          on inherit's less-clearly-documented cross-repo behavior.
+        required: true
 
 concurrency:
   # Keyed by the PR's fork repo + branch, NOT workflow_run.id or head_sha:
