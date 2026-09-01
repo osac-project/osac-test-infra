@@ -213,3 +213,64 @@ iptables -t nat -A POSTROUTING -s 198.51.100.0/29 -o eno3 -j MASQUERADE
 **Root Cause:** All softgate VMs share one cloud-init ISO with `hostname: softgate`. The install script does `grep "^$(hostname)" /tmp/netris-devices` but the devices file has `ns-softgate-0`, not `softgate`. The grep never matches, so the script exits without installing.
 
 **Fix:** The automation installs the agent from the connectivity role after VMs are up and hostnames are set via DHCP/hostnamectl. This bypasses the cloud-init hostname issue entirely.
+
+## 18. Softgate Agent Crash-Loops — Missing plugins.conf
+
+**Symptom:** `netris-sg` never reaches `active`; `systemctl status netris-sg` shows a growing restart counter. `journalctl -u netris-sg` shows `ENOENT: no such file or directory, lstat '/opt/netris/etc/plugins.conf'`.
+
+**Root Cause:** The `netris-sg-hs` package ships two variant plugin configs, `plugins.conf_dpdkno` and `plugins.conf_dpdkyes`, but never symlinks or copies either one to the plain `plugins.conf` path the systemd unit's `--plugins` flag expects. This happens regardless of networking or the `dpdk = no` fix in item 10/13 above — setting `dpdk = no` alone does not create `plugins.conf`.
+
+**Fix:** After forcing `dpdk = no`, also copy the matching variant into place:
+```bash
+cp -f /opt/netris/etc/plugins.conf_dpdkno /opt/netris/etc/plugins.conf
+systemctl restart netris-sg
+```
+The automation does this in `roles/connectivity/tasks/softgates.yml`'s agent-install step, right after the `dpdk` sed.
+
+## 19. VPN Route Conflict Also Hits br-mgmt and the Softgate Mgmt Subnet
+
+**Symptom:** After a VPN reconnect (or `make deploy-infra` retry), softgates at `10.3.3.x` become unreachable again even though they were previously working — `ping`/`ssh` from the host time out, `ip neigh` shows no ARP replies.
+
+**Root Cause:** Item 4/5 above cover the VPN pushing a conflicting route for `192.168.122.0/24` (virbr0). The same VPN server also pushes conflicting routes for br-mgmt's own subnet (`mgmt_bridge_network`, e.g. `192.168.16.0/20`) and the softgate mgmt subnet (`ns_fabric.mgmt_subnet`, e.g. `10.3.0.0/16`) via `tun0`, with the same malformed gateway (the peer's netmask). This silently breaks host-to-softgate reachability on every VPN (re)connect, independent of item 18 above.
+
+**Fix:** `openvpn-route-fix.sh.j2` (installed as `openvpn-client@client.service`'s `ExecStartPost`) deletes and re-adds the connected routes for all three prefixes, not just virbr0, so this self-heals on every VPN start/restart. If you hit this on a host where the fix predates this update, re-run `make connectivity` (or manually re-run `/usr/local/bin/openvpn-route-fix.sh`) to pick up the regenerated script.
+
+## 20. Softgate `ens4` Loses Its IP After Reboot — `Invalid server_address`
+
+**Symptom:** `netris-sg` crash-loops (or never starts) with `Invalid server_address` even after the `plugins.conf` fix (item 18) is applied. `ip a show ens4` on the softgate shows no IPv4 address. `netris.conf`'s `grpc.address` and `telescope.server_address` are empty.
+
+**Root Cause:** The softgate cloud-init template (`netris-cloudsim/templates.go`'s `prepareCloudInitSG`) only runs `[dhclient, -v]` once, imperatively, in `runcmd` — then reboots at the end of that same `runcmd` (needed for the hostname/agent setup to take effect). `dhclient -v` gets a lease for the current boot, but nothing re-requests one on **subsequent** boots, so `ens4` comes up with no IP after every reboot. Without an IP, `curl get.netris.io | bash` (the installer that normally populates `grpc.address`/`telescope.server_address`) can't reach the controller at `10.8.0.2`, so those fields are left blank and the agent fails with `Invalid server_address`.
+
+**Fix:** `prepareCloudInitSG` now also writes a persistent netplan config in `write_files`:
+```yaml
+- path: /etc/netplan/90-mgmt-dhcp.yaml
+  content: |
+    network:
+      version: 2
+      ethernets:
+        ens4:
+          dhcp4: true
+```
+The softgate image (Ubuntu 24.04) runs `systemd-networkd` as its netplan renderer, so this is picked up automatically on every boot — confirmed via `networkctl status ens4` showing `Network File: /run/systemd/network/10-netplan-ens4.network` and an active DHCP4 lease after a reboot. This takes effect for newly-created softgate VMs (next Pulumi rebuild).
+
+**Live workaround for already-deployed softgates:**
+1. Request a lease over the qemu guest agent (no SSH needed, since there's no IP yet):
+   ```bash
+   virsh qemu-agent-command <vm> '{"execute":"guest-exec","arguments":{"path":"/sbin/dhclient","arg":["-v","ens4"],"capture-output":true}}'
+   ```
+2. Re-run the installer (`roles/connectivity/tasks/softgates.yml`'s install command) now that the softgate can reach the controller. If the agent already crash-looped through a first, network-less install attempt, `/opt/netris/etc/netris.conf` and `/opt/netris/installer.lock` are already populated with a bad/incomplete config, and the installer treats a second run as an "upgrade" that **skips re-initialization** (`- Initialize the Softgate Step was skipped`) — silently keeping the broken config. Delete the lock first to force full re-init:
+   ```bash
+   ssh root@<softgate> "rm -f /opt/netris/installer.lock"
+   # then re-run: curl -fsSL https://get.netris.io | sh -s -- --lo <main_ip> --controller 10.8.0.2 \
+   #   --hostname <name> --auth <token> --node-type softgate_hs
+   ```
+   A full re-init also runs "Setup Main Loopback" (fixes a possible `Cannot determine loopback ip address` telescope error) and prints `*** ATTENTION: You must reboot SoftGate to complete the installation` — reboot once the netplan fix above (or its live-applied equivalent) is in place so the softgate doesn't lose `ens4` again on that reboot.
+3. `<token>` is the controller's static `netris_auth_token` setting (not a per-user login token) — fetch it the same way `netris.controller.general`'s `read` role does: `POST /api/auth` with `{"user":"netris","password":"netris","auth_scheme_id":1}` to get a `connect.sid` cookie, then `GET /api/v2/general` with that cookie and read the `netris_auth_token` entry from the response's `data` array.
+
+## 21. Switches Show `Critical` Health / E-BGP Never Establishes — Strict rp_filter Drops Softgate-to-Controller Traffic
+
+**Symptom:** All leaf/spine switches show `health: critical` (`health_monitoring: critical - Monitoring Unavailable`) in the Netris UI/`api/v2/hw?showHealth=true`. `api/v2/ebgp` shows every session's `bgp_state` as empty (never `Established`). On a softgate, `vtysh -c "show bgp summary"` returns `% BGP instance not found` even though `netris.conf` has a real `server_address` (item 20 is already fixed) and `systemctl is-active netris-sg` reports `active`. `journalctl -u netris-sg` shows `offloaderpd`/`telescope` endlessly retrying `API.getSwitchInfo(): rpc error: code = DeadlineExceeded`.
+
+**Root Cause:** The controller's gRPC (`50051`) and telescope (`3033`/`3034`) ports are exposed to the lab VMs via `socat`, bound to `10.8.0.2` — the hypervisor's OpenVPN client's own `tun0` address (forwarded into the k3s cluster's `netris-controller-haproxy` pod). RHEL's `/usr/lib/sysctl.d/50-redhat.conf` sets `net.ipv4.conf.default.rp_filter = 1`. Since `br-mgmt` and `tun0` are both created *after* boot (by the lab automation and by the VPN client, respectively), they inherit this strict default — and the *effective* filter for an interface is `max(all, <iface>)`, so this holds even when `net.ipv4.conf.all.rp_filter` is `0`. With strict RPF on both `br-mgmt` (softgates' ingress) and `tun0` (owns the destination address), the kernel silently drops the softgates' inbound connections to `10.8.0.2`, confirmed by a `tcpdump -i br-mgmt` showing SYN retransmits with no reply, and conclusively by toggling `rp_filter` to `0` and watching the TCP connection immediately succeed. Without connectivity to the controller, `offloaderpd`/`telescope` never pull switch/BGP config, so FRR never gets a BGP instance at all, and health-monitoring data never reaches the controller (hence the switches' `Monitoring Unavailable`).
+
+**Fix:** `roles/prerequisites/tasks/main.yml` now sets `net.ipv4.conf.default.rp_filter = 0` and `net.ipv4.conf.all.rp_filter = 0` (via `/etc/sysctl.d/99-netris-lab-rp-filter.conf`), covering interfaces created after this task runs, plus an explicit fixup loop that zeroes `rp_filter` on `{{ mgmt_bridge_name }}` and `tun0` if they already exist (the re-run case, since the `default` template only applies at interface-creation time and won't retroactively change an already-created interface's value). If you hit this on a host predating the fix, re-run `make connectivity` (or manually apply the same two sysctls and restart `netris-sg` on each softgate).

@@ -149,6 +149,50 @@
     sysctl_set: true
     reload: true
 
+# RHEL's /usr/lib/sysctl.d/50-redhat.conf sets net.ipv4.conf.default.rp_filter=1
+# (net.ipv4.conf.all.rp_filter is often 0, but the *effective* filter for an
+# interface is max(all, <iface>) -- so any interface created after boot with
+# no explicit override, like br-mgmt or openvpn's tun0, inherits strict RPF
+# from the "default" template). That silently drops inbound connections
+# addressed to tun0's IP (the socat-forwarded controller endpoint, see
+# docs/troubleshooting.md #21) when they arrive via br-mgmt from lab VMs
+# (e.g. softgates reaching the netris controller's gRPC/telescope ports),
+# since the kernel sees an apparent path asymmetry between the two
+# interfaces. Override the default so newly-created interfaces don't
+# inherit strict RPF.
+- name: Disable reverse-path filtering for dynamically-created lab interfaces
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "0"
+    sysctl_file: /etc/sysctl.d/99-netris-lab-rp-filter.conf
+    sysctl_set: true
+    reload: true
+  loop:
+    - net.ipv4.conf.default.rp_filter
+    - net.ipv4.conf.all.rp_filter
+
+# The default/all override above only affects interfaces created *after*
+# this task runs. On a re-run against an already-deployed lab (br-mgmt and
+# tun0 already exist from a prior run), their rp_filter is whatever "default"
+# was at their creation time and won't retroactively pick up the new default
+# -- fix those explicitly too, if present.
+- name: Check which lab interfaces already exist
+  stat:
+    path: "/proc/sys/net/ipv4/conf/{{ item }}/rp_filter"
+  loop:
+    - "{{ mgmt_bridge_name }}"
+    - tun0
+  register: _rp_filter_iface_check
+
+- name: Disable reverse-path filtering on already-existing lab interfaces
+  ansible.posix.sysctl:
+    name: "net.ipv4.conf.{{ item.item }}.rp_filter"
+    value: "0"
+    sysctl_set: true
+    reload: false
+  loop: "{{ _rp_filter_iface_check.results }}"
+  when: item.stat.exists
+
 # === Virtualization platform ===
 # Use monolithic libvirtd (not modular daemons) for compatibility with
 # Pulumi libvirt provider which expects /var/run/libvirt/libvirt-sock

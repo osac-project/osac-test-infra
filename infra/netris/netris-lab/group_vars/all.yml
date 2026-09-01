@@ -53,6 +53,10 @@ connectivity_mode: "isolated"
 mgmt_bridge_name: "br-mgmt"
 mgmt_bridge_ip: "192.168.16.254"
 mgmt_bridge_cidr: "192.168.16.254/20"
+# Network form of mgmt_bridge_cidr, used to restore the connected route when
+# the lab VPN's pushed route for this prefix shadows it (see
+# openvpn-route-fix.sh.j2 / docs/troubleshooting.md #4-5).
+mgmt_bridge_network: "192.168.16.0/20"
 public_bridge_name: "br-public"
 
 # --- IPAM (all private, no public IPs needed) ---

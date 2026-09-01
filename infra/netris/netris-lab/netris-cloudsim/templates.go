@@ -515,6 +515,20 @@ runcmd:
     reboot
 
 write_files:
+  - path: /etc/netplan/90-mgmt-dhcp.yaml
+    permissions: '0600'
+    # runcmd's [dhclient, -v] below only requests a lease once, imperatively.
+    # It works for the current boot, but the DHCP client releases that lease
+    # on the "reboot" at the end of this same runcmd, and nothing re-requests
+    # one afterwards -- the mgmt NIC is permanently IP-less on every boot
+    # after the first. This persists DHCP on ens4 across reboots. See
+    # docs/troubleshooting.md #20.
+    content: |
+      network:
+        version: 2
+        ethernets:
+          ens4:
+            dhcp4: true
   - path: /etc/network_nics_up.sh
     permissions: '0744'
     content: |
