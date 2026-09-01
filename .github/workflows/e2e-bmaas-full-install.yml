@@ -130,10 +130,10 @@ on:
         type: string
         default: "osac-ci"
       test-source:
-        description: "Where to run tests from: 'test-infra' (this repo, default) or 'osac' (mono-repo)"
+        description: "Where to run tests from: 'test-infra' (this repo) or 'osac' (mono-repo, default)"
         required: false
         type: string
-        default: "test-infra"
+        default: "osac"
       test-ref:
         description: "Git ref for the test source repo when test-source is 'osac'"
         required: false
