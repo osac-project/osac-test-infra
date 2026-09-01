@@ -3,17 +3,22 @@
 # The VPN server pushes routes for virbr0's, br-mgmt's, and the softgate
 # mgmt subnet's prefixes via tun0 (with a malformed gateway -- the peer's
 # own netmask), which overrides the connected routes needed to reach
-# mgmt-server, br-mgmt, and the softgates. See docs/troubleshooting.md #4.
+# mgmt-server, br-mgmt, and the softgates. See docs/troubleshooting.md #4-5, #19.
 sleep 3
 
+# Delete the VPN-pushed route (malformed gateway = the peer's own netmask)
+# for $1, then restore the connected route to it via $2 (optionally with a
+# src address, $3).
+fix_route() {
+  ip route del "$1" via 255.255.255.0 dev tun0 2>/dev/null || true
+  ip route add "$1" dev "$2" ${3:+proto kernel scope link src "$3"} 2>/dev/null || true
+}
+
 # virbr0 (mgmt-server, isp-server)
-ip route del 192.168.122.0/24 via 255.255.255.0 dev tun0 2>/dev/null || true
-ip route add 192.168.122.0/24 dev virbr0 proto kernel scope link src 192.168.122.1 2>/dev/null || true
+fix_route 192.168.122.0/24 virbr0 192.168.122.1
 
 # br-mgmt's own connected subnet
-ip route del {{ mgmt_bridge_network }} via 255.255.255.0 dev tun0 2>/dev/null || true
-ip route add {{ mgmt_bridge_network }} dev {{ mgmt_bridge_name }} proto kernel scope link src {{ mgmt_bridge_ip }} 2>/dev/null || true
+fix_route {{ mgmt_bridge_cidr | ansible.utils.ipaddr('network/prefix') }} {{ mgmt_bridge_name }} {{ mgmt_bridge_ip }}
 
 # softgate/OOB mgmt subnet (rides on br-mgmt but is not br-mgmt's own address range)
-ip route del {{ ns_fabric.mgmt_subnet }} via 255.255.255.0 dev tun0 2>/dev/null || true
-ip route add {{ ns_fabric.mgmt_subnet }} dev {{ mgmt_bridge_name }} 2>/dev/null || true
+fix_route {{ ns_fabric.mgmt_subnet }} {{ mgmt_bridge_name }}

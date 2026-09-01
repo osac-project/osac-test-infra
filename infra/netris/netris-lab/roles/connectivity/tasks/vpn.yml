@@ -95,6 +95,21 @@
     path: /sys/class/net/tun0
     timeout: 30
 
+# tun0 is created after boot each time the VPN client starts, so it inherits
+# RHEL's strict net.ipv4.conf.default.rp_filter=1 -- see
+# roles/prerequisites/tasks/main.yml and docs/troubleshooting.md #21 for why
+# that silently drops lab VM connections to services exposed on tun0's
+# address (e.g. the netris controller's socat-forwarded gRPC/telescope
+# ports). This is an accepted, scoped exception for this lab's VPN tunnel
+# specifically (not a host-wide default/all change) -- asymmetric routing
+# between br-mgmt and tun0 makes it unavoidable here.
+- name: Disable reverse-path filtering on tun0
+  ansible.posix.sysctl:
+    name: net.ipv4.conf.tun0.rp_filter
+    value: "0"
+    sysctl_set: true
+    reload: true
+
 - name: Verify VPN IP
   shell: ip addr show tun0 | grep "10.8.0.2"
   changed_when: false
