@@ -19,8 +19,15 @@ import xml.etree.ElementTree as ET
 
 MAX_FAILURES = 5
 MAX_FAILURE_TEXT = 2000
+MAX_NAME_LEN = 200
+MAX_MESSAGE_LEN = 500
 MAX_LOG_MATCHES = 60
 MAX_LOG_LINE_LEN = 400
+# Real junit.xml from these E2E suites is normally KBs, not MBs. A generous
+# but hard ceiling against a pathological/runaway file, checked before
+# ET.parse loads the whole thing into memory -- ET.parse itself has no
+# built-in size limit.
+MAX_JUNIT_BYTES = 20 * 1024 * 1024
 
 ARTIFACT_DIR = os.environ.get("ARTIFACT_DIR", "")
 JUNIT_PATH = os.environ.get("JUNIT_PATH", "")
@@ -36,6 +43,9 @@ LOG_PATTERN = re.compile(r"error|traceback|panic|failed|exception", re.IGNORECAS
 def extract_junit_failures(path):
     if not path or not os.path.isfile(path):
         return "(no junit.xml found)"
+    size = os.path.getsize(path)
+    if size > MAX_JUNIT_BYTES:
+        return f"(junit.xml is {size} bytes, over the {MAX_JUNIT_BYTES}-byte cap -- skipped rather than loading it whole)"
     try:
         tree = ET.parse(path)
     except ET.ParseError as exc:
@@ -47,8 +57,8 @@ def extract_junit_failures(path):
             node = testcase.find(tag)
             if node is None:
                 continue
-            name = testcase.get("name", "unknown")
-            message = (node.get("message") or "").strip()
+            name = testcase.get("name", "unknown")[:MAX_NAME_LEN]
+            message = (node.get("message") or "").strip()[:MAX_MESSAGE_LEN]
             text = (node.text or "").strip()[:MAX_FAILURE_TEXT]
             chunks.append(f"### {name}\n**{tag}**: {message}\n```\n{text}\n```")
             if len(chunks) >= MAX_FAILURES:

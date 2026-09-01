@@ -39,12 +39,20 @@ outputs:
 runs:
   using: composite
   steps:
+    # Installed BEFORE authenticating, deliberately: pip install executes
+    # arbitrary code (build hooks, setup.py) for the package and everything
+    # in its dependency tree. Doing that after google-github-actions/auth
+    # has already exported live GCP credentials into the job's environment
+    # would mean a compromised package (this one or a transitive dep) could
+    # exfiltrate those credentials during install. Installing first means
+    # there's nothing to steal yet -- swap the order back only if you've
+    # independently re-verified this reasoning no longer applies.
+    - name: Install google-genai SDK
+      shell: bash
+      run: pip install --user --quiet "google-genai==2.21.0"
+
     - name: Authenticate to Google Cloud (Vertex AI)
       uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
       with:
         workload_identity_provider: projects/1008600636152/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
         service_account: osac-ci@osac-ci.iam.gserviceaccount.com
-
-    - name: Install google-genai SDK
-      shell: bash
-      run: pip install --user --quiet google-genai
