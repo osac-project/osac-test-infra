@@ -110,17 +110,20 @@ on:
       enable-ai-diagnostic:
         description: >-
           Run an AI (Vertex AI/Gemini) root-cause diagnosis on failure and
-          write it to the job summary. Only ever set true for scheduled
-          runs. The real constraint this input can never override is
-          narrower than "pull_request": a run whose head is a genuine fork
-          (not just any pull_request event) gets a read-only token from
-          GitHub Actions with no OIDC minting at all, by policy -- and
-          every real-world PR on osac/osac-test-infra is confirmed to be
-          fork-originated today, so pull_request/merge_group callers leave
-          this false in practice regardless. Explicit input rather than
-          checking github.event_name here, since it's ambiguous whether
-          that context reflects the caller's original event or
-          workflow_call itself inside a called workflow.
+          write it to the job summary. Callers should gate this on
+          `github.ref == 'refs/heads/main'`, not on event type -- the
+          actual constraint is WIF trust (main branch only), which has
+          nothing to do with which event triggered the run. Checking the
+          ref this way correctly covers both schedule (always main) and a
+          manual workflow_dispatch run against main (also safe, same WIF
+          context), while naturally excluding pull_request (github.ref is
+          the synthetic PR-merge ref, never refs/heads/main) and
+          merge_group (github.ref is the readonly-queue ref) without
+          needing to enumerate event names. It's also moot for genuine
+          fork PRs regardless of ref: a run whose head is a fork gets a
+          read-only token from GitHub Actions with no OIDC minting at all,
+          by policy, and every real-world PR on osac/osac-test-infra is
+          confirmed to be fork-originated today.
         required: false
         type: boolean
         default: false

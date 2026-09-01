@@ -80,7 +80,7 @@ jobs:
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
-      enable-ai-diagnostic: ${{ github.event_name == 'schedule' }}
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   e2e-bmaas-gate:
     if: always()
