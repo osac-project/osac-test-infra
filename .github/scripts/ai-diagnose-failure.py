@@ -34,6 +34,10 @@ JUNIT_PATH = os.environ.get("JUNIT_PATH", "")
 GOOGLE_CLOUD_PROJECT = os.environ["GOOGLE_CLOUD_PROJECT"]
 GOOGLE_CLOUD_LOCATION = os.environ["GOOGLE_CLOUD_LOCATION"]
 SUMMARY_PATH = os.environ.get("GITHUB_STEP_SUMMARY", "")
+# Set by callers that need the raw diagnosis text outside this job's own step
+# summary -- e.g. ai-diagnostic-e2e.yml runs in a separate workflow_run job
+# and feeds this into a Check Run body instead of (or as well as) a summary.
+DIAGNOSIS_FILE = os.environ.get("DIAGNOSIS_FILE", "")
 WORKFLOW_NAME = os.environ.get("WORKFLOW_NAME", "E2E job")
 RUN_URL = os.environ.get("RUN_URL", "")
 
@@ -131,7 +135,10 @@ than guessing.
             f.write(diagnosis.strip() + "\n\n")
             if RUN_URL:
                 f.write(f"[Full run]({RUN_URL})\n")
-    else:
+    if DIAGNOSIS_FILE:
+        with open(DIAGNOSIS_FILE, "w") as f:
+            f.write(diagnosis.strip() + "\n")
+    if not SUMMARY_PATH and not DIAGNOSIS_FILE:
         print(diagnosis)
 
 
