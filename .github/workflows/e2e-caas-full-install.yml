@@ -102,6 +102,19 @@ on:
         required: false
         type: boolean
         default: false
+      enable-ai-diagnostic:
+        description: >-
+          Run an AI (Vertex AI/Gemini) root-cause diagnosis on failure and
+          write it to the job summary. Only ever set true for scheduled
+          runs -- pull_request runs come from forks and cannot get OIDC/WIF
+          access regardless of this input (GitHub Actions security policy,
+          not something this input can override). Explicit input rather
+          than checking github.event_name here, since it's ambiguous
+          whether that context reflects the caller's original event or
+          workflow_call itself inside a called workflow.
+        required: false
+        type: boolean
+        default: false
       runner-label:
         description: "Self-hosted runner label to target"
         required: false
@@ -133,6 +146,7 @@ jobs:
     environment: e2e-test
     permissions:
       contents: read
+      id-token: write # only exercised when enable-ai-diagnostic is true (always false for fork PR runs)
     outputs:
       result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
 
@@ -765,6 +779,25 @@ jobs:
           kubeconfig-path: ${{ runner.temp }}/kubeconfig
           artifact-name: osac-logs-caas-full-install-${{ github.run_id }}
           junit-path: ${{ runner.temp }}/test-output/junit.xml
+
+      - name: Authenticate for AI diagnosis
+        if: failure() && inputs.enable-ai-diagnostic
+        continue-on-error: true # must never block Teardown below
+        uses: ./.github/actions/vertex-ai-auth
+        id: vertex-auth
+
+      - name: Run AI failure diagnosis
+        if: failure() && inputs.enable-ai-diagnostic
+        continue-on-error: true # must never block Teardown below
+        shell: bash
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
+          JUNIT_PATH: ${{ runner.temp }}/test-output/junit.xml
+          GOOGLE_CLOUD_PROJECT: ${{ steps.vertex-auth.outputs.gcp-project }}
+          GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
+          WORKFLOW_NAME: "E2E CaaS Full Install"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/ai-diagnose-failure.py
 
       - name: Teardown
         if: always()
