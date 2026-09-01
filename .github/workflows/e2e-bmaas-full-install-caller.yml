@@ -53,6 +53,11 @@ concurrency:
 
 jobs:
   e2e-bmaas-full-install:
+    permissions:
+      contents: read
+      # See e2e-vmaas-full-install-caller.yml's identical grant for why
+      # this is needed.
+      id-token: write
     uses: ./.github/workflows/e2e-bmaas-full-install.yml
     with:
       test-suite: ${{ inputs.test-suite || 'bmaas' }}

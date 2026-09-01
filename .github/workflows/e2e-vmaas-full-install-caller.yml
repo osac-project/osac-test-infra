@@ -49,6 +49,14 @@ concurrency:
 
 jobs:
   e2e-vmaas-full-install:
+    permissions:
+      contents: read
+      # Required by e2e-vmaas-full-install.yml's "e2e" job -- only
+      # exercised there when enable-ai-diagnostic is true (always false
+      # for fork PR runs), but GitHub statically validates a called
+      # reusable workflow's declared job permissions against what the
+      # caller grants regardless of runtime reachability.
+      id-token: write
     uses: ./.github/workflows/e2e-vmaas-full-install.yml
     with:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
