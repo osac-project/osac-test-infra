@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # OSAC-3370: decide whether a PR is ready for expensive e2e.
 #
-# Allow when (fail closed otherwise):
+# Allow when:
 #   1. "lgtm" label present (Prow removes on push), or
 #   2. "e2e-ready" label present (cleanup workflow removes on push), or
 #   3. coderabbitai[bot] APPROVED on head AND no outstanding human CHANGES_REQUESTED
+# Otherwise wait: ready=false, exit 0 (do not fail). Fetch/API errors still fail.
 #
 # Human APPROVED reviews do NOT unlock e2e (untrusted for this cost gate).
 #
@@ -23,6 +24,14 @@
 set -euo pipefail
 
 CODERABBIT_LOGIN='coderabbitai[bot]'
+
+# Write ready=true|false for the composite action output (no-op outside Actions).
+write_ready_output() {
+  local ready="$1"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "ready=${ready}" >> "${GITHUB_OUTPUT}"
+  fi
+}
 
 # Returns 0 if labels JSON contains the given label name.
 labels_have() {
@@ -243,12 +252,14 @@ events_json="$(cat "${tmp}/events.json")"
 
 if reason=$(decide_e2e_readiness "${labels_json}" "${reviews_json}" "${HEAD_SHA}" "${events_json}"); then
   echo "${reason}"
+  write_ready_output true
   exit 0
 fi
 
-echo "::error::E2E readiness gate: PR #${PR_NUMBER} is not ready for expensive CI at ${HEAD_SHA:0:7}."
-echo "::error::Need a CodeRabbit APPROVED review on this head, \`lgtm\` label, or \`e2e-ready\` label."
+echo "::notice::E2E readiness gate: PR #${PR_NUMBER} is waiting for unlock at ${HEAD_SHA:0:7}."
+echo "::notice::Need a CodeRabbit APPROVED review on this head, \`lgtm\` label, or \`/e2e-ready\`."
 if human_has_changes_requested "${reviews_json}"; then
-  echo "::error::Note: a human requested changes — CodeRabbit approval alone does not unlock e2e until that is cleared."
+  echo "::notice::Note: a human requested changes — CodeRabbit approval alone does not unlock e2e until that is cleared."
 fi
-exit 1
+write_ready_output false
+exit 0

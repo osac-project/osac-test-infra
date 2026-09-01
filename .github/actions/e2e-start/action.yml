@@ -1,0 +1,45 @@
+---
+name: Start e2e from PR run
+description: >-
+  Replay pull_request e2e workflow runs at HEAD after an unlock (lgtm,
+  /e2e-ready, or CodeRabbit APPROVED). OSAC-3370.
+
+inputs:
+  pr-number:
+    description: Pull request number
+    required: true
+  trigger-label:
+    description: Unlock label (ignored when skip-label-check is true)
+    required: false
+    default: e2e-ready
+  workflows:
+    description: Comma-separated workflow filenames to replay
+    required: false
+    default: e2e-vmaas-full-install-caller.yml,e2e-bmaas-full-install-caller.yml,e2e-caas-full-install-caller.yml
+  event-head-sha:
+    description: Event head SHA to compare (empty skips mismatch check)
+    required: false
+    default: ""
+  skip-label-check:
+    description: Skip label presence/actor checks (CodeRabbit approval start)
+    required: false
+    default: "false"
+  github-token:
+    description: Token with actions:write and pull-requests:write
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Start e2e workflows
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        EVENT_HEAD_SHA: ${{ inputs.event-head-sha }}
+        TRIGGER_LABEL: ${{ inputs.trigger-label }}
+        WORKFLOWS: ${{ inputs.workflows }}
+        SKIP_LABEL_CHECK: ${{ inputs.skip-label-check }}
+      run: bash "${GITHUB_ACTION_PATH}/e2e-start.sh"

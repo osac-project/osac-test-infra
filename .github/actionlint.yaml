@@ -29,3 +29,8 @@ paths:
       # severity keeps real warning/error-level shellcheck findings (and
       # everything else actionlint checks) failing the build.
       - 'shellcheck reported issue in this script: SC[0-9]+:(info|style):'
+  .github/workflows/e2e-on-label.yml:
+    ignore:
+      # v1.7.12 schema has no job.workflow_* (added to GitHub 2026). Runtime
+      # values are documented; drop this when actionlint is bumped to v1.18+.
+      - 'property "workflow_(repository|sha)" is not defined'

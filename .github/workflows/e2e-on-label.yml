@@ -1,0 +1,95 @@
+---
+# OSAC-3370: when lgtm (or quiet e2e-ready override) is added, start expensive
+# e2e callers. Replay the pull_request run at HEAD (paths-filter + readiness).
+# Canonical starter: this repo. osac calls it via workflow_call (thin wrapper).
+# Replay action lives next to this file. ./ needs a workspace; checkout of
+# github.sha / github.repository on workflow_call is the caller (osac).
+# job.workflow_* is this workflow's repo and SHA (native and reusable).
+# e2e-ready must come from github-actions[bot] (/e2e-ready); match the gate.
+# pull_request_target: fork PRs can manage runs/comments with base-repo token.
+# workflow_dispatch: GITHUB_TOKEN label events do not start other workflows, so
+# slash-command-handler dispatches the per-repo e2e-on-label.yml after applying
+# e2e-ready. Default workflow names are this repo's *-caller.yml files; osac
+# passes its caller filenames.
+name: E2E on unlock label
+
+on:
+  pull_request_target:
+    types: [labeled]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to unlock
+        required: true
+        type: string
+      trigger_label:
+        description: Unlock label that was applied
+        required: false
+        default: e2e-ready
+        type: string
+  workflow_call:
+    inputs:
+      pr_number:
+        description: PR number to unlock
+        required: true
+        type: string
+      trigger_label:
+        description: Unlock label that was applied
+        required: false
+        default: e2e-ready
+        type: string
+      workflows:
+        description: Comma-separated workflow filenames to replay
+        required: false
+        type: string
+        default: e2e-vmaas-full-install-caller.yml,e2e-bmaas-full-install-caller.yml,e2e-caas-full-install-caller.yml
+      event_head_sha:
+        description: Event head SHA to compare (empty skips mismatch check)
+        required: false
+        type: string
+        default: ""
+      skip_label_check:
+        description: Skip label presence/actor checks (CodeRabbit approval start)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Shared with e2e-on-approval. Queue, do not cancel: a killed starter leaves
+# partial reruns and no summary. Revalidation makes a queued run idempotent.
+concurrency:
+  group: e2e-start-${{ inputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  start-e2e:
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: write
+    # Native labeled: only lgtm / e2e-ready. workflow_call / dispatch / review
+    # callers already filtered; github.event_name may be the caller's event.
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      contains(fromJSON('["lgtm","e2e-ready"]'), github.event.label.name)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/e2e-start
+      - uses: ./.github/actions/e2e-start
+        with:
+          pr-number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+          trigger-label: ${{ github.event_name == 'pull_request_target' && github.event.label.name || inputs.trigger_label || github.event.inputs.trigger_label || 'e2e-ready' }}
+          event-head-sha: ${{ github.event.pull_request.head.sha || inputs.event_head_sha }}
+          workflows: ${{ inputs.workflows }}
+          skip-label-check: ${{ inputs.skip_label_check }}

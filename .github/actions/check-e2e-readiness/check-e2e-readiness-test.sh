@@ -9,6 +9,7 @@ CHECK_E2E_READINESS_LIB_ONLY=1 source "${SCRIPT_DIR}/check-e2e-readiness.sh"
 pass=0
 fail=0
 
+# Pass if expected equals actual; log name.
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
   if [[ "${expected}" == "${actual}" ]]; then
@@ -20,6 +21,7 @@ assert_eq() {
   fi
 }
 
+# Run remaining args; pass if exit code equals expected_rc. Name is $1.
 assert_rc() {
   local name="$1" expected_rc="$2"
   shift 2
@@ -160,6 +162,17 @@ assert_rc "decide denied no signals" 1 decide_e2e_readiness "${LABELS_WITHOUT}" 
 assert_rc "decide denied human approve" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_HUMAN_APPROVED}" "${HEAD_SHA}" "${EVENTS_NONE}"
 assert_rc "decide denied old CR approve" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_APPROVED_OLD}" "${HEAD_SHA}" "${EVENTS_NONE}"
 assert_rc "decide denied other bot" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_OTHER_BOT_APPROVED}" "${HEAD_SHA}" "${EVENTS_NONE}"
+
+# --- write_ready_output ---
+ready_out="$(mktemp)"
+GITHUB_OUTPUT="${ready_out}" write_ready_output true
+assert_eq "write_ready_output true" "ready=true" "$(cat "${ready_out}")"
+GITHUB_OUTPUT="${ready_out}" write_ready_output false
+assert_eq "write_ready_output false appends" $'ready=true\nready=false' "$(cat "${ready_out}")"
+unset GITHUB_OUTPUT
+write_ready_output true
+assert_eq "write_ready_output no GITHUB_OUTPUT is no-op" $'ready=true\nready=false' "$(cat "${ready_out}")"
+rm -f "${ready_out}"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed"

@@ -1,0 +1,57 @@
+# OSAC-3370: when CodeRabbit approves the PR head, start expensive e2e.
+# Human APPROVED does not unlock. Fork pull_request_review is read-only:
+# same-repo reruns via e2e-on-label.yml; fork only hands off so
+# e2e-on-approval-fork.yml (workflow_run, default-branch YAML) can replay.
+# Display name is the workflow_run filter; rename both or fork replay never starts.
+# Job id "fork-handoff" is the display name (no name:); rename both or the
+# fork replay gate never matches.
+name: E2E on CodeRabbit approval
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-start-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  start-e2e:
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: write
+    if: >-
+      github.event.review.state == 'approved' &&
+      github.event.review.user.login == 'coderabbitai[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'main'
+    uses: ./.github/workflows/e2e-on-label.yml
+    with:
+      pr_number: ${{ format('{0}', github.event.pull_request.number) }}
+      skip_label_check: true
+      event_head_sha: ${{ github.event.review.commit_id }}
+      workflows: e2e-vmaas-full-install-caller.yml,e2e-bmaas-full-install-caller.yml,e2e-caas-full-install-caller.yml
+
+  # Fork CR APPROVED: job must succeed so workflow_run can replay. Do not call
+  # gh run rerun here (read-only token / no secrets).
+  fork-handoff:
+    permissions: {}
+    if: >-
+      github.event.review.state == 'approved' &&
+      github.event.review.user.login == 'coderabbitai[bot]' &&
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Handoff fork approval to workflow_run replay
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          echo "Fork PR ${HEAD_REPO}: pull_request_review cannot rerun workflows."
+          echo "e2e-on-approval-fork.yml (workflow_run on the default branch) starts e2e after this run completes."

@@ -1,9 +1,10 @@
 ---
 name: Check e2e readiness
 description: >-
-  Fail unless the PR is ready for expensive e2e: lgtm label, e2e-ready label,
-  or coderabbitai[bot] APPROVED on head (blocked while a human still has
-  CHANGES_REQUESTED). Human APPROVED does not unlock. OSAC-3370.
+  Set ready=true when the PR may run expensive e2e (lgtm, e2e-ready from
+  github-actions[bot], or coderabbitai[bot] APPROVED on head with no human
+  CHANGES_REQUESTED). Otherwise ready=false (wait, do not fail). API errors
+  still fail. Human APPROVED does not unlock. OSAC-3370.
 
 inputs:
   pr-number:
@@ -18,10 +19,16 @@ inputs:
     required: false
     default: ${{ github.token }}
 
+outputs:
+  ready:
+    description: "'true' if expensive e2e may run; 'false' if waiting for unlock"
+    value: ${{ steps.check.outputs.ready }}
+
 runs:
   using: composite
   steps:
     - name: Check e2e readiness
+      id: check
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}

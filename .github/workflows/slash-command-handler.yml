@@ -135,7 +135,7 @@ jobs:
             echo "| \`/retest\` | Re-run all failed checks |"
             echo "| \`/cancel [name]\` | Cancel in-progress runs |"
             echo "| \`/ok-to-test\` | Approve fork PR for E2E testing |"
-            echo "| \`/e2e-ready\` | Apply \`e2e-ready\` label to unlock expensive e2e |"
+            echo "| \`/e2e-ready\` | Apply \`e2e-ready\` and start expensive e2e |"
 
             if jq -e '[.[] | select(.stem | startswith("e2e-"))] | length > 0' /tmp/available.json > /dev/null 2>&1; then
               echo ""
@@ -229,8 +229,40 @@ jobs:
             gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" \
               --input - <<< '{"labels":["e2e-ready"]}' --silent
 
-          gh pr comment "${PR_NUMBER}" -R "${REPO}" \
-            --body "Labeled \`e2e-ready\` on \`${HEAD_SHA:0:7}\`. Expensive e2e is now unlocked (cleanup workflow removes on next push)."
+          # GITHUB_TOKEN label events do not start other workflows (except
+          # workflow_dispatch / repository_dispatch). Dispatch this repo's
+          # e2e-on-label.yml (osac is a thin caller of the test-infra reusable;
+          # this repo is the native workflow). Fallback: rerun full-install.
+          DISPATCHED=0
+          if gh workflow run e2e-on-label.yml -R "${REPO}" \
+            -f "pr_number=${PR_NUMBER}" \
+            -f "trigger_label=e2e-ready"; then
+            DISPATCHED=1
+            echo "Dispatched e2e-on-label.yml for PR #${PR_NUMBER}."
+          else
+            echo "::warning::Failed to dispatch e2e-on-label.yml; falling back to run rerun."
+            while IFS=$'\t' read -r run_id run_name; do
+              [ -z "${run_id}" ] && continue
+              if gh run rerun "${run_id}" -R "${REPO}"; then
+                DISPATCHED=1
+                echo "Re-ran ${run_name} (#${run_id})."
+              fi
+            done < <(jq -r '
+              .[] | select(.stem | test("^e2e-(vmaas|bmaas|caas)-full-install$"))
+              | "\(.id)\t\(.name)"
+            ' /tmp/available.json)
+          fi
+
+          if [[ "${DISPATCHED}" -eq 1 ]]; then
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+              --body "Labeled \`e2e-ready\` on \`${HEAD_SHA:0:7}\`. Starting expensive e2e (cleanup removes the label on next push)."
+          else
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+              --body "Labeled \`e2e-ready\` on \`${HEAD_SHA:0:7}\`, but could not start e2e. Retry \`/e2e-ready\` or \`/retest\`."
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+              -f content='confused' --silent 2>/dev/null || true
+            exit 1
+          fi
           gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
             -f content='rocket' --silent 2>/dev/null || true
 

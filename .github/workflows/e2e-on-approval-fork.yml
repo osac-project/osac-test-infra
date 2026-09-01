@@ -1,0 +1,201 @@
+# OSAC-3370: fork CodeRabbit APPROVED cannot gh run rerun from
+# pull_request_review (read-only token, no secrets). This workflow_run
+# listener runs default-branch YAML with a write token. No checkout of
+# the PR. Independently verify coderabbitai[bot] APPROVED on current HEAD
+# — do not trust the triggering workflow (fork merge can rename/copy it).
+# After that gate, replay via e2e-on-label.yml (same starter as same-repo).
+name: E2E on CodeRabbit approval (fork replay)
+
+on:
+  workflow_run:
+    # Must match name: in e2e-on-approval.yml (GitHub matches display name,
+    # not filename). Rename both or this listener never fires.
+    workflows: ["E2E on CodeRabbit approval"]
+    types: [completed]
+  workflow_call:
+    inputs:
+      workflows:
+        description: Comma-separated workflow filenames to replay
+        required: false
+        type: string
+        default: e2e-vmaas-full-install-caller.yml,e2e-bmaas-full-install-caller.yml,e2e-caas-full-install-caller.yml
+
+permissions:
+  contents: read
+
+# Fork payload often has empty pull_requests; key on head SHA.
+concurrency:
+  group: e2e-start-fork-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-fork-pr:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      skip: ${{ steps.resolve.outputs.skip }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+    steps:
+      - name: Verify fork-handoff and CodeRabbit APPROVED on HEAD
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          REVIEWER: coderabbitai[bot]
+        run: |
+          set -euo pipefail
+          echo "skip=true" >> "${GITHUB_OUTPUT}"
+
+          if [[ -z "${EVENT_HEAD_SHA}" ]]; then
+            echo "workflow_run missing head_sha; skipping."
+            exit 0
+          fi
+
+          # Triggering workflow may be attacker-controlled (same name). Require
+          # the trusted fork-handoff job; still verify CR APPROVED below.
+          # Display name equals job id (no name: on producer). e2e-on-approval.yml
+          # fork-handoff must stay in sync; a rename breaks this gate.
+          # workflow_run.head_repository is the base repo, not the fork — do
+          # not use it to detect forks (resolve head.repo from the PR instead).
+          if ! gh run view "${WORKFLOW_RUN_ID}" -R "${REPO}" --json jobs \
+            | jq -e '.jobs[] | select(.name == "fork-handoff" and .conclusion == "success")' >/dev/null; then
+            echo "No successful fork-handoff job on run #${WORKFLOW_RUN_ID}; skipping."
+            exit 0
+          fi
+
+          # commits/{sha}/pulls is empty for unmerged fork SHAs.
+          # List open main PRs and match head.sha; take head.repo from the PR.
+          if ! prs_json=$(gh api --paginate \
+            "repos/${REPO}/pulls?state=open&base=main&per_page=100" \
+            --jq '.[]' | jq -s '.'); then
+            echo "Failed to list open PRs for ${EVENT_HEAD_SHA:0:7}; skipping."
+            exit 0
+          fi
+          pr_json=$(jq -c --arg sha "${EVENT_HEAD_SHA}" --arg base "${REPO}" '
+            [.[]
+              | select(.state == "open")
+              | select(.base.ref == "main")
+              | select(.head.sha == $sha)
+              | select((.head.repo.full_name // "") != "")
+              | select((.head.repo.full_name // "") != $base)
+            ]
+            | if length == 1 then .[0] else empty end
+          ' <<<"${prs_json}")
+          if [[ -z "${pr_json}" || "${pr_json}" == "null" ]]; then
+            echo "No unique open fork PR targeting main at ${EVENT_HEAD_SHA:0:7}; skipping."
+            exit 0
+          fi
+
+          PR_NUMBER=$(jq -r '.number' <<<"${pr_json}")
+          HEAD_SHA=$(jq -r '.head.sha' <<<"${pr_json}")
+          HEAD_REPO=$(jq -r '.head.repo.full_name // empty' <<<"${pr_json}")
+          if [[ -z "${HEAD_REPO}" ]]; then
+            echo "PR #${PR_NUMBER} has empty head.repo; skipping."
+            exit 0
+          fi
+
+          human_cr_blocks_bot() {
+            local reviews_json="$1"
+            local rc e_was=0
+            [[ $- == *e* ]] && e_was=1
+            set +e
+            jq -e '
+              [.[]
+                | select(.user != null)
+                | select(((.user.login // "") | endswith("[bot]")) | not)
+                | select((.user.type // "User") != "Bot")
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ]
+              | group_by(.user.login)
+              | map(max_by([(.submitted_at // ""), (.id // 0)]))
+              | map(select(.state == "CHANGES_REQUESTED"))
+              | length > 0
+            ' <<<"${reviews_json}" >/dev/null
+            rc=$?
+            [[ ${e_was} -eq 1 ]] && set -e
+            if [[ ${rc} -ne 0 && ${rc} -ne 1 ]]; then
+              echo "Cannot evaluate human review state (jq rc=${rc}); treating as blocked." >&2
+              return 0
+            fi
+            return ${rc}
+          }
+
+          approval_still_valid() {
+            local sha="$1"
+            local reviews_json
+            if ! reviews_json=$(gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUMBER}/reviews" | jq 'add'); then
+              return 2
+            fi
+            if human_cr_blocks_bot "${reviews_json}"; then
+              return 1
+            fi
+            jq -e --arg sha "${sha}" --arg who "${REVIEWER}" '
+              ([.[]
+                | select(.user.login == $who)
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ] | max_by([(.submitted_at // ""), (.id // 0)]) // empty) as $latest
+              | ($latest != null)
+                and ($latest.state == "APPROVED")
+                and ($latest.commit_id != null)
+                and ($latest.commit_id == $sha)
+            ' <<<"${reviews_json}" >/dev/null 2>&1
+          }
+
+          av_rc=0
+          approval_still_valid "${HEAD_SHA}" || av_rc=$?
+          if [[ ${av_rc} -eq 2 ]]; then
+            echo "Failed to fetch reviews for PR #${PR_NUMBER}; skipping."
+            {
+              echo "### E2E on approval (fork) skipped"
+              echo ""
+              echo "Could not read review state for \`${HEAD_SHA:0:7}\` on PR #${PR_NUMBER}."
+              echo "Re-approve or use \`lgtm\` / \`/e2e-ready\`."
+            } > /tmp/e2e-on-approval-fork-skip.md
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "$(cat /tmp/e2e-on-approval-fork-skip.md)"
+            exit 1
+          fi
+          if [[ ${av_rc} -ne 0 ]]; then
+            echo "No current ${REVIEWER} APPROVED on ${HEAD_SHA:0:7} (or human CHANGES_REQUESTED); skipping."
+            {
+              echo "### E2E on approval skipped"
+              echo ""
+              echo "\`${REVIEWER}\` is not APPROVED on exact head \`${HEAD_SHA:0:7}\` (different SHA, withdrawn, or a human still has CHANGES_REQUESTED)."
+              echo "Expensive e2e will not start until that is cleared, or a \`lgtm\` / \`/e2e-ready\` unlock is applied."
+            } > /tmp/e2e-on-approval-fork-blocked.md
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "$(cat /tmp/e2e-on-approval-fork-blocked.md)"
+            exit 0
+          fi
+
+          {
+            echo "skip=false"
+            echo "pr_number=${PR_NUMBER}"
+            echo "head_sha=${HEAD_SHA}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Fork PR #${PR_NUMBER}: ${REVIEWER} APPROVED ${HEAD_SHA:0:7}."
+
+  start-e2e:
+    needs: resolve-fork-pr
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: write
+    if: >-
+      needs.resolve-fork-pr.outputs.skip != 'true' &&
+      needs.resolve-fork-pr.outputs.pr_number != ''
+    uses: ./.github/workflows/e2e-on-label.yml
+    with:
+      pr_number: ${{ needs.resolve-fork-pr.outputs.pr_number }}
+      skip_label_check: true
+      event_head_sha: ${{ needs.resolve-fork-pr.outputs.head_sha }}
+      workflows: ${{ inputs.workflows || 'e2e-vmaas-full-install-caller.yml,e2e-bmaas-full-install-caller.yml,e2e-caas-full-install-caller.yml' }}

@@ -48,7 +48,36 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # OSAC-3370: cheap readiness before expensive runners. Non-PR skips this job.
+  e2e-readiness:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/check-e2e-readiness
+      - name: Check e2e readiness
+        id: check
+        uses: ./.github/actions/check-e2e-readiness
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+
   e2e-vmaas-full-install:
+    needs: [e2e-readiness]
+    if: >-
+      always()
+      && (github.event_name != 'pull_request'
+          || needs.e2e-readiness.result == 'skipped'
+          || needs.e2e-readiness.outputs.ready == 'true')
     permissions:
       contents: read
       # Required by e2e-vmaas-full-install.yml's "e2e" job -- only
@@ -73,12 +102,56 @@ jobs:
       notify-on-failure: ${{ github.event_name == 'schedule' }}
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
+  # Skip this required check on unreadiness so it stays pending (not red).
   e2e-vmaas-gate:
-    if: always()
-    needs: [e2e-vmaas-full-install]
+    if: >-
+      always()
+      && (github.event_name != 'pull_request'
+          || needs.e2e-readiness.result != 'success'
+          || needs.e2e-readiness.outputs.ready == 'true')
+    needs: [e2e-readiness, e2e-vmaas-full-install]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
+          echo "e2e-readiness: ${{ needs.e2e-readiness.result }}"
           echo "e2e-vmaas-full-install: ${{ needs.e2e-vmaas-full-install.result }}"
           exit 1
+
+  e2e-vmaas-pending:
+    if: >-
+      always()
+      && github.event_name == 'pull_request'
+      && needs.e2e-readiness.result == 'success'
+      && needs.e2e-readiness.outputs.ready != 'true'
+    needs: [e2e-readiness, e2e-vmaas-full-install, e2e-vmaas-gate]
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Mark e2e-vmaas-gate pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHECK_NAME: e2e-vmaas-gate
+        run: |
+          set -euo pipefail
+          payload=$(jq -n \
+            --arg name "${CHECK_NAME}" \
+            --arg sha "${HEAD_SHA}" \
+            --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              name: $name,
+              head_sha: $sha,
+              status: "in_progress",
+              started_at: $started,
+              output: {
+                title: "Waiting for e2e unlock",
+                summary: "Expensive e2e has not started. Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready."
+              }
+            }')
+          if ! gh api "repos/${REPO}/check-runs" --input - <<<"${payload}"; then
+            echo "Could not post in_progress check ${CHECK_NAME} (fork PRs may lack checks:write)."
+            echo "Required check stays unreported until unlock rerun."
+          fi
