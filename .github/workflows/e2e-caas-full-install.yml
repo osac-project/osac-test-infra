@@ -336,6 +336,12 @@ jobs:
         env:
           FLAVOR_NAME: ${{ inputs.flavor-name }}
         run: |
+          # TEMPORARY -- OSAC-4741 validation only, DO NOT MERGE. Forces an
+          # immediate failure here (before any real VM/cluster is touched)
+          # to test the ai-diagnostic-e2e.yml commit-status pipeline
+          # end-to-end against a genuine fork PR failure.
+          echo "::error::Forced failure for OSAC-4741 AI diagnostic validation -- not a real cluster-boot failure."
+          exit 1
           exec 9>"${FLAVOR_LOCK}"
           flock --shared 9
           sudo python3 /usr/local/bin/cluster-tool boot \
