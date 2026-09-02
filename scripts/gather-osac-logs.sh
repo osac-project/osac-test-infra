@@ -137,6 +137,108 @@ echo "Collecting cluster operator status..."
 oc get co > "${ARTIFACT_DIR}/clusteroperators.txt" 2>&1 || true
 oc get csv -n openshift-cnv -o wide > "${ARTIFACT_DIR}/cnv/csv.txt" 2>&1 || true
 
+echo "Collecting software BOM..."
+# Everything below is already gathered elsewhere in this script in raw form
+# (olm/csv.txt, clusteroperators.txt, deployments.txt, ...) -- this distills
+# just the "what did this run actually test against" facts (OCP version,
+# each Red Hat prerequisite operator's resolved CSV, and every workload
+# image actually running in the namespaces that matter) into one small,
+# structured file, so nobody has to go spelunking through the full
+# diagnostic bundle -- or worse, hand-maintain a spreadsheet -- to answer
+# that question for a given run.
+collect_bom() {
+    local ocp_version ocp_channel
+    ocp_version=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' 2>/dev/null || echo "")
+    ocp_channel=$(oc get clusterversion version -o jsonpath='{.spec.channel}' 2>/dev/null || echo "")
+
+    # component label -> "subscriptionName:namespace" for every OLM-managed
+    # prerequisite OSAC itself installs (osac-installer/charts/osac-deps).
+    # Not every flavor enables every one of these (e.g. LVMS/Kafka are
+    # disabled by default) -- installedCSV/version come back null rather
+    # than erroring when a subscription doesn't exist in this cluster.
+    local -A olm_components=(
+        ["OpenShift Virtualization (CNV/KubeVirt)"]="kubevirt-hyperconverged:openshift-cnv"
+        ["Multicluster Engine (MCE)"]="multicluster-engine:multicluster-engine"
+        ["Ansible Automation Platform (AAP)"]="dev-ansible-automation-platform:ansible-aap"
+        ["cert-manager Operator"]="openshift-cert-manager-operator:cert-manager-operator"
+        ["MetalLB Operator"]="metallb-operator:metallb-system"
+        ["LVMS (LVM Storage)"]="lvms-operator:openshift-storage"
+        ["Kafka / Strimzi (AMQ Streams)"]="amq-streams:osac-kafka"
+    )
+
+    local operator_entries=()
+    local label sub_name sub_ns installed_csv channel version entry
+    for label in "${!olm_components[@]}"; do
+        sub_name="${olm_components[$label]%%:*}"
+        sub_ns="${olm_components[$label]##*:}"
+        installed_csv=$(oc get subscription "${sub_name}" -n "${sub_ns}" \
+            -o jsonpath='{.status.installedCSV}' 2>/dev/null || echo "")
+        channel=$(oc get subscription "${sub_name}" -n "${sub_ns}" \
+            -o jsonpath='{.spec.channel}' 2>/dev/null || echo "")
+        version=""
+        if [[ -n "${installed_csv}" ]]; then
+            version=$(oc get csv "${installed_csv}" -n "${sub_ns}" \
+                -o jsonpath='{.spec.version}' 2>/dev/null || echo "")
+        fi
+        entry=$(jq -n \
+            --arg component "${label}" --arg namespace "${sub_ns}" --arg subscription "${sub_name}" \
+            --arg channel "${channel}" --arg csv "${installed_csv}" --arg version "${version}" \
+            'def blank_to_null: if length > 0 then . else null end;
+            {
+                component: $component,
+                namespace: $namespace,
+                subscription: $subscription,
+                channel: ($channel | blank_to_null),
+                installedCSV: ($csv | blank_to_null),
+                version: ($version | blank_to_null)
+            }')
+        operator_entries+=("${entry}")
+    done
+    local operators_json
+    operators_json=$(printf '%s\n' "${operator_entries[@]}" | jq -s '.')
+
+    # Every deployment/statefulset's actual running image in the namespaces
+    # that matter: OSAC's own components plus bundled Postgres (both live in
+    # E2E_NAMESPACE), and standalone Keycloak (its own "keycloak" namespace).
+    # Reports whatever is actually running rather than hand-listing every
+    # component name, so this doesn't need updating when a new one is added.
+    local ns
+    collect_namespace_workload_images() {
+        ns="$1"
+        if ! oc get namespace "${ns}" &>/dev/null; then
+            echo "[]"
+            return
+        fi
+        oc get deployments,statefulsets -n "${ns}" -o json 2>/dev/null \
+            | jq '[.items[]? | {
+                kind: .kind,
+                name: .metadata.name,
+                containers: [.spec.template.spec.containers[]? | {name: .name, image: .image}]
+              }]'
+    }
+    local workloads_json
+    workloads_json=$(jq -n \
+        --argjson main "$(collect_namespace_workload_images "${E2E_NAMESPACE}")" \
+        --argjson keycloak "$(collect_namespace_workload_images keycloak)" \
+        --arg main_ns "${E2E_NAMESPACE}" \
+        '{($main_ns): $main, "keycloak": $keycloak}')
+
+    jq -n \
+        --arg capturedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg ocpVersion "${ocp_version}" --arg ocpChannel "${ocp_channel}" \
+        --argjson operators "${operators_json}" \
+        --argjson workloadImages "${workloads_json}" \
+        'def blank_to_null: if length > 0 then . else null end;
+        {
+            capturedAt: $capturedAt,
+            ocp: {version: ($ocpVersion | blank_to_null), channel: ($ocpChannel | blank_to_null)},
+            operators: $operators,
+            workloadImages: $workloadImages
+        }' > "${ARTIFACT_DIR}/bom.json"
+}
+collect_bom
+echo "Software BOM written to ${ARTIFACT_DIR}/bom.json"
+
 echo "Collecting OLM marketplace diagnostics..."
 mkdir -p "${ARTIFACT_DIR}/marketplace"
 timeout 30s oc get catalogsource -n openshift-marketplace -o wide > "${ARTIFACT_DIR}/marketplace/catalogsources.txt" 2>&1 || true
