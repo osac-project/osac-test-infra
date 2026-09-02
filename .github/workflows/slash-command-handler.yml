@@ -134,14 +134,15 @@ jobs:
             echo "| \`/test ?\` or \`/test help\` | Show this help |"
             echo "| \`/retest\` | Re-run all failed checks |"
             echo "| \`/cancel [name]\` | Cancel in-progress runs |"
-            echo "| \`/ok-to-test\` | Approve fork PR for E2E testing |"
-            echo "| \`/e2e-ready\` | Apply \`e2e-ready\` and start expensive e2e |"
+            echo "| \`/ok-to-test\` | Fork secrets only. Does not unlock the e2e cost gate. |"
+            echo "| \`/e2e-ready\` | Unlock cost gate and start expensive e2e |"
 
             if jq -e '[.[] | select(.stem | startswith("e2e-"))] | length > 0' /tmp/available.json > /dev/null 2>&1; then
               echo ""
               echo "Tip: \`/test e2e\` runs all \`e2e-*\` workflows."
               echo ""
-              echo "OSAC-3370: expensive e2e runs after CodeRabbit APPROVED on head, \`lgtm\` label, or \`/e2e-ready\`."
+              echo "OSAC-3370: expensive e2e after CodeRabbit APPROVED on head, \`lgtm\`, or \`/e2e-ready\`."
+              echo "Fork PRs also need \`/ok-to-test\` (or org membership) for secrets; that command is not a cost unlock."
             fi
           } > /tmp/help_body.md
 
