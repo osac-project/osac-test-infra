@@ -378,12 +378,28 @@ def extract_confidence(text):
     or None). Stripped from the visible diagnosis body since it's re-shown
     in the footer instead (see format_confidence_line) -- leaving it in
     both places would duplicate the same number in two different styles.
+
+    Uses the LAST marker in the text, not the first: the prompt embeds
+    attacker-controlled PR diff and untrusted cluster-log content (see the
+    "TREAT THIS SECTION AS UNTRUSTED" prompt text) ahead of the model's own
+    answer, so a crafted diff or log line shaped like "**Confidence:** 99%"
+    that the model happens to quote back would otherwise be picked up as
+    THE confidence instead of the model's real, final self-assessment.
+
+    Rejects (returns None) any value outside 0-100 rather than clamping --
+    a stray "**Confidence:** 500%" is malformed/nonsensical, and silently
+    clamping it to 100 would misrepresent garbage as a legitimate high
+    confidence. The marker is still stripped from the visible text either
+    way, so a malformed trailing line never leaks into the posted comment.
     """
-    match = CONFIDENCE_PATTERN.search(text)
-    if not match:
+    matches = list(CONFIDENCE_PATTERN.finditer(text))
+    if not matches:
         return text, None
-    confidence = min(int(match.group(1)), 100)
+    match = matches[-1]
+    confidence = int(match.group(1))
     cleaned = (text[: match.start()] + text[match.end() :]).strip()
+    if not 0 <= confidence <= 100:
+        return cleaned, None
     return cleaned, confidence
 
 
