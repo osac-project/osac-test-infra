@@ -755,10 +755,32 @@ jobs:
             echo "TEST_PATH_PREFIX=tests" >> "$GITHUB_ENV"
           fi
 
+      - name: Resolve effective test suite (fallback if tier dir is empty)
+        env:
+          TEST_SUITE: ${{ inputs.test-suite }}
+        run: |
+          # VMaaS/CaaS test content hasn't moved into sanity/regression/serial
+          # tier subdirectories yet (only .gitkeep scaffolding exists as of
+          # OSAC-3593) -- if the resolved tier directory has no real tests,
+          # fall back to the base suite name so this never silently collects
+          # zero tests. Generic over any "<suite>/<tier>" shape (sanity,
+          # regression, serial, or any future tier), not hardcoded to one
+          # suffix. Recursive find, not maxdepth 1: BMaaS's own regression/
+          # tier (already populated) nests real tests under regression/networking/,
+          # not directly under regression/*.py.
+          EFFECTIVE_TEST_SUITE="${TEST_SUITE}"
+          if [[ "${TEST_SUITE}" == */* ]]; then
+            SUITE_DIR="${TEST_PATH_PREFIX}/${TEST_SUITE}"
+            if ! find "${SUITE_DIR}" -name 'test_*.py' -type f 2>/dev/null | grep -q .; then
+              echo "No test_*.py files found under ${SUITE_DIR} -- falling back to ${TEST_SUITE%/*}"
+              EFFECTIVE_TEST_SUITE="${TEST_SUITE%/*}"
+            fi
+          fi
+          echo "EFFECTIVE_TEST_SUITE=${EFFECTIVE_TEST_SUITE}" >> "$GITHUB_ENV"
+
       - name: Run E2E tests
         id: test
         env:
-          TEST_SUITE: ${{ inputs.test-suite }}
           TEST_FILTER: ${{ inputs.test-filter }}
           OSAC_NAMESPACE: ${{ inputs.namespace }}
           OSAC_VM_TEMPLATE: ${{ inputs.vm-template }}
@@ -769,10 +791,10 @@ jobs:
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
 
           TEST_ARGS="${TEST_PATH_PREFIX}/"
-          if [ -n "${TEST_SUITE}" ]; then
-            TEST_ARGS="${TEST_PATH_PREFIX}/${TEST_SUITE}/"
+          if [ -n "${EFFECTIVE_TEST_SUITE}" ]; then
+            TEST_ARGS="${TEST_PATH_PREFIX}/${EFFECTIVE_TEST_SUITE}/"
             # Run references tests alongside vmaas suite
-            if [ "${TEST_SUITE}" = "vmaas" ]; then
+            if [ "${EFFECTIVE_TEST_SUITE}" = "vmaas" ]; then
               TEST_ARGS="${TEST_ARGS} ${TEST_PATH_PREFIX}/references/"
             fi
           fi
