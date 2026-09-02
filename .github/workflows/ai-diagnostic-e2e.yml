@@ -273,6 +273,38 @@ jobs:
         id: vertex-auth
         uses: ./.github/actions/vertex-ai-auth
 
+      # The known-issues memory IS this: title+body of every osac-test-infra
+      # issue labeled confirmed-known-issue (see
+      # track-recurring-failure.py's module docstring for the full
+      # promotion flow). Fetched live, not checked out as files, so
+      # promoting a candidate is just adding a label -- no PR needed. Uses
+      # AI_DIAGNOSTIC_TOKEN (not github.token) because the corpus always
+      # lives in osac-test-infra regardless of which repo this run is
+      # actually diagnosing.
+      - name: Fetch confirmed known issues
+        id: known-issues
+        env:
+          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+        run: |
+          set -euo pipefail
+          MAX_CHARS=8000
+          issues_json=$(gh api --paginate \
+            "repos/osac-project/osac-test-infra/issues?labels=confirmed-known-issue&state=open&per_page=100" \
+            --jq '.[] | {title, body}' | jq -s '.')
+          text=$(jq -r '
+            if length == 0 then "(none documented yet)"
+            else [.[] | "# \(.title)\n\n\(.body // "")"] | join("\n\n---\n\n")
+            end
+          ' <<<"${issues_json}")
+          if [[ "${#text}" -gt "${MAX_CHARS}" ]]; then
+            text=$(printf '%s\n... (truncated -- corpus has grown past the prompt budget, trim confirmed-known-issue labels)' "${text:0:${MAX_CHARS}}")
+          fi
+          # Same single-line JSON-string encoding as CHANGED_FILES/PR_DIFF
+          # above -- issue bodies are human-written (whoever confirmed
+          # them), not attacker-controlled, but this keeps encoding
+          # consistent and sidesteps delimiter issues regardless.
+          echo "text=$(jq -Rs . <<<"${text}")" >> "${GITHUB_OUTPUT}"
+
       - name: Run AI failure diagnosis
         env:
           ARTIFACT_DIR: ${{ steps.artifact.outputs.dir }}
@@ -284,6 +316,7 @@ jobs:
           DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
           CHANGED_FILES: ${{ steps.pr-context.outputs.files }}
           PR_DIFF: ${{ steps.pr-context.outputs.diff }}
+          KNOWN_ISSUES: ${{ steps.known-issues.outputs.text }}
         run: python3 .github/scripts/ai-diagnose-failure.py
 
       # Deliberately a commit Status, not a Check Run. Check Runs are only
@@ -447,11 +480,11 @@ jobs:
           fi
 
       # Opens/bumps a review-queue issue in osac-test-infra when the same
-      # JUnit test fails repeatedly -- never writes to known-issues/
-      # itself; a human still decides whether to promote a flagged
-      # candidate into a real entry. Uses AI_DIAGNOSTIC_TOKEN (already
-      # scoped to Issues read/write on osac-test-infra) rather than
-      # GITHUB_TOKEN, same reasoning as the PR comment/status steps above.
+      # JUnit test fails repeatedly -- never applies the confirmed-known-
+      # issue label itself; a human still decides whether to promote a
+      # flagged candidate. Uses AI_DIAGNOSTIC_TOKEN (already scoped to
+      # Issues read/write on osac-test-infra) rather than GITHUB_TOKEN,
+      # same reasoning as the PR comment/status steps above.
       - name: Track recurring-failure candidate
         if: "!cancelled()"
         env:

@@ -70,6 +70,23 @@ try:
 except (json.JSONDecodeError, TypeError):
     PR_DIFF = ""
 
+# Curated known-issues corpus -- title+body of every osac-test-infra issue
+# labeled confirmed-known-issue, fetched live by the "Fetch confirmed known
+# issues" workflow step (via AI_DIAGNOSTIC_TOKEN) and JSON-encoded the same
+# way as CHANGED_FILES/PR_DIFF above. Kept as GitHub Issues rather than
+# files in this repo so promoting a candidate from
+# track-recurring-failure.py's review queue is just adding a label -- no
+# PR needed. Human-curated by design (the diagnostic script never adds
+# this label itself), so it's safe to inline the whole thing into every
+# prompt rather than gating it behind a tool call: the model can never
+# "forget" to check it, for a fixed, small, predictable token cost instead
+# of an extra round trip.
+_known_issues_raw = os.environ.get("KNOWN_ISSUES", "").strip()
+try:
+    KNOWN_ISSUES = json.loads(_known_issues_raw) if _known_issues_raw else "(none documented yet)"
+except (json.JSONDecodeError, TypeError):
+    KNOWN_ISSUES = "(none documented yet)"
+
 LOG_PATTERN = re.compile(r"error|traceback|panic|failed|exception", re.IGNORECASE)
 
 # Static, "teach once" primer -- Gemini has no access to this repo's own
@@ -106,38 +123,6 @@ components, and where their evidence lands in this run's gathered artifact:
 CaaS provisions full OpenShift clusters, BMaaS provisions bare-metal hosts,
 VMaaS provisions VMs directly -- so which of these ran tells you which
 subsystem was under test."""
-
-# Curated known-issues corpus, checked out from this repo's own
-# .github/known-issues/ (never from the artifact or PR-controlled paths).
-# Loaded in full, not via a tool call: unlike the multi-MB/many-file E2E
-# artifact (where a listing + on-demand read tool is the only bounded
-# option), this corpus is small and human-curated by design -- see
-# known-issues/INDEX.md -- so inlining it directly means the model can
-# never "forget" to check it, and costs a fixed, small, predictable number
-# of tokens rather than an extra round trip.
-KNOWN_ISSUES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "known-issues")
-MAX_KNOWN_ISSUES_CHARS = 8000
-
-
-def load_known_issues():
-    if not os.path.isdir(KNOWN_ISSUES_DIR):
-        return "(none documented yet)"
-    chunks = []
-    for name in sorted(os.listdir(KNOWN_ISSUES_DIR)):
-        if not name.endswith(".md"):
-            continue
-        path = os.path.join(KNOWN_ISSUES_DIR, name)
-        try:
-            with open(path, "r", errors="replace") as f:
-                chunks.append(f.read().strip())
-        except OSError:
-            continue
-    if not chunks:
-        return "(none documented yet)"
-    text = "\n\n---\n\n".join(chunks)
-    if len(text) > MAX_KNOWN_ISSUES_CHARS:
-        text = text[:MAX_KNOWN_ISSUES_CHARS] + "\n... (truncated -- corpus has grown past the prompt budget, trim known-issues/)"
-    return text
 
 
 def extract_junit_failures(path):
@@ -511,7 +496,7 @@ def main():
     junit_section = extract_junit_failures(JUNIT_PATH)
     log_section = extract_log_signal(ARTIFACT_DIR)
     file_listing = build_file_listing(ARTIFACT_DIR)
-    known_issues_section = load_known_issues()
+    known_issues_section = KNOWN_ISSUES
 
     changed_files_section = (
         f"\n## Files changed in this PR (may hint at what to check first)\n{CHANGED_FILES}\n"

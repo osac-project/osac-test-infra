@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Track recurring E2E failures as candidates for known-issues/ review.
+"""Track recurring E2E failures as candidates for the known-issues memory.
 
-Never writes to known-issues/ itself. Opens or bumps a tracking issue
-(labeled ai-candidate-known-issue) in osac-test-infra so a human notices a
-pattern and decides whether to promote it to a real known-issues/*.md
-entry -- the AI diagnostic pipeline never gets write access to the trusted
-corpus it reads from, only to this review queue.
+The known-issues memory IS a set of GitHub Issues in osac-test-infra
+labeled confirmed-known-issue (see ai-diagnose-failure.py's KNOWN_ISSUES
+loading) -- there is no separate file corpus. This script only ever
+manages the CANDIDATE_LABEL review queue below it: it opens or bumps a
+tracking issue when the same JUnit test fails again, and flags it
+REVIEW_LABEL once it crosses PROMOTION_THRESHOLD occurrences. It never
+applies CONFIRMED_LABEL itself -- that's a deliberate human action (a
+maintainer reviews the flagged issue, edits its body into a real
+symptom/root-cause writeup if needed, and applies the label) -- so the AI
+diagnostic pipeline never gets write access to the corpus it reads from,
+only to this review queue.
 
 Always tracks in osac-test-infra (TRACKING_REPO), regardless of which repo
 (osac or osac-test-infra) the actual failing PR lives in, since that's
-also where known-issues/ itself lives -- one review queue for the one
-corpus, rather than splitting candidates across repos.
+also where the confirmed-known-issue corpus itself lives -- one review
+queue for the one corpus, rather than splitting candidates across repos.
 """
 import json
 import os
@@ -22,7 +28,19 @@ import xml.etree.ElementTree as ET
 TRACKING_REPO = "osac-project/osac-test-infra"
 CANDIDATE_LABEL = "ai-candidate-known-issue"
 REVIEW_LABEL = "needs-review"
+# Applied only by a human, never by this script -- see module docstring.
+# Created proactively (ensure_labels()) purely so it's available to pick
+# from the GitHub UI immediately, without needing separate repo setup.
+CONFIRMED_LABEL = "confirmed-known-issue"
 PROMOTION_THRESHOLD = 3
+# Every auto-generated issue gets both this title prefix (visible at a
+# glance in the Issues list, no filter needed) and the CANDIDATE_LABEL
+# (the actual, code-level filter -- see find_existing() -- since a title
+# string could in principle collide with something a human writes by
+# hand). Author is also always the AI_DIAGNOSTIC_TOKEN bot account for
+# free, as a third way to isolate these (`gh issue list --author
+# <bot-login>`), with no extra code required.
+TITLE_PREFIX = "[AI Diagnostic]"
 MAX_EXCERPT_CHARS = 500
 MAX_TEST_NAME_LEN = 200
 
@@ -78,6 +96,19 @@ def first_failing_test_name(path):
     return None
 
 
+def ensure_label(name, color, description):
+    # Static args only (our own constants) -- safe as plain subprocess
+    # argv, unlike the title/body payloads built from evidence below.
+    # --force makes this idempotent (updates color/description if the
+    # label already exists rather than erroring), so it's cheap to call
+    # unconditionally every run rather than checking existence first.
+    subprocess.run(
+        ["gh", "label", "create", name, "--repo", TRACKING_REPO,
+         "--color", color, "--description", description, "--force"],
+        capture_output=True, text=True,
+    )
+
+
 def find_existing(signature_title):
     raw = gh_api(
         "GET",
@@ -99,8 +130,11 @@ def main():
         print("No failing testcase name in junit.xml -- no stable signature, skipping recurrence tracking.")
         return
 
+    ensure_label(CANDIDATE_LABEL, "fbca04", "Auto-tracked by the AI diagnostic pipeline, pending human review")
+    ensure_label(CONFIRMED_LABEL, "0e8a16", "Confirmed known issue -- fed into every AI diagnosis prompt")
+
     signature = f"{WORKFLOW_NAME}: {test_name}"
-    title = f"AI candidate known issue: {signature}"
+    title = f"{TITLE_PREFIX} {signature}"
 
     excerpt = "(no diagnosis text)"
     if DIAGNOSIS_FILE and os.path.isfile(DIAGNOSIS_FILE):
@@ -125,9 +159,11 @@ def main():
             body = (
                 "Automatically tracked by the AI diagnostic pipeline -- opened "
                 "when this test failed with no existing tracking issue found. "
-                "Nothing here is auto-promoted: a human reviews and decides "
-                "whether to add a real entry to this repo's known-issues/ "
-                "(see known-issues/INDEX.md).\n\n"
+                "Nothing here is auto-promoted: if this is a real recurring "
+                f"issue, edit this description into a proper symptom/root-"
+                f"cause writeup and add the `{CONFIRMED_LABEL}` label -- every "
+                "issue with that label is fed into future AI diagnoses. "
+                "Leave unlabeled (or close) to ignore.\n\n"
                 f"**Signature:** `{signature}`\n\n"
                 "**Occurrences:** 1"
             )
@@ -156,18 +192,7 @@ def main():
         print(f"Bumped tracking issue #{number} to {new_count} occurrences for signature: {signature}")
 
         if new_count >= PROMOTION_THRESHOLD:
-            # Static args only (repo/label constants, an int) -- safe as
-            # plain subprocess argv, unlike the title/body payloads above.
-            subprocess.run(
-                [
-                    "gh", "label", "create", REVIEW_LABEL,
-                    "--repo", TRACKING_REPO,
-                    "--color", "d93f0b",
-                    "--description", "Flagged by the AI diagnostic pipeline for human review",
-                    "--force",
-                ],
-                capture_output=True, text=True,
-            )
+            ensure_label(REVIEW_LABEL, "d93f0b", "Flagged by the AI diagnostic pipeline for human review")
             subprocess.run(
                 ["gh", "issue", "edit", str(number), "--repo", TRACKING_REPO, "--add-label", REVIEW_LABEL],
                 capture_output=True, text=True,
