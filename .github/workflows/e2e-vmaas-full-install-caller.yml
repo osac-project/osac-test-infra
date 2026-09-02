@@ -48,8 +48,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # OSAC-3370: cheap readiness before expensive runners. Non-PR skips this job.
   e2e-readiness:
+    name: e2e-readiness (vmaas)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -58,6 +58,7 @@ jobs:
       pull-requests: read
     outputs:
       ready: ${{ steps.check.outputs.ready }}
+      reason: ${{ steps.check.outputs.reason }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
@@ -117,6 +118,8 @@ jobs:
           echo "e2e-readiness: ${{ needs.e2e-readiness.result }}"
           echo "e2e-vmaas-full-install: ${{ needs.e2e-vmaas-full-install.result }}"
           exit 1
+      - if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        run: echo "e2e passed"
 
   e2e-vmaas-pending:
     if: >-
@@ -135,20 +138,29 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CHECK_NAME: e2e-vmaas-gate
+          DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REASON: ${{ needs.e2e-readiness.outputs.reason }}
         run: |
           set -euo pipefail
+          title="${REASON:-waiting for e2e unlock}"
+          summary=$(printf '%s\n\n%s' "${title}" \
+            "Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready.")
           payload=$(jq -n \
             --arg name "${CHECK_NAME}" \
             --arg sha "${HEAD_SHA}" \
             --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg title "${title}" \
+            --arg details "${DETAILS_URL}" \
+            --arg summary "${summary}" \
             '{
               name: $name,
               head_sha: $sha,
               status: "in_progress",
+              details_url: $details,
               started_at: $started,
               output: {
-                title: "Waiting for e2e unlock",
-                summary: "Expensive e2e has not started. Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready."
+                title: $title,
+                summary: $summary
               }
             }')
           if ! gh api "repos/${REPO}/check-runs" --input - <<<"${payload}"; then

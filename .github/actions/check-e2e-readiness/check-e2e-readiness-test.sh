@@ -163,6 +163,28 @@ assert_rc "decide denied human approve" 1 decide_e2e_readiness "${LABELS_WITHOUT
 assert_rc "decide denied old CR approve" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_APPROVED_OLD}" "${HEAD_SHA}" "${EVENTS_NONE}"
 assert_rc "decide denied other bot" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_OTHER_BOT_APPROVED}" "${HEAD_SHA}" "${EVENTS_NONE}"
 
+# --- explain_e2e_wait ---
+assert_eq "wait no CR" \
+  "waiting: no CR APPROVED on this SHA" \
+  "$(explain_e2e_wait "${LABELS_WITHOUT}" "${REVIEWS_NONE}" "${HEAD_SHA}" "${EVENTS_NONE}")"
+assert_eq "wait stale CR SHA" \
+  "waiting: CR APPROVED on older SHA old-com" \
+  "$(explain_e2e_wait "${LABELS_WITHOUT}" "${REVIEWS_APPROVED_OLD}" "${HEAD_SHA}" "${EVENTS_NONE}")"
+assert_eq "wait human CR" \
+  "waiting: human CHANGES_REQUESTED still open" \
+  "$(explain_e2e_wait "${LABELS_WITHOUT}" "${REVIEWS_BOT_WITH_HUMAN_CR}" "${HEAD_SHA}" "${EVENTS_NONE}")"
+assert_eq "wait untrusted e2e-ready" \
+  "denied: e2e-ready label present but applied by untrusted actor" \
+  "$(explain_e2e_wait "${LABELS_E2E_READY}" "${REVIEWS_NONE}" "${HEAD_SHA}" "${EVENTS_E2E_READY_BY_HUMAN}")"
+assert_eq "wait human CR beats stale SHA" \
+  "waiting: human CHANGES_REQUESTED still open" \
+  "$(explain_e2e_wait "${LABELS_WITHOUT}" "${REVIEWS_COMMENT_AFTER_CR_BOT_APPROVE}" "${HEAD_SHA}" "${EVENTS_NONE}")"
+assert_rc "coderabbit_latest_approved_commit bot only" 0 coderabbit_latest_approved_commit "${REVIEWS_BOT_ONLY}"
+assert_eq "coderabbit_latest_approved_commit sha" \
+  "head-commit" \
+  "$(coderabbit_latest_approved_commit "${REVIEWS_BOT_ONLY}")"
+assert_rc "coderabbit_latest_approved_commit none" 1 coderabbit_latest_approved_commit "${REVIEWS_NONE}"
+
 # --- write_ready_output ---
 ready_out="$(mktemp)"
 GITHUB_OUTPUT="${ready_out}" write_ready_output true

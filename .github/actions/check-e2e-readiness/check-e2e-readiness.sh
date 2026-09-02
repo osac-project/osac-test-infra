@@ -33,6 +33,70 @@ write_ready_output() {
   fi
 }
 
+# Write a single-line reason for job output / overlay title (no-op outside Actions).
+write_reason_output() {
+  local reason="$1"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
+  fi
+}
+
+# Job Summary shows on the check page; ::notice:: does not.
+write_readiness_summary() {
+  local ready="$1"
+  local reason="$2"
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+      echo "## E2E readiness"
+      echo ""
+      echo "- ready: \`${ready}\`"
+      echo "- ${reason}"
+    } >> "${GITHUB_STEP_SUMMARY}"
+  fi
+}
+
+# Prints commit_id if CodeRabbit's latest decision is APPROVED; else return 1.
+coderabbit_latest_approved_commit() {
+  local reviews_json="$1"
+  local sha
+  sha=$(jq -r --arg who "${CODERABBIT_LOGIN}" '
+    ([.[]
+      | select(.user.login == $who)
+      | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+    ] | max_by([(.submitted_at // ""), (.id // 0)]) // empty) as $latest
+    | if ($latest != null) and ($latest.state == "APPROVED") and ($latest.commit_id != null)
+      then $latest.commit_id
+      else empty
+      end
+  ' <<<"${reviews_json}")
+  [[ -n "${sha}" && "${sha}" != "null" ]] || return 1
+  echo "${sha}"
+}
+
+# One-line wait reason when decide_e2e_readiness denies (stdout empty except untrusted e2e-ready).
+explain_e2e_wait() {
+  local labels_json="$1"
+  local reviews_json="$2"
+  local head_sha="$3"
+  local events_json="${4:-[]}"
+
+  if labels_have_e2e_ready "${labels_json}" && ! e2e_ready_applied_by_trusted_actor "${events_json}"; then
+    echo "denied: e2e-ready label present but applied by untrusted actor"
+    return 0
+  fi
+  if human_has_changes_requested "${reviews_json}"; then
+    echo "waiting: human CHANGES_REQUESTED still open"
+    return 0
+  fi
+  local cr_sha=""
+  cr_sha=$(coderabbit_latest_approved_commit "${reviews_json}" || true)
+  if [[ -n "${cr_sha}" && "${cr_sha}" != "${head_sha}" ]]; then
+    echo "waiting: CR APPROVED on older SHA ${cr_sha:0:7}"
+    return 0
+  fi
+  echo "waiting: no CR APPROVED on this SHA"
+}
+
 # Returns 0 if labels JSON contains the given label name.
 labels_have() {
   local labels_json="$1"
@@ -253,13 +317,19 @@ events_json="$(cat "${tmp}/events.json")"
 if reason=$(decide_e2e_readiness "${labels_json}" "${reviews_json}" "${HEAD_SHA}" "${events_json}"); then
   echo "${reason}"
   write_ready_output true
+  write_reason_output "${reason}"
+  write_readiness_summary true "${reason}"
   exit 0
 fi
 
-echo "::notice::E2E readiness gate: PR #${PR_NUMBER} is waiting for unlock at ${HEAD_SHA:0:7}."
-echo "::notice::Need a CodeRabbit APPROVED review on this head, \`lgtm\` label, or \`/e2e-ready\`."
-if human_has_changes_requested "${reviews_json}"; then
-  echo "::notice::Note: a human requested changes — CodeRabbit approval alone does not unlock e2e until that is cleared."
+if [[ -z "${reason}" ]]; then
+  reason=$(explain_e2e_wait "${labels_json}" "${reviews_json}" "${HEAD_SHA}" "${events_json}")
 fi
+
+echo "::notice::E2E readiness gate: PR #${PR_NUMBER} is waiting for unlock at ${HEAD_SHA:0:7}."
+echo "::notice::${reason}"
+echo "::notice::Need a CodeRabbit APPROVED review on this head, \`lgtm\` label, or \`/e2e-ready\`."
 write_ready_output false
+write_reason_output "${reason}"
+write_readiness_summary false "${reason}"
 exit 0

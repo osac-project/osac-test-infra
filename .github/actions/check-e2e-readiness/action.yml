@@ -23,6 +23,9 @@ outputs:
   ready:
     description: "'true' if expensive e2e may run; 'false' if waiting for unlock"
     value: ${{ steps.check.outputs.ready }}
+  reason:
+    description: One-line wait or unlock reason for the check summary / overlay
+    value: ${{ steps.check.outputs.reason }}
 
 runs:
   using: composite
