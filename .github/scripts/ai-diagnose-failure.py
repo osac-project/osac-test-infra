@@ -107,6 +107,38 @@ CaaS provisions full OpenShift clusters, BMaaS provisions bare-metal hosts,
 VMaaS provisions VMs directly -- so which of these ran tells you which
 subsystem was under test."""
 
+# Curated known-issues corpus, checked out from this repo's own
+# .github/known-issues/ (never from the artifact or PR-controlled paths).
+# Loaded in full, not via a tool call: unlike the multi-MB/many-file E2E
+# artifact (where a listing + on-demand read tool is the only bounded
+# option), this corpus is small and human-curated by design -- see
+# known-issues/INDEX.md -- so inlining it directly means the model can
+# never "forget" to check it, and costs a fixed, small, predictable number
+# of tokens rather than an extra round trip.
+KNOWN_ISSUES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "known-issues")
+MAX_KNOWN_ISSUES_CHARS = 8000
+
+
+def load_known_issues():
+    if not os.path.isdir(KNOWN_ISSUES_DIR):
+        return "(none documented yet)"
+    chunks = []
+    for name in sorted(os.listdir(KNOWN_ISSUES_DIR)):
+        if not name.endswith(".md"):
+            continue
+        path = os.path.join(KNOWN_ISSUES_DIR, name)
+        try:
+            with open(path, "r", errors="replace") as f:
+                chunks.append(f.read().strip())
+        except OSError:
+            continue
+    if not chunks:
+        return "(none documented yet)"
+    text = "\n\n---\n\n".join(chunks)
+    if len(text) > MAX_KNOWN_ISSUES_CHARS:
+        text = text[:MAX_KNOWN_ISSUES_CHARS] + "\n... (truncated -- corpus has grown past the prompt budget, trim known-issues/)"
+    return text
+
 
 def extract_junit_failures(path):
     if not path or not os.path.isfile(path):
@@ -251,9 +283,12 @@ def extract_log_signal(artifact_dir):
     return _annotate_retried_aap_failures("\n".join(matches), artifact_dir)
 
 
-MAX_TOOL_CALLS = 5
+MAX_TOOL_CALLS = 8
 MAX_TOOL_READ_CHARS = 5000
 MAX_LISTED_FILES = 300
+# The bar a diagnosis must clear before it's presented as definitive, rather
+# than deferring to "go check the logs yourself" -- see CONFIDENCE_PATTERN.
+CONFIDENCE_THRESHOLD_PERCENT = 85
 
 
 def build_file_listing(artifact_dir):
@@ -330,6 +365,41 @@ def make_read_artifact_file_tool(artifact_dir):
     return read_artifact_file
 
 
+# Matches the mandatory trailing "**Confidence:** NN%" line the prompt
+# requires (see main()'s prompt text) -- re.search, not anchored to the very
+# last line, since a model occasionally trails the marker with a blank line
+# or stray whitespace despite the instruction.
+CONFIDENCE_PATTERN = re.compile(r"\*\*Confidence:\*\*\s*(\d{1,3})\s*%", re.IGNORECASE)
+
+
+def extract_confidence(text):
+    """Pull the model's self-reported confidence (0-100) out of its
+    response, and return (text-with-the-confidence-line-removed, confidence
+    or None). Stripped from the visible diagnosis body since it's re-shown
+    in the footer instead (see format_confidence_line) -- leaving it in
+    both places would duplicate the same number in two different styles.
+    """
+    match = CONFIDENCE_PATTERN.search(text)
+    if not match:
+        return text, None
+    confidence = min(int(match.group(1)), 100)
+    cleaned = (text[: match.start()] + text[match.end() :]).strip()
+    return cleaned, confidence
+
+
+def format_confidence_line(confidence):
+    if confidence is None:
+        return "Confidence: not reported by the model"
+    if confidence < CONFIDENCE_THRESHOLD_PERCENT:
+        return (
+            f"⚠️ Confidence: {confidence}% "
+            f"(below the {CONFIDENCE_THRESHOLD_PERCENT}% bar for a definitive "
+            f"root cause -- evidence was insufficient, treat this diagnosis as "
+            f"a lead, not a conclusion)"
+        )
+    return f"Confidence: {confidence}%"
+
+
 # Vertex AI list price for gemini-2.5-flash, USD per 1M tokens, as of when
 # this was written -- pricing drifts; verify at
 # https://cloud.google.com/vertex-ai/generative-ai/pricing before relying
@@ -376,7 +446,7 @@ def format_cost_line(usage_metadata):
         # A bare "$0.0000" here would look like a real (negligible) cost
         # rather than "no usage data" -- say so plainly instead of
         # silently defaulting missing fields to 0.
-        return "<sub>Estimated cost: unavailable (response had no usage data)</sub>"
+        return "Estimated cost: unavailable (response had no usage data)"
     tool_use_prompt_tokens = usage_metadata.tool_use_prompt_token_count or 0
     thoughts_tokens = usage_metadata.thoughts_token_count or 0
     input_tokens = prompt_tokens + tool_use_prompt_tokens
@@ -386,8 +456,8 @@ def format_cost_line(usage_metadata):
         + output_tokens / 1_000_000 * GEMINI_FLASH_OUTPUT_USD_PER_MILLION
     )
     return (
-        f"<sub>Estimated cost: ${cost_usd:.4f} "
-        f"({input_tokens} input + {output_tokens} output tokens, gemini-2.5-flash)</sub>"
+        f"Estimated cost: ${cost_usd:.4f} "
+        f"({input_tokens} input + {output_tokens} output tokens, gemini-2.5-flash)"
     )
 
 
@@ -413,16 +483,19 @@ def call_gemini(prompt, artifact_dir):
     resp = chat.send_message(prompt)
     text = resp.text or "(empty response from Gemini)"
     try:
-        cost_line = format_cost_line(resp.usage_metadata)
-    except Exception:  # noqa: BLE001 -- a cost-formatting bug must never lose a real diagnosis
-        cost_line = ""
-    return f"{text}\n\n{cost_line}" if cost_line else text
+        text, confidence = extract_confidence(text)
+        parts = filter(None, [format_confidence_line(confidence), format_cost_line(resp.usage_metadata)])
+        footer = f"<sub>{' | '.join(parts)}</sub>"
+    except Exception:  # noqa: BLE001 -- a footer-formatting bug must never lose a real diagnosis
+        footer = ""
+    return f"{text}\n\n{footer}" if footer else text
 
 
 def main():
     junit_section = extract_junit_failures(JUNIT_PATH)
     log_section = extract_log_signal(ARTIFACT_DIR)
     file_listing = build_file_listing(ARTIFACT_DIR)
+    known_issues_section = load_known_issues()
 
     changed_files_section = (
         f"\n## Files changed in this PR (may hint at what to check first)\n{CHANGED_FILES}\n"
@@ -444,6 +517,18 @@ cluster and runs a pytest E2E suite against it. The run's own logs and
 job list are at: {RUN_URL or "(url unavailable)"}
 
 {OSAC_CONTEXT}
+
+## Known recurring CI issues (check this FIRST)
+
+Curated by the team from past diagnoses -- if this failure's symptoms
+clearly match one of these, say so explicitly, cite it, and use it as your
+basis for a high-confidence diagnosis instead of re-deriving a root cause
+from scratch. Don't force-fit a weak or partial match, though -- these are
+patterns seen before, not an exhaustive list of everything that can go
+wrong; if nothing here clearly fits, diagnose normally from the evidence
+below.
+
+{known_issues_section}
 
 Below are the only sources of evidence you have -- do not assume any other
 CI system (Jenkins, GitLab CI, Tekton, etc.) is involved, and do not invent
@@ -494,11 +579,37 @@ log locations that weren't given to you:
    only when you genuinely need more to connect the dots.
 {changed_files_section}{pr_diff_section}
 Given this evidence, write a SHORT (under 200 words) root-cause
-diagnosis for a developer who has not looked at the run yet: what likely
-broke, which component is implicated, and one concrete next step (point
-them at the GitHub Actions run's own job logs at the URL above, not a
-generic/other CI system). If the evidence is insufficient to say anything
-confident, say so plainly rather than guessing.
+diagnosis for a developer who has not looked at the run yet: what broke,
+which component is implicated, and ONE concrete, specific next step -- e.g.
+"check whether osac-operator's ClusterOrder reconciler handles a nil X" or
+"verify the AAP playbook's Y task against the new Z field this PR adds",
+something the developer can actually go act on. Do NOT default to "check
+the logs" or "look at the run/artifact" as your next step -- the developer
+already knows the run failed; that tells them nothing they don't already
+know. Only fall back to pointing at the GitHub Actions run's own job logs
+at the URL above if you have used read_artifact_file and there is
+genuinely no file left worth reading, and say explicitly that this is a
+fallback due to insufficient evidence, not your normal answer.
+
+You must reach a DEFINITIVE root cause with at least
+{CONFIDENCE_THRESHOLD_PERCENT}% confidence before finalizing. If the
+bounded extract above doesn't clearly support that confidence level, use
+read_artifact_file (up to {MAX_TOOL_CALLS} times) to read the specific
+files most likely to explain the JUnit failure -- e.g. the AAP job log for
+the task that failed, the operator pod log for the resource that never
+became ready, or the VM/CNV state for a compute-instance failure -- before
+concluding. Settling for "insufficient evidence" without having actually
+used read_artifact_file to look is not acceptable; that tool exists so you
+don't have to say that. Only after genuinely exhausting the useful
+evidence and tool calls, and still not reaching {CONFIDENCE_THRESHOLD_PERCENT}%,
+should you say so explicitly, name exactly what evidence is missing, and
+report your real (lower) confidence -- never inflate it.
+
+End your response with a line in EXACTLY this format as the last line
+(used for automated parsing):
+**Confidence:** NN%
+where NN is your integer confidence (0-100) that the stated root cause is
+correct.
 
 ## JUnit failures
 {junit_section}
