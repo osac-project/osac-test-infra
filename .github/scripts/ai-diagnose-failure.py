@@ -386,24 +386,34 @@ def make_read_artifact_file_tool(artifact_dir):
         if not os.path.isfile(candidate):
             return "(no such file)"
         try:
-            with open(candidate, "rb") as f:
-                data = f.read()
+            size = os.path.getsize(candidate)
         except OSError as exc:
             return f"(could not read file: {exc})"
-        if not data:
+        if size == 0:
             return "(file is empty)"
-        size = len(data)
         start = max(0, size + offset) if offset < 0 else min(offset, size)
         if start >= size:
             return f"(offset {offset} is past the end of the {size}-byte file)"
-        end = min(start + MAX_TOOL_READ_CHARS, size)
+        read_len = min(MAX_TOOL_READ_CHARS, size - start)
+        end = start + read_len
+        # Seeks to the exact range and reads only read_len bytes -- never
+        # loads the whole file first. Pod logs up to ~2MB have been seen
+        # in practice, and a single diagnosis can call this tool up to
+        # MAX_TOOL_CALLS times, so reading the full file just to slice an
+        # 8KB window out of it would be repeated, avoidable I/O and
+        # memory overhead on every call.
+        try:
+            with open(candidate, "rb") as f:
+                f.seek(start)
+                raw = f.read(read_len)
+        except OSError as exc:
+            return f"(could not read file: {exc})"
         # Decoded per-slice (not the whole file) -- a multi-byte UTF-8
         # character split at a slice boundary can garble one character at
         # the edge; errors="replace" turns that into a single "?" rather
-        # than raising, an acceptable trade for not loading huge files
-        # (seen up to ~2MB in practice) into memory as text just to slice
-        # them by character.
-        chunk = data[start:end].decode("utf-8", errors="replace")
+        # than raising, an acceptable trade for reading a fixed byte
+        # range rather than aligning to character boundaries.
+        chunk = raw.decode("utf-8", errors="replace")
         # No prefix/suffix noise for the common case (the whole file fit
         # in one read starting from 0) -- only add it when there's
         # actually something to say, to avoid padding every one of up to
@@ -611,8 +621,13 @@ def call_gemini(prompt, artifact_dir):
         text, confidence = extract_confidence(text)
         tool_calls = count_tool_calls(chat)
         cost_line = format_cost_line(resp.usage_metadata)
-        if cost_line and tool_calls:
-            cost_line = f"{cost_line}, {tool_calls} tool call{'s' if tool_calls != 1 else ''}"
+        if tool_calls:
+            tool_calls_text = f"{tool_calls} tool call{'s' if tool_calls != 1 else ''}"
+            # Combined into the cost line when usage data is available
+            # (existing style), but shown on its own otherwise -- a
+            # nonzero tool-call count is real signal on its own and
+            # shouldn't disappear just because usage_metadata was empty.
+            cost_line = f"{cost_line}, {tool_calls_text}" if cost_line else tool_calls_text
         parts = filter(None, [format_confidence_line(confidence), cost_line])
         footer = f"<sub>{' | '.join(parts)}</sub>"
     except Exception:  # noqa: BLE001 -- a footer-formatting bug must never lose a real diagnosis
