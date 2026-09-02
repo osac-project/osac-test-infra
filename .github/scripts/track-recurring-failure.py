@@ -17,6 +17,15 @@ Always tracks in osac-test-infra (TRACKING_REPO), regardless of which repo
 (osac or osac-test-infra) the actual failing PR lives in, since that's
 also where the confirmed-known-issue corpus itself lives -- one review
 queue for the one corpus, rather than splitting candidates across repos.
+
+KNOWN GAP (not yet implemented): nothing here ever closes or expires an
+ai-candidate-known-issue issue. Once opened, it stays open forever, even
+if that exact test never fails again -- this review queue currently only
+grows. Needs a separate scheduled cleanup job (e.g. a daily/weekly
+workflow closing open ai-candidate-known-issue issues whose `updated_at`
+is older than N days) that explicitly skips anything also labeled
+needs-review or confirmed-known-issue, so a flagged-for-review or already-
+promoted issue never gets silently closed out from under a maintainer.
 """
 import json
 import os
