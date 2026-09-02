@@ -477,12 +477,19 @@ def extract_category(text):
     """Pull the model's category tag out of its response, and return
     (text-with-the-category-line-removed, category or None).
 
-    Uses the FIRST marker -- inverted from extract_confidence()'s "last
-    marker" but the same underlying reasoning: the prompt requires this
-    as the very first line of the response, before any quoted evidence,
-    so the first match is the model's real, intended answer. A later
-    match could be attacker-controlled log/evidence text the model quoted
-    verbatim inside its own Evidence section.
+    Matched ONLY at the very start of the response (after stripping
+    leading whitespace) via re.match, never searched for anywhere in the
+    text. "First occurrence anywhere" is not the same guarantee as "the
+    first line": the prompt requires the category as literally the first
+    thing the model writes, but if the model ever emits untrusted
+    evidence text before its own stated category -- e.g. quoting a
+    crafted log line shaped like "**Category:** X" as part of an Evidence
+    citation that, for whatever reason, lands ahead of the category line
+    -- a bare first-occurrence search would still accept that spoofed
+    value as the real answer. Anchoring to position 0 makes that
+    structurally impossible regardless of what the model does elsewhere
+    in its response, rather than just relying on the model reliably
+    following the "first line" instruction.
 
     Backticks around TAG are optional in the match even though the
     prompt's own example always shows them -- confirmed live (run
@@ -496,12 +503,13 @@ def extract_category(text):
     through free text -- a fixed, scannable badge is the whole point;
     an unrecognized or hallucinated value defeats that either way.
     """
-    matches = list(CATEGORY_PATTERN.finditer(text))
-    if not matches:
+    stripped = text.lstrip()
+    match = CATEGORY_PATTERN.match(stripped)
+    if not match:
         return text, None
-    match = matches[0]
     category = match.group(1).upper()
-    cleaned = (text[: match.start()] + text[match.end() :]).strip()
+    leading_ws = text[: len(text) - len(stripped)]
+    cleaned = (leading_ws + stripped[match.end() :]).strip()
     if category not in CATEGORIES:
         return cleaned, None
     return cleaned, category
