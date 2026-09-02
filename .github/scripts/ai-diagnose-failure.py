@@ -515,6 +515,17 @@ def extract_category(text):
     return cleaned, category
 
 
+# Requires a letter (optionally after a leading /) immediately after "<" --
+# matches real tags like <sub>, </sub>, <div ...> but not a comparison
+# ("x < 5"), a redirect ("2>&1"), or other non-tag angle-bracket text that
+# could legitimately appear in quoted log/code evidence.
+HTML_TAG_PATTERN = re.compile(r"</?[A-Za-z][^>]*>")
+
+
+def strip_html_tags(text):
+    return HTML_TAG_PATTERN.sub("", text)
+
+
 def format_confidence_line(confidence):
     if confidence is None:
         return "Confidence: not reported by the model"
@@ -754,7 +765,8 @@ were fatal. Work through the evidence carefully rather than fixating on
 the first or loudest-looking failure; a task marked "ignoring" or
 followed by a later success is noise, not your root cause.
 
-Use EXACTLY these section headers, in this order:
+Use EXACTLY these section labels (bold text, NOT markdown headings --
+no leading #), in this order:
 
 **Category:** `TAG` -- the very first line of your response. TAG must be
 exactly one of:
@@ -770,18 +782,18 @@ exactly one of:
 - TEST_FLAKE -- the test itself is flaky/environmental (e.g. a timing race in the test), not a real product bug
 - UNKNOWN -- evidence doesn't clearly point to any of the above
 
-### Root cause
+**Root cause**
 One or two sentences stating the DEFINITIVE root cause -- a single,
 specific claim backed by the evidence below, not a list of possibilities.
 
-### Causal chain
+**Causal chain**
 A bulleted, chronological list of what actually happened, in order --
 e.g. "the ClusterOrder CR was created" -> "osac-operator's reconciler
 called into AAP" -> "the AAP job failed at task X because Y" -> "the
 test's assertion on Z then failed/timed out". Reconstruct the real
 sequence from the evidence; don't just restate the final symptom.
 
-### Evidence
+**Evidence**
 For each claim above, quote the SPECIFIC log line(s) that support it,
 each labeled with its exact source path, formatted like this:
 
@@ -794,7 +806,7 @@ Never state a claim as prose without a citation backing it -- if you
 can't point to a specific line, use read_artifact_file to find one, or
 don't make that claim.
 
-### Conclusion
+**Conclusion**
 One or two sentences a developer can act on immediately: which component
 is implicated, and ONE concrete, specific next step -- e.g. "check
 whether osac-operator's ClusterOrder reconciler handles a nil X" or
@@ -844,14 +856,39 @@ correct.
         category = None
 
     if SUMMARY_PATH:
+        # Wrapped in <sub> (not a styled <div>) to render smaller than
+        # GitHub's default Job Summary text, closer to the compact
+        # Annotations panel next to it. A `style="font-size: ..."`
+        # attribute was tried first and confirmed (via the /markdown
+        # render API) to be silently stripped entirely by GitHub's HTML
+        # sanitizer -- the div rendered with no size effect whatsoever.
+        # <sub> is a plain semantic tag with no attributes to strip, and
+        # -- also confirmed via /markdown -- GitHub's renderer correctly
+        # re-enters markdown parsing for multi-paragraph content inside
+        # it (headings/lists/code fences all still render) as long as
+        # blank lines immediately follow the opening tag and precede the
+        # closing one, the same mechanism <details><summary> collapsible
+        # sections rely on.
         with open(SUMMARY_PATH, "a") as f:
-            f.write(f"## AI Failure Diagnosis: {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`\n\n")
-            f.write(diagnosis.strip() + "\n\n")
+            f.write(f"**AI Failure Diagnosis: {WORKFLOW_NAME} | Category:** `{category or 'UNKNOWN'}`\n\n")
+            f.write(f"<sub>\n\n{diagnosis.strip()}\n\n</sub>\n\n")
             if RUN_URL:
                 f.write(f"[Full run]({RUN_URL})\n")
     if DIAGNOSIS_FILE:
+        # HTML tags stripped here (not just left unwrapped): this same file
+        # also feeds the commit-status description via a plain-text
+        # `tr`/`cut` snippet (first 137 chars) in ai-diagnostic-e2e.yml's
+        # "Publish diagnostic status" step, which doesn't render HTML at
+        # all. call_gemini() always appends a <sub>...</sub> footer
+        # (confidence/cost) to `diagnosis`, and a short diagnosis body --
+        # e.g. the exception-fallback path above, or a long low-confidence
+        # warning pushing the footer earlier -- can land that raw tag
+        # inside the first 137 chars, showing up as literal text in the
+        # tooltip. The PR-comment/Job-Summary paths apply their own <sub>
+        # wrapping separately, at the point they actually render markdown,
+        # so stripping here doesn't affect what gets rendered there.
         with open(DIAGNOSIS_FILE, "w") as f:
-            f.write(diagnosis.strip() + "\n")
+            f.write(strip_html_tags(diagnosis.strip()) + "\n")
     if not SUMMARY_PATH and not DIAGNOSIS_FILE:
         print(diagnosis)
 

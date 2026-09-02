@@ -511,9 +511,23 @@ jobs:
             echo "_AI diagnosis unavailable for this run._" > "${DIAGNOSIS_FILE}"
           fi
           {
-            echo "### ❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category: \`${CATEGORY}\`"
+            echo "**❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category:** \`${CATEGORY}\`"
+            echo
+            # <sub>, not a styled <div>: a style="font-size: ..." attribute
+            # was tried first and confirmed (via the /markdown render API)
+            # to be silently stripped entirely by GitHub's HTML sanitizer,
+            # with zero visual effect. <sub> has no attributes to strip,
+            # and -- also confirmed via /markdown -- still lets GitHub's
+            # renderer re-enter markdown parsing for multi-paragraph
+            # content inside it (headings/lists/code fences all still
+            # render) as long as blank lines immediately follow the
+            # opening tag and precede the closing one, the same mechanism
+            # <details><summary> collapsible sections rely on.
+            echo '<sub>'
             echo
             cat "${DIAGNOSIS_FILE}"
+            echo
+            echo '</sub>'
             echo
             echo "[Full run](${RUN_URL})"
           } > "${SECTION_FILE}"
@@ -637,7 +651,7 @@ jobs:
           set -euo pipefail
           SECTION_FILE="${RUNNER_TEMP}/comment-section.md"
           {
-            echo "### ✅ ${WORKFLOW_NAME} -- Passing"
+            echo "**✅ ${WORKFLOW_NAME} -- Passing**"
             echo
             echo "Previously failing; now passing as of [this run](${RUN_URL})."
           } > "${SECTION_FILE}"
