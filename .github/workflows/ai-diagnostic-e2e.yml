@@ -135,9 +135,18 @@ jobs:
       # actual root cause (missing e2e-ready label/approval) is a fixed,
       # well-known one-liner already visible in the failing e2e-readiness
       # check itself, not something worth asking an LLM about.
+      #
+      # Also gates the SUCCESS path (comment-success below): the paths-filter
+      # `changes` job can decide `should-run: false` for a doc-only PR,
+      # which skips e2e-*-full-install the same way while the caller
+      # workflow's overall conclusion is still 'success' -- without this
+      # check, a later doc-only push would flip a PR's sticky comment to
+      # "✅ Passing" for a suite that never actually re-ran, not one that
+      # actually passed. No `if:` here (unlike the rest of this job's
+      # steps) so it runs for both conclusions; resolve's own job-level
+      # `if:` above already restricts this to success/failure PR runs.
       - name: Check whether the E2E test job actually ran
         id: evidence
-        if: github.event.workflow_run.conclusion == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -444,7 +453,10 @@ jobs:
   comment-success:
     name: Mark Resolved
     needs: resolve
-    if: needs.resolve.outputs.found == 'true' && github.event.workflow_run.conclusion == 'success'
+    if: >-
+      needs.resolve.outputs.found == 'true' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      needs.resolve.outputs.has-test-evidence == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
