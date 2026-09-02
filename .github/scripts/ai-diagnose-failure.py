@@ -470,7 +470,7 @@ def extract_confidence(text):
     return cleaned, confidence
 
 
-CATEGORY_PATTERN = re.compile(r"\*\*Category:\*\*\s*`([A-Za-z_]+)`")
+CATEGORY_PATTERN = re.compile(r"\*\*Category:\*\*\s*`?([A-Za-z_]+)`?")
 
 
 def extract_category(text):
@@ -483,6 +483,14 @@ def extract_category(text):
     so the first match is the model's real, intended answer. A later
     match could be attacker-controlled log/evidence text the model quoted
     verbatim inside its own Evidence section.
+
+    Backticks around TAG are optional in the match even though the
+    prompt's own example always shows them -- confirmed live (run
+    33666516042) that the model sometimes writes "**Category:**
+    OSAC_OPERATOR" with no backticks at all. A backtick-only pattern
+    silently failed to match that, leaving the raw, unstripped line
+    behind in the visible diagnosis AND defaulting the header badge to
+    UNKNOWN despite the model having given a perfectly good answer.
 
     Rejects (returns None) anything not in CATEGORIES rather than passing
     through free text -- a fixed, scannable badge is the whole point;
