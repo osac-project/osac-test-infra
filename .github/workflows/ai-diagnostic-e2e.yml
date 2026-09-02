@@ -153,8 +153,12 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
+          # Once the job actually runs (not skipped), GitHub composites its
+          # name as "e2e-bmaas-full-install / e2e" -- match that too, or a
+          # $-anchored plain-name-only pattern misreports every real run as
+          # "missing" evidence (see PR #458, run 33653594254).
           full_install_conclusion=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=100" \
-            --jq '.jobs[] | select(.name | test("^e2e-.*-full-install$")) | .conclusion' | head -1)
+            --jq '.jobs[] | select(.name | test("^e2e-[a-z]+-full-install(\\s*/.*)?$")) | .conclusion' | head -1)
           if [[ -z "${full_install_conclusion}" || "${full_install_conclusion}" == "skipped" ]]; then
             echo "e2e-*-full-install job conclusion: '${full_install_conclusion:-missing}' -- the actual E2E test never ran (likely blocked by the e2e-readiness gate). Skipping AI diagnosis, no test evidence to analyze."
             echo "has-test-evidence=false" >> "${GITHUB_OUTPUT}"
