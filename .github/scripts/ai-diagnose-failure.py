@@ -346,25 +346,48 @@ def format_cost_line(usage_metadata):
 
     Only reflects the FINAL response's own usage_metadata, not a sum
     across every automatic-function-calling round trip within this one
-    call -- Gemini's multi-turn accounting resends the full growing
-    conversation as input on each turn, so prompt_token_count here
-    already captures essentially all of the input-side cost; only the
-    (typically tiny) output tokens from intermediate function-call-
-    issuing turns aren't separately counted, so this slightly
-    undercounts, never overcounts.
+    call. This is a hard API limitation, not a shortcut: with
+    chat.send_message()'s automatic function calling, neither the
+    response's own automatic_function_calling_history nor
+    Chat.get_history() expose anything beyond plain Content (conversation
+    turns) for intermediate rounds -- no usage_metadata is available for
+    them at all in google-genai==2.21.0 (confirmed by inspecting both
+    types directly). Accumulating true per-turn usage would mean
+    replacing automatic function calling with a hand-rolled
+    generate_content loop -- a much larger change than this estimate is
+    worth. Gemini's multi-turn accounting does resend the full growing
+    conversation as input on each turn, so prompt_token_count here still
+    captures nearly all of the input-side cost; only the (typically tiny)
+    output tokens from intermediate function-call-issuing turns aren't
+    separately counted, so this slightly undercounts, never overcounts.
+
+    Sums explicit, unambiguous fields rather than deriving output via
+    `total - prompt`: tool_use_prompt_token_count (function-calling/tool-
+    declaration overhead) is input-side despite landing in
+    total_token_count, so subtracting only prompt_token_count would
+    silently fold it into the output bucket and overcount it at the
+    pricier output rate.
     """
     if not usage_metadata:
         return ""
-    prompt_tokens = usage_metadata.prompt_token_count or 0
-    total_tokens = usage_metadata.total_token_count or 0
-    output_tokens = max(total_tokens - prompt_tokens, 0)
+    prompt_tokens = usage_metadata.prompt_token_count
+    candidates_tokens = usage_metadata.candidates_token_count
+    if prompt_tokens is None or candidates_tokens is None:
+        # A bare "$0.0000" here would look like a real (negligible) cost
+        # rather than "no usage data" -- say so plainly instead of
+        # silently defaulting missing fields to 0.
+        return "<sub>Estimated cost: unavailable (response had no usage data)</sub>"
+    tool_use_prompt_tokens = usage_metadata.tool_use_prompt_token_count or 0
+    thoughts_tokens = usage_metadata.thoughts_token_count or 0
+    input_tokens = prompt_tokens + tool_use_prompt_tokens
+    output_tokens = candidates_tokens + thoughts_tokens
     cost_usd = (
-        prompt_tokens / 1_000_000 * GEMINI_FLASH_INPUT_USD_PER_MILLION
+        input_tokens / 1_000_000 * GEMINI_FLASH_INPUT_USD_PER_MILLION
         + output_tokens / 1_000_000 * GEMINI_FLASH_OUTPUT_USD_PER_MILLION
     )
     return (
         f"<sub>Estimated cost: ${cost_usd:.4f} "
-        f"({prompt_tokens} input + {output_tokens} output tokens, gemini-2.5-flash)</sub>"
+        f"({input_tokens} input + {output_tokens} output tokens, gemini-2.5-flash)</sub>"
     )
 
 
