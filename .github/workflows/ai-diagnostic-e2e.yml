@@ -91,6 +91,7 @@ jobs:
     outputs:
       found: ${{ steps.pr.outputs.found }}
       number: ${{ steps.pr.outputs.number }}
+      has-test-evidence: ${{ steps.evidence.outputs.has-test-evidence }}
     steps:
       - name: Resolve fork PR from head SHA
         id: pr
@@ -124,6 +125,34 @@ jobs:
           echo "found=true" >> "${GITHUB_OUTPUT}"
           echo "number=$(jq -r '.number' <<<"${pr_json}")" >> "${GITHUB_OUTPUT}"
 
+      # OSAC-3370's cheap e2e-readiness gate (lgtm / `/e2e-ready` /
+      # CodeRabbit approval) can fail the whole caller workflow before the
+      # actual e2e-{suite}-full-install job -- the one that boots a cluster
+      # and produces the osac-logs-* artifact this diagnosis is built from
+      # -- ever runs. Diagnosing that case burns a Vertex AI call against a
+      # run with zero test evidence and produces a "no artifacts found, go
+      # check the logs yourself" non-answer instead of a real diagnosis; the
+      # actual root cause (missing e2e-ready label/approval) is a fixed,
+      # well-known one-liner already visible in the failing e2e-readiness
+      # check itself, not something worth asking an LLM about.
+      - name: Check whether the E2E test job actually ran
+        id: evidence
+        if: github.event.workflow_run.conclusion == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          full_install_conclusion=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name | test("^e2e-.*-full-install$")) | .conclusion' | head -1)
+          if [[ -z "${full_install_conclusion}" || "${full_install_conclusion}" == "skipped" ]]; then
+            echo "e2e-*-full-install job conclusion: '${full_install_conclusion:-missing}' -- the actual E2E test never ran (likely blocked by the e2e-readiness gate). Skipping AI diagnosis, no test evidence to analyze."
+            echo "has-test-evidence=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has-test-evidence=true" >> "${GITHUB_OUTPUT}"
+          fi
+
   # Explicit name so the job's auto-generated Job Summary section header
   # reads "Diagnose summary" instead of the raw job id ("diagnose
   # summary") -- GitHub appends the literal, lowercase word "summary"
@@ -131,7 +160,10 @@ jobs:
   diagnose:
     name: Diagnose
     needs: resolve
-    if: needs.resolve.outputs.found == 'true' && github.event.workflow_run.conclusion == 'failure'
+    if: >-
+      needs.resolve.outputs.found == 'true' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      needs.resolve.outputs.has-test-evidence == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
