@@ -274,12 +274,44 @@ def extract_log_signal(artifact_dir):
     return _annotate_retried_aap_failures("\n".join(matches), artifact_dir)
 
 
-MAX_TOOL_CALLS = 8
-MAX_TOOL_READ_CHARS = 5000
+MAX_TOOL_CALLS = 15
+# Real artifacts include pod logs up to ~2MB -- a flat per-call cap can
+# never cover one of those in a single read regardless of size, so
+# read_artifact_file also supports an offset (see
+# make_read_artifact_file_tool) to page through or jump to the tail of a
+# large file across multiple calls. This cap governs how much comes back
+# per call; raised from 5000 now that MAX_TOOL_CALLS affords more budget.
+MAX_TOOL_READ_CHARS = 8000
 MAX_LISTED_FILES = 300
 # The bar a diagnosis must clear before it's presented as definitive, rather
 # than deferring to "go check the logs yourself" -- see CONFIDENCE_PATTERN.
-CONFIDENCE_THRESHOLD_PERCENT = 85
+# Raised from 85: real artifacts are often dominated by noise unrelated to
+# the actual failure (e.g. hundreds of lines of routine AAP-controller
+# install/migration chatter, including Ansible tasks explicitly marked
+# "...ignoring" that a naive error/failed grep still picks up) -- 90+
+# forces the model to actually work through read_artifact_file to confirm
+# a specific root cause rather than settling for "probably this" once it
+# spots the first failed-looking line.
+CONFIDENCE_THRESHOLD_PERCENT = 92
+
+# Fixed enum, not free text: lets the posted comment show a short, scannable
+# triage badge (see the section header built in ai-diagnostic-e2e.yml) and
+# keeps the model from inventing a new category per run. Mirrors
+# OSAC_CONTEXT's own component breakdown above, plus three catch-alls for
+# things that aren't a specific OSAC component's bug.
+CATEGORIES = (
+    "FULFILLMENT_SERVICE",
+    "OSAC_OPERATOR",
+    "OSAC_AAP",
+    "BARE_METAL",
+    "STORAGE",
+    "NETWORKING",
+    "COMPUTE_VM",
+    "AUTH",
+    "INFRA",       # CI/runner/cluster-capacity/network flakiness, not an OSAC bug
+    "TEST_FLAKE",  # the test itself is flaky/environmental, not a real product bug
+    "UNKNOWN",     # evidence doesn't clearly point to any of the above
+)
 
 
 def build_file_listing(artifact_dir):
@@ -326,7 +358,7 @@ def make_read_artifact_file_tool(artifact_dir):
     """
     root = os.path.realpath(artifact_dir) if artifact_dir and os.path.isdir(artifact_dir) else None
 
-    def read_artifact_file(path: str) -> str:
+    def read_artifact_file(path: str, offset: int = 0) -> str:
         """Read a bounded excerpt of one file from this run's gathered
         artifact directory, to look into something the initial extract
         didn't fully explain. Only files inside the artifact directory
@@ -336,6 +368,15 @@ def make_read_artifact_file_tool(artifact_dir):
         Args:
             path: Path relative to the artifact root, e.g.
                 "aap-jobs/job-42-failed-x.txt" or "cnv/vms.txt".
+            offset: Byte offset to start reading from. 0 (default) reads
+                from the start. A NEGATIVE value reads the LAST |offset|
+                bytes instead -- e.g. offset=-8000 reads the final 8000
+                bytes, useful for a large chronological pod log where the
+                actual crash/panic is usually near the END, not the
+                start. A POSITIVE value continues reading further into a
+                file whose start you've already seen and was truncated
+                (the truncation message tells you what offset to pass
+                next).
         """
         if not root:
             return "(no artifact directory available)"
@@ -345,13 +386,38 @@ def make_read_artifact_file_tool(artifact_dir):
         if not os.path.isfile(candidate):
             return "(no such file)"
         try:
-            with open(candidate, "r", errors="replace") as f:
-                content = f.read(MAX_TOOL_READ_CHARS + 1)
+            with open(candidate, "rb") as f:
+                data = f.read()
         except OSError as exc:
             return f"(could not read file: {exc})"
-        if len(content) > MAX_TOOL_READ_CHARS:
-            content = content[:MAX_TOOL_READ_CHARS] + "\n... (truncated)"
-        return content or "(file is empty)"
+        if not data:
+            return "(file is empty)"
+        size = len(data)
+        start = max(0, size + offset) if offset < 0 else min(offset, size)
+        if start >= size:
+            return f"(offset {offset} is past the end of the {size}-byte file)"
+        end = min(start + MAX_TOOL_READ_CHARS, size)
+        # Decoded per-slice (not the whole file) -- a multi-byte UTF-8
+        # character split at a slice boundary can garble one character at
+        # the edge; errors="replace" turns that into a single "?" rather
+        # than raising, an acceptable trade for not loading huge files
+        # (seen up to ~2MB in practice) into memory as text just to slice
+        # them by character.
+        chunk = data[start:end].decode("utf-8", errors="replace")
+        # No prefix/suffix noise for the common case (the whole file fit
+        # in one read starting from 0) -- only add it when there's
+        # actually something to say, to avoid padding every one of up to
+        # MAX_TOOL_CALLS responses with a redundant line.
+        if start == 0 and end == size:
+            return chunk
+        note = f"(bytes {start}-{end} of {size} total)\n"
+        if end < size:
+            note += (
+                f"... showing this slice; {size - end} bytes remain -- "
+                f"pass offset={end} to continue forward, or a negative "
+                f"offset to jump to the end ...\n"
+            )
+        return note + chunk
 
     return read_artifact_file
 
@@ -392,6 +458,35 @@ def extract_confidence(text):
     if not 0 <= confidence <= 100:
         return cleaned, None
     return cleaned, confidence
+
+
+CATEGORY_PATTERN = re.compile(r"\*\*Category:\*\*\s*`([A-Za-z_]+)`")
+
+
+def extract_category(text):
+    """Pull the model's category tag out of its response, and return
+    (text-with-the-category-line-removed, category or None).
+
+    Uses the FIRST marker -- inverted from extract_confidence()'s "last
+    marker" but the same underlying reasoning: the prompt requires this
+    as the very first line of the response, before any quoted evidence,
+    so the first match is the model's real, intended answer. A later
+    match could be attacker-controlled log/evidence text the model quoted
+    verbatim inside its own Evidence section.
+
+    Rejects (returns None) anything not in CATEGORIES rather than passing
+    through free text -- a fixed, scannable badge is the whole point;
+    an unrecognized or hallucinated value defeats that either way.
+    """
+    matches = list(CATEGORY_PATTERN.finditer(text))
+    if not matches:
+        return text, None
+    match = matches[0]
+    category = match.group(1).upper()
+    cleaned = (text[: match.start()] + text[match.end() :]).strip()
+    if category not in CATEGORIES:
+        return cleaned, None
+    return cleaned, category
 
 
 def format_confidence_line(confidence):
@@ -468,6 +563,27 @@ def format_cost_line(usage_metadata):
     )
 
 
+def count_tool_calls(chat):
+    """How many read_artifact_file round trips automatic function calling
+    actually made, purely as an investigation-depth signal alongside the
+    cost line -- not a cost figure itself (see format_cost_line's own
+    docstring on why per-turn usage_metadata isn't available at all).
+    Counts function_call parts across the full conversation history
+    (curated=False), confirmed via types.Part having a function_call field
+    in google-genai==2.21.0.
+    """
+    try:
+        history = chat.get_history()
+    except Exception:  # noqa: BLE001 -- a count is a nice-to-have, never worth losing the diagnosis over
+        return 0
+    return sum(
+        1
+        for content in history
+        for part in (content.parts or [])
+        if getattr(part, "function_call", None)
+    )
+
+
 def call_gemini(prompt, artifact_dir):
     from google import genai
     from google.genai import types
@@ -489,13 +605,20 @@ def call_gemini(prompt, artifact_dir):
     )
     resp = chat.send_message(prompt)
     text = resp.text or "(empty response from Gemini)"
+    category = None
     try:
+        text, category = extract_category(text)
         text, confidence = extract_confidence(text)
-        parts = filter(None, [format_confidence_line(confidence), format_cost_line(resp.usage_metadata)])
+        tool_calls = count_tool_calls(chat)
+        cost_line = format_cost_line(resp.usage_metadata)
+        if cost_line and tool_calls:
+            cost_line = f"{cost_line}, {tool_calls} tool call{'s' if tool_calls != 1 else ''}"
+        parts = filter(None, [format_confidence_line(confidence), cost_line])
         footer = f"<sub>{' | '.join(parts)}</sub>"
     except Exception:  # noqa: BLE001 -- a footer-formatting bug must never lose a real diagnosis
         footer = ""
-    return f"{text}\n\n{footer}" if footer else text
+    diagnosis = f"{text}\n\n{footer}" if footer else text
+    return diagnosis, category
 
 
 def main():
@@ -573,30 +696,85 @@ log locations that weren't given to you:
    named in the JUnit section over the first/loudest thing in this
    section, and say so plainly if nothing here clearly connects to that
    specific failure.
-3. A full listing of every file this run gathered (below). Sections 1-2
-   above are a bounded, heuristic EXTRACT -- not the whole picture, and
-   may not include whatever file actually explains this specific
-   failure. You have a `read_artifact_file` tool (up to {MAX_TOOL_CALLS}
-   calls) to read any file from this listing by its exact relative path
-   if the extract above doesn't clearly connect to the JUnit failure --
-   e.g. if a compute-instance test failed, check cnv/ for the VM's own
-   state; if an operator-driven resource never became ready, check
-   osac-operators/ for that pod's log directly. Don't call it
-   speculatively if the extract already gives you a confident answer --
-   only when you genuinely need more to connect the dots.
+3. A full listing of every file this run gathered (below), with sizes.
+   Sections 1-2 above are a bounded, heuristic EXTRACT -- not the whole
+   picture, and may not include whatever file actually explains this
+   specific failure. You have a `read_artifact_file` tool (up to
+   {MAX_TOOL_CALLS} calls) to read any file from this listing by its
+   exact relative path if the extract above doesn't clearly connect to
+   the JUnit failure -- e.g. if a compute-instance test failed, check
+   cnv/ for the VM's own state; if an operator-driven resource never
+   became ready, check osac-operators/ for that pod's log directly. Some
+   pod logs are large (hundreds of KB to a few MB) -- a single call only
+   returns a bounded slice from wherever you start reading, so for a
+   large file whose start doesn't show the failure, use the tool's
+   `offset` parameter to jump to the END (a negative offset) rather than
+   assuming the file has nothing relevant; a crash/panic in a
+   chronological pod log is usually near the end, not the start. Don't
+   call it speculatively if the extract already gives you a confident
+   answer -- only when you genuinely need more to connect the dots.
 {changed_files_section}{pr_diff_section}
-Given this evidence, write a SHORT (under 200 words) root-cause
-diagnosis for a developer who has not looked at the run yet: what broke,
-which component is implicated, and ONE concrete, specific next step -- e.g.
-"check whether osac-operator's ClusterOrder reconciler handles a nil X" or
+Given this evidence, produce a structured diagnosis for a developer who
+has not looked at the run yet. Real artifacts are often dominated by
+noise unrelated to the actual failure -- e.g. hundreds of lines of
+routine install/migration chatter, or Ansible tasks explicitly marked
+"...ignoring" that a naive error/failed grep still picks up as if they
+were fatal. Work through the evidence carefully rather than fixating on
+the first or loudest-looking failure; a task marked "ignoring" or
+followed by a later success is noise, not your root cause.
+
+Use EXACTLY these section headers, in this order:
+
+**Category:** `TAG` -- the very first line of your response. TAG must be
+exactly one of:
+- FULFILLMENT_SERVICE -- bug in fulfillment-service (gRPC/REST API, PostgreSQL, resource lifecycle)
+- OSAC_OPERATOR -- bug in osac-operator's controllers/reconcilers
+- OSAC_AAP -- bug/misconfiguration in an Ansible playbook or AAP job
+- BARE_METAL -- bug in bare-metal-fulfillment-operator (BMaaS host provisioning)
+- STORAGE -- bug in osac-csi-driver or a storage tier
+- NETWORKING -- bug in VirtualNetwork/Subnet/SecurityGroup/NATGateway/ExternalIP handling
+- COMPUTE_VM -- bug in KubeVirt VM provisioning (VMaaS, or CaaS's own node VMs)
+- AUTH -- keycloak/auth/RBAC issue
+- INFRA -- CI runner, cluster capacity, network flakiness, image pull, or other infrastructure issue -- not an OSAC code bug
+- TEST_FLAKE -- the test itself is flaky/environmental (e.g. a timing race in the test), not a real product bug
+- UNKNOWN -- evidence doesn't clearly point to any of the above
+
+### Root cause
+One or two sentences stating the DEFINITIVE root cause -- a single,
+specific claim backed by the evidence below, not a list of possibilities.
+
+### Causal chain
+A bulleted, chronological list of what actually happened, in order --
+e.g. "the ClusterOrder CR was created" -> "osac-operator's reconciler
+called into AAP" -> "the AAP job failed at task X because Y" -> "the
+test's assertion on Z then failed/timed out". Reconstruct the real
+sequence from the evidence; don't just restate the final symptom.
+
+### Evidence
+For each claim above, quote the SPECIFIC log line(s) that support it,
+each labeled with its exact source path, formatted like this:
+
+`aap-jobs/job-17-failed-osac-create-tenant-cluster-storage_.txt`:
+```
+<the actual line, quoted verbatim -- not a paraphrase>
+```
+
+Never state a claim as prose without a citation backing it -- if you
+can't point to a specific line, use read_artifact_file to find one, or
+don't make that claim.
+
+### Conclusion
+One or two sentences a developer can act on immediately: which component
+is implicated, and ONE concrete, specific next step -- e.g. "check
+whether osac-operator's ClusterOrder reconciler handles a nil X" or
 "verify the AAP playbook's Y task against the new Z field this PR adds",
-something the developer can actually go act on. Do NOT default to "check
-the logs" or "look at the run/artifact" as your next step -- the developer
-already knows the run failed; that tells them nothing they don't already
-know. Only fall back to pointing at the GitHub Actions run's own job logs
-at the URL above if you have used read_artifact_file and there is
-genuinely no file left worth reading, and say explicitly that this is a
-fallback due to insufficient evidence, not your normal answer.
+something to actually go act on. Do NOT default to "check the logs" or
+"look at the run/artifact" -- the developer already knows the run failed;
+that tells them nothing new. Only fall back to pointing at the GitHub
+Actions run's own job logs at the URL above if you have used
+read_artifact_file and there is genuinely no file left worth reading, and
+say explicitly that this is a fallback due to insufficient evidence, not
+your normal answer.
 
 You must reach a DEFINITIVE root cause with at least
 {CONFIDENCE_THRESHOLD_PERCENT}% confidence before finalizing. If the
@@ -629,13 +807,14 @@ correct.
 """
 
     try:
-        diagnosis = call_gemini(prompt, ARTIFACT_DIR)
+        diagnosis, category = call_gemini(prompt, ARTIFACT_DIR)
     except Exception as exc:  # noqa: BLE001 -- must never crash the job
         diagnosis = f"_AI diagnosis unavailable: {exc}_"
+        category = None
 
     if SUMMARY_PATH:
         with open(SUMMARY_PATH, "a") as f:
-            f.write(f"## AI Failure Diagnosis: {WORKFLOW_NAME}\n\n")
+            f.write(f"## AI Failure Diagnosis: {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`\n\n")
             f.write(diagnosis.strip() + "\n\n")
             if RUN_URL:
                 f.write(f"[Full run]({RUN_URL})\n")
@@ -644,6 +823,15 @@ correct.
             f.write(diagnosis.strip() + "\n")
     if not SUMMARY_PATH and not DIAGNOSIS_FILE:
         print(diagnosis)
+
+    # Exposed as a step output (not just embedded in the diagnosis text)
+    # so ai-diagnostic-e2e.yml's "Prepare comment section" step can fold
+    # it into the section header itself as a scannable triage badge --
+    # see that step for how CATEGORY is consumed.
+    github_output_path = os.environ.get("GITHUB_OUTPUT", "")
+    if github_output_path:
+        with open(github_output_path, "a") as f:
+            f.write(f"category={category or 'UNKNOWN'}\n")
 
 
 if __name__ == "__main__":

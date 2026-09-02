@@ -313,6 +313,7 @@ jobs:
           echo "text=$(jq -Rs . <<<"${text}")" >> "${GITHUB_OUTPUT}"
 
       - name: Run AI failure diagnosis
+        id: diagnose-script
         env:
           ARTIFACT_DIR: ${{ steps.artifact.outputs.dir }}
           JUNIT_PATH: ${{ steps.artifact.outputs.dir }}/junit.xml
@@ -444,6 +445,10 @@ jobs:
         env:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          # Falls back to UNKNOWN if the diagnosis step itself hard-failed
+          # before setting this output (see ai-diagnose-failure.py's own
+          # main(), which always writes it on the success path).
+          CATEGORY: ${{ steps.diagnose-script.outputs.category || 'UNKNOWN' }}
         run: |
           set -euo pipefail
           SECTION_FILE="${RUNNER_TEMP}/comment-section.md"
@@ -452,7 +457,7 @@ jobs:
             echo "_AI diagnosis unavailable for this run._" > "${DIAGNOSIS_FILE}"
           fi
           {
-            echo "### ❌ ${WORKFLOW_NAME} -- AI Diagnosis"
+            echo "### ❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category: \`${CATEGORY}\`"
             echo
             cat "${DIAGNOSIS_FILE}"
             echo
