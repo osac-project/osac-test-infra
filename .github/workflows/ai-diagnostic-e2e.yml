@@ -79,11 +79,13 @@ jobs:
     # schedule/workflow_dispatch runs against main already get a same-job
     # diagnosis in the Job Summary (Phase 1); this is specifically the path
     # for genuine fork PRs, which never reach that code (no OIDC there at
-    # all). merge_group has no single PR to attach a comment/status to and
-    # is excluded the same way (event != 'pull_request').
+    # all). merge_group IS included (a real merge-queue E2E failure, e.g.
+    # run 33666352565 on PR #257, otherwise got zero diagnosis) -- see the
+    # "Resolve fork PR from head SHA" step below for how its PR number is
+    # resolved differently than a plain pull_request run's.
     if: >-
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success') &&
-      github.event.workflow_run.event == 'pull_request'
+      (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'merge_group')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -99,8 +101,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event.workflow_run.event }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
+
+          # merge_group's head_sha is a synthetic merge-queue commit, never
+          # the PR's own head.sha -- the head.sha-matching path below would
+          # never find a match for it regardless of how long we search.
+          # GitHub's merge queue instead encodes the PR number directly in
+          # the temporary branch name it creates (documented format:
+          # gh-readonly-queue/<base>/pr-<number>-<sha>), so parse that
+          # instead. Confirmed live against run 33666352565 on PR #257.
+          if [[ "${EVENT_NAME}" == "merge_group" ]]; then
+            if [[ "${HEAD_BRANCH}" =~ ^gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
+              pr_number="${BASH_REMATCH[1]}"
+              # Confirm still open -- a merge_group run can finish after its
+              # PR was already merged/closed (e.g. superseded by a later
+              # queue entry), and posting to a closed PR's thread is
+              # confusing, not useful.
+              if pr_state=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.state' 2>/dev/null) && [[ "${pr_state}" == "open" ]]; then
+                echo "found=true" >> "${GITHUB_OUTPUT}"
+                echo "number=${pr_number}" >> "${GITHUB_OUTPUT}"
+              else
+                echo "Parsed PR #${pr_number} from merge_group branch '${HEAD_BRANCH}' but it's not open (state: ${pr_state:-unknown}); skipping."
+                echo "found=false" >> "${GITHUB_OUTPUT}"
+              fi
+            else
+              echo "merge_group head_branch '${HEAD_BRANCH}' doesn't match the expected gh-readonly-queue/.../pr-N-... pattern; skipping."
+              echo "found=false" >> "${GITHUB_OUTPUT}"
+            fi
+            exit 0
+          fi
+
           # commits/{sha}/pulls is empty for unmerged fork SHAs (same gap
           # e2e-on-approval-fork.yml works around). List open PRs targeting
           # main and match head.sha; require a unique match rather than
