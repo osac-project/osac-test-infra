@@ -167,13 +167,17 @@ collect_bom() {
     )
 
     local operator_entries=()
-    local label sub_name sub_ns installed_csv channel version entry
+    local label sub_name sub_ns installed_csv configured_channel version entry
     for label in "${!olm_components[@]}"; do
         sub_name="${olm_components[$label]%%:*}"
         sub_ns="${olm_components[$label]##*:}"
         installed_csv=$(oc get subscription "${sub_name}" -n "${sub_ns}" \
             -o jsonpath='{.status.installedCSV}' 2>/dev/null || echo "")
-        channel=$(oc get subscription "${sub_name}" -n "${sub_ns}" \
+        # Subscription.spec.channel is what we asked OLM to track, not
+        # necessarily the channel the resolved installedCSV/version actually
+        # shipped on (e.g. after a manual startingCSV pin, or mid channel
+        # migration) -- name it accordingly so the two can't be confused.
+        configured_channel=$(oc get subscription "${sub_name}" -n "${sub_ns}" \
             -o jsonpath='{.spec.channel}' 2>/dev/null || echo "")
         version=""
         if [[ -n "${installed_csv}" ]]; then
@@ -182,13 +186,13 @@ collect_bom() {
         fi
         entry=$(jq -n \
             --arg component "${label}" --arg namespace "${sub_ns}" --arg subscription "${sub_name}" \
-            --arg channel "${channel}" --arg csv "${installed_csv}" --arg version "${version}" \
+            --arg configuredChannel "${configured_channel}" --arg csv "${installed_csv}" --arg version "${version}" \
             'def blank_to_null: if length > 0 then . else null end;
             {
                 component: $component,
                 namespace: $namespace,
                 subscription: $subscription,
-                channel: ($channel | blank_to_null),
+                configuredChannel: ($configuredChannel | blank_to_null),
                 installedCSV: ($csv | blank_to_null),
                 version: ($version | blank_to_null)
             }')
@@ -197,24 +201,70 @@ collect_bom() {
     local operators_json
     operators_json=$(printf '%s\n' "${operator_entries[@]}" | jq -s '.')
 
-    # Every deployment/statefulset's actual running image in the namespaces
+    # Every deployment/statefulset's actual *running* image in the namespaces
     # that matter: OSAC's own components plus bundled Postgres (both live in
     # E2E_NAMESPACE), and standalone Keycloak (its own "keycloak" namespace).
     # Reports whatever is actually running rather than hand-listing every
     # component name, so this doesn't need updating when a new one is added.
-    local ns
+    #
+    # Reads status.containerStatuses on each matching Pod (not
+    # spec.template.spec.containers on the Deployment/StatefulSet itself):
+    # the template is only the *desired* image, which can be a floating tag
+    # that hasn't finished resolving, or can legitimately differ pod-to-pod
+    # mid-rollout -- containerStatuses.image/imageID is what that specific
+    # pod actually pulled and is running. Pods are matched to their owning
+    # workload via its own spec.selector.matchLabels rather than walking
+    # ownerReferences (Deployment -> ReplicaSet -> Pod is a 2-hop chain;
+    # StatefulSet -> Pod is 1-hop) -- the label selector is exactly what the
+    # workload itself already uses to claim its pods, so it's the simpler,
+    # equally-correct way to find them. Results are kept per-pod (not
+    # deduped by container name) so a rollout in progress -- some pods on
+    # the old image, some on the new -- is visible instead of collapsed
+    # away.
     collect_namespace_workload_images() {
-        ns="$1"
-        if ! oc get namespace "${ns}" &>/dev/null; then
-            echo "[]"
+        local ns="$1"
+        local ns_error
+        if ! ns_error=$(oc get namespace "${ns}" 2>&1 >/dev/null); then
+            if grep -qi "notfound" <<<"${ns_error}"; then
+                echo "[]"
+            else
+                echo "::warning::collect_namespace_workload_images: could not check namespace '${ns}': ${ns_error//$'\n'/ }" >&2
+                jq -cn --arg error "${ns_error}" '{error: $error}'
+            fi
             return
         fi
-        oc get deployments,statefulsets -n "${ns}" -o json 2>/dev/null \
-            | jq '[.items[]? | {
-                kind: .kind,
-                name: .metadata.name,
-                containers: [.spec.template.spec.containers[]? | {name: .name, image: .image}]
-              }]'
+
+        local workloads_raw
+        workloads_raw=$(oc get deployments,statefulsets -n "${ns}" -o json 2>/dev/null) || workloads_raw='{"items":[]}'
+
+        local entries=()
+        local workload kind name selector pods_json entry
+        while IFS= read -r workload; do
+            [[ -z "${workload}" ]] && continue
+            kind=$(jq -r '.kind' <<<"${workload}")
+            name=$(jq -r '.metadata.name' <<<"${workload}")
+            selector=$(jq -r '.spec.selector.matchLabels // {} | to_entries | map("\(.key)=\(.value)") | join(",")' <<<"${workload}")
+            pods_json='{"items":[]}'
+            if [[ -n "${selector}" ]]; then
+                pods_json=$(oc get pods -n "${ns}" -l "${selector}" -o json 2>/dev/null) || pods_json='{"items":[]}'
+            fi
+            entry=$(jq -n --arg kind "${kind}" --arg name "${name}" --argjson pods "${pods_json}" \
+                '{
+                    kind: $kind,
+                    name: $name,
+                    pods: [$pods.items[]? | {
+                        pod: .metadata.name,
+                        containers: [.status.containerStatuses[]? | {name: .name, image: .image, imageID: .imageID}]
+                    }]
+                }')
+            entries+=("${entry}")
+        done < <(jq -c '.items[]?' <<<"${workloads_raw}")
+
+        if [[ ${#entries[@]} -eq 0 ]]; then
+            echo "[]"
+        else
+            printf '%s\n' "${entries[@]}" | jq -s '.'
+        fi
     }
     local workloads_json
     workloads_json=$(jq -n \
