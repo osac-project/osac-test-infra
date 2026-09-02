@@ -2,7 +2,9 @@
 # OSAC-3370: decide whether a PR is ready for expensive e2e.
 #
 # Allow when:
-#   1. "lgtm" label present (Prow removes on push), or
+#   1. "lgtm" label present, or it was applied earlier (Prow / auto-queue
+#      strip the label on push; a prior /lgtm still unlocks later SHAs unless
+#      a human has outstanding CHANGES_REQUESTED), or
 #   2. "e2e-ready" label present (cleanup workflow removes on push), or
 #   3. coderabbitai[bot] APPROVED on head AND no outstanding human CHANGES_REQUESTED
 # Otherwise wait: ready=false, exit 0 (do not fail). Fetch/API errors still fail.
@@ -133,6 +135,18 @@ labels_have_lgtm() {
   labels_have "$1" "lgtm"
 }
 
+# Returns 0 if issue events include at least one labeled lgtm.
+# Current label is not required: Prow and auto-queue unlabeled on push.
+pr_ever_had_lgtm() {
+  local events_json="$1"
+  jq -e '
+    [.[]
+      | select(.event == "labeled")
+      | select(.label.name == "lgtm")
+    ] | length > 0
+  ' <<<"${events_json}" >/dev/null 2>&1
+}
+
 # Returns 0 if any human reviewer's latest decision is CHANGES_REQUESTED.
 human_has_changes_requested() {
   local reviews_json="$1"
@@ -185,6 +199,10 @@ decide_e2e_readiness() {
 
   if labels_have_lgtm "${labels_json}"; then
     echo "allowed: lgtm label present"
+    return 0
+  fi
+  if pr_ever_had_lgtm "${events_json}" && ! human_has_changes_requested "${reviews_json}"; then
+    echo "allowed: lgtm was applied earlier"
     return 0
   fi
   if labels_have_e2e_ready "${labels_json}"; then
@@ -328,7 +346,7 @@ fi
 
 echo "::notice::E2E readiness gate: PR #${PR_NUMBER} is waiting for unlock at ${HEAD_SHA:0:7}."
 echo "::notice::${reason}"
-echo "::notice::Need a CodeRabbit APPROVED review on this head, \`lgtm\` label, or \`/e2e-ready\`."
+echo "::notice::Need a CodeRabbit APPROVED review on this head, \`lgtm\` (now or earlier), or \`/e2e-ready\`."
 write_ready_output false
 write_reason_output "${reason}"
 write_readiness_summary false "${reason}"

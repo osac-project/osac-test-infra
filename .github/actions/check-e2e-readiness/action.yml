@@ -1,10 +1,10 @@
 ---
 name: Check e2e readiness
 description: >-
-  Set ready=true when the PR may run expensive e2e (lgtm, e2e-ready from
-  github-actions[bot], or coderabbitai[bot] APPROVED on head with no human
-  CHANGES_REQUESTED). Otherwise ready=false (wait, do not fail). API errors
-  still fail. Human APPROVED does not unlock. OSAC-3370.
+  Set ready=true when the PR may run expensive e2e (lgtm now or previously
+  applied, e2e-ready from github-actions[bot], or coderabbitai[bot] APPROVED
+  on head with no human CHANGES_REQUESTED). Otherwise ready=false (wait, do
+  not fail). API errors still fail. Human APPROVED does not unlock. OSAC-3370.
 
 inputs:
   pr-number:
