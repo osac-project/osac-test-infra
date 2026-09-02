@@ -116,6 +116,23 @@ jobs:
           if [[ "${EVENT_NAME}" == "merge_group" ]]; then
             if [[ "${HEAD_BRANCH}" =~ ^gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
               pr_number="${BASH_REMATCH[1]}"
+              # This repo's merge queue can batch multiple PRs into one
+              # build (grouping_strategy: ALLGREEN, max_entries_to_build: 4
+              # per the ci-status-checks ruleset) -- the branch name only
+              # ever reflects ONE of them, so a batched failure could
+              # actually be caused by a different PR in the same group.
+              # merge_method is SQUASH, and each squashed PR's own
+              # "(#N)" trailer survives into the final commit message, so
+              # count distinct trailers as a proxy for how many PRs this
+              # build actually covers, and skip (rather than guess) if
+              # it's more than the one this branch name names.
+              commit_message=$(gh api "repos/${REPO}/commits/${HEAD_SHA}" --jq '.commit.message' 2>/dev/null || echo "")
+              pr_ref_count=$(grep -oE '\(#[0-9]+\)' <<<"${commit_message}" | sort -u | wc -l)
+              if [[ "${pr_ref_count}" -gt 1 ]]; then
+                echo "Merge group at ${HEAD_SHA:0:7} batches ${pr_ref_count} PRs (multiple '(#N)' trailers in the commit message); skipping rather than attributing this failure to a single PR."
+                echo "found=false" >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
               # Confirm still open -- a merge_group run can finish after its
               # PR was already merged/closed (e.g. superseded by a later
               # queue entry), and posting to a closed PR's thread is
@@ -521,6 +538,16 @@ jobs:
           COMMENT_ID: ${{ steps.comment.outputs.id }}
         run: |
           set -euo pipefail
+          # Re-check right before mutating: resolve decided found=true
+          # potentially minutes ago (artifact download + Gemini call sit in
+          # between), and the PR could have merged/closed since. Posting or
+          # editing a diagnosis comment on an already-resolved PR is
+          # confusing noise, not useful signal.
+          pr_state=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "unknown")
+          if [[ "${pr_state}" != "open" ]]; then
+            echo "PR #${PR_NUMBER} is no longer open (state: ${pr_state}); skipping comment."
+            exit 0
+          fi
           BODY_FILE="${RUNNER_TEMP}/new-comment-body.md"
           if [[ -n "${COMMENT_ID}" ]]; then
             jq -Rs '{body: .}' < "${BODY_FILE}" | gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH --input -
@@ -631,7 +658,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
           REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
           COMMENT_ID: ${{ steps.comment.outputs.id }}
         run: |
           set -euo pipefail
+          # Same re-check as the diagnose job's own copy of this step --
+          # see there for the full reasoning.
+          pr_state=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "unknown")
+          if [[ "${pr_state}" != "open" ]]; then
+            echo "PR #${PR_NUMBER} is no longer open (state: ${pr_state}); skipping comment."
+            exit 0
+          fi
           jq -Rs '{body: .}' < "${RUNNER_TEMP}/new-comment-body.md" | gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH --input -
