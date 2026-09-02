@@ -1,0 +1,68 @@
+---
+# track-recurring-failure.py (ai-diagnostic-e2e.yml's "Track recurring-
+# failure candidate" step) only ever opens or bumps an
+# ai-candidate-known-issue issue -- nothing there ever closes one, so that
+# review queue would otherwise only ever grow. This closes candidates that
+# have gone quiet (no new occurrence bumping updated_at) for STALE_DAYS,
+# on the theory that a test that hasn't failed again in that long isn't
+# worth a human's review time anymore. If it does fail again later,
+# track-recurring-failure.py's own state=open search won't find the
+# closed issue and will just open a fresh one -- a clean restart rather
+# than resurrecting old, possibly-stale context.
+#
+# Deliberately skips anything also labeled needs-review or
+# confirmed-known-issue: those have already crossed the threshold for a
+# human to look at (or already been promoted), and must never be silently
+# closed out from under a maintainer just because nobody re-triggered the
+# same failure lately.
+name: Cleanup stale AI-diagnostic candidate issues
+
+on:
+  schedule:
+    # Once daily, offset away from the top of the hour -- GitHub's shared
+    # cron scheduler queues everyone's on-the-hour schedules together and
+    # can delay/drop them under load (same reasoning as
+    # e2e-caas-full-install.yml's own cron comment).
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Close stale ai-candidate-known-issue issues
+        env:
+          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="osac-project/osac-test-infra"
+          STALE_DAYS=14
+          CUTOFF=$(date -u -d "-${STALE_DAYS} days" +%Y-%m-%dT%H:%M:%SZ)
+
+          issues_json=$(gh api --paginate \
+            "repos/${REPO}/issues?labels=ai-candidate-known-issue&state=open&per_page=100" \
+            --jq '.[] | {number, updated_at, labels: [.labels[].name]}' | jq -s '.')
+
+          stale=$(jq -c --arg cutoff "${CUTOFF}" '
+            [.[] | select(.updated_at < $cutoff)
+                 | select((.labels | index("needs-review")) == null)
+                 | select((.labels | index("confirmed-known-issue")) == null)]
+          ' <<<"${issues_json}")
+
+          count=$(jq 'length' <<<"${stale}")
+          echo "Found ${count} stale candidate issue(s) to close (no activity since ${CUTOFF})."
+
+          comment_body=$(jq -n --arg days "${STALE_DAYS}" '
+            {body: "Auto-closed: no new occurrences in the last \($days) days. If this test fails again, a new tracking issue will be opened."}
+          ')
+          close_body=$(jq -n '{state: "closed"}')
+
+          for number in $(jq -r '.[].number' <<<"${stale}"); do
+            gh api "repos/${REPO}/issues/${number}/comments" --input - <<<"${comment_body}"
+            gh api "repos/${REPO}/issues/${number}" -X PATCH --input - <<<"${close_body}"
+            echo "Closed stale issue #${number}"
+          done
