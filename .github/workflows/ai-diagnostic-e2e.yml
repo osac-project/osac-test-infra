@@ -446,6 +446,24 @@ jobs:
             jq -Rs '{body: .}' < "${BODY_FILE}" | gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --input -
           fi
 
+      # Opens/bumps a review-queue issue in osac-test-infra when the same
+      # JUnit test fails repeatedly -- never writes to known-issues/
+      # itself; a human still decides whether to promote a flagged
+      # candidate into a real entry. Uses AI_DIAGNOSTIC_TOKEN (already
+      # scoped to Issues read/write on osac-test-infra) rather than
+      # GITHUB_TOKEN, same reasoning as the PR comment/status steps above.
+      - name: Track recurring-failure candidate
+        if: "!cancelled()"
+        env:
+          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          JUNIT_PATH: ${{ steps.artifact.outputs.dir }}/junit.xml
+          DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
+        run: python3 .github/scripts/track-recurring-failure.py
+
   # Separate, minimal job for the "now passing" comment edit: needs neither
   # actions:read (no artifact to download) nor id-token:write (no diagnosis
   # to run) -- see the top-level comment on `jobs:` for why this isn't just
