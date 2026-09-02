@@ -749,6 +749,16 @@ jobs:
           # suffix. Recursive find, not maxdepth 1: BMaaS's own regression/
           # tier (already populated) nests real tests under regression/networking/,
           # not directly under regression/*.py.
+          # Reject anything but word chars/hyphens/underscores in at most one
+          # "/tier" segment before it ever reaches a path -- caller-controlled
+          # (workflow_dispatch), and a stray "../" here would point `find`
+          # outside tests/e2e/ and would still flow into the pytest invocation
+          # below regardless of what this fallback decides.
+          if [[ -n "${TEST_SUITE}" && ! "${TEST_SUITE}" =~ ^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)?$ ]]; then
+            echo "::error::test-suite '${TEST_SUITE}' is not a valid suite[/tier] name" >&2
+            exit 1
+          fi
+
           EFFECTIVE_TEST_SUITE="${TEST_SUITE}"
           if [[ "${TEST_SUITE}" == */* ]]; then
             SUITE_DIR="${TEST_PATH_PREFIX}/${TEST_SUITE}"
