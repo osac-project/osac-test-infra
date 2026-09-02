@@ -330,6 +330,44 @@ def make_read_artifact_file_tool(artifact_dir):
     return read_artifact_file
 
 
+# Vertex AI list price for gemini-2.5-flash, USD per 1M tokens, as of when
+# this was written -- pricing drifts; verify at
+# https://cloud.google.com/vertex-ai/generative-ai/pricing before relying
+# on the estimate below for anything beyond a rough per-run sanity check.
+GEMINI_FLASH_INPUT_USD_PER_MILLION = 0.30
+GEMINI_FLASH_OUTPUT_USD_PER_MILLION = 2.50
+
+
+def format_cost_line(usage_metadata):
+    """Rough per-diagnosis cost estimate, appended to the bottom of the
+    diagnosis text -- makes the plan's own "confirm actual GCP spend is
+    sane" verification step visible per-run instead of requiring someone
+    to go dig through Cloud Billing.
+
+    Only reflects the FINAL response's own usage_metadata, not a sum
+    across every automatic-function-calling round trip within this one
+    call -- Gemini's multi-turn accounting resends the full growing
+    conversation as input on each turn, so prompt_token_count here
+    already captures essentially all of the input-side cost; only the
+    (typically tiny) output tokens from intermediate function-call-
+    issuing turns aren't separately counted, so this slightly
+    undercounts, never overcounts.
+    """
+    if not usage_metadata:
+        return ""
+    prompt_tokens = usage_metadata.prompt_token_count or 0
+    total_tokens = usage_metadata.total_token_count or 0
+    output_tokens = max(total_tokens - prompt_tokens, 0)
+    cost_usd = (
+        prompt_tokens / 1_000_000 * GEMINI_FLASH_INPUT_USD_PER_MILLION
+        + output_tokens / 1_000_000 * GEMINI_FLASH_OUTPUT_USD_PER_MILLION
+    )
+    return (
+        f"<sub>Estimated cost: ${cost_usd:.4f} "
+        f"({prompt_tokens} input + {output_tokens} output tokens, gemini-2.5-flash)</sub>"
+    )
+
+
 def call_gemini(prompt, artifact_dir):
     from google import genai
     from google.genai import types
@@ -350,7 +388,12 @@ def call_gemini(prompt, artifact_dir):
         ),
     )
     resp = chat.send_message(prompt)
-    return resp.text or "(empty response from Gemini)"
+    text = resp.text or "(empty response from Gemini)"
+    try:
+        cost_line = format_cost_line(resp.usage_metadata)
+    except Exception:  # noqa: BLE001 -- a cost-formatting bug must never lose a real diagnosis
+        cost_line = ""
+    return f"{text}\n\n{cost_line}" if cost_line else text
 
 
 def main():
