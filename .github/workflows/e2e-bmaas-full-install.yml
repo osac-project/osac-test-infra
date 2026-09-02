@@ -331,6 +331,10 @@ jobs:
         env:
           FLAVOR_NAME: ${{ inputs.flavor-name }}
         run: |
+          # TEMPORARY -- validating the has-test-evidence composite-job-name
+          # fix (#463) + category-parsing fix (#462), DO NOT MERGE.
+          echo "::error::Forced failure to validate the AI diagnostic pipeline fixes -- not a real cluster-boot failure."
+          exit 1
           exec 9>"${FLAVOR_LOCK}"
           flock --shared 9
           sudo python3 /usr/local/bin/cluster-tool boot \
