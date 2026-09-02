@@ -288,8 +288,15 @@ jobs:
         run: |
           set -euo pipefail
           MAX_CHARS=8000
+          # creator filter is defense-in-depth, not the primary guard
+          # (only write-access holders can apply this label at all, and a
+          # random public user opening an issue in this public repo can't
+          # self-label it) -- but it means even a maintainer mistakenly
+          # labeling someone else's unrelated issue can never feed it
+          # into every future diagnosis prompt.
+          bot_login=$(gh api user --jq '.login')
           issues_json=$(gh api --paginate \
-            "repos/osac-project/osac-test-infra/issues?labels=confirmed-known-issue&state=open&per_page=100" \
+            "repos/osac-project/osac-test-infra/issues?labels=confirmed-known-issue&creator=${bot_login}&state=open&per_page=100" \
             --jq '.[] | {title, body}' | jq -s '.')
           text=$(jq -r '
             if length == 0 then "(none documented yet)"

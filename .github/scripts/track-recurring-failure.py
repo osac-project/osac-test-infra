@@ -67,9 +67,19 @@ def gh_api(method, path, payload=None):
     controlled for pull_request-triggered runs, since E2E tests execute
     from the fork's own checkout. JSON-via-stdin has no such magic-prefix
     behavior, so there's nothing for a crafted test name to trigger.
+
+    GET requests always add --paginate --slurp: without it, a candidate
+    search silently misses any match beyond the first 100 open issues,
+    risking a duplicate issue for a signature that already exists further
+    back. --slurp does NOT flatten across pages the way its own docs
+    imply -- confirmed empirically, it wraps each individual page's own
+    JSON array as one element of an outer list, even for a single page --
+    so callers must flatten the result themselves (see find_existing()).
     """
     cmd = ["gh", "api", path]
-    if method != "GET":
+    if method == "GET":
+        cmd += ["--paginate", "--slurp"]
+    else:
         cmd += ["-X", method, "--input", "-"]
     result = subprocess.run(
         cmd,
@@ -80,6 +90,13 @@ def gh_api(method, path, payload=None):
     if result.returncode != 0:
         raise RuntimeError(f"gh api {method} {path} failed: {result.stderr.strip()}")
     return result.stdout
+
+
+def current_login():
+    result = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"gh api user failed: {result.stderr.strip()}")
+    return result.stdout.strip()
 
 
 def first_failing_test_name(path):
@@ -114,17 +131,32 @@ def ensure_label(name, color, description):
     )
 
 
-def find_existing(signature_title):
+def find_existing(signature_title, bot_login):
+    # creator=bot_login is defense-in-depth, not the primary guard (only
+    # write-access holders can apply CANDIDATE_LABEL at all, and a random
+    # public user opening an issue in this public repo can't self-label
+    # it) -- but it means even a maintainer mistakenly labeling someone
+    # else's unrelated issue can never feed it into this automation.
     raw = gh_api(
         "GET",
-        f"repos/{TRACKING_REPO}/issues?labels={CANDIDATE_LABEL}&state=open&per_page=100",
+        f"repos/{TRACKING_REPO}/issues?labels={CANDIDATE_LABEL}&creator={bot_login}&state=open&per_page=100",
     )
     try:
-        issues = json.loads(raw)
+        pages = json.loads(raw)
     except json.JSONDecodeError:
         return None
-    for issue in issues:
-        if issue.get("title") == signature_title:
+    for page in pages:
+        for issue in page:
+            if issue.get("title") != signature_title:
+                continue
+            # Never mutate an already-promoted record: if a maintainer
+            # confirmed this exact issue (typically without also removing
+            # CANDIDATE_LABEL), treat it as "not found" so a fresh
+            # recurrence opens a new, separate candidate instead of
+            # silently bumping/overwriting the confirmed writeup's body.
+            label_names = [label.get("name") for label in issue.get("labels", [])]
+            if CONFIRMED_LABEL in label_names:
+                continue
             return issue
     return None
 
@@ -153,8 +185,18 @@ def main():
         f"> {excerpt}"
     )
 
+    # Known, accepted race: this find-then-create is not atomic, so two
+    # different PRs hitting the exact same failing test within the same
+    # few seconds could each find nothing and both create an issue for
+    # the same signature. Not fixed with a lock/CAS mechanism -- GitHub's
+    # Issues API has no conditional-create support, this repo's own
+    # concurrency group already serializes same-PR runs (the only
+    # realistic repeat trigger), and the failure mode is a harmless
+    # duplicate low-stakes tracking issue a human can merge/close, not a
+    # correctness or security issue for the diagnoses themselves.
     try:
-        existing = find_existing(title)
+        bot_login = current_login()
+        existing = find_existing(title, bot_login)
     except RuntimeError as exc:
         print(f"Failed to list tracking issues, skipping: {exc}", file=sys.stderr)
         return

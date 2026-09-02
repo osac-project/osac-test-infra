@@ -43,8 +43,13 @@ jobs:
           STALE_DAYS=14
           CUTOFF=$(date -u -d "-${STALE_DAYS} days" +%Y-%m-%dT%H:%M:%SZ)
 
+          # creator filter is defense-in-depth, same reasoning as the
+          # other two touch points that read these labels (find_existing
+          # in track-recurring-failure.py, and the confirmed-known-issue
+          # fetch in ai-diagnostic-e2e.yml).
+          bot_login=$(gh api user --jq '.login')
           issues_json=$(gh api --paginate \
-            "repos/${REPO}/issues?labels=ai-candidate-known-issue&state=open&per_page=100" \
+            "repos/${REPO}/issues?labels=ai-candidate-known-issue&creator=${bot_login}&state=open&per_page=100" \
             --jq '.[] | {number, updated_at, labels: [.labels[].name]}' | jq -s '.')
 
           stale=$(jq -c --arg cutoff "${CUTOFF}" '
@@ -54,7 +59,7 @@ jobs:
           ' <<<"${issues_json}")
 
           count=$(jq 'length' <<<"${stale}")
-          echo "Found ${count} stale candidate issue(s) to close (no activity since ${CUTOFF})."
+          echo "Found ${count} stale candidate issue(s) to check (no activity since ${CUTOFF} as of the initial snapshot)."
 
           comment_body=$(jq -n --arg days "${STALE_DAYS}" '
             {body: "Auto-closed: no new occurrences in the last \($days) days. If this test fails again, a new tracking issue will be opened."}
@@ -62,6 +67,27 @@ jobs:
           close_body=$(jq -n '{state: "closed"}')
 
           for number in $(jq -r '.[].number' <<<"${stale}"); do
+            # Re-fetch immediately before closing rather than trusting the
+            # bulk snapshot above: this job can run for a while across
+            # many issues, and a concurrent track-recurring-failure.py run
+            # (a real E2E failure bumping this exact issue) could make it
+            # fresh again in the meantime. The GitHub API has no
+            # conditional-PATCH/CAS support, so this narrows the race
+            # window to a single request rather than eliminating it --
+            # the residual window (between this re-check and the PATCH
+            # below) is a few hundred ms, vs. up to the whole job's
+            # runtime before.
+            current=$(gh api "repos/${REPO}/issues/${number}" --jq '{state, updated_at, labels: [.labels[].name]}')
+            still_eligible=$(jq -c --arg cutoff "${CUTOFF}" '
+              (.state == "open")
+              and (.updated_at < $cutoff)
+              and ((.labels | index("needs-review")) == null)
+              and ((.labels | index("confirmed-known-issue")) == null)
+            ' <<<"${current}")
+            if [[ "${still_eligible}" != "true" ]]; then
+              echo "Skipping #${number}: no longer eligible (became active or was labeled/closed since the initial snapshot)."
+              continue
+            fi
             gh api "repos/${REPO}/issues/${number}/comments" --input - <<<"${comment_body}"
             gh api "repos/${REPO}/issues/${number}" -X PATCH --input - <<<"${close_body}"
             echo "Closed stale issue #${number}"

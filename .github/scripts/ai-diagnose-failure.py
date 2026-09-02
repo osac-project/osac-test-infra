@@ -71,16 +71,22 @@ except (json.JSONDecodeError, TypeError):
     PR_DIFF = ""
 
 # Curated known-issues corpus -- title+body of every osac-test-infra issue
-# labeled confirmed-known-issue, fetched live by the "Fetch confirmed known
-# issues" workflow step (via AI_DIAGNOSTIC_TOKEN) and JSON-encoded the same
-# way as CHANGED_FILES/PR_DIFF above. Kept as GitHub Issues rather than
-# files in this repo so promoting a candidate from
-# track-recurring-failure.py's review queue is just adding a label -- no
-# PR needed. Human-curated by design (the diagnostic script never adds
-# this label itself), so it's safe to inline the whole thing into every
-# prompt rather than gating it behind a tool call: the model can never
-# "forget" to check it, for a fixed, small, predictable token cost instead
-# of an extra round trip.
+# labeled confirmed-known-issue AND authored by the pipeline's own bot
+# account, fetched live by the "Fetch confirmed known issues" workflow
+# step (via AI_DIAGNOSTIC_TOKEN) and JSON-encoded the same way as
+# CHANGED_FILES/PR_DIFF above. The creator filter is defense-in-depth on
+# top of GitHub's own access control (only write-access holders can apply
+# this label at all; a random public user can't self-label their own
+# issue in this public repo) -- it means even a maintainer mistakenly
+# confirming someone else's unrelated issue can't feed it in here. Kept as
+# GitHub Issues rather than files in this repo so promoting a candidate
+# from track-recurring-failure.py's review queue is just adding a label --
+# no PR needed. Human-curated by design (the diagnostic script never adds
+# this label itself, and find_existing() in track-recurring-failure.py
+# refuses to touch an issue once it's been confirmed), so it's safe to
+# inline the whole thing into every prompt rather than gating it behind a
+# tool call: the model can never "forget" to check it, for a fixed, small,
+# predictable token cost instead of an extra round trip.
 _known_issues_raw = os.environ.get("KNOWN_ISSUES", "").strip()
 try:
     KNOWN_ISSUES = json.loads(_known_issues_raw) if _known_issues_raw else "(none documented yet)"
