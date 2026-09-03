@@ -81,3 +81,14 @@
   register: vm_count
   changed_when: false
   failed_when: vm_count.stdout | int < 10
+
+# Pulumi creates br-mgmt as part of the VM deploy above. It's created after
+# boot, so it inherits RHEL's strict net.ipv4.conf.default.rp_filter=1 --
+# see roles/prerequisites/tasks/main.yml and docs/troubleshooting.md #21 for
+# why that silently drops lab VM connections to the netris controller.
+- name: Disable reverse-path filtering on br-mgmt
+  ansible.posix.sysctl:
+    name: "net.ipv4.conf.{{ mgmt_bridge_name }}.rp_filter"
+    value: "0"
+    sysctl_set: true
+    reload: true

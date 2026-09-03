@@ -86,6 +86,13 @@
 
       if [ -f /opt/netris/etc/netris.conf ]; then
         sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
+        # The netris-sg-hs package ships plugins.conf_dpdkno/plugins.conf_dpdkyes
+        # but never symlinks either to the plugins.conf the systemd unit expects
+        # (--plugins /opt/netris/etc/plugins.conf). Without this, the agent
+        # crash-loops forever with 'ENOENT ... plugins.conf'.
+        if [ -f /opt/netris/etc/plugins.conf_dpdkno ]; then
+          cp -f /opt/netris/etc/plugins.conf_dpdkno /opt/netris/etc/plugins.conf
+        fi
         systemctl restart netris-sg 2>/dev/null || true
       fi
     " 2>&1 | tail -5

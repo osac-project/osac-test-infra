@@ -1035,7 +1035,11 @@ fully booted:
    a bug — empty package name variable)
 4. Immediately set `dpdk = no` in the config (VMs can't use DPDK; without this
    the agent crashes or takes over the management NIC)
-5. Restart the agent
+5. Copy `plugins.conf_dpdkno` over `plugins.conf` (the package ships both
+   dpdk variants but never symlinks either to the plain `plugins.conf` path
+   the systemd unit expects — without this the agent crash-loops with
+   `ENOENT ... plugins.conf` even with `dpdk = no` set)
+6. Restart the agent
 
 ### 9.4 libvirt and K3s Firewall Conflicts
 
