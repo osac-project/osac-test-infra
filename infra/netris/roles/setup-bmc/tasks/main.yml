@@ -20,6 +20,7 @@
       virsh net-dhcp-leases {{ bmc_net_name }}
       | grep "{{ _ocp_bmc_mac.stdout | trim }}"
       | awk '{print $5}' | cut -d/ -f1
+      | tail -1
   register: _ocp_bmc_ip
   until: _ocp_bmc_ip.stdout | trim | length > 0
   retries: 30
