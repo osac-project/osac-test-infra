@@ -138,14 +138,22 @@ class WorkflowExporter:
     # without running it don't get caught by e2e's bare "e2e" substring --
     # confirmed live: "E2E on CodeRabbit approval" (kicks off the real e2e
     # workflows via the GitHub API, runs none itself), "Remove e2e-ready
-    # label on new push" (label housekeeping), and "Scan E2E logs" (log
-    # retention) were all miscategorized "e2e" and polluting e2e pass-rate/
-    # infra-failure stats with runs that never executed a single real test.
+    # label on new push" (label housekeeping), "Scan E2E logs" (log
+    # retention), "E2E on unlock label" (same API-trigger pattern as the
+    # CodeRabbit-approval workflow, just a different label as the source
+    # event -- its only job is "start-e2e", which calls the GitHub API and
+    # runs no test of its own), and "AI diagnostic (E2E fork PR failures)"
+    # (a post-hoc bot that inspects an already-completed e2e run's logs and
+    # posts/updates a PR comment -- "Resolve PR"/"Mark Resolved"/"Diagnose"
+    # jobs, no test execution) were all miscategorized "e2e" and polluting
+    # e2e pass-rate/infra-failure stats with runs that never executed a
+    # single real test.
     # release is checked before ci too, so "Build container image" matches
     # "container image" instead of ci's generic "build" pattern.
     WORKFLOW_CATEGORIES = {
         "automation": ["bump", "dependabot", "copilot", "slash", "ok-to-test",
-                       "coderabbit approval", "e2e-ready label", "scan e2e logs"],
+                       "coderabbit approval", "e2e-ready label", "scan e2e logs",
+                       "e2e on unlock label", "ai diagnostic"],
         "e2e":        ["e2e"],
         "lint":       ["pre-commit", "lint", "checklist", "kustomize", "check image"],
         "release":    ["publish", "container image", "mirror"],
