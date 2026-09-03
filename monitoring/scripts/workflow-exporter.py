@@ -20,6 +20,7 @@ import statistics
 import threading
 from datetime import datetime, timezone, timedelta
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from typing import ClassVar
 from urllib.parse import urlparse, parse_qs
 
 import requests
@@ -150,7 +151,7 @@ class WorkflowExporter:
     # single real test.
     # release is checked before ci too, so "Build container image" matches
     # "container image" instead of ci's generic "build" pattern.
-    WORKFLOW_CATEGORIES = {
+    WORKFLOW_CATEGORIES: ClassVar[dict[str, list[str]]] = {
         "automation": ["bump", "dependabot", "copilot", "slash", "ok-to-test",
                        "coderabbit approval", "e2e-ready label", "scan e2e logs",
                        "e2e on unlock label", "ai diagnostic"],
