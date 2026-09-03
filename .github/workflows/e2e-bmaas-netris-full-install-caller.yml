@@ -5,11 +5,6 @@ permissions:
   contents: read
 
 on:
-  # TODO: remove pull_request trigger before merge — temporary for testing
-  pull_request:
-    branches: [main]
-  schedule:
-    - cron: "0 */12 * * *"
   workflow_dispatch:
     inputs:
       instance-type:
