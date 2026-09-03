@@ -64,6 +64,23 @@
         status_code: [200, 204, 404]
       when: _ci_id | length > 0
 
+    - name: Resolve auto-EIP catalog item id
+      ansible.builtin.set_fact:
+        _auto_eip_ci_id: >-
+          {{ (_ci_list.json.get('items', [])
+              | selectattr('metadata.name', 'equalto', bmaas_auto_eip_catalog_item)
+              | map(attribute='id') | list | first) | default('') }}
+
+    - name: Delete auto-EIP BMI catalog item
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items/{{ _auto_eip_ci_id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+        validate_certs: false
+        status_code: [200, 204, 404]
+      when: _auto_eip_ci_id | length > 0
+
     # Unlink the template from the host type (reverse of setup "Link BMI
     # template to host type"). Must happen before deleting the host type.
     - name: Unlink BMI template from host type
@@ -344,12 +361,16 @@
           ignore_errors: true
 
         - name: Delete provisioning ACL permit rule
-          ansible.builtin.include_role:
-            name: netris.controller.acl
-            tasks_from: delete
-          vars:
-            acl_name: "{{ bmaas_provisioning_vnet_name }}-permit-all"
-          ignore_errors: true
+          block:
+            - ansible.builtin.include_role:
+                name: netris.controller.acl
+                tasks_from: delete
+              vars:
+                acl_name: "{{ bmaas_provisioning_vnet_name }}-permit-all"
+          rescue:
+            - name: ACL permit rule deletion failed (non-fatal)
+              ansible.builtin.debug:
+                msg: "ACL rule '{{ bmaas_provisioning_vnet_name }}-permit-all' deletion failed — may already be gone"
 
         - name: Delete provisioning VPC
           ansible.builtin.include_role:
