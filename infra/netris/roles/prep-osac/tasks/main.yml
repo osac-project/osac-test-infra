@@ -254,55 +254,23 @@
   failed_when: false
   changed_when: _ns_create.rc == 0
 
-- name: Create BMF inventory config secret
+- name: Ensure Provisioning CR exists for Metal3 validation
   when: bare_metal_services | bool
   ansible.builtin.shell:
     cmd: |
-      oc apply -f - <<'EOF'
-      apiVersion: v1
-      kind: Secret
+      oc apply -f - <<EOF
+      apiVersion: metal3.io/v1alpha1
+      kind: Provisioning
       metadata:
-        name: osac-inventory-config
-        namespace: {{ osac_namespace }}
-      type: Opaque
-      stringData:
-        inventory.yaml: |
-          name: metal3-inventory
-          type: metal3
-          hostClass: metal3
-          networkClass: metal3
-          options:
-            metal3:
-              namespace: {{ bmaas_bmh_namespace }}
+        name: provisioning-configuration
+      spec:
+        provisioningNetwork: "Disabled"
+        watchAllNamespaces: true
       EOF
   environment:
     KUBECONFIG: /root/.kube/config
-  register: _inv_secret
-  changed_when: "'created' in _inv_secret.stdout or 'configured' in _inv_secret.stdout"
-
-- name: Create BMF management config secret
-  when: bare_metal_services | bool
-  ansible.builtin.shell:
-    cmd: |
-      oc apply -f - <<'EOF'
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: osac-management-config
-        namespace: {{ osac_namespace }}
-      type: Opaque
-      stringData:
-        management.yaml: |
-          name: metal3-management
-          type: metal3
-          options:
-            metal3:
-              namespace: {{ bmaas_bmh_namespace }}
-      EOF
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _mgmt_secret
-  changed_when: "'created' in _mgmt_secret.stdout or 'configured' in _mgmt_secret.stdout"
+  register: _prov_cr
+  changed_when: "'created' in _prov_cr.stdout or 'configured' in _prov_cr.stdout"
 
 - name: Report OSAC preparation complete
   ansible.builtin.debug:
