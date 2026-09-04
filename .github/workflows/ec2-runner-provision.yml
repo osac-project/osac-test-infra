@@ -90,9 +90,9 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
-      - name: Fetch EC2 runner GitHub PAT
+      - name: Fetch EC2 runner GitHub App token
         id: gh-pat
-        uses: ./.github/actions/fetch-ec2-runner-github-pat
+        uses: ./.github/actions/fetch-ec2-runner-github-app-token
         with:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
