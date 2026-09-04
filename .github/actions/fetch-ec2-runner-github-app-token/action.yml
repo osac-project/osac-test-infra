@@ -1,0 +1,112 @@
+---
+name: Fetch EC2 runner GitHub App token
+description: >-
+  Retrieve a temporary GitHub App installation token from Vault for registering
+  JIT runners. The generate-jitconfig endpoint does not support personal access
+  tokens (fine-grained or classic), so we use a GitHub App instead.
+
+  This action:
+  1. Fetches app_id and private_key from Vault
+  2. Generates a JWT from the private key
+  3. Exchanges JWT for an installation token (valid 1 hour)
+  4. Outputs the token for use in runner registration
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+
+outputs:
+  GH_TOKEN:
+    value: ${{ steps.github-app-token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve GitHub App credentials from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: |
+          secret/data/osac/e2e/ec2-runner-github-app app_id | APP_ID ;
+          secret/data/osac/e2e/ec2-runner-github-app private_key | PRIVATE_KEY
+
+    - name: Generate GitHub App installation token
+      id: github-app-token
+      shell: bash
+      env:
+        APP_ID: ${{ steps.vault.outputs.APP_ID }}
+        PRIVATE_KEY: ${{ steps.vault.outputs.PRIVATE_KEY }}
+      run: |
+        set -euo pipefail
+
+        # Validate inputs
+        if [ -z "$APP_ID" ]; then
+          echo "ERROR: APP_ID not set from Vault" >&2
+          exit 1
+        fi
+        if [ -z "$PRIVATE_KEY" ]; then
+          echo "ERROR: PRIVATE_KEY not set from Vault" >&2
+          exit 1
+        fi
+
+        # Create JWT (valid for 10 minutes)
+        # Backdate iat by 60 seconds to account for clock skew
+        NOW=$(date +%s)
+        IAT=$((NOW - 60))
+        EXPIRY=$((NOW + 600))
+
+        # JWT header and payload
+        HEADER='{"alg":"RS256","typ":"JWT"}'
+        PAYLOAD="{\"iss\":\"${APP_ID}\",\"iat\":${IAT},\"exp\":${EXPIRY}}"
+
+        # Encode to base64 (URL-safe)
+        HEADER_B64=$(echo -n "$HEADER" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+        PAYLOAD_B64=$(echo -n "$PAYLOAD" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+
+        # Sign with private key
+        SIGNATURE=$(echo -n "${HEADER_B64}.${PAYLOAD_B64}" | \
+          openssl dgst -sha256 -sign <(echo "$PRIVATE_KEY") | \
+          base64 -w0 | tr '+/' '-_' | tr -d '=')
+
+        JWT="${HEADER_B64}.${PAYLOAD_B64}.${SIGNATURE}"
+
+        # Exchange JWT for installation token
+        # Get the installation ID first (for osac-project org)
+        INSTALLATION_ID=$(curl -s \
+          -H "Authorization: Bearer ${JWT}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/app/installations" | \
+          jq -r '.[] | select(.account.login == "osac-project") | .id')
+
+        if [ -z "$INSTALLATION_ID" ] || [ "$INSTALLATION_ID" = "null" ]; then
+          echo "ERROR: Could not find installation ID for osac-project" >&2
+          curl -s \
+            -H "Authorization: Bearer ${JWT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/app/installations" | jq '.' >&2
+          exit 1
+        fi
+
+        # Generate installation token with minimal scopes for JIT runner registration
+        TOKEN=$(curl -s -X POST \
+          -H "Authorization: Bearer ${JWT}" \
+          -H "Accept: application/vnd.github+json" \
+          -d '{"repositories":["osac"],"permissions":{"administration":"write"}}' \
+          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" | \
+          jq -r '.token')
+
+        if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+          echo "ERROR: Failed to generate installation token" >&2
+          exit 1
+        fi
+
+        # Output token (masked in logs)
+        echo "::add-mask::${TOKEN}"
+        echo "token=${TOKEN}" >> "$GITHUB_OUTPUT"
