@@ -97,6 +97,13 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
+      - name: Fetch Route53 credentials for test infrastructure
+        id: route53-creds
+        uses: ./.github/actions/fetch-caas-route53-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
       - name: Fetch EC2 runner network config
         id: network-config
         uses: ./.github/actions/fetch-ec2-runner-network-config
@@ -144,6 +151,8 @@ jobs:
           PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
           RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           GH_TOKEN: ${{ steps.gh-pat.outputs.GH_TOKEN }}
+          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
+          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
           TOOLING_CHECK_CMDS: ${{ inputs.tooling-check-cmds }}
         run: |
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
