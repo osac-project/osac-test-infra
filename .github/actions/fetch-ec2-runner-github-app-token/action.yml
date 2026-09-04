@@ -43,6 +43,7 @@ runs:
       env:
         APP_ID: ${{ steps.vault.outputs.APP_ID }}
         PRIVATE_KEY: ${{ steps.vault.outputs.PRIVATE_KEY }}
+        REPO_NAME: ${{ github.event.repository.name }}
       run: |
         set -euo pipefail
 
@@ -98,7 +99,7 @@ runs:
         TOKEN=$(curl -s -X POST \
           -H "Authorization: Bearer ${JWT}" \
           -H "Accept: application/vnd.github+json" \
-          -d '{"repositories":["osac"],"permissions":{"administration":"write"}}' \
+          -d "{\"repositories\":[\"${REPO_NAME}\"],\"permissions\":{\"administration\":\"write\"}}" \
           "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" | \
           jq -r '.token')
 
