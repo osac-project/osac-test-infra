@@ -510,8 +510,18 @@ jobs:
           if [[ ! -s "${DIAGNOSIS_FILE}" ]]; then
             echo "_AI diagnosis unavailable for this run._" > "${DIAGNOSIS_FILE}"
           fi
+          # <sub> wraps only this one line -- never the multi-paragraph
+          # diagnosis body below it. GitHub's markdown CSS sets
+          # `line-height: 0; position: relative` on sub/sup, which
+          # collapses vertical spacing between block-level children
+          # (paragraphs/lists/code fences) placed inside it -- that's
+          # what made #465's whole-body <sub> wrap render as overlapping
+          # text (see the run-33748608462 Job Summary screenshot). Confined
+          # to a single line with no block children, sub just shrinks text
+          # safely, same as the confidence/cost footer inside the
+          # diagnosis body itself.
           {
-            echo "### ❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category: \`${CATEGORY}\`"
+            echo "<sub>**❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category:** \`${CATEGORY}\`</sub>"
             echo
             cat "${DIAGNOSIS_FILE}"
             echo
@@ -636,8 +646,11 @@ jobs:
         run: |
           set -euo pipefail
           SECTION_FILE="${RUNNER_TEMP}/comment-section.md"
+          # <sub> confined to this one line only -- see the diagnose job's
+          # own "Prepare comment section" step for why it must never span
+          # a blank line into a second paragraph/block.
           {
-            echo "### ✅ ${WORKFLOW_NAME} -- Passing"
+            echo "<sub>**✅ ${WORKFLOW_NAME} -- Passing**</sub>"
             echo
             echo "Previously failing; now passing as of [this run](${RUN_URL})."
           } > "${SECTION_FILE}"

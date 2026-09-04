@@ -845,7 +845,16 @@ correct.
 
     if SUMMARY_PATH:
         with open(SUMMARY_PATH, "a") as f:
-            f.write(f"## AI Failure Diagnosis: {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`\n\n")
+            # <sub> wraps only this one line -- never the multi-paragraph
+            # diagnosis body below. GitHub's own markdown CSS sets
+            # `line-height: 0; position: relative` on sub/sup (verified via
+            # github-markdown-css), which collapses vertical spacing between
+            # any block-level children (paragraphs/lists/code fences) placed
+            # inside it -- that's what made #465's whole-body <sub> wrap
+            # render as overlapping text. Confined to a single line with no
+            # block children, sub just shrinks text safely, same as the
+            # confidence/cost footer below already does.
+            f.write(f"<sub>**AI Failure Diagnosis:** {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`</sub>\n\n")
             f.write(diagnosis.strip() + "\n\n")
             if RUN_URL:
                 f.write(f"[Full run]({RUN_URL})\n")
