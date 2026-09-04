@@ -58,11 +58,11 @@ on:
 permissions:
   contents: read
 
-# Shared with e2e-on-approval. Queue, do not cancel: a killed starter leaves
-# partial reruns and no summary. Revalidation makes a queued run idempotent.
-concurrency:
-  group: e2e-start-${{ inputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number }}
-  cancel-in-progress: false
+# No workflow-level concurrency: the `inputs` context is not populated at
+# setup time when cross-repo callers invoke this via workflow_call, causing
+# a 0-job startup failure. Each caller (osac, test-infra e2e-on-approval)
+# sets its own concurrency group. The job-level concurrency below serializes
+# native pull_request_target / workflow_dispatch runs within this repo.
 
 jobs:
   start-e2e:
@@ -76,6 +76,11 @@ jobs:
     if: >-
       github.event_name != 'pull_request_target' ||
       contains(fromJSON('["lgtm","e2e-ready"]'), github.event.label.name)
+    # Queue, do not cancel: a killed starter leaves partial reruns and no
+    # summary. Revalidation makes a queued run idempotent.
+    concurrency:
+      group: e2e-start-${{ inputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
