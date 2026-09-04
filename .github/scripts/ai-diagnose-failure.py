@@ -515,6 +515,44 @@ def extract_category(text):
     return cleaned, category
 
 
+# Matches the "### Root cause" section the prompt's fixed structure always
+# puts first (right after the "**Category:**" line extract_category already
+# strips), up to -- but not including, via the lookahead -- the following
+# "### Causal chain" heading. Anchored at position 0 (re.match), same
+# reasoning as CATEGORY_PATTERN: this must be the model's own first section,
+# never something matched out of untrusted evidence quoted further down.
+ROOT_CAUSE_PATTERN = re.compile(r"### Root cause\s*\n(.*?)\n+(?=### Causal chain\b)", re.DOTALL)
+
+
+def split_root_cause(diagnosis):
+    """Split the model's full structured diagnosis into (summary, detail).
+
+    `summary` is the Root cause section's own prose, collapsed to a single
+    line -- short enough to stand alone as an always-visible teaser above a
+    collapsed section, and it changes every run (unlike the header line,
+    which only ever shows the workflow name and category badge). `detail`
+    is everything else (Causal chain / Evidence / Conclusion, plus the
+    confidence/cost footer call_gemini already appended), meant to go
+    inside a <details> block -- see main()'s use of this for why <details>
+    and not <sub>: <details> is a plain block element, so nesting Evidence's
+    code fences and the Causal chain's bullet list inside it doesn't hit the
+    line-height:0 inheritance bug <sub> has for multi-line content (see the
+    "Prepare comment section" step in ai-diagnostic-e2e.yml for the full
+    history of that bug).
+
+    Returns (None, diagnosis) unchanged if the expected structure isn't
+    found -- e.g. the "_AI diagnosis unavailable: ..._" exception-fallback
+    path in main(), which never has a "### Root cause" heading at all.
+    Callers must treat a None summary as "don't split", not as an error.
+    """
+    match = ROOT_CAUSE_PATTERN.match(diagnosis)
+    if not match:
+        return None, diagnosis
+    summary = " ".join(match.group(1).split())
+    detail = diagnosis[match.end() :].strip()
+    return summary, detail
+
+
 def format_confidence_line(confidence):
     if confidence is None:
         return "Confidence: not reported by the model"
@@ -843,15 +881,40 @@ correct.
         diagnosis = f"_AI diagnosis unavailable: {exc}_"
         category = None
 
+    # Split into an always-visible one-line summary (the Root cause prose)
+    # plus a <details>-collapsed block for everything else. <details> is a
+    # plain block element (unlike <sub>, whose `line-height: 0` collapses
+    # vertical spacing between any multi-line content placed inside it --
+    # see the "Prepare comment section" step in ai-diagnostic-e2e.yml for
+    # the full history of that bug), so nesting the Causal chain's bullet
+    # list and Evidence's code fences inside it is safe. Falls back to the
+    # full, unsplit diagnosis (no collapse at all) if the expected
+    # "### Root cause" structure isn't there, e.g. the exception-fallback
+    # diagnosis set above.
+    summary, detail = split_root_cause(diagnosis.strip())
+    if summary:
+        body_md = (
+            f"{summary}\n\n"
+            "<details>\n"
+            "<summary><sub>Causal chain, evidence &amp; confidence</sub></summary>\n\n"
+            f"{detail}\n\n"
+            "</details>"
+        )
+    else:
+        body_md = diagnosis.strip()
+
     if SUMMARY_PATH:
         with open(SUMMARY_PATH, "a") as f:
-            f.write(f"## AI Failure Diagnosis: {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`\n\n")
-            f.write(diagnosis.strip() + "\n\n")
+            # Plain bold text, not <sub> -- a header this short never risks
+            # the multi-line overlap bug, and shrinking it read as too small
+            # in practice.
+            f.write(f"**AI Failure Diagnosis:** {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`\n\n")
+            f.write(body_md + "\n\n")
             if RUN_URL:
                 f.write(f"[Full run]({RUN_URL})\n")
     if DIAGNOSIS_FILE:
         with open(DIAGNOSIS_FILE, "w") as f:
-            f.write(diagnosis.strip() + "\n")
+            f.write(body_md + "\n")
     if not SUMMARY_PATH and not DIAGNOSIS_FILE:
         print(diagnosis)
 

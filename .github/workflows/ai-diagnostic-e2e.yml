@@ -510,8 +510,16 @@ jobs:
           if [[ ! -s "${DIAGNOSIS_FILE}" ]]; then
             echo "_AI diagnosis unavailable for this run._" > "${DIAGNOSIS_FILE}"
           fi
+          # Plain bold header, not <sub> -- a header this short never risks
+          # the multi-line overlap bug (see ai-diagnose-failure.py's
+          # split_root_cause for that history), and shrinking it read as
+          # too small in practice. DIAGNOSIS_FILE already contains the
+          # actual per-run compactness: a one-line Root cause summary
+          # followed by a <details>-collapsed block for Causal
+          # chain/Evidence/Conclusion/confidence -- <details> is a plain
+          # block element, so it doesn't hit that same overlap bug.
           {
-            echo "### ❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category: \`${CATEGORY}\`"
+            echo "**❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category:** \`${CATEGORY}\`"
             echo
             cat "${DIAGNOSIS_FILE}"
             echo
@@ -636,8 +644,10 @@ jobs:
         run: |
           set -euo pipefail
           SECTION_FILE="${RUNNER_TEMP}/comment-section.md"
+          # Plain bold header -- see the diagnose job's own "Prepare
+          # comment section" step for why this isn't <sub>-wrapped.
           {
-            echo "### ✅ ${WORKFLOW_NAME} -- Passing"
+            echo "**✅ ${WORKFLOW_NAME} -- Passing**"
             echo
             echo "Previously failing; now passing as of [this run](${RUN_URL})."
           } > "${SECTION_FILE}"
