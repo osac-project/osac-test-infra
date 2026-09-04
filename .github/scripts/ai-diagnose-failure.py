@@ -34,6 +34,10 @@ ARTIFACT_DIR = os.environ.get("ARTIFACT_DIR", "")
 JUNIT_PATH = os.environ.get("JUNIT_PATH", "")
 GOOGLE_CLOUD_PROJECT = os.environ["GOOGLE_CLOUD_PROJECT"]
 GOOGLE_CLOUD_LOCATION = os.environ["GOOGLE_CLOUD_LOCATION"]
+# Must be a key in GEMINI_PRICING_USD_PER_MILLION below, or the cost estimate
+# in the confidence/cost footer degrades to "unavailable" rather than silently
+# costing against the wrong model's rate -- see format_cost_line.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
 SUMMARY_PATH = os.environ.get("GITHUB_STEP_SUMMARY", "")
 # Set by callers that need the raw diagnosis text outside this job's own step
 # summary -- e.g. ai-diagnostic-e2e.yml runs in a separate workflow_run job
@@ -566,15 +570,32 @@ def format_confidence_line(confidence):
     return f"Confidence: {confidence}%"
 
 
-# Vertex AI list price for gemini-2.5-flash, USD per 1M tokens, as of when
-# this was written -- pricing drifts; verify at
+# Vertex AI list prices, USD per 1M tokens, as of when this was written --
+# pricing drifts; verify at
 # https://cloud.google.com/vertex-ai/generative-ai/pricing before relying
 # on the estimate below for anything beyond a rough per-run sanity check.
-GEMINI_FLASH_INPUT_USD_PER_MILLION = 0.30
-GEMINI_FLASH_OUTPUT_USD_PER_MILLION = 2.50
+# gemini-2.5-pro is tiered by prompt size: a request whose input exceeds
+# tiered_input_threshold_tokens is billed at tiered_input/tiered_output for
+# the WHOLE request, not just the excess (confirmed against multiple
+# independent pricing trackers as of September 2026 -- Google's own pricing
+# page is a large SPA that wouldn't render for direct fetch-based
+# verification here). Keyed by the exact string passed as GEMINI_MODEL/to
+# genai.Client, so a typo'd or newer/unlisted model name fails closed to
+# "unavailable" in format_cost_line rather than silently costing against the
+# wrong model's rate.
+GEMINI_PRICING_USD_PER_MILLION = {
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+    "gemini-2.5-pro": {
+        "input": 1.25,
+        "output": 10.00,
+        "tiered_input_threshold_tokens": 200_000,
+        "tiered_input": 2.50,
+        "tiered_output": 15.00,
+    },
+}
 
 
-def format_cost_line(usage_metadata):
+def format_cost_line(usage_metadata, model):
     """Rough per-diagnosis cost estimate, appended to the bottom of the
     diagnosis text -- makes the plan's own "confirm actual GCP spend is
     sane" verification step visible per-run instead of requiring someone
@@ -603,6 +624,11 @@ def format_cost_line(usage_metadata):
     total_token_count, so subtracting only prompt_token_count would
     silently fold it into the output bucket and overcount it at the
     pricier output rate.
+
+    `model` picks the pricing row (and, for a tiered model like
+    gemini-2.5-pro, the tier) out of GEMINI_PRICING_USD_PER_MILLION -- always
+    the actual model this run's call_gemini() invoked (GEMINI_MODEL), never
+    assumed, since different models have very different per-token rates.
     """
     if not usage_metadata:
         return ""
@@ -617,13 +643,19 @@ def format_cost_line(usage_metadata):
     thoughts_tokens = usage_metadata.thoughts_token_count or 0
     input_tokens = prompt_tokens + tool_use_prompt_tokens
     output_tokens = candidates_tokens + thoughts_tokens
-    cost_usd = (
-        input_tokens / 1_000_000 * GEMINI_FLASH_INPUT_USD_PER_MILLION
-        + output_tokens / 1_000_000 * GEMINI_FLASH_OUTPUT_USD_PER_MILLION
-    )
+    pricing = GEMINI_PRICING_USD_PER_MILLION.get(model)
+    if pricing is None:
+        return f"Estimated cost: unavailable (no pricing data for model {model!r})"
+    input_price = pricing["input"]
+    output_price = pricing["output"]
+    tier_threshold = pricing.get("tiered_input_threshold_tokens")
+    if tier_threshold is not None and input_tokens > tier_threshold:
+        input_price = pricing["tiered_input"]
+        output_price = pricing["tiered_output"]
+    cost_usd = input_tokens / 1_000_000 * input_price + output_tokens / 1_000_000 * output_price
     return (
         f"Estimated cost: ${cost_usd:.4f} "
-        f"({input_tokens} input + {output_tokens} output tokens, gemini-2.5-flash)"
+        f"({input_tokens} input + {output_tokens} output tokens, {model})"
     )
 
 
@@ -659,7 +691,7 @@ def call_gemini(prompt, artifact_dir):
     # loop internally, capped at MAX_TOOL_CALLS round trips, so this is
     # still a single logical call from main()'s perspective.
     chat = client.chats.create(
-        model="gemini-2.5-flash",
+        model=GEMINI_MODEL,
         config=types.GenerateContentConfig(
             tools=[make_read_artifact_file_tool(artifact_dir)],
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
@@ -674,7 +706,7 @@ def call_gemini(prompt, artifact_dir):
         text, category = extract_category(text)
         text, confidence = extract_confidence(text)
         tool_calls = count_tool_calls(chat)
-        cost_line = format_cost_line(resp.usage_metadata)
+        cost_line = format_cost_line(resp.usage_metadata, GEMINI_MODEL)
         if tool_calls:
             tool_calls_text = f"{tool_calls} tool call{'s' if tool_calls != 1 else ''}"
             # Combined into the cost line when usage data is available

@@ -18,9 +18,13 @@
 # workflows/ai-diagnostic-e2e.yml@main`. github.event/github.repository
 # inside a workflow_call-invoked reusable workflow reflect the CALLER's own
 # triggering event, exactly as for the e2e-*-full-install.yml reusable
-# workflows already called cross-repo the same way -- so this file needs no
-# inputs at all; every step below already correctly resolves against
-# whichever repo's E2E run actually failed. The "Checkout repository" steps
+# workflows already called cross-repo the same way -- so every step below
+# already correctly resolves against whichever repo's E2E run actually
+# failed without needing any inputs for that. The one input this file does
+# take (gemini-model) is unrelated to that -- see the workflow_call block
+# below -- and defaults identically whether invoked via workflow_call or
+# natively via workflow_run, since `inputs` is only populated for the
+# former. The "Checkout repository" steps
 # still explicitly pin `repository: osac-project/osac-test-infra` (rather
 # than defaulting to github.repository) so the script/action files
 # themselves are always read from here, never duplicated into a caller.
@@ -34,6 +38,19 @@ on:
       - E2E VMaaS Full Install
     types: [completed]
   workflow_call:
+    inputs:
+      gemini-model:
+        description: >-
+          Vertex AI Gemini model id to diagnose with, e.g. gemini-2.5-pro or
+          gemini-2.5-flash. Must be a key in ai-diagnose-failure.py's
+          GEMINI_PRICING_USD_PER_MILLION or the cost estimate in the
+          diagnosis footer degrades to "unavailable" rather than silently
+          costing against the wrong model's rate. Optional -- defaults to
+          gemini-2.5-pro (also this file's own default when triggered
+          natively via workflow_run, which never populates `inputs`).
+        type: string
+        required: false
+        default: gemini-2.5-pro
     secrets:
       AI_DIAGNOSTIC_TOKEN:
         description: >-
@@ -373,6 +390,12 @@ jobs:
           JUNIT_PATH: ${{ steps.artifact.outputs.dir }}/junit.xml
           GOOGLE_CLOUD_PROJECT: ${{ steps.vertex-auth.outputs.gcp-project }}
           GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
+          # `inputs.gemini-model` only exists when this workflow was invoked
+          # via workflow_call (e.g. osac's wrapper) -- empty on a native
+          # workflow_run trigger in this repo, hence the fallback, which
+          # must match the workflow_call input's own `default:` above and
+          # ai-diagnose-failure.py's own GEMINI_MODEL fallback.
+          GEMINI_MODEL: ${{ inputs.gemini-model || 'gemini-2.5-pro' }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
