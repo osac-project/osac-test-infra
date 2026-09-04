@@ -23,9 +23,13 @@ on:
 permissions:
   contents: read
 
-# No workflow-level concurrency: github.event.workflow_run.head_sha is not
-# populated when cross-repo callers invoke this via workflow_call, causing
-# a 0-job startup failure. Each caller sets its own concurrency group.
+# Distinct from caller group e2e-start-fork-<sha> (osac wrapper). Nested
+# same-group concurrency fails at setup on workflow_call. github.event is
+# the caller's workflow_run payload for both native and reusable calls.
+
+concurrency:
+  group: e2e-start-fork-job-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   resolve-fork-pr:
@@ -36,10 +40,6 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request_review'
-    # Fork payload often has empty pull_requests; key on head SHA.
-    concurrency:
-      group: e2e-start-fork-${{ github.event.workflow_run.head_sha }}
-      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
