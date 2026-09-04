@@ -487,6 +487,9 @@ jobs:
       - name: Install grpcurl
         uses: ./.github/actions/install-grpcurl
 
+      - name: Force failure (dummy PR -- AI diagnostic pipeline check, revert before merge)
+        run: exit 1
+
       - name: Install infrastructure operators
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
