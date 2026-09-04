@@ -127,18 +127,13 @@ on:
         required: false
         type: string
         default: "osac-ci"
-      test-source:
-        description: "Where to run tests from: 'test-infra' (this repo) or 'osac' (mono-repo, default)"
-        required: false
-        type: string
-        default: "osac"
       test-ref:
-        description: "Git ref for the test source repo when test-source is 'osac'"
+        description: "Git ref for the osac mono-repo test checkout"
         required: false
         type: string
         default: "main"
       test-repository:
-        description: "GitHub repo (owner/name) to checkout for e2e tests when test-source is osac"
+        description: "GitHub repo (owner/name) to checkout for e2e tests"
         required: false
         type: string
         default: "osac-project/osac"
@@ -169,7 +164,6 @@ jobs:
           persist-credentials: false
 
       - name: Overlay tests from osac mono-repo
-        if: inputs.test-source == 'osac'
         env:
           TEST_REF: ${{ inputs.test-ref }}
           TEST_REPOSITORY: ${{ inputs.test-repository }}
@@ -745,16 +739,6 @@ jobs:
             exit 1
           fi
           echo "url=http://${ROUTE_HOST}" >> "$GITHUB_OUTPUT"
-      - name: Compute test path prefix
-        env:
-          TEST_SOURCE: ${{ inputs.test-source }}
-        run: |
-          if [ "${TEST_SOURCE}" = "osac" ]; then
-            echo "TEST_PATH_PREFIX=tests/e2e" >> "$GITHUB_ENV"
-          else
-            echo "TEST_PATH_PREFIX=tests" >> "$GITHUB_ENV"
-          fi
-
       - name: Resolve effective test suite (fallback if tier dir is empty)
         env:
           TEST_SUITE: ${{ inputs.test-suite }}
@@ -780,7 +764,7 @@ jobs:
 
           EFFECTIVE_TEST_SUITE="${TEST_SUITE}"
           if [[ "${TEST_SUITE}" == */* ]]; then
-            SUITE_DIR="${TEST_PATH_PREFIX}/${TEST_SUITE}"
+            SUITE_DIR="tests/e2e/${TEST_SUITE}"
             if ! find "${SUITE_DIR}" -name 'test_*.py' -type f 2>/dev/null | grep -q .; then
               echo "No test_*.py files found under ${SUITE_DIR} -- falling back to ${TEST_SUITE%/*}"
               EFFECTIVE_TEST_SUITE="${TEST_SUITE%/*}"
@@ -800,12 +784,12 @@ jobs:
         run: |
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
 
-          TEST_ARGS="${TEST_PATH_PREFIX}/"
+          TEST_ARGS="tests/e2e/"
           if [ -n "${EFFECTIVE_TEST_SUITE}" ]; then
-            TEST_ARGS="${TEST_PATH_PREFIX}/${EFFECTIVE_TEST_SUITE}/"
+            TEST_ARGS="tests/e2e/${EFFECTIVE_TEST_SUITE}/"
             # Run references tests alongside vmaas suite
             if [ "${EFFECTIVE_TEST_SUITE}" = "vmaas" ]; then
-              TEST_ARGS="${TEST_ARGS} ${TEST_PATH_PREFIX}/references/"
+              TEST_ARGS="${TEST_ARGS} tests/e2e/references/"
             fi
           fi
 
