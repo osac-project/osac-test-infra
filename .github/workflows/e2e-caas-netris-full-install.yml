@@ -241,12 +241,26 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
+      # Not an externally issued credential -- netris-lab assigns this
+      # straight into its own freshly-deployed controller's DB on creation
+      # (see roles/k3s_controller/tasks/password_fix.yml), so there's
+      # nothing to fetch from Vault and no reason to reuse the same value
+      # run over run.
+      - name: Generate Netris controller password
+        id: netris-password
+        shell: bash
+        run: |
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::${password}"
+          echo "NETRIS_PASSWORD=${password}" >> "$GITHUB_OUTPUT"
+
       - name: Push Netris secrets to ephemeral box
         shell: bash
         env:
           SSH_USER: ${{ needs.provision.outputs.ssh-user }}
           PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
           NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
+          NETRIS_PASSWORD: ${{ steps.netris-password.outputs.NETRIS_PASSWORD }}
           AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
           PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
           LAB_NAME: ci-${{ github.run_id }}
