@@ -3,8 +3,9 @@
 # push-route53-secrets.sh -- Append Route53 AWS credentials to the config
 # file that push-netris-secrets.sh already staged on the ephemeral box.
 #
-# Only needed by suites that manage DNS records (CaaS/MaaS). BMaaS does
-# not use Route53 and should not call this script.
+# Needed by any suite that runs `make deploy-ocp` (playbooks/deploy-ocp.yml
+# always includes the configure-dns role) -- that's every Netris-backend
+# suite, including BMaaS, which still deploys an OCP SNO cluster.
 #
 # Must run AFTER push-netris-secrets.sh (the config file and staging
 # directory must already exist on the box).

@@ -18,6 +18,15 @@
 #   KNOWN_HOSTS_FILE      the same run-specific known_hosts path provision.sh
 #                         used to establish trust with this box
 #   NETRIS_LICENSE        raw Netris license key content
+#   NETRIS_PASSWORD       password to assign to the freshly-deployed Netris
+#                         controller's own admin account -- not an
+#                         externally issued credential (netris-lab bcrypt-
+#                         hashes it straight into the controller's DB on
+#                         creation), so callers generate a random value per
+#                         run rather than fetching one from Vault. Read
+#                         back out of the config file's [default]
+#                         netris_password key by infra/netris's
+#                         inventory/group_vars/all.yml.
 #   AAP_LICENSE_ZIP_PATH  local path to the already-fetched, already
 #                         base64-decoded AAP license zip
 #   PULL_SECRET_JSON_PATH local path to the already-fetched pull secret JSON
@@ -40,11 +49,23 @@ GREEN="\e[32m"
 : "${PUBLIC_IP:?PUBLIC_IP is required}"
 : "${KNOWN_HOSTS_FILE:?KNOWN_HOSTS_FILE is required}"
 : "${NETRIS_LICENSE:?NETRIS_LICENSE is required}"
+: "${NETRIS_PASSWORD:?NETRIS_PASSWORD is required}"
 : "${AAP_LICENSE_ZIP_PATH:?AAP_LICENSE_ZIP_PATH is required}"
 : "${PULL_SECRET_JSON_PATH:?PULL_SECRET_JSON_PATH is required}"
 : "${LAB_NAME:?LAB_NAME is required}"
 
 REMOTE_STAGING_DIR="${REMOTE_STAGING_DIR:-/root/caas-netris-secrets}"
+
+# NETRIS_PASSWORD is interpolated into a single INI line below (config's
+# [default] netris_password key) -- a newline would corrupt that line into
+# multiple bogus ones, and a bare '%' can trip interpolation in some INI
+# parsers. Both current callers only ever pass `openssl rand -hex ...`
+# output (never either character), so this is a guard against a future
+# caller breaking the config file, not an expected failure today.
+if [[ "$NETRIS_PASSWORD" == *$'\n'* ]] || [[ "$NETRIS_PASSWORD" == *%* ]]; then
+    echo "NETRIS_PASSWORD must not contain newlines or '%' -- both break the staged INI config file" >&2
+    exit 1
+fi
 
 ssh_exec() {
     ssh -i "$SSH_KEY_PATH" \
@@ -76,6 +97,7 @@ umask 077
 cat > "$CONFIG_FILE" <<EOF
 [default]
 lab_name = ${LAB_NAME}
+netris_password = ${NETRIS_PASSWORD}
 EOF
 
 ssh_exec "mkdir -p '${REMOTE_STAGING_DIR}' && chmod 700 '${REMOTE_STAGING_DIR}'"
