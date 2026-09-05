@@ -236,6 +236,21 @@
     GOPATH: "{{ lookup('env', 'HOME') }}/go"
     GOCACHE: "{{ lookup('env', 'HOME') }}/.cache/go-build"
 
+- name: Verify host dependencies for the E2E test suites
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      for command in uv grpcurl oc kubectl osac virsh ssh ssh-keygen curl; do
+        command -v "${command}"
+      done
+      test -r /root/.ssh/id_rsa
+      test -r /root/.ssh/id_rsa.pub
+      virsh -c qemu:///system list --all >/dev/null
+    executable: /bin/bash
+  environment:
+    PATH: "{{ lookup('env', 'HOME') }}/.local/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
 - name: Cache snapshot flavor image
   ansible.builtin.include_role:
     name: cache-snapshot
