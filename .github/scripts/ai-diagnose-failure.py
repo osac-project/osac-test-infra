@@ -914,6 +914,59 @@ def _describe_empty_response(resp):
     return "no candidates/finish_reason available"
 
 
+# Generous but bounded -- this goes to the job log (never the posted
+# diagnosis), so the goal is "enough to actually debug it," not "keep it
+# short." Still capped against a pathological prompt/response blowing up
+# log size unboundedly.
+MAX_DEBUG_DUMP_CHARS = 20000
+
+
+def _dump_incomplete_response_debug(resp, sent_this_turn, chat):
+    """Verbose, best-effort dump of an incomplete turn to stderr: the
+    exact text sent this turn, its length, the raw response object, and
+    how long the chat history is so far.
+
+    Only called when a response is already known to be incomplete (see
+    _is_incomplete) -- the common, successful path stays quiet so this
+    doesn't bloat every routine run's job log with a full prompt dump.
+
+    Added after investigating two live incidents (osac run 33970823221
+    and osac-test-infra run 33977253113) with nothing to go on beyond a
+    bare "finish_reason=STOP" -- not enough to tell whether the cause was
+    prompt size, prompt content, or something else in the request. A
+    third occurrence (re-running 33970823221's diagnosis, both the
+    original attempt AND the retry) confirmed it's NOT simply "one
+    specific PR's diff" -- 33977253113 was a scheduled main-branch run
+    with no PR/diff involved at all -- so this exists to capture the
+    actual evidence (prompt size and content, safety ratings, raw
+    response shape) needed to pin down the real cause next time, instead
+    of guessing from a single line of output.
+
+    Every step is defensive and best-effort: a debugging aid must never
+    itself crash the diagnosis or replace a real finding with an
+    exception.
+    """
+    try:
+        print(
+            f"DEBUG: incomplete response -- prompt sent this turn is {len(sent_this_turn)} chars:",
+            file=sys.stderr,
+        )
+        print(sent_this_turn[:MAX_DEBUG_DUMP_CHARS], file=sys.stderr)
+        if len(sent_this_turn) > MAX_DEBUG_DUMP_CHARS:
+            print(f"... ({len(sent_this_turn) - MAX_DEBUG_DUMP_CHARS} more chars truncated)", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"DEBUG: failed to dump the prompt text itself: {exc}", file=sys.stderr)
+    try:
+        dump = json.dumps(resp.model_dump(mode="json"), default=str)
+        print(f"DEBUG: raw response object: {dump[:MAX_DEBUG_DUMP_CHARS]}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"DEBUG: could not dump response object ({exc}); repr: {resp!r}"[:MAX_DEBUG_DUMP_CHARS], file=sys.stderr)
+    try:
+        print(f"DEBUG: chat history has {len(chat.get_history())} entries at this point", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"DEBUG: could not read chat history length: {exc}", file=sys.stderr)
+
+
 _RETRY_PROMPT = (
     "Your previous response did not include a usable, complete final answer -- "
     "either it was cut off for exceeding the output token limit, or it came back "
@@ -955,6 +1008,7 @@ def _generate_with_retry(chat, prompt):
     usage_metadata_list = [resp.usage_metadata]
     if not _is_incomplete(resp):
         return resp, False, usage_metadata_list
+    _dump_incomplete_response_debug(resp, prompt, chat)
     if _is_blocked(resp):
         return resp, True, usage_metadata_list
     print(
@@ -966,6 +1020,7 @@ def _generate_with_retry(chat, prompt):
     usage_metadata_list.append(retry_resp.usage_metadata)
     if not _is_incomplete(retry_resp):
         return retry_resp, False, usage_metadata_list
+    _dump_incomplete_response_debug(retry_resp, _RETRY_PROMPT, chat)
     print(
         f"WARNING: Retry was also incomplete ({_describe_empty_response(retry_resp)}); "
         "giving up after one retry.",
@@ -982,6 +1037,13 @@ def _generate_with_retry(chat, prompt):
 def call_gemini(prompt, artifact_dir):
     from google import genai
     from google.genai import types
+
+    # Cheap and unconditional (unlike _dump_incomplete_response_debug's
+    # full-prompt dump, which only fires on an incomplete response) --
+    # having this on EVERY run, not just failures, is what lets a future
+    # investigation actually correlate prompt size against outcome across
+    # the full population, not just the handful of known-bad runs.
+    print(f"INFO: diagnosis prompt is {len(prompt)} chars", file=sys.stderr)
 
     client = genai.Client(
         vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION
