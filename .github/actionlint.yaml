@@ -34,3 +34,11 @@ paths:
       # v1.7.12 schema has no job.workflow_* (added to GitHub 2026). Runtime
       # values are documented; drop this when actionlint is bumped to v1.18+.
       - 'property "workflow_(repository|sha)" is not defined'
+  .github/workflows/ai-diagnostic-e2e.yml:
+    ignore:
+      # v1.7.12 (released 2026-03-30) predates concurrency.queue, added to
+      # GitHub Actions 2026-05-07
+      # (https://github.blog/changelog/2026-05-07-github-actions-concurrency-groups-now-allow-larger-queues/).
+      # Confirmed real and working at runtime; drop this once actionlint's
+      # schema catches up.
+      - 'unexpected key "queue" for "concurrency" section'
