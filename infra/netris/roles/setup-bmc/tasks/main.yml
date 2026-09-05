@@ -32,12 +32,35 @@
 
 # ── Phase 2: sushy-tools ─────────────────────────────────────────────
 
-- name: Install sushy-tools and libvirt-python
-  ansible.builtin.pip:
-    name:
+- name: Check sushy-tools Python dependencies
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import libvirt, sushy_tools
+  register: _sushy_dependencies_import
+  changed_when: false
+  failed_when: false
+
+- name: Install sushy-tools and libvirt-python for Ansible Python
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -m
+      - pip
+      - install
       - sushy-tools
       - libvirt-python
-    state: present
+  changed_when: true
+  when: _sushy_dependencies_import.rc != 0
+
+- name: Verify sushy-tools Python dependencies
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import libvirt, sushy_tools
+  changed_when: false
 
 - name: Create sushy-tools disk directory
   ansible.builtin.file:

@@ -109,12 +109,35 @@
       - nftables
     state: present
 
-- name: Install Python dependencies
-  pip:
-    name:
+- name: Check Netris Python dependency imports
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import bcrypt, netaddr
+  register: _netris_dependencies_import
+  changed_when: false
+  failed_when: false
+
+- name: Install Netris Python dependencies for Ansible Python
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -m
+      - pip
+      - install
       - bcrypt
       - netaddr
-    state: present
+  changed_when: true
+  when: _netris_dependencies_import.rc != 0
+
+- name: Verify Netris Python dependencies
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import bcrypt, netaddr
+  changed_when: false
 
 - name: Ensure root SSH key exists
   command: ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa

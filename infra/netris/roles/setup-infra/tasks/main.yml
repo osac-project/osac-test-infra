@@ -45,7 +45,7 @@
       fi
   register: _epel_install
   changed_when: "'installed' == _epel_install.stdout | trim"
-  when: ansible_os_family == "RedHat"
+  when: ansible_distribution == "RedHat"
 
 - name: Run prerequisites
   ansible.builtin.include_role:
@@ -53,10 +53,34 @@
 
 # kubernetes.core.k8s (caas_setup) needs the Python kubernetes client; not installed by
 # netris-lab prerequisites (only bcrypt/netaddr).
-- name: Install Python kubernetes client
-  ansible.builtin.pip:
-    name: kubernetes
-    state: present
+- name: Check Kubernetes client import
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import kubernetes
+  register: _kubernetes_import
+  changed_when: false
+  failed_when: false
+
+- name: Install Kubernetes client for Ansible Python
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -m
+      - pip
+      - install
+      - kubernetes
+  changed_when: true
+  when: _kubernetes_import.rc != 0
+
+- name: Verify Kubernetes client is importable by Ansible Python
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import kubernetes
+  changed_when: false
 
 # netris-lab's own prerequisites role drags in an openssl-libs upgrade as a
 # side effect of its package installs, and that OpenSSL version breaks
@@ -126,11 +150,26 @@
       - pigz
     state: present
 
-- name: Install awscli
-  ansible.builtin.pip:
-    name:
+- name: Check AWS CLI Python package import
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import awscli
+  register: _awscli_import
+  changed_when: false
+  failed_when: false
+
+- name: Install AWS CLI for Ansible Python
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -m
+      - pip
+      - install
       - awscli
-    state: present
+  changed_when: true
+  when: _awscli_import.rc != 0
 
 - name: Install oc CLI
   ansible.builtin.shell:

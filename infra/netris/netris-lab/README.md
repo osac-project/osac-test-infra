@@ -4,7 +4,7 @@ Automated deployment of a Netris Spectrum-X GPU cluster network simulation lab o
 
 ## Prerequisites
 
-- **OS**: RHEL 9.x or Rocky Linux 9.x
+- **OS**: RHEL-family distribution (RHEL, Rocky Linux, CentOS Stream, or Fedora)
 - **Access**: Root
 - **Hardware**: 16+ cores, 64GB+ RAM, 100GB+ disk in `/var/lib/libvirt/images`
 - **Network**: Internet access for image/package downloads
