@@ -26,7 +26,7 @@ on:
         description: "Semicolon-separated commands to run/verify on the box before JIT registration."
         required: false
         type: string
-        default: "dnf install -y ansible-core python3-pip make; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make"
+        default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; podman pull ghcr.io/astral-sh/uv:latest && uv_container=\"$(podman create ghcr.io/astral-sh/uv:latest)\" && podman cp \"${uv_container}:/uv\" /usr/local/bin/uv && podman rm \"${uv_container}\" && chmod 0755 /usr/local/bin/uv; command -v ansible-playbook; command -v make; command -v uv"
       osac-operator-image:
         description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
         required: false

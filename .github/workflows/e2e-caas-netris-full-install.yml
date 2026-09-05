@@ -40,10 +40,10 @@ on:
       # accept-and-revisit-if-flaky precedent (see provision.sh's
       # InsufficientInstanceCapacity handling for the same philosophy).
       tooling-check-cmds:
-        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites (ansible-core, python3-pip, make -- matching what the equivalent Prow lab-setup step installed, and infra/netris/README.md's own documented setup)."
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites (ansible-core, python3-pip, make, podman, and uv -- matching what the test harness requires, plus infra/netris/README.md's own documented setup)."
         required: false
         type: string
-        default: "dnf install -y ansible-core python3-pip make; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make"
+        default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; podman pull ghcr.io/astral-sh/uv:latest && uv_container=\"$(podman create ghcr.io/astral-sh/uv:latest)\" && podman cp \"${uv_container}:/uv\" /usr/local/bin/uv && podman rm \"${uv_container}\" && chmod 0755 /usr/local/bin/uv; command -v ansible-playbook; command -v make; command -v uv"
       osac-installer-image:
         description: "Override osac-installer image (registry-pullable reference, e.g. from a component repo's own PR build) -- accepted but not yet consumed: infra/netris has no plain extra-var for this (see the test job's 'Build component image overrides' step comment), needs podman-extraction handling in a later PR"
         required: false
