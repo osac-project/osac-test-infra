@@ -70,10 +70,14 @@ def render_total_block(cost, input_tokens, output_tokens, count):
     # rounding it to 4 decimals here would compound a small error on every
     # addition. The display line below still rounds to 4dp for reading.
     plural = "is" if count == 1 else "es"
+    # <sub> (smaller) + italic, all as one single-line paragraph -- never
+    # split across a blank line into this, since <sub> only shrinks a
+    # single line safely (see ai-diagnose-failure.py's split_root_cause
+    # docstring for the multi-line overlap bug this avoids).
     return (
         f"\n\n<!-- osac-ai-total-cost:{cost!r}:{input_tokens}:{output_tokens}:{count} -->\n"
-        f"**Total AI diagnostic cost for this PR:** ${cost:.4f} "
-        f"({input_tokens} input + {output_tokens} output tokens across {count} diagnos{plural})\n"
+        f"<sub>*Total AI diagnostic cost for this PR:* ${cost:.4f} "
+        f"({input_tokens} input + {output_tokens} output tokens across {count} diagnos{plural})</sub>\n"
     )
 
 

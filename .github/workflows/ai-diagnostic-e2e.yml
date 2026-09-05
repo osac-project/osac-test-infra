@@ -85,6 +85,17 @@ concurrency:
   # can't be used here).
   group: ai-diagnostic-e2e-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
+  # Without this, GitHub's default queue depth is 1: when a THIRD trigger
+  # arrives while one run is in-progress and a second is already pending,
+  # the second (still-pending) run gets silently CANCELLED and replaced by
+  # the third, rather than queuing behind it -- confirmed live (run
+  # 33940378100, PR #494: zero jobs ever started) when CaaS/BMaaS/VMaaS
+  # all failed within seconds of the same push, and cost the sticky
+  # comment an entire section. queue: max raises that to 100 pending runs
+  # in FIFO order, which is what "one comment per PR, safe under N
+  # simultaneous suite failures" actually requires. (Not compatible with
+  # cancel-in-progress: true, which is exactly why this is false above.)
+  queue: max
 
 # Deny-by-default at the workflow level; each job below sets its own
 # least-privilege block regardless.
