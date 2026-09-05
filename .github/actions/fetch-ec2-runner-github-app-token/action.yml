@@ -7,9 +7,8 @@ description: >-
 
   This action:
   1. Fetches app_id and private_key from Vault
-  2. Generates a JWT from the private key
-  3. Exchanges JWT for an installation token (valid 1 hour)
-  4. Outputs the token for use in runner registration
+  2. Mints an installation token via mint-github-app-token (valid 1 hour)
+  3. Outputs the token for use in runner registration
 
 inputs:
   role-id:
@@ -39,75 +38,12 @@ runs:
 
     - name: Generate GitHub App installation token
       id: github-app-token
-      shell: bash
-      env:
-        APP_ID: ${{ steps.vault.outputs.APP_ID }}
-        PRIVATE_KEY: ${{ steps.vault.outputs.PRIVATE_KEY }}
-        REPO_NAME: ${{ github.event.repository.name }}
-      run: |
-        set -euo pipefail
-
-        # Validate inputs
-        if [ -z "$APP_ID" ]; then
-          echo "ERROR: APP_ID not set from Vault" >&2
-          exit 1
-        fi
-        if [ -z "$PRIVATE_KEY" ]; then
-          echo "ERROR: PRIVATE_KEY not set from Vault" >&2
-          exit 1
-        fi
-
-        # Create JWT (valid for 10 minutes)
-        # Backdate iat by 60 seconds to account for clock skew
-        NOW=$(date +%s)
-        IAT=$((NOW - 60))
-        EXPIRY=$((NOW + 600))
-
-        # JWT header and payload
-        HEADER='{"alg":"RS256","typ":"JWT"}'
-        PAYLOAD="{\"iss\":\"${APP_ID}\",\"iat\":${IAT},\"exp\":${EXPIRY}}"
-
-        # Encode to base64 (URL-safe)
-        HEADER_B64=$(echo -n "$HEADER" | base64 -w0 | tr '+/' '-_' | tr -d '=')
-        PAYLOAD_B64=$(echo -n "$PAYLOAD" | base64 -w0 | tr '+/' '-_' | tr -d '=')
-
-        # Sign with private key
-        SIGNATURE=$(echo -n "${HEADER_B64}.${PAYLOAD_B64}" | \
-          openssl dgst -sha256 -sign <(echo "$PRIVATE_KEY") | \
-          base64 -w0 | tr '+/' '-_' | tr -d '=')
-
-        JWT="${HEADER_B64}.${PAYLOAD_B64}.${SIGNATURE}"
-
-        # Exchange JWT for installation token
-        # Get the installation ID first (for osac-project org)
-        INSTALLATION_ID=$(curl -s \
-          -H "Authorization: Bearer ${JWT}" \
-          -H "Accept: application/vnd.github+json" \
-          "https://api.github.com/app/installations" | \
-          jq -r '.[] | select(.account.login == "osac-project") | .id')
-
-        if [ -z "$INSTALLATION_ID" ] || [ "$INSTALLATION_ID" = "null" ]; then
-          echo "ERROR: Could not find installation ID for osac-project" >&2
-          curl -s \
-            -H "Authorization: Bearer ${JWT}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/app/installations" | jq '.' >&2
-          exit 1
-        fi
-
-        # Generate installation token with minimal scopes for JIT runner registration
-        TOKEN=$(curl -s -X POST \
-          -H "Authorization: Bearer ${JWT}" \
-          -H "Accept: application/vnd.github+json" \
-          -d "{\"repositories\":[\"${REPO_NAME}\"],\"permissions\":{\"administration\":\"write\"}}" \
-          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" | \
-          jq -r '.token')
-
-        if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-          echo "ERROR: Failed to generate installation token" >&2
-          exit 1
-        fi
-
-        # Output token (masked in logs)
-        echo "::add-mask::${TOKEN}"
-        echo "token=${TOKEN}" >> "$GITHUB_OUTPUT"
+      uses: ./.github/actions/mint-github-app-token
+      with:
+        app-id: ${{ steps.vault.outputs.APP_ID }}
+        private-key: ${{ steps.vault.outputs.PRIVATE_KEY }}
+        account-login: osac-project
+        repositories: ${{ github.event.repository.name }}
+        # Minimal scope for JIT runner registration -- unchanged from
+        # before this action was refactored to share mint-github-app-token.
+        permissions: '{"administration":"write"}'

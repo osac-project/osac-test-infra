@@ -32,11 +32,28 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions: {}
+    permissions:
+      contents: read  # checkout for the mint-github-app-token composite action only
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Mint OSAC AI bot token
+        id: mint-ai-token
+        uses: ./.github/actions/mint-github-app-token
+        with:
+          app-id: ${{ secrets.OSAC_AI_APP_ID }}
+          private-key: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}
+          account-login: osac-project
+          repositories: osac-test-infra
+          permissions: '{"issues":"write"}'
+
       - name: Close stale ai-candidate-known-issue issues
         env:
-          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
         run: |
           set -euo pipefail
           REPO="osac-project/osac-test-infra"
@@ -46,8 +63,11 @@ jobs:
           # creator filter is defense-in-depth, same reasoning as the
           # other two touch points that read these labels (find_existing
           # in track-recurring-failure.py, and the confirmed-known-issue
-          # fetch in ai-diagnostic-e2e.yml).
-          bot_login=$(gh api user --jq '.login')
+          # fetch in ai-diagnostic-e2e.yml). BOT_LOGIN comes from
+          # mint-github-app-token's own /app slug lookup, not `gh api
+          # user` -- that endpoint doesn't work with GitHub App
+          # installation tokens at all.
+          bot_login="${BOT_LOGIN}"
           issues_json=$(gh api --paginate \
             "repos/${REPO}/issues?labels=ai-candidate-known-issue&creator=${bot_login}&state=open&per_page=100" \
             --jq '.[] | {number, updated_at, labels: [.labels[].name]}' | jq -s '.')

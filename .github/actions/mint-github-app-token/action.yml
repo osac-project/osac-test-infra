@@ -1,0 +1,166 @@
+---
+name: Mint GitHub App token
+description: >-
+  Mint a short-lived (1h) GitHub App installation token, scoped to exactly
+  the account, repositories, and permissions the caller asks for.
+
+  Self-contained JWT-sign-and-exchange (curl/openssl/jq only, no external
+  token-minting action). Shared by every GitHub App this org uses for CI
+  automation -- e.g. fetch-ec2-runner-github-app-token (which fetches
+  app-id/private-key from Vault first, since that action targets
+  self-hosted runners with a local Vault Agent) and the OSAC AI bot's
+  workflows (which use plain GitHub Actions secrets instead, since
+  ai-diagnostic-e2e.yml runs on ubuntu-latest -- a GitHub-hosted runner
+  with neither a local Vault Agent nor an AppRole file on disk). Each
+  caller is responsible for however it sources app-id/private-key; this
+  action only does the mint.
+
+inputs:
+  app-id:
+    description: The GitHub App's numeric ID.
+    required: true
+  private-key:
+    description: The GitHub App's PEM private key.
+    required: true
+  account-login:
+    description: >-
+      Login of the ORG the app is installed under, e.g. osac-project. Every
+      current caller (and every planned one) installs its app on an org, not
+      a personal account, so this looks up the org-installation endpoint
+      directly rather than branching on account type.
+    required: true
+  repositories:
+    description: >-
+      Comma-separated repo names (no owner) to scope the token to, e.g.
+      "osac,osac-test-infra". Each must have this app installed under
+      account-login.
+    required: true
+  permissions:
+    description: >-
+      JSON object of GitHub App installation-token permissions, e.g.
+      '{"issues":"write","statuses":"write"}'. Keep this to the minimum the
+      calling job's own steps actually need -- see
+      https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app
+      for valid permission keys/values.
+    required: true
+
+outputs:
+  token:
+    value: ${{ steps.token.outputs.token }}
+  bot-login:
+    description: >-
+      The app's bot login (e.g. "osac-ai[bot]"), for matching against
+      `.user.login` on issues/comments/etc. this same token authored.
+    value: ${{ steps.token.outputs.bot-login }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate GitHub App installation token
+      id: token
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        PRIVATE_KEY: ${{ inputs.private-key }}
+        ACCOUNT_LOGIN: ${{ inputs.account-login }}
+        REPOSITORIES: ${{ inputs.repositories }}
+        PERMISSIONS: ${{ inputs.permissions }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${APP_ID}" ]]; then
+          echo "ERROR: app-id input is empty" >&2
+          exit 1
+        fi
+        if [[ -z "${PRIVATE_KEY}" ]]; then
+          echo "ERROR: private-key input is empty" >&2
+          exit 1
+        fi
+
+        # JWT valid for 10 minutes -- only used to mint the installation
+        # token below, never sent anywhere else. Backdate iat by 60s for
+        # clock skew.
+        NOW=$(date +%s)
+        IAT=$((NOW - 60))
+        EXPIRY=$((NOW + 600))
+
+        HEADER='{"alg":"RS256","typ":"JWT"}'
+        PAYLOAD="{\"iss\":\"${APP_ID}\",\"iat\":${IAT},\"exp\":${EXPIRY}}"
+
+        HEADER_B64=$(echo -n "${HEADER}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+        PAYLOAD_B64=$(echo -n "${PAYLOAD}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+
+        SIGNATURE=$(echo -n "${HEADER_B64}.${PAYLOAD_B64}" | \
+          openssl dgst -sha256 -sign <(echo "${PRIVATE_KEY}") | \
+          base64 -w0 | tr '+/' '-_' | tr -d '=')
+
+        JWT="${HEADER_B64}.${PAYLOAD_B64}.${SIGNATURE}"
+
+        # Shared by every curl call below: fail fast on a hung connection
+        # rather than eating the job's whole timeout-minutes budget, and
+        # retry the two idempotent GETs (not the access_tokens POST --
+        # minting an extra valid token on a false-negative retry is
+        # harmless, but retrying a POST whose response merely failed to
+        # come back isn't the kind of "idempotent" this flag is for).
+        CURL_OPTS=(--connect-timeout 10 --max-time 30)
+        CURL_GET_OPTS=("${CURL_OPTS[@]}" --retry 3 --retry-delay 2 --retry-connrefused)
+
+        # /app requires JWT auth and returns the app's own metadata,
+        # including `slug` -- combined with the fixed "[bot]" suffix,
+        # that's the exact login GitHub attributes this token's actions to
+        # (e.g. "osac-ai[bot]"), the same technique actions/create-github-
+        # app-token uses for its own app-slug output. Exposed as `bot-login`
+        # so callers can match `.user.login` on their own issues/comments
+        # without a `gh api user` call -- that endpoint doesn't work with
+        # installation tokens at all (GET /user has no "Works with GitHub
+        # Apps" support), which is what every caller here used to do,
+        # unnoticed until this token stopped being a real user account.
+        app_response=$(curl -s "${CURL_GET_OPTS[@]}" \
+          -H "Authorization: Bearer ${JWT}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/app")
+        APP_SLUG=$(jq -r '.slug' <<<"${app_response}")
+
+        if [[ -z "${APP_SLUG}" || "${APP_SLUG}" == "null" ]]; then
+          echo "ERROR: Could not resolve the app's own slug from /app" >&2
+          echo "${app_response}" >&2
+          exit 1
+        fi
+        BOT_LOGIN="${APP_SLUG}[bot]"
+
+        # Direct org-installation lookup (not curl -f: a 4xx/5xx here still
+        # returns a JSON body worth printing on failure -- -f would just
+        # fail with no diagnostic).
+        installation_response=$(curl -s "${CURL_GET_OPTS[@]}" \
+          -H "Authorization: Bearer ${JWT}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/orgs/${ACCOUNT_LOGIN}/installation")
+        INSTALLATION_ID=$(jq -r '.id' <<<"${installation_response}")
+
+        if [[ -z "${INSTALLATION_ID}" || "${INSTALLATION_ID}" == "null" ]]; then
+          echo "ERROR: Could not find an app installation for org '${ACCOUNT_LOGIN}'" >&2
+          echo "${installation_response}" >&2
+          exit 1
+        fi
+
+        repos_json=$(jq -Rc 'split(",")' <<<"${REPOSITORIES}")
+        request_body=$(jq -nc --argjson repositories "${repos_json}" --argjson permissions "${PERMISSIONS}" \
+          '{repositories: $repositories, permissions: $permissions}')
+
+        response=$(curl -s "${CURL_OPTS[@]}" -X POST \
+          -H "Authorization: Bearer ${JWT}" \
+          -H "Accept: application/vnd.github+json" \
+          -d "${request_body}" \
+          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
+
+        TOKEN=$(jq -r '.token' <<<"${response}")
+
+        if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
+          echo "ERROR: Failed to generate installation token" >&2
+          echo "${response}" >&2
+          exit 1
+        fi
+
+        echo "::add-mask::${TOKEN}"
+        echo "token=${TOKEN}" >> "${GITHUB_OUTPUT}"
+        echo "bot-login=${BOT_LOGIN}" >> "${GITHUB_OUTPUT}"

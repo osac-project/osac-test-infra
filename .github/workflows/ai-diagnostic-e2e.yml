@@ -52,13 +52,20 @@ on:
         required: false
         default: gemini-2.5-pro
     secrets:
-      AI_DIAGNOSTIC_TOKEN:
-        description: >-
-          Fine-grained PAT for the osac-ai-diagnostic-bot account (Issues +
-          Commit statuses only) used to post the diagnostic status/comment.
-          Declared explicitly (rather than relying on a caller's `secrets:
-          inherit`) so the interface is self-documenting and doesn't depend
-          on inherit's less-clearly-documented cross-repo behavior.
+      # Credentials for the "OSAC AI" GitHub App (bot identity
+      # osac-ai[bot], installed on both osac and osac-test-infra),
+      # exchanged for a short-lived installation token per job by "Mint
+      # OSAC AI bot token" below -- see mint-github-app-token's own
+      # description for why this doesn't fetch from Vault the way
+      # self-hosted-runner workflows do (this job runs on ubuntu-latest).
+      # Declared explicitly (rather than relying on a caller's `secrets:
+      # inherit`) so the interface is self-documenting and doesn't depend
+      # on inherit's less-clearly-documented cross-repo behavior.
+      OSAC_AI_APP_ID:
+        description: The OSAC AI GitHub App's numeric ID.
+        required: true
+      OSAC_AI_APP_PRIVATE_KEY:
+        description: The OSAC AI GitHub App's PEM private key.
         required: true
 
 concurrency:
@@ -252,11 +259,9 @@ jobs:
       pull-requests: read  # fetch this PR's changed-files/diff for extra prompt context
       id-token: write      # Vertex AI WIF auth
       # No issues:write / statuses:write here: posting the comment and
-      # commit status both go through AI_DIAGNOSTIC_TOKEN (a dedicated
-      # fine-grained PAT for the osac-ai-diagnostic-bot account, scoped to
-      # just Issues + Commit statuses on osac/osac-test-infra), not
-      # GITHUB_TOKEN -- see "Publish diagnostic status" and the comment
-      # steps below for why.
+      # commit status both go through a minted OSAC AI GitHub App
+      # installation token, not GITHUB_TOKEN -- see "Mint OSAC AI bot
+      # token" and the comment/status steps below for why.
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -267,6 +272,27 @@ jobs:
           # cross-repo via workflow_call from another repo's wrapper.
           repository: osac-project/osac-test-infra
           persist-credentials: false
+
+      # Scoped to Issues (known-issues fetch, PR comments, recurring-
+      # failure tracking) + Commit statuses on both osac and
+      # osac-test-infra, plus read-only Pull requests (checking a PR is
+      # still open before editing its comment) -- the OSAC AI app is
+      # installed on both repos so one token covers whichever repo's E2E
+      # run actually failed, and osac-test-infra specifically for the
+      # known-issues/recurring-failure Issues regardless of which repo
+      # that is. Replaces the old osac-ai-diagnostic-bot fine-grained PAT
+      # (AI_DIAGNOSTIC_TOKEN) -- a GitHub App's installation token is
+      # short-lived (1h, minted fresh per job) and needs no seat/2FA'd
+      # bot-user account to maintain or rotate.
+      - name: Mint OSAC AI bot token
+        id: mint-ai-token
+        uses: ./.github/actions/mint-github-app-token
+        with:
+          app-id: ${{ secrets.OSAC_AI_APP_ID }}
+          private-key: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}
+          account-login: osac-project
+          repositories: osac,osac-test-infra
+          permissions: '{"issues":"write","pull_requests":"read","statuses":"write"}'
 
       - name: Fetch PR changed-files and diff
         id: pr-context
@@ -349,13 +375,14 @@ jobs:
       # track-recurring-failure.py's module docstring for the full
       # promotion flow). Fetched live, not checked out as files, so
       # promoting a candidate is just adding a label -- no PR needed. Uses
-      # AI_DIAGNOSTIC_TOKEN (not github.token) because the corpus always
-      # lives in osac-test-infra regardless of which repo this run is
-      # actually diagnosing.
+      # the minted OSAC AI bot token (not github.token) because the corpus
+      # always lives in osac-test-infra regardless of which repo this run
+      # is actually diagnosing.
       - name: Fetch confirmed known issues
         id: known-issues
         env:
-          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
         run: |
           set -euo pipefail
           MAX_CHARS=8000
@@ -365,7 +392,13 @@ jobs:
           # self-label it) -- but it means even a maintainer mistakenly
           # labeling someone else's unrelated issue can never feed it
           # into every future diagnosis prompt.
-          bot_login=$(gh api user --jq '.login')
+          #
+          # BOT_LOGIN comes from mint-github-app-token's own /app slug
+          # lookup, not `gh api user` -- that endpoint doesn't work with
+          # GitHub App installation tokens at all (no "Works with GitHub
+          # Apps" support), unlike the old fine-grained PAT this replaced,
+          # which really was a normal user account.
+          bot_login="${BOT_LOGIN}"
           issues_json=$(gh api --paginate \
             "repos/osac-project/osac-test-infra/issues?labels=confirmed-known-issue&creator=${bot_login}&state=open&per_page=100" \
             --jq '.[] | {title, body}' | jq -s '.')
@@ -416,11 +449,10 @@ jobs:
       # always show up in the rollup, which is how pre-Checks-API CI
       # integrations (e.g. classic Travis CI) supported fork PRs for years.
       #
-      # Posted via AI_DIAGNOSTIC_TOKEN -- a dedicated fine-grained PAT for a
-      # bot account created specifically for this pipeline (Issues +
-      # Commit statuses only, scoped to osac/osac-test-infra) -- rather
-      # than GITHUB_TOKEN, so this always shows up under a stable,
-      # recognizable bot identity distinct from the generic
+      # Posted via the minted OSAC AI bot token -- a GitHub App installation
+      # token scoped to Issues + Commit statuses on osac/osac-test-infra --
+      # rather than GITHUB_TOKEN, so this always shows up under a stable,
+      # recognizable bot identity (osac-ai[bot]) distinct from the generic
       # github-actions[bot] every other job in these repos posts as.
       #
       # !cancelled() (rather than relying on the implicit success() this
@@ -432,7 +464,7 @@ jobs:
       - name: Publish diagnostic status
         if: "!cancelled()"
         env:
-          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
@@ -472,25 +504,29 @@ jobs:
       # comment-success job for the passing-run edit path); a passing run
       # with no prior failure comment posts nothing at all.
       #
-      # Posted via AI_DIAGNOSTIC_TOKEN, same reasoning as the commit status
-      # above -- plus it's what makes the author-identity check below
-      # possible: GITHUB_TOKEN always posts as github-actions[bot], which
-      # any PR participant could also front-run by posting their own
-      # comment starting with our marker text before this job ever runs
-      # (see below).
+      # Posted via the minted OSAC AI bot token, same reasoning as the
+      # commit status above -- plus it's what makes the author-identity
+      # check below possible: GITHUB_TOKEN always posts as
+      # github-actions[bot], which any PR participant could also front-run
+      # by posting their own comment starting with our marker text before
+      # this job ever runs (see below).
       - name: Find existing diagnostic comment
         id: comment
         if: "!cancelled()"
         env:
-          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.number }}
         run: |
           set -euo pipefail
-          # Resolve our own identity dynamically (never hardcode a login)
-          # so the author-match below always matches whichever account
-          # AI_DIAGNOSTIC_TOKEN actually authenticates as.
-          bot_login=$(gh api user --jq '.login')
+          # Resolved by mint-github-app-token via /app's own slug, not `gh
+          # api user` (doesn't work with installation tokens) -- see the
+          # "Fetch confirmed known issues" step above for the full
+          # reasoning. Read into a shell var (never hardcoded) so the
+          # author-match below always matches whichever account the
+          # minted OSAC AI bot token actually authenticates as.
+          bot_login="${BOT_LOGIN}"
           BODY_FILE="${RUNNER_TEMP}/existing-comment-body.md"
           # Fetch id+body+author together and search in jq (not `| head -1`
           # on a live gh api pipe, which risks a SIGPIPE-under-pipefail
@@ -563,7 +599,7 @@ jobs:
       - name: Upsert PR comment
         if: "!cancelled()"
         env:
-          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.number }}
           COMMENT_ID: ${{ steps.comment.outputs.id }}
@@ -589,13 +625,13 @@ jobs:
       # Opens/bumps a review-queue issue in osac-test-infra when the same
       # JUnit test fails repeatedly -- never applies the confirmed-known-
       # issue label itself; a human still decides whether to promote a
-      # flagged candidate. Uses AI_DIAGNOSTIC_TOKEN (already scoped to
-      # Issues read/write on osac-test-infra) rather than GITHUB_TOKEN,
-      # same reasoning as the PR comment/status steps above.
+      # flagged candidate. Uses the minted OSAC AI bot token (already
+      # scoped to Issues read/write on osac-test-infra) rather than
+      # GITHUB_TOKEN, same reasoning as the PR comment/status steps above.
       - name: Track recurring-failure candidate
         if: "!cancelled()"
         env:
-          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.number }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
@@ -630,17 +666,34 @@ jobs:
           repository: osac-project/osac-test-infra
           persist-credentials: false
 
+      # Narrower than the diagnose job's own copy of this step: this job
+      # only ever edits the existing sticky comment, never posts a commit
+      # status or touches Issues on osac-test-infra.
+      - name: Mint OSAC AI bot token
+        id: mint-ai-token
+        uses: ./.github/actions/mint-github-app-token
+        with:
+          app-id: ${{ secrets.OSAC_AI_APP_ID }}
+          private-key: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}
+          account-login: osac-project
+          repositories: osac,osac-test-infra
+          permissions: '{"issues":"write","pull_requests":"read"}'
+
       # Same identity/author-check reasoning as the diagnose job's own copy
       # of this step -- see there for the full explanation.
       - name: Find existing diagnostic comment
         id: comment
         env:
-          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.number }}
         run: |
           set -euo pipefail
-          bot_login=$(gh api user --jq '.login')
+          # See the diagnose job's own copy of this step for why this
+          # comes from mint-github-app-token's bot-login output, not
+          # `gh api user`.
+          bot_login="${BOT_LOGIN}"
           BODY_FILE="${RUNNER_TEMP}/existing-comment-body.md"
           comments_json=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" --jq '.[] | {id, body, user: .user.login}' | jq -s '.')
           comment_id=$(jq -r --arg bot "${bot_login}" '
@@ -689,7 +742,7 @@ jobs:
       - name: Upsert PR comment
         if: steps.comment.outputs.id != ''
         env:
-          GH_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.number }}
           COMMENT_ID: ${{ steps.comment.outputs.id }}
