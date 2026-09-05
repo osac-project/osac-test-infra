@@ -820,12 +820,59 @@ MAX_TOKENS_FINISH_REASON = "MAX_TOKENS"
 
 def _hit_max_tokens(resp):
     """True if this response's own finish_reason shows it hit
-    max_output_tokens before finishing -- the one failure mode a "please
-    be more concise" retry can actually fix. A safety block or recitation
-    flag isn't caused by length, so retrying with that ask wouldn't
-    address why generation actually stopped.
+    max_output_tokens before finishing.
     """
     return MAX_TOKENS_FINISH_REASON in str(_finish_reason(resp) or "")
+
+
+# Finish reasons that mean the model's output was deliberately withheld by
+# a content policy. Retrying the identical prompt/history against one of
+# these would almost certainly reproduce the exact same block -- unlike
+# MAX_TOKENS (a fresh turn gets a fresh budget) or a bare empty STOP (see
+# _is_incomplete below), there's no reason to expect a second attempt to
+# come out any differently. Matched by substring, same reasoning as
+# MAX_TOKENS_FINISH_REASON above. MALFORMED_FUNCTION_CALL is deliberately
+# NOT in this list: it looks like a model/SDK glitch on that specific tool
+# call, not a content decision, so a retry is still worth trying.
+_BLOCKED_FINISH_REASONS = (
+    "SAFETY",
+    "RECITATION",
+    "PROHIBITED_CONTENT",
+    "SPII",
+    "BLOCKLIST",
+    "IMAGE_SAFETY",
+    "LANGUAGE",
+)
+
+
+def _is_blocked(resp):
+    """True if this response's finish_reason is a hard content-policy
+    block (see _BLOCKED_FINISH_REASONS) rather than a length or
+    reliability issue.
+    """
+    return any(reason in str(_finish_reason(resp) or "") for reason in _BLOCKED_FINISH_REASONS)
+
+
+def _is_incomplete(resp):
+    """True if `resp` isn't a usable, complete diagnosis: either it hit
+    max_output_tokens before finishing (even if it has SOME partial text),
+    or it has no text at all, for any reason.
+
+    The second half matters on its own, not just alongside MAX_TOKENS:
+    confirmed live twice on 2026-09-05 (osac-project/osac run 33970823221
+    and osac-project/osac-test-infra run 33977253113) that Gemini can
+    return a completely empty resp.text with finish_reason=STOP -- no
+    length signal, no safety block, nothing -- and the original version of
+    this retry logic only ever checked _hit_max_tokens, so that case was
+    returned immediately as "done, not incomplete" without ever attempting
+    a retry. This matches a documented, independently-reported Gemini/
+    Vertex reliability quirk (e.g. the Google AI Developer Forum's "Gemini
+    2.5 Pro with empty response.text" thread, and googleapis/python-genai
+    issue #1289 "Frequent empty response with gemini 2.5 pro"), not
+    something a bigger token budget or MAX_TOOL_CALLS change can prevent,
+    since it isn't caused by either.
+    """
+    return _hit_max_tokens(resp) or not resp.text
 
 
 def _describe_empty_response(resp):
@@ -852,72 +899,69 @@ def _describe_empty_response(resp):
     return "no candidates/finish_reason available"
 
 
+_RETRY_PROMPT = (
+    "Your previous response did not include a usable, complete final answer -- "
+    "either it was cut off for exceeding the output token limit, or it came back "
+    "empty for another reason. Respond again from scratch with the SAME required "
+    "section headers and format. If you were cut off for length, be significantly "
+    "more concise this time: shorter Evidence quotes (one line each is enough), "
+    "fewer Causal chain bullets, no filler. Either way, prioritize actually "
+    "writing out the complete answer -- reaching the Conclusion and the final "
+    "Confidence line -- over exhaustive detail."
+)
+
+
 def _generate_with_retry(chat, prompt):
-    """Send `prompt`, retrying ONCE with a "be more concise" follow-up
-    turn if the response hit max_output_tokens (see _hit_max_tokens for
-    why only that specific finish_reason is worth retrying at all).
+    """Send `prompt`, retrying ONCE with a follow-up turn if the response
+    is incomplete (see _is_incomplete: it hit max_output_tokens, or it
+    came back with no text at all for some other, non-blocked reason).
 
     A fresh turn gets its own full max_output_tokens budget again, and the
     model already has every read_artifact_file call's evidence sitting in
-    this same chat's history -- asking it to compress what it already
-    figured out into a tighter answer is a real repair, not just a
-    relabeled failure. Only one retry: if it's still this verbose on a
-    second attempt, a third pass is unlikely to help and just doubles the
-    cost again for no gain.
+    this same chat's history -- asking it to actually produce a complete
+    answer from what it already gathered is a real repair, not just a
+    relabeled failure. Only one retry: if it's still bad on a second
+    attempt, a third pass is unlikely to help and just doubles the cost
+    again for no gain. Skips the retry entirely for a genuine
+    content-policy block (_is_blocked) -- retrying the same prompt/history
+    against the same filter would almost certainly reproduce it.
 
-    Returns (resp, truncated, usage_metadata_list). `truncated` is True
-    only if the response being returned STILL hit max_output_tokens after
-    the retry (with or without any text) -- the caller uses this to flag
-    an incomplete diagnosis explicitly rather than silently presenting a
-    cut-off answer as if it were a complete one. `usage_metadata_list`
-    carries every attempt actually made (one entry, or two if a retry was
-    sent) so the caller can add up the REAL total cost across attempts --
-    see aggregate_cost's docstring for why the final attempt's
-    usage_metadata alone would silently drop the first attempt's already-
-    incurred cost.
+    Returns (resp, incomplete, usage_metadata_list). `incomplete` is True
+    only if the response being returned is STILL bad after the retry (or
+    a retry was skipped as pointless) -- the caller uses this to flag the
+    diagnosis explicitly rather than silently presenting a bad answer as a
+    complete one. `usage_metadata_list` carries every attempt actually
+    made (one entry, or two if a retry was sent) so the caller can add up
+    the REAL total cost across attempts -- see aggregate_cost's docstring
+    for why the final attempt's usage_metadata alone would silently drop
+    an earlier attempt's already-incurred cost.
     """
     resp = chat.send_message(prompt)
     usage_metadata_list = [resp.usage_metadata]
-    if not _hit_max_tokens(resp):
+    if not _is_incomplete(resp):
         return resp, False, usage_metadata_list
+    if _is_blocked(resp):
+        return resp, True, usage_metadata_list
     print(
-        f"WARNING: Gemini hit its output token limit ({_describe_empty_response(resp)}); "
-        "retrying once for a more concise answer.",
+        f"WARNING: Gemini's response was incomplete ({_describe_empty_response(resp)}); "
+        "retrying once for a complete answer.",
         file=sys.stderr,
     )
-    retry_resp = chat.send_message(
-        "Your previous response was cut off for exceeding the output token limit. "
-        "Respond again from scratch with the SAME required section headers and format, "
-        "but be significantly more concise: shorter Evidence quotes (one line each is "
-        "enough), fewer Causal chain bullets, and no filler -- prioritize actually "
-        "reaching the Conclusion and the final Confidence line over exhaustive detail."
-    )
+    retry_resp = chat.send_message(_RETRY_PROMPT)
     usage_metadata_list.append(retry_resp.usage_metadata)
-    if _hit_max_tokens(retry_resp):
-        print(
-            f"WARNING: Retry also hit the output token limit ({_describe_empty_response(retry_resp)}); "
-            "giving up after one retry.",
-            file=sys.stderr,
-        )
-        # Prefer whichever attempt actually has SOME text -- a truncated
-        # but non-empty answer is still more useful (once flagged below)
-        # than a totally empty one.
-        return (retry_resp if retry_resp.text else resp), True, usage_metadata_list
-    if retry_resp.text:
+    if not _is_incomplete(retry_resp):
         return retry_resp, False, usage_metadata_list
-    # The retry did NOT hit the length limit (e.g. a safety/recitation
-    # block on the retry turn, unrelated to length) but still came back
-    # with no text -- do not present that as the "clean" result. Fall back
-    # to the ORIGINAL response instead: it's the one that actually hit
-    # max_output_tokens, so `truncated=True` still accurately describes it
-    # whether or not it has any text of its own.
     print(
-        f"WARNING: Retry returned no text without hitting the token limit "
-        f"({_describe_empty_response(retry_resp)}); falling back to the "
-        "original (truncated) response.",
+        f"WARNING: Retry was also incomplete ({_describe_empty_response(retry_resp)}); "
+        "giving up after one retry.",
         file=sys.stderr,
     )
-    return resp, True, usage_metadata_list
+    # Prefer whichever attempt actually has SOME text -- a truncated (or
+    # otherwise imperfect) but non-empty answer is still more useful (once
+    # flagged below) than a totally empty one. The retry wins ties (e.g.
+    # both have text) since it's the more considered attempt.
+    final_resp = retry_resp if retry_resp.text else (resp if resp.text else retry_resp)
+    return final_resp, True, usage_metadata_list
 
 
 def call_gemini(prompt, artifact_dir):
@@ -941,7 +985,7 @@ def call_gemini(prompt, artifact_dir):
             thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET_TOKENS),
         ),
     )
-    resp, truncated, usage_metadata_list = _generate_with_retry(chat, prompt)
+    resp, incomplete, usage_metadata_list = _generate_with_retry(chat, prompt)
     if resp.text:
         text = resp.text
     else:
@@ -967,16 +1011,18 @@ def call_gemini(prompt, artifact_dir):
             # shouldn't disappear just because usage_metadata was empty.
             cost_line = f"{cost_line}, {tool_calls_text}" if cost_line else tool_calls_text
         # Even after the retry in _generate_with_retry, the response can
-        # still be truncated (verbose model, hard failure) -- surfaced
-        # explicitly rather than silently presenting a cut-off answer
-        # (missing its Conclusion/Confidence line, or worse, mid-sentence)
-        # as if it were a complete one.
-        truncated_line = (
-            "⚠️ Truncated: hit the output token limit even after a retry -- treat as incomplete"
-            if truncated
+        # still be incomplete (verbose model hitting the token limit
+        # again, a repeated empty response, or a content-policy block) --
+        # surfaced explicitly rather than silently presenting a bad answer
+        # (missing its Conclusion/Confidence line, empty, or cut off
+        # mid-sentence) as if it were a complete one.
+        incomplete_line = (
+            "⚠️ Incomplete: Gemini's response was cut off or came back empty even "
+            "after a retry -- treat as incomplete"
+            if incomplete
             else None
         )
-        parts = filter(None, [truncated_line, format_confidence_line(confidence), cost_line])
+        parts = filter(None, [incomplete_line, format_confidence_line(confidence), cost_line])
         footer = f"<sub>{' | '.join(parts)}</sub>"
     except Exception:  # noqa: BLE001 -- a footer-formatting bug must never lose a real diagnosis
         footer = ""
