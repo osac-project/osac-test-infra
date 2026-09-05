@@ -42,9 +42,9 @@ PROMOTION_THRESHOLD = 3
 # glance in the Issues list, no filter needed) and the CANDIDATE_LABEL
 # (the actual, code-level filter -- see find_existing() -- since a title
 # string could in principle collide with something a human writes by
-# hand). Author is also always the AI_DIAGNOSTIC_TOKEN bot account for
-# free, as a third way to isolate these (`gh issue list --author
-# <bot-login>`), with no extra code required.
+# hand). Author is also always the minted OSAC AI bot token's account
+# (osac-ai[bot]) for free, as a third way to isolate these (`gh issue list
+# --author <bot-login>`), with no extra code required.
 TITLE_PREFIX = "[AI Diagnostic]"
 MAX_EXCERPT_CHARS = 500
 MAX_TEST_NAME_LEN = 200

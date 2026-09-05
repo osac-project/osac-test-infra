@@ -77,7 +77,7 @@ except (json.JSONDecodeError, TypeError):
 # Curated known-issues corpus -- title+body of every osac-test-infra issue
 # labeled confirmed-known-issue AND authored by the pipeline's own bot
 # account, fetched live by the "Fetch confirmed known issues" workflow
-# step (via AI_DIAGNOSTIC_TOKEN) and JSON-encoded the same way as
+# step (via the minted OSAC AI bot token) and JSON-encoded the same way as
 # CHANGED_FILES/PR_DIFF above. The creator filter is defense-in-depth on
 # top of GitHub's own access control (only write-access holders can apply
 # this label at all; a random public user can't self-label their own

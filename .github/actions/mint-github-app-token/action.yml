@@ -1,0 +1,129 @@
+---
+name: Mint GitHub App token
+description: >-
+  Mint a short-lived (1h) GitHub App installation token, scoped to exactly
+  the account, repositories, and permissions the caller asks for.
+
+  Self-contained JWT-sign-and-exchange (curl/openssl/jq only, no external
+  token-minting action). Shared by every GitHub App this org uses for CI
+  automation -- e.g. fetch-ec2-runner-github-app-token (which fetches
+  app-id/private-key from Vault first, since that action targets
+  self-hosted runners with a local Vault Agent) and the OSAC AI bot's
+  workflows (which use plain GitHub Actions secrets instead, since
+  ai-diagnostic-e2e.yml runs on ubuntu-latest -- a GitHub-hosted runner
+  with neither a local Vault Agent nor an AppRole file on disk). Each
+  caller is responsible for however it sources app-id/private-key; this
+  action only does the mint.
+
+inputs:
+  app-id:
+    description: The GitHub App's numeric ID.
+    required: true
+  private-key:
+    description: The GitHub App's PEM private key.
+    required: true
+  account-login:
+    description: >-
+      Login of the org/user the app is installed under, e.g. osac-project.
+      One app can only have one installation per account, so this is
+      enough to find it regardless of how many repos it's installed on.
+    required: true
+  repositories:
+    description: >-
+      Comma-separated repo names (no owner) to scope the token to, e.g.
+      "osac,osac-test-infra". Each must have this app installed under
+      account-login.
+    required: true
+  permissions:
+    description: >-
+      JSON object of GitHub App installation-token permissions, e.g.
+      '{"issues":"write","statuses":"write"}'. Keep this to the minimum the
+      calling job's own steps actually need -- see
+      https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app
+      for valid permission keys/values.
+    required: true
+
+outputs:
+  token:
+    value: ${{ steps.token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate GitHub App installation token
+      id: token
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        PRIVATE_KEY: ${{ inputs.private-key }}
+        ACCOUNT_LOGIN: ${{ inputs.account-login }}
+        REPOSITORIES: ${{ inputs.repositories }}
+        PERMISSIONS: ${{ inputs.permissions }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${APP_ID}" ]]; then
+          echo "ERROR: app-id input is empty" >&2
+          exit 1
+        fi
+        if [[ -z "${PRIVATE_KEY}" ]]; then
+          echo "ERROR: private-key input is empty" >&2
+          exit 1
+        fi
+
+        # JWT valid for 10 minutes -- only used to mint the installation
+        # token below, never sent anywhere else. Backdate iat by 60s for
+        # clock skew.
+        NOW=$(date +%s)
+        IAT=$((NOW - 60))
+        EXPIRY=$((NOW + 600))
+
+        HEADER='{"alg":"RS256","typ":"JWT"}'
+        PAYLOAD="{\"iss\":\"${APP_ID}\",\"iat\":${IAT},\"exp\":${EXPIRY}}"
+
+        HEADER_B64=$(echo -n "${HEADER}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+        PAYLOAD_B64=$(echo -n "${PAYLOAD}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+
+        SIGNATURE=$(echo -n "${HEADER_B64}.${PAYLOAD_B64}" | \
+          openssl dgst -sha256 -sign <(echo "${PRIVATE_KEY}") | \
+          base64 -w0 | tr '+/' '-_' | tr -d '=')
+
+        JWT="${HEADER_B64}.${PAYLOAD_B64}.${SIGNATURE}"
+
+        # Installation ID is per-account, not per-repo -- one app installed
+        # across multiple repos under the same account still has a single
+        # installation entry here.
+        # Not curl -f: a 4xx/5xx here still returns a JSON body worth
+        # printing on failure -- -f would just fail with no diagnostic.
+        installations_response=$(curl -s \
+          -H "Authorization: Bearer ${JWT}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/app/installations")
+        INSTALLATION_ID=$(jq -r --arg login "${ACCOUNT_LOGIN}" '.[] | select(.account.login == $login) | .id' <<<"${installations_response}")
+
+        if [[ -z "${INSTALLATION_ID}" || "${INSTALLATION_ID}" == "null" ]]; then
+          echo "ERROR: Could not find an app installation for account '${ACCOUNT_LOGIN}'" >&2
+          echo "${installations_response}" >&2
+          exit 1
+        fi
+
+        repos_json=$(jq -Rc 'split(",")' <<<"${REPOSITORIES}")
+        request_body=$(jq -nc --argjson repositories "${repos_json}" --argjson permissions "${PERMISSIONS}" \
+          '{repositories: $repositories, permissions: $permissions}')
+
+        response=$(curl -s -X POST \
+          -H "Authorization: Bearer ${JWT}" \
+          -H "Accept: application/vnd.github+json" \
+          -d "${request_body}" \
+          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
+
+        TOKEN=$(jq -r '.token' <<<"${response}")
+
+        if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
+          echo "ERROR: Failed to generate installation token" >&2
+          echo "${response}" >&2
+          exit 1
+        fi
+
+        echo "::add-mask::${TOKEN}"
+        echo "token=${TOKEN}" >> "${GITHUB_OUTPUT}"
