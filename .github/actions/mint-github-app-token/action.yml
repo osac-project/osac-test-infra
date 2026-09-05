@@ -161,6 +161,13 @@ runs:
           exit 1
         fi
 
+        # Always logged (not just on failure): the actual GRANTED
+        # permissions can be lower than what was requested above -- an
+        # installation's own accepted grant can lag behind the app's
+        # current permission manifest until an admin re-approves it, and
+        # that gap only shows up here, never as a mint-time error. Not
+        # sensitive (it's just a permissions object, not the token).
+        echo "Granted permissions: $(jq -c '.permissions' <<<"${response}")"
         echo "::add-mask::${TOKEN}"
         echo "token=${TOKEN}" >> "${GITHUB_OUTPUT}"
         echo "bot-login=${BOT_LOGIN}" >> "${GITHUB_OUTPUT}"
