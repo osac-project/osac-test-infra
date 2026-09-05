@@ -411,6 +411,9 @@ jobs:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make setup-suite INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
 
+      - name: Install grpcurl
+        uses: ./.github/actions/install-grpcurl
+
       - name: Run BMaaS networking tests
         id: test
         timeout-minutes: 60
@@ -438,13 +441,25 @@ jobs:
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=bmaas_networking
 
+      - name: Archive Netris artifacts
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: |
+          archive_paths=()
+          [[ -d reports ]] && archive_paths+=(reports)
+          [[ -d infra/netris/logs ]] && archive_paths+=(infra/netris/logs)
+          if (( ${#archive_paths[@]} > 0 )); then
+            tar -czf bmaas-netris-artifacts.tar.gz "${archive_paths[@]}"
+          fi
+
       - name: Upload artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bmaas-netris-artifacts
-          path: infra/netris/logs/
+          path: bmaas-netris-artifacts.tar.gz
           if-no-files-found: ignore
 
       - name: Gather EC2 runner artifacts
