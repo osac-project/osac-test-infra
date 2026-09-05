@@ -847,10 +847,25 @@ _BLOCKED_FINISH_REASONS = (
 
 def _is_blocked(resp):
     """True if this response's finish_reason is a hard content-policy
-    block (see _BLOCKED_FINISH_REASONS) rather than a length or
-    reliability issue.
+    block (see _BLOCKED_FINISH_REASONS), OR the PROMPT itself was blocked
+    before any candidate was even generated.
+
+    The prompt-level check matters on its own, not just as a fallback:
+    per _finish_reason's own docstring, a prompt-level safety block never
+    produces a finish_reason on a candidate at all (there may be no
+    candidates whatsoever) -- so checking finish_reason alone would miss
+    this case entirely and let _generate_with_retry waste its one retry
+    on a prompt that's guaranteed to be rejected again for the exact same
+    reason. Same defensive nested-attribute pattern as
+    _describe_empty_response's own prompt_feedback lookup, since
+    prompt_feedback can itself be absent.
     """
-    return any(reason in str(_finish_reason(resp) or "") for reason in _BLOCKED_FINISH_REASONS)
+    if any(reason in str(_finish_reason(resp) or "") for reason in _BLOCKED_FINISH_REASONS):
+        return True
+    try:
+        return getattr(getattr(resp, "prompt_feedback", None), "block_reason", None) is not None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _is_incomplete(resp):
@@ -1010,15 +1025,17 @@ def call_gemini(prompt, artifact_dir):
             # nonzero tool-call count is real signal on its own and
             # shouldn't disappear just because usage_metadata was empty.
             cost_line = f"{cost_line}, {tool_calls_text}" if cost_line else tool_calls_text
-        # Even after the retry in _generate_with_retry, the response can
-        # still be incomplete (verbose model hitting the token limit
-        # again, a repeated empty response, or a content-policy block) --
-        # surfaced explicitly rather than silently presenting a bad answer
-        # (missing its Conclusion/Confidence line, empty, or cut off
-        # mid-sentence) as if it were a complete one.
+        # The response can still be incomplete after _generate_with_retry
+        # (verbose model hitting the token limit again, a repeated empty
+        # response, or a content-policy block) -- surfaced explicitly
+        # rather than silently presenting a bad answer (missing its
+        # Conclusion/Confidence line, empty, or cut off mid-sentence) as
+        # if it were a complete one. Deliberately doesn't claim "even
+        # after a retry": a content-policy block (_is_blocked) skips the
+        # retry entirely, so that wording would be false in that case.
         incomplete_line = (
-            "⚠️ Incomplete: Gemini's response was cut off or came back empty even "
-            "after a retry -- treat as incomplete"
+            "⚠️ Incomplete: Gemini's response was empty, cut off, or blocked -- "
+            "treat as incomplete"
             if incomplete
             else None
         )
