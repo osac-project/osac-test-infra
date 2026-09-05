@@ -18,9 +18,20 @@ import re
 import sys
 
 COMMENT_MARKER = "<!-- osac-ai-diagnostic-comment -->"
-# Matches any of our own marker shapes so they can be neutralized if they
-# ever show up *inside* section content (see upsert_section below).
-_MARKER_RE = re.compile(r"<!--\s*/?section:.*?-->", re.DOTALL)
+# Matches any of our own marker shapes (section delimiters AND the total-
+# cost marker) so they can be neutralized if they ever show up *inside*
+# section content (see upsert_section below). Diagnosis content can quote
+# attacker-influenced log/diff text verbatim (the prompt explicitly
+# requires verbatim, not paraphrased, quotes in its Evidence section), so
+# a crafted log line shaped like a real "<!-- osac-ai-total-cost:... -->"
+# marker is a realistic injection, not just a theoretical one: strip_total_
+# block's TOTAL_MARKER_RE uses re.search, which takes the LEFTMOST match --
+# an unescaped fake marker earlier in the body would be found instead of
+# the real trailing one, both truncating away everything after it
+# (including the rest of that section and any later sections) and feeding
+# attacker-chosen numbers into the "existing total" the next diagnosis
+# builds on.
+_MARKER_RE = re.compile(r"<!--\s*(?:/?section:|osac-ai-total-cost:).*?-->", re.DOTALL)
 
 # The running-total block is always the last thing in the body (never
 # section-scoped, since it tracks spend across every suite AND every

@@ -997,7 +997,7 @@ correct.
         with open(DIAGNOSIS_FILE, "w") as f:
             f.write(body_md + "\n")
     if not SUMMARY_PATH and not DIAGNOSIS_FILE:
-        print(diagnosis)
+        print(body_md)
 
     # Exposed as step outputs (not just embedded in the diagnosis text) so
     # ai-diagnostic-e2e.yml's own steps can use them directly:
