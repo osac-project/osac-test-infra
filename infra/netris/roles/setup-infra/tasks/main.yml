@@ -53,6 +53,9 @@
 
 # kubernetes.core.k8s (caas_setup) needs the Python kubernetes client; not installed by
 # netris-lab prerequisites (only bcrypt/netaddr).
+# RHEL-family images can provide oauthlib through RPM while pip provides
+# requests-oauthlib. Ignore the RPM dependency set so the complete Kubernetes
+# dependency closure is installed under the same Python site-packages tree.
 - name: Check Kubernetes client import
   ansible.builtin.command:
     argv:
@@ -70,6 +73,7 @@
       - -m
       - pip
       - install
+      - --ignore-installed
       - kubernetes
   changed_when: true
   when: _kubernetes_import.rc != 0
@@ -167,6 +171,7 @@
       - -m
       - pip
       - install
+      - --ignore-installed
       - awscli
   changed_when: true
   when: _awscli_import.rc != 0

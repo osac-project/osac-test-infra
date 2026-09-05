@@ -125,7 +125,7 @@ fi
 
 echo ""
 echo "=== [6/9] Running bootstrap on server ==="
-run_ssh "dnf install -y git make ansible-core python3-pip sshpass tmux policycoreutils-python-utils && /usr/bin/python3 -m pip install ansible"
+run_ssh "dnf install -y git make ansible-core python3-pip sshpass tmux policycoreutils-python-utils && /usr/bin/python3 -m pip install --ignore-installed ansible"
 run_ssh '. /etc/os-release; if [ "$ID" = rhel ]; then rpm -q epel-release >/dev/null 2>&1 || dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-$(rpm -E %rhel).noarch.rpm"; fi'
 
 echo ""

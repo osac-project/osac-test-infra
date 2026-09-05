@@ -49,6 +49,7 @@
       - -m
       - pip
       - install
+      - --ignore-installed
       - sushy-tools
       - libvirt-python
   changed_when: true
