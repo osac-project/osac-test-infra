@@ -19,6 +19,15 @@
   register: traefik_np
   changed_when: false
 
+- name: Refresh Netris auth (cookie from earlier roles may have expired)
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  vars:
+    netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"
+    netris_username: "{{ netris_login }}"
+    netris_validate_certs: false
+    netris_timeout: 30
+
 - name: Get auth token via collection
   ansible.builtin.include_role:
     name: netris.controller.general

@@ -83,15 +83,43 @@
     src: cert-manager.yaml
     dest: /var/lib/rancher/k3s/server/manifests/cert-manager.yaml
 
-- name: Deploy netris-controller manifest
+- name: Check if netris-controller is already deployed
+  shell: kubectl get helmchart netris-controller -n netris-controller -o name 2>/dev/null
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _nctl_exists
+  changed_when: false
+  failed_when: false
+
+- name: Deploy baseline netris-controller (no image overrides)
+  when: _nctl_exists.rc != 0
   template:
-    src: netris-controller.yaml.j2
+    src: netris-controller-baseline.yaml.j2
     dest: /var/lib/rancher/k3s/server/manifests/netris-controller.yaml
 
 - name: Deploy traefik config
   copy:
     src: traefik-config.yaml
     dest: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+
+- name: Wait for baseline netris-controller pods to be Running
+  when: _nctl_exists.rc != 0
+  shell: |
+    total=$(kubectl get pods -n netris-controller --no-headers 2>/dev/null | grep -v Completed | wc -l)
+    running=$(kubectl get pods -n netris-controller --no-headers 2>/dev/null | grep -v Completed | grep -c Running)
+    if [ "$total" -ge 10 ] && [ "$running" -eq "$total" ]; then echo "ready"; else echo "waiting ($running/$total)"; fi
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _baseline_ready
+  until: _baseline_ready.stdout == "ready"
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Upgrade netris-controller with image overrides
+  template:
+    src: netris-controller.yaml.j2
+    dest: /var/lib/rancher/k3s/server/manifests/netris-controller.yaml
 
 - name: Wait for all netris-controller pods to be Running
   shell: |
@@ -116,6 +144,9 @@
 - name: Set controller_nodeport fact
   set_fact:
     controller_nodeport: "{{ traefik_nodeport.stdout }}"
+
+- name: Fix controller password
+  include_tasks: password_fix.yml
 
 - name: Create socat env directory
   file:
@@ -156,9 +187,6 @@
     state: started
     enabled: true
     daemon_reload: true
-
-- name: Fix controller password
-  include_tasks: password_fix.yml
 
 - name: Verify controller API
   uri:
