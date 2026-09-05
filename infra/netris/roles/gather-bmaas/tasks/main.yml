@@ -1,7 +1,7 @@
 ---
 - name: Set gather directory
   ansible.builtin.set_fact:
-    _gather_dir: "{{ lookup('env', 'ARTIFACT_DIR') | default('/tmp/gather', true) }}"
+    _gather_dir: "{{ lookup('env', 'ARTIFACT_DIR') | default(playbook_dir + '/../logs', true) }}"
 
 - name: Create gather subdirectory
   ansible.builtin.file:

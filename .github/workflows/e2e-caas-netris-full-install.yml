@@ -565,13 +565,22 @@ jobs:
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=caas
 
+      - name: Archive Netris artifacts
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: |
+          if [[ -d infra/netris/logs ]]; then
+            tar -czf caas-netris-artifacts.tar.gz infra/netris/logs
+          fi
+
       - name: Upload artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: caas-netris-artifacts
-          path: infra/netris/logs/
+          path: caas-netris-artifacts.tar.gz
           if-no-files-found: ignore
 
       # Not part of the formal backend contract (infra/contract.md's target
