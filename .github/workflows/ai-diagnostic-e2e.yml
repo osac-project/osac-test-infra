@@ -382,6 +382,7 @@ jobs:
         id: known-issues
         env:
           GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
         run: |
           set -euo pipefail
           MAX_CHARS=8000
@@ -391,7 +392,13 @@ jobs:
           # self-label it) -- but it means even a maintainer mistakenly
           # labeling someone else's unrelated issue can never feed it
           # into every future diagnosis prompt.
-          bot_login=$(gh api user --jq '.login')
+          #
+          # BOT_LOGIN comes from mint-github-app-token's own /app slug
+          # lookup, not `gh api user` -- that endpoint doesn't work with
+          # GitHub App installation tokens at all (no "Works with GitHub
+          # Apps" support), unlike the old fine-grained PAT this replaced,
+          # which really was a normal user account.
+          bot_login="${BOT_LOGIN}"
           issues_json=$(gh api --paginate \
             "repos/osac-project/osac-test-infra/issues?labels=confirmed-known-issue&creator=${bot_login}&state=open&per_page=100" \
             --jq '.[] | {title, body}' | jq -s '.')
@@ -508,14 +515,18 @@ jobs:
         if: "!cancelled()"
         env:
           GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.number }}
         run: |
           set -euo pipefail
-          # Resolve our own identity dynamically (never hardcode a login)
-          # so the author-match below always matches whichever account the
+          # Resolved by mint-github-app-token via /app's own slug, not `gh
+          # api user` (doesn't work with installation tokens) -- see the
+          # "Fetch confirmed known issues" step above for the full
+          # reasoning. Read into a shell var (never hardcoded) so the
+          # author-match below always matches whichever account the
           # minted OSAC AI bot token actually authenticates as.
-          bot_login=$(gh api user --jq '.login')
+          bot_login="${BOT_LOGIN}"
           BODY_FILE="${RUNNER_TEMP}/existing-comment-body.md"
           # Fetch id+body+author together and search in jq (not `| head -1`
           # on a live gh api pipe, which risks a SIGPIPE-under-pipefail
@@ -674,11 +685,15 @@ jobs:
         id: comment
         env:
           GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.number }}
         run: |
           set -euo pipefail
-          bot_login=$(gh api user --jq '.login')
+          # See the diagnose job's own copy of this step for why this
+          # comes from mint-github-app-token's bot-login output, not
+          # `gh api user`.
+          bot_login="${BOT_LOGIN}"
           BODY_FILE="${RUNNER_TEMP}/existing-comment-body.md"
           comments_json=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" --jq '.[] | {id, body, user: .user.login}' | jq -s '.')
           comment_id=$(jq -r --arg bot "${bot_login}" '

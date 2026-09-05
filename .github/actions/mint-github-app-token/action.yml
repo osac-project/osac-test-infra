@@ -24,9 +24,10 @@ inputs:
     required: true
   account-login:
     description: >-
-      Login of the org/user the app is installed under, e.g. osac-project.
-      One app can only have one installation per account, so this is
-      enough to find it regardless of how many repos it's installed on.
+      Login of the ORG the app is installed under, e.g. osac-project. Every
+      current caller (and every planned one) installs its app on an org, not
+      a personal account, so this looks up the org-installation endpoint
+      directly rather than branching on account type.
     required: true
   repositories:
     description: >-
@@ -46,6 +47,11 @@ inputs:
 outputs:
   token:
     value: ${{ steps.token.outputs.token }}
+  bot-login:
+    description: >-
+      The app's bot login (e.g. "osac-ai[bot]"), for matching against
+      `.user.login` on issues/comments/etc. this same token authored.
+    value: ${{ steps.token.outputs.bot-login }}
 
 runs:
   using: composite
@@ -90,20 +96,50 @@ runs:
 
         JWT="${HEADER_B64}.${PAYLOAD_B64}.${SIGNATURE}"
 
-        # Installation ID is per-account, not per-repo -- one app installed
-        # across multiple repos under the same account still has a single
-        # installation entry here.
-        # Not curl -f: a 4xx/5xx here still returns a JSON body worth
-        # printing on failure -- -f would just fail with no diagnostic.
-        installations_response=$(curl -s \
+        # Shared by every curl call below: fail fast on a hung connection
+        # rather than eating the job's whole timeout-minutes budget, and
+        # retry the two idempotent GETs (not the access_tokens POST --
+        # minting an extra valid token on a false-negative retry is
+        # harmless, but retrying a POST whose response merely failed to
+        # come back isn't the kind of "idempotent" this flag is for).
+        CURL_OPTS=(--connect-timeout 10 --max-time 30)
+        CURL_GET_OPTS=("${CURL_OPTS[@]}" --retry 3 --retry-delay 2 --retry-connrefused)
+
+        # /app requires JWT auth and returns the app's own metadata,
+        # including `slug` -- combined with the fixed "[bot]" suffix,
+        # that's the exact login GitHub attributes this token's actions to
+        # (e.g. "osac-ai[bot]"), the same technique actions/create-github-
+        # app-token uses for its own app-slug output. Exposed as `bot-login`
+        # so callers can match `.user.login` on their own issues/comments
+        # without a `gh api user` call -- that endpoint doesn't work with
+        # installation tokens at all (GET /user has no "Works with GitHub
+        # Apps" support), which is what every caller here used to do,
+        # unnoticed until this token stopped being a real user account.
+        app_response=$(curl -s "${CURL_GET_OPTS[@]}" \
           -H "Authorization: Bearer ${JWT}" \
           -H "Accept: application/vnd.github+json" \
-          "https://api.github.com/app/installations")
-        INSTALLATION_ID=$(jq -r --arg login "${ACCOUNT_LOGIN}" '.[] | select(.account.login == $login) | .id' <<<"${installations_response}")
+          "https://api.github.com/app")
+        APP_SLUG=$(jq -r '.slug' <<<"${app_response}")
+
+        if [[ -z "${APP_SLUG}" || "${APP_SLUG}" == "null" ]]; then
+          echo "ERROR: Could not resolve the app's own slug from /app" >&2
+          echo "${app_response}" >&2
+          exit 1
+        fi
+        BOT_LOGIN="${APP_SLUG}[bot]"
+
+        # Direct org-installation lookup (not curl -f: a 4xx/5xx here still
+        # returns a JSON body worth printing on failure -- -f would just
+        # fail with no diagnostic).
+        installation_response=$(curl -s "${CURL_GET_OPTS[@]}" \
+          -H "Authorization: Bearer ${JWT}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/orgs/${ACCOUNT_LOGIN}/installation")
+        INSTALLATION_ID=$(jq -r '.id' <<<"${installation_response}")
 
         if [[ -z "${INSTALLATION_ID}" || "${INSTALLATION_ID}" == "null" ]]; then
-          echo "ERROR: Could not find an app installation for account '${ACCOUNT_LOGIN}'" >&2
-          echo "${installations_response}" >&2
+          echo "ERROR: Could not find an app installation for org '${ACCOUNT_LOGIN}'" >&2
+          echo "${installation_response}" >&2
           exit 1
         fi
 
@@ -111,7 +147,7 @@ runs:
         request_body=$(jq -nc --argjson repositories "${repos_json}" --argjson permissions "${PERMISSIONS}" \
           '{repositories: $repositories, permissions: $permissions}')
 
-        response=$(curl -s -X POST \
+        response=$(curl -s "${CURL_OPTS[@]}" -X POST \
           -H "Authorization: Bearer ${JWT}" \
           -H "Accept: application/vnd.github+json" \
           -d "${request_body}" \
@@ -127,3 +163,4 @@ runs:
 
         echo "::add-mask::${TOKEN}"
         echo "token=${TOKEN}" >> "${GITHUB_OUTPUT}"
+        echo "bot-login=${BOT_LOGIN}" >> "${GITHUB_OUTPUT}"
