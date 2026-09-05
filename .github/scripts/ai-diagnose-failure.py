@@ -287,6 +287,25 @@ MAX_TOOL_CALLS = 15
 # per call; raised from 5000 now that MAX_TOOL_CALLS affords more budget.
 MAX_TOOL_READ_CHARS = 8000
 MAX_LISTED_FILES = 300
+
+# gemini-2.5-pro's "thinking" tokens count against the SAME output-token
+# budget as its visible answer (confirmed against multiple real reports of
+# this exact failure mode, e.g. googleapis/python-genai#782 and #811) --
+# left unset, thinking defaults to dynamic/unbounded, so a genuinely hard
+# diagnosis (long prompt, high MAX_TOOL_CALLS budget, a 92%-confidence bar
+# forcing thorough reasoning) can spend its ENTIRE output budget on
+# internal reasoning and return a completely empty response with
+# finish_reason=MAX_TOKENS, sometimes with no usage_metadata either --
+# confirmed live (run 33965773078: "(empty response from Gemini)",
+# "Estimated cost: unavailable (response had no usage data)"). Ironically
+# the hardest, most-in-need-of-a-real-answer failures are the ones most at
+# risk of this. MAX_OUTPUT_TOKENS is the model's actual hard maximum (not
+# a made-up cap); THINKING_BUDGET_TOKENS reserves a bounded, generous slice
+# of it for thinking specifically, guaranteeing real diagnoses (typically
+# 1-5k output tokens per format_cost_line's own observed numbers) always
+# have room left over regardless of how much the model reasons first.
+MAX_OUTPUT_TOKENS = 65536
+THINKING_BUDGET_TOKENS = 24576
 # The bar a diagnosis must clear before it's presented as definitive, rather
 # than deferring to "go check the logs yourself" -- see CONFIDENCE_PATTERN.
 # Raised from 85: real artifacts are often dominated by noise unrelated to
@@ -727,6 +746,110 @@ def count_tool_calls(chat):
     )
 
 
+def _finish_reason(resp):
+    """First candidate's finish_reason, or None if unavailable. Defensive:
+    candidates can be absent entirely depending on why generation stopped
+    (e.g. a prompt-level safety block never produces one at all), and this
+    must never raise -- shared by _describe_empty_response and
+    _hit_max_tokens below, which each need this same defensive lookup.
+    """
+    try:
+        candidates = resp.candidates or []
+        if candidates:
+            return getattr(candidates[0], "finish_reason", None)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+# Stringified rather than compared against a specific enum type: whether
+# finish_reason comes back as a plain string or a google.genai enum member
+# depends on SDK details we shouldn't have to track here, but str(...) on
+# either reliably contains this substring.
+MAX_TOKENS_FINISH_REASON = "MAX_TOKENS"
+
+
+def _hit_max_tokens(resp):
+    """True if this response's own finish_reason shows it hit
+    max_output_tokens before finishing -- the one failure mode a "please
+    be more concise" retry can actually fix. A safety block or recitation
+    flag isn't caused by length, so retrying with that ask wouldn't
+    address why generation actually stopped.
+    """
+    return MAX_TOKENS_FINISH_REASON in str(_finish_reason(resp) or "")
+
+
+def _describe_empty_response(resp):
+    """Best-effort explanation for why resp.text came back empty --
+    printed to the job log and folded into the visible fallback text, so a
+    future occurrence is self-diagnosing instead of the silent mystery run
+    33965773078 was (zero console output, "(empty response from Gemini)"
+    with no cost data either, and no way to tell why after the fact).
+
+    Every attribute access is defensive: candidates/finish_reason/
+    prompt_feedback can each be absent depending on why generation
+    stopped, and this must never itself raise -- a footer-diagnostics bug
+    is not worth losing the real (if unhelpful) fallback text over.
+    """
+    finish_reason = _finish_reason(resp)
+    if finish_reason is not None:
+        return f"finish_reason={finish_reason}"
+    try:
+        block_reason = getattr(getattr(resp, "prompt_feedback", None), "block_reason", None)
+        if block_reason is not None:
+            return f"prompt blocked: {block_reason}"
+    except Exception:  # noqa: BLE001
+        pass
+    return "no candidates/finish_reason available"
+
+
+def _generate_with_retry(chat, prompt):
+    """Send `prompt`, retrying ONCE with a "be more concise" follow-up
+    turn if the response hit max_output_tokens (see _hit_max_tokens for
+    why only that specific finish_reason is worth retrying at all).
+
+    A fresh turn gets its own full max_output_tokens budget again, and the
+    model already has every read_artifact_file call's evidence sitting in
+    this same chat's history -- asking it to compress what it already
+    figured out into a tighter answer is a real repair, not just a
+    relabeled failure. Only one retry: if it's still this verbose on a
+    second attempt, a third pass is unlikely to help and just doubles the
+    cost again for no gain.
+
+    Returns (resp, truncated). `truncated` is True only if the response
+    being returned STILL hit max_output_tokens after the retry (with or
+    without any text) -- the caller uses this to flag an incomplete
+    diagnosis explicitly rather than silently presenting a cut-off answer
+    as if it were a complete one.
+    """
+    resp = chat.send_message(prompt)
+    if not _hit_max_tokens(resp):
+        return resp, False
+    print(
+        f"WARNING: Gemini hit its output token limit ({_describe_empty_response(resp)}); "
+        "retrying once for a more concise answer.",
+        file=sys.stderr,
+    )
+    retry_resp = chat.send_message(
+        "Your previous response was cut off for exceeding the output token limit. "
+        "Respond again from scratch with the SAME required section headers and format, "
+        "but be significantly more concise: shorter Evidence quotes (one line each is "
+        "enough), fewer Causal chain bullets, and no filler -- prioritize actually "
+        "reaching the Conclusion and the final Confidence line over exhaustive detail."
+    )
+    if not _hit_max_tokens(retry_resp):
+        return retry_resp, False
+    print(
+        f"WARNING: Retry also hit the output token limit ({_describe_empty_response(retry_resp)}); "
+        "giving up after one retry.",
+        file=sys.stderr,
+    )
+    # Prefer whichever attempt actually has SOME text -- a truncated but
+    # non-empty answer is still more useful (once flagged below) than a
+    # totally empty one.
+    return (retry_resp if retry_resp.text else resp), True
+
+
 def call_gemini(prompt, artifact_dir):
     from google import genai
     from google.genai import types
@@ -744,16 +867,29 @@ def call_gemini(prompt, artifact_dir):
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
                 maximum_remote_calls=MAX_TOOL_CALLS
             ),
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET_TOKENS),
         ),
     )
-    resp = chat.send_message(prompt)
-    text = resp.text or "(empty response from Gemini)"
+    resp, truncated = _generate_with_retry(chat, prompt)
+    if resp.text:
+        text = resp.text
+    else:
+        reason = _describe_empty_response(resp)
+        print(f"WARNING: Gemini returned an empty response ({reason}).", file=sys.stderr)
+        text = f"(empty response from Gemini: {reason})"
     category = None
     cost_usd = input_tokens = output_tokens = None
     try:
         text, category = extract_category(text)
         text, confidence = extract_confidence(text)
         tool_calls = count_tool_calls(chat)
+        # Correctly reflects BOTH turns' cost when a retry happened:
+        # usage_metadata is always the FINAL response's own (per
+        # compute_cost's docstring), and Gemini resends the full growing
+        # conversation as input on every turn, so this already captures
+        # nearly all of the retry's added cost too, not just the first
+        # attempt's.
         cost_usd, input_tokens, output_tokens = compute_cost(resp.usage_metadata, GEMINI_MODEL)
         cost_line = format_cost_line(cost_usd, input_tokens, output_tokens, GEMINI_MODEL)
         if tool_calls:
@@ -763,7 +899,17 @@ def call_gemini(prompt, artifact_dir):
             # nonzero tool-call count is real signal on its own and
             # shouldn't disappear just because usage_metadata was empty.
             cost_line = f"{cost_line}, {tool_calls_text}" if cost_line else tool_calls_text
-        parts = filter(None, [format_confidence_line(confidence), cost_line])
+        # Even after the retry in _generate_with_retry, the response can
+        # still be truncated (verbose model, hard failure) -- surfaced
+        # explicitly rather than silently presenting a cut-off answer
+        # (missing its Conclusion/Confidence line, or worse, mid-sentence)
+        # as if it were a complete one.
+        truncated_line = (
+            "⚠️ Truncated: hit the output token limit even after a retry -- treat as incomplete"
+            if truncated
+            else None
+        )
+        parts = filter(None, [truncated_line, format_confidence_line(confidence), cost_line])
         footer = f"<sub>{' | '.join(parts)}</sub>"
     except Exception:  # noqa: BLE001 -- a footer-formatting bug must never lose a real diagnosis
         footer = ""
