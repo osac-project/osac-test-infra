@@ -414,6 +414,17 @@ jobs:
       - name: Install grpcurl
         uses: ./.github/actions/install-grpcurl
 
+      - name: Verify BMaaS networking test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command in uv grpcurl oc kubectl osac virsh ssh ssh-keygen curl; do
+            command -v "${command}"
+          done
+          test -r /root/.ssh/id_rsa
+          test -r /root/.ssh/id_rsa.pub
+          virsh -c qemu:///system list --all >/dev/null
+
       - name: Run BMaaS networking tests
         id: test
         timeout-minutes: 60

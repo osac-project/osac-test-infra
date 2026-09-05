@@ -102,9 +102,13 @@
       - libxslt
       - genisoimage
       - libvirt
+      - libvirt-client
       - libvirt-daemon-kvm
       - qemu-kvm
       - virt-install
+      - openssh-clients
+      - iproute
+      - iputils
       - skopeo
       - nftables
     state: present
