@@ -709,6 +709,55 @@ def compute_cost(usage_metadata, model):
     return cost_usd, input_tokens, output_tokens
 
 
+def aggregate_cost(usage_metadata_list, model):
+    """Sum compute_cost's numbers across EVERY generation attempt actually
+    made for one diagnosis -- the initial send_message plus a retry turn,
+    if _generate_with_retry sent one -- rather than just the final
+    attempt's own usage_metadata.
+
+    This matters specifically because of the retry: each attempt is billed
+    on its own (Gemini resends the whole growing conversation as input on
+    every turn, including the prior attempt's own output as context, and
+    bills a fresh set of output tokens for whatever it generates this
+    turn). Looking only at the final attempt's usage_metadata silently
+    drops the first attempt's real, already-incurred output-token cost --
+    which, for exactly the hard-to-diagnose cases this retry exists for,
+    can be tens of thousands of thinking/output tokens at gemini-2.5-pro's
+    output rate. Not double counting: per-turn billing really does charge
+    for the resent context each turn, so summing each turn's own
+    (input, output) as reported by that turn's own usage_metadata is the
+    actual total cost, not an overcount.
+
+    Skips (rather than aborting on) any attempt whose usage_metadata is
+    unavailable, same fail-open behavior as compute_cost. Returns
+    (None, None, None) only if NONE of the attempts had usable token
+    counts; if at least one did, but pricing for `model` is unknown,
+    returns (None, total_input_tokens, total_output_tokens) -- same
+    None-cost-but-real-tokens contract as compute_cost.
+    """
+    total_cost = 0.0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    any_usage = False
+    cost_known = True
+    for usage_metadata in usage_metadata_list:
+        cost_usd, input_tokens, output_tokens = compute_cost(usage_metadata, model)
+        if input_tokens is None or output_tokens is None:
+            continue
+        any_usage = True
+        total_input_tokens += input_tokens
+        total_output_tokens += output_tokens
+        if cost_usd is None:
+            cost_known = False
+        else:
+            total_cost += cost_usd
+    if not any_usage:
+        return None, None, None
+    if not cost_known:
+        return None, total_input_tokens, total_output_tokens
+    return total_cost, total_input_tokens, total_output_tokens
+
+
 def format_cost_line(cost_usd, input_tokens, output_tokens, model):
     """Render compute_cost's numbers as the human-readable line appended
     to the confidence/cost footer. A bare "$0.0000" for the unavailable
@@ -816,15 +865,21 @@ def _generate_with_retry(chat, prompt):
     second attempt, a third pass is unlikely to help and just doubles the
     cost again for no gain.
 
-    Returns (resp, truncated). `truncated` is True only if the response
-    being returned STILL hit max_output_tokens after the retry (with or
-    without any text) -- the caller uses this to flag an incomplete
-    diagnosis explicitly rather than silently presenting a cut-off answer
-    as if it were a complete one.
+    Returns (resp, truncated, usage_metadata_list). `truncated` is True
+    only if the response being returned STILL hit max_output_tokens after
+    the retry (with or without any text) -- the caller uses this to flag
+    an incomplete diagnosis explicitly rather than silently presenting a
+    cut-off answer as if it were a complete one. `usage_metadata_list`
+    carries every attempt actually made (one entry, or two if a retry was
+    sent) so the caller can add up the REAL total cost across attempts --
+    see aggregate_cost's docstring for why the final attempt's
+    usage_metadata alone would silently drop the first attempt's already-
+    incurred cost.
     """
     resp = chat.send_message(prompt)
+    usage_metadata_list = [resp.usage_metadata]
     if not _hit_max_tokens(resp):
-        return resp, False
+        return resp, False, usage_metadata_list
     print(
         f"WARNING: Gemini hit its output token limit ({_describe_empty_response(resp)}); "
         "retrying once for a more concise answer.",
@@ -837,17 +892,32 @@ def _generate_with_retry(chat, prompt):
         "enough), fewer Causal chain bullets, and no filler -- prioritize actually "
         "reaching the Conclusion and the final Confidence line over exhaustive detail."
     )
-    if not _hit_max_tokens(retry_resp):
-        return retry_resp, False
+    usage_metadata_list.append(retry_resp.usage_metadata)
+    if _hit_max_tokens(retry_resp):
+        print(
+            f"WARNING: Retry also hit the output token limit ({_describe_empty_response(retry_resp)}); "
+            "giving up after one retry.",
+            file=sys.stderr,
+        )
+        # Prefer whichever attempt actually has SOME text -- a truncated
+        # but non-empty answer is still more useful (once flagged below)
+        # than a totally empty one.
+        return (retry_resp if retry_resp.text else resp), True, usage_metadata_list
+    if retry_resp.text:
+        return retry_resp, False, usage_metadata_list
+    # The retry did NOT hit the length limit (e.g. a safety/recitation
+    # block on the retry turn, unrelated to length) but still came back
+    # with no text -- do not present that as the "clean" result. Fall back
+    # to the ORIGINAL response instead: it's the one that actually hit
+    # max_output_tokens, so `truncated=True` still accurately describes it
+    # whether or not it has any text of its own.
     print(
-        f"WARNING: Retry also hit the output token limit ({_describe_empty_response(retry_resp)}); "
-        "giving up after one retry.",
+        f"WARNING: Retry returned no text without hitting the token limit "
+        f"({_describe_empty_response(retry_resp)}); falling back to the "
+        "original (truncated) response.",
         file=sys.stderr,
     )
-    # Prefer whichever attempt actually has SOME text -- a truncated but
-    # non-empty answer is still more useful (once flagged below) than a
-    # totally empty one.
-    return (retry_resp if retry_resp.text else resp), True
+    return resp, True, usage_metadata_list
 
 
 def call_gemini(prompt, artifact_dir):
@@ -871,7 +941,7 @@ def call_gemini(prompt, artifact_dir):
             thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET_TOKENS),
         ),
     )
-    resp, truncated = _generate_with_retry(chat, prompt)
+    resp, truncated, usage_metadata_list = _generate_with_retry(chat, prompt)
     if resp.text:
         text = resp.text
     else:
@@ -884,13 +954,10 @@ def call_gemini(prompt, artifact_dir):
         text, category = extract_category(text)
         text, confidence = extract_confidence(text)
         tool_calls = count_tool_calls(chat)
-        # Correctly reflects BOTH turns' cost when a retry happened:
-        # usage_metadata is always the FINAL response's own (per
-        # compute_cost's docstring), and Gemini resends the full growing
-        # conversation as input on every turn, so this already captures
-        # nearly all of the retry's added cost too, not just the first
-        # attempt's.
-        cost_usd, input_tokens, output_tokens = compute_cost(resp.usage_metadata, GEMINI_MODEL)
+        # Sums every attempt's own usage_metadata (see aggregate_cost's
+        # docstring) so a retry's real, already-incurred first-attempt
+        # cost is never silently dropped from the reported total.
+        cost_usd, input_tokens, output_tokens = aggregate_cost(usage_metadata_list, GEMINI_MODEL)
         cost_line = format_cost_line(cost_usd, input_tokens, output_tokens, GEMINI_MODEL)
         if tool_calls:
             tool_calls_text = f"{tool_calls} tool call{'s' if tool_calls != 1 else ''}"
