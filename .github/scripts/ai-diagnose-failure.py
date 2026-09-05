@@ -557,6 +557,37 @@ def split_root_cause(diagnosis):
     return summary, detail
 
 
+# Matches the boundary between the Causal chain section's own content and
+# the following "### Evidence" heading -- used to insert the Full run link
+# as the last item of Causal chain, not as a trailing line after the whole
+# diagnosis (which is what it used to be) or the "### Evidence" heading is
+# not consumed here, just used as an anchor.
+EVIDENCE_HEADING_RE = re.compile(r"\n+(?=### Evidence\b)")
+
+
+def insert_full_run_link(detail, run_url):
+    """Place the Full run link at the end of the Causal chain section
+    (right before Evidence), as its own single-line, <sub>-wrapped
+    paragraph -- single line with blank lines on both sides, so it can't
+    hit the <sub> multi-line overlap bug split_root_cause's own docstring
+    describes.
+
+    Falls back to appending after `detail` entirely (still inside the
+    <details> block) if the "### Evidence" heading isn't found -- e.g. an
+    exception-fallback diagnosis with no real section structure at all.
+    """
+    if not run_url:
+        return detail
+    link = f"<sub>[Full run]({run_url})</sub>"
+    match = EVIDENCE_HEADING_RE.search(detail)
+    if not match:
+        return f"{detail}\n\n{link}"
+    # match spans ALL the newlines between Causal chain's last line and
+    # "### Evidence" (the `\n+` is greedy) -- slice at start/end (not just
+    # start) so those original newlines are fully replaced, not added to.
+    return f"{detail[: match.start()]}\n\n{link}\n\n{detail[match.end() :]}"
+
+
 def format_confidence_line(confidence):
     if confidence is None:
         return "Confidence: not reported by the model"
@@ -595,11 +626,12 @@ GEMINI_PRICING_USD_PER_MILLION = {
 }
 
 
-def format_cost_line(usage_metadata, model):
-    """Rough per-diagnosis cost estimate, appended to the bottom of the
-    diagnosis text -- makes the plan's own "confirm actual GCP spend is
-    sane" verification step visible per-run instead of requiring someone
-    to go dig through Cloud Billing.
+def compute_cost(usage_metadata, model):
+    """Rough per-diagnosis cost estimate, split out from format_cost_line
+    (below) so main() can also expose the raw numbers as step outputs --
+    ai-diagnostic-e2e.yml uses those to maintain a running total-cost
+    footer across every diagnosis posted to a PR's sticky comment, which
+    needs real numbers to add, not a pre-formatted string to re-parse.
 
     Only reflects the FINAL response's own usage_metadata, not a sum
     across every automatic-function-calling round trip within this one
@@ -629,23 +661,25 @@ def format_cost_line(usage_metadata, model):
     gemini-2.5-pro, the tier) out of GEMINI_PRICING_USD_PER_MILLION -- always
     the actual model this run's call_gemini() invoked (GEMINI_MODEL), never
     assumed, since different models have very different per-token rates.
+
+    Returns (cost_usd, input_tokens, output_tokens). cost_usd is None if
+    pricing data for `model` is missing (tokens are still returned, since
+    those come straight from the API regardless of whether we know the
+    price); all three are None if usage_metadata itself is unavailable.
     """
     if not usage_metadata:
-        return ""
+        return None, None, None
     prompt_tokens = usage_metadata.prompt_token_count
     candidates_tokens = usage_metadata.candidates_token_count
     if prompt_tokens is None or candidates_tokens is None:
-        # A bare "$0.0000" here would look like a real (negligible) cost
-        # rather than "no usage data" -- say so plainly instead of
-        # silently defaulting missing fields to 0.
-        return "Estimated cost: unavailable (response had no usage data)"
+        return None, None, None
     tool_use_prompt_tokens = usage_metadata.tool_use_prompt_token_count or 0
     thoughts_tokens = usage_metadata.thoughts_token_count or 0
     input_tokens = prompt_tokens + tool_use_prompt_tokens
     output_tokens = candidates_tokens + thoughts_tokens
     pricing = GEMINI_PRICING_USD_PER_MILLION.get(model)
     if pricing is None:
-        return f"Estimated cost: unavailable (no pricing data for model {model!r})"
+        return None, input_tokens, output_tokens
     input_price = pricing["input"]
     output_price = pricing["output"]
     tier_threshold = pricing.get("tiered_input_threshold_tokens")
@@ -653,6 +687,19 @@ def format_cost_line(usage_metadata, model):
         input_price = pricing["tiered_input"]
         output_price = pricing["tiered_output"]
     cost_usd = input_tokens / 1_000_000 * input_price + output_tokens / 1_000_000 * output_price
+    return cost_usd, input_tokens, output_tokens
+
+
+def format_cost_line(cost_usd, input_tokens, output_tokens, model):
+    """Render compute_cost's numbers as the human-readable line appended
+    to the confidence/cost footer. A bare "$0.0000" for the unavailable
+    cases would look like a real (negligible) cost -- say so plainly
+    instead of silently defaulting missing fields to 0.
+    """
+    if input_tokens is None or output_tokens is None:
+        return "Estimated cost: unavailable (response had no usage data)"
+    if cost_usd is None:
+        return f"Estimated cost: unavailable (no pricing data for model {model!r})"
     return (
         f"Estimated cost: ${cost_usd:.4f} "
         f"({input_tokens} input + {output_tokens} output tokens, {model})"
@@ -702,11 +749,13 @@ def call_gemini(prompt, artifact_dir):
     resp = chat.send_message(prompt)
     text = resp.text or "(empty response from Gemini)"
     category = None
+    cost_usd = input_tokens = output_tokens = None
     try:
         text, category = extract_category(text)
         text, confidence = extract_confidence(text)
         tool_calls = count_tool_calls(chat)
-        cost_line = format_cost_line(resp.usage_metadata, GEMINI_MODEL)
+        cost_usd, input_tokens, output_tokens = compute_cost(resp.usage_metadata, GEMINI_MODEL)
+        cost_line = format_cost_line(cost_usd, input_tokens, output_tokens, GEMINI_MODEL)
         if tool_calls:
             tool_calls_text = f"{tool_calls} tool call{'s' if tool_calls != 1 else ''}"
             # Combined into the cost line when usage data is available
@@ -719,7 +768,7 @@ def call_gemini(prompt, artifact_dir):
     except Exception:  # noqa: BLE001 -- a footer-formatting bug must never lose a real diagnosis
         footer = ""
     diagnosis = f"{text}\n\n{footer}" if footer else text
-    return diagnosis, category
+    return diagnosis, category, cost_usd, input_tokens, output_tokens
 
 
 def main():
@@ -908,10 +957,11 @@ correct.
 """
 
     try:
-        diagnosis, category = call_gemini(prompt, ARTIFACT_DIR)
+        diagnosis, category, cost_usd, input_tokens, output_tokens = call_gemini(prompt, ARTIFACT_DIR)
     except Exception as exc:  # noqa: BLE001 -- must never crash the job
         diagnosis = f"_AI diagnosis unavailable: {exc}_"
         category = None
+        cost_usd = input_tokens = output_tokens = None
 
     # Split into an always-visible one-line summary (the Root cause prose)
     # plus a <details>-collapsed block for everything else. <details> is a
@@ -924,6 +974,7 @@ correct.
     # "### Root cause" structure isn't there, e.g. the exception-fallback
     # diagnosis set above.
     summary, detail = split_root_cause(diagnosis.strip())
+    detail = insert_full_run_link(detail, RUN_URL)
     if summary:
         body_md = (
             f"{summary}\n\n"
@@ -933,7 +984,7 @@ correct.
             "</details>"
         )
     else:
-        body_md = diagnosis.strip()
+        body_md = detail
 
     if SUMMARY_PATH:
         with open(SUMMARY_PATH, "a") as f:
@@ -941,23 +992,33 @@ correct.
             # the multi-line overlap bug, and shrinking it read as too small
             # in practice.
             f.write(f"**AI Failure Diagnosis:** {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`\n\n")
-            f.write(body_md + "\n\n")
-            if RUN_URL:
-                f.write(f"[Full run]({RUN_URL})\n")
+            f.write(body_md + "\n")
     if DIAGNOSIS_FILE:
         with open(DIAGNOSIS_FILE, "w") as f:
             f.write(body_md + "\n")
     if not SUMMARY_PATH and not DIAGNOSIS_FILE:
-        print(diagnosis)
+        print(body_md)
 
-    # Exposed as a step output (not just embedded in the diagnosis text)
-    # so ai-diagnostic-e2e.yml's "Prepare comment section" step can fold
-    # it into the section header itself as a scannable triage badge --
-    # see that step for how CATEGORY is consumed.
+    # Exposed as step outputs (not just embedded in the diagnosis text) so
+    # ai-diagnostic-e2e.yml's own steps can use them directly:
+    # - category folds into the section header as a scannable triage badge
+    #   (see "Prepare comment section" for how it's consumed).
+    # - cost/token numbers let "Build updated comment body" maintain a
+    #   running total-cost footer across every diagnosis posted to a PR's
+    #   sticky comment (upsert-pr-comment.py adds these to whatever total
+    #   the existing comment already carries, rather than replacing it --
+    #   a pre-formatted string like format_cost_line's would have to be
+    #   re-parsed to do that, so the raw numbers are exposed instead).
+    #   Empty string (not "None"/0) when unavailable, so the shell step
+    #   can tell "no cost data this run" apart from "zero cost" with a
+    #   plain [[ -z ... ]] check.
     github_output_path = os.environ.get("GITHUB_OUTPUT", "")
     if github_output_path:
         with open(github_output_path, "a") as f:
             f.write(f"category={category or 'UNKNOWN'}\n")
+            f.write(f"cost-usd={cost_usd if cost_usd is not None else ''}\n")
+            f.write(f"input-tokens={input_tokens if input_tokens is not None else ''}\n")
+            f.write(f"output-tokens={output_tokens if output_tokens is not None else ''}\n")
 
 
 if __name__ == "__main__":

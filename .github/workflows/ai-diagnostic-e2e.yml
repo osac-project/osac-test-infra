@@ -556,7 +556,6 @@ jobs:
         id: section
         if: "!cancelled()"
         env:
-          RUN_URL: ${{ github.event.workflow_run.html_url }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           # Falls back to UNKNOWN if the diagnosis step itself hard-failed
           # before setting this output (see ai-diagnose-failure.py's own
@@ -577,12 +576,14 @@ jobs:
           # followed by a <details>-collapsed block for Causal
           # chain/Evidence/Conclusion/confidence -- <details> is a plain
           # block element, so it doesn't hit that same overlap bug.
+          # DIAGNOSIS_FILE also already has its own Full run link (as the
+          # last item of the Causal chain section, via
+          # ai-diagnose-failure.py's insert_full_run_link) -- not appended
+          # here anymore, so it isn't duplicated.
           {
             echo "**❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category:** \`${CATEGORY}\`"
             echo
             cat "${DIAGNOSIS_FILE}"
-            echo
-            echo "[Full run](${RUN_URL})"
           } > "${SECTION_FILE}"
           echo "section-file=${SECTION_FILE}" >> "${GITHUB_OUTPUT}"
 
@@ -594,6 +595,15 @@ jobs:
           SECTION_KEY: ${{ github.event.workflow_run.name }}
           SECTION_CONTENT_FILE: ${{ steps.section.outputs.section-file }}
           OUTPUT_BODY_FILE: ${{ runner.temp }}/new-comment-body.md
+          # Adds to whatever running total the existing comment already
+          # carries -- see upsert-pr-comment.py's own render_total_block
+          # for why. Empty when ai-diagnose-failure.py had no usable cost
+          # data (an exception before Gemini responded, or GEMINI_MODEL
+          # missing from its pricing table); upsert-pr-comment.py treats
+          # that as "add nothing", not "add zero".
+          RUN_COST_USD: ${{ steps.diagnose-script.outputs.cost-usd }}
+          RUN_INPUT_TOKENS: ${{ steps.diagnose-script.outputs.input-tokens }}
+          RUN_OUTPUT_TOKENS: ${{ steps.diagnose-script.outputs.output-tokens }}
         run: python3 .github/scripts/upsert-pr-comment.py
 
       - name: Upsert PR comment
@@ -737,6 +747,10 @@ jobs:
           SECTION_KEY: ${{ github.event.workflow_run.name }}
           SECTION_CONTENT_FILE: ${{ steps.section.outputs.section-file }}
           OUTPUT_BODY_FILE: ${{ runner.temp }}/new-comment-body.md
+          # Deliberately no RUN_COST_USD/RUN_INPUT_TOKENS/RUN_OUTPUT_TOKENS
+          # here -- this job never runs a diagnosis, so there's no new
+          # cost to add. upsert-pr-comment.py carries the existing running
+          # total forward unchanged when these are absent.
         run: python3 .github/scripts/upsert-pr-comment.py
 
       - name: Upsert PR comment
