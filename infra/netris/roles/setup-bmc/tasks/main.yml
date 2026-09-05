@@ -32,6 +32,13 @@
 
 # ── Phase 2: sushy-tools ─────────────────────────────────────────────
 
+# libvirt-python is a native binding and should match the host's libvirt-libs;
+# use the RHEL-family package instead of compiling a PyPI sdist.
+- name: Install native libvirt Python bindings
+  ansible.builtin.dnf:
+    name: python3-libvirt
+    state: present
+
 - name: Check sushy-tools Python dependencies
   ansible.builtin.command:
     argv:
@@ -42,7 +49,7 @@
   changed_when: false
   failed_when: false
 
-- name: Install sushy-tools and libvirt-python for Ansible Python
+- name: Install sushy-tools for Ansible Python
   ansible.builtin.command:
     argv:
       - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
@@ -51,7 +58,6 @@
       - install
       - --ignore-installed
       - sushy-tools
-      - libvirt-python
   changed_when: true
   when: _sushy_dependencies_import.rc != 0
 
