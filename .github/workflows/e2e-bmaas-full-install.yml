@@ -321,6 +321,9 @@ jobs:
             sudo ip link delete "${br}" 2>/dev/null || true
           done
 
+      - name: Force failure (dummy PR -- AI diagnostic pipeline check, revert before merge)
+        run: exit 1
+
       - name: Boot cluster clone
         env:
           FLAVOR_NAME: ${{ inputs.flavor-name }}
