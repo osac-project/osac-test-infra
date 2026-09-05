@@ -292,7 +292,16 @@ jobs:
           private-key: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}
           account-login: osac-project
           repositories: osac,osac-test-infra
-          permissions: '{"issues":"write","pull_requests":"read","statuses":"write"}'
+          # pull_requests bumped from read to write: posting a NEW PR
+          # comment (POST .../issues/{pr}/comments) 403'd with "Resource
+          # not accessible by integration" under issues:write + pull_
+          # requests:read alone, confirmed live (run 33939347107) even
+          # though the App's own Issues permission is Read and write and
+          # the same token's statuses:write call succeeded in the same
+          # run -- see mint-github-app-token's new debug line for the
+          # actual granted-permissions object next time this needs
+          # re-diagnosing.
+          permissions: '{"issues":"write","pull_requests":"write","statuses":"write"}'
 
       - name: Fetch PR changed-files and diff
         id: pr-context
@@ -687,7 +696,13 @@ jobs:
           private-key: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}
           account-login: osac-project
           repositories: osac,osac-test-infra
-          permissions: '{"issues":"write","pull_requests":"read"}'
+          # pull_requests bumped from read to write -- see the diagnose
+          # job's own copy of this step for why (PATCHing an existing
+          # comment might not hit the same restriction POSTing a new one
+          # did, but this job edits the very same kind of resource, so
+          # keeping both jobs' grants identical avoids re-discovering this
+          # the hard way here too).
+          permissions: '{"issues":"write","pull_requests":"write"}'
 
       # Same identity/author-check reasoning as the diagnose job's own copy
       # of this step -- see there for the full explanation.
