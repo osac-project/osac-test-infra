@@ -921,6 +921,32 @@ def _describe_empty_response(resp):
 MAX_DEBUG_DUMP_CHARS = 20000
 
 
+def _safe_print(message, file=None):
+    """print(message, file=file), swallowing ANY exception rather than
+    letting it propagate -- e.g. a closed/broken stderr, or a downstream
+    consumer rejecting the write. Diagnostic, fallback, and final-output
+    writes exist so a run degrades gracefully; a failure in ONE of them
+    (say, the debug dump below) must never be able to interrupt work
+    still in progress (a retry) or crash the whole script, which would be
+    strictly worse than the failure it was trying to report.
+    """
+    try:
+        print(message, file=file)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _safe_repr(value):
+    """repr(value), or a fixed placeholder if repr() itself raises --
+    used when formatting a value purely for a defensive log message,
+    where even a broken __repr__ must not become a second failure.
+    """
+    try:
+        return repr(value)
+    except Exception:  # noqa: BLE001
+        return "<unrepresentable>"
+
+
 def _dump_incomplete_response_debug(resp, sent_this_turn, chat):
     """Verbose, best-effort dump of an incomplete turn to stderr: the
     exact text sent this turn, its length, the raw response object, and
@@ -942,29 +968,44 @@ def _dump_incomplete_response_debug(resp, sent_this_turn, chat):
     response shape) needed to pin down the real cause next time, instead
     of guessing from a single line of output.
 
-    Every step is defensive and best-effort: a debugging aid must never
-    itself crash the diagnosis or replace a real finding with an
-    exception.
+    Every step -- including formatting `resp`/exceptions for the log
+    message itself, not just the writes -- goes through _safe_print/
+    _safe_repr and is individually guarded, so this can NEVER raise: a
+    debugging aid must never itself crash the diagnosis, or (since this
+    runs mid-retry in _generate_with_retry) interrupt a retry still in
+    progress.
     """
     try:
-        print(
-            f"DEBUG: incomplete response -- prompt sent this turn is {len(sent_this_turn)} chars:",
+        length = len(sent_this_turn)
+    except Exception:  # noqa: BLE001
+        length = None
+    if length is None:
+        _safe_print("DEBUG: incomplete response -- could not determine prompt length", file=sys.stderr)
+    else:
+        _safe_print(f"DEBUG: incomplete response -- prompt sent this turn is {length} chars:", file=sys.stderr)
+        try:
+            content = sent_this_turn[:MAX_DEBUG_DUMP_CHARS]
+        except Exception:  # noqa: BLE001
+            content = None
+        if content is not None:
+            _safe_print(content, file=sys.stderr)
+            if length > MAX_DEBUG_DUMP_CHARS:
+                _safe_print(f"... ({length - MAX_DEBUG_DUMP_CHARS} more chars truncated)", file=sys.stderr)
+    try:
+        dump = json.dumps(resp.model_dump(mode="json"), default=str)[:MAX_DEBUG_DUMP_CHARS]
+    except Exception as exc:  # noqa: BLE001
+        _safe_print(
+            f"DEBUG: could not dump response object ({_safe_repr(exc)}); repr: {_safe_repr(resp)[:MAX_DEBUG_DUMP_CHARS]}",
             file=sys.stderr,
         )
-        print(sent_this_turn[:MAX_DEBUG_DUMP_CHARS], file=sys.stderr)
-        if len(sent_this_turn) > MAX_DEBUG_DUMP_CHARS:
-            print(f"... ({len(sent_this_turn) - MAX_DEBUG_DUMP_CHARS} more chars truncated)", file=sys.stderr)
-    except Exception as exc:  # noqa: BLE001
-        print(f"DEBUG: failed to dump the prompt text itself: {exc}", file=sys.stderr)
+    else:
+        _safe_print(f"DEBUG: raw response object: {dump}", file=sys.stderr)
     try:
-        dump = json.dumps(resp.model_dump(mode="json"), default=str)
-        print(f"DEBUG: raw response object: {dump[:MAX_DEBUG_DUMP_CHARS]}", file=sys.stderr)
+        history_len = len(chat.get_history())
     except Exception as exc:  # noqa: BLE001
-        print(f"DEBUG: could not dump response object ({exc}); repr: {resp!r}"[:MAX_DEBUG_DUMP_CHARS], file=sys.stderr)
-    try:
-        print(f"DEBUG: chat history has {len(chat.get_history())} entries at this point", file=sys.stderr)
-    except Exception as exc:  # noqa: BLE001
-        print(f"DEBUG: could not read chat history length: {exc}", file=sys.stderr)
+        _safe_print(f"DEBUG: could not read chat history length: {_safe_repr(exc)}", file=sys.stderr)
+    else:
+        _safe_print(f"DEBUG: chat history has {history_len} entries at this point", file=sys.stderr)
 
 
 _RETRY_PROMPT = (
@@ -1011,7 +1052,7 @@ def _generate_with_retry(chat, prompt):
     _dump_incomplete_response_debug(resp, prompt, chat)
     if _is_blocked(resp):
         return resp, True, usage_metadata_list
-    print(
+    _safe_print(
         f"WARNING: Gemini's response was incomplete ({_describe_empty_response(resp)}); "
         "retrying once for a complete answer.",
         file=sys.stderr,
@@ -1021,7 +1062,7 @@ def _generate_with_retry(chat, prompt):
     if not _is_incomplete(retry_resp):
         return retry_resp, False, usage_metadata_list
     _dump_incomplete_response_debug(retry_resp, _RETRY_PROMPT, chat)
-    print(
+    _safe_print(
         f"WARNING: Retry was also incomplete ({_describe_empty_response(retry_resp)}); "
         "giving up after one retry.",
         file=sys.stderr,
@@ -1043,7 +1084,7 @@ def call_gemini(prompt, artifact_dir):
     # having this on EVERY run, not just failures, is what lets a future
     # investigation actually correlate prompt size against outcome across
     # the full population, not just the handful of known-bad runs.
-    print(f"INFO: diagnosis prompt is {len(prompt)} chars", file=sys.stderr)
+    _safe_print(f"INFO: diagnosis prompt is {len(prompt)} chars", file=sys.stderr)
 
     client = genai.Client(
         vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION
@@ -1067,7 +1108,7 @@ def call_gemini(prompt, artifact_dir):
         text = resp.text
     else:
         reason = _describe_empty_response(resp)
-        print(f"WARNING: Gemini returned an empty response ({reason}).", file=sys.stderr)
+        _safe_print(f"WARNING: Gemini returned an empty response ({reason}).", file=sys.stderr)
         text = f"(empty response from Gemini: {reason})"
     category = None
     cost_usd = input_tokens = output_tokens = None
@@ -1324,18 +1365,30 @@ correct.
     else:
         body_md = detail
 
+    # Each write below is independently guarded: a failure writing ONE of
+    # these (a full disk, a permissions issue, GITHUB_STEP_SUMMARY being
+    # unwritable for some CI-environment reason) must not crash the whole
+    # script and lose every other output alongside it -- same "never
+    # crash the job" principle as the rest of this file's defensive
+    # coding (see _safe_print).
     if SUMMARY_PATH:
-        with open(SUMMARY_PATH, "a") as f:
-            # Plain bold text, not <sub> -- a header this short never risks
-            # the multi-line overlap bug, and shrinking it read as too small
-            # in practice.
-            f.write(f"**AI Failure Diagnosis:** {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`\n\n")
-            f.write(body_md + "\n")
+        try:
+            with open(SUMMARY_PATH, "a") as f:
+                # Plain bold text, not <sub> -- a header this short never
+                # risks the multi-line overlap bug, and shrinking it read
+                # as too small in practice.
+                f.write(f"**AI Failure Diagnosis:** {WORKFLOW_NAME} | Category: `{category or 'UNKNOWN'}`\n\n")
+                f.write(body_md + "\n")
+        except Exception as exc:  # noqa: BLE001 -- see comment above
+            _safe_print(f"WARNING: failed to write GITHUB_STEP_SUMMARY: {_safe_repr(exc)}", file=sys.stderr)
     if DIAGNOSIS_FILE:
-        with open(DIAGNOSIS_FILE, "w") as f:
-            f.write(body_md + "\n")
+        try:
+            with open(DIAGNOSIS_FILE, "w") as f:
+                f.write(body_md + "\n")
+        except Exception as exc:  # noqa: BLE001 -- see comment above
+            _safe_print(f"WARNING: failed to write DIAGNOSIS_FILE: {_safe_repr(exc)}", file=sys.stderr)
     if not SUMMARY_PATH and not DIAGNOSIS_FILE:
-        print(body_md)
+        _safe_print(body_md)
 
     # Exposed as step outputs (not just embedded in the diagnosis text) so
     # ai-diagnostic-e2e.yml's own steps can use them directly:
@@ -1352,11 +1405,14 @@ correct.
     #   plain [[ -z ... ]] check.
     github_output_path = os.environ.get("GITHUB_OUTPUT", "")
     if github_output_path:
-        with open(github_output_path, "a") as f:
-            f.write(f"category={category or 'UNKNOWN'}\n")
-            f.write(f"cost-usd={cost_usd if cost_usd is not None else ''}\n")
-            f.write(f"input-tokens={input_tokens if input_tokens is not None else ''}\n")
-            f.write(f"output-tokens={output_tokens if output_tokens is not None else ''}\n")
+        try:
+            with open(github_output_path, "a") as f:
+                f.write(f"category={category or 'UNKNOWN'}\n")
+                f.write(f"cost-usd={cost_usd if cost_usd is not None else ''}\n")
+                f.write(f"input-tokens={input_tokens if input_tokens is not None else ''}\n")
+                f.write(f"output-tokens={output_tokens if output_tokens is not None else ''}\n")
+        except Exception as exc:  # noqa: BLE001 -- see comment above
+            _safe_print(f"WARNING: failed to write GITHUB_OUTPUT: {_safe_repr(exc)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
