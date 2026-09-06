@@ -448,6 +448,27 @@
   changed_when: false
   loop: "{{ bmaas_vms }}"
 
+- name: Verify BMH SSH host mapping
+  ansible.builtin.assert:
+    that:
+      - bmaas_ssh_hosts is mapping
+      - bmaas_vms | difference(bmaas_ssh_hosts.keys() | list) | length == 0
+    fail_msg: >-
+      bmaas_ssh_hosts must provide a management-network SSH address for every
+      BMH in bmaas_vm_patterns.
+
+- name: Build BMH SSH host mapping
+  ansible.builtin.set_fact:
+    _bmaas_ssh_hosts: "{{ bmaas_ssh_hosts }}"
+
+- name: Publish BMH SSH hosts for host-side networking tests
+  ansible.builtin.lineinfile:
+    path: "{{ inventory_dir }}/../.env.infra"
+    regexp: '^OSAC_BMH_SSH_HOSTS='
+    line: "OSAC_BMH_SSH_HOSTS={{ _bmaas_ssh_hosts | to_json | quote }}"
+    create: true
+    mode: "0644"
+
 # The tenant data interfaces (eth9, eth10, ...) are the Netris fabric NICs,
 # which appear as the "udp"-type interfaces in domiflist, in order. This is a
 # DIFFERENT MAC than bootMACAddress (the bmc-net NIC) — the DHCP lease the
