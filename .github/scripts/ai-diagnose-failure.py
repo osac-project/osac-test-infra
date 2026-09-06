@@ -1169,6 +1169,23 @@ def main():
         else ""
     )
 
+    # The prompt's evidence-source item 4 (timeouts-are-a-symptom) exists
+    # because of a real, manually-traced investigation: osac-test-infra run
+    # 34032835160's test_cluster_create_with_version failed with
+    # "TimeoutError: order-ttdjl ClusterOrder Deleting phase -- timeout
+    # after 145s, last value: ''". Tracing that exact ClusterOrder (by its
+    # CR name and cluster UUID) across e2e.log, osac-operator's manager
+    # log, and fulfillment-controller's log -- all within the SAME second
+    # -- showed the object was actually deleted correctly and fast (the
+    # remote record was already gone, so the operator removed its
+    # finalizer immediately) without ever passing through an observable
+    # "Deleting" phase, because it was deleted before any provisioning
+    # ever started. The real story was a test-design gap (the wait helper
+    # only accepts phase=="Deleting", not "the CR no longer exists"), not
+    # a stuck OSAC component -- exactly the kind of finding a shallow
+    # "test timed out, check logs" diagnosis would never surface, and
+    # exactly the kind of finding this item exists to make routine rather
+    # than a one-off manual deep-dive.
     prompt = f"""You are diagnosing a failed GitHub Actions workflow run
 named "{WORKFLOW_NAME}", part of OSAC (an OpenShift-based fulfillment
 platform). This run installs OSAC components onto a real OpenShift/KubeVirt
@@ -1242,6 +1259,23 @@ log locations that weren't given to you:
    chronological pod log is usually near the end, not the start. Don't
    call it speculatively if the extract already gives you a confident
    answer -- only when you genuinely need more to connect the dots.
+4. TIMEOUTS ARE A SYMPTOM, NOT A ROOT CAUSE. If the JUnit failure is a
+   TimeoutError or "timed out waiting for X" (a resource never reaching
+   some expected state, condition, or phase), never conclude with just
+   "the test timed out waiting for X" -- that only restates the symptom,
+   it doesn't explain it. Pull the specific resource identifier out of
+   the failure text (a UUID, CR name, VM name, etc.) and use
+   read_artifact_file to search for that EXACT identifier across every
+   component log that could plausibly have touched it (osac-operators/,
+   the fulfillment-service controller log, aap-jobs/, cnv/) to
+   reconstruct what actually happened to that specific resource during
+   the timeout window, correlated by timestamp. The answer is sometimes
+   "a component genuinely got stuck" -- but it can just as validly turn
+   out to be "the operation actually completed correctly and fast, the
+   test's own wait condition just never matched what really happened"
+   (a test-design gap, not a product bug). Trace the object's real fate
+   before concluding either way; don't guess from the timeout value
+   alone.
 {changed_files_section}{pr_diff_section}
 Given this evidence, produce a structured diagnosis for a developer who
 has not looked at the run yet. Real artifacts are often dominated by
