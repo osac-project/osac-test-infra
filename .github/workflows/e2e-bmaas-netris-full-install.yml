@@ -26,7 +26,7 @@ on:
         description: "Semicolon-separated commands to run/verify on the box before JIT registration."
         required: false
         type: string
-        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+        default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman"
       osac-operator-image:
         description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
         required: false
@@ -402,7 +402,7 @@ jobs:
             fi
 
             if [[ "${build_type}" == "ansible-builder" ]]; then
-              pip3 install --quiet 'ansible-builder~=3.0'
+              /usr/bin/python3 -m pip install --ignore-installed --quiet 'ansible-builder~=3.0'
               ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
               podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
             else
@@ -475,13 +475,25 @@ jobs:
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=bmaas_networking
 
+      - name: Archive Netris artifacts
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: |
+          archive_paths=()
+          [[ -d reports ]] && archive_paths+=(reports)
+          [[ -d infra/netris/logs ]] && archive_paths+=(infra/netris/logs)
+          if (( ${#archive_paths[@]} > 0 )); then
+            tar -czf bmaas-netris-artifacts.tar.gz "${archive_paths[@]}"
+          fi
+
       - name: Upload artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bmaas-netris-artifacts
-          path: infra/netris/logs/
+          path: bmaas-netris-artifacts.tar.gz
           if-no-files-found: ignore
 
       - name: Gather EC2 runner artifacts

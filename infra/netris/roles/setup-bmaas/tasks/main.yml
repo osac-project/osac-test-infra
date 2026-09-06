@@ -448,6 +448,27 @@
   changed_when: false
   loop: "{{ bmaas_vms }}"
 
+- name: Verify BMH SSH host mapping
+  ansible.builtin.assert:
+    that:
+      - bmaas_ssh_hosts is mapping
+      - bmaas_vms | difference(bmaas_ssh_hosts.keys() | list) | length == 0
+    fail_msg: >-
+      bmaas_ssh_hosts must provide a management-network SSH address for every
+      BMH in bmaas_vm_patterns.
+
+- name: Build BMH SSH host mapping
+  ansible.builtin.set_fact:
+    _bmaas_ssh_hosts: "{{ bmaas_ssh_hosts }}"
+
+- name: Publish BMH SSH hosts for host-side networking tests
+  ansible.builtin.lineinfile:
+    path: "{{ inventory_dir }}/../.env.infra"
+    regexp: '^OSAC_BMH_SSH_HOSTS='
+    line: "OSAC_BMH_SSH_HOSTS={{ _bmaas_ssh_hosts | to_json | quote }}"
+    create: true
+    mode: "0644"
+
 # The tenant data interfaces (eth9, eth10, ...) are the Netris fabric NICs,
 # which appear as the "udp"-type interfaces in domiflist, in order. This is a
 # DIFFERENT MAC than bootMACAddress (the bmc-net NIC) — the DHCP lease the
@@ -537,18 +558,6 @@
   changed_when: false
   loop: "{{ bmaas_vms }}"
 
-# Phase 5: Label BMHs
-- name: Label BMHs with host type
-  ansible.builtin.command:
-    cmd: >-
-      oc label bmh {{ item }} -n {{ bmaas_bmh_namespace }}
-      osac.openshift.io/host-type={{ bmaas_host_type }}
-      --overwrite
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop: "{{ bmaas_vms }}"
-  changed_when: true
-
 # Phase 6: BMF secrets are created by prep-bmaas (runs before deploy-osac)
 # so the BMF pod can start without Helm --wait timing out.
 
@@ -632,6 +641,29 @@
       {{ (_host_types.json.get('items', [])
           | selectattr('metadata.name', 'equalto', bmaas_host_type)
           | map(attribute='id') | list | first) }}
+
+- name: Require the BMaaS host type ID to be resolved
+  ansible.builtin.assert:
+    that:
+      - (_host_type_id | default('', true) | string | length) > 0
+    fail_msg: >-
+      Could not resolve host type '{{ bmaas_host_type }}' to an ID from the
+      fulfillment service. Refusing to label BMHs with the host type name.
+
+# The BMF operator uses the BMI hostType value as the BMH host-type label
+# selector. The BMI template stores the fulfillment-service resource ID, so
+# BMHs must carry that same ID rather than the display name (for example,
+# "default").
+- name: Label BMHs with the resolved host type ID
+  ansible.builtin.command:
+    cmd: >-
+      oc label bmh {{ item }} -n {{ bmaas_bmh_namespace }}
+      osac.openshift.io/host-type={{ _host_type_id }}
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ bmaas_vms }}"
+  changed_when: true
 
 - name: Wait for BMI template to be published by AAP
   ansible.builtin.uri:

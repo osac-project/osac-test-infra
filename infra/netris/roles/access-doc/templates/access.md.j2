@@ -8,7 +8,7 @@ The clusters use `198.51.100.x` IPs which are only routable inside the BM server
 
 ```bash
 # Install (one-time)
-pip install sshuttle
+python3 -m pip install sshuttle
 
 # Connect — routes 198.51.100.0/24 through the BM server
 sshuttle -r root@{{ _bm_ip }} 198.51.100.0/24 192.168.40.0/24

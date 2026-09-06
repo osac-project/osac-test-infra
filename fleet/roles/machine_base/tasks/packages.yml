@@ -9,6 +9,7 @@
   ansible.builtin.dnf:
     name:
       - libvirt
+      - libvirt-client
       - qemu-kvm
       - podman
       - podman-docker
@@ -23,6 +24,9 @@
       - python3
       - python3-pip
       - virt-install
+      - openssh-clients
+      - iproute
+      - iputils
     state: present
 
 - name: Install ansible-builder (needed for AAP execution-environment images)

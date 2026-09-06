@@ -44,6 +44,12 @@
         - "{{ public_bridge_name }}"
       changed_when: false
 
+    - name: Check if firewalld is running
+      ansible.builtin.command: firewall-cmd --state
+      register: _firewalld_state
+      changed_when: false
+      failed_when: false
+
     - name: Remove masquerade rules (isolated mode)
       when: connectivity_mode == "isolated"
       ansible.builtin.iptables:
@@ -61,7 +67,9 @@
       ignore_errors: true
 
     - name: Remove firewalld lab configuration
-      when: ansible_facts.services['firewalld.service'] is defined
+      when:
+        - _firewalld_state.rc == 0
+        - _firewalld_state.stdout | trim == 'running'
       block:
         - name: Remove trusted zone interfaces
           ansible.posix.firewalld:

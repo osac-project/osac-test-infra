@@ -32,12 +32,42 @@
 
 # ── Phase 2: sushy-tools ─────────────────────────────────────────────
 
-- name: Install sushy-tools and libvirt-python
-  ansible.builtin.pip:
-    name:
-      - sushy-tools
-      - libvirt-python
+# libvirt-python is a native binding and should match the host's libvirt-libs;
+# use the RHEL-family package instead of compiling a PyPI sdist.
+- name: Install native libvirt Python bindings
+  ansible.builtin.dnf:
+    name: python3-libvirt
     state: present
+
+- name: Check sushy-tools Python dependencies
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import libvirt, sushy_tools
+  register: _sushy_dependencies_import
+  changed_when: false
+  failed_when: false
+
+- name: Install sushy-tools for Ansible Python
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -m
+      - pip
+      - install
+      - --ignore-installed
+      - sushy-tools
+  changed_when: true
+  when: _sushy_dependencies_import.rc != 0
+
+- name: Verify sushy-tools Python dependencies
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - import libvirt, sushy_tools
+  changed_when: false
 
 - name: Create sushy-tools disk directory
   ansible.builtin.file:
@@ -127,7 +157,16 @@
   register: _sushy_start
   when: _sushy_running.rc != 0 or _sushy_config is changed
 
+- name: Check if firewalld is running
+  ansible.builtin.command: firewall-cmd --state
+  register: _firewalld_state
+  changed_when: false
+  failed_when: false
+
 - name: Allow sushy-tools traffic through firewalld on bmc-net bridge
+  when:
+    - _firewalld_state.rc == 0
+    - _firewalld_state.stdout | trim == 'running'
   block:
     - name: Add bmc-net bridge to libvirt firewalld zone
       ansible.builtin.command:

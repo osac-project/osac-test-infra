@@ -189,10 +189,18 @@
       failed_when: false
       changed_when: true
 
+    - name: Check if firewalld is running
+      ansible.builtin.command: firewall-cmd --state
+      register: _firewalld_state
+      changed_when: false
+      failed_when: false
+
     - name: Reload firewalld to reset runtime state
       ansible.builtin.shell:
-        cmd: firewall-cmd --complete-reload 2>/dev/null || true
-      failed_when: false
+        cmd: firewall-cmd --complete-reload
+      when:
+        - _firewalld_state.rc == 0
+        - _firewalld_state.stdout | trim == 'running'
       changed_when: true
 
     # --- Phase 4: Wipe data disk contents ---

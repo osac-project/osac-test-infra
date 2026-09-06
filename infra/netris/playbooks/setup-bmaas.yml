@@ -2,6 +2,7 @@
 - name: Set up BMaaS — repurpose HGX VMs, enable Ironic, register in fulfillment
   hosts: all
   gather_facts: false
+  become: true
   roles:
     - setup-bmc
     - setup-bmaas

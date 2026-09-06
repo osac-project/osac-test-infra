@@ -31,9 +31,11 @@ test-bmaas:
 	mkdir -p $(REPORTS_DIR)
 	pytest tests/bmaas/ --ignore=tests/bmaas/networking -n 0 -v --tb=short $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas.xml
 
+OSAC_MONO_DIR ?= /opt/osac
+
 test-bmaas-networking test-bmaas_networking:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/bmaas/networking/ -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas-networking.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/regression/networking/ -x -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
 
 test-metering:
 	mkdir -p $(REPORTS_DIR)

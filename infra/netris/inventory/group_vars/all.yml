@@ -180,6 +180,12 @@ bmaas_vm_patterns:
   - "hgx-pod00-su0-h01"
   - "hgx-pod00-su0-h02"
   - "hgx-pod00-su0-h03"
+# Stable management-network addresses used by the host-side BMaaS networking
+# tests. These are deliberately independent of the bmc-net DHCP leases.
+bmaas_ssh_hosts:
+  hgx-pod00-su0-h01: "192.168.16.3"
+  hgx-pod00-su0-h02: "192.168.16.4"
+  hgx-pod00-su0-h03: "192.168.16.5"
 bmaas_vm_vcpu: 4
 bmaas_vm_memory_mb: 8192
 bmaas_vm_disk_gb: 50

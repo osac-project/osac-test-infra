@@ -113,6 +113,7 @@ install_packages() {
 
     dnf install -y \
         libvirt \
+        libvirt-client \
         qemu-kvm \
         podman \
         podman-docker \
@@ -126,7 +127,10 @@ install_packages() {
         dnsmasq \
         python3 \
         python3-pip \
-        virt-install
+        virt-install \
+        openssh-clients \
+        iproute \
+        iputils
 
     # ansible-builder is needed for building AAP execution-environment images
     python3 -m pip install --quiet ansible-builder

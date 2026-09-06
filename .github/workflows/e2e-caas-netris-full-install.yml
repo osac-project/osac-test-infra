@@ -40,10 +40,10 @@ on:
       # accept-and-revisit-if-flaky precedent (see provision.sh's
       # InsufficientInstanceCapacity handling for the same philosophy).
       tooling-check-cmds:
-        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's prerequisites (ansible-core, python3-pip, make -- matching what the equivalent Prow lab-setup step installed, and infra/netris/README.md's own documented setup)."
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration. Defaults to installing and verifying the CaaS/Netris flow's bootstrap prerequisites (ansible-core, python3-pip, make, and podman). Test tools are installed by infra/netris prerequisites."
         required: false
         type: string
-        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+        default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman"
       osac-installer-image:
         description: "Override osac-installer image (registry-pullable reference, e.g. from a component repo's own PR build) -- accepted but not yet consumed: infra/netris has no plain extra-var for this (see the test job's 'Build component image overrides' step comment), needs podman-extraction handling in a later PR"
         required: false
@@ -497,7 +497,7 @@ jobs:
             fi
 
             if [[ "${build_type}" == "ansible-builder" ]]; then
-              pip3 install --quiet 'ansible-builder~=3.0'
+              /usr/bin/python3 -m pip install --ignore-installed --quiet 'ansible-builder~=3.0'
               ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
               podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
             else
@@ -579,13 +579,22 @@ jobs:
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=caas
 
+      - name: Archive Netris artifacts
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: |
+          if [[ -d infra/netris/logs ]]; then
+            tar -czf caas-netris-artifacts.tar.gz infra/netris/logs
+          fi
+
       - name: Upload artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: caas-netris-artifacts
-          path: infra/netris/logs/
+          path: caas-netris-artifacts.tar.gz
           if-no-files-found: ignore
 
       # Not part of the formal backend contract (infra/contract.md's target

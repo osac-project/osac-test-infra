@@ -90,6 +90,12 @@
       ansible.builtin.include_role:
         name: k3s_controller
 
+- name: Check if firewalld is running
+  ansible.builtin.command: firewall-cmd --state
+  register: _firewalld_state
+  changed_when: false
+  failed_when: false
+
 - name: Ensure virbr0 is in firewalld trusted zone
   ansible.posix.firewalld:
     zone: trusted
@@ -97,7 +103,9 @@
     permanent: true
     immediate: true
     state: enabled
-  when: ansible_facts.services['firewalld.service'] is defined
+  when:
+    - _firewalld_state.rc == 0
+    - _firewalld_state.stdout | trim == 'running'
 
 - name: Deploy network topology
   ansible.builtin.include_role:

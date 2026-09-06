@@ -5,6 +5,8 @@ permissions:
   contents: read
 
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       instance-type:
@@ -21,7 +23,7 @@ on:
       tooling-check-cmds:
         description: "Semicolon-separated commands to verify on the box before JIT registration."
         required: false
-        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+        default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman"
       osac-operator-image:
         description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
         required: false
@@ -48,8 +50,8 @@ on:
         default: ""
 
 concurrency:
-  group: e2e-bmaas-netris-full-install-${{ github.run_id }}
-  cancel-in-progress: false
+  group: e2e-bmaas-netris-full-install-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e-bmaas-netris:
@@ -57,10 +59,13 @@ jobs:
     with:
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
-      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman' }}
       osac-operator-image: ${{ inputs.osac-operator-image || '' }}
       fulfillment-service-image: ${{ inputs.fulfillment-service-image || '' }}
       osac-aap-ee-image: ${{ inputs.osac-aap-ee-image || '' }}
       bmf-operator-image: ${{ inputs.bmf-operator-image || '' }}
       osac-repo: ${{ inputs.osac-repo || '' }}
       osac-branch: ${{ inputs.osac-branch || '' }}
+      fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
+      fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
+      pr-number: ${{ github.event.pull_request.number }}
