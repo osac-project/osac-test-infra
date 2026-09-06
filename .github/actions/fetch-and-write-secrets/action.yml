@@ -11,6 +11,20 @@ inputs:
 outputs:
   SLACK_WEBHOOK_URL:
     value: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
+  SLACK_BOT_TOKEN:
+    description: >-
+      Slack bot token (chat:write scope) -- same app/token already used by
+      the daily CI digest (post-ci-digest.py), reused here so the AI
+      diagnosis + chai-bot ping can be posted as threaded replies (a
+      webhook, unlike chat.postMessage, never returns a message ts to
+      thread onto).
+    value: ${{ steps.vault.outputs.SLACK_BOT_TOKEN }}
+  SLACK_CHANNEL_ID:
+    description: 'Slack channel ID for the same bot/token above -- the channel the E2E failure notification posts to.'
+    value: ${{ steps.vault.outputs.SLACK_CHANNEL_ID }}
+  CHAI_BOT_USER_ID:
+    description: "chai-bot's Slack member ID, for a real <@ID>-style mention (a plain-text \"@chai-bot\" string does not notify anyone)."
+    value: ${{ steps.vault.outputs.CHAI_BOT_USER_ID }}
 
 runs:
   using: composite
@@ -28,7 +42,10 @@ runs:
           secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
           secret/data/osac/e2e/aap-license license | AAP_LICENSE ;
           secret/data/osac/e2e/snapshot-registry dockerconfigjson | SNAPSHOT_REGISTRY_AUTH ;
-          secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL
+          secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL ;
+          secret/data/osac/monitoring/slack-bot bot_token | SLACK_BOT_TOKEN ;
+          secret/data/osac/monitoring/slack-bot channel_id | SLACK_CHANNEL_ID ;
+          secret/data/osac/monitoring/slack-bot chai_bot_user_id | CHAI_BOT_USER_ID
 
     - name: Write secrets to disk
       shell: bash

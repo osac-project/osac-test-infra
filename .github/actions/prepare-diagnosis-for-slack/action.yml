@@ -1,0 +1,71 @@
+---
+name: Prepare Diagnosis For Slack
+description: >-
+  Reads the DIAGNOSIS_FILE written by ai-diagnose-failure.py (if present),
+  converts GitHub-flavored markdown to Slack mrkdwn (bold, links), and
+  truncates it for a Slack thread reply. Shared by every E2E full-install
+  flavor (CaaS/VMaaS/BMaaS) that threads the AI diagnosis onto its Slack
+  failure notification -- previously ~35 lines of identical bash+python
+  duplicated verbatim in each of those workflow files.
+
+inputs:
+  diagnosis-file:
+    description: 'Path to the DIAGNOSIS_FILE written by ai-diagnose-failure.py'
+    required: true
+
+outputs:
+  text:
+    description: >-
+      Slack mrkdwn-ready diagnosis text, truncated to a skimmable length --
+      or a fallback message if the file is missing/empty.
+    value: ${{ steps.prepare.outputs.text }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare diagnosis text
+      id: prepare
+      shell: bash
+      env:
+        DIAGNOSIS_FILE: ${{ inputs.diagnosis-file }}
+      run: |
+        set -euo pipefail
+        if [[ -s "${DIAGNOSIS_FILE}" ]]; then
+          TEXT=$(python3 - "$DIAGNOSIS_FILE" <<'PYEOF'
+        import re
+        import sys
+
+        text = open(sys.argv[1], "r", errors="replace").read()
+        # Best-effort GitHub-flavored-markdown -> Slack mrkdwn: bold and
+        # links are the two constructs that render as visible clutter
+        # (literal asterisks/brackets) if left untouched. Other GFM
+        # constructs (tables, nested lists, <details>) are left as-is --
+        # readability over a pixel-perfect conversion.
+        text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+        text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<\2|\1>", text)
+        # Keep the thread reply skimmable -- the run/job summary already
+        # has the full text; truncate rather than dumping everything.
+        # Reserves room for the suffix BEFORE slicing so the final output
+        # actually stays at or under max_chars, rather than slicing to
+        # max_chars and then appending the suffix on top of that (which
+        # would overshoot the cap by the suffix's own length).
+        max_chars = 2800
+        if len(text) > max_chars:
+            suffix = "\n... (truncated -- see the full run for the complete diagnosis)"
+            text = text[: max_chars - len(suffix)] + suffix
+        print(text)
+        PYEOF
+        )
+        else
+          TEXT="_AI diagnosis unavailable for this run._"
+        fi
+        # Random delimiter (not a fixed string like EOF) so diagnosis
+        # text that happens to quote a line matching the delimiter --
+        # this can embed attacker-influenced log/diff content -- can't
+        # prematurely terminate the multiline output.
+        DELIM="EOF_$(openssl rand -hex 8)"
+        {
+          echo "text<<${DELIM}"
+          echo "$TEXT"
+          echo "${DELIM}"
+        } >> "$GITHUB_OUTPUT"
