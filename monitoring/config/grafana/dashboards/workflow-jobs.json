@@ -973,7 +973,7 @@
     },
     {
       "title": "Failed Runs Only",
-      "description": "Only failed workflow runs, showing which step failed.",
+      "description": "Failed workflow runs, showing which step failed -- except when Failure Reason / AI Status is set to AI: Ran or AI: Skipped, which show category=ai rows regardless of conclusion (an ai row is essentially always Success; see the Conclusion/Status columns in that case).",
       "type": "table",
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 70 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
@@ -1061,7 +1061,10 @@
           },
           {
             "matcher": { "id": "byName", "options": "conclusion" },
-            "properties": [{ "id": "custom.hidden", "value": true }]
+            "properties": [
+              { "id": "displayName", "value": "Conclusion" },
+              { "id": "custom.width", "value": 100 }
+            ]
           },
           {
             "matcher": { "id": "byName", "options": "status" },
@@ -1195,11 +1198,12 @@
         "name": "category",
         "label": "Category",
         "type": "custom",
-        "query": "All,e2e,ci,lint,release,automation",
+        "query": "All,e2e,ai,ci,lint,release,automation",
         "current": { "text": "E2E", "value": "e2e", "selected": true },
         "options": [
           { "text": "All", "value": "All", "selected": false },
           { "text": "E2E", "value": "e2e", "selected": true },
+          { "text": "AI Diagnostic", "value": "ai", "selected": false },
           { "text": "CI/Build", "value": "ci", "selected": false },
           { "text": "Lint/Quality", "value": "lint", "selected": false },
           { "text": "Release/Publish", "value": "release", "selected": false },
@@ -1340,14 +1344,17 @@
       },
       {
         "name": "failure_reason",
-        "label": "Failure Reason",
+        "label": "Failure Reason / AI Status",
+        "description": "Infra/Test apply to category=e2e (implies Status=Failed). Ran/Skipped apply to category=ai instead -- whether the Diagnose job's actual AI call happened at all, independent of Status (an ai row is essentially always Success regardless of whether it ran or was skipped -- see AI_DIAGNOSIS_STEP in workflow-exporter.py).",
         "type": "custom",
-        "query": "All,infra,test",
+        "query": "All,infra,test,ran,skipped",
         "current": { "text": "All", "value": "All", "selected": true },
         "options": [
           { "text": "All", "value": "All", "selected": true },
           { "text": "Infra", "value": "infra", "selected": false },
-          { "text": "Test/Product", "value": "test", "selected": false }
+          { "text": "Test/Product", "value": "test", "selected": false },
+          { "text": "AI: Ran", "value": "ran", "selected": false },
+          { "text": "AI: Skipped", "value": "skipped", "selected": false }
         ],
         "includeAll": false,
         "multi": false,

@@ -96,12 +96,12 @@ in_progress_total = Gauge(
 )
 queued_by_category = Gauge(
     "github_actions_queued_runs_by_category",
-    "Queued workflow runs by category (e2e, lint, ci, automation, release)",
+    "Queued workflow runs by category (e2e, ai, lint, ci, automation, release)",
     ["org", "category"],
 )
 in_progress_by_category = Gauge(
     "github_actions_in_progress_runs_by_category",
-    "In-progress workflow runs by category (e2e, lint, ci, automation, release)",
+    "In-progress workflow runs by category (e2e, ai, lint, ci, automation, release)",
     ["org", "category"],
 )
 completed_runs = Counter(
@@ -132,29 +132,35 @@ api_remaining = Gauge(
 # ---------------------------------------------------------------------------
 class WorkflowExporter:
     # Ordered category mapping — first match wins (case-insensitive substring).
-    # automation is checked before BOTH "e2e" and the broad "ci" catch-all
-    # (test/check/build): before ci so bot-maintenance workflows like
-    # "Remove ok-to-test on new push" don't get caught by ci's "test"
-    # pattern, and before e2e so bot workflows that merely reference e2e
-    # without running it don't get caught by e2e's bare "e2e" substring --
-    # confirmed live: "E2E on CodeRabbit approval" (kicks off the real e2e
-    # workflows via the GitHub API, runs none itself), "Remove e2e-ready
-    # label on new push" (label housekeeping), "Scan E2E logs" (log
-    # retention), "E2E on unlock label" (same API-trigger pattern as the
-    # CodeRabbit-approval workflow, just a different label as the source
-    # event -- its only job is "start-e2e", which calls the GitHub API and
-    # runs no test of its own), and "AI diagnostic (E2E fork PR failures)"
-    # (a post-hoc bot that inspects an already-completed e2e run's logs and
-    # posts/updates a PR comment -- "Resolve PR"/"Mark Resolved"/"Diagnose"
-    # jobs, no test execution) were all miscategorized "e2e" and polluting
-    # e2e pass-rate/infra-failure stats with runs that never executed a
-    # single real test.
+    # automation and ai are both checked before BOTH "e2e" and the broad
+    # "ci" catch-all (test/check/build): before ci so bot-maintenance
+    # workflows like "Remove ok-to-test on new push" don't get caught by
+    # ci's "test" pattern, and before e2e so bot workflows that merely
+    # reference e2e without running it don't get caught by e2e's bare
+    # "e2e" substring -- confirmed live: "E2E on CodeRabbit approval"
+    # (kicks off the real e2e workflows via the GitHub API, runs none
+    # itself), "Remove e2e-ready label on new push" (label housekeeping),
+    # "Scan E2E logs" (log retention), "E2E on unlock label" (same
+    # API-trigger pattern as the CodeRabbit-approval workflow, just a
+    # different label as the source event -- its only job is "start-e2e",
+    # which calls the GitHub API and runs no test of its own), and
+    # "AI diagnostic (E2E fork PR failures)" (a post-hoc bot that inspects
+    # an already-completed e2e run's logs and posts/updates a PR comment --
+    # "Resolve PR"/"Mark Resolved"/"Diagnose" jobs, no test execution)
+    # were all miscategorized "e2e" and polluting e2e pass-rate/infra-
+    # failure stats with runs that never executed a single real test.
+    # ai is its own category (split out from automation) rather than
+    # folded into it, so it gets its own queued/in-progress gauges and
+    # failure_reason semantics (see AI_DIAGNOSIS_STEP and
+    # _classify_failure_reason's "ai" branch) instead of being invisible
+    # inside automation's aggregate counts.
     # release is checked before ci too, so "Build container image" matches
     # "container image" instead of ci's generic "build" pattern.
     WORKFLOW_CATEGORIES: ClassVar[dict[str, list[str]]] = {
         "automation": ["bump", "dependabot", "copilot", "slash", "ok-to-test",
                        "coderabbit approval", "e2e-ready label", "scan e2e logs",
-                       "e2e on unlock label", "ai diagnostic"],
+                       "e2e on unlock label"],
+        "ai":         ["ai diagnostic"],
         "e2e":        ["e2e"],
         "lint":       ["pre-commit", "lint", "checklist", "kustomize", "check image"],
         "release":    ["publish", "container image", "mirror"],
@@ -190,6 +196,23 @@ class WorkflowExporter:
         "Run E2E tests",
         "Run CaaS e2e tests",
     })
+
+    # The one step, shared verbatim by both phases of the AI diagnostic
+    # pipeline (Phase 1: embedded directly in a failed E2E *-Full-Install
+    # job, categorized "e2e" not "ai" -- see WORKFLOW_CATEGORIES; Phase 2:
+    # the "diagnose / Diagnose" job in the "AI diagnostic (E2E fork PR
+    # failures)" listener workflow, categorized "ai"), that represents the
+    # AI actually being invoked -- see osac-test-infra's own
+    # ai-diagnose-failure.py, called from this exact step name in both
+    # ai-diagnostic-e2e.yml and each e2e-*-full-install.yml. Every OTHER
+    # step in the Diagnose job (minting a token, fetching the diff,
+    # posting the comment, ...) is plumbing around this one; a "skipped"
+    # Diagnose job never reaches it at all -- most commonly because there
+    # was no open PR to diagnose, or the E2E job it's listening to never
+    # actually ran a test in the first place (see _is_gate_job). Used only
+    # for the "ai" category's failure_reason classification below -- e2e's
+    # own TEST_STEPS/failure_reason logic is untouched by this.
+    AI_DIAGNOSIS_STEP = "Run AI failure diagnosis"
 
     # Suffix used by pure pass-through relay jobs/workflows that exist only
     # to give the merge-queue ruleset a stable required-check name -- e.g.
@@ -250,30 +273,52 @@ class WorkflowExporter:
 
     @staticmethod
     def _classify_failure_reason(category, failed_steps, jobs=None):
-        """category: only "e2e" jobs get classified. Returns "n/a" for
-        any other category.
+        """category: only "e2e" and "ai" jobs get classified. Returns
+        "n/a" for any other category.
 
         failed_steps: the list from _extract_failed_steps
         ([{"display":.., "step":..}, ...]), already excluding gate/
-        precondition jobs (see _is_gate_job). jobs: the raw per-job list
-        from _fetch_run_jobs, used only to detect the gate-only-failure
-        case below -- pass None when unavailable (e.g. reclassifying from
-        already-stored text) to skip that check.
+        precondition jobs (see _is_gate_job). Only used for "e2e".
+        jobs: the raw per-job list from _fetch_run_jobs. Used by "e2e" only
+        to detect the gate-only-failure case below (pass None when
+        unavailable, e.g. reclassifying from already-stored text, to skip
+        that check); used by "ai" as its ONLY input (see below).
 
-        Returns "gate" if every job that actually failed was a gate/
-        precondition job (see _is_gate_only_failure) -- excluded from all
-        stats by get_jobs_json, not just this infra/test breakdown, since
-        it's neither. Otherwise "test" if any failed step is in TEST_STEPS
-        (OSAC's own install/test execution), "infra" if there's failure
-        detail but none of it is a test step, and "infra" too when there's
-        no per-step detail at all (e.g. the job itself shows conclusion
-        "cancelled" with zero recorded steps even though the run's overall
-        conclusion is "failure" -- a real observed case: a runner-level
-        crash/timeout that GitHub cancelled mid-job). A genuine product/
-        test failure always produces step-level data (a red "Run E2E
-        tests" step); the total absence of any step data is itself an
-        infra-level symptom, not an ambiguous third category.
+        For "e2e": returns "gate" if every job that actually failed was a
+        gate/precondition job (see _is_gate_only_failure) -- excluded from
+        all stats by get_jobs_json, not just this infra/test breakdown,
+        since it's neither. Otherwise "test" if any failed step is in
+        TEST_STEPS (OSAC's own install/test execution), "infra" if there's
+        failure detail but none of it is a test step, and "infra" too when
+        there's no per-step detail at all (e.g. the job itself shows
+        conclusion "cancelled" with zero recorded steps even though the
+        run's overall conclusion is "failure" -- a real observed case: a
+        runner-level crash/timeout that GitHub cancelled mid-job). A
+        genuine product/test failure always produces step-level data (a
+        red "Run E2E tests" step); the total absence of any step data is
+        itself an infra-level symptom, not an ambiguous third category.
+
+        For "ai": returns "ran" if AI_DIAGNOSIS_STEP appears, with a
+        non-skipped conclusion, in ANY job in `jobs`; "skipped" otherwise;
+        "n/a" if `jobs` itself is falsy (e.g. the fetch legitimately
+        returned zero job entries). Deliberately independent of the run's
+        own conclusion, unlike e2e's classification above -- an AI
+        diagnostic run's overall conclusion is essentially always
+        "success" whether or not the Diagnose job's real work happened at
+        all (see AI_DIAGNOSIS_STEP's docstring), so gating this on
+        conclusion == "failure" the way callers do for e2e would never
+        fire. Every ingestion call site instead calls this unconditionally
+        for "ai" category records via _apply_ai_status.
         """
+        if category == "ai":
+            if not jobs:
+                return "n/a"
+            for job in jobs:
+                for step in job.get("steps") or []:
+                    if (step.get("name") == WorkflowExporter.AI_DIAGNOSIS_STEP
+                            and step.get("conclusion") not in (None, "skipped")):
+                        return "ran"
+            return "skipped"
         if category != "e2e":
             return "n/a"
         if jobs is not None and WorkflowExporter._is_gate_only_failure(jobs):
@@ -284,6 +329,22 @@ class WorkflowExporter:
             if f["step"] in WorkflowExporter.TEST_STEPS:
                 return "test"
         return "infra"
+
+    @staticmethod
+    def _apply_ai_status(record, jobs):
+        """Set record["failure_reason"] to "ran"/"skipped"/"n/a" for
+        category "ai" records, independent of the run's own conclusion --
+        see _classify_failure_reason's "ai" branch for why this can't be
+        gated on conclusion == "failure" the way e2e's infra/test/gate
+        classification is. No-op for every other category.
+
+        Called unconditionally (not just on failure) from each of this
+        exporter's ingestion call sites (_backfill_page, _backfill_range,
+        initial_load, _process_completed_run), right alongside where
+        record["steps"] gets set from the same `jobs` fetch.
+        """
+        if record.get("category") == "ai":
+            record["failure_reason"] = WorkflowExporter._classify_failure_reason("ai", None, jobs)
 
     @staticmethod
     def _categorize_workflow(name):
@@ -387,6 +448,7 @@ class WorkflowExporter:
         self._purge_ignored_events_if_needed()
         self._recategorize_jobs_if_needed()
         self._reclassify_failure_reasons_if_needed()
+        self._reclassify_ai_status_if_needed()
         self._clean_hosted_runner_noise_if_needed()
 
     def _purge_ignored_events_if_needed(self):
@@ -467,11 +529,20 @@ class WorkflowExporter:
         failed_step happens to be empty -- confirmed live, e.g. osac run
         #32265159432, reclassified back and forth across restarts before
         this guard existed.
+
+        Excludes category "ai" rows: this function only knows how to
+        re-derive e2e's gate/test/infra reasons from stored failed_step
+        text, which doesn't apply to "ai"'s ran/skipped classification at
+        all (see _classify_failure_reason's "ai" branch) -- calling it on
+        one with jobs=None would return "n/a" and silently clobber an
+        already-correct "ran"/"skipped" value on every restart.
+        _reclassify_ai_status_if_needed handles "ai" rows separately, from
+        stored steps_json instead of failed_step text.
         """
         with self._db() as conn:
             rows = conn.execute(
                 "SELECT id, category, failed_step, failure_reason FROM jobs "
-                "WHERE conclusion = 'failure'"
+                "WHERE conclusion = 'failure' AND category != 'ai'"
             ).fetchall()
             updated = 0
             for row in rows:
@@ -493,6 +564,68 @@ class WorkflowExporter:
             if updated:
                 logger.info(
                     "Reclassified failure_reason for %d already-stored failed job(s)", updated
+                )
+
+    def _reclassify_ai_status_if_needed(self):
+        """Backfill failure_reason ("ran"/"skipped") for already-stored
+        "ai" category rows -- e.g. rows just recategorized from
+        "automation" to "ai" by _recategorize_jobs_if_needed above (a
+        fresh deploy of the "ai" category itself), or upgraded via a
+        WORKFLOW_CATEGORIES/AI_DIAGNOSIS_STEP change later.
+
+        No GitHub API calls: reuses the already-stored steps_json (see
+        _extract_step_durations). Its presence for AI_DIAGNOSIS_STEP is a
+        reliable enough signal from stored data alone even though
+        steps_json doesn't retain each step's conclusion (unlike the live
+        `jobs` _classify_failure_reason's "ai" branch prefers) -- the
+        Diagnose job is only ever entirely skipped or fully executed,
+        never partially, and _extract_step_durations already drops every
+        step belonging to a job whose OWN conclusion isn't success/failure
+        (i.e. a skipped Diagnose job contributes zero steps at all) -- so
+        "does AI_DIAGNOSIS_STEP appear in the stored list" and "did it
+        have a non-skipped conclusion" agree in every real case this
+        pipeline produces.
+
+        Safe to re-run every startup: no-op once every "ai" row already
+        has the correct value.
+
+        A row with empty/malformed steps_json is genuinely ambiguous from
+        stored data alone -- it can mean either a legitimately skipped
+        Diagnose job (the common case) or "the jobs fetch itself returned
+        zero entries" (the rare, degenerate case _classify_failure_reason's
+        "ai" branch calls "n/a" at ingestion time, when it still had the
+        live `jobs` list to tell the two apart). Rewriting an existing
+        "n/a" to "skipped" here would assert something this migration
+        can't actually verify -- so an existing "n/a" is left alone in
+        that case rather than downgraded; only a row with real step data
+        gets (re)classified to "ran"/"skipped".
+        """
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT id, steps_json, failure_reason FROM jobs WHERE category = 'ai'"
+            ).fetchall()
+            updated = 0
+            for row in rows:
+                try:
+                    steps = json.loads(row["steps_json"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    steps = []
+                if not steps:
+                    if row["failure_reason"] == "n/a":
+                        continue
+                    reason = "skipped"
+                else:
+                    reason = "ran" if any(
+                        s.get("name") == WorkflowExporter.AI_DIAGNOSIS_STEP for s in steps
+                    ) else "skipped"
+                if reason != row["failure_reason"]:
+                    conn.execute(
+                        "UPDATE jobs SET failure_reason = ? WHERE id = ?", (reason, row["id"])
+                    )
+                    updated += 1
+            if updated:
+                logger.info(
+                    "Reclassified failure_reason for %d already-stored 'ai' job(s)", updated
                 )
 
     def _clean_hosted_runner_noise_if_needed(self):
@@ -1459,6 +1592,7 @@ class WorkflowExporter:
                 if jobs:
                     record["runner_name"] = self._extract_runner_names(jobs)
                     record["steps"] = self._extract_step_durations(jobs)
+                self._apply_ai_status(record, jobs)
                 if conclusion == "failure":
                     # jobs may be [] (fetch succeeded, zero job entries) --
                     # classify anyway rather than leaving failure_reason
@@ -1533,6 +1667,7 @@ class WorkflowExporter:
             if jobs:
                 record["runner_name"] = self._extract_runner_names(jobs)
                 record["steps"] = self._extract_step_durations(jobs)
+            self._apply_ai_status(record, jobs)
             if conclusion == "failure":
                 # jobs may be [] (fetch succeeded, zero job entries) --
                 # classify anyway rather than leaving failure_reason unset;
@@ -1622,6 +1757,7 @@ class WorkflowExporter:
                     if jobs:
                         record["runner_name"] = self._extract_runner_names(jobs)
                         record["steps"] = self._extract_step_durations(jobs)
+                    self._apply_ai_status(record, jobs)
                     if conclusion == "failure":
                         # jobs may be [] (fetch succeeded, zero job entries)
                         # -- classify anyway rather than leaving
@@ -1675,6 +1811,7 @@ class WorkflowExporter:
         if jobs:
             record["runner_name"] = self._extract_runner_names(jobs)
             record["steps"] = self._extract_step_durations(jobs)
+        self._apply_ai_status(record, jobs)
         if conclusion == "failure":
             # jobs may be [] (fetch succeeded, zero job entries)
             # -- classify anyway rather than leaving
@@ -1967,9 +2104,14 @@ class WorkflowExporter:
           since     - ISO 8601 timestamp, only return jobs created at or after
           until     - ISO 8601 timestamp, only return jobs created before
           job_type  - periodic, presubmit, manual, or merge_queue
-          failure_reason - infra or test (see _classify_failure_reason).
-                      Implies status=failure and takes precedence over
-                      the status param if both are given.
+          failure_reason - infra, test, gate (category "e2e"), or ran,
+                      skipped (category "ai") -- see
+                      _classify_failure_reason. For e2e's values, implies
+                      status=failure and takes precedence over the status
+                      param if both are given -- NOT true for ai's ran/
+                      skipped, since an ai row is essentially never
+                      conclusion=="failure" regardless of whether the
+                      Diagnose job's real work ran (see AI_DIAGNOSIS_STEP).
           runner    - filter by machine/runner name (matches a
                       "<runner>-runner-" prefix, case-insensitively;
                       runner_name can hold more than one comma-joined
@@ -2047,13 +2189,20 @@ class WorkflowExporter:
         # NULL rows compare as '' (never equal to 'gate') and pass through.
         where.append("COALESCE(LOWER(failure_reason), '') != 'gate'")
         if failure_reason_filter:
-            # Picking a failure reason implies "only failures" -- the same
-            # effect as also picking status=failure. Takes precedence over
-            # status_filter since Grafana has no native way to make one
-            # dropdown's selection change another dropdown's displayed
-            # value, so this is how "selecting Failure Reason behaves as
-            # if Status were set to Failed" actually gets enforced.
-            where.append("conclusion = 'failure'")
+            # Picking an e2e failure reason (infra/test/gate) implies
+            # "only failures" -- the same effect as also picking
+            # status=failure. Takes precedence over status_filter since
+            # Grafana has no native way to make one dropdown's selection
+            # change another dropdown's displayed value, so this is how
+            # "selecting Failure Reason behaves as if Status were set to
+            # Failed" actually gets enforced. Does NOT apply to ai's
+            # ran/skipped values: an "ai" row is essentially never
+            # conclusion=="failure" regardless of whether the Diagnose
+            # job's real work happened (see AI_DIAGNOSIS_STEP) -- forcing
+            # conclusion='failure' here would make selecting Ran/Skipped
+            # return zero rows every time.
+            if failure_reason_filter.lower() not in ("ran", "skipped"):
+                where.append("conclusion = 'failure'")
             where.append("LOWER(failure_reason) = :failure_reason")
             args["failure_reason"] = failure_reason_filter.lower()
         elif status_filter:

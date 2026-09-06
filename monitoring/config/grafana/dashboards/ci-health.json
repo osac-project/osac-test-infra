@@ -441,11 +441,12 @@
         "name": "category",
         "label": "Category",
         "type": "custom",
-        "query": "All,e2e,ci,lint,release,automation",
+        "query": "All,e2e,ai,ci,lint,release,automation",
         "current": { "text": "All", "value": "All", "selected": true },
         "options": [
           { "text": "All", "value": "All", "selected": true },
           { "text": "E2E", "value": "e2e", "selected": false },
+          { "text": "AI Diagnostic", "value": "ai", "selected": false },
           { "text": "CI/Build", "value": "ci", "selected": false },
           { "text": "Lint/Quality", "value": "lint", "selected": false },
           { "text": "Release/Publish", "value": "release", "selected": false },
