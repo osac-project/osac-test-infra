@@ -64,3 +64,9 @@ jobs:
       bmf-operator-image: ${{ inputs.bmf-operator-image || '' }}
       osac-repo: ${{ inputs.osac-repo || '' }}
       osac-branch: ${{ inputs.osac-branch || '' }}
+      # test-ref / test-repository are not workflow_dispatch inputs
+      # (GitHub caps dispatch at 10 inputs); defaults from the reusable
+      # workflow apply.  Other programmatic callers (slash-command,
+      # cross-repo dispatch) can pass them directly.
+      test-ref: "main"
+      test-repository: "osac-project/osac"
