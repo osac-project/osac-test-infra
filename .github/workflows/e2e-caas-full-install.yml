@@ -820,6 +820,10 @@ jobs:
           GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
           WORKFLOW_NAME: "E2E CaaS Full Install"
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Also written here (not just GITHUB_STEP_SUMMARY) so the Slack
+          # steps below can grab the raw diagnosis text on its own,
+          # without re-parsing the job summary.
+          DIAGNOSIS_FILE: ${{ runner.temp }}/ai-diagnosis.md
         run: python3 .github/scripts/ai-diagnose-failure.py
 
       - name: Teardown
@@ -830,13 +834,47 @@ jobs:
         run: bash .github/scripts/teardown.sh
 
       - name: Notify Slack on failure
+        id: notify-slack
         if: always() && failure() && inputs.notify-on-failure
         uses: ./.github/actions/notify-slack
         with:
           status: failure
           workflow-name: "E2E CaaS Full Install"
-          slack-webhook-url: ${{ steps.secrets.outputs.SLACK_WEBHOOK_URL }}
+          # Bot-token path (not the webhook) -- only chat.postMessage
+          # returns a message ts, which the two threaded replies below
+          # need. Same bot/token/channel already used by the daily CI
+          # digest (post-ci-digest.py).
+          slack-bot-token: ${{ steps.secrets.outputs.SLACK_BOT_TOKEN }}
+          slack-channel-id: ${{ steps.secrets.outputs.SLACK_CHANNEL_ID }}
           workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           branch-name: ${{ github.ref_name }}
           commit-sha: ${{ github.sha }}
           artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
+
+      - name: Prepare AI diagnosis for Slack
+        id: prepare-diagnosis-text
+        if: always() && failure() && inputs.notify-on-failure && steps.notify-slack.outputs.message-ts != ''
+        continue-on-error: true # a formatting bug here must not lose the Slack thread
+        uses: ./.github/actions/prepare-diagnosis-for-slack
+        with:
+          diagnosis-file: ${{ runner.temp }}/ai-diagnosis.md
+
+      - name: Post AI diagnosis to Slack thread
+        if: always() && failure() && inputs.notify-on-failure && steps.notify-slack.outputs.message-ts != ''
+        continue-on-error: true # must never block the job on a Slack hiccup
+        uses: ./.github/actions/post-slack-thread-reply
+        with:
+          slack-bot-token: ${{ steps.secrets.outputs.SLACK_BOT_TOKEN }}
+          slack-channel-id: ${{ steps.secrets.outputs.SLACK_CHANNEL_ID }}
+          thread-ts: ${{ steps.notify-slack.outputs.message-ts }}
+          message-text: ${{ steps.prepare-diagnosis-text.outputs.text }}
+
+      - name: Ping chai-bot to verify failure
+        if: always() && failure() && inputs.notify-on-failure && steps.notify-slack.outputs.message-ts != ''
+        continue-on-error: true # must never block the job on a Slack hiccup
+        uses: ./.github/actions/post-slack-thread-reply
+        with:
+          slack-bot-token: ${{ steps.secrets.outputs.SLACK_BOT_TOKEN }}
+          slack-channel-id: ${{ steps.secrets.outputs.SLACK_CHANNEL_ID }}
+          thread-ts: ${{ steps.notify-slack.outputs.message-ts }}
+          message-text: "<@${{ steps.secrets.outputs.CHAI_BOT_USER_ID }}> please verify this failure reason and add/update/comment on the relevant osac-test-infra issue if needed."

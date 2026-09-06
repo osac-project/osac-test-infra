@@ -10,8 +10,26 @@ inputs:
     description: 'Workflow display name (e.g., "E2E VMaaS Full Install")'
     required: true
   slack-webhook-url:
-    description: 'Slack incoming webhook URL'
-    required: true
+    description: >-
+      Slack incoming webhook URL. Used when slack-bot-token/slack-channel-id
+      are not provided. A webhook's response never includes a message
+      timestamp, so a notification sent this way can never be threaded onto
+      (message-ts stays empty) -- pass slack-bot-token/slack-channel-id
+      instead for any caller that needs to post follow-up replies.
+    required: false
+    default: ''
+  slack-bot-token:
+    description: >-
+      Slack bot token (xoxb-...) with chat:write scope. When this AND
+      slack-channel-id are both set, posts via the chat.postMessage Web
+      API instead of the webhook -- the only way to get back a message
+      timestamp (see the message-ts output) for later threaded replies.
+    required: false
+    default: ''
+  slack-channel-id:
+    description: 'Slack channel ID to post to (required alongside slack-bot-token; ignored for the webhook path, which has its own fixed target channel).'
+    required: false
+    default: ''
   workflow-url:
     description: 'GitHub workflow run URL'
     required: true
@@ -34,10 +52,20 @@ inputs:
     required: false
     default: ''
 
+outputs:
+  message-ts:
+    description: >-
+      The posted message's Slack timestamp, usable as thread_ts for a
+      follow-up chat.postMessage reply. Only set when slack-bot-token/
+      slack-channel-id were used (the webhook path leaves this empty --
+      webhooks never return a ts at all).
+    value: ${{ steps.send.outputs.message-ts }}
+
 runs:
   using: composite
   steps:
     - name: Send Slack notification
+      id: send
       shell: bash
       env:
         INPUT_STATUS: ${{ inputs.status }}
@@ -49,6 +77,8 @@ runs:
         INPUT_ARTIFACT_URL: ${{ inputs.artifact-url }}
         INPUT_PR_INFO: ${{ inputs.pr-info }}
         INPUT_SLACK_WEBHOOK: ${{ inputs.slack-webhook-url }}
+        INPUT_SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+        INPUT_SLACK_CHANNEL_ID: ${{ inputs.slack-channel-id }}
       run: |
         # Set status-specific values
         if [ "$INPUT_STATUS" = "success" ]; then
@@ -149,6 +179,29 @@ runs:
             ]
           }')
 
-        echo "Sending notification to Slack..."
-        curl -sf --connect-timeout 10 --max-time 30 \
-          -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$INPUT_SLACK_WEBHOOK"
+        if [ -n "$INPUT_SLACK_BOT_TOKEN" ] && [ -n "$INPUT_SLACK_CHANNEL_ID" ]; then
+          # Bot-token path: chat.postMessage, not the webhook -- the only
+          # way to get back a message ts, since a notification sent this
+          # way may need threaded follow-up replies (the AI diagnosis, a
+          # chai-bot ping) posted onto it later in the same job.
+          echo "Sending notification to Slack via chat.postMessage..."
+          PAYLOAD=$(jq -n --argjson base "$PAYLOAD" --arg channel "$INPUT_SLACK_CHANNEL_ID" \
+            '$base + {"channel": $channel}')
+          RESPONSE=$(curl -sf --connect-timeout 10 --max-time 30 \
+            -X POST -H "Authorization: Bearer ${INPUT_SLACK_BOT_TOKEN}" \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data "$PAYLOAD" "https://slack.com/api/chat.postMessage")
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "::error::Slack chat.postMessage failed: $(echo "$RESPONSE" | jq -r '.error // "unknown error"')"
+            exit 1
+          fi
+          TS=$(echo "$RESPONSE" | jq -r '.ts')
+          echo "message-ts=${TS}" >> "$GITHUB_OUTPUT"
+        else
+          echo "Sending notification to Slack via webhook..."
+          curl -sf --connect-timeout 10 --max-time 30 \
+            -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$INPUT_SLACK_WEBHOOK"
+          # No ts available from a webhook response -- message-ts output
+          # simply stays unset for this path.
+        fi

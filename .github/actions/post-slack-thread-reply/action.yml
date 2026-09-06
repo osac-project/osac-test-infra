@@ -1,0 +1,56 @@
+---
+name: Post Slack Thread Reply
+description: >-
+  Posts a message as a threaded reply under an existing Slack message via
+  the chat.postMessage Web API. Requires a bot token (chat:write scope) --
+  unlike notify-slack's webhook path, there is no way to thread a reply
+  through an incoming webhook at all, since a webhook response never
+  carries a channel/ts pair to reply against.
+
+inputs:
+  slack-bot-token:
+    description: 'Slack bot token (xoxb-...) with chat:write scope.'
+    required: true
+  slack-channel-id:
+    description: 'Slack channel ID the parent message was posted to.'
+    required: true
+  thread-ts:
+    description: >-
+      The parent message's ts (e.g. notify-slack's message-ts output) to
+      reply underneath.
+    required: true
+  message-text:
+    description: >-
+      Slack mrkdwn-formatted message body for the reply. Sent as plain
+      `text` (no Block Kit), so this is rendered as a single text
+      message -- keep it under Slack's ~40,000-char message limit
+      (callers should truncate longer content themselves; this action
+      does not).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Post threaded reply
+      shell: bash
+      env:
+        INPUT_SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+        INPUT_SLACK_CHANNEL_ID: ${{ inputs.slack-channel-id }}
+        INPUT_THREAD_TS: ${{ inputs.thread-ts }}
+        INPUT_MESSAGE_TEXT: ${{ inputs.message-text }}
+      run: |
+        set -euo pipefail
+        PAYLOAD=$(jq -n \
+          --arg channel "$INPUT_SLACK_CHANNEL_ID" \
+          --arg thread_ts "$INPUT_THREAD_TS" \
+          --arg text "$INPUT_MESSAGE_TEXT" \
+          '{"channel": $channel, "thread_ts": $thread_ts, "text": $text, "unfurl_links": false}')
+        RESPONSE=$(curl -sf --connect-timeout 10 --max-time 30 \
+          -X POST -H "Authorization: Bearer ${INPUT_SLACK_BOT_TOKEN}" \
+          -H 'Content-type: application/json; charset=utf-8' \
+          --data "$PAYLOAD" "https://slack.com/api/chat.postMessage")
+        OK=$(echo "$RESPONSE" | jq -r '.ok')
+        if [ "$OK" != "true" ]; then
+          echo "::error::Slack chat.postMessage (threaded reply) failed: $(echo "$RESPONSE" | jq -r '.error // "unknown error"')"
+          exit 1
+        fi
