@@ -1,0 +1,36 @@
+---
+name: Ping Chai Bot To Verify Failure
+description: >-
+  Posts a fixed, standard request to chai-bot as a threaded Slack reply,
+  asking it to verify an AI-diagnosed E2E failure and act on it. Shared
+  by every E2E full-install flavor (CaaS/VMaaS/BMaaS) -- the message text
+  is centralized here so a future wording tweak only needs to happen in
+  one place, not duplicated across every workflow file.
+
+inputs:
+  slack-bot-token:
+    description: 'Slack bot token (xoxb-...) with chat:write scope.'
+    required: true
+  slack-channel-id:
+    description: 'Slack channel ID the parent failure notification was posted to.'
+    required: true
+  thread-ts:
+    description: "The parent failure notification's ts to reply underneath."
+    required: true
+  chai-bot-user-id:
+    description: >-
+      chai-bot's Slack member ID (fetched from Vault at runtime -- never
+      hardcoded here or anywhere else in this repo) for a real <@ID>
+      mention. A plain-text "@chai-bot" string would not notify anyone.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Post chai-bot ping
+      uses: ./.github/actions/post-slack-thread-reply
+      with:
+        slack-bot-token: ${{ inputs.slack-bot-token }}
+        slack-channel-id: ${{ inputs.slack-channel-id }}
+        thread-ts: ${{ inputs.thread-ts }}
+        message-text: "<@${{ inputs.chai-bot-user-id }}> please verify this failure reason. If a matching GitHub issue already exists in osac-test-infra (our AI bot creates those, not you -- no need to open a new one), comment there with this occurrence -- don't only reference or update a Jira issue instead. If you confirm the root cause and submit a fix, please reference that issue in it."
