@@ -36,13 +36,55 @@ runs:
         import sys
 
         text = open(sys.argv[1], "r", errors="replace").read()
-        # Best-effort GitHub-flavored-markdown -> Slack mrkdwn: bold and
-        # links are the two constructs that render as visible clutter
-        # (literal asterisks/brackets) if left untouched. Other GFM
-        # constructs (tables, nested lists, <details>) are left as-is --
-        # readability over a pixel-perfect conversion.
+        # Best-effort GitHub-flavored-markdown -> Slack mrkdwn.
+        #
+        # 1. Strip the <details>/<summary>/<sub> HTML wrappers this
+        #    pipeline's own diagnosis structure uses for GitHub's renderer
+        #    (collapsible sections, small text) -- unwrapped, not removed,
+        #    since their inner content still matters. Slack has no
+        #    equivalent, and critically, angle brackets are ALSO Slack's
+        #    own link/mention syntax -- confirmed live: a
+        #    "<sub>[Full run](url)</sub>" footer link came out with its
+        #    URL missing entirely once posted, because the un-stripped
+        #    <sub> wrapper turned the link conversion below into a nested
+        #    angle-bracket structure Slack's parser doesn't handle. Must
+        #    run BEFORE the link conversion for exactly that reason.
+        text = re.sub(r"</?details>", "", text)
+        text = re.sub(r"</?summary>", "", text)
+        text = re.sub(r"</?sub>", "", text)
+        # 2. Markdown headers (### Causal chain) have no Slack mrkdwn
+        #    equivalent at all -- Slack would otherwise show the literal
+        #    "### Causal chain" text, hashes included. Bold instead.
+        text = re.sub(r"^#{1,6}\s+(.*)$", r"*\1*", text, flags=re.MULTILINE)
+        # 3. Bold.
         text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
-        text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<\2|\1>", text)
+        # 4. Stash markdown links as placeholders BEFORE escaping (step 5)
+        #    so their eventual Slack <url|text> syntax is generated AFTER
+        #    escaping and survives untouched -- placeholders contain none
+        #    of the characters escaping targets.
+        links = []
+
+        def _stash_link(m):
+            links.append((m.group(2), m.group(1)))
+            return f"\x00LINK{len(links) - 1}\x00"
+
+        text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", _stash_link, text)
+        # 5. Escape any remaining literal &, <, > -- this diagnosis can
+        #    quote untrusted, PR-influenced content verbatim (the prompt
+        #    explicitly asks for verbatim log/diff quotes in the Evidence
+        #    section), and Slack's mrkdwn parser treats a literal
+        #    "<!channel>"/"<!here>"/"<!everyone>" as a real broadcast
+        #    mention -- a crafted fork-PR failure could otherwise ping the
+        #    whole channel. & must be escaped first, or escaping < / >
+        #    afterward would double-escape the &amp; just inserted for
+        #    those. Slack's own renderer decodes these entities back to
+        #    the literal characters when displaying mrkdwn text, so
+        #    ordinary content (e.g. a shell redirection like "2>&1"
+        #    quoted from a log) still displays correctly.
+        text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        # 6. Put the real Slack links back now that escaping is done.
+        for i, (url, label) in enumerate(links):
+            text = text.replace(f"\x00LINK{i}\x00", f"<{url}|{label}>")
         # Keep the thread reply skimmable -- the run/job summary already
         # has the full text; truncate rather than dumping everything.
         # Reserves room for the suffix BEFORE slicing so the final output

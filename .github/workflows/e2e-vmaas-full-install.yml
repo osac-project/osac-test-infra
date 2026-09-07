@@ -896,9 +896,9 @@ jobs:
       - name: Ping chai-bot to verify failure
         if: always() && failure() && inputs.notify-on-failure && steps.notify-slack.outputs.message-ts != ''
         continue-on-error: true # must never block the job on a Slack hiccup
-        uses: ./.github/actions/post-slack-thread-reply
+        uses: ./.github/actions/ping-chai-bot-to-verify-failure
         with:
           slack-bot-token: ${{ steps.secrets.outputs.SLACK_BOT_TOKEN }}
           slack-channel-id: ${{ steps.secrets.outputs.SLACK_CHANNEL_ID }}
           thread-ts: ${{ steps.notify-slack.outputs.message-ts }}
-          message-text: "<@${{ steps.secrets.outputs.CHAI_BOT_USER_ID }}> please verify this failure reason and add/update/comment on the relevant osac-test-infra issue if needed."
+          chai-bot-user-id: ${{ steps.secrets.outputs.CHAI_BOT_USER_ID }}
