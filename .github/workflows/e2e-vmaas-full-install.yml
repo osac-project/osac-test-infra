@@ -508,6 +508,7 @@ jobs:
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
           INSTALLER_REF: ${{ inputs.installer-ref }}
           INSTALLER_REPO: ${{ inputs.installer-repo }}
+          ENABLE_CAAS: ${{ inputs.enable-caas }}
         run: |
           set -o pipefail
           # Ensure helm and yq are available
@@ -583,7 +584,14 @@ jobs:
           fi
           echo "CatalogSource is READY."
 
-          make install-infra PLATFORM=openshift PROFILE=vmaas-ci NS="${INSTALLER_NAMESPACE}"
+          # CaaS requires MCE/HyperShift CRDs. Keep the vmaas-ci OSAC values
+          # below, because they provide the VMaaS k8s-only networking setup.
+          INFRA_PROFILE=vmaas-ci
+          if [[ "${ENABLE_CAAS}" == "true" ]]; then
+            INFRA_PROFILE=full-ci
+          fi
+          echo "Installing infrastructure with profile ${INFRA_PROFILE}"
+          make install-infra PLATFORM=openshift PROFILE="${INFRA_PROFILE}" NS="${INSTALLER_NAMESPACE}"
 
       - name: Install OSAC
         env:
