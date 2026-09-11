@@ -12,4 +12,8 @@ if [[ -z "${HEAD_SHA:-}" || -z "${REPO:-}" ]]; then
   exit 1
 fi
 
-complete_stale_in_progress_merge_gates
+if [[ "${AFTER_NATIVE_SUCCESS:-true}" == "true" ]]; then
+  complete_stale_in_progress_merge_gates
+else
+  dismiss_unlock_orphan_gate_checks
+fi

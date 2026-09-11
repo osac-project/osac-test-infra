@@ -18,6 +18,12 @@ inputs:
       When empty, completes stale checks for all three gates.
     required: false
     default: ""
+  after-native-success:
+    description: >-
+      When true, complete orphans only after native gate jobs succeeded.
+      When false, cancel unlock-time orphan API checks before full-install.
+    required: false
+    default: "true"
   github-token:
     description: Token with checks:read and checks:write
     required: false
@@ -33,4 +39,5 @@ runs:
         REPO: ${{ inputs.repository }}
         HEAD_SHA: ${{ inputs.head-sha }}
         COMPLETE_GATE_NAME: ${{ inputs.gate-name }}
+        AFTER_NATIVE_SUCCESS: ${{ inputs.after-native-success }}
       run: bash "${GITHUB_ACTION_PATH}/complete-stale-e2e-gates.sh"

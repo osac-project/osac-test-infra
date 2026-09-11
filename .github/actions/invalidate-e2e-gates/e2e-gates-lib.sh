@@ -118,23 +118,44 @@ native_gate_job_success() {
   ' <<<"${CHECK_RUNS_JSON}" >/dev/null
 }
 
+# Validate COMPLETE_GATE_NAME when set; return 2 on unsupported value.
+validate_complete_gate_name() {
+  local gate
+
+  if [[ -z "${COMPLETE_GATE_NAME:-}" ]]; then
+    return 0
+  fi
+  for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
+    if [[ "${gate}" == "${COMPLETE_GATE_NAME}" ]]; then
+      return 0
+    fi
+  done
+  echo "Unsupported gate name: ${COMPLETE_GATE_NAME}" >&2
+  return 2
+}
+
+# In_progress API gate checks not backed by a native workflow job URL.
+orphan_in_progress_gate_check_ids() {
+  local gate="$1"
+  jq -r --arg g "${gate}" --arg prefix "${INVALIDATE_EXTERNAL_ID_PREFIX}" '
+    [.[] | select(
+      .name == $g
+      and .status == "in_progress"
+      and (
+        ((.external_id // "") | startswith($prefix))
+        or ((.details_url // "") | test("^https://github.com/[^/]+/[^/]+/actions/runs/[0-9]+$"))
+        or ((.details_url // "") | test("^https://github.com/[^/]+/[^/]+/runs/[0-9]+$"))
+      )
+    ) | .id] | .[]
+  ' <<<"${CHECK_RUNS_JSON}"
+}
+
 # Complete orphaned in_progress API gate checks after native gate jobs succeed.
 # Set COMPLETE_GATE_NAME to limit completion to one gate.
 complete_stale_in_progress_merge_gates() {
-  local gate id completed_at title summary failed=0 valid=0
+  local gate id completed_at title summary failed=0
 
-  if [[ -n "${COMPLETE_GATE_NAME:-}" ]]; then
-    for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
-      if [[ "${gate}" == "${COMPLETE_GATE_NAME}" ]]; then
-        valid=1
-        break
-      fi
-    done
-    if [[ "${valid}" -eq 0 ]]; then
-      echo "Unsupported gate name: ${COMPLETE_GATE_NAME}" >&2
-      return 2
-    fi
-  fi
+  validate_complete_gate_name || return 2
 
   load_check_runs_for_sha
   completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -174,16 +195,49 @@ complete_stale_in_progress_merge_gates() {
         echo "Could not complete stale ${gate} check ${id} (fork PRs may lack checks:write)." >&2
         failed=1
       fi
-    done < <(jq -r --arg g "${gate}" --arg prefix "${INVALIDATE_EXTERNAL_ID_PREFIX}" '
-      [.[] | select(
-        .name == $g
-        and .status == "in_progress"
-        and (
-          ((.external_id // "") | startswith($prefix))
-          or ((.details_url // "") | test("^https://github.com/[^/]+/[^/]+/actions/runs/[0-9]+$"))
-        )
-      ) | .id] | .[]
-    ' <<<"${CHECK_RUNS_JSON}")
+    done < <(orphan_in_progress_gate_check_ids "${gate}")
+  done
+  return "${failed}"
+}
+
+# Cancel orphan unlock API gate checks before native full-install runs.
+# e2e-on-label invalidate (main-branch) can post in_progress checks on the
+# wrong workflow suite until this PR merges.
+dismiss_unlock_orphan_gate_checks() {
+  local gate id completed_at title summary failed=0
+
+  validate_complete_gate_name || return 2
+
+  load_check_runs_for_sha
+  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  title="Superseded by full-install gate job"
+  summary="Stale unlock invalidate check; native gate job will report on this SHA."
+
+  for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
+    if [[ -n "${COMPLETE_GATE_NAME:-}" && "${gate}" != "${COMPLETE_GATE_NAME}" ]]; then
+      continue
+    fi
+    while IFS= read -r id; do
+      [[ -z "${id}" || "${id}" == "null" ]] && continue
+      payload=$(jq -n \
+        --arg status "completed" \
+        --arg conclusion "cancelled" \
+        --arg completed_at "${completed_at}" \
+        --arg title "${title}" \
+        --arg summary "${summary}" \
+        '{
+          status: $status,
+          conclusion: $conclusion,
+          completed_at: $completed_at,
+          output: {title: $title, summary: $summary}
+        }')
+      if gh api "repos/${REPO}/check-runs/${id}" -X PATCH --input - <<<"${payload}"; then
+        echo "Dismissed unlock orphan ${gate} check ${id} on ${HEAD_SHA:0:7}"
+      else
+        echo "Could not dismiss orphan ${gate} check ${id} (fork PRs may lack checks:write)." >&2
+        failed=1
+      fi
+    done < <(orphan_in_progress_gate_check_ids "${gate}")
   done
   return "${failed}"
 }
