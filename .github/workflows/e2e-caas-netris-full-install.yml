@@ -501,7 +501,7 @@ jobs:
               ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
               podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
             else
-              podman build -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
+              podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
             fi
 
             echo "Loading ${tag} onto node ${NODE_NAME}..."
