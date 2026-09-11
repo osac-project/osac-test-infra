@@ -14,6 +14,9 @@ on:
 jobs:
   cancel-stale-e2e:
     runs-on: ubuntu-latest
+    concurrency:
+      group: cancel-stale-e2e-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       actions: write
       contents: read
@@ -26,6 +29,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: bash .github/scripts/cancel-stale-e2e-runs.sh

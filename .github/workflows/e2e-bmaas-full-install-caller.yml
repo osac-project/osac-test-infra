@@ -57,6 +57,9 @@ jobs:
       github.event_name == 'pull_request'
       && github.event.action == 'synchronize'
     runs-on: ubuntu-latest
+    concurrency:
+      group: cancel-stale-e2e-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       actions: write
       contents: read
@@ -69,6 +72,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: bash .github/scripts/cancel-stale-e2e-runs.sh
@@ -143,8 +147,6 @@ jobs:
           || needs.e2e-readiness.outputs.ready == 'true')
     needs: [e2e-readiness, e2e-bmaas-full-install]
     runs-on: ubuntu-latest
-    permissions:
-      checks: write
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
@@ -153,12 +155,28 @@ jobs:
           exit 1
       - if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
         run: echo "e2e passed"
+
+  e2e-bmaas-complete-stale-gates:
+    if: >-
+      always()
+      && github.event_name == 'pull_request'
+      && needs.e2e-readiness.result == 'success'
+      && needs.e2e-readiness.outputs.ready == 'true'
+      && !contains(needs.e2e-bmaas-gate.result, 'failure')
+      && !contains(needs.e2e-bmaas-gate.result, 'cancelled')
+    needs: [e2e-readiness, e2e-bmaas-full-install, e2e-bmaas-gate]
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/complete-stale-e2e-gates
+            .github/actions/invalidate-e2e-gates
       - name: Complete stale in_progress gate checks
-        if: >-
-          github.event_name == 'pull_request'
-          && !contains(needs.*.result, 'failure')
-          && !contains(needs.*.result, 'cancelled')
-          && needs.e2e-readiness.outputs.ready == 'true'
         uses: ./.github/actions/complete-stale-e2e-gates
         with:
           head-sha: ${{ github.event.pull_request.head.sha }}
