@@ -8,6 +8,24 @@ on:
   workflow_call: {}
 
 jobs:
+  dismiss-unlock-orphan-gates:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/complete-stale-e2e-gates
+            .github/actions/invalidate-e2e-gates
+      - name: Dismiss unlock orphan gate checks
+        uses: ./.github/actions/complete-stale-e2e-gates
+        with:
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          after-native-success: false
+
   remove-label:
     if: contains(github.event.pull_request.labels.*.name, 'e2e-ready')
     runs-on: ubuntu-latest

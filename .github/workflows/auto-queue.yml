@@ -27,6 +27,24 @@ jobs:
             gh pr edit "$pr" --repo "${{ github.repository }}" --remove-label lgtm
           fi
 
+      - name: Checkout cancel-stale-e2e-runs script
+        if: github.event.action == 'synchronize'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/cancel-stale-e2e-runs.sh
+
+      - name: Cancel stale e2e full-install runs
+        if: github.event.action == 'synchronize'
+        env:
+          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: bash .github/scripts/cancel-stale-e2e-runs.sh
+
       - name: Dismiss changes-requested reviews
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}

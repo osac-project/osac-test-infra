@@ -163,6 +163,7 @@ if [[ "${SKIP_LABEL_CHECK}" == "true" ]]; then
 else
   export REASON="${TRIGGER_LABEL} unlock - waiting for fresh full-install run"
 fi
+dismiss_unlock_orphan_gate_checks || true
 bash "${lib_dir}/invalidate-e2e-gates.sh"
 
 E2E_WORKFLOWS=()
