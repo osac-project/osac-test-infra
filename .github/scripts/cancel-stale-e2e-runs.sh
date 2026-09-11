@@ -15,25 +15,46 @@ if [[ -z "${REPO:-}" || -z "${HEAD_SHA:-}" || -z "${HEAD_BRANCH:-}" || -z "${HEA
   exit 1
 fi
 
-if [[ -n "${PR_NUMBER:-}" ]]; then
+# Return 0 when PR head still matches HEAD_SHA; 1 when moved or lookup failed.
+pr_head_still_current() {
+  local current_head
+
+  if [[ -z "${PR_NUMBER:-}" ]]; then
+    return 0
+  fi
   current_head=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // empty')
   if [[ -z "${current_head}" ]]; then
     echo "Could not read PR #${PR_NUMBER} head; skipping stale-run cancel." >&2
-    exit 0
+    return 1
   fi
   if [[ "${current_head}" != "${HEAD_SHA}" ]]; then
-    echo "PR #${PR_NUMBER} head moved (${HEAD_SHA:0:7} -> ${current_head:0:7}); skipping stale-run cancel."
-    exit 0
+    echo "PR #${PR_NUMBER} head moved (${HEAD_SHA:0:7} -> ${current_head:0:7}); stopping stale-run cancel."
+    return 1
   fi
+  return 0
+}
+
+if ! pr_head_still_current; then
+  exit 0
 fi
 
 E2E_NAMES='["E2E VMaaS Full Install","E2E BMaaS Full Install","E2E CaaS Full Install"]'
 cancelled=0
 for status in in_progress queued waiting; do
+  if ! pr_head_still_current; then
+    break
+  fi
   runs=$(gh api "repos/${REPO}/actions/runs?event=pull_request&branch=${HEAD_BRANCH}&status=${status}&per_page=100" \
     --jq '.workflow_runs')
   while IFS=$'\t' read -r id name sha; do
     [[ -z "${id}" ]] && continue
+    if ! pr_head_still_current; then
+      break 2
+    fi
+    if [[ "${sha}" == "${HEAD_SHA}" ]]; then
+      echo "Skipping ${name} #${id}: matches current PR head"
+      continue
+    fi
     echo "Cancelling stale ${name} #${id} (${sha:0:7} != ${HEAD_SHA:0:7})"
     if gh api -X POST "repos/${REPO}/actions/runs/${id}/force-cancel" 2>/dev/null \
       || gh run cancel "${id}" -R "${REPO}"; then

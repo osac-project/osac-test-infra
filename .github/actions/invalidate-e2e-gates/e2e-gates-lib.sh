@@ -83,7 +83,20 @@ native_gate_job_success() {
 # Complete orphaned in_progress API gate checks after native gate jobs succeed.
 # Set COMPLETE_GATE_NAME to limit completion to one gate.
 complete_stale_in_progress_merge_gates() {
-  local gate id completed_at title summary failed=0
+  local gate id completed_at title summary failed=0 valid=0
+
+  if [[ -n "${COMPLETE_GATE_NAME:-}" ]]; then
+    for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
+      if [[ "${gate}" == "${COMPLETE_GATE_NAME}" ]]; then
+        valid=1
+        break
+      fi
+    done
+    if [[ "${valid}" -eq 0 ]]; then
+      echo "Unsupported gate name: ${COMPLETE_GATE_NAME}" >&2
+      return 2
+    fi
+  fi
 
   load_check_runs_for_sha
   completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
