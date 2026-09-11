@@ -113,6 +113,11 @@ complete_stale_in_progress_merge_gates() {
     fi
     while IFS= read -r id; do
       [[ -z "${id}" || "${id}" == "null" ]] && continue
+      load_check_runs_for_sha
+      if ! native_gate_job_success "${gate}"; then
+        echo "Skipping stale ${gate} check ${id}: native gate no longer success on ${HEAD_SHA:0:7}"
+        continue
+      fi
       payload=$(jq -n \
         --arg status "completed" \
         --arg conclusion "success" \

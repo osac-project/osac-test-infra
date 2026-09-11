@@ -40,11 +40,15 @@ fi
 
 E2E_NAMES='["E2E VMaaS Full Install","E2E BMaaS Full Install","E2E CaaS Full Install"]'
 cancelled=0
-for status in in_progress queued waiting; do
+for status in in_progress queued waiting pending requested; do
   if ! pr_head_still_current; then
     break
   fi
-  runs=$(gh api "repos/${REPO}/actions/runs?event=pull_request&branch=${HEAD_BRANCH}&status=${status}&per_page=100" \
+  runs=$(gh api --method GET "repos/${REPO}/actions/runs" \
+    -f event=pull_request \
+    -f branch="${HEAD_BRANCH}" \
+    -f status="${status}" \
+    -F per_page=100 \
     --jq '.workflow_runs')
   while IFS=$'\t' read -r id name sha; do
     [[ -z "${id}" ]] && continue
