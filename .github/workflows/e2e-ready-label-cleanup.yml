@@ -25,6 +25,7 @@ jobs:
         with:
           head-sha: ${{ github.event.pull_request.head.sha }}
           after-native-success: false
+          github-token: ${{ secrets.MERGE_QUEUE_TOKEN }}
 
   remove-label:
     if: contains(github.event.pull_request.labels.*.name, 'e2e-ready')

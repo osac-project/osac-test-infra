@@ -153,7 +153,7 @@ orphan_in_progress_gate_check_ids() {
 # Complete orphaned in_progress API gate checks after native gate jobs succeed.
 # Set COMPLETE_GATE_NAME to limit completion to one gate.
 complete_stale_in_progress_merge_gates() {
-  local gate id completed_at title summary failed=0
+  local gate id completed_at title summary
 
   validate_complete_gate_name || return 2
 
@@ -192,19 +192,18 @@ complete_stale_in_progress_merge_gates() {
       if gh api "repos/${REPO}/check-runs/${id}" -X PATCH --input - <<<"${payload}"; then
         echo "Completed stale in_progress ${gate} check ${id} on ${HEAD_SHA:0:7}"
       else
-        echo "Could not complete stale ${gate} check ${id} (fork PRs may lack checks:write)." >&2
-        failed=1
+        echo "Could not complete stale ${gate} check ${id} (checks:write unavailable; non-fatal)." >&2
       fi
     done < <(orphan_in_progress_gate_check_ids "${gate}")
   done
-  return "${failed}"
+  return 0
 }
 
 # Cancel orphan unlock API gate checks before native full-install runs.
 # e2e-on-label invalidate (main-branch) can post in_progress checks on the
 # wrong workflow suite until this PR merges.
 dismiss_unlock_orphan_gate_checks() {
-  local gate id completed_at title summary failed=0
+  local gate id completed_at title summary
 
   validate_complete_gate_name || return 2
 
@@ -234,10 +233,9 @@ dismiss_unlock_orphan_gate_checks() {
       if gh api "repos/${REPO}/check-runs/${id}" -X PATCH --input - <<<"${payload}"; then
         echo "Dismissed unlock orphan ${gate} check ${id} on ${HEAD_SHA:0:7}"
       else
-        echo "Could not dismiss orphan ${gate} check ${id} (fork PRs may lack checks:write)." >&2
-        failed=1
+        echo "Could not dismiss orphan ${gate} check ${id} (checks:write unavailable; non-fatal)." >&2
       fi
     done < <(orphan_in_progress_gate_check_ids "${gate}")
   done
-  return "${failed}"
+  return 0
 }

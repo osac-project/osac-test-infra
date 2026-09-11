@@ -76,30 +76,6 @@ jobs:
           pr-number: ${{ github.event.pull_request.number }}
           head-sha: ${{ github.event.pull_request.head.sha }}
 
-  e2e-vmaas-dismiss-unlock-gates:
-    if: >-
-      github.event_name == 'pull_request'
-      && needs.e2e-readiness.result == 'success'
-      && needs.e2e-readiness.outputs.ready == 'true'
-    needs: [e2e-readiness]
-    runs-on: ubuntu-latest
-    permissions:
-      checks: write
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            .github/actions/complete-stale-e2e-gates
-            .github/actions/invalidate-e2e-gates
-      - name: Dismiss unlock orphan gate checks
-        uses: ./.github/actions/complete-stale-e2e-gates
-        with:
-          head-sha: ${{ github.event.pull_request.head.sha }}
-          gate-name: e2e-vmaas-gate
-          after-native-success: false
-
   e2e-vmaas-full-install:
     needs: [e2e-readiness]
     if: >-

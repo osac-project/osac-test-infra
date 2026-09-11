@@ -47,8 +47,8 @@ jobs:
             .github/actions/complete-stale-e2e-gates
             .github/actions/invalidate-e2e-gates
       - name: Dismiss unlock orphan gate checks
-        continue-on-error: true
         uses: ./.github/actions/complete-stale-e2e-gates
         with:
           head-sha: ${{ github.event.pull_request.head.sha }}
           after-native-success: false
+          github-token: ${{ secrets.MERGE_QUEUE_TOKEN }}
