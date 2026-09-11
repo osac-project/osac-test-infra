@@ -52,6 +52,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Sole caller copy until e2e-cancel-stale-runs-on-push.yml merges (pull_request_target).
   cancel-stale-e2e-runs:
     if: >-
       github.event_name == 'pull_request'
@@ -75,6 +76,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: bash .github/scripts/cancel-stale-e2e-runs.sh
 
   e2e-readiness:

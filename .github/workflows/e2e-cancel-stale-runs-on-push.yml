@@ -1,7 +1,8 @@
 ---
 # pull_request_target uses default-branch workflow YAML only — this file takes
-# effect after merge. Until then, caller workflows run
-# .github/scripts/cancel-stale-e2e-runs.sh on pull_request synchronize.
+# effect after merge. Until then, e2e-vmaas-full-install-caller.yml runs
+# cancel-stale-e2e-runs on pull_request synchronize (one copy; script cancels
+# all three full-install workflows).
 # gh run rerun (unlock replay) can keep an old SHA's full-install run in
 # progress while newer pull_request runs queue behind concurrency.
 name: Cancel stale e2e runs on push
@@ -32,4 +33,5 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: bash .github/scripts/cancel-stale-e2e-runs.sh

@@ -43,31 +43,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  cancel-stale-e2e-runs:
-    if: >-
-      github.event_name == 'pull_request'
-      && github.event.action == 'synchronize'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: cancel-stale-e2e-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts/cancel-stale-e2e-runs.sh
-      - name: Cancel full-install runs on obsolete SHAs
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: bash .github/scripts/cancel-stale-e2e-runs.sh
-
   e2e-readiness:
     name: e2e-readiness (caas)
     if: github.event_name == 'pull_request'
