@@ -52,6 +52,27 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  cancel-stale-e2e-runs:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/cancel-stale-e2e-runs.sh
+      - name: Cancel full-install runs on obsolete SHAs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: bash .github/scripts/cancel-stale-e2e-runs.sh
+
   e2e-readiness:
     name: e2e-readiness (vmaas)
     if: github.event_name == 'pull_request'
@@ -121,6 +142,8 @@ jobs:
           || needs.e2e-readiness.outputs.ready == 'true')
     needs: [e2e-readiness, e2e-vmaas-full-install]
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
@@ -129,7 +152,21 @@ jobs:
           exit 1
       - if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
         run: echo "e2e passed"
+      - name: Complete stale in_progress gate checks
+        if: >-
+          github.event_name == 'pull_request'
+          && !contains(needs.*.result, 'failure')
+          && !contains(needs.*.result, 'cancelled')
+          && needs.e2e-readiness.outputs.ready == 'true'
+        uses: ./.github/actions/complete-stale-e2e-gates
+        with:
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          gate-name: e2e-vmaas-gate
 
+  # Latest check named e2e-vmaas-gate after the skipped gate job. Resolve this
+  # workflow run's check_suite_id and attach the pending check so PR UI does not
+  # group it under unrelated pull_request_target workflows. Forks may lack
+  # checks:write; unreported check is still Expected/Waiting.
   e2e-vmaas-pending:
     if: >-
       always()
@@ -146,17 +183,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
           CHECK_NAME: e2e-vmaas-gate
           DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REASON: ${{ needs.e2e-readiness.outputs.reason }}
         run: |
           set -euo pipefail
           title="${REASON:-waiting for e2e unlock}"
-          summary=$(printf '%s\n\n%s' "${title}" \
-            "Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready.")
+          summary=$(printf '%s\n\n%s\n\n%s' "${title}" \
+            "Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready." \
+            "See .github/e2e-readiness.md")
+          check_suite_id=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" \
+            --jq '.check_suite_id // empty' 2>/dev/null || true)
           payload=$(jq -n \
             --arg name "${CHECK_NAME}" \
             --arg sha "${HEAD_SHA}" \
+            --arg check_suite_id "${check_suite_id}" \
             --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg title "${title}" \
             --arg details "${DETAILS_URL}" \
@@ -171,7 +213,11 @@ jobs:
                 title: $title,
                 summary: $summary
               }
-            }')
+            }
+            | if ($check_suite_id | length) > 0
+              then . + {check_suite_id: ($check_suite_id | tonumber)}
+              else .
+              end')
           if ! gh api "repos/${REPO}/check-runs" --input - <<<"${payload}"; then
             echo "Could not post in_progress check ${CHECK_NAME} (fork PRs may lack checks:write)."
             echo "Required check stays unreported until unlock rerun."

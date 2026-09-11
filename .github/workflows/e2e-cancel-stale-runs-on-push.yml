@@ -1,0 +1,31 @@
+---
+# pull_request_target uses default-branch workflow YAML only — this file takes
+# effect after merge. Until then, caller workflows run
+# .github/scripts/cancel-stale-e2e-runs.sh on pull_request synchronize.
+# gh run rerun (unlock replay) can keep an old SHA's full-install run in
+# progress while newer pull_request runs queue behind concurrency.
+name: Cancel stale e2e runs on push
+on:
+  pull_request_target:
+    types: [synchronize]
+    branches: [main]
+  workflow_call: {}
+
+jobs:
+  cancel-stale-e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/cancel-stale-e2e-runs.sh
+      - name: Cancel full-install runs on obsolete SHAs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: bash .github/scripts/cancel-stale-e2e-runs.sh

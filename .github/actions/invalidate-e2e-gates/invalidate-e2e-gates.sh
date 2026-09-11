@@ -20,6 +20,7 @@ fi
 
 if [[ "${SKIP_IF_ALL_GREEN}" == "true" ]] && all_merge_e2e_gates_green; then
   echo "Skipping invalidation: all merge-required e2e gates already success on HEAD."
+  complete_stale_in_progress_merge_gates || true
   exit 0
 fi
 
@@ -35,9 +36,11 @@ fi
 
 failed=0
 for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
+  external_id=$(invalidate_gate_external_id "${gate}")
   payload=$(jq -n \
     --arg name "${gate}" \
     --arg sha "${HEAD_SHA}" \
+    --arg external_id "${external_id}" \
     --arg check_suite_id "${check_suite_id}" \
     --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg title "${REASON}" \
@@ -46,6 +49,7 @@ for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
     '{
       name: $name,
       head_sha: $sha,
+      external_id: $external_id,
       status: "in_progress",
       details_url: $details,
       started_at: $started,
