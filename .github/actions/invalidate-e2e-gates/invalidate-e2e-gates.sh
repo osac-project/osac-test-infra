@@ -27,11 +27,18 @@ summary=$(printf '%s\n\n%s\n\n%s' "${REASON}" \
   "Partial or missing gate success on this SHA; waiting for a fresh full-install run." \
   "See .github/e2e-readiness.md")
 
+check_suite_id=""
+if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+  check_suite_id=$(gh api "repos/${REPO}/actions/runs/${GITHUB_RUN_ID}" \
+    --jq '.check_suite_id // empty' 2>/dev/null || true)
+fi
+
 failed=0
 for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
   payload=$(jq -n \
     --arg name "${gate}" \
     --arg sha "${HEAD_SHA}" \
+    --arg check_suite_id "${check_suite_id}" \
     --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg title "${REASON}" \
     --arg details "${DETAILS_URL}" \
@@ -46,7 +53,11 @@ for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
         title: $title,
         summary: $summary
       }
-    }')
+    }
+    | if ($check_suite_id | length) > 0
+      then . + {check_suite_id: ($check_suite_id | tonumber)}
+      else .
+      end')
   if gh api "repos/${REPO}/check-runs" --input - <<<"${payload}"; then
     echo "Marked ${gate} in_progress on ${HEAD_SHA:0:7}"
   else
