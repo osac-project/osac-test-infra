@@ -31,9 +31,9 @@ gate_caller_workflows() {
 # Print matching pull_request workflow run JSON for a gate, or empty.
 # Requires REPO, HEAD_SHA, PR_NUMBER; head_repo and head_ref for fork fallback.
 # Returns 0 with JSON on stdout when a run matches, 1 when queries succeeded
-# but no run matched, 2 when every workflow query failed (not 404).
+# but no run matched, 2 when any non-404 workflow query failed.
 find_gate_caller_pr_run() {
-  local gate="$1" head_repo="${2:-}" head_ref="${3:-}" wf runs match err queried=0
+  local gate="$1" head_repo="${2:-}" head_ref="${3:-}" wf runs match err queried=0 failed_queries=0
   gate_caller_workflows "${gate}" >/dev/null || return 1
   err=$(mktemp)
   while IFS= read -r wf; do
@@ -45,6 +45,8 @@ find_gate_caller_pr_run() {
       --jq '[.workflow_runs[]]' 2>"${err}"); then
       if grep -qE 'HTTP 404' "${err}"; then
         queried=$((queried + 1))
+      else
+        failed_queries=$((failed_queries + 1))
       fi
       continue
     fi
@@ -72,7 +74,7 @@ find_gate_caller_pr_run() {
     fi
   done < <(gate_caller_workflows "${gate}")
   rm -f "${err}"
-  if [[ "${queried}" -eq 0 ]]; then
+  if [[ "${failed_queries}" -gt 0 || "${queried}" -eq 0 ]]; then
     return 2
   fi
   return 1
