@@ -30,18 +30,25 @@ gate_caller_workflows() {
 
 # Print matching pull_request workflow run JSON for a gate, or empty.
 # Requires REPO, HEAD_SHA, PR_NUMBER; head_repo and head_ref for fork fallback.
+# Returns 0 with JSON on stdout when a run matches, 1 when queries succeeded
+# but no run matched, 2 when every workflow query failed (not 404).
 find_gate_caller_pr_run() {
-  local gate="$1" head_repo="${2:-}" head_ref="${3:-}" wf runs match
+  local gate="$1" head_repo="${2:-}" head_ref="${3:-}" wf runs match err queried=0
   gate_caller_workflows "${gate}" >/dev/null || return 1
+  err=$(mktemp)
   while IFS= read -r wf; do
     [[ -z "${wf}" ]] && continue
     if ! runs=$(gh api --method GET "repos/${REPO}/actions/workflows/${wf}/runs" \
       -f event=pull_request \
       -f head_sha="${HEAD_SHA}" \
       -F per_page=100 \
-      --jq '[.workflow_runs[]]' 2>/dev/null); then
+      --jq '[.workflow_runs[]]' 2>"${err}"); then
+      if grep -qE 'HTTP 404' "${err}"; then
+        queried=$((queried + 1))
+      fi
       continue
     fi
+    queried=$((queried + 1))
     match=$(jq -c --arg sha "${HEAD_SHA}" --argjson pr "${PR_NUMBER}" \
       --arg repo "${head_repo}" --arg ref "${head_ref}" '
       ([.[]
@@ -59,10 +66,15 @@ find_gate_caller_pr_run() {
       // empty
     ' <<<"${runs}")
     if [[ -n "${match}" && "${match}" != "null" ]]; then
+      rm -f "${err}"
       printf '%s\n' "${match}"
       return 0
     fi
   done < <(gate_caller_workflows "${gate}")
+  rm -f "${err}"
+  if [[ "${queried}" -eq 0 ]]; then
+    return 2
+  fi
   return 1
 }
 

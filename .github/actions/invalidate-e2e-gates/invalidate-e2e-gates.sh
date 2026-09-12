@@ -40,8 +40,15 @@ failed=0
 for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
   gate_details="${DETAILS_URL}"
   gate_check_suite_id=""
+  run_json=""
   if [[ -n "${PR_NUMBER:-}" ]]; then
-    run_json=$(find_gate_caller_pr_run "${gate}" "${HEAD_REPO}" "${HEAD_REF}" || true)
+    find_rc=0
+    run_json=$(find_gate_caller_pr_run "${gate}" "${HEAD_REPO}" "${HEAD_REF}") || find_rc=$?
+    if [[ "${find_rc}" -eq 2 ]]; then
+      echo "Could not query full-install runs for ${gate}" >&2
+      failed=1
+      continue
+    fi
     if [[ -n "${run_json}" && "${run_json}" != "null" ]]; then
       run_id=$(jq -r '.id' <<<"${run_json}")
       gate_details="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${run_id}"
