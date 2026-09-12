@@ -11,12 +11,19 @@ invalidate_gate_external_id() {
   printf '%s:%s' "${INVALIDATE_EXTERNAL_ID_PREFIX}" "${gate}"
 }
 
-# Caller workflow filename for each merge-required gate check name.
-gate_caller_workflow() {
+# pull_request workflow filenames that post each merge-required gate.
+# osac uses e2e-*-full-install.yml; this repo uses *-caller.yml.
+gate_caller_workflows() {
   case "$1" in
-    e2e-vmaas-gate) echo "e2e-vmaas-full-install-caller.yml" ;;
-    e2e-bmaas-gate) echo "e2e-bmaas-full-install-caller.yml" ;;
-    e2e-caas-gate) echo "e2e-caas-full-install-caller.yml" ;;
+    e2e-vmaas-gate)
+      printf '%s\n' e2e-vmaas-full-install.yml e2e-vmaas-full-install-caller.yml
+      ;;
+    e2e-bmaas-gate)
+      printf '%s\n' e2e-bmaas-full-install.yml e2e-bmaas-full-install-caller.yml
+      ;;
+    e2e-caas-gate)
+      printf '%s\n' e2e-caas-full-install.yml e2e-caas-full-install-caller.yml
+      ;;
     *) return 1 ;;
   esac
 }
@@ -24,29 +31,39 @@ gate_caller_workflow() {
 # Print matching pull_request workflow run JSON for a gate, or empty.
 # Requires REPO, HEAD_SHA, PR_NUMBER; head_repo and head_ref for fork fallback.
 find_gate_caller_pr_run() {
-  local gate="$1" head_repo="${2:-}" head_ref="${3:-}" wf runs
-  wf=$(gate_caller_workflow "${gate}") || return 1
-  runs=$(gh api --method GET "repos/${REPO}/actions/workflows/${wf}/runs" \
-    -f event=pull_request \
-    -f head_sha="${HEAD_SHA}" \
-    -F per_page=100 \
-    --jq '[.workflow_runs[]]')
-  jq -c --arg sha "${HEAD_SHA}" --argjson pr "${PR_NUMBER}" \
-    --arg repo "${head_repo}" --arg ref "${head_ref}" '
-    ([.[]
-      | select(.head_sha == $sha)
-      | select(any(.pull_requests[]?; .number == $pr))
-    ][0])
-    // (if ($repo | length) > 0 and ($ref | length) > 0 then
-        ([.[]
-          | select(.head_sha == $sha)
-          | select((.pull_requests // []) | length == 0)
-          | select((.head_repository.full_name // "") == $repo)
-          | select(.head_branch == $ref)
-        ] | if length == 1 then .[0] else empty end)
-      else empty end)
-    // empty
-  ' <<<"${runs}"
+  local gate="$1" head_repo="${2:-}" head_ref="${3:-}" wf runs match
+  gate_caller_workflows "${gate}" >/dev/null || return 1
+  while IFS= read -r wf; do
+    [[ -z "${wf}" ]] && continue
+    if ! runs=$(gh api --method GET "repos/${REPO}/actions/workflows/${wf}/runs" \
+      -f event=pull_request \
+      -f head_sha="${HEAD_SHA}" \
+      -F per_page=100 \
+      --jq '[.workflow_runs[]]' 2>/dev/null); then
+      continue
+    fi
+    match=$(jq -c --arg sha "${HEAD_SHA}" --argjson pr "${PR_NUMBER}" \
+      --arg repo "${head_repo}" --arg ref "${head_ref}" '
+      ([.[]
+        | select(.head_sha == $sha)
+        | select(any(.pull_requests[]?; .number == $pr))
+      ][0])
+      // (if ($repo | length) > 0 and ($ref | length) > 0 then
+          ([.[]
+            | select(.head_sha == $sha)
+            | select((.pull_requests // []) | length == 0)
+            | select((.head_repository.full_name // "") == $repo)
+            | select(.head_branch == $ref)
+          ] | if length == 1 then .[0] else empty end)
+        else empty end)
+      // empty
+    ' <<<"${runs}")
+    if [[ -n "${match}" && "${match}" != "null" ]]; then
+      printf '%s\n' "${match}"
+      return 0
+    fi
+  done < <(gate_caller_workflows "${gate}")
+  return 1
 }
 
 # Load all check runs for HEAD_SHA into CHECK_RUNS_JSON (array).

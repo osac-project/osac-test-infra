@@ -9,6 +9,10 @@ inputs:
   head-sha:
     description: PR head commit SHA
     required: true
+  pr-number:
+    description: PR number (binds in_progress checks to the full-install suite)
+    required: false
+    default: ${{ github.event.pull_request.number }}
   reason:
     description: Short title for the check output
     required: false
@@ -35,6 +39,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         REPO: ${{ github.repository }}
         HEAD_SHA: ${{ inputs.head-sha }}
+        PR_NUMBER: ${{ inputs.pr-number }}
         REASON: ${{ inputs.reason }}
         DETAILS_URL: ${{ inputs.details-url }}
         SKIP_IF_ALL_GREEN: ${{ inputs.skip-if-all-green }}

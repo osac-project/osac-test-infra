@@ -49,6 +49,10 @@ for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
         --jq '.check_suite_id // empty' 2>/dev/null || true)
     fi
   fi
+  if [[ -z "${gate_check_suite_id}" ]]; then
+    echo "Skipping unbound in_progress ${gate}: no full-install check suite on ${HEAD_SHA:0:7}"
+    continue
+  fi
   external_id=$(invalidate_gate_external_id "${gate}")
   payload=$(jq -n \
     --arg name "${gate}" \
