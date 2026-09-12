@@ -1,0 +1,43 @@
+---
+name: Complete stale e2e merge gates
+description: >-
+  Mark orphaned in_progress e2e-*-gate API checks completed when native gate
+  jobs already succeeded on the PR head SHA.
+
+inputs:
+  head-sha:
+    description: PR head commit SHA
+    required: true
+  repository:
+    description: Target repository (owner/name)
+    required: false
+    default: ${{ github.repository }}
+  gate-name:
+    description: >-
+      Optional single gate (e2e-vmaas-gate, e2e-bmaas-gate, e2e-caas-gate).
+      When empty, completes stale checks for all three gates.
+    required: false
+    default: ""
+  after-native-success:
+    description: >-
+      When true, complete orphans only after native gate jobs succeeded.
+      When false, cancel unlock-time orphan API checks before full-install.
+    required: false
+    default: "true"
+  github-token:
+    description: Token with checks:read and checks:write
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Complete stale e2e merge gates
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ inputs.repository }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        COMPLETE_GATE_NAME: ${{ inputs.gate-name }}
+        AFTER_NATIVE_SUCCESS: ${{ inputs.after-native-success }}
+      run: bash "${GITHUB_ACTION_PATH}/complete-stale-e2e-gates.sh"

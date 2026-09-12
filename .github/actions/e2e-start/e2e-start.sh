@@ -140,6 +140,7 @@ lib_dir="$(dirname "${BASH_SOURCE[0]}")/../invalidate-e2e-gates"
 source "${lib_dir}/e2e-gates-lib.sh"
 
 if all_merge_e2e_gates_green; then
+  complete_stale_in_progress_merge_gates || true
   {
     if [[ "${SKIP_LABEL_CHECK}" == "true" ]]; then
       echo "### E2E on CodeRabbit approval"
@@ -162,6 +163,7 @@ if [[ "${SKIP_LABEL_CHECK}" == "true" ]]; then
 else
   export REASON="${TRIGGER_LABEL} unlock - waiting for fresh full-install run"
 fi
+dismiss_unlock_orphan_gate_checks || true
 bash "${lib_dir}/invalidate-e2e-gates.sh"
 
 E2E_WORKFLOWS=()

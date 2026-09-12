@@ -20,6 +20,7 @@ fi
 
 if [[ "${SKIP_IF_ALL_GREEN}" == "true" ]] && all_merge_e2e_gates_green; then
   echo "Skipping invalidation: all merge-required e2e gates already success on HEAD."
+  complete_stale_in_progress_merge_gates || true
   exit 0
 fi
 
@@ -27,25 +28,41 @@ summary=$(printf '%s\n\n%s\n\n%s' "${REASON}" \
   "Partial or missing gate success on this SHA; waiting for a fresh full-install run." \
   "See .github/e2e-readiness.md")
 
-check_suite_id=""
-if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
-  check_suite_id=$(gh api "repos/${REPO}/actions/runs/${GITHUB_RUN_ID}" \
-    --jq '.check_suite_id // empty' 2>/dev/null || true)
+HEAD_REPO=""
+HEAD_REF=""
+if [[ -n "${PR_NUMBER:-}" ]]; then
+  pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+  HEAD_REPO=$(jq -r '.head.repo.full_name // empty' <<<"${pr_json}")
+  HEAD_REF=$(jq -r '.head.ref // empty' <<<"${pr_json}")
 fi
 
 failed=0
 for gate in "${MERGE_E2E_GATE_NAMES[@]}"; do
+  gate_details="${DETAILS_URL}"
+  gate_check_suite_id=""
+  if [[ -n "${PR_NUMBER:-}" ]]; then
+    run_json=$(find_gate_caller_pr_run "${gate}" "${HEAD_REPO}" "${HEAD_REF}" || true)
+    if [[ -n "${run_json}" && "${run_json}" != "null" ]]; then
+      run_id=$(jq -r '.id' <<<"${run_json}")
+      gate_details="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${run_id}"
+      gate_check_suite_id=$(gh api "repos/${REPO}/actions/runs/${run_id}" \
+        --jq '.check_suite_id // empty' 2>/dev/null || true)
+    fi
+  fi
+  external_id=$(invalidate_gate_external_id "${gate}")
   payload=$(jq -n \
     --arg name "${gate}" \
     --arg sha "${HEAD_SHA}" \
-    --arg check_suite_id "${check_suite_id}" \
+    --arg external_id "${external_id}" \
+    --arg check_suite_id "${gate_check_suite_id}" \
     --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg title "${REASON}" \
-    --arg details "${DETAILS_URL}" \
+    --arg details "${gate_details}" \
     --arg summary "${summary}" \
     '{
       name: $name,
       head_sha: $sha,
+      external_id: $external_id,
       status: "in_progress",
       details_url: $details,
       started_at: $started,
