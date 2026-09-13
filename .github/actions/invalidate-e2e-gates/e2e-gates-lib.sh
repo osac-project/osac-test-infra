@@ -83,7 +83,7 @@ latest_gate_conclusion() {
       .name == $g
       and ((.details_url // "") | test("/actions/runs/[0-9]+/job/"))
     )]
-    | sort_by(.created_at)
+    | sort_by(.started_at)
     | last
     | .conclusion // "missing"
   ' <<<"${CHECK_RUNS_JSON}"
@@ -112,7 +112,7 @@ native_gate_job_success() {
       .name == $g
       and ((.details_url // "") | test("/actions/runs/[0-9]+/job/"))
     )]
-    | sort_by(.created_at)
+    | sort_by(.started_at)
     | last
     | .status == "completed" and .conclusion == "success"
   ' <<<"${CHECK_RUNS_JSON}" >/dev/null
