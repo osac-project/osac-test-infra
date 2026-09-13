@@ -453,7 +453,21 @@ jobs:
           fi
 
           log_path="${RUNNER_TEMP}/job.log"
-          if ! gh api "repos/${REPO}/actions/jobs/${job_id}/logs" > "${log_path}" 2>/dev/null; then
+          # --allow-escape-sequences is required: real job logs almost
+          # always contain ANSI color codes (every `##[group]Run ...`
+          # colored echo, for one), and `gh api` otherwise REFUSES to
+          # print the response at all ("the response contains terminal
+          # escape sequences; pass --allow-escape-sequences to output it
+          # anyway") and exits non-zero -- confirmed this silently broke
+          # every real run once this step shipped (both the BMaaS and
+          # VMaaS diagnoses on PR #947's re-run had an empty JOB_LOG_PATH
+          # as a result; BMaaS's diagnosis happened to still land on the
+          # right answer from the PR diff + step name alone, VMaaS's
+          # correctly reported lower confidence for having the same
+          # missing evidence). This is just output-formatting permission,
+          # not a security concern here: the log is written straight to a
+          # file, never rendered to a terminal.
+          if ! gh api --allow-escape-sequences "repos/${REPO}/actions/jobs/${job_id}/logs" > "${log_path}" 2>/dev/null; then
             echo "Failed to download log for job ${job_id}; diagnosing without job-log signal."
             echo "path=" >> "${GITHUB_OUTPUT}"
             exit 0
