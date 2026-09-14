@@ -878,9 +878,12 @@ jobs:
             if [[ -z "${helm_bin}" || ! -x "${helm_bin}" ]]; then
               echo "::error::Helm is required for the enablement upgrade but was not found on the runner"
               test_rc=1
+            # This job covers control-plane service enablement; the dedicated BMaaS
+            # suite covers BMF runtime and provisioning against a Metal3 backend.
             elif ! KUBECONFIG="${KUBECONFIG_PATH}" "${helm_bin}" upgrade osac "${INSTALLER_DIR}/charts/osac" \
               --namespace "${OSAC_NAMESPACE}" --reuse-values \
-              --set global.services.bmaas.enabled=true --wait --timeout 10m; then
+              --set global.services.bmaas.enabled=true \
+              --set bmf.replicaCount=0 --wait --timeout 10m; then
               echo "::error::Helm upgrade enabling BMaaS failed"
               test_rc=1
             else
