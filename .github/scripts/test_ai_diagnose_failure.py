@@ -129,6 +129,118 @@ class ExtractConfidenceTests(unittest.TestCase):
         self.assertEqual(cleaned, "no marker here")
 
 
+class HeadAndTailTests(unittest.TestCase):
+    def test_short_text_returned_unchanged(self):
+        result = ai_diagnose_failure._head_and_tail("hello world", 20, 5)
+        self.assertEqual(result, "hello world")
+
+    def test_exact_boundary_returned_unchanged(self):
+        text = "x" * 20
+        result = ai_diagnose_failure._head_and_tail(text, 20, 5)
+        self.assertEqual(result, text)
+
+    def test_oversized_text_keeps_both_head_and_tail(self):
+        text = "HEAD" + ("m" * 1000) + "TAIL"
+        result = ai_diagnose_failure._head_and_tail(text, 100, 20)
+        self.assertTrue(result.startswith("HEAD"))
+        self.assertTrue(result.endswith("TAIL"))
+        self.assertIn("omitted", result)
+        self.assertLessEqual(len(result), 100)
+        self.assertLess(len(result), len(text))
+
+    def test_result_never_exceeds_max_chars_including_marker(self):
+        # The old implementation sized head_chars+tail_chars to sum to
+        # max_chars on its own, then appended the elision marker text ON
+        # TOP of that -- silently returning up to len(marker) chars over
+        # budget. Confirm the fix actually reserves the marker's own
+        # length out of max_chars instead.
+        text = "x" * 10000
+        result = ai_diagnose_failure._head_and_tail(text, 8000, 1500)
+        self.assertLessEqual(len(result), 8000)
+
+    def test_max_chars_smaller_than_marker_degrades_without_exceeding_budget(self):
+        # No room for a marker (or a tail) at all -- must still never
+        # exceed max_chars, even if that means dropping the tail/marker
+        # entirely rather than the old behavior of returning something
+        # longer than requested.
+        text = "HEAD" + ("m" * 100) + "TAIL"
+        result = ai_diagnose_failure._head_and_tail(text, 5, 2)
+        self.assertLessEqual(len(result), 5)
+
+    def test_head_chars_larger_than_available_is_clamped(self):
+        # head_chars alone (50) would exceed max_chars (30) once the
+        # marker (29 chars, for this text's 500-char omitted count) is
+        # reserved -- must be clamped to whatever's actually left, not
+        # trusted blindly. max_chars=30 is deliberately chosen just above
+        # the marker's own length so this still exercises the real
+        # head-clamping arithmetic, unlike test_max_chars_smaller_than_
+        # marker_degrades_without_exceeding_budget above, whose max_chars
+        # is smaller than the marker itself and so never reaches it.
+        text = "y" * 500
+        result = ai_diagnose_failure._head_and_tail(text, 30, 50)
+        self.assertIn("omitted", result)
+        self.assertLessEqual(len(result), 30)
+
+
+class ExtractJunitFailuresRealWorldRegressionTests(unittest.TestCase):
+    """Regression coverage for the PR #959 misdiagnosis (osac run
+    34920046409): a subprocess.CalledProcessError's real cause -- a
+    captured `stderr = 'ERROR:\\n  Code: InvalidArgument\\n  Message:
+    reference validation failed: ...'` local-variable dump -- sat at
+    character ~3645 of a 7787-char pytest failure text (most of it
+    subprocess.run()'s own inlined stdlib source), well past the OLD
+    2000-char flat head-only truncation. The model confidently diagnosed
+    a wrong root cause instead of the real, specific, actionable one
+    that was sitting right there in the same artifact.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.tmpdir = tempfile.mkdtemp()
+
+    def _write_junit(self, failure_text):
+        import xml.sax.saxutils as saxutils
+
+        path = os.path.join(self.tmpdir, "junit.xml")
+        with open(path, "w") as f:
+            f.write(
+                '<?xml version="1.0"?>\n<testsuite>\n'
+                '<testcase name="test_nat_gateway_allocation_metering" classname="regression">\n'
+                f'<failure message="subprocess.CalledProcessError">{saxutils.escape(failure_text)}</failure>\n'
+                "</testcase>\n</testsuite>\n"
+            )
+        return path
+
+    def test_real_world_traceback_surfaces_the_actual_error(self):
+        # A realistic reconstruction of the real failure text: a long
+        # run of inlined subprocess.py stdlib source (standing in for
+        # the actual ~100-line docstring+implementation dump), the real
+        # error as a captured-stderr local-variable line, then more
+        # stdlib source, then the final exception summary -- matching
+        # the real shape (signal roughly mid-file, not at either edge).
+        stdlib_filler = "\n".join(f"    # stdlib subprocess.py source line {i}" for i in range(120))
+        failure_text = (
+            f"def test_nat_gateway_allocation_metering(...):\n{stdlib_filler}\n"
+            "stderr = 'ERROR:\\n  Code: InvalidArgument\\n  Message: reference "
+            "validation failed: object.spec.external_ip: ExternalIP "
+            '"externalip-7k4dm" not found\\n'
+            f"'\n{stdlib_filler}\n"
+            "E   subprocess.CalledProcessError: Command '(...)' returned non-zero exit status 67."
+        )
+        # Confirm the fixture itself actually reproduces the real
+        # condition being tested (signal past the old 2000-char cap)
+        # before trusting what extract_junit_failures does with it.
+        self.assertGreater(len(failure_text), 2000)
+        self.assertGreater(failure_text.find("InvalidArgument"), 2000)
+
+        path = self._write_junit(failure_text)
+        result = ai_diagnose_failure.extract_junit_failures(path)
+        self.assertIn("InvalidArgument", result)
+        self.assertIn("ExternalIP", result)
+        self.assertIn("not found", result)
+
+
 class ReadArtifactFileSandboxTests(unittest.TestCase):
     """Adversarial-path coverage for the one other place this script
     accepts model-driven input: the read_artifact_file tool, where the

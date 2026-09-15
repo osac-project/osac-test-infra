@@ -22,7 +22,36 @@ import time
 import xml.etree.ElementTree as ET
 
 MAX_FAILURES = 5
-MAX_FAILURE_TEXT = 2000
+# Verbose tracebacks -- e.g. subprocess.run() raising through its own
+# ~100-line stdlib source/docstring, which pytest's default traceback
+# style inlines in full -- can push the ACTUAL error (the real exception
+# message, a captured stderr/stdout local-variable dump, or assertion
+# detail) well past a flat head-only truncation. Confirmed live on PR
+# #959 (osac), run 34920046409: a subprocess.CalledProcessError's real
+# cause (`stderr = 'ERROR:\n  Code: InvalidArgument\n  Message:
+# reference validation failed: object.spec.external_ip: ExternalIP
+# "..." not found'`) sat at character ~3645 of a 7787-char failure text
+# -- past the OLD 2000-char cap, and (measured directly against this
+# same real text) also past what a modest head+tail split could reach:
+# the useful content here isn't reliably at either end, it's roughly
+# mid-file, sandwiched between the stdlib source dump and the final
+# exception summary line. The model confidently diagnosed a wrong root
+# cause instead (guessed the RPC method wasn't exposed at all; checked
+# against the actual server code, it is and was correctly registered)
+# rather than the real, specific, actionable one that was sitting right
+# there in the same artifact, just out of reach.
+#
+# Raised to comfortably cover this real, measured case (7787 chars) with
+# margin, rather than a guessed number -- 5 testcases (MAX_FAILURES) at
+# this new cap is still a bounded, predictable worst-case prompt
+# addition (~10k tokens), consistent with this file's "bounded by
+# design" cost philosophy. MAX_FAILURE_TEXT_HEAD_CHARS/see
+# extract_junit_failures below still splits the budget between head
+# (test identity, initial call path) and tail (where a shorter overflow
+# beyond this cap most often lands) as defense-in-depth for whatever
+# still exceeds this, rather than reverting to a flat head-only cut.
+MAX_FAILURE_TEXT = 8000
+MAX_FAILURE_TEXT_HEAD_CHARS = 1500
 MAX_NAME_LEN = 200
 MAX_MESSAGE_LEN = 500
 MAX_LOG_MATCHES = 60
@@ -179,6 +208,55 @@ VMaaS provisions VMs directly -- so which of these ran tells you which
 subsystem was under test."""
 
 
+def _head_and_tail(text, max_chars, head_chars):
+    """Truncate `text` to at most `max_chars`, keeping both its start
+    (`head_chars` worth) and its end, eliding the middle with a marker --
+    instead of a flat head-only cut. See MAX_FAILURE_TEXT's own comment
+    for why: the most specific, actionable part of a verbose traceback
+    (the real exception, or a captured stderr/stdout dump) is usually
+    near the END, not right after the opening frame.
+
+    The returned string is NEVER longer than max_chars: the elision
+    marker's own text (the "... (N chars omitted) ..." line, plus its
+    surrounding newlines) is reserved out of the budget BEFORE head/tail
+    are sized, not appended on top of a head_chars+tail_chars that
+    already sums to max_chars on its own -- the latter is what silently
+    let the old version return up to len(marker) chars over budget.
+    head_chars is also clamped to whatever's actually left once the
+    marker is accounted for (never trusted blindly), and a max_chars too
+    small to even fit the marker degrades to a plain, unmarked
+    text[:max_chars] rather than something longer than requested.
+    """
+    if len(text) <= max_chars:
+        return text
+
+    # The marker's own text embeds the omitted COUNT, which depends on
+    # the final head/tail split -- sidestepped by sizing the reserved
+    # budget using len(text) itself as the omitted-count placeholder:
+    # since the real omitted count can never exceed len(text), its
+    # digit width (and so the real marker's length) is always <= this
+    # estimate's, so reserving against this placeholder is always
+    # sufficient, computed just once rather than needing to re-size
+    # after the fact.
+    marker_template = "\n... ({} chars omitted) ...\n"
+    marker_budget = len(marker_template.format(len(text)))
+    if marker_budget >= max_chars:
+        return text[:max_chars]
+
+    available = max_chars - marker_budget
+    head_len = min(head_chars, available)
+    tail_len = available - head_len
+
+    head = text[:head_len]
+    tail = text[-tail_len:] if tail_len > 0 else ""
+    omitted = len(text) - head_len - tail_len
+    result = f"{head}{marker_template.format(omitted)}{tail}"
+    assert len(result) <= max_chars, (
+        f"_head_and_tail produced {len(result)} chars, over the {max_chars} budget"
+    )
+    return result
+
+
 def extract_junit_failures(path):
     if not path or not os.path.isfile(path):
         return "(no junit.xml found)"
@@ -198,7 +276,7 @@ def extract_junit_failures(path):
                 continue
             name = testcase.get("name", "unknown")[:MAX_NAME_LEN]
             message = (node.get("message") or "").strip()[:MAX_MESSAGE_LEN]
-            text = (node.text or "").strip()[:MAX_FAILURE_TEXT]
+            text = _head_and_tail((node.text or "").strip(), MAX_FAILURE_TEXT, MAX_FAILURE_TEXT_HEAD_CHARS)
             chunks.append(f"### {name}\n**{tag}**: {message}\n```\n{text}\n```")
             if len(chunks) >= MAX_FAILURES:
                 return "\n\n".join(chunks)
