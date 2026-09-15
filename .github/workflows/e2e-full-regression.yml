@@ -865,7 +865,16 @@ jobs:
           # VMaaS ExternalIPPool needs k8s-only MetalLB (vmaas-ci NetworkClass);
           # full-ci's singleton NetworkClass is cudn_net, which cannot provision
           # EIP pools. Do not flip that class here — CaaS/BMaaS share the install.
-          FILTER="not TestBmaasNetworking"
+          #
+          # test_disabled_services.py asserts BMaaS is off (vmaas-ci). full-ci
+          # enables VMaaS+CaaS+BMaaS, so BMI gRPC/REST/reflection/controller
+          # checks fail by design.
+          #
+          # Cluster create via references/ needs a fabric NIC on host type
+          # ci-worker. full-ci does not stamp that role (cudn_net singleton).
+          # Subnet-by-name cleanup hits the same CUDN NetworkClass (grpcurl
+          # Subnets/Delete). Skip those names; keep the rest of the file.
+          FILTER="not TestBmaasNetworking and not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name"
           if [ -n "${TEST_FILTER}" ]; then
             FILTER="(${TEST_FILTER}) and ${FILTER}"
           fi
@@ -898,6 +907,7 @@ jobs:
               tests/e2e/bmaas/ \
               --ignore=tests/e2e/bmaas/regression/networking \
               --ignore=tests/e2e/vmaas/regression/external_ip \
+              --ignore=tests/e2e/vmaas/test_disabled_services.py \
               -k "${FILTER}" \
               -n 0 \
               --junitxml=/tmp/test-output/junit.xml -v
