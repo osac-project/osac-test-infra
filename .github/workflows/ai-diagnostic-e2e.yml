@@ -938,13 +938,21 @@ jobs:
           fi
           echo "body-file=${BODY_FILE}" >> "${GITHUB_OUTPUT}"
 
-      # Nothing to update if there was never a comment (failure OR the new
-      # "⏳ Running" reservation) -- never create one just to say things
-      # are fine, or that a suite that never even got a placeholder was
-      # "skipped".
+      # Runs unconditionally (unlike an earlier version of this job, which
+      # only updated an EXISTING comment -- "never create one just to say
+      # things are fine"): a passing/skipped suite should always be
+      # reflected in the sticky comment, not just ones that happen to
+      # already have one from a prior failure or the Reserve workflow's
+      # own placeholder. This also covers Reserve's own known gap --
+      # workflow_run type "requested" doesn't fire for reruns of an
+      # existing run, confirmed live (PR #980's own /e2e-ready replay never
+      # got a fresh placeholder) -- so a suite whose first-ever completion
+      # is a rerun with no pre-existing comment still gets one created
+      # here from scratch. "Upsert PR comment" below already handles
+      # create-vs-update via whether COMMENT_ID is set; nothing else needs
+      # to change for that.
       - name: Prepare comment section
         id: section
-        if: steps.comment.outputs.id != ''
         env:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
@@ -979,7 +987,6 @@ jobs:
 
       - name: Build updated comment body
         id: body
-        if: steps.comment.outputs.id != ''
         env:
           CURRENT_BODY_FILE: ${{ steps.comment.outputs.body-file }}
           SECTION_KEY: ${{ github.event.workflow_run.name }}
@@ -992,7 +999,6 @@ jobs:
         run: python3 .github/scripts/upsert-pr-comment.py
 
       - name: Upsert PR comment
-        if: steps.comment.outputs.id != ''
         env:
           GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -1007,4 +1013,15 @@ jobs:
             echo "PR #${PR_NUMBER} is no longer open (state: ${pr_state}); skipping comment."
             exit 0
           fi
-          jq -Rs '{body: .}' < "${RUNNER_TEMP}/new-comment-body.md" | gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH --input -
+          # Branch on COMMENT_ID, same as the diagnose job's own copy of
+          # this step -- this job now runs unconditionally (see "Prepare
+          # comment section" above), so COMMENT_ID being empty (no
+          # pre-existing comment) is a real, common case here now, not
+          # just a theoretical one: an unconditional PATCH to
+          # .../issues/comments/ with no ID would 404.
+          BODY_FILE="${RUNNER_TEMP}/new-comment-body.md"
+          if [[ -n "${COMMENT_ID}" ]]; then
+            jq -Rs '{body: .}' < "${BODY_FILE}" | gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH --input -
+          else
+            jq -Rs '{body: .}' < "${BODY_FILE}" | gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --input -
+          fi
