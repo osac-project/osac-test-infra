@@ -597,10 +597,32 @@ jobs:
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
+          DIAGNOSIS_JSON_FILE: ${{ runner.temp }}/diagnosis.json
           CHANGED_FILES: ${{ steps.pr-context.outputs.files }}
           PR_DIFF: ${{ steps.pr-context.outputs.diff }}
           KNOWN_ISSUES: ${{ steps.known-issues.outputs.text }}
         run: python3 .github/scripts/ai-diagnose-failure.py
+
+      # Machine-readable counterpart to the sticky PR comment/Check Run,
+      # which only ever show the rendered markdown for a PR's LATEST run --
+      # this survives per-run (root cause, causal chain, evidence, category,
+      # confidence, cost/token counts, model) for later querying or
+      # aggregation across many runs, without re-scraping comment markdown.
+      # continue-on-error/if-no-files-found:warn (not "ignore" or a hard
+      # failure) since ai-diagnose-failure.py's own JSON write is already
+      # best-effort/guarded (see its "never crash the job" comment) -- a
+      # missing file here means that write failed and warned to stderr
+      # above, which is worth a visible (but non-blocking) signal on this
+      # supplementary artifact rather than silence or failing the whole job.
+      - name: Upload AI diagnosis JSON artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ai-diagnosis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/diagnosis.json
+          retention-days: 90
+          if-no-files-found: warn
 
       # Deliberately a commit Status, not a Check Run. Check Runs are only
       # linked into a PR's Checks-tab rollup (statusCheckRollup) via their

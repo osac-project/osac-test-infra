@@ -91,6 +91,11 @@ class ExtractCategoryTests(unittest.TestCase):
         )
         self.assertIsNone(category)
 
+    def test_code_change_category_recognized(self):
+        cleaned, category = ai_diagnose_failure.extract_category("**Category:** `CODE_CHANGE`\n\nrest")
+        self.assertEqual(category, "CODE_CHANGE")
+        self.assertEqual(cleaned, "rest")
+
     def test_leading_whitespace_is_tolerated(self):
         cleaned, category = ai_diagnose_failure.extract_category(
             "\n\n**Category:** `NETWORKING`\n\nrest"
@@ -333,12 +338,33 @@ class ExtractJobLogErrorsTests(unittest.TestCase):
         self.assertLessEqual(len(result), ai_diagnose_failure.MAX_JOB_LOG_CHARS + len("\n... (truncated)"))
 
 
-def _fake_resp(text, finish_reason="STOP"):
+def _fake_resp(text, finish_reason="STOP", usage_metadata=None):
     return SimpleNamespace(
         text=text,
         candidates=[SimpleNamespace(finish_reason=finish_reason)],
         prompt_feedback=None,
-        usage_metadata=object(),
+        # A bare object() by default -- compute_cost's attribute access on
+        # it fails, which call_gemini's own broad footer-building
+        # try/except swallows, same as real usage_metadata being
+        # unavailable. Pass a real _fake_usage(...) instead when a test
+        # needs actual, aggregatable token/cost numbers.
+        usage_metadata=usage_metadata if usage_metadata is not None else object(),
+    )
+
+
+def _fake_usage(prompt_tokens, candidates_tokens):
+    """A minimal stand-in for google.genai's real usage_metadata, with
+    just the four fields compute_cost() reads. tool_use/thoughts tokens
+    are always 0 here -- irrelevant to what these tests are checking
+    (that usage aggregates/combines correctly across attempts and tiers,
+    not the tool-call/thinking-token accounting itself, which
+    ComputeCostNewModelsTests already covers directly).
+    """
+    return SimpleNamespace(
+        prompt_token_count=prompt_tokens,
+        candidates_token_count=candidates_tokens,
+        tool_use_prompt_token_count=0,
+        thoughts_token_count=0,
     )
 
 
@@ -347,6 +373,11 @@ class FakeChat:
     canned response off a queue, in order, regardless of what prompt text
     it's called with -- these tests only care about how many attempts
     _generate_with_retry makes and what it does with each result.
+
+    An Exception INSTANCE queued in `responses` is raised instead of
+    returned when popped -- lets a test simulate a real network/API
+    error on a specific call (the initial one, or a later retry) without
+    a separate fake-chat implementation.
     """
 
     def __init__(self, responses):
@@ -355,7 +386,10 @@ class FakeChat:
 
     def send_message(self, _prompt):
         self.calls += 1
-        return self._responses.pop(0)
+        item = self._responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 class GenerateWithRetryTests(unittest.TestCase):
@@ -564,43 +598,93 @@ class CallGeminiFallbackTests(unittest.TestCase):
         self._chats_to_create.append(FakeChat(responses))
 
     def test_falls_back_when_primary_exhausted(self):
+        # "Fallback success" scenario: primary tier exhausted, fallback
+        # tier's response wins.
         self._queue_chat([_fake_resp("") for _ in range(ai_diagnose_failure.MAX_RETRIES + 1)])
         self._queue_chat(
             [_fake_resp("**Category:** `TEST_FLAKE`\n\nfallback answer\n\n**Confidence:** 80%")]
         )
-        diagnosis, category, _cost, _in_tok, _out_tok, incomplete = ai_diagnose_failure.call_gemini(
-            "prompt", "/tmp/nonexistent-artifact-dir"
+        diagnosis, category, confidence, _cost, _in_tok, _out_tok, incomplete, model_used, attempted_models = (
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir")
         )
         self.assertFalse(incomplete)
         self.assertIn("fallback answer", diagnosis)
         self.assertEqual(category, "TEST_FLAKE")
+        self.assertEqual(confidence, 80)
         self.assertEqual(len(self.created_chats), 2)
         self.assertEqual(self.created_chats[0].model, ai_diagnose_failure.GEMINI_MODEL)
         self.assertEqual(self.created_chats[1].model, ai_diagnose_failure.GEMINI_FALLBACK_MODEL)
+        # The fallback tier actually WON here -- model_used must name the
+        # fallback, not the configured primary.
+        self.assertEqual(model_used, ai_diagnose_failure.GEMINI_FALLBACK_MODEL)
+        self.assertEqual(attempted_models, [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL])
+
+    def test_fallback_success_combines_usage_from_both_tiers(self):
+        # Same "fallback success" shape as above, but with real usage_
+        # metadata on every attempt so cost/token aggregation across BOTH
+        # tiers is actually exercised end to end (aggregate_cost per tier
+        # + _merge_cost_tuples combining them), not just unit-tested in
+        # isolation (see MergeCostTuplesTests).
+        primary_usage = [_fake_usage(1000, 200) for _ in range(ai_diagnose_failure.MAX_RETRIES + 1)]
+        self._queue_chat(
+            [_fake_resp("", usage_metadata=u) for u in primary_usage]
+        )
+        fallback_usage = _fake_usage(500, 100)
+        self._queue_chat(
+            [_fake_resp("fallback answer\n\n**Confidence:** 80%", usage_metadata=fallback_usage)]
+        )
+        _diagnosis, _category, _confidence, cost_usd, input_tokens, output_tokens, incomplete, model_used, attempted_models = (
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir")
+        )
+        self.assertFalse(incomplete)
+        self.assertEqual(model_used, ai_diagnose_failure.GEMINI_FALLBACK_MODEL)
+        self.assertEqual(attempted_models, [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL])
+        # Every primary attempt's tokens are billed (see aggregate_cost's
+        # own docstring on why retries aren't dropped) PLUS the fallback's
+        # single attempt -- not just whichever attempt's text won.
+        expected_input = len(primary_usage) * 1000 + 500
+        expected_output = len(primary_usage) * 200 + 100
+        self.assertEqual(input_tokens, expected_input)
+        self.assertEqual(output_tokens, expected_output)
+        expected_cost = ai_diagnose_failure.aggregate_cost(primary_usage, ai_diagnose_failure.GEMINI_MODEL)[
+            0
+        ] + ai_diagnose_failure.compute_cost(fallback_usage, ai_diagnose_failure.GEMINI_FALLBACK_MODEL)[0]
+        self.assertAlmostEqual(cost_usd, expected_cost)
 
     def test_no_fallback_needed_when_primary_succeeds(self):
+        # "Primary success" scenario: no fallback attempt at all.
         self._queue_chat(
             [_fake_resp("**Category:** `OSAC_AAP`\n\nprimary answer\n\n**Confidence:** 90%")]
         )
-        diagnosis, category, _cost, _in_tok, _out_tok, incomplete = ai_diagnose_failure.call_gemini(
-            "prompt", "/tmp/nonexistent-artifact-dir"
+        diagnosis, category, confidence, _cost, _in_tok, _out_tok, incomplete, model_used, attempted_models = (
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir")
         )
         self.assertFalse(incomplete)
         self.assertIn("primary answer", diagnosis)
+        self.assertEqual(confidence, 90)
         # Only the primary chat should ever have been created -- a
         # successful first attempt must never pay for a fallback call it
         # doesn't need.
         self.assertEqual(len(self.created_chats), 1)
+        self.assertEqual(model_used, ai_diagnose_failure.GEMINI_MODEL)
+        self.assertEqual(attempted_models, [ai_diagnose_failure.GEMINI_MODEL])
 
     def test_fallback_respects_its_own_smaller_retry_budget(self):
+        # "Fallback exhaustion" scenario: both tiers exhausted, fully
+        # empty. Neither tier actually WON here (there's no usable text
+        # from either one), so model_used must be None -- distinct from
+        # attempted_models, which still names both since both models were
+        # genuinely attempted either way.
         self._queue_chat([_fake_resp("") for _ in range(ai_diagnose_failure.MAX_RETRIES + 1)])
         self._queue_chat([_fake_resp("") for _ in range(ai_diagnose_failure.FALLBACK_MAX_RETRIES + 1)])
-        _diagnosis, _category, _cost, _in_tok, _out_tok, incomplete = ai_diagnose_failure.call_gemini(
-            "prompt", "/tmp/nonexistent-artifact-dir"
+        _diagnosis, _category, _confidence, _cost, _in_tok, _out_tok, incomplete, model_used, attempted_models = (
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir")
         )
         self.assertTrue(incomplete)
         self.assertEqual(self.created_chats[0].calls, ai_diagnose_failure.MAX_RETRIES + 1)
         self.assertEqual(self.created_chats[1].calls, ai_diagnose_failure.FALLBACK_MAX_RETRIES + 1)
+        self.assertIsNone(model_used)
+        self.assertEqual(attempted_models, [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL])
 
     def test_both_tiers_exhausted_still_prefers_any_real_text(self):
         # Primary has a real (if incomplete) partial answer; fallback
@@ -612,11 +696,88 @@ class CallGeminiFallbackTests(unittest.TestCase):
             + [_fake_resp("") for _ in range(ai_diagnose_failure.MAX_RETRIES)]
         )
         self._queue_chat([_fake_resp("") for _ in range(ai_diagnose_failure.FALLBACK_MAX_RETRIES + 1)])
-        diagnosis, _category, _cost, _in_tok, _out_tok, incomplete = ai_diagnose_failure.call_gemini(
-            "prompt", "/tmp/nonexistent-artifact-dir"
+        diagnosis, _category, confidence, _cost, _in_tok, _out_tok, incomplete, model_used, attempted_models = (
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir")
         )
         self.assertTrue(incomplete)
         self.assertIn("partial primary text", diagnosis)
+        # No "**Confidence:**" marker anywhere in either tier's queued
+        # responses here -- confirms the None-default isn't accidentally
+        # inherited from a PREVIOUS test's chat/state.
+        self.assertIsNone(confidence)
+        # The primary's own partial text WON here despite the fallback
+        # also having been attempted -- model_used must reflect the
+        # winner (primary), not just "a fallback was tried".
+        self.assertEqual(model_used, ai_diagnose_failure.GEMINI_MODEL)
+        self.assertEqual(attempted_models, [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL])
+
+    def test_attempted_models_survives_exception_after_earlier_response(self):
+        # Primary tier's FIRST call succeeds (though incomplete, forcing a
+        # retry) -- an EARLIER response, per this test's name -- and the
+        # retry's own send_message() call then raises outright (e.g. a
+        # transient network/API error), well before call_gemini ever
+        # reaches its own `return`. attempted_models, passed in by the
+        # caller and mutated in place, must still record GEMINI_MODEL.
+        self._queue_chat([_fake_resp(""), RuntimeError("simulated network error")])
+        attempted_models = []
+        with self.assertRaises(RuntimeError):
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir", attempted_models)
+        self.assertEqual(attempted_models, [ai_diagnose_failure.GEMINI_MODEL])
+        # The exception happened mid-retry on the PRIMARY tier -- the
+        # fallback tier's own chat must never have even been created.
+        self.assertEqual(len(self.created_chats), 1)
+
+    def test_attempted_models_survives_fallback_exception_after_primary_completed(self):
+        # Primary tier fully exhausts its retries normally (no raise) --
+        # a genuinely completed EARLIER attempt, distinct from the
+        # single-partial-response case above. The fallback tier's first
+        # call then succeeds/incomplete, forcing ITS OWN retry, and that
+        # retry raises. attempted_models must retain BOTH models: the
+        # primary's entry (recorded well before the fallback tier ever
+        # started) survives the exception that only the fallback caused.
+        self._queue_chat([_fake_resp("") for _ in range(ai_diagnose_failure.MAX_RETRIES + 1)])
+        self._queue_chat([_fake_resp(""), RuntimeError("simulated network error")])
+        attempted_models = []
+        with self.assertRaises(RuntimeError):
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir", attempted_models)
+        self.assertEqual(
+            attempted_models,
+            [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL],
+        )
+        self.assertEqual(len(self.created_chats), 2)
+
+    def test_partial_usage_attached_to_exception_after_earlier_response(self):
+        # Primary tier's FIRST call succeeds (with real, known usage_
+        # metadata) but is incomplete, forcing a retry -- an EARLIER
+        # response, per this test's name -- and the retry's own
+        # send_message() call then raises outright. The raised exception
+        # must carry that first call's real, already-incurred cost/
+        # tokens as `partial_usage`, not lose them just because
+        # call_gemini itself never reaches its own `return`.
+        usage = _fake_usage(1000, 200)
+        self._queue_chat([_fake_resp("", usage_metadata=usage), RuntimeError("simulated network error")])
+        with self.assertRaises(RuntimeError) as ctx:
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir")
+        expected = ai_diagnose_failure.aggregate_cost([usage], ai_diagnose_failure.GEMINI_MODEL)
+        self.assertEqual(ctx.exception.partial_usage, expected)
+
+    def test_partial_usage_combines_both_tiers_after_fallback_exception(self):
+        # Primary tier fully completes normally (with real usage) --
+        # fallback tier's first call also succeeds (with its own real
+        # usage) but is incomplete, forcing a fallback retry, and THAT
+        # retry raises. partial_usage must combine BOTH tiers' real
+        # usage, each billed at its own model's rate, not just whichever
+        # tier was mid-flight when the exception happened.
+        primary_usage = [_fake_usage(1000, 200) for _ in range(ai_diagnose_failure.MAX_RETRIES + 1)]
+        self._queue_chat([_fake_resp("", usage_metadata=u) for u in primary_usage])
+        fallback_usage = _fake_usage(500, 100)
+        self._queue_chat(
+            [_fake_resp("", usage_metadata=fallback_usage), RuntimeError("simulated network error")]
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            ai_diagnose_failure.call_gemini("prompt", "/tmp/nonexistent-artifact-dir")
+        expected = ai_diagnose_failure._aggregate_combined_cost(primary_usage, [fallback_usage])
+        self.assertEqual(ctx.exception.partial_usage, expected)
 
 
 _FULL_DIAGNOSIS = """### Root cause
@@ -678,6 +839,153 @@ class SplitSectionsTests(unittest.TestCase):
         self.assertEqual(summary, "Something broke.")
         self.assertEqual(causal_chain, "- a\n- b")
         self.assertIsNone(evidence)
+
+
+class BuildDiagnosisJsonTests(unittest.TestCase):
+    def test_full_structure_primary_success(self):
+        # "Primary success" shape: no fallback ever attempted.
+        diagnosis = _FULL_DIAGNOSIS
+        result = ai_diagnose_failure.build_diagnosis_json(
+            diagnosis,
+            "STORAGE",
+            95,
+            0.05,
+            1000,
+            200,
+            False,
+            ai_diagnose_failure.GEMINI_MODEL,
+            [ai_diagnose_failure.GEMINI_MODEL],
+            True,
+            "E2E Storage",
+            "https://example.com/run/1",
+            "Run E2E tests",
+            False,
+            ["tests/storage/test_x.py"],
+        )
+        self.assertEqual(result["schema_version"], 1)
+        self.assertIn("generated_at", result)
+        self.assertEqual(result["workflow_name"], "E2E Storage")
+        self.assertEqual(result["run_url"], "https://example.com/run/1")
+        self.assertEqual(result["category"], "STORAGE")
+        self.assertEqual(result["confidence"], 95)
+        self.assertTrue(result["diagnosis_available"])
+        self.assertFalse(result["incomplete"])
+        self.assertEqual(result["cost_usd"], 0.05)
+        self.assertEqual(result["input_tokens"], 1000)
+        self.assertEqual(result["output_tokens"], 200)
+        self.assertEqual(
+            result["model"],
+            {
+                "primary": ai_diagnose_failure.GEMINI_MODEL,
+                "fallback": ai_diagnose_failure.GEMINI_FALLBACK_MODEL or None,
+                "used": ai_diagnose_failure.GEMINI_MODEL,
+                "attempted": [ai_diagnose_failure.GEMINI_MODEL],
+            },
+        )
+        self.assertIn("CSI driver never provisioned", result["root_cause"])
+        self.assertIn("osac-csi-driver's provisioner", result["causal_chain"])
+        self.assertIn("provisioner.go:123", result["evidence"])
+        self.assertEqual(result["diagnosis_markdown"], diagnosis)
+        self.assertEqual(result["failed_step_name"], "Run E2E tests")
+        self.assertFalse(result["no_test_evidence"])
+        self.assertEqual(result["changed_files"], ["tests/storage/test_x.py"])
+
+    def test_fallback_success_reports_used_and_attempted(self):
+        # "Fallback success" shape: attempted lists both tiers, in order;
+        # used names the one whose response actually won.
+        result = ai_diagnose_failure.build_diagnosis_json(
+            _FULL_DIAGNOSIS, "STORAGE", 80, 0.09, 1500, 300, False,
+            ai_diagnose_failure.GEMINI_FALLBACK_MODEL,
+            [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL],
+            True, "E2E Storage", "https://example.com/run/1", "step", False, [],
+        )
+        self.assertEqual(result["model"]["used"], ai_diagnose_failure.GEMINI_FALLBACK_MODEL)
+        self.assertEqual(
+            result["model"]["attempted"],
+            [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL],
+        )
+        # Configured fields are unaffected by which tier actually won.
+        self.assertEqual(result["model"]["primary"], ai_diagnose_failure.GEMINI_MODEL)
+        self.assertEqual(result["model"]["fallback"], ai_diagnose_failure.GEMINI_FALLBACK_MODEL)
+        # Combined usage across both tiers, not just the winning tier's.
+        self.assertEqual(result["cost_usd"], 0.09)
+        self.assertEqual(result["input_tokens"], 1500)
+        self.assertEqual(result["output_tokens"], 300)
+
+    def test_fallback_exhaustion_still_reports_both_attempted(self):
+        # "Fallback exhaustion" shape: both tiers attempted and both
+        # produced nothing usable -- attempted still names both, even
+        # though neither one WON (used=None, matching what call_gemini
+        # itself now passes in this scenario) and the diagnosis itself is
+        # unavailable.
+        result = ai_diagnose_failure.build_diagnosis_json(
+            "(empty response from Gemini: finish_reason=FinishReason.STOP)",
+            None, None, None, None, None, True,
+            None,
+            [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL],
+            False, "E2E Storage", "https://example.com/run/1", "step", False, [],
+        )
+        self.assertIsNone(result["model"]["used"])
+        self.assertEqual(
+            result["model"]["attempted"],
+            [ai_diagnose_failure.GEMINI_MODEL, ai_diagnose_failure.GEMINI_FALLBACK_MODEL],
+        )
+        self.assertFalse(result["diagnosis_available"])
+
+    def test_confidence_is_passed_through_not_reparsed_from_diagnosis_text(self):
+        # _FULL_DIAGNOSIS's own footer says "Confidence: 95%" -- passing a
+        # DIFFERENT value here and asserting it wins confirms confidence is
+        # threaded straight through from the caller (call_gemini's own
+        # extract_confidence result), not re-derived by pattern-matching
+        # the rendered diagnosis/footer text.
+        result = ai_diagnose_failure.build_diagnosis_json(
+            _FULL_DIAGNOSIS, "STORAGE", 42, 0.05, 1000, 200, False,
+            ai_diagnose_failure.GEMINI_MODEL, [ai_diagnose_failure.GEMINI_MODEL], True,
+            "E2E Storage", "https://example.com/run/1", "step", False, [],
+        )
+        self.assertEqual(result["confidence"], 42)
+
+    def test_missing_optional_fields_become_none(self):
+        result = ai_diagnose_failure.build_diagnosis_json(
+            "_AI diagnosis unavailable: boom_",
+            None,
+            None,
+            None,
+            None,
+            None,
+            True,
+            None,
+            [],
+            False,
+            "",
+            "",
+            "",
+            True,
+            [],
+        )
+        self.assertIsNone(result["category"])
+        self.assertIsNone(result["confidence"])
+        self.assertIsNone(result["cost_usd"])
+        self.assertIsNone(result["workflow_name"])
+        self.assertIsNone(result["run_url"])
+        self.assertIsNone(result["failed_step_name"])
+        self.assertIsNone(result["root_cause"])
+        self.assertIsNone(result["model"]["used"])
+        self.assertEqual(result["model"]["attempted"], [])
+        self.assertTrue(result["no_test_evidence"])
+
+    def test_result_is_json_serializable(self):
+        import json
+
+        result = ai_diagnose_failure.build_diagnosis_json(
+            _FULL_DIAGNOSIS, "STORAGE", 95, 0.05, 1000, 200, False,
+            ai_diagnose_failure.GEMINI_MODEL, [ai_diagnose_failure.GEMINI_MODEL], True, "E2E Storage",
+            "https://example.com/run/1", "step", False, [],
+        )
+        # Must round-trip cleanly -- this is the whole point of the
+        # artifact; a non-serializable field would only surface as a
+        # runtime crash inside main()'s guarded try/except otherwise.
+        json.loads(json.dumps(result))
 
 
 class ComputeCostNewModelsTests(unittest.TestCase):

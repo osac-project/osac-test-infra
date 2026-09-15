@@ -13,6 +13,7 @@ Bounded by design: sends a fixed-size extract, not the full multi-file
 dump, to keep the prompt (and cost) predictable regardless of how much a
 given failure happened to log.
 """
+import datetime
 import glob
 import json
 import os
@@ -116,6 +117,13 @@ SUMMARY_PATH = os.environ.get("GITHUB_STEP_SUMMARY", "")
 # summary -- e.g. ai-diagnostic-e2e.yml runs in a separate workflow_run job
 # and feeds this into a Check Run body instead of (or as well as) a summary.
 DIAGNOSIS_FILE = os.environ.get("DIAGNOSIS_FILE", "")
+# Set by callers that want the full structured diagnosis (root cause,
+# causal chain, evidence, category, confidence, cost/token counts, model,
+# and run metadata) as a standalone machine-readable artifact -- e.g.
+# uploaded via actions/upload-artifact so the data survives past the
+# sticky PR comment/Check Run (which only ever show the rendered
+# markdown) for later querying/aggregation across runs.
+DIAGNOSIS_JSON_FILE = os.environ.get("DIAGNOSIS_JSON_FILE", "")
 WORKFLOW_NAME = os.environ.get("WORKFLOW_NAME", "E2E job")
 RUN_URL = os.environ.get("RUN_URL", "")
 # Optional, fork-PR-only (Phase 2 already resolves the PR number to gate the
@@ -545,9 +553,10 @@ CATEGORIES = (
     "NETWORKING",
     "COMPUTE_VM",
     "AUTH",
-    "INFRA",       # CI/runner/cluster-capacity/network flakiness, not an OSAC bug
-    "TEST_FLAKE",  # the test itself is flaky/environmental, not a real product bug
-    "UNKNOWN",     # evidence doesn't clearly point to any of the above
+    "INFRA",        # CI/runner/cluster-capacity/network flakiness, not an OSAC bug
+    "TEST_FLAKE",   # the test itself is flaky/environmental, not a real product bug
+    "CODE_CHANGE",  # a deterministic bug in code THIS PR itself added/modified (test or product)
+    "UNKNOWN",      # evidence doesn't clearly point to any of the above
 )
 
 
@@ -868,6 +877,83 @@ def format_full_run_line(run_url):
     return f"To see the full run, check the [workflow run]({run_url})."
 
 
+def build_diagnosis_json(
+    diagnosis,
+    category,
+    confidence,
+    cost_usd,
+    input_tokens,
+    output_tokens,
+    incomplete,
+    model_used,
+    attempted_models,
+    diagnosis_available,
+    workflow_name,
+    run_url,
+    failed_step_name,
+    no_test_evidence,
+    changed_files,
+):
+    """Build the full structured diagnosis as a plain, JSON-serializable
+    dict -- the machine-readable counterpart to build_diagnosis_body's
+    rendered markdown. Meant to be dumped as a standalone artifact (see
+    DIAGNOSIS_JSON_FILE) so the data/metadata behind a diagnosis survives
+    past the sticky PR comment (which only ever shows the rendered
+    markdown for the CURRENT state of a PR's latest run) for later
+    querying or aggregation across many runs.
+
+    `confidence` is the plain integer call_gemini already extracted via
+    extract_confidence -- passed straight through rather than re-derived
+    by pattern-matching the rendered footer text here (format_confidence_line
+    reformats it into a "not reported by the model" string, or prefixes a
+    "below threshold" warning, neither of which a caller should need to
+    re-parse just to recover a value already known upstream).
+
+    `model_used`/`attempted_models` are likewise call_gemini's own runtime
+    record of what actually happened on THIS run -- which model's response
+    won (model_used), and every model an actual Vertex AI call was made to
+    in order, whether or not it won (attempted_models) -- distinct from
+    the model.primary/model.fallback fields below, which only reflect this
+    job's CONFIGURED GEMINI_MODEL/GEMINI_FALLBACK_MODEL and say nothing
+    about whether the fallback tier was ever reached or which tier's text
+    actually became this diagnosis.
+
+    root_cause/causal_chain/evidence are re-derived here via
+    split_sections rather than threaded through from build_diagnosis_body,
+    which only returns the final rendered string -- split_sections is a
+    cheap, pure regex parse, so re-running it against the same `diagnosis`
+    text is simpler than plumbing its intermediate pieces through two
+    separate call sites.
+    """
+    summary, causal_chain, evidence, _footer = split_sections(diagnosis)
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "workflow_name": workflow_name or None,
+        "run_url": run_url or None,
+        "category": category,
+        "confidence": confidence,
+        "diagnosis_available": diagnosis_available,
+        "incomplete": incomplete,
+        "cost_usd": cost_usd,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "model": {
+            "primary": GEMINI_MODEL,
+            "fallback": GEMINI_FALLBACK_MODEL or None,
+            "used": model_used,
+            "attempted": attempted_models,
+        },
+        "root_cause": summary,
+        "causal_chain": causal_chain,
+        "evidence": evidence,
+        "diagnosis_markdown": diagnosis,
+        "failed_step_name": failed_step_name or None,
+        "no_test_evidence": no_test_evidence,
+        "changed_files": changed_files,
+    }
+
+
 def build_diagnosis_body(diagnosis, run_url, workflow_name, category, incomplete=False):
     """Assemble the final posted markdown: title, an always-visible
     one-line summary (ending with the full-run link), then Causal chain
@@ -1133,6 +1219,25 @@ def _merge_cost_tuples(a, b):
     return (cost_a or 0.0) + (cost_b or 0.0), input_tokens, output_tokens
 
 
+def _aggregate_combined_cost(primary_usage_metadata_list, fallback_usage_metadata_list):
+    """Sum cost/token totals across both tiers' usage_metadata ledgers,
+    billing each at ITS OWN model's rate via aggregate_cost before
+    merging. Shared by call_gemini's own normal-completion path (inside
+    its footer-building try block) and its exception handler (see
+    call_gemini's docstring on `partial_usage`) -- the same math either
+    way, just applied to whatever each ledger actually holds at the time
+    it's called: the full picture on success, or only whatever attempts
+    genuinely completed before a later one raised.
+    """
+    cost_usd, input_tokens, output_tokens = aggregate_cost(primary_usage_metadata_list, GEMINI_MODEL)
+    if fallback_usage_metadata_list:
+        fallback_cost = aggregate_cost(fallback_usage_metadata_list, GEMINI_FALLBACK_MODEL)
+        cost_usd, input_tokens, output_tokens = _merge_cost_tuples(
+            (cost_usd, input_tokens, output_tokens), fallback_cost
+        )
+    return cost_usd, input_tokens, output_tokens
+
+
 def format_cost_line(cost_usd, input_tokens, output_tokens, model):
     """Render compute_cost's numbers as the human-readable line appended
     to the confidence/cost footer. A bare "$0.0000" for the unavailable
@@ -1395,7 +1500,7 @@ _RETRY_PROMPT = (
 )
 
 
-def _generate_with_retry(chat, prompt, max_retries=MAX_RETRIES):
+def _generate_with_retry(chat, prompt, max_retries=MAX_RETRIES, usage_metadata_list=None):
     """Send `prompt`, retrying up to `max_retries` times with a follow-up
     turn each time if the response is incomplete (see _is_incomplete: it
     hit max_output_tokens, or it came back with no text at all for some
@@ -1435,9 +1540,26 @@ def _generate_with_retry(chat, prompt, max_retries=MAX_RETRIES):
     -- see aggregate_cost's docstring for why the final attempt's
     usage_metadata alone would silently drop an earlier attempt's
     already-incurred cost.
+
+    `usage_metadata_list`, when provided, is APPENDED TO IN PLACE (not
+    replaced) as soon as each attempt's response is received -- not just
+    built up as a local and handed back only via this function's own
+    `return`. chat.send_message() itself is unguarded here: if a LATER
+    retry's call raises outright (a real network/API error, as opposed
+    to the already-handled "came back incomplete" case this function
+    retries on), a plain local variable would take this function's whole
+    local scope down with it, silently losing an EARLIER attempt's
+    already-incurred, real cost along with it. Mutating a list the caller
+    already holds means that cost survives regardless of where or
+    whether this function ever returns -- same reasoning as call_gemini's
+    own `attempted_models` parameter. Defaults to a fresh list when
+    omitted, for callers that don't need to observe partial state after
+    an exception.
     """
+    if usage_metadata_list is None:
+        usage_metadata_list = []
     resp = chat.send_message(prompt)
-    usage_metadata_list = [resp.usage_metadata]
+    usage_metadata_list.append(resp.usage_metadata)
     attempts = [resp]
     if not _is_incomplete(resp):
         return resp, False, usage_metadata_list
@@ -1486,7 +1608,30 @@ def _generate_with_retry(chat, prompt, max_retries=MAX_RETRIES):
     return final_resp, True, usage_metadata_list
 
 
-def call_gemini(prompt, artifact_dir):
+def call_gemini(prompt, artifact_dir, attempted_models=None):
+    """... (see the module-level call sites for the full picture; the
+    `attempted_models` parameter is documented where it's populated,
+    below)
+
+    `attempted_models`, when provided, is APPENDED TO IN PLACE (not
+    replaced) immediately before each tier's first real API call --
+    deliberately a caller-owned, mutated-in-place list rather than a
+    plain local built up and only handed back via this function's own
+    `return`. `_generate_with_retry`'s `chat.send_message()` calls are
+    unguarded (a network/API error on the INITIAL call, or on any retry,
+    propagates straight out of this function with no try/except here to
+    catch it), so a caller that only trusted this function's return value
+    would lose all record of which models were actually attempted the
+    moment any one of those calls raises -- including the primary tier's
+    own attempted_models entry, even after it already fully finished and
+    the exception came from the FALLBACK tier instead. Mutating a list the
+    caller already holds means that record survives regardless of where
+    or whether this function ever returns. Defaults to a fresh list when
+    omitted, for callers (tests, mainly) that don't need to observe
+    partial state after an exception.
+    """
+    if attempted_models is None:
+        attempted_models = []
     from google import genai
     from google.genai import types
 
@@ -1520,43 +1665,86 @@ def call_gemini(prompt, artifact_dir):
             ),
         )
 
-    chat = make_chat(GEMINI_MODEL)
-    resp, incomplete, usage_metadata_list = _generate_with_retry(chat, prompt, max_retries=MAX_RETRIES)
-    model_used = GEMINI_MODEL
+    # Declared here (not inside the try below) and passed into
+    # _generate_with_retry to be mutated in place, same reasoning as
+    # attempted_models -- see _generate_with_retry's own docstring. This
+    # is what lets the except block just below recover the REAL,
+    # already-incurred cost for whatever attempts genuinely completed
+    # before a later one raised, instead of losing it along with this
+    # function's local scope.
+    usage_metadata_list = []
     fallback_usage_metadata_list = []
+    try:
+        # Appended right before the call that can actually raise (NOT
+        # after _generate_with_retry returns) -- see this function's own
+        # docstring on `attempted_models` for why: a send_message()
+        # exception on a LATER retry within this same tier must still
+        # leave GEMINI_MODEL recorded as attempted, and appending only on
+        # success would lose that.
+        chat = make_chat(GEMINI_MODEL)
+        attempted_models.append(GEMINI_MODEL)
+        resp, incomplete, usage_metadata_list = _generate_with_retry(
+            chat, prompt, max_retries=MAX_RETRIES, usage_metadata_list=usage_metadata_list
+        )
+        model_used = GEMINI_MODEL
 
-    # GEMINI_MODEL exhausted every retry with nothing usable -- try a
-    # SECOND, independent model rather than giving up. This is the actual
-    # mitigation for the reliability quirk MAX_RETRIES documents (a
-    # cyclical, hours-long, per-model backend issue): more retries on the
-    # same model just keep hitting the same outage window, but a
-    # different model is a different serving path that, empirically, is
-    # very unlikely to be down for the exact same reason at the exact
-    # same moment. Skipped when GEMINI_FALLBACK_MODEL is unset/blank or
-    # identical to GEMINI_MODEL (nothing new to try).
-    if incomplete and GEMINI_FALLBACK_MODEL and GEMINI_FALLBACK_MODEL != GEMINI_MODEL:
-        _safe_print(
-            f"WARNING: {GEMINI_MODEL} exhausted every retry with nothing usable; "
-            f"falling back to {GEMINI_FALLBACK_MODEL}.",
-            file=sys.stderr,
-        )
-        fallback_chat = make_chat(GEMINI_FALLBACK_MODEL)
-        fallback_resp, fallback_incomplete, fallback_usage_metadata_list = _generate_with_retry(
-            fallback_chat, prompt, max_retries=FALLBACK_MAX_RETRIES
-        )
-        # Prefer the fallback's answer whenever it produced ANY real
-        # text, even if still flagged incomplete (e.g. truncated) --
-        # partial text from a second, independent model beats an
-        # entirely empty primary response. Only keep the primary's
-        # (already-empty, since we're in this branch) response if the
-        # fallback ALSO came back with nothing at all.
-        if fallback_resp.text or not resp.text:
-            resp, incomplete, chat, model_used = (
-                fallback_resp,
-                fallback_incomplete,
-                fallback_chat,
-                GEMINI_FALLBACK_MODEL,
+        # GEMINI_MODEL exhausted every retry with nothing usable -- try a
+        # SECOND, independent model rather than giving up. This is the
+        # actual mitigation for the reliability quirk MAX_RETRIES
+        # documents (a cyclical, hours-long, per-model backend issue):
+        # more retries on the same model just keep hitting the same
+        # outage window, but a different model is a different serving
+        # path that, empirically, is very unlikely to be down for the
+        # exact same reason at the exact same moment. Skipped when
+        # GEMINI_FALLBACK_MODEL is unset/blank or identical to
+        # GEMINI_MODEL (nothing new to try).
+        if incomplete and GEMINI_FALLBACK_MODEL and GEMINI_FALLBACK_MODEL != GEMINI_MODEL:
+            _safe_print(
+                f"WARNING: {GEMINI_MODEL} exhausted every retry with nothing usable; "
+                f"falling back to {GEMINI_FALLBACK_MODEL}.",
+                file=sys.stderr,
             )
+            fallback_chat = make_chat(GEMINI_FALLBACK_MODEL)
+            # Same "append before the call that can raise" reasoning as
+            # the primary tier above -- a send_message() exception on the
+            # fallback's own first call or a later retry must still leave
+            # GEMINI_FALLBACK_MODEL recorded as attempted, alongside the
+            # primary tier's entry which by this point already fully
+            # completed and is safely recorded.
+            attempted_models.append(GEMINI_FALLBACK_MODEL)
+            fallback_resp, fallback_incomplete, fallback_usage_metadata_list = _generate_with_retry(
+                fallback_chat,
+                prompt,
+                max_retries=FALLBACK_MAX_RETRIES,
+                usage_metadata_list=fallback_usage_metadata_list,
+            )
+            # Prefer the fallback's answer whenever it produced ANY real
+            # text, even if still flagged incomplete (e.g. truncated) --
+            # partial text from a second, independent model beats an
+            # entirely empty primary response. Only keep the primary's
+            # (already-empty, since we're in this branch) response if the
+            # fallback ALSO came back with nothing at all.
+            if fallback_resp.text or not resp.text:
+                resp, incomplete, chat, model_used = (
+                    fallback_resp,
+                    fallback_incomplete,
+                    fallback_chat,
+                    GEMINI_FALLBACK_MODEL,
+                )
+    except Exception as exc:
+        # usage_metadata_list/fallback_usage_metadata_list are already
+        # safely populated with whatever attempts genuinely completed
+        # before this exception (mutated in place by _generate_with_retry
+        # itself, not just accumulated in a local this function's own
+        # abandoned scope would otherwise take down with it). Attach the
+        # aggregated total to the exception -- there's no return value to
+        # carry it on a path that never reaches this function's own
+        # `return`, so main()'s except block reads it back via getattr.
+        try:
+            exc.partial_usage = _aggregate_combined_cost(usage_metadata_list, fallback_usage_metadata_list)
+        except Exception:  # noqa: BLE001 -- must never mask/replace the ORIGINAL exception being handled
+            exc.partial_usage = (None, None, None)
+        raise
 
     if resp.text:
         text = resp.text
@@ -1564,26 +1752,33 @@ def call_gemini(prompt, artifact_dir):
         reason = _describe_empty_response(resp)
         _safe_print(f"WARNING: Gemini returned an empty response ({reason}).", file=sys.stderr)
         text = f"(empty response from Gemini: {reason})"
+        # No tier actually "won" if the selected response has no text at
+        # all -- model_used may have been set to GEMINI_FALLBACK_MODEL
+        # above purely because resp.text was empty (see the "not
+        # resp.text" arm of the selection above, which hands off to the
+        # fallback's slot whenever the primary is empty, whether or not
+        # the fallback produced anything better), not because the
+        # fallback actually produced usable text. attempted_models is
+        # untouched here -- both models were still genuinely attempted,
+        # regardless of whether either one's response was usable.
+        model_used = None
     category = None
+    confidence = None
     cost_usd = input_tokens = output_tokens = None
     try:
         text, category = extract_category(text)
         text, confidence = extract_confidence(text)
         tool_calls = count_tool_calls(chat)
-        # Sums every attempt's own usage_metadata (see aggregate_cost's
-        # docstring) so a retry's real, already-incurred first-attempt
-        # cost is never silently dropped from the reported total. When a
-        # fallback model was also tried, its attempts are billed at ITS
-        # own rate and merged in via _merge_cost_tuples -- the primary
-        # model's exhausted-retry attempts cost real money too, even
-        # though its response wasn't the one used.
-        cost_usd, input_tokens, output_tokens = aggregate_cost(usage_metadata_list, GEMINI_MODEL)
+        # Sums every attempt's own usage_metadata across BOTH tiers (see
+        # _aggregate_combined_cost/aggregate_cost's own docstrings) so a
+        # retry's real, already-incurred cost is never silently dropped
+        # from the reported total, regardless of whether its response was
+        # the one ultimately used.
+        cost_usd, input_tokens, output_tokens = _aggregate_combined_cost(
+            usage_metadata_list, fallback_usage_metadata_list
+        )
         model_label = model_used
         if fallback_usage_metadata_list:
-            fallback_cost = aggregate_cost(fallback_usage_metadata_list, GEMINI_FALLBACK_MODEL)
-            cost_usd, input_tokens, output_tokens = _merge_cost_tuples(
-                (cost_usd, input_tokens, output_tokens), fallback_cost
-            )
             model_label = f"{GEMINI_MODEL} -> {GEMINI_FALLBACK_MODEL}"
         cost_line = format_cost_line(cost_usd, input_tokens, output_tokens, model_label)
         if tool_calls:
@@ -1620,7 +1815,7 @@ def call_gemini(prompt, artifact_dir):
     # such a response would pass split_sections' structural check and get
     # posted to Slack / pinged to chai-bot as if it were a normal,
     # trustworthy diagnosis, contradicting its own "⚠️ Incomplete" footer.
-    return diagnosis, category, cost_usd, input_tokens, output_tokens, incomplete
+    return diagnosis, category, confidence, cost_usd, input_tokens, output_tokens, incomplete, model_used, attempted_models
 
 
 def main():
@@ -1845,6 +2040,7 @@ exactly one of:
 - AUTH -- keycloak/auth/RBAC issue
 - INFRA -- CI runner, cluster capacity, network flakiness, image pull, or other infrastructure issue -- not an OSAC code bug
 - TEST_FLAKE -- the test itself is flaky/environmental (e.g. a timing race in the test), not a real product bug
+- CODE_CHANGE -- a deterministic bug (not flaky, not environmental) in a line this PR's own diff (above, when present) added or modified -- test code or product code either way. Use this, NOT TEST_FLAKE or a component category, whenever the causal chain traces directly to a specific added/modified line in the diff that a reviewer would flag as a straightforward mistake (e.g. a wrong field/argument, an off-by-one, a typo'd identifier) -- the fix belongs in THIS PR, retrying won't help, and it isn't a pre-existing bug in an OSAC component. If the diff isn't shown to you, or the failing line predates this PR (check the diff before assuming), don't use this category.
 - UNKNOWN -- evidence doesn't clearly point to any of the above
 
 ### Root cause
@@ -1931,12 +2127,42 @@ correct.
 {file_listing}
 """
 
+    # Owned here (not inside the try) and passed into call_gemini to be
+    # mutated in place -- see call_gemini's own docstring on
+    # `attempted_models`. This is what lets the except block below keep
+    # whatever was recorded before a mid-call exception, instead of
+    # resetting to [] and losing real, already-incurred attempts.
+    attempted_models = []
     try:
-        diagnosis, category, cost_usd, input_tokens, output_tokens, incomplete = call_gemini(prompt, ARTIFACT_DIR)
+        diagnosis, category, confidence, cost_usd, input_tokens, output_tokens, incomplete, model_used, attempted_models = (
+            call_gemini(prompt, ARTIFACT_DIR, attempted_models)
+        )
     except Exception as exc:  # noqa: BLE001 -- must never crash the job
         diagnosis = f"_AI diagnosis unavailable: {exc}_"
         category = None
-        cost_usd = input_tokens = output_tokens = None
+        confidence = None
+        # call_gemini's own except block attaches whatever cost/tokens
+        # were genuinely incurred before ITS exception as `partial_usage`
+        # (see its docstring) -- read that back instead of unconditionally
+        # reporting None, so a run that got partway through (e.g. the
+        # primary tier fully completed, and only the fallback tier's own
+        # later retry raised) still reports its real, already-billed
+        # spend. Falls back to (None, None, None) for an exception from
+        # somewhere call_gemini never even entered its own try (there is
+        # no such path today, but this is the same defensive posture as
+        # every other getattr-guarded field in this except block).
+        cost_usd, input_tokens, output_tokens = getattr(exc, "partial_usage", (None, None, None))
+        # Deliberately NOT resetting attempted_models to [] here: it's the
+        # same list object passed into call_gemini above, which appends
+        # to it in place immediately before each tier's first real API
+        # call -- so it already holds every model genuinely attempted
+        # before whatever raised, even when that's the fallback tier and
+        # the primary tier's own entry was recorded well before this
+        # exception. model_used, unlike attempted_models, has no such
+        # partial-provenance story -- it only means anything once a
+        # response actually won, which by definition didn't happen if
+        # we're in this except block at all.
+        model_used = None
         # No "### Root cause" structure in this fallback text either way
         # (build_diagnosis_body already treats it as unavailable), but
         # True is also the semantically correct value here regardless:
@@ -1966,6 +2192,45 @@ correct.
             _safe_print(f"WARNING: failed to write DIAGNOSIS_FILE: {_safe_repr(exc)}", file=sys.stderr)
     if not SUMMARY_PATH and not DIAGNOSIS_FILE:
         _safe_print(body_md)
+    if DIAGNOSIS_JSON_FILE:
+        # Written to a temp file first and atomically moved into place
+        # (os.replace, same directory/filesystem) only once serialization
+        # AND the write both fully succeed -- json.dump() writes
+        # incrementally to the file handle as it goes, so writing
+        # DIAGNOSIS_JSON_FILE directly could leave a truncated, invalid-
+        # JSON artifact on disk if it raised partway through (e.g. a
+        # stray non-serializable value slipping into build_diagnosis_
+        # json's dict). A consumer/uploader reading that half-written
+        # file is worse than the file simply not existing at all.
+        tmp_path = f"{DIAGNOSIS_JSON_FILE}.tmp-{os.getpid()}"
+        try:
+            diagnosis_json = build_diagnosis_json(
+                diagnosis,
+                category,
+                confidence,
+                cost_usd,
+                input_tokens,
+                output_tokens,
+                incomplete,
+                model_used,
+                attempted_models,
+                diagnosis_available,
+                WORKFLOW_NAME,
+                RUN_URL,
+                FAILED_STEP_NAME,
+                no_test_evidence,
+                CHANGED_FILES.split("\n") if CHANGED_FILES else [],
+            )
+            with open(tmp_path, "w") as f:
+                json.dump(diagnosis_json, f, indent=2)
+                f.write("\n")
+            os.replace(tmp_path, DIAGNOSIS_JSON_FILE)
+        except Exception as exc:  # noqa: BLE001 -- see comment above
+            _safe_print(f"WARNING: failed to write DIAGNOSIS_JSON_FILE: {_safe_repr(exc)}", file=sys.stderr)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     # Exposed as step outputs (not just embedded in the diagnosis text) so
     # ai-diagnostic-e2e.yml's own steps can use them directly:
