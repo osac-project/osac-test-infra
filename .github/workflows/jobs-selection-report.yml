@@ -1,21 +1,26 @@
 ---
-# Phase 1 (POC) of diff-aware E2E suite selection, OSAC-4741: the real
-# logic behind osac's e2e-suite-selection-poc.yml. Invoked exclusively via
-# workflow_call from osac's own tiny native workflow_run wrapper (also
-# named e2e-suite-selection-ai.yml) -- workflow_call'd jobs inherit the
-# CALLER's own github.event/github.repository/token, so everything below
-# (github.event.workflow_run.*, github.repository) correctly resolves
-# against osac regardless of this file physically living here, exactly as
-# ai-diagnostic-e2e.yml's own resolve/diagnose jobs already do. This keeps
-# the actual logic in one place instead of duplicated into osac's own
-# wrapper.
+# Jobs Selection (formerly "E2E Suite Selection POC"/"AI Judgment",
+# OSAC-4741's code): the real logic behind osac's jobs-selection.yml.
+# Invoked exclusively via workflow_call from osac's own tiny native
+# workflow_run wrapper (also named jobs-selection-report.yml) --
+# workflow_call'd jobs inherit the CALLER's own github.event/
+# github.repository/token, so everything below (github.event.workflow_run.*,
+# github.repository) correctly resolves against osac regardless of this
+# file physically living here, exactly as ai-diagnostic-e2e.yml's own
+# resolve/diagnose jobs already do. This keeps the actual logic in one
+# place instead of duplicated into osac's own wrapper.
 #
-# Purely informational: posts a PR comment showing which E2E suites/tiers
-# this PR appears to need. No required check, nothing gated, no effect on
-# merge -- validates the selection logic (in particular, whether graphify's
-# own query output actually helps Gemini's judgment, which is unconfirmed)
-# before a later phase wires it up for real.
-name: E2E Suite Selection AI Judgment
+# Purely informational: posts a PR comment showing, for every real CI job
+# category in osac (unit tests, integration tests, helm lint, proto/
+# generated-code check, fulfillment-service checks, both component image
+# builds, ansible-lint, darwin keychain tests, and the 3 E2E full-install
+# suites), whether that job's own real path filter would consider the PR
+# relevant. No required check, nothing gated, no effect on merge --
+# deliberately observational-only for now. Gemini judgment (in particular,
+# whether feeding graphify's own query output to it actually helps, which
+# is unconfirmed) is used only for the 3 E2E suites' ambiguous cases; every
+# other job category in the comment is deterministic-only.
+name: Jobs Selection Report
 
 on:
   workflow_call: {}
@@ -65,7 +70,7 @@ jobs:
           echo "number=$(jq -r '.number' <<<"${pr_json}")" >> "${GITHUB_OUTPUT}"
 
   judge:
-    name: Judge suite selection
+    name: Compute jobs selection
     needs: resolve
     if: needs.resolve.outputs.found == 'true'
     runs-on: ubuntu-latest
@@ -74,7 +79,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write  # Vertex AI WIF auth
-      actions: read     # download the POC run's context artifact
+      actions: read     # download the jobs-selection run's context artifact
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -86,16 +91,15 @@ jobs:
           # as ai-diagnostic-e2e.yml's own checkout step and for the exact
           # same reason: without this pin, the later `uses:
           # ./.github/actions/vertex-ai-auth` and `python3 .github/scripts/
-          # select-e2e-suite.py` steps would silently check out osac
-          # instead and fail with "file not found", since neither exists
-          # there.
+          # select-jobs.py` steps would silently check out osac instead and
+          # fail with "file not found", since neither exists there.
           repository: osac-project/osac-test-infra
           persist-credentials: false
 
       # Same pattern as ai-diagnostic-e2e.yml's "Download failure artifact"
       # -- REPO here resolves to osac (the caller), so this is a same-repo
       # artifact download even though this file lives in osac-test-infra.
-      - name: Download suite-selection context
+      - name: Download jobs-selection context
         id: context
         env:
           GH_TOKEN: ${{ github.token }}
@@ -103,14 +107,14 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          EXTRACT_DIR="${RUNNER_TEMP}/suite-selection-context"
+          EXTRACT_DIR="${RUNNER_TEMP}/jobs-selection-context"
           mkdir -p "${EXTRACT_DIR}"
           art_json=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" --jq '.artifacts[]' | jq -s '
-            [.[] | select(.expired == false) | select(.name == "suite-selection-context")]
+            [.[] | select(.expired == false) | select(.name == "jobs-selection-context")]
             | first // empty
           ')
           if [[ -z "${art_json}" || "${art_json}" == "null" ]]; then
-            echo "::error::No suite-selection-context artifact found for run ${RUN_ID}."
+            echo "::error::No jobs-selection-context artifact found for run ${RUN_ID}."
             exit 1
           fi
           art_id=$(jq -r '.id' <<<"${art_json}")
@@ -137,10 +141,10 @@ jobs:
           # Tracked separately from the diff CONTENT (unlike
           # ai-diagnostic-e2e.yml's identical-looking fetch, where the diff
           # is just auxiliary context for a free-text diagnosis): here it's
-          # the primary signal behind a structured skip/sanity/regression
-          # decision, so select-e2e-suite.py needs to know outright when
-          # the fetch failed, rather than silently treating a fetch
-          # failure the same as "the PR genuinely has an empty diff" --
+          # the primary signal behind the E2E suites' structured skip/
+          # sanity/regression decision, so select-jobs.py needs to know
+          # outright when the fetch failed, rather than silently treating a
+          # fetch failure the same as "the PR genuinely has an empty diff" --
           # both currently collapse to the same empty string otherwise.
           if raw_diff=$(gh api -H "Accept: application/vnd.github.v3.diff" "repos/${REPO}/pulls/${PR_NUMBER}" 2>/dev/null); then
             diff_available=true
@@ -157,15 +161,15 @@ jobs:
 
       # Best-effort only -- graphify's own query/path CLI is designed for
       # interactive dev-navigation questions, not as a machine-consumed CI
-      # signal, and this is exactly what this POC exists to validate
-      # empirically. Every step here is allowed to fail without failing the
-      # job: select-e2e-suite.py falls back to judging from the diff alone
-      # if no graphify context shows up (see GRAPHIFY_CONTEXT_FILE there).
-      # Pinned to the same GRAPHIFY_VERSION graphify-brain-refresh.yaml (in
-      # osac) uses, to stay compatible with the published graph-latest
-      # bundle -- kept in sync manually for now; a future iteration should
-      # extract this into one shared source both files read, once this
-      # phase is proven worth keeping.
+      # signal, and this is exactly what this feature exists to validate
+      # empirically for the E2E suites' ambiguous cases. Every step here is
+      # allowed to fail without failing the job: select-jobs.py falls back
+      # to judging from the diff alone if no graphify context shows up (see
+      # GRAPHIFY_CONTEXT_FILE there). Pinned to the same GRAPHIFY_VERSION
+      # graphify-brain-refresh.yaml (in osac) uses, to stay compatible with
+      # the published graph-latest bundle -- kept in sync manually for now;
+      # a future iteration should extract this into one shared source both
+      # files read, once this phase is proven worth keeping.
       - name: Install graphify (best-effort)
         id: graphify-install
         continue-on-error: true
@@ -234,7 +238,7 @@ jobs:
         id: vertex-auth
         uses: ./.github/actions/vertex-ai-auth
 
-      - name: Run suite-selection judgment
+      - name: Run jobs-selection judgment
         id: judge-script
         env:
           CONTEXT_FILE: ${{ steps.context.outputs.file }}
@@ -243,15 +247,15 @@ jobs:
           PR_DIFF_AVAILABLE: ${{ steps.pr-context.outputs.diff-available }}
           GOOGLE_CLOUD_PROJECT: ${{ steps.vertex-auth.outputs.gcp-project }}
           GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
-          DECISION_FILE: ${{ runner.temp }}/suite-selection-decision.md
-        run: python3 .github/scripts/select-e2e-suite.py
+          DECISION_FILE: ${{ runner.temp }}/jobs-selection-decision.md
+        run: python3 .github/scripts/select-jobs.py
 
-      - name: Post suite-selection comment
+      - name: Post jobs-selection comment
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.number }}
-          DECISION_FILE: ${{ runner.temp }}/suite-selection-decision.md
+          DECISION_FILE: ${{ runner.temp }}/jobs-selection-decision.md
         run: |
           set -euo pipefail
           # One sticky comment per PR (found by a hidden marker), replaced
@@ -259,12 +263,12 @@ jobs:
           # ai-diagnostic-e2e.yml's own sticky comment, but a single
           # section here since this workflow only ever has one thing to
           # say per PR (not one section per E2E suite).
-          MARKER="<!-- osac-e2e-suite-selection-comment -->"
+          MARKER="<!-- osac-jobs-selection-comment -->"
           comments_json=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" --jq '.[] | {id, body}' | jq -s '.')
           comment_id=$(jq -r --arg marker "${MARKER}" '
             [.[] | select(.body | startswith($marker))] | if length > 0 then .[0].id else empty end
           ' <<<"${comments_json}")
-          BODY_FILE="${RUNNER_TEMP}/suite-selection-comment.md"
+          BODY_FILE="${RUNNER_TEMP}/jobs-selection-comment.md"
           { echo "${MARKER}"; echo; cat "${DECISION_FILE}"; } > "${BODY_FILE}"
           if [[ -n "${comment_id}" ]]; then
             jq -Rs '{body: .}' < "${BODY_FILE}" | gh api "repos/${REPO}/issues/comments/${comment_id}" -X PATCH --input -

@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
-"""Phase 1 (POC) of diff-aware E2E suite selection, OSAC-4741.
+"""Jobs Selection (formerly "E2E Suite Selection", OSAC-4741's code).
 
-Decides, for a single PR, which of the three E2E full-install suites
-(VMaaS/CaaS/BMaaS) it appears to need and at which tier (sanity/
-regression), combining:
+Reports, for every real CI job category in osac (unit tests, integration
+tests, helm lint, proto/generated-code check, fulfillment-service checks,
+both component image builds, ansible-lint, darwin keychain tests, and the
+3 E2E full-install suites), whether that job's own real path filter would
+consider this PR relevant:
 
-- A deterministic verdict already computed by osac's own
-  e2e-suite-selection-poc.yml (dorny/paths-filter, handed off via
-  CONTEXT_FILE) for the common, unambiguous cases -- a bare-metal-
-  fulfillment-operator/** change obviously means BMaaS, no AI needed.
-- A Gemini judgment call, ONLY when something was left ambiguous (shared
-  osac-operator/fulfillment-service code not clearly VMaaS/CaaS-named, or
-  YAML/JSON config graphify can't model well) -- optionally augmented with
-  graphify's own `graphify query` output per ambiguous file, best-effort
-  (see GRAPHIFY_DIR below; this script must degrade gracefully to a
-  diff-only judgment if graphify produced nothing usable, since whether
-  its query output is actually a useful signal for this task, versus
-  noise, is exactly what this POC exists to validate empirically).
+- The 3 E2E suites (VMaaS/CaaS/BMaaS) get the full original treatment: a
+  deterministic verdict already computed by osac's own jobs-selection.yml
+  (dorny/paths-filter, handed off via CONTEXT_FILE) for the common,
+  unambiguous cases -- a bare-metal-fulfillment-operator/** change
+  obviously means BMaaS, no AI needed -- plus a Gemini judgment call, ONLY
+  when something was left ambiguous (shared osac-operator/fulfillment-
+  service code not clearly VMaaS/CaaS-named, or YAML/JSON config graphify
+  can't model well), optionally augmented with graphify's own
+  `graphify query` output per ambiguous file, best-effort (see
+  GRAPHIFY_DIR below; this script must degrade gracefully to a diff-only
+  judgment if graphify produced nothing usable, since whether its query
+  output is actually a useful signal for this task, versus noise, is
+  exactly what this feature exists to validate empirically).
+- Every OTHER job category is deterministic-only (no AI): a boolean
+  already computed by jobs-selection.yml's own mirrored copy of that
+  job's real path filter.
 
-Purely informational at this phase: this script's output is posted as a
-PR comment (by the calling workflow), never used to gate anything.
+Purely informational: this script's output is posted as a PR comment (by
+the calling workflow), never used to gate anything -- see jobs-selection.yml's
+own header for why real per-job gating is deliberately deferred.
 
-Run via: python3 .github/scripts/select-e2e-suite.py
+Run via: python3 .github/scripts/select-jobs.py
 Reads CONTEXT_FILE (JSON, from the triggering osac run's artifact),
 GRAPHIFY_DIR (optional, a fetched+updated graphify-out/ directory),
 PR_DIFF (JSON-encoded string, from the calling workflow's own PR-diff
@@ -709,6 +716,100 @@ def _deterministic_reason(files):
     return _sanitize_reason(reason)
 
 
+# Every job category besides the 3 E2E suites above: deterministic-only,
+# no Gemini involved. Each row is (label, path) where path indexes into
+# context["jobs"] (a tuple of keys, e.g. ("unit_tests", "fulfillment_service")),
+# or a sentinel string for the two rows that aren't a plain boolean lookup:
+# "always" (osac-installer's integration-test job has no filter of its own
+# in the real workflow -- it always runs whenever should-run is true) and
+# "or:<group>" (helm-lint's own osac-installer job reacts to ANY of the
+# other helm-lint components, per that job's real `if:` condition -- an OR
+# computed here rather than duplicated as its own filter in jobs-selection.yml).
+JOB_GROUPS = (
+    (
+        "Unit Tests",
+        (
+            ("fulfillment-service", ("unit_tests", "fulfillment_service")),
+            ("osac-metering", ("unit_tests", "osac_metering")),
+            ("osac-metering/adapters", ("unit_tests", "osac_metering_adapters")),
+            ("osac-metering/schema", ("unit_tests", "osac_metering_schema")),
+        ),
+    ),
+    (
+        "Integration Tests",
+        (
+            ("fulfillment-service", ("integration_tests", "fulfillment_service")),
+            ("osac-operator", ("integration_tests", "osac_operator")),
+            ("bare-metal-fulfillment-operator", ("integration_tests", "bare_metal_fulfillment_operator")),
+            ("osac-aap", ("integration_tests", "osac_aap")),
+            ("osac-installer", "always"),
+        ),
+    ),
+    (
+        "Helm Lint",
+        (
+            ("osac-operator", ("helm_lint", "osac_operator")),
+            ("bare-metal-fulfillment-operator", ("helm_lint", "bare_metal_fulfillment_operator")),
+            ("fulfillment-service", ("helm_lint", "fulfillment_service")),
+            ("osac-aap", ("helm_lint", "osac_aap")),
+            ("osac-csi-driver", ("helm_lint", "osac_csi_driver")),
+            ("osac-metering", ("helm_lint", "osac_metering")),
+            ("osac-installer", "or:helm_lint"),
+        ),
+    ),
+    (
+        "Checks & Builds",
+        (
+            ("Check generated code (proto)", ("checks", "proto")),
+            ("fulfillment-service checks", ("checks", "fulfillment_service")),
+            ("Build container image (osac-operator)", ("builds", "osac_operator")),
+            ("Build container image (bare-metal-fulfillment-operator)", ("builds", "bare_metal_fulfillment_operator")),
+            ("ansible-lint (osac-aap)", ("lint", "osac_aap")),
+            ("Darwin keychain tests", ("lint", "darwin_keychain")),
+        ),
+    ),
+)
+
+
+def _job_flag(jobs, path):
+    """Resolve one JOB_GROUPS row's `path` against context["jobs"].
+
+    "always" -- unconditionally relevant, no filter of its own (see
+    JOB_GROUPS' own comment). "or:<group>" -- true if ANY boolean under
+    that group is true. Otherwise `path` is a (group, key) tuple indexing
+    a plain boolean. Missing data (an older context.json schema, or a
+    typo'd path) resolves to False rather than raising -- this is a purely
+    informational comment; a missing field should degrade to "skip" plus an
+    honest reason, never crash the job before DECISION_FILE gets written.
+    """
+    if path == "always":
+        return True
+    if isinstance(path, str) and path.startswith("or:"):
+        group = jobs.get(path[len("or:") :], {})
+        return any(bool(v) for v in group.values())
+    group, key = path
+    return bool(jobs.get(group, {}).get(key, False))
+
+
+def _job_reason(path, relevant):
+    if path == "always":
+        return "Always runs -- deploys and tests the full stack, not scoped to one component's path"
+    if isinstance(path, str) and path.startswith("or:"):
+        return (
+            "A component chart it depends on changed" if relevant else "No dependent component chart changed"
+        )
+    return "Matches this job's path filter" if relevant else "No changed files matched this job's path filter"
+
+
+def render_job_group_table(title, rows, jobs):
+    lines = [f"### {title}", "", "| Job | Decision | Reason |", "|---|---|---|"]
+    for label, path in rows:
+        relevant = _job_flag(jobs, path)
+        decision = "run" if relevant else "skip"
+        lines.append(f"| {label} | {decision} | {_job_reason(path, relevant)} |")
+    return "\n".join(lines)
+
+
 def decide(context, gemini_decisions, gemini_reasons):
     """Merge the deterministic verdict with Gemini's (if it ran). A
     suite the deterministic layer already marked clear always runs at
@@ -780,7 +881,7 @@ def _build_netris_note(netris_files, gemini_netris):
     return "; ".join(parts)
 
 
-def render_decision_table(decision, confidence, ai_status, cost_line=None, netris_note=None):
+def render_decision_table(decision, confidence, ai_status, jobs, cost_line=None, netris_note=None):
     """ai_status is one of:
     - "not_needed" -- nothing in this PR was recognized as relevant to any
       suite at all (e.g. docs-only), so there was nothing for AI to
@@ -803,12 +904,20 @@ def render_decision_table(decision, confidence, ai_status, cost_line=None, netri
     netris_note (see _build_netris_note) is None whenever neither the
     deterministic path check nor Gemini flagged CaaS-Netris/BMaaS-Netris
     relevance -- otherwise shown as a standalone advisory line, deliberately
-    NOT a fifth table row: these suites aren't wired into this POC's
+    NOT a fifth table row: these suites aren't wired into this feature's
     decision table at all (Phase 3 of the rollout plan), so giving them a
     row would misrepresent them as gated the same way VMAAS/CAAS/BMAAS are.
+
+    `jobs` is context["jobs"] (see JOB_GROUPS/_job_flag) -- every job
+    category besides the 3 E2E suites, rendered as its own deterministic-
+    only table, always shown in full regardless of decision (run or skip),
+    so the comment is a complete picture of every real CI job category,
+    not just the ones judged relevant.
     """
     lines = [
-        "# 🧭 E2E Suite Selection (POC, informational only)",
+        "# 🧭 Jobs Selection (informational only)",
+        "",
+        "### E2E Suites",
         "",
         "| Suite | Decision | Source | Reason |",
         "|---|---|---|---|",
@@ -819,20 +928,28 @@ def render_decision_table(decision, confidence, ai_status, cost_line=None, netri
     lines.append("")
     if ai_status == "used":
         conf_text = f"{confidence}%" if confidence is not None else "not reported"
-        lines.append(f"_AI judgment confidence: {conf_text}. This comment is informational only; nothing is gated on it yet._")
+        lines.append(f"_AI judgment confidence: {conf_text}._")
     elif ai_status == "unavailable":
         lines.append(
             "_AI judgment was needed for some files but unavailable for this run "
             "(diff fetch failed, the Gemini call failed, or its response couldn't "
-            "be parsed) -- fell back to safe defaults below. This comment is "
-            "informational only; nothing is gated on it yet._"
+            "be parsed) -- fell back to safe defaults below._"
         )
     else:
-        lines.append("_No AI validation needed -- nothing in this PR was recognized as relevant to any E2E suite. This comment is informational only; nothing is gated on it yet._")
+        lines.append("_No AI validation needed -- nothing in this PR was recognized as relevant to any E2E suite._")
     if netris_note:
         lines.append(f"\n🔌 **Netris/Agentless-Net signal**: {netris_note} -- consider running CaaS Netris / BMaaS Netris manually (not gated by this comment).")
     if cost_line:
         lines.append(f"<sub>{cost_line}</sub>")
+    lines.append("")
+    for title, rows in JOB_GROUPS:
+        lines.append(render_job_group_table(title, rows, jobs))
+        lines.append("")
+    lines.append(
+        "_Every table above is informational only -- nothing here gates whether a job "
+        "actually runs. The E2E Suites table can use AI judgment for ambiguous files; "
+        "every other table is deterministic-only (no AI)._"
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -942,7 +1059,10 @@ def main():
 
     decision = decide(context, gemini_decisions, gemini_reasons)
     netris_note = _build_netris_note(netris_files, gemini_netris)
-    table = render_decision_table(decision, confidence, ai_status=ai_status, cost_line=cost_line, netris_note=netris_note)
+    jobs = context.get("jobs", {})
+    table = render_decision_table(
+        decision, confidence, ai_status=ai_status, jobs=jobs, cost_line=cost_line, netris_note=netris_note
+    )
     with open(DECISION_FILE, "w") as f:
         f.write(table)
     _safe_print(table)

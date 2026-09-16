@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for select-e2e-suite.py's PR-diff handling and Gemini
+"""Regression tests for select-jobs.py's PR-diff handling and Gemini
 verdict parsing.
 
 Focus: the PR diff is the primary signal an AI judgment is based on (unlike
@@ -9,7 +9,7 @@ that (1) the diff actually reaches the prompt content Gemini sees, and (2)
 a diff-fetch failure skips the Gemini call entirely rather than judging
 blind and silently mislabeling an infra hiccup as a confident verdict.
 
-Run directly: python3 .github/scripts/test_select_e2e_suite.py
+Run directly: python3 .github/scripts/test_select_jobs.py
 Stdlib unittest only, consistent with test_ai_diagnose_failure.py -- the
 google-genai import in call_gemini() is deferred/local, so these tests never
 need real Vertex AI credentials.
@@ -28,10 +28,10 @@ os.environ.setdefault("CONTEXT_FILE", "/dev/null")
 os.environ.setdefault("DECISION_FILE", os.path.join(tempfile.gettempdir(), "unused-decision-file.md"))
 
 _SPEC = importlib.util.spec_from_file_location(
-    "select_e2e_suite", os.path.join(os.path.dirname(__file__), "select-e2e-suite.py")
+    "select_jobs", os.path.join(os.path.dirname(__file__), "select-jobs.py")
 )
-select_e2e_suite = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(select_e2e_suite)
+select_jobs = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(select_jobs)
 
 
 def _write_context(tmpdir, **overrides):
@@ -61,11 +61,11 @@ class BuildUserContentDiffTests(unittest.TestCase):
             "netris_relevant_files": [],
         }
         marker = "+def totally_unique_marker_line(): pass"
-        select_e2e_suite.PR_DIFF = json.dumps(f"diff --git a/x b/x\n{marker}\n")
+        select_jobs.PR_DIFF = json.dumps(f"diff --git a/x b/x\n{marker}\n")
         try:
-            parts = select_e2e_suite.build_user_content(context, graphify_context="")
+            parts = select_jobs.build_user_content(context, graphify_context="")
         finally:
-            select_e2e_suite.PR_DIFF = '""'
+            select_jobs.PR_DIFF = '""'
         joined = "\n".join(parts)
         self.assertIn(marker, joined)
 
@@ -77,8 +77,8 @@ class BuildUserContentDiffTests(unittest.TestCase):
             "config_files": [],
             "netris_relevant_files": [],
         }
-        select_e2e_suite.PR_DIFF = ""
-        parts = select_e2e_suite.build_user_content(context, graphify_context="")
+        select_jobs.PR_DIFF = ""
+        parts = select_jobs.build_user_content(context, graphify_context="")
         diff_section = next(p for p in parts if "## PR diff" in p)
         self.assertNotIn("diff --git", diff_section)
 
@@ -88,27 +88,32 @@ class MainSkipsGeminiWithoutDiffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             context_path = _write_context(tmpdir)
             decision_path = os.path.join(tmpdir, "decision.md")
-            select_e2e_suite.CONTEXT_FILE = context_path
-            select_e2e_suite.DECISION_FILE = decision_path
-            select_e2e_suite.PR_DIFF_AVAILABLE = False
-            with mock.patch.object(select_e2e_suite, "call_gemini") as mock_call_gemini:
-                select_e2e_suite.main()
+            select_jobs.CONTEXT_FILE = context_path
+            select_jobs.DECISION_FILE = decision_path
+            select_jobs.PR_DIFF_AVAILABLE = False
+            with mock.patch.object(select_jobs, "call_gemini") as mock_call_gemini:
+                select_jobs.main()
             mock_call_gemini.assert_not_called()
             with open(decision_path) as f:
                 rendered = f.read()
             self.assertIn("AI judgment was needed for some files but unavailable", rendered)
-            # Fails open toward "sanity" for every suite -- never a silent
-            # "skip" just because the diff fetch happened to fail.
-            self.assertNotIn("| skip |", rendered)
+            # Fails open toward "sanity" for every E2E suite -- never a
+            # silent "skip" just because the diff fetch happened to fail.
+            # Scoped to the E2E Suites section only: the deterministic
+            # Jobs Selection tables below it legitimately show "skip" rows
+            # (this context has no unit-tests/integration-tests/etc. files
+            # touched at all), which isn't the same fail-open contract.
+            e2e_section = rendered.split("### Unit Tests")[0]
+            self.assertNotIn("| skip |", e2e_section)
 
     def test_diff_available_invokes_gemini(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             context_path = _write_context(tmpdir)
             decision_path = os.path.join(tmpdir, "decision.md")
-            select_e2e_suite.CONTEXT_FILE = context_path
-            select_e2e_suite.DECISION_FILE = decision_path
-            select_e2e_suite.PR_DIFF_AVAILABLE = True
-            select_e2e_suite.PR_DIFF = json.dumps("diff --git a/x b/x\n+print(1)\n")
+            select_jobs.CONTEXT_FILE = context_path
+            select_jobs.DECISION_FILE = decision_path
+            select_jobs.PR_DIFF_AVAILABLE = True
+            select_jobs.PR_DIFF = json.dumps("diff --git a/x b/x\n+print(1)\n")
             fake_response = (
                 "VMAAS: skip | no evidence\n"
                 "CAAS: skip | no evidence\n"
@@ -116,8 +121,8 @@ class MainSkipsGeminiWithoutDiffTests(unittest.TestCase):
                 "NETRIS: no | no evidence\n"
                 "CONFIDENCE: 80"
             )
-            with mock.patch.object(select_e2e_suite, "call_gemini", return_value=fake_response) as mock_call_gemini:
-                select_e2e_suite.main()
+            with mock.patch.object(select_jobs, "call_gemini", return_value=fake_response) as mock_call_gemini:
+                select_jobs.main()
             mock_call_gemini.assert_called_once()
             # The diff actually reached the content passed to Gemini.
             (call_args, _), = (mock_call_gemini.call_args,)
@@ -135,7 +140,7 @@ class ParseGeminiDecisionsTerminalBlockTests(unittest.TestCase):
             "NETRIS: no | no evidence found\n"
             "CONFIDENCE: 90"
         )
-        decisions, reasons, netris, confidence = select_e2e_suite.parse_gemini_decisions(text)
+        decisions, reasons, netris, confidence = select_jobs.parse_gemini_decisions(text)
         self.assertEqual(decisions["vmaas"], "sanity")
         self.assertEqual(confidence, 90)
         self.assertFalse(netris["relevant"])
@@ -158,9 +163,37 @@ class ParseGeminiDecisionsTerminalBlockTests(unittest.TestCase):
             "CONFIDENCE: 50\n"
             "one trailing line that isn't part of any block"
         )
-        decisions, reasons, netris, confidence = select_e2e_suite.parse_gemini_decisions(text)
+        decisions, reasons, netris, confidence = select_jobs.parse_gemini_decisions(text)
         self.assertEqual(decisions, {})
         self.assertIsNone(confidence)
+
+
+class JobFlagTests(unittest.TestCase):
+    def test_plain_boolean_lookup(self):
+        jobs = {"unit_tests": {"fulfillment_service": True, "osac_metering": False}}
+        self.assertTrue(select_jobs._job_flag(jobs, ("unit_tests", "fulfillment_service")))
+        self.assertFalse(select_jobs._job_flag(jobs, ("unit_tests", "osac_metering")))
+
+    def test_missing_data_defaults_to_false_not_a_crash(self):
+        self.assertFalse(select_jobs._job_flag({}, ("unit_tests", "fulfillment_service")))
+
+    def test_always_sentinel_is_always_true(self):
+        self.assertTrue(select_jobs._job_flag({}, "always"))
+
+    def test_or_sentinel_true_if_any_group_member_true(self):
+        jobs = {"helm_lint": {"osac_operator": False, "osac_aap": True}}
+        self.assertTrue(select_jobs._job_flag(jobs, "or:helm_lint"))
+
+    def test_or_sentinel_false_if_all_group_members_false(self):
+        jobs = {"helm_lint": {"osac_operator": False, "osac_aap": False}}
+        self.assertFalse(select_jobs._job_flag(jobs, "or:helm_lint"))
+
+    def test_render_job_group_table_shows_every_row_regardless_of_decision(self):
+        jobs = {"unit_tests": {"fulfillment_service": True, "osac_metering": False}}
+        rows = (("fulfillment-service", ("unit_tests", "fulfillment_service")), ("osac-metering", ("unit_tests", "osac_metering")))
+        table = select_jobs.render_job_group_table("Unit Tests", rows, jobs)
+        self.assertIn("| fulfillment-service | run |", table)
+        self.assertIn("| osac-metering | skip |", table)
 
 
 if __name__ == "__main__":
