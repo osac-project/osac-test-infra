@@ -237,7 +237,17 @@ class JobFlagTests(unittest.TestCase):
             ("Checks & Builds", "ansible-lint (osac-aap)"),
             ("Checks & Builds", "Darwin keychain tests"),
         }
-        actual_rows = {(title, label) for title, rows in select_jobs.JOB_GROUPS for label, _ in rows}
+        raw_rows = [(title, label) for title, rows in select_jobs.JOB_GROUPS for label, _ in rows]
+        # Counted BEFORE deduplication: a set comprehension alone would
+        # silently collapse a genuine duplicate (title, label) row (e.g. a
+        # copy-paste mistake adding the same label twice, possibly pointing
+        # at two DIFFERENT paths) down to one entry, and the set-equality
+        # check below would still pass since expected_rows also lists it
+        # once -- masking a real bug where render_job_group_table (which
+        # iterates JOB_GROUPS' rows as a list, not a set) would render that
+        # label twice in the actual posted comment.
+        self.assertEqual(len(raw_rows), len(expected_rows))
+        actual_rows = set(raw_rows)
         self.assertEqual(actual_rows, expected_rows)
 
         # Every leaf True: with a real payload shaped like this, EVERY row
