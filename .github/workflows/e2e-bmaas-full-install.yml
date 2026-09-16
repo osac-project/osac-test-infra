@@ -189,11 +189,9 @@ jobs:
             echo "::error::Failed to resolve SHA for ${TEST_REPOSITORY}@${TEST_REF}"
             exit 1
           fi
-          SHORT_SHA="${SHA:0:7}"
-          echo "Pinned ${TEST_REPOSITORY}@${TEST_REF} → ${SHA} (short: ${SHORT_SHA})"
+          echo "Pinned ${TEST_REPOSITORY}@${TEST_REF} → ${SHA}"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "PINNED_OSAC_SHA=${SHA}" >> "$GITHUB_ENV"
-          echo "PINNED_OSAC_SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
 
       - name: Overlay tests from osac mono-repo
         env:
@@ -496,24 +494,37 @@ jobs:
             echo "::endgroup::"
           done
 
-      # When no components are built from source, pull the published
-      # fulfillment-service image at the pinned SHA tag and extract
-      # the CLI binary — same pattern used by the component-build loop
-      # above, but against the immutable sha-<short> tag instead of a
-      # locally-built image (OSAC-5356).
-      - name: Pin CLI from fulfillment-service image
+      # When no components are built from source, build the
+      # fulfillment-service image at the pinned SHA to extract the CLI
+      # binary — guarantees version-matched parity between the service
+      # and the CLI used by tests (OSAC-5356).  Builds from source
+      # rather than pulling a pre-built registry image so there is no
+      # dependency on publish-image CI timing.
+      - name: Build CLI from osac source
         if: steps.resolve-sha.outputs.sha != ''
+        env:
+          TEST_REPOSITORY: ${{ inputs.test-repository }}
         run: |
-          FS_IMAGE="ghcr.io/osac-project/fulfillment-service:sha-${PINNED_OSAC_SHORT_SHA}"
-          echo "Pulling fulfillment-service image: ${FS_IMAGE}"
-          podman pull "${FS_IMAGE}"
+          echo "::group::Build fulfillment-service for CLI extraction"
+          FS_SRC="$RUNNER_TEMP/osac-cli-build-src"
+          git init "${FS_SRC}"
+          git -C "${FS_SRC}" fetch --depth 1 \
+            "https://github.com/${TEST_REPOSITORY}.git" "${PINNED_OSAC_SHA}"
+          git -C "${FS_SRC}" checkout FETCH_HEAD
 
-          cli_container=$(podman create "${FS_IMAGE}")
+          FS_TAG="localhost/fulfillment-service-cli:${GITHUB_RUN_ID}"
+          podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG \
+            -t "${FS_TAG}" \
+            -f "${FS_SRC}/fulfillment-service/Containerfile" \
+            "${FS_SRC}"
+
+          cli_container=$(podman create "${FS_TAG}")
           trap 'podman rm "${cli_container}" >/dev/null 2>&1 || true' EXIT
           podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
           chmod +x "$RUNNER_TEMP/osac-cli-bin"
           echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
-          echo "Extracted CLI from ${FS_IMAGE}"
+          echo "Extracted CLI from locally-built image at ${PINNED_OSAC_SHA}"
+          echo "::endgroup::"
 
       - name: Build test image
         env:
