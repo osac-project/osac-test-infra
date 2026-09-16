@@ -414,11 +414,24 @@ def call_gemini(contents):
     global _last_usage_metadata
     _last_usage_metadata = []
     for attempt in range(2):
+        # Set only once generate_content() is actually invoked -- an import
+        # or client-construction failure never reached the network at all
+        # (guaranteed zero cost, not worth an entry), but a raised exception
+        # AFTER that point (network drop, timeout, API error) may have hit
+        # Vertex AI's backend regardless of whether this process ever saw a
+        # response -- billing happens server-side, not on receipt. Appending
+        # None for that case (rather than nothing) lets aggregate_cost's own
+        # any_missing/complete=False machinery flag "possibly billed, cost
+        # unknown" if a LATER retry then succeeds with real usage data,
+        # instead of silently presenting that later attempt's total as if it
+        # were the complete, only cost incurred this run.
+        dispatched = False
         try:
             from google import genai
             from google.genai import types
 
             client = genai.Client(vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
+            dispatched = True
             resp = client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=contents,
@@ -450,6 +463,8 @@ def call_gemini(contents):
                 file=sys.stderr,
             )
         except Exception as exc:  # noqa: BLE001 -- must never crash the job
+            if dispatched:
+                _last_usage_metadata.append(None)
             _safe_print(f"WARNING: Gemini call failed (attempt {attempt + 1}/2): {exc!r}", file=sys.stderr)
         if attempt == 0:
             time.sleep(3)

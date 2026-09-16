@@ -22,6 +22,7 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("CONTEXT_FILE", "/dev/null")
@@ -205,6 +206,94 @@ class MainSkipsGeminiWithoutDiffTests(unittest.TestCase):
             (call_args, _), = (mock_call_gemini.call_args,)
             passed_content = "\n".join(call_args[0])
             self.assertIn("print(1)", passed_content)
+
+
+class CallGeminiUsageTrackingTests(unittest.TestCase):
+    """call_gemini()'s own generate_content dispatch/retry tracking --
+    specifically, whether a failed attempt AFTER the network call was
+    actually dispatched records a None usage-metadata entry (so
+    aggregate_cost's own any_missing/complete=False machinery can flag
+    "possibly billed, cost unknown" if a later retry then succeeds), while
+    an import/client-construction failure (never reached the network,
+    guaranteed zero cost) records nothing at all. google.genai's import is
+    deferred/local in call_gemini, so these tests inject fake `google`/
+    `google.genai`/`google.genai.types` modules via sys.modules -- same
+    approach as test_ai_diagnose_failure.py's own CallGeminiFallbackTests,
+    adapted to select-jobs.py's direct client.models.generate_content(...)
+    call (no chat object).
+    """
+
+    def setUp(self):
+        self.sleep_patcher = mock.patch.object(select_jobs.time, "sleep")
+        self.sleep_patcher.start()
+        self.addCleanup(self.sleep_patcher.stop)
+
+        # _last_usage_metadata is a module-level global that call_gemini()
+        # only resets as a side effect of actually running -- other test
+        # classes mock call_gemini entirely (never running the real
+        # function, never resetting it) and call main() trusting it starts
+        # empty, matching real production behavior where call_gemini always
+        # runs for real. Reset it after every test here so this class's own
+        # real invocations never leak into them.
+        self.addCleanup(lambda: setattr(select_jobs, "_last_usage_metadata", []))
+
+        self._responses = []
+        self._client_init_error = None
+        outer = self
+
+        class FakeModels:
+            def generate_content(_self, model, contents, config):  # noqa: ANN001 -- matches genai's own signature
+                item = outer._responses.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
+        class FakeClient:
+            def __init__(self, vertexai, project, location):  # noqa: ANN001
+                if outer._client_init_error:
+                    raise outer._client_init_error
+                self.models = FakeModels()
+
+        fake_types = SimpleNamespace(
+            GenerateContentConfig=lambda **kw: SimpleNamespace(**kw),
+            ThinkingConfig=lambda **kw: SimpleNamespace(**kw),
+        )
+        fake_genai = SimpleNamespace(Client=FakeClient, types=fake_types)
+        fake_google = SimpleNamespace(genai=fake_genai)
+        self.modules_patcher = mock.patch.dict(
+            sys.modules,
+            {"google": fake_google, "google.genai": fake_genai, "google.genai.types": fake_types},
+        )
+        self.modules_patcher.start()
+        self.addCleanup(self.modules_patcher.stop)
+
+    def test_dispatched_failure_then_success_records_none_then_real_usage(self):
+        real_usage = SimpleNamespace(
+            prompt_token_count=100, candidates_token_count=20, tool_use_prompt_token_count=0, thoughts_token_count=0
+        )
+        self._responses = [
+            RuntimeError("network dropped mid-call"),
+            SimpleNamespace(text="real answer", usage_metadata=real_usage, candidates=[]),
+        ]
+        result = select_jobs.call_gemini(["prompt"])
+        self.assertEqual(result, "real answer")
+        self.assertEqual(select_jobs._last_usage_metadata, [None, real_usage])
+        _cost, _in_tok, _out_tok, complete = select_jobs.aggregate_cost(
+            select_jobs._last_usage_metadata, select_jobs.GEMINI_MODEL
+        )
+        self.assertFalse(complete)  # attempt 1's real (possibly billed) cost is unknown
+
+    def test_client_construction_failure_records_nothing(self):
+        # A failure before generate_content is ever called (the fake
+        # Client's own constructor raising, standing in for a real
+        # import or client-construction failure) never reached the
+        # network -- guaranteed zero cost, so no entry should be recorded
+        # for it at all, on EITHER attempt (both retries hit the same
+        # client-construction failure here).
+        self._client_init_error = RuntimeError("bad WIF credentials")
+        result = select_jobs.call_gemini(["prompt"])
+        self.assertIsNone(result)
+        self.assertEqual(select_jobs._last_usage_metadata, [])
 
 
 class ParseGeminiDecisionsTerminalBlockTests(unittest.TestCase):
