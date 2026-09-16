@@ -718,30 +718,37 @@ def _deterministic_reason(files):
 
 # Every job category besides the 3 E2E suites above: deterministic-only,
 # no Gemini involved. Each row is (label, path) where path indexes into
-# context["jobs"] (a tuple of keys, e.g. ("unit_tests", "fulfillment_service")),
-# or a sentinel string for the two rows that aren't a plain boolean lookup:
+# context["jobs"] (a tuple of keys, e.g. ("helm_lint", "fulfillment_service")),
+# or a sentinel string for rows that aren't a per-component boolean lookup:
+# "code" (unit-tests.yml/integration-tests.yml have NO per-component scoping
+# of their own today -- every job in both files is gated only by their
+# shared, identical `code` filter, so every Unit Tests/Integration Tests row
+# below uses that SAME top-level boolean; a per-component filter here would
+# report a narrower "would run" than what actually happens, e.g. an
+# osac-csi-driver-only change genuinely runs every one of these jobs today),
 # "always" (osac-installer's integration-test job has no filter of its own
-# in the real workflow -- it always runs whenever should-run is true) and
-# "or:<group>" (helm-lint's own osac-installer job reacts to ANY of the
-# other helm-lint components, per that job's real `if:` condition -- an OR
-# computed here rather than duplicated as its own filter in jobs-selection.yml).
+# either, but for a different reason -- it's a deliberate full-stack smoke
+# test, not an unscoped-by-omission one), and "or:<group>" (helm-lint's own
+# osac-installer job reacts to ANY of the other helm-lint components, per
+# that job's real `if:` condition -- an OR computed here rather than
+# duplicated as its own filter in jobs-selection.yml).
 JOB_GROUPS = (
     (
         "Unit Tests",
         (
-            ("fulfillment-service", ("unit_tests", "fulfillment_service")),
-            ("osac-metering", ("unit_tests", "osac_metering")),
-            ("osac-metering/adapters", ("unit_tests", "osac_metering_adapters")),
-            ("osac-metering/schema", ("unit_tests", "osac_metering_schema")),
+            ("fulfillment-service", "code"),
+            ("osac-metering", "code"),
+            ("osac-metering/adapters", "code"),
+            ("osac-metering/schema", "code"),
         ),
     ),
     (
         "Integration Tests",
         (
-            ("fulfillment-service", ("integration_tests", "fulfillment_service")),
-            ("osac-operator", ("integration_tests", "osac_operator")),
-            ("bare-metal-fulfillment-operator", ("integration_tests", "bare_metal_fulfillment_operator")),
-            ("osac-aap", ("integration_tests", "osac_aap")),
+            ("fulfillment-service", "code"),
+            ("osac-operator", "code"),
+            ("bare-metal-fulfillment-operator", "code"),
+            ("osac-aap", "code"),
             ("osac-installer", "always"),
         ),
     ),
@@ -775,15 +782,20 @@ def _job_flag(jobs, path):
     """Resolve one JOB_GROUPS row's `path` against context["jobs"].
 
     "always" -- unconditionally relevant, no filter of its own (see
-    JOB_GROUPS' own comment). "or:<group>" -- true if ANY boolean under
-    that group is true. Otherwise `path` is a (group, key) tuple indexing
-    a plain boolean. Missing data (an older context.json schema, or a
-    typo'd path) resolves to False rather than raising -- this is a purely
-    informational comment; a missing field should degrade to "skip" plus an
-    honest reason, never crash the job before DECISION_FILE gets written.
+    JOB_GROUPS' own comment). "code" -- the single shared boolean every
+    Unit Tests/Integration Tests row uses (real per-component scoping
+    doesn't exist in those two workflows today). "or:<group>" -- true if
+    ANY boolean under that group is true. Otherwise `path` is a (group, key)
+    tuple indexing a plain boolean. Missing data (an older context.json
+    schema, or a typo'd path) resolves to False rather than raising -- this
+    is a purely informational comment; a missing field should degrade to
+    "skip" plus an honest reason, never crash the job before DECISION_FILE
+    gets written.
     """
     if path == "always":
         return True
+    if path == "code":
+        return bool(jobs.get("code", False))
     if isinstance(path, str) and path.startswith("or:"):
         group = jobs.get(path[len("or:") :], {})
         return any(bool(v) for v in group.values())
@@ -794,6 +806,12 @@ def _job_flag(jobs, path):
 def _job_reason(path, relevant):
     if path == "always":
         return "Always runs -- deploys and tests the full stack, not scoped to one component's path"
+    if path == "code":
+        return (
+            "This workflow has no per-component scoping -- runs for any non-doc change"
+            if relevant
+            else "No non-doc changes in this PR (this workflow has no per-component scoping)"
+        )
     if isinstance(path, str) and path.startswith("or:"):
         return (
             "A component chart it depends on changed" if relevant else "No dependent component chart changed"
@@ -801,9 +819,24 @@ def _job_reason(path, relevant):
     return "Matches this job's path filter" if relevant else "No changed files matched this job's path filter"
 
 
-def render_job_group_table(title, rows, jobs):
+def render_job_group_table(title, rows, jobs, jobs_available):
+    """`jobs_available` is False only when context.json has no "jobs" key
+    at all (e.g. a caller on an older schema, or a rollout window where
+    jobs-selection.yml and select-jobs.py briefly disagree on the context
+    shape across the two repos) -- distinct from a present-but-empty jobs
+    dict, which `_job_flag` already treats as "every specific flag missing,
+    default False" (a normal, honest "nothing matched" for a real payload).
+    Silently reporting "skip" with a "no changed files matched" reason for
+    EVERY row in that unavailable case would misrepresent missing data as a
+    confident, checked verdict. The "always" sentinel is unaffected either
+    way -- it's a hardcoded truth (osac-installer's job) that never depended
+    on `jobs` data in the first place.
+    """
     lines = [f"### {title}", "", "| Job | Decision | Reason |", "|---|---|---|"]
     for label, path in rows:
+        if not jobs_available and path != "always":
+            lines.append(f"| {label} | unknown | Jobs Selection data unavailable for this run (older context schema) |")
+            continue
         relevant = _job_flag(jobs, path)
         decision = "run" if relevant else "skip"
         lines.append(f"| {label} | {decision} | {_job_reason(path, relevant)} |")
@@ -881,7 +914,7 @@ def _build_netris_note(netris_files, gemini_netris):
     return "; ".join(parts)
 
 
-def render_decision_table(decision, confidence, ai_status, jobs, cost_line=None, netris_note=None):
+def render_decision_table(decision, confidence, ai_status, jobs, jobs_available, cost_line=None, netris_note=None):
     """ai_status is one of:
     - "not_needed" -- nothing in this PR was recognized as relevant to any
       suite at all (e.g. docs-only), so there was nothing for AI to
@@ -943,7 +976,7 @@ def render_decision_table(decision, confidence, ai_status, jobs, cost_line=None,
         lines.append(f"<sub>{cost_line}</sub>")
     lines.append("")
     for title, rows in JOB_GROUPS:
-        lines.append(render_job_group_table(title, rows, jobs))
+        lines.append(render_job_group_table(title, rows, jobs, jobs_available))
         lines.append("")
     lines.append(
         "_Every table above is informational only -- nothing here gates whether a job "
@@ -1059,9 +1092,20 @@ def main():
 
     decision = decide(context, gemini_decisions, gemini_reasons)
     netris_note = _build_netris_note(netris_files, gemini_netris)
+    # Distinct from "jobs" itself being empty (a real, honest payload where
+    # every specific flag happens to default False) -- see
+    # render_job_group_table's own docstring for why this needs to be a
+    # separate signal.
+    jobs_available = "jobs" in context
     jobs = context.get("jobs", {})
     table = render_decision_table(
-        decision, confidence, ai_status=ai_status, jobs=jobs, cost_line=cost_line, netris_note=netris_note
+        decision,
+        confidence,
+        ai_status=ai_status,
+        jobs=jobs,
+        jobs_available=jobs_available,
+        cost_line=cost_line,
+        netris_note=netris_note,
     )
     with open(DECISION_FILE, "w") as f:
         f.write(table)

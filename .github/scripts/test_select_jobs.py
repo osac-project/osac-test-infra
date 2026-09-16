@@ -191,9 +191,23 @@ class JobFlagTests(unittest.TestCase):
     def test_render_job_group_table_shows_every_row_regardless_of_decision(self):
         jobs = {"unit_tests": {"fulfillment_service": True, "osac_metering": False}}
         rows = (("fulfillment-service", ("unit_tests", "fulfillment_service")), ("osac-metering", ("unit_tests", "osac_metering")))
-        table = select_jobs.render_job_group_table("Unit Tests", rows, jobs)
+        table = select_jobs.render_job_group_table("Unit Tests", rows, jobs, jobs_available=True)
         self.assertIn("| fulfillment-service | run |", table)
         self.assertIn("| osac-metering | skip |", table)
+
+    def test_jobs_unavailable_reports_unknown_not_a_false_skip(self):
+        # An empty-but-present jobs dict (a real payload where every
+        # specific flag happens to be False) must NOT be confused with
+        # jobs_available=False (no "jobs" key in context.json at all, e.g.
+        # an older schema) -- the former is an honest "nothing matched",
+        # the latter must never silently render as a confident "skip".
+        rows = (("fulfillment-service", ("unit_tests", "fulfillment_service")), ("osac-installer", "always"))
+        table = select_jobs.render_job_group_table("Integration Tests", rows, {}, jobs_available=False)
+        self.assertIn("| fulfillment-service | unknown | Jobs Selection data unavailable", table)
+        self.assertNotIn("| fulfillment-service | skip |", table)
+        # The "always" sentinel is unaffected -- it never depended on the
+        # jobs map in the first place.
+        self.assertIn("| osac-installer | run |", table)
 
 
 if __name__ == "__main__":
