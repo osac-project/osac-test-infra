@@ -445,11 +445,19 @@ jobs:
               podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
             fi
 
-            # Build OSAC CLI from source when this component is fulfillment-service.
-            # Keyed off imageKey (not a repo-name substring), so this works whether
-            # repo is fulfillment-service's own repo or a monorepo like osac-project/osac.
+            # Extract the osac CLI baked into the fulfillment-service image
+            # (see osac-project/osac's fulfillment-service/Containerfile)
+            # instead of building it from source separately -- guarantees
+            # byte-for-byte parity with the image actually under test, no
+            # separate build step or Go toolchain needed for this. Keyed
+            # off imageKey (not a repo-name substring), so this works
+            # whether repo is fulfillment-service's own repo or a
+            # monorepo like osac-project/osac.
             if [[ "${image_key}" == "service.images.service" ]]; then
-              (cd "${component_dir}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
+              cli_container=$(podman create "${tag}")
+              trap 'podman rm "${cli_container}" >/dev/null 2>&1 || true' EXIT
+              podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
+              chmod +x "$RUNNER_TEMP/osac-cli-bin"
               echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
             fi
 

@@ -275,14 +275,6 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
           chmod 600 "$RUNNER_TEMP/kubeconfig"
 
-      - name: Build test image
-        env:
-          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
-          OSAC_VERSION: ${{ inputs.osac-cli-version }}
-        run: |
-          podman build --no-cache --build-arg OSAC_VERSION="${OSAC_VERSION}" \
-            -t "${E2E_IMAGE}" -f Containerfile .
-
       - name: Deploy OSAC
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
@@ -371,6 +363,93 @@ jobs:
               --timeout 10m \
               --wait
           fi
+
+      # Resolve the fulfillment-service image actually deployed above (an
+      # explicit override if one was given, otherwise whatever the
+      # installer chart's own default values.yaml says at the checked-out
+      # installer-ref) and extract the osac CLI from it -- this suite
+      # never builds fulfillment-service locally itself (unlike the
+      # full-install suites), so without this it would otherwise fall
+      # through to the Containerfile's stale "latest GitHub release"
+      # download fallback.
+      - name: Resolve deployed fulfillment-service image
+        id: resolve-image
+        env:
+          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          set -euo pipefail
+          overrides="${IMAGE_OVERRIDES}"
+          [[ -n "${overrides}" ]] || overrides="{}"
+          override=$(jq -r '."service.images.service" // empty' <<<"${overrides}")
+          if [[ -n "${override}" ]]; then
+            image="${override}"
+          else
+            image=$(yq -r '.service.images.service' "$RUNNER_TEMP/osac-installer/charts/osac/values.yaml")
+          fi
+          if [[ -z "${image}" || "${image}" == "null" ]]; then
+            echo "::error::Could not resolve the deployed fulfillment-service image" >&2
+            exit 1
+          fi
+
+          # Prefer the exact digest the cluster actually pulled and is
+          # running (grpc-server's pod, labeled by charts/service/templates/
+          # grpc-server/deployment.yaml) over the tag reference above --
+          # immune to that tag being repointed between deploy and
+          # extraction, and confirms the CLI matches what's genuinely
+          # running rather than just what was requested. This is a
+          # refinement on top of the tag resolution, not a replacement for
+          # it: fall back to the tag if the live pod can't be queried, or
+          # its imageID doesn't look like a real digest reference, rather
+          # than hard-failing the whole step over it.
+          # Filter to a Ready, non-terminating pod (a rolling update can
+          # briefly leave an old pod matching this label while it winds
+          # down) and select the container by name (the deployment's only
+          # container is named "grpc-server", not "fulfillment-service")
+          # rather than trusting index 0 for either.
+          pod_image_id=$(oc get pods -n "${INSTALLER_NAMESPACE}" -l app=fulfillment-grpc-server -o json 2>/dev/null \
+            | jq -r '
+                [.items[]
+                  | select(.metadata.deletionTimestamp == null)
+                  | select([.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length > 0)
+                ][0].status.containerStatuses[]?
+                | select(.name == "grpc-server")
+                | .imageID
+              ' 2>/dev/null || true)
+          pod_image_id="${pod_image_id#docker-pullable://}"
+          if [[ -n "${pod_image_id}" && "${pod_image_id}" == *"@sha256:"* ]]; then
+            echo "Using live deployed digest ${pod_image_id} (requested: ${image})"
+            image="${pod_image_id}"
+          else
+            echo "::warning::Could not resolve a live pod digest for fulfillment-service (label app=fulfillment-grpc-server in namespace ${INSTALLER_NAMESPACE}) -- falling back to the requested reference ${image}"
+          fi
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract OSAC CLI
+        id: cli
+        uses: ./.github/actions/extract-osac-cli
+        with:
+          image: ${{ steps.resolve-image.outputs.image }}
+
+      # Moved after Deploy OSAC/Extract OSAC CLI (was previously built
+      # first) so it can bake in the just-extracted, version-matched CLI
+      # via OSAC_CLI_BIN instead of always falling through to the
+      # Containerfile's OSAC_VERSION/latest-GitHub-release fallback.
+      - name: Build test image
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+          OSAC_VERSION: ${{ inputs.osac-cli-version }}
+          OSAC_CLI_BIN: ${{ steps.cli.outputs.path }}
+        run: |
+          set -euo pipefail
+          BUILD_ARGS=("--build-arg" "OSAC_VERSION=${OSAC_VERSION}")
+          if [[ -n "${OSAC_CLI_BIN:-}" ]] && [[ -f "${OSAC_CLI_BIN}" ]]; then
+            cp "${OSAC_CLI_BIN}" ./osac-cli-bin
+            BUILD_ARGS=("--build-arg" "OSAC_CLI_BIN=osac-cli-bin")
+          fi
+          podman build --no-cache "${BUILD_ARGS[@]}" -t "${E2E_IMAGE}" -f Containerfile .
+          rm -f ./osac-cli-bin
 
       - name: Run E2E tests
         id: test

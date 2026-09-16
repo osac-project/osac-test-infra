@@ -1,0 +1,72 @@
+---
+name: Extract OSAC CLI
+description: >-
+  Extract the osac CLI binary from a fulfillment-service container image
+  (baked into the image alongside the service binary -- see
+  osac-project/osac's fulfillment-service/Containerfile) rather than
+  building it from source or downloading a GitHub release. Guarantees the
+  CLI matches whatever fulfillment-service image is actually being tested,
+  with no separate release mechanism to fall out of sync with.
+
+inputs:
+  image:
+    description: "Fully-qualified fulfillment-service image reference to extract the CLI from (e.g. ghcr.io/osac-project/fulfillment-service:sha-abc1234)"
+    required: true
+  output-path:
+    description: "Where to write the extracted binary"
+    required: false
+    default: "${{ runner.temp }}/osac-cli-bin"
+
+outputs:
+  path:
+    description: "Path to the extracted, executable osac CLI binary"
+    value: ${{ steps.extract.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: extract
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: |
+        set -euo pipefail
+
+        # Independently verify presence/absence of the binary first, rather
+        # than inferring "missing" from a podman cp failure -- a cp failure
+        # can just as easily mean a bad OUTPUT_PATH, no disk space, or a
+        # runtime hiccup, none of which should be silently treated as "this
+        # image predates the CLI." A missing /usr/local/bin/osac (genuinely
+        # true for pre-#1015 images) is the ONLY case that takes the
+        # fallback branch -- callers already have their own OSAC_VERSION
+        # -based fallback for exactly that case, gated on this output being
+        # a real, existing file.
+        if ! podman run --rm --entrypoint sh "${IMAGE}" -c 'test -f /usr/local/bin/osac' >/dev/null 2>&1; then
+          echo "::warning::No /usr/local/bin/osac found in ${IMAGE} -- this image may predate the CLI being baked in (see osac-project/osac's fulfillment-service/Containerfile). Falling back to the caller's own default CLI resolution."
+          echo "path=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # The binary exists in the image, so from here any failure is a
+        # real error (bad destination, disk full, runtime issue) and must
+        # propagate -- not be swallowed as "CLI missing".
+        if [[ -e "${OUTPUT_PATH}" && ! -f "${OUTPUT_PATH}" ]]; then
+          echo "::error::output-path (${OUTPUT_PATH}) already exists and is not a regular file"
+          exit 1
+        fi
+
+        container_id=$(podman create "${IMAGE}")
+        trap 'podman rm "${container_id}" >/dev/null 2>&1 || true' EXIT
+        podman cp "${container_id}:/usr/local/bin/osac" "${OUTPUT_PATH}"
+
+        # A directory destination is podman cp's default behavior when
+        # OUTPUT_PATH's parent looks like one -- guard against silently
+        # reporting a directory as the "extracted binary" path.
+        if [[ ! -f "${OUTPUT_PATH}" ]]; then
+          echo "::error::podman cp reported success but ${OUTPUT_PATH} is not a regular file (is output-path a directory?)"
+          exit 1
+        fi
+
+        chmod +x "${OUTPUT_PATH}"
+        echo "path=${OUTPUT_PATH}" >> "$GITHUB_OUTPUT"
