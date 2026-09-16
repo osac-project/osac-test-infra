@@ -33,7 +33,9 @@ Reads CONTEXT_FILE (JSON, from the triggering osac run's artifact),
 GRAPHIFY_DIR (optional, a fetched+updated graphify-out/ directory),
 PR_DIFF (JSON-encoded string, from the calling workflow's own PR-diff
 fetch), GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION (from vertex-ai-auth).
-Writes DECISION_FILE (markdown, for the calling workflow to post as-is).
+Writes DECISION_FILE (markdown, for the calling workflow to post as-is)
+and, optionally, JOBS_SELECTION_JSON_FILE (the same decision, structured,
+for the calling workflow to upload as a machine-readable artifact).
 """
 from __future__ import annotations
 
@@ -53,6 +55,13 @@ PR_DIFF = os.environ.get("PR_DIFF", '""')
 # silently discarding every Gemini verdict for no reason.
 PR_DIFF_AVAILABLE = os.environ.get("PR_DIFF_AVAILABLE", "true").lower() == "true"
 DECISION_FILE = os.environ["DECISION_FILE"]
+# Optional -- set by callers that want the full structured decision (every
+# suite/job row, AI confidence, cost/token counts, model) as a standalone
+# machine-readable artifact, mirroring ai-diagnose-failure.py's own
+# DIAGNOSIS_JSON_FILE/build_diagnosis_json pattern. The posted comment
+# (DECISION_FILE) only ever shows a PR's LATEST run; this survives per-run
+# for later querying or aggregation without re-scraping comment markdown.
+JOBS_SELECTION_JSON_FILE = os.environ.get("JOBS_SELECTION_JSON_FILE", "")
 # Moved off gemini-2.5-pro (retires 2026-10-16) to gemini-3.1-pro-preview,
 # mirroring ai-diagnose-failure.py's own already-live migration -- see that
 # script's identical GEMINI_MODEL comment for the full reasoning. Kept
@@ -220,9 +229,16 @@ def aggregate_cost(usage_metadata_list, model):
 
 
 def format_cost_line(cost_usd, input_tokens, output_tokens, model, complete=True):
-    """Render aggregate_cost's numbers as a human-readable line. A bare
-    "$0.0000" for the unavailable cases would look like a real (negligible)
-    cost -- say so plainly instead of silently defaulting to 0.
+    """Render aggregate_cost's numbers as a human-readable line -- ALWAYS
+    shown in the posted comment (see main()), not only when Gemini actually
+    ran, so the model this run is configured to use is always visible too.
+
+    No usage data at all (Gemini was never invoked -- most runs, since most
+    PRs need no AI judgment at all -- or every attempt failed before
+    returning usage data) renders as a real, explicit $0.0000 rather than
+    "unavailable": this line is no longer conditional on AI having run, so
+    "unavailable" for the overwhelmingly common case would read as if
+    something had gone wrong on every single PR.
 
     complete=False (at least one attempt's usage data was missing while
     another attempt's wasn't) labels the line as partial rather than
@@ -230,7 +246,7 @@ def format_cost_line(cost_usd, input_tokens, output_tokens, model, complete=True
     as if it were the full picture.
     """
     if input_tokens is None or output_tokens is None:
-        return "Estimated cost: unavailable (no usage data -- Gemini was never actually invoked, or every attempt failed before returning usage data)"
+        return f"Estimated cost: $0.0000 (0 input + 0 output tokens, {model})"
     prefix = "Estimated cost" if complete else "Estimated cost (partial -- at least one attempt's usage data was missing)"
     if cost_usd is None:
         return f"{prefix}: unavailable (no pricing data for model {model!r})"
@@ -721,14 +737,16 @@ def _deterministic_reason(files):
 # context["jobs"] (a tuple of keys, e.g. ("helm_lint", "fulfillment_service")),
 # or a sentinel string for rows that aren't a per-component boolean lookup:
 # "code" (unit-tests.yml/integration-tests.yml have NO per-component scoping
-# of their own today -- every job in both files is gated only by their
-# shared, identical `code` filter, so every Unit Tests/Integration Tests row
-# below uses that SAME top-level boolean; a per-component filter here would
-# report a narrower "would run" than what actually happens, e.g. an
-# osac-csi-driver-only change genuinely runs every one of these jobs today),
-# "always" (osac-installer's integration-test job has no filter of its own
-# either, but for a different reason -- it's a deliberate full-stack smoke
-# test, not an unscoped-by-omission one), and "or:<group>" (helm-lint's own
+# of their own today -- every job in both files, INCLUDING osac-installer's
+# integration-test job, is gated only by their shared, identical `code`
+# filter, so every Unit Tests/Integration Tests row below uses that SAME
+# top-level boolean; a per-component filter here would report a narrower
+# "would run" than what actually happens, e.g. an osac-csi-driver-only
+# change genuinely runs every one of these jobs today -- osac-installer's
+# job is not a special case: it deploys the full stack from a PR-built
+# image, which is exactly why it was never narrowed to a per-component
+# filter to begin with, but it's still skipped on a doc-only PR just like
+# every other job in the file) and "or:<group>" (helm-lint's own
 # osac-installer job reacts to ANY of the other helm-lint components, per
 # that job's real `if:` condition -- an OR computed here rather than
 # duplicated as its own filter in jobs-selection.yml).
@@ -749,7 +767,7 @@ JOB_GROUPS = (
             ("osac-operator", "code"),
             ("bare-metal-fulfillment-operator", "code"),
             ("osac-aap", "code"),
-            ("osac-installer", "always"),
+            ("osac-installer", "code"),
         ),
     ),
     (
@@ -781,19 +799,15 @@ JOB_GROUPS = (
 def _job_flag(jobs, path):
     """Resolve one JOB_GROUPS row's `path` against context["jobs"].
 
-    "always" -- unconditionally relevant, no filter of its own (see
-    JOB_GROUPS' own comment). "code" -- the single shared boolean every
-    Unit Tests/Integration Tests row uses (real per-component scoping
-    doesn't exist in those two workflows today). "or:<group>" -- true if
-    ANY boolean under that group is true. Otherwise `path` is a (group, key)
-    tuple indexing a plain boolean. Missing data (an older context.json
-    schema, or a typo'd path) resolves to False rather than raising -- this
-    is a purely informational comment; a missing field should degrade to
-    "skip" plus an honest reason, never crash the job before DECISION_FILE
-    gets written.
+    "code" -- the single shared boolean every Unit Tests/Integration Tests
+    row uses (real per-component scoping doesn't exist in those two
+    workflows today). "or:<group>" -- true if ANY boolean under that group
+    is true. Otherwise `path` is a (group, key) tuple indexing a plain
+    boolean. Missing data (an older context.json schema, or a typo'd path)
+    resolves to False rather than raising -- this is a purely informational
+    comment; a missing field should degrade to "skip" plus an honest
+    reason, never crash the job before DECISION_FILE gets written.
     """
-    if path == "always":
-        return True
     if path == "code":
         return bool(jobs.get("code", False))
     if isinstance(path, str) and path.startswith("or:"):
@@ -804,8 +818,6 @@ def _job_flag(jobs, path):
 
 
 def _job_reason(path, relevant):
-    if path == "always":
-        return "Always runs -- deploys and tests the full stack, not scoped to one component's path"
     if path == "code":
         return (
             "This workflow has no per-component scoping -- runs for any non-doc change"
@@ -828,13 +840,14 @@ def render_job_group_table(title, rows, jobs, jobs_available):
     default False" (a normal, honest "nothing matched" for a real payload).
     Silently reporting "skip" with a "no changed files matched" reason for
     EVERY row in that unavailable case would misrepresent missing data as a
-    confident, checked verdict. The "always" sentinel is unaffected either
-    way -- it's a hardcoded truth (osac-installer's job) that never depended
-    on `jobs` data in the first place.
+    confident, checked verdict -- so every row (there's no longer any row
+    exempt from this: an earlier "always" sentinel for osac-installer's
+    integration-test row was removed since that job turned out not to be
+    special either, see JOB_GROUPS' own comment) renders "unknown" instead.
     """
     lines = [f"### {title}", "", "| Job | Decision | Reason |", "|---|---|---|"]
     for label, path in rows:
-        if not jobs_available and path != "always":
+        if not jobs_available:
             lines.append(f"| {label} | unknown | Jobs Selection data unavailable for this run (older context schema) |")
             continue
         relevant = _job_flag(jobs, path)
@@ -986,6 +999,32 @@ def render_decision_table(decision, confidence, ai_status, jobs, jobs_available,
     return "\n".join(lines) + "\n"
 
 
+def build_selection_json(
+    context, decision, confidence, ai_status, jobs, jobs_available, netris_note, cost_usd, input_tokens, output_tokens, cost_complete, model
+):
+    """Machine-readable counterpart to render_decision_table's markdown --
+    same underlying data, structured for later querying/aggregation across
+    runs instead of re-scraping comment text. See JOBS_SELECTION_JSON_FILE.
+    """
+    return {
+        "pr_number": context.get("pr_number"),
+        "head_sha": context.get("head_sha"),
+        "e2e_suites": decision,
+        "ai": {
+            "status": ai_status,
+            "confidence": confidence,
+            "model": model,
+            "cost_usd": cost_usd,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_complete": cost_complete,
+        },
+        "netris_note": netris_note,
+        "jobs_available": jobs_available,
+        "jobs": jobs,
+    }
+
+
 def main():
     context = load_context()
     ambiguous_files = context.get("ambiguous_files", [])
@@ -1074,21 +1113,21 @@ def main():
         else:
             ai_status = "used"
 
-    cost_line = None
-    if needs_ai:
-        # _last_usage_metadata carries one entry per generate_content
-        # attempt call_gemini actually made (empty-response attempts
-        # included -- each is billed regardless of whether it produced
-        # usable text), so this reflects the real total cost of this run's
-        # judgment, not just whichever attempt's text was ultimately used.
-        # Computed here (not only inside the elif needs_ai: branch above)
-        # so the diff-unavailable path also gets a real "cost unavailable"
-        # line -- _last_usage_metadata correctly stays empty there since
-        # call_gemini was never invoked, matching format_cost_line's
-        # existing fail-open contract.
-        cost_usd, input_tokens, output_tokens, cost_complete = aggregate_cost(_last_usage_metadata, GEMINI_MODEL)
-        cost_line = format_cost_line(cost_usd, input_tokens, output_tokens, GEMINI_MODEL, complete=cost_complete)
-        _safe_print(cost_line)
+    # Always computed, not only when needs_ai -- the cost/model line is
+    # always shown in the posted comment now (see render_decision_table),
+    # so the model this run is configured to use is always visible, even
+    # on the overwhelmingly common PR where nothing needed AI at all.
+    # _last_usage_metadata carries one entry per generate_content attempt
+    # call_gemini actually made (empty-response attempts included -- each
+    # is billed regardless of whether it produced usable text), so this
+    # reflects the real total cost of this run's judgment, not just
+    # whichever attempt's text was ultimately used; it correctly stays
+    # empty when call_gemini was never invoked at all (not needed, or
+    # skipped due to an unavailable diff), which format_cost_line renders
+    # as a real $0.0000 rather than "unavailable".
+    cost_usd, input_tokens, output_tokens, cost_complete = aggregate_cost(_last_usage_metadata, GEMINI_MODEL)
+    cost_line = format_cost_line(cost_usd, input_tokens, output_tokens, GEMINI_MODEL, complete=cost_complete)
+    _safe_print(cost_line)
 
     decision = decide(context, gemini_decisions, gemini_reasons)
     netris_note = _build_netris_note(netris_files, gemini_netris)
@@ -1110,6 +1149,36 @@ def main():
     with open(DECISION_FILE, "w") as f:
         f.write(table)
     _safe_print(table)
+
+    if JOBS_SELECTION_JSON_FILE:
+        # Written to a temp file first and atomically moved into place
+        # (os.replace, same directory/filesystem) only once serialization
+        # AND the write both fully succeed -- same reasoning as
+        # ai-diagnose-failure.py's own DIAGNOSIS_JSON_FILE write: a
+        # consumer/uploader reading a half-written file is worse than the
+        # file simply not existing at all.
+        tmp_path = f"{JOBS_SELECTION_JSON_FILE}.tmp-{os.getpid()}"
+        try:
+            selection_json = build_selection_json(
+                context,
+                decision,
+                confidence,
+                ai_status,
+                jobs,
+                jobs_available,
+                netris_note,
+                cost_usd,
+                input_tokens,
+                output_tokens,
+                cost_complete,
+                GEMINI_MODEL,
+            )
+            with open(tmp_path, "w") as f:
+                json.dump(selection_json, f, indent=2)
+                f.write("\n")
+            os.replace(tmp_path, JOBS_SELECTION_JSON_FILE)
+        except Exception as exc:  # noqa: BLE001 -- must never crash the job
+            _safe_print(f"WARNING: failed to write JOBS_SELECTION_JSON_FILE: {exc!r}", file=sys.stderr)
 
 
 if __name__ == "__main__":

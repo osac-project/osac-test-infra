@@ -83,6 +83,83 @@ class BuildUserContentDiffTests(unittest.TestCase):
         self.assertNotIn("diff --git", diff_section)
 
 
+class CostLineTests(unittest.TestCase):
+    def test_no_usage_data_renders_a_real_zero_not_unavailable(self):
+        # Gemini was never invoked at all (most PRs need no AI judgment) --
+        # must render a real $0.0000 line naming the configured model, not
+        # "unavailable", now that this line is always shown regardless of
+        # whether AI actually ran.
+        line = select_jobs.format_cost_line(None, None, None, "gemini-3.1-pro-preview")
+        self.assertEqual(line, "Estimated cost: $0.0000 (0 input + 0 output tokens, gemini-3.1-pro-preview)")
+
+    def test_real_usage_data_still_renders_a_real_cost(self):
+        line = select_jobs.format_cost_line(0.0128, 3941, 406, "gemini-3.1-pro-preview")
+        self.assertEqual(line, "Estimated cost: $0.0128 (3941 input + 406 output tokens, gemini-3.1-pro-preview)")
+
+    def test_main_always_shows_cost_and_model_even_when_ai_not_needed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # No ambiguous/config files and every deterministic bucket
+            # False -- needs_ai is False, so Gemini is never invoked at all.
+            context_path = _write_context(
+                tmpdir,
+                ambiguous_files=[],
+                deterministic={"vmaas": False, "caas": False, "bmaas": False},
+            )
+            decision_path = os.path.join(tmpdir, "decision.md")
+            select_jobs.CONTEXT_FILE = context_path
+            select_jobs.DECISION_FILE = decision_path
+            select_jobs.PR_DIFF_AVAILABLE = True
+            with mock.patch.object(select_jobs, "call_gemini") as mock_call_gemini:
+                select_jobs.main()
+            mock_call_gemini.assert_not_called()
+            with open(decision_path) as f:
+                rendered = f.read()
+            self.assertIn(f"Estimated cost: $0.0000 (0 input + 0 output tokens, {select_jobs.GEMINI_MODEL})", rendered)
+
+
+class SelectionJsonTests(unittest.TestCase):
+    def test_main_writes_valid_json_artifact_when_configured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context_path = _write_context(
+                tmpdir,
+                ambiguous_files=[],
+                deterministic={"vmaas": False, "caas": False, "bmaas": False},
+                pr_number=42,
+                head_sha="abc123",
+            )
+            decision_path = os.path.join(tmpdir, "decision.md")
+            json_path = os.path.join(tmpdir, "selection.json")
+            select_jobs.CONTEXT_FILE = context_path
+            select_jobs.DECISION_FILE = decision_path
+            select_jobs.JOBS_SELECTION_JSON_FILE = json_path
+            select_jobs.PR_DIFF_AVAILABLE = True
+            try:
+                with mock.patch.object(select_jobs, "call_gemini"):
+                    select_jobs.main()
+                with open(json_path) as f:
+                    payload = json.load(f)
+            finally:
+                select_jobs.JOBS_SELECTION_JSON_FILE = ""
+            self.assertEqual(payload["pr_number"], 42)
+            self.assertEqual(payload["head_sha"], "abc123")
+            self.assertIn("vmaas", payload["e2e_suites"])
+            self.assertEqual(payload["ai"]["model"], select_jobs.GEMINI_MODEL)
+            self.assertEqual(payload["ai"]["cost_usd"], None)
+            self.assertIn("jobs", payload)
+            self.assertIn("jobs_available", payload)
+
+    def test_no_json_file_configured_writes_nothing_and_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context_path = _write_context(tmpdir, ambiguous_files=[])
+            decision_path = os.path.join(tmpdir, "decision.md")
+            select_jobs.CONTEXT_FILE = context_path
+            select_jobs.DECISION_FILE = decision_path
+            select_jobs.JOBS_SELECTION_JSON_FILE = ""
+            select_jobs.PR_DIFF_AVAILABLE = True
+            with mock.patch.object(select_jobs, "call_gemini"):
+                select_jobs.main()  # must not raise
+
+
 class MainSkipsGeminiWithoutDiffTests(unittest.TestCase):
     def test_diff_unavailable_skips_gemini_call_and_fails_open(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -177,9 +254,6 @@ class JobFlagTests(unittest.TestCase):
     def test_missing_data_defaults_to_false_not_a_crash(self):
         self.assertFalse(select_jobs._job_flag({}, ("unit_tests", "fulfillment_service")))
 
-    def test_always_sentinel_is_always_true(self):
-        self.assertTrue(select_jobs._job_flag({}, "always"))
-
     def test_or_sentinel_true_if_any_group_member_true(self):
         jobs = {"helm_lint": {"osac_operator": False, "osac_aap": True}}
         self.assertTrue(select_jobs._job_flag(jobs, "or:helm_lint"))
@@ -187,6 +261,19 @@ class JobFlagTests(unittest.TestCase):
     def test_or_sentinel_false_if_all_group_members_false(self):
         jobs = {"helm_lint": {"osac_operator": False, "osac_aap": False}}
         self.assertFalse(select_jobs._job_flag(jobs, "or:helm_lint"))
+
+    def test_osac_installer_integration_row_skips_on_a_doc_only_change(self):
+        # Regression test: osac-installer's integration-test row used to be
+        # wired to a hardcoded "always run" sentinel, which was wrong --
+        # that job's real `if:` in integration-tests.yml is gated on the
+        # exact same shared `code` boolean as every other job in the file
+        # (confirmed live: it correctly skipped on PR #1059's doc-only
+        # change, but this feature's own comment claimed "run"). Must
+        # resolve "skip" when code=False, matching the real job's behavior.
+        self.assertFalse(select_jobs._job_flag({"code": False}, "code"))
+        rows = (("osac-installer", "code"),)
+        table = select_jobs.render_job_group_table("Integration Tests", rows, {"code": False}, jobs_available=True)
+        self.assertIn("| osac-installer | skip |", table)
 
     def test_render_job_group_table_shows_every_row_regardless_of_decision(self):
         jobs = {"unit_tests": {"fulfillment_service": True, "osac_metering": False}}
@@ -202,11 +289,11 @@ class JobFlagTests(unittest.TestCase):
         # this filter recognizes). Must render as a normal "skip", not
         # "unknown" -- jobs_available, not the emptiness of `jobs` itself,
         # is what distinguishes the two cases.
-        rows = (("fulfillment-service", ("unit_tests", "fulfillment_service")), ("osac-installer", "always"))
+        rows = (("fulfillment-service", ("unit_tests", "fulfillment_service")), ("osac-installer", "or:helm_lint"))
         table = select_jobs.render_job_group_table("Integration Tests", rows, {}, jobs_available=True)
         self.assertIn("| fulfillment-service | skip |", table)
+        self.assertIn("| osac-installer | skip |", table)
         self.assertNotIn("unknown", table)
-        self.assertIn("| osac-installer | run |", table)
 
     def test_production_job_groups_resolve_expected_decisions(self):
         # Exercises the REAL select_jobs.JOB_GROUPS mapping (not hand-rolled
@@ -251,9 +338,9 @@ class JobFlagTests(unittest.TestCase):
         self.assertEqual(actual_rows, expected_rows)
 
         # Every leaf True: with a real payload shaped like this, EVERY row
-        # in JOB_GROUPS -- direct (group, key) lookups, the "or:helm_lint"
-        # sentinel (true if ANY member is true), and the "always" sentinel
-        # (unconditionally true) -- must resolve "run". A typo'd or
+        # in JOB_GROUPS -- direct (group, key) lookups, the "code" sentinel,
+        # and the "or:helm_lint" sentinel (true if ANY member is true) --
+        # must resolve "run". A typo'd or
         # miswired (group, key) tuple anywhere in JOB_GROUPS would instead
         # hit _job_flag's missing-data-defaults-to-False fallback and
         # surface here as an unexpected "skip", which a test using its own
@@ -286,13 +373,16 @@ class JobFlagTests(unittest.TestCase):
         # jobs_available=False (no "jobs" key in context.json at all, e.g.
         # an older schema) -- the former is an honest "nothing matched",
         # the latter must never silently render as a confident "skip".
-        rows = (("fulfillment-service", ("unit_tests", "fulfillment_service")), ("osac-installer", "always"))
+        # Every row renders "unknown" in this case -- there is no longer
+        # any row exempt from it (an earlier "always" sentinel for
+        # osac-installer's integration-test row was removed once that job
+        # turned out not to be special either; see JOB_GROUPS' own comment).
+        rows = (("fulfillment-service", ("unit_tests", "fulfillment_service")), ("osac-installer", "or:helm_lint"))
         table = select_jobs.render_job_group_table("Integration Tests", rows, {}, jobs_available=False)
         self.assertIn("| fulfillment-service | unknown | Jobs Selection data unavailable", table)
+        self.assertIn("| osac-installer | unknown | Jobs Selection data unavailable", table)
         self.assertNotIn("| fulfillment-service | skip |", table)
-        # The "always" sentinel is unaffected -- it never depended on the
-        # jobs map in the first place.
-        self.assertIn("| osac-installer | run |", table)
+        self.assertNotIn("| osac-installer | run |", table)
 
 
 if __name__ == "__main__":
