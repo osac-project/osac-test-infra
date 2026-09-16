@@ -46,18 +46,36 @@ PR_DIFF = os.environ.get("PR_DIFF", '""')
 # silently discarding every Gemini verdict for no reason.
 PR_DIFF_AVAILABLE = os.environ.get("PR_DIFF_AVAILABLE", "true").lower() == "true"
 DECISION_FILE = os.environ["DECISION_FILE"]
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
+# Moved off gemini-2.5-pro (retires 2026-10-16) to gemini-3.1-pro-preview,
+# mirroring ai-diagnose-failure.py's own already-live migration -- see that
+# script's identical GEMINI_MODEL comment for the full reasoning. Kept
+# independently configurable (not hardcoded) for the same reason as there:
+# a future caller, or a manual override while chasing a model-specific
+# outage, shouldn't require a code change.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview")
 GOOGLE_CLOUD_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
-GOOGLE_CLOUD_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-# gemini-2.5-pro is a "thinking" model whose reasoning tokens draw from the
-# SAME max_output_tokens budget as the final answer unless a thinking budget
-# is explicitly capped. Observed in the first week of real production runs
+# "global", not a region: confirmed live (see vertex-ai-auth's own
+# gcp-location default, which this script's caller always passes through)
+# that neither gemini-3.1-pro-preview nor gemini-3.7-flash resolve on
+# us-central1 or any other region tried on the osac-ci project, only global.
+# This fallback only matters if GOOGLE_CLOUD_LOCATION is ever unset entirely
+# (the real workflow always sets it) -- kept in sync with that default so a
+# future caller which forgets to set it doesn't silently 404 instead of
+# degrading to the same "AI judgment unavailable" fail-open path as any
+# other Gemini-call failure.
+GOOGLE_CLOUD_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+# gemini-3.1-pro-preview, like gemini-2.5-pro before it, is a "thinking"
+# model whose reasoning tokens draw from the SAME max_output_tokens budget as
+# the final answer unless a thinking budget is explicitly capped. Observed
+# directly with gemini-2.5-pro in the first week of real production runs
 # (OSAC-4741): ~80% of AI-needed runs came back with empty resp.text and no
 # API error -- consistent with the model spending its entire 2048-token
 # budget on reasoning before ever emitting the required decision block,
 # rather than with any correlation to diff/prompt size. A capped thinking
 # budget plus a larger overall budget leaves reliable headroom for the
-# actual formatted answer.
+# actual formatted answer; kept unchanged across the model move since the
+# underlying "thinking" behavior, not anything gemini-2.5-pro-specific, is
+# what these two settings guard against.
 GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "4096"))
 GEMINI_THINKING_BUDGET = int(os.environ.get("GEMINI_THINKING_BUDGET", "256"))
 
@@ -67,10 +85,15 @@ MAX_GRAPHIFY_FILES = 8
 
 # Vertex AI list prices, USD per 1M tokens -- same table and tiering as
 # ai-diagnose-failure.py's own GEMINI_PRICING_USD_PER_MILLION (kept in sync
-# manually; both scripts price gemini-2.5-pro identically). Missing pricing
-# data for `model` degrades to "unavailable" in format_cost_line rather than
-# silently costing against the wrong model's rate.
+# manually). Missing pricing data for `model` degrades to "unavailable" in
+# format_cost_line rather than silently costing against the wrong model's
+# rate.
 GEMINI_PRICING_USD_PER_MILLION = {
+    # Kept even though no longer the default (GEMINI_MODEL moved to
+    # gemini-3.1-pro-preview) -- gemini-2.5-pro/gemini-2.5-flash remain valid,
+    # explicitly-selectable GEMINI_MODEL values until their 2026-10-16
+    # retirement, and format_cost_line needs their pricing row if a caller
+    # does select one.
     "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
     "gemini-2.5-pro": {
         "input": 1.25,
@@ -78,6 +101,13 @@ GEMINI_PRICING_USD_PER_MILLION = {
         "tiered_input_threshold_tokens": 200_000,
         "tiered_input": 2.50,
         "tiered_output": 15.00,
+    },
+    "gemini-3.1-pro-preview": {
+        "input": 2.00,
+        "output": 12.00,
+        "tiered_input_threshold_tokens": 200_000,
+        "tiered_input": 4.00,
+        "tiered_output": 18.00,
     },
 }
 
