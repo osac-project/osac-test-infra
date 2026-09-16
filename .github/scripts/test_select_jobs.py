@@ -208,6 +208,68 @@ class JobFlagTests(unittest.TestCase):
         self.assertNotIn("unknown", table)
         self.assertIn("| osac-installer | run |", table)
 
+    def test_production_job_groups_resolve_expected_decisions(self):
+        # Exercises the REAL select_jobs.JOB_GROUPS mapping (not hand-rolled
+        # rows), asserting the exact set of (group, label) rows it contains
+        # -- catches a category silently added, renamed, or dropped without
+        # matching test coverage.
+        expected_rows = {
+            ("Unit Tests", "fulfillment-service"),
+            ("Unit Tests", "osac-metering"),
+            ("Unit Tests", "osac-metering/adapters"),
+            ("Unit Tests", "osac-metering/schema"),
+            ("Integration Tests", "fulfillment-service"),
+            ("Integration Tests", "osac-operator"),
+            ("Integration Tests", "bare-metal-fulfillment-operator"),
+            ("Integration Tests", "osac-aap"),
+            ("Integration Tests", "osac-installer"),
+            ("Helm Lint", "osac-operator"),
+            ("Helm Lint", "bare-metal-fulfillment-operator"),
+            ("Helm Lint", "fulfillment-service"),
+            ("Helm Lint", "osac-aap"),
+            ("Helm Lint", "osac-csi-driver"),
+            ("Helm Lint", "osac-metering"),
+            ("Helm Lint", "osac-installer"),
+            ("Checks & Builds", "Check generated code (proto)"),
+            ("Checks & Builds", "fulfillment-service checks"),
+            ("Checks & Builds", "Build container image (osac-operator)"),
+            ("Checks & Builds", "Build container image (bare-metal-fulfillment-operator)"),
+            ("Checks & Builds", "ansible-lint (osac-aap)"),
+            ("Checks & Builds", "Darwin keychain tests"),
+        }
+        actual_rows = {(title, label) for title, rows in select_jobs.JOB_GROUPS for label, _ in rows}
+        self.assertEqual(actual_rows, expected_rows)
+
+        # Every leaf True: with a real payload shaped like this, EVERY row
+        # in JOB_GROUPS -- direct (group, key) lookups, the "or:helm_lint"
+        # sentinel (true if ANY member is true), and the "always" sentinel
+        # (unconditionally true) -- must resolve "run". A typo'd or
+        # miswired (group, key) tuple anywhere in JOB_GROUPS would instead
+        # hit _job_flag's missing-data-defaults-to-False fallback and
+        # surface here as an unexpected "skip", which a test using its own
+        # hand-rolled rows (verified separately above) could never catch.
+        all_true_jobs = {
+            "code": True,
+            "helm_lint": {
+                "osac_operator": True,
+                "bare_metal_fulfillment_operator": True,
+                "fulfillment_service": True,
+                "osac_aap": True,
+                "osac_csi_driver": True,
+                "osac_metering": True,
+            },
+            "checks": {"proto": True, "fulfillment_service": True},
+            "builds": {"osac_operator": True, "bare_metal_fulfillment_operator": True},
+            "lint": {"osac_aap": True, "darwin_keychain": True},
+        }
+        for title, rows in select_jobs.JOB_GROUPS:
+            for label, path in rows:
+                self.assertTrue(
+                    select_jobs._job_flag(all_true_jobs, path),
+                    f"{title} / {label} (path={path!r}) resolved to skip with an all-True jobs payload -- "
+                    "likely a typo'd or miswired JOB_GROUPS key",
+                )
+
     def test_jobs_unavailable_reports_unknown_not_a_false_skip(self):
         # An empty-but-present jobs dict (a real payload where every
         # specific flag happens to be False) must NOT be confused with
