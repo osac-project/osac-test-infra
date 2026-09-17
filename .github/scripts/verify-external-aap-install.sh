@@ -29,7 +29,10 @@ log() {
   echo "$*"
 }
 
-status=$(helm status osac -n "${OSAC_NAMESPACE}" -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["status"])')
+if ! helm_json=$(helm status osac -n "${OSAC_NAMESPACE}" -o json 2>/dev/null); then
+  fail "helm release osac does not exist in namespace ${OSAC_NAMESPACE}"
+fi
+status=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["status"])' <<<"${helm_json}")
 [[ "${status}" == "deployed" ]] || fail "helm release osac status is '${status}', expected deployed"
 log "helm release osac is deployed"
 

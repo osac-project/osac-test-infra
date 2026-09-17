@@ -141,6 +141,9 @@ jobs:
         env:
           FLAVOR_IMAGE: ${{ inputs.flavor-image }}
           FLAVOR_NAME: ${{ inputs.flavor-name }}
+          # Also written to GITHUB_ENV by validate-and-bootstrap; set here so
+          # this step does not depend on that side channel.
+          CLONE_NAME: ${{ steps.setup.outputs.clone-name }}
         run: |
           CT_CONFIG="${HOME}/.config/cluster-tool"
           ROOT_CONFIG="/root/.config/cluster-tool"
@@ -213,6 +216,7 @@ jobs:
       - name: Boot cluster clone
         env:
           FLAVOR_NAME: ${{ inputs.flavor-name }}
+          CLONE_NAME: ${{ steps.setup.outputs.clone-name }}
         run: |
           exec 9>"${FLAVOR_LOCK}"
           flock --shared 9

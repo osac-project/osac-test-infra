@@ -95,19 +95,23 @@ log "Will pass AAP URL ${AAP_URL} to the OSAC installer"
 
 AAP_PASSWORD=$(oc get secret "${ADMIN_SECRET}" -n "${AAP_NAMESPACE}" -o jsonpath='{.data.password}' | base64 -d)
 NETRC=$(mktemp)
-trap 'rm -f "${NETRC}"' EXIT
+BODY=$(mktemp)
+trap 'rm -f "${NETRC}" "${BODY}"' EXIT
 umask 077
 printf 'machine %s\nlogin admin\npassword %s\n' "${ROUTE_HOST}" "${AAP_PASSWORD}" >"${NETRC}"
 unset AAP_PASSWORD
 
+# Sets MINT_HTTP_CODE and writes the response body to $BODY.
 mint_token() {
   local path=$1
-  curl -sk --connect-timeout 5 --max-time 30 \
+  : >"${BODY}"
+  MINT_HTTP_CODE=$(curl -sk --connect-timeout 5 --max-time 30 \
     --netrc-file "${NETRC}" \
     -H "Content-Type: application/json" \
     -X POST \
     -d '{"description": "osac-e2e-external-aap", "scope": "write"}' \
-    "https://${ROUTE_HOST}${path}"
+    -o "${BODY}" -w '%{http_code}' \
+    "https://${ROUTE_HOST}${path}" || true)
 }
 
 token_from_json() {
@@ -118,14 +122,20 @@ TOKEN=""
 deadline=$((SECONDS + AAP_WAIT_SECONDS))
 while ((SECONDS < deadline)); do
   for path in /api/gateway/v1/tokens/ /api/controller/v2/tokens/; do
-    raw=$(mint_token "${path}" || true)
-    TOKEN=$(printf '%s' "${raw}" | token_from_json 2>/dev/null || true)
+    mint_token "${path}"
+    case "${MINT_HTTP_CODE}" in
+      401 | 403)
+        log "ERROR: AAP token API ${path} returned HTTP ${MINT_HTTP_CODE}; not retrying"
+        exit 1
+        ;;
+    esac
+    TOKEN=$(token_from_json <"${BODY}" 2>/dev/null || true)
     if [[ -n "${TOKEN}" ]]; then
       log "Minted AAP API token via ${path}"
       break 2
     fi
   done
-  log "AAP token API not ready, retrying in 20s..."
+  log "AAP token API not ready (last HTTP ${MINT_HTTP_CODE:-none}), retrying in 20s..."
   sleep 20
 done
 [[ -n "${TOKEN}" ]] || {
