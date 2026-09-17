@@ -431,16 +431,20 @@ def call_gemini(contents):
             from google.genai import types
 
             client = genai.Client(vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
-            dispatched = True
-            resp = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
-                    thinking_config=types.ThinkingConfig(thinking_budget=GEMINI_THINKING_BUDGET),
-                ),
+            # Config construction and method resolution both happen BEFORE
+            # dispatched is set -- a failure in either (a bad kwarg, an SDK
+            # version mismatch on client.models itself) is purely local,
+            # never reached the network, and must not be mistaken for a
+            # possibly-billed dispatch the way a real generate_content()
+            # failure is (see the flag's own comment above).
+            config = types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
+                thinking_config=types.ThinkingConfig(thinking_budget=GEMINI_THINKING_BUDGET),
             )
+            generate = client.models.generate_content
+            dispatched = True
+            resp = generate(model=GEMINI_MODEL, contents=contents, config=config)
             # Recorded for EVERY attempt that reaches a response (empty text
             # included) -- an attempt is billed whether or not it produced
             # usable text, so dropping a failed attempt's usage here would

@@ -239,6 +239,7 @@ class CallGeminiUsageTrackingTests(unittest.TestCase):
 
         self._responses = []
         self._client_init_error = None
+        self._config_error = None
         outer = self
 
         class FakeModels:
@@ -254,8 +255,13 @@ class CallGeminiUsageTrackingTests(unittest.TestCase):
                     raise outer._client_init_error
                 self.models = FakeModels()
 
+        def fake_generate_content_config(**kw):
+            if outer._config_error:
+                raise outer._config_error
+            return SimpleNamespace(**kw)
+
         fake_types = SimpleNamespace(
-            GenerateContentConfig=lambda **kw: SimpleNamespace(**kw),
+            GenerateContentConfig=fake_generate_content_config,
             ThinkingConfig=lambda **kw: SimpleNamespace(**kw),
         )
         fake_genai = SimpleNamespace(Client=FakeClient, types=fake_types)
@@ -291,6 +297,20 @@ class CallGeminiUsageTrackingTests(unittest.TestCase):
         # for it at all, on EITHER attempt (both retries hit the same
         # client-construction failure here).
         self._client_init_error = RuntimeError("bad WIF credentials")
+        result = select_jobs.call_gemini(["prompt"])
+        self.assertIsNone(result)
+        self.assertEqual(select_jobs._last_usage_metadata, [])
+
+    def test_config_construction_failure_records_nothing(self):
+        # Regression test: dispatched must be set only once generate_content
+        # is actually about to be invoked, AFTER config construction -- a
+        # failure building GenerateContentConfig/ThinkingConfig (a bad
+        # kwarg, an SDK version mismatch) is purely local Python object
+        # construction, never reached the network, and must not be
+        # recorded as a possibly-billed dispatch (an earlier version of
+        # this code set dispatched=True before building the config, which
+        # would have incorrectly appended None here).
+        self._config_error = TypeError("unexpected keyword argument 'thinking_config'")
         result = select_jobs.call_gemini(["prompt"])
         self.assertIsNone(result)
         self.assertEqual(select_jobs._last_usage_metadata, [])
