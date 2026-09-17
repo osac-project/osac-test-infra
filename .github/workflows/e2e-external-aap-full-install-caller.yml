@@ -76,6 +76,6 @@ jobs:
       installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}
       image-overrides: ${{ inputs.image-overrides || '{}' }}
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
-      test-infra-repository: ${{ inputs.pr-repository || github.repository }}
-      test-infra-ref: ${{ inputs.pr-ref || github.head_ref || '' }}
+      test-infra-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}
+      test-infra-ref: ${{ inputs.pr-sha || github.event.pull_request.head.sha || inputs.pr-ref || github.head_ref || '' }}
       allow-cluster: ${{ github.event_name == 'workflow_dispatch' }}
