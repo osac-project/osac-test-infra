@@ -484,6 +484,30 @@ jobs:
             echo "::endgroup::"
           done
 
+      # ── CLI fallback: extract from the published fulfillment-service image ──
+      # When no component build produced an OSAC CLI binary (e.g. the
+      # default empty-components path from osac-test-infra main triggers),
+      # extract one from the latest published fulfillment-service image so
+      # the CLI always matches what is deployed.  Without this, the
+      # test-image Containerfile falls back to the latest GitHub release,
+      # which can be days behind main and may lack flags that the HEAD test
+      # code depends on (e.g. osac-project/osac#1061 renamed --cores to
+      # --vcpus, causing "unknown flag" failures — see osac#1015).
+      - name: Extract OSAC CLI from published image (fallback)
+        if: env.OSAC_CLI_BIN == ''
+        run: |
+          echo "::group::Extract OSAC CLI from published image"
+          IMAGE="ghcr.io/osac-project/fulfillment-service:latest"
+          echo "Pulling ${IMAGE}..."
+          podman pull "${IMAGE}"
+          cli_container=$(podman create "${IMAGE}")
+          podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
+          podman rm "${cli_container}" >/dev/null 2>&1 || true
+          chmod +x "$RUNNER_TEMP/osac-cli-bin"
+          echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
+          echo "Extracted OSAC CLI from ${IMAGE}"
+          echo "::endgroup::"
+
       - name: Build test image
         env:
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
