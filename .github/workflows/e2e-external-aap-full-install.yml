@@ -1,0 +1,386 @@
+---
+# OSAC-5228 complementary e2e: install the AAP operator (install-infra), then
+# point OSAC at a standalone AAP instead of deploying one in the OSAC namespace.
+#
+# Safe to merge before the installer PR: detect-external-aap-installer.sh
+# prints "no such parameter in the installer" and skips cluster install so
+# this workflow stays green against osac main. When EXTERNAL_AAP exists,
+# dispatch with installer-ref/repo of that PR to run the real path.
+name: E2E External AAP Full Install
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "OSAC namespace on the cluster"
+        required: false
+        type: string
+        default: "osac-e2e-ci"
+      flavor-image:
+        description: "OCI image containing the cluster-tool flavor"
+        required: false
+        type: string
+        default: "quay.io/osac-project/cluster-flavors:sno-4-22"
+      flavor-name:
+        description: "cluster-tool flavor name"
+        required: false
+        type: string
+        default: "sno-4-22"
+      installer-ref:
+        description: "Branch/ref of the OSAC monorepo to clone for install"
+        required: false
+        type: string
+        default: "main"
+      installer-repo:
+        description: "GitHub repo (owner/name) of the OSAC monorepo"
+        required: false
+        type: string
+        default: "osac-project/osac"
+      test-infra-repository:
+        description: "Repository to checkout for scripts (for cross-repo calls)"
+        required: false
+        type: string
+        default: ""
+      test-infra-ref:
+        description: "Git ref of test infrastructure repository"
+        required: false
+        type: string
+        default: ""
+      image-overrides:
+        description: "JSON object mapping Helm value paths to image refs"
+        required: false
+        type: string
+        default: "{}"
+      runner-label:
+        description: "Self-hosted runner label to target"
+        required: false
+        type: string
+        default: "osac-ci"
+      allow-cluster:
+        description: "When false, only detect installer knobs (no cluster boot)"
+        required: false
+        type: boolean
+        default: true
+      bmh-namespace:
+        description: "Namespace for BareMetalHost / BMF Metal3 secrets"
+        required: false
+        type: string
+        default: "host-inventory"
+
+jobs:
+  detect:
+    name: Detect installer EXTERNAL_AAP
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      supported: ${{ steps.detect.outputs.supported }}
+    steps:
+      - name: Checkout test-infra
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
+          ref: ${{ inputs.test-infra-ref || '' }}
+          persist-credentials: false
+
+      - name: Unit-test detector
+        run: bash .github/scripts/detect-external-aap-installer-test.sh
+
+      - name: Clone installer
+        env:
+          INSTALLER_REF: ${{ inputs.installer-ref }}
+          INSTALLER_REPO: ${{ inputs.installer-repo }}
+        run: |
+          if [[ ! "${INSTALLER_REPO}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::installer-repo must be owner/name, got '${INSTALLER_REPO}'"
+            exit 1
+          fi
+          INSTALLER_CLONE="${RUNNER_TEMP}/osac-installer-clone"
+          git clone --depth 1 --branch "${INSTALLER_REF}" \
+            "https://github.com/${INSTALLER_REPO}.git" "${INSTALLER_CLONE}"
+          echo "INSTALLER_CLONE=${INSTALLER_CLONE}" >>"$GITHUB_ENV"
+
+      - name: Detect EXTERNAL_AAP knobs
+        id: detect
+        run: bash .github/scripts/detect-external-aap-installer.sh "${INSTALLER_CLONE}"
+
+  e2e:
+    name: Install external AAP then OSAC
+    needs: detect
+    if: needs.detect.outputs.supported == 'true' && inputs.allow-cluster
+    runs-on: ${{ inputs.runner-label }}
+    environment: e2e-test
+    permissions:
+      contents: read
+    env:
+      FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
+      E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+    steps:
+      - name: Checkout test-infra
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
+          ref: ${{ inputs.test-infra-ref || '' }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: extaap
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch and write secrets
+        id: secrets
+        uses: ./.github/actions/fetch-and-write-secrets
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Prepare cluster environment
+        env:
+          FLAVOR_IMAGE: ${{ inputs.flavor-image }}
+          FLAVOR_NAME: ${{ inputs.flavor-name }}
+          # Also written to GITHUB_ENV by validate-and-bootstrap; set here so
+          # this step does not depend on that side channel.
+          CLONE_NAME: ${{ steps.setup.outputs.clone-name }}
+        run: |
+          CT_CONFIG="${HOME}/.config/cluster-tool"
+          ROOT_CONFIG="/root/.config/cluster-tool"
+          if [[ -f "${CT_CONFIG}/servers.json" ]] && [[ -f "${CT_CONFIG}/state.json" ]]; then
+            echo "cluster-tool already configured."
+          elif [[ -f "${ROOT_CONFIG}/servers.json" ]]; then
+            echo "Syncing cluster-tool config from root..."
+            mkdir -p "${CT_CONFIG}"
+            cp "${ROOT_CONFIG}"/{config,servers.json,state.json,cluster-tool.key,cluster-tool.key.pub} "${CT_CONFIG}/" 2>/dev/null || true
+          else
+            echo "ERROR: cluster-tool not configured. Run machine-init.sh first." >&2
+            exit 1
+          fi
+
+          DIGEST_FILE="/tmp/cluster-tool-flavor-${FLAVOR_NAME}.digest"
+          REMOTE_DIGEST=$(skopeo inspect "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' 2>/dev/null || echo "")
+
+          exec 9>"${FLAVOR_LOCK}"
+          flock --exclusive 9
+          echo "Acquired flavor lock."
+
+          LOCAL_DIGEST=""
+          if [[ -f "${DIGEST_FILE}" ]]; then
+            LOCAL_DIGEST=$(cat "${DIGEST_FILE}")
+          fi
+
+          FLAVOR_EXISTS=false
+          if sudo python3 /usr/local/bin/cluster-tool flavors 9>&- \
+               | grep -q "^${FLAVOR_NAME} "; then
+            FLAVOR_EXISTS=true
+          fi
+
+          NEED_PULL=false
+          if ${FLAVOR_EXISTS}; then
+            if [[ -n "${REMOTE_DIGEST}" ]] && [[ "${REMOTE_DIGEST}" == "${LOCAL_DIGEST}" ]]; then
+              echo "Flavor '${FLAVOR_NAME}' is up to date — skipping pull."
+            elif [[ -n "${REMOTE_DIGEST}" ]] && [[ -z "${LOCAL_DIGEST}" ]]; then
+              echo "Flavor '${FLAVOR_NAME}' already present, seeding digest file."
+              echo "${REMOTE_DIGEST}" >"${DIGEST_FILE}"
+            elif [[ -n "${REMOTE_DIGEST}" ]]; then
+              echo "Flavor '${FLAVOR_NAME}' image changed — deleting and re-pulling..."
+              sudo python3 /usr/local/bin/cluster-tool flavors --delete "${FLAVOR_NAME}" 9>&- || true
+              NEED_PULL=true
+            else
+              echo "Flavor '${FLAVOR_NAME}' already present, could not check remote digest — skipping pull."
+            fi
+          else
+            echo "Flavor '${FLAVOR_NAME}' not found — pulling..."
+            NEED_PULL=true
+          fi
+
+          if ${NEED_PULL}; then
+            sudo python3 /usr/local/bin/cluster-tool pull "${FLAVOR_IMAGE}" 9>&-
+            if [[ -n "${REMOTE_DIGEST}" ]]; then
+              echo "${REMOTE_DIGEST}" >"${DIGEST_FILE}"
+            fi
+          fi
+
+          exec 9>&-
+          echo "Released flavor lock."
+
+          sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>/dev/null || true
+          BRIDGE_PREFIX="br-${CLONE_NAME:0:8}"
+          for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
+            echo "Removing stale bridge ${br}..."
+            sudo ip link set "${br}" down 2>/dev/null || true
+            sudo ip link delete "${br}" 2>/dev/null || true
+          done
+
+      - name: Boot cluster clone
+        env:
+          FLAVOR_NAME: ${{ inputs.flavor-name }}
+          CLONE_NAME: ${{ steps.setup.outputs.clone-name }}
+        run: |
+          exec 9>"${FLAVOR_LOCK}"
+          flock --shared 9
+          sudo python3 /usr/local/bin/cluster-tool boot \
+            --flavor "${FLAVOR_NAME}" --name "${CLONE_NAME}" \
+            --pull-secret "$RUNNER_TEMP/pull-secret.json" 9>&-
+          exec 9>&-
+
+          echo "Cluster clone '${CLONE_NAME}' booted."
+
+          sudo cp "${HOME}/.kube/${CLONE_NAME}.kubeconfig" "$RUNNER_TEMP/kubeconfig"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
+          chmod 600 "$RUNNER_TEMP/kubeconfig"
+
+      - name: Prepare cluster prerequisites
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+        run: |
+          echo "Waiting for CatalogSource redhat-operators to be READY..."
+          oc wait --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
+            catalogsource/redhat-operators -n openshift-marketplace --timeout=300s
+
+      - name: Install AAP operator (install-infra)
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          INSTALLER_REF: ${{ inputs.installer-ref }}
+          INSTALLER_REPO: ${{ inputs.installer-repo }}
+        run: |
+          set -o pipefail
+          if ! command -v helm &>/dev/null; then
+            curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          fi
+          if ! command -v yq &>/dev/null; then
+            YQ_VERSION="v4.53.3"
+            YQ_SHA256="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+            YQ_DIR="${RUNNER_TEMP}/bin"
+            mkdir -p "${YQ_DIR}"
+            curl --retry 5 --retry-delay 2 -fsSL -o "${YQ_DIR}/yq" \
+              "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            echo "${YQ_SHA256}  ${YQ_DIR}/yq" | sha256sum -c -
+            chmod +x "${YQ_DIR}/yq"
+            export PATH="${YQ_DIR}:${PATH}"
+            echo "${YQ_DIR}" >>"$GITHUB_PATH"
+          fi
+
+          INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
+          git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
+            "https://github.com/${INSTALLER_REPO}.git" "${INSTALLER_CLONE_DIR}"
+
+          if [[ -d "${INSTALLER_CLONE_DIR}/osac-installer" ]]; then
+            INSTALLER_DIR="${INSTALLER_CLONE_DIR}/osac-installer"
+          else
+            INSTALLER_DIR="${INSTALLER_CLONE_DIR}"
+          fi
+          echo "INSTALLER_DIR=${INSTALLER_DIR}" >>"$GITHUB_ENV"
+          cd "${INSTALLER_DIR}"
+
+          OVERLAY_DIR="${GITHUB_WORKSPACE}/.github/overlays"
+          yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' \
+            values/full-ci/infra.yaml "${OVERLAY_DIR}/full-ci-infra.yaml" \
+            >values/full-ci/infra.yaml.merged
+          mv values/full-ci/infra.yaml.merged values/full-ci/infra.yaml
+          yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' \
+            values/full-ci/instance.yaml "${OVERLAY_DIR}/full-ci-instance.yaml" \
+            >values/full-ci/instance.yaml.merged
+          mv values/full-ci/instance.yaml.merged values/full-ci/instance.yaml
+
+          echo "Installing AAP operator via make install-infra..."
+          make install-infra PLATFORM=openshift PROFILE=full-ci NS="${INSTALLER_NAMESPACE}"
+
+      - name: Create BMF secrets
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+        run: |
+          oc create namespace "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
+
+          INV="${RUNNER_TEMP}/osac-inventory.yaml"
+          MGMT="${RUNNER_TEMP}/osac-management.yaml"
+          cat >"${INV}" <<EOF
+          type: metal3
+          hostClass: metal3
+          networkClass: metal3
+          options:
+            metal3:
+              namespace: ${BMH_NAMESPACE}
+          EOF
+          cat >"${MGMT}" <<EOF
+          type: metal3
+          options:
+            metal3:
+              namespace: ${BMH_NAMESPACE}
+          EOF
+
+          oc create secret generic osac-inventory-config \
+            --from-file=inventory.yaml="${INV}" \
+            -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
+          oc create secret generic osac-management-config \
+            --from-file=management.yaml="${MGMT}" \
+            -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
+          oc create secret generic osac-os-clouds \
+            --from-literal=clouds.yaml="" \
+            -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
+          oc create configmap osac-profiles \
+            --from-literal=profile.yaml="" \
+            -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
+
+      - name: Install standalone AAP and write installer overlay
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          OVERLAY_PATH: ${{ runner.temp }}/external-aap-overlay.yaml
+        run: bash .github/scripts/provision-external-aap.sh
+
+      - name: Install OSAC with EXTERNAL_AAP
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
+        run: |
+          cd "${INSTALLER_DIR}"
+
+          echo "installer EXTERNAL_AAP / externalAap parameters exist — using them"
+          echo "  EXTERNAL_AAP=true"
+          echo "  overlay: ${EXTERNAL_AAP_OVERLAY}"
+          echo "  url: ${EXTERNAL_AAP_URL}"
+
+          SET_ARGS=()
+          if [[ -n "${IMAGE_OVERRIDES}" ]] && [[ "${IMAGE_OVERRIDES}" != "{}" ]]; then
+            for key in $(echo "${IMAGE_OVERRIDES}" | jq -r 'keys[]'); do
+              value=$(echo "${IMAGE_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
+              SET_ARGS+=("--set-string" "${key}=${value}")
+              echo "  --set-string ${key}=${value}"
+            done
+            yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
+            helm dependency update charts/osac/
+          fi
+
+          make install-osac \
+            EXTERNAL_AAP=true \
+            PLATFORM=openshift \
+            PROFILE=full-ci \
+            NS="${INSTALLER_NAMESPACE}" \
+            INSTANCE_VALUES_EXTRA="-f ${EXTERNAL_AAP_OVERLAY}" \
+            EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+
+      - name: Verify brownfield wiring
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+        run: bash .github/scripts/verify-external-aap-install.sh
+
+      - name: Gather artifacts
+        if: always()
+        uses: ./.github/actions/gather-artifacts
+        with:
+          namespace: ${{ inputs.namespace }}
+          kubeconfig-path: ${{ runner.temp }}/kubeconfig
+          artifact-name: osac-logs-external-aap-${{ github.run_id }}
+
+      - name: Teardown
+        if: always()
+        env:
+          CLONE_NAME: ${{ steps.setup.outputs.clone-name }}
+        run: bash .github/scripts/teardown.sh

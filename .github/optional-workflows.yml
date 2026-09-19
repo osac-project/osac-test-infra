@@ -8,3 +8,9 @@ workflows:
     trigger: label
     label: e2e-bmaas-netris
     retestable: true
+  - command: e2e-external-aap
+    workflow: e2e-external-aap-full-install-caller.yml
+    name: E2E External AAP Full Install
+    description: After AAP operator install, pass a standalone AAP URL to OSAC (skips if installer has no EXTERNAL_AAP yet)
+    trigger: workflow_dispatch
+    retestable: true

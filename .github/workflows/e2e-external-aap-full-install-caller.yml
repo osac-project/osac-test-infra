@@ -1,0 +1,81 @@
+---
+# OSAC-5228 complementary e2e. Does not replace VMaaS/CaaS/BMaaS full-install.
+# Pull requests only run the cheap detector (skip-install if installer main
+# has no EXTERNAL_AAP). Dispatch boots a cluster and exercises the brownfield
+# path when those knobs exist:
+#   gh workflow run e2e-external-aap-full-install-caller.yml \
+#     -f installer-repo=talhil-rh/osac \
+#     -f installer-ref=feat/OSAC-5228-external-aap
+name: E2E External AAP Full Install
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/e2e-external-aap-full-install.yml'
+      - '.github/workflows/e2e-external-aap-full-install-caller.yml'
+      - '.github/scripts/detect-external-aap-installer.sh'
+      - '.github/scripts/detect-external-aap-installer-test.sh'
+      - '.github/scripts/provision-external-aap.sh'
+      - '.github/scripts/verify-external-aap-install.sh'
+      - '.github/optional-workflows.yml'
+  workflow_dispatch:
+    inputs:
+      installer-ref:
+        description: "Branch/ref of the OSAC monorepo"
+        required: false
+        default: "main"
+      installer-repo:
+        description: "GitHub repo (owner/name) of the OSAC monorepo"
+        required: false
+        default: "osac-project/osac"
+      image-overrides:
+        description: "JSON mapping Helm value paths to image refs"
+        required: false
+        default: "{}"
+      runner-label:
+        description: "Self-hosted runner label (e.g. osac-ci-1). Defaults to the shared fleet label."
+        required: false
+        default: ""
+      pr-number:
+        description: "PR number being tested (set by /test optional dispatch)"
+        required: false
+        default: ""
+      pr-repository:
+        description: "Repository containing the PR head"
+        required: false
+        default: ""
+      pr-ref:
+        description: "PR head branch/ref"
+        required: false
+        default: ""
+      pr-sha:
+        description: "Expected immutable PR head SHA"
+        required: false
+        default: ""
+      fork-pr-author-association:
+        description: "PR author association used by fork authorization"
+        required: false
+        default: ""
+      fork-pr-author:
+        description: "PR author login used by fork authorization"
+        required: false
+        default: ""
+
+concurrency:
+  group: e2e-external-aap-${{ inputs.pr-number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e-external-aap:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/e2e-external-aap-full-install.yml
+    with:
+      installer-ref: ${{ inputs.installer-ref || 'main' }}
+      installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}
+      image-overrides: ${{ inputs.image-overrides || '{}' }}
+      runner-label: ${{ inputs.runner-label || 'osac-ci' }}
+      test-infra-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}
+      test-infra-ref: ${{ inputs.pr-sha || github.event.pull_request.head.sha || inputs.pr-ref || github.head_ref || '' }}
+      allow-cluster: ${{ github.event_name == 'workflow_dispatch' }}
