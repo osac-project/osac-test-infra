@@ -876,44 +876,84 @@ def render_job_group_table(title, rows, jobs, jobs_available):
 
 
 def decide(context, gemini_decisions, gemini_reasons):
-    """Merge the deterministic verdict with Gemini's (if it ran). A
-    suite the deterministic layer already marked clear always runs at
-    least at "sanity" -- Gemini can only escalate it to "regression", never
-    downgrade it to "skip" (a positive path-match is closer to ground
-    truth than an LLM's opinion). A suite NOT marked clear falls back to
-    "skip" if Gemini never ran (nothing ambiguous existed) or never
-    produced a usable verdict for it (fails open toward "sanity" instead,
-    consistent with this pipeline's own "never silently skip on an
-    inconclusive signal" principle -- even though this phase doesn't gate
-    anything yet, the comment itself must stay honest).
+    """Merge the deterministic verdict with Gemini's (if it ran).
+
+    INVARIANT: no branch in this function may ever assign a `gemini_verdict`
+    value of "skip" to `decision`. "skip" is produced by exactly ONE line
+    below, gated on the deterministic `exclusive_skip` signal -- never on
+    AI judgment alone, at any confidence. This is a structural property
+    (grep this function for the literal string '"skip"' -- it appears on
+    exactly one right-hand side), not a tunable threshold, precisely so a
+    future change to the model, the prompt, or a confidence cutoff can
+    never quietly reopen an AI-alone-skip path. See test_select_jobs.py's
+    `test_ambiguous_suite_never_skips_on_ai_alone` for the regression this
+    guards (PR #836: three suites resolved to "skip -- no evidence found"
+    at 60% AI confidence while, because nothing gated yet, all three ran
+    anyway and hit a real, relevant failure).
+
+    Three cases per suite:
+    - `clear` (the deterministic layer positively matched this suite):
+      floor is "sanity"; Gemini may only escalate to "regression", never
+      downgrade to "skip" -- a positive path-match is closer to ground
+      truth than an LLM's opinion.
+    - not `clear` but `exclusive_skip` (every changed file falls inside
+      this suite's reviewed, provably-irrelevant allow-list --
+      ci-filters.yml's *-outside-known-safe filters, inverted): decision is
+      "skip". Gemini may still escalate this UP to "sanity"/"regression"
+      (defense in depth against an incomplete allow-list), but can never
+      keep or reinforce "skip".
+    - otherwise (not clear, not exclusive_skip -- an unclassified file
+      nobody wrote a rule for yet, exactly PR #836's shape): floor is
+      "sanity", unconditionally. Gemini may escalate to "regression". It
+      can no longer produce "skip" here at any confidence.
 
     Each result also carries a short "reason": for a deterministic verdict
     it's derived directly from the matching file list (no AI needed); for
-    a suite Gemini actually judged, it's Gemini's own stated reason; a
-    deterministic-clear suite Gemini escalates to regression shows
-    Gemini's reason for the escalation instead of the baseline file-match
-    reason, since that's what actually explains the regression tier.
+    an escalation, it's Gemini's own stated reason, since that's what
+    actually explains the higher tier.
     """
     deterministic = context["deterministic"]
     deterministic_files = context.get("deterministic_files", {})
+    exclusive_skip = context.get("exclusive_skip", {})
     result = {}
     for suite in SUITES:
         clear = deterministic.get(suite, False)
         gemini_verdict = gemini_decisions.get(suite)
         gemini_reason = gemini_reasons.get(suite)
+        escalated = gemini_verdict in ("sanity", "regression")
+
         if clear:
             decision = "regression" if gemini_verdict == "regression" else "sanity"
             reason = gemini_reason if decision == "regression" and gemini_reason else _deterministic_reason(deterministic_files.get(suite, []))
             result[suite] = {"decision": decision, "source": "deterministic", "reason": reason}
-        elif gemini_verdict is not None:
-            result[suite] = {"decision": gemini_verdict, "source": "gemini", "reason": gemini_reason or "(no reason given)"}
+        elif exclusive_skip.get(suite, False):
+            if escalated:
+                result[suite] = {
+                    "decision": gemini_verdict,
+                    "source": "gemini-escalation-over-exclusive-skip",
+                    "reason": gemini_reason or "(no reason given)",
+                }
+            else:
+                result[suite] = {
+                    "decision": "skip",
+                    "source": "deterministic-exclusive-skip",
+                    "reason": "Every changed file is in this suite's reviewed, provably-irrelevant allow-list",
+                }
+        elif gemini_verdict == "regression":
+            result[suite] = {"decision": "regression", "source": "gemini-escalation", "reason": gemini_reason or "(no reason given)"}
         elif gemini_decisions:
-            # Gemini ran (for some other suite/file) but never produced a
-            # parseable verdict for THIS suite -- fail open, don't imply
-            # "definitely not needed" from silence.
+            # Gemini ran (for some other suite/file, or gave an
+            # unparseable/"skip" verdict for THIS one) but produced nothing
+            # usable to escalate on -- fail open to sanity, don't imply
+            # "definitely not needed" from silence or from a verdict this
+            # function refuses to honor.
             result[suite] = {"decision": "sanity", "source": "gemini-inconclusive", "reason": "AI judgment was inconclusive for this suite"}
         else:
-            result[suite] = {"decision": "skip", "source": "deterministic", "reason": "No changed files matched a path rule for this suite"}
+            result[suite] = {
+                "decision": "sanity",
+                "source": "deterministic-default-sanity",
+                "reason": "No changed files matched a path rule for this suite, and no exclusive-skip allow-list covers it",
+            }
     return result
 
 

@@ -494,5 +494,92 @@ class JobFlagTests(unittest.TestCase):
         self.assertNotIn("| osac-installer | run |", table)
 
 
+class DecideTests(unittest.TestCase):
+    """decide()'s one hard invariant: "skip" is never assigned from a raw
+    Gemini verdict, at any confidence -- it comes from exactly one line,
+    gated on the deterministic `exclusive_skip` signal. See decide()'s own
+    docstring for the PR #836 incident this guards against."""
+
+    def _context(self, clear=False, exclusive_skip=False):
+        return {
+            "deterministic": {"vmaas": clear, "caas": False, "bmaas": False},
+            "deterministic_files": {"vmaas": ["osac-operator/api/computeinstance_types.go"] if clear else []},
+            "exclusive_skip": {"vmaas": exclusive_skip, "caas": False, "bmaas": False},
+        }
+
+    def test_clear_suite_floors_at_sanity_even_if_gemini_says_skip(self):
+        # Unchanged, pre-existing behavior: a positive path-match outranks
+        # an LLM's opinion in the downgrade direction.
+        result = select_jobs.decide(self._context(clear=True), {"vmaas": "skip"}, {"vmaas": "looks unrelated"})
+        self.assertEqual(result["vmaas"]["decision"], "sanity")
+
+    def test_clear_suite_gemini_can_escalate_to_regression(self):
+        result = select_jobs.decide(self._context(clear=True), {"vmaas": "regression"}, {"vmaas": "touches a risky path"})
+        self.assertEqual(result["vmaas"]["decision"], "regression")
+        self.assertEqual(result["vmaas"]["source"], "deterministic")
+
+    def test_exclusive_skip_with_no_gemini_verdict_resolves_to_skip(self):
+        result = select_jobs.decide(self._context(exclusive_skip=True), {}, {})
+        self.assertEqual(result["vmaas"]["decision"], "skip")
+        self.assertEqual(result["vmaas"]["source"], "deterministic-exclusive-skip")
+
+    def test_exclusive_skip_gemini_can_still_escalate_up(self):
+        # Defense in depth against an incomplete allow-list: AI may pull a
+        # suite OUT of an exclusive-skip, just never keep or reinforce it.
+        result = select_jobs.decide(self._context(exclusive_skip=True), {"vmaas": "regression"}, {"vmaas": "actually touches shared code"})
+        self.assertEqual(result["vmaas"]["decision"], "regression")
+        self.assertEqual(result["vmaas"]["source"], "gemini-escalation-over-exclusive-skip")
+
+    def test_exclusive_skip_gemini_saying_skip_does_not_override_the_skip_source(self):
+        # Gemini agreeing with "skip" must not be laundered into a
+        # gemini-sourced decision -- the source must stay attributed to the
+        # deterministic allow-list, not to AI agreement.
+        result = select_jobs.decide(self._context(exclusive_skip=True), {"vmaas": "skip"}, {"vmaas": "no evidence found"})
+        self.assertEqual(result["vmaas"]["decision"], "skip")
+        self.assertEqual(result["vmaas"]["source"], "deterministic-exclusive-skip")
+
+    def test_ambiguous_suite_never_skips_on_ai_alone(self):
+        # PR #836 regression test: not clear, not exclusive-skip-eligible
+        # (a brand-new proto domain nobody wrote a rule for), Gemini says
+        # "skip" at high confidence. Must floor at "sanity", never "skip",
+        # regardless of AI confidence -- confidence is not part of this
+        # function's signature at all, by design.
+        result = select_jobs.decide(self._context(), {"vmaas": "skip"}, {"vmaas": "no evidence found"})
+        self.assertEqual(result["vmaas"]["decision"], "sanity")
+        self.assertNotEqual(result["vmaas"]["source"], "gemini")
+
+    def test_ambiguous_suite_gemini_can_escalate_to_regression(self):
+        result = select_jobs.decide(self._context(), {"vmaas": "regression"}, {"vmaas": "touches shared risky code"})
+        self.assertEqual(result["vmaas"]["decision"], "regression")
+        self.assertEqual(result["vmaas"]["source"], "gemini-escalation")
+
+    def test_ambiguous_suite_gemini_ran_but_gave_no_usable_verdict_stays_sanity(self):
+        # Gemini ran (attempted at all, even if only for a different suite)
+        # but produced nothing usable for THIS suite -- fail open, not skip.
+        result = select_jobs.decide(self._context(), {"caas": "regression"}, {"caas": "unrelated"})
+        self.assertEqual(result["vmaas"]["decision"], "sanity")
+        self.assertEqual(result["vmaas"]["source"], "gemini-inconclusive")
+
+    def test_ambiguous_suite_gemini_never_ran_defaults_to_sanity_not_skip(self):
+        # This is the one behavior change from the pre-#836-fix code: the
+        # old default (no deterministic match, no Gemini attempt at all)
+        # was "skip". It is now "sanity".
+        result = select_jobs.decide(self._context(), {}, {})
+        self.assertEqual(result["vmaas"]["decision"], "sanity")
+        self.assertEqual(result["vmaas"]["source"], "deterministic-default-sanity")
+
+    def test_missing_exclusive_skip_key_in_context_defaults_to_not_skippable(self):
+        # Backward compatible with an older context.json schema that
+        # predates the exclusive_skip field entirely (e.g. a rollout window
+        # where jobs-selection.yml hasn't deployed it yet) -- must not
+        # crash, and must default to the safe (non-skippable) side.
+        context = {
+            "deterministic": {"vmaas": False, "caas": False, "bmaas": False},
+            "deterministic_files": {},
+        }
+        result = select_jobs.decide(context, {"vmaas": "skip"}, {"vmaas": "no evidence found"})
+        self.assertEqual(result["vmaas"]["decision"], "sanity")
+
+
 if __name__ == "__main__":
     unittest.main()
