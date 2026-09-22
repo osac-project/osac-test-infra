@@ -53,22 +53,6 @@ on:
         description: "Semicolon-separated commands to verify on the box before JIT registration."
         required: false
         default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman"
-      osac-operator-image:
-        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
-        required: false
-        default: ""
-      fulfillment-service-image:
-        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
-        required: false
-        default: ""
-      osac-aap-ee-image:
-        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
-        required: false
-        default: ""
-      bmf-operator-image:
-        description: "Override bare-metal-fulfillment-operator image (registry-pullable reference) -- empty means no override"
-        required: false
-        default: ""
       osac-repo:
         description: "Override osac mono-repo git URI -- empty means upstream"
         required: false
@@ -94,10 +78,6 @@ jobs:
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
       tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman' }}
-      osac-operator-image: ${{ inputs.osac-operator-image || '' }}
-      fulfillment-service-image: ${{ inputs.fulfillment-service-image || '' }}
-      osac-aap-ee-image: ${{ inputs.osac-aap-ee-image || '' }}
-      bmf-operator-image: ${{ inputs.bmf-operator-image || '' }}
       osac-repo: ${{ inputs.osac-repo || '' }}
       osac-branch: ${{ inputs.osac-branch || '' }}
       test-infra-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}

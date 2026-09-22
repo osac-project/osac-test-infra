@@ -27,26 +27,6 @@ on:
         required: false
         type: string
         default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman"
-      osac-operator-image:
-        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
-        required: false
-        type: string
-        default: ""
-      fulfillment-service-image:
-        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
-        required: false
-        type: string
-        default: ""
-      osac-aap-ee-image:
-        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
-        required: false
-        type: string
-        default: ""
-      bmf-operator-image:
-        description: "Override bare-metal-fulfillment-operator image (registry-pullable reference) -- empty means no override"
-        required: false
-        type: string
-        default: ""
       osac-repo:
         description: "Override osac mono-repo git URI -- empty means upstream"
         required: false
@@ -59,12 +39,16 @@ on:
         default: ""
       components:
         description: >-
-          JSON array of components to build from source on the EC2 box and
-          load onto the SNO node. Each entry: repo, ref, containerfile,
+          JSON array of additional components to build from source on the EC2
+          box and load onto the SNO node. Fulfillment Service, OSAC Operator,
+          Bare-metal Fulfillment Operator, and the AAP execution environment
+          are always built from the exact OSAC commit used to build the CLI.
+          The AAP execution environment image is applied to both AAP image
+          values. Each additional entry supports repo, ref, containerfile,
           imageKey (Helm value path), optional buildType ("ansible-builder"),
           and optional context (build context directory relative to repo root;
-          defaults to the containerfile's parent directory).
-          Empty array (default) builds nothing from source.
+          defaults to the containerfile's parent directory). Empty array
+          (default) builds only the mandatory OSAC images.
         required: false
         type: string
         default: "[]"
@@ -325,23 +309,16 @@ jobs:
           ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || github.ref }}
           persist-credentials: false
 
-      - name: Validate component image override inputs
+      - name: Validate OSAC source inputs
         shell: bash
         env:
-          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
-          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
-          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
-          BMF_OPERATOR_IMAGE: ${{ inputs.bmf-operator-image }}
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_BRANCH: ${{ inputs.osac-branch }}
         run: |
-          for name in OSAC_OPERATOR_IMAGE FULFILLMENT_SERVICE_IMAGE OSAC_AAP_EE_IMAGE BMF_OPERATOR_IMAGE OSAC_REPO; do
-            value="${!name}"
-            if [[ -n "$value" ]] && [[ ! "$value" =~ ^[A-Za-z0-9._/:@-]+$ ]]; then
-              echo "::error::${name} contains characters outside a valid reference (letters, digits, and ._/:@- only): ${value}"
-              exit 1
-            fi
-          done
+          if [[ -n "$OSAC_REPO" ]] && [[ ! "$OSAC_REPO" =~ ^[A-Za-z0-9._/:@-]+$ ]]; then
+            echo "::error::OSAC_REPO contains characters outside a valid reference (letters, digits, and ._/:@- only): ${OSAC_REPO}"
+            exit 1
+          fi
           for name in OSAC_BRANCH; do
             value="${!name}"
             if [[ -n "$value" ]]; then
@@ -356,14 +333,10 @@ jobs:
             fi
           done
 
-      - name: Build component image overrides
+      - name: Build deployment overrides
         id: extra-vars
         shell: bash
         env:
-          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
-          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
-          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
-          BMF_OPERATOR_IMAGE: ${{ inputs.bmf-operator-image }}
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_BRANCH: ${{ inputs.osac-branch }}
         run: |
@@ -372,10 +345,6 @@ jobs:
           fi
           EXTRA_VARS='{"bare_metal_services":true}'
           declare -A OVERRIDES=(
-            [osac_operator_image]="$OSAC_OPERATOR_IMAGE"
-            [fulfillment_service_image]="$FULFILLMENT_SERVICE_IMAGE"
-            [osac_aap_image]="$OSAC_AAP_EE_IMAGE"
-            [osac_bmf_image]="$BMF_OPERATOR_IMAGE"
             [osac_repo]="$OSAC_REPO"
             [osac_branch]="$OSAC_BRANCH"
           )
@@ -383,7 +352,7 @@ jobs:
             value="${OVERRIDES[$key]}"
             if [ -n "$value" ]; then
               EXTRA_VARS=$(echo "$EXTRA_VARS" | jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}')
-              echo "Component image override: ${key}=${value}"
+              echo "Deployment override: ${key}=${value}"
             fi
           done
           echo "json=${EXTRA_VARS}" >> "$GITHUB_OUTPUT"
@@ -405,6 +374,19 @@ jobs:
         shell: bash
         run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Resolve osac CLI source revision
+        id: osac-source
+        shell: bash
+        run: |
+          source_dir="$HOME/.local/src/osac"
+          if [[ ! -d "${source_dir}/.git" ]]; then
+            echo "::error::OSAC CLI source checkout not found at ${source_dir}"
+            exit 1
+          fi
+          sha=$(git -C "${source_dir}" rev-parse HEAD)
+          echo "OSAC CLI source revision: ${sha}"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
       - name: Deploy Netris lab
         shell: bash
         timeout-minutes: 45
@@ -420,14 +402,40 @@ jobs:
         run: make deploy-ocp INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Build and load component images
-        if: inputs.components != '[]' && inputs.components != ''
         id: components
         timeout-minutes: 30
         shell: bash
         env:
-          COMPONENTS_JSON: ${{ inputs.components }}
+          COMPONENTS_JSON_INPUT: ${{ inputs.components }}
+          OSAC_REPO: ${{ inputs.osac-repo || 'https://github.com/osac-project/osac.git' }}
+          OSAC_BRANCH: ${{ steps.osac-source.outputs.sha }}
           KUBECONFIG: /root/.kube/config
         run: |
+          CORE_COMPONENTS=$(jq -nc \
+            --arg repo "${OSAC_REPO}" \
+            --arg ref "${OSAC_BRANCH}" \
+            '[
+              {repo: $repo, ref: $ref, containerfile: "fulfillment-service/Containerfile", context: ".", imageKey: "service.images.service"},
+              {repo: $repo, ref: $ref, containerfile: "osac-operator/Containerfile", context: ".", imageKey: "operator.image.repository"},
+              {repo: $repo, ref: $ref, containerfile: "osac-aap/execution-environment/execution-environment.yaml", imageKey: "aap.bootstrap.image", buildType: "ansible-builder"},
+              {repo: $repo, ref: $ref, containerfile: "bare-metal-fulfillment-operator/Containerfile", context: ".", imageKey: "bmf.image.repository"}
+            ]')
+
+          if [[ -z "${COMPONENTS_JSON_INPUT}" || "${COMPONENTS_JSON_INPUT}" == "[]" ]]; then
+            COMPONENTS_JSON="${CORE_COMPONENTS}"
+          else
+            COMPONENTS_JSON=$(echo "${COMPONENTS_JSON_INPUT}" | jq -c --argjson core "${CORE_COMPONENTS}" '
+                map(select(
+                  .imageKey != "service.images.service" and
+                  .imageKey != "operator.image.repository" and
+                  .imageKey != "aap.bootstrap.image" and
+                  .imageKey != "aap.configAsCode.eeImage" and
+                  .imageKey != "bmf.image.repository"
+                )) as $additional
+                | $core + $additional
+              ')
+          fi
+
           COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
           IMAGE_OVERRIDES="{}"
           NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
@@ -446,15 +454,19 @@ jobs:
             src="$RUNNER_TEMP/component-${i}-src"
 
             echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
+            repo_url="${repo}"
+            if [[ "${repo_url}" != *://* && "${repo_url}" != git@* ]]; then
+              repo_url="https://github.com/${repo_url%.git}.git"
+            fi
             if [[ -n "${REPO_PINNED_SHA[$repo]:-}" ]]; then
               sha="${REPO_PINNED_SHA[$repo]}"
               echo "Cloning ${repo} at pinned SHA ${sha} (first clone resolved this from ref '${ref}')."
               git init "${src}"
-              git -C "${src}" fetch --depth 1 "https://github.com/${repo}.git" "${sha}"
+              git -C "${src}" fetch --depth 1 "${repo_url}" "${sha}"
               git -C "${src}" checkout FETCH_HEAD
             else
               git init "${src}"
-              git -C "${src}" fetch --depth 1 "https://github.com/${repo}.git" "${ref}"
+              git -C "${src}" fetch --depth 1 "${repo_url}" "${ref}"
               git -C "${src}" checkout FETCH_HEAD
               sha=$(git -C "${src}" rev-parse HEAD)
               REPO_PINNED_SHA[$repo]="${sha}"
@@ -486,19 +498,20 @@ jobs:
             podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
 
             case "${image_key}" in
-              service.images.service)      var_name="fulfillment_service_image" ;;
-              operator.image.repository)   var_name="osac_operator_image" ;;
-              aap.bootstrap.image)         var_name="osac_aap_image" ;;
-              aap.configAsCode.eeImage)    var_name="osac_aap_ee_image" ;;
-              bmf.image.repository)        var_name="osac_bmf_image" ;;
+              service.images.service)      var_names=(fulfillment_service_image) ;;
+              operator.image.repository)   var_names=(osac_operator_image) ;;
+              aap.bootstrap.image)         var_names=(osac_aap_image) ;;
+              bmf.image.repository)        var_names=(bmf_operator_image) ;;
               *)
                 echo "::error::components[$i].imageKey '${image_key}' is not a recognized override key"
                 exit 1
                 ;;
             esac
 
-            IMAGE_OVERRIDES=$(echo "${IMAGE_OVERRIDES}" | jq -c --arg k "${var_name}" --arg v "${tag}" '. + {($k): $v}')
-            echo "Built ${var_name}=${tag}"
+            for var_name in "${var_names[@]}"; do
+              IMAGE_OVERRIDES=$(echo "${IMAGE_OVERRIDES}" | jq -c --arg k "${var_name}" --arg v "${tag}" '. + {($k): $v}')
+              echo "Built ${var_name}=${tag}"
+            done
             echo "::endgroup::"
           done
 
