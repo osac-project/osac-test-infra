@@ -185,19 +185,71 @@ PENDING=0
 STALE=0
 TIMEOUTS=0
 
-# Print the matching pull_request run JSON for workflow $1 at HEAD_SHA, or empty.
+# Print the matching pull_request run JSON for workflow $1, preferring an
+# exact match at HEAD_SHA but falling back to the most recent pull_request
+# run anywhere else in this PR (same branch) when the exact commit never
+# got one of its own. Confirmed live (osac-project/osac#1173): a
+# synchronize push can silently fail to produce a fresh pull_request run
+# at all for some/all of the e2e-*-full-install workflows -- and
+# closing+reopening the PR didn't produce one either. Treat "does this PR
+# have a usable run to replay" as the real question, not "does this exact
+# commit have one" -- the caller already re-validates the PR is still
+# open and the label/approval still current immediately before reusing
+# whatever candidate this returns, same as it always did for an
+# exact-commit match.
 find_pr_run() {
   local wf="$1"
+  local runs candidate candidate_sha
+
+  candidate=$(_find_pr_run_at "${wf}" "${HEAD_SHA}")
+  if [[ -n "${candidate}" && "${candidate}" != "null" ]]; then
+    printf '%s' "${candidate}"
+    return
+  fi
+
+  [[ -z "${HEAD_REF}" ]] && return
+  # No head_sha filter this time -- take whatever's most recent for this
+  # PR's branch. GitHub returns runs newest-first, so the first PR/branch
+  # match after filtering is the most recent one.
+  runs=$(gh api \
+    "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request&branch=${HEAD_REF}&per_page=100" \
+    --jq '[.workflow_runs[]]')
+  candidate=$(jq -c --argjson pr "${PR_NUMBER}" \
+    --arg repo "${HEAD_REPO}" --arg ref "${HEAD_REF}" '
+    ([.[] | select(any(.pull_requests[]?; .number == $pr))][0])
+    // (if ($repo | length) > 0 and ($ref | length) > 0 then
+        ([.[]
+          | select((.pull_requests // []) | length == 0)
+          | select((.head_repository.full_name // "") == $repo)
+          | select(.head_branch == $ref)
+        ][0])
+      else empty end)
+    // empty
+  ' <<<"${runs}")
+  if [[ -n "${candidate}" && "${candidate}" != "null" ]]; then
+    candidate_sha=$(jq -r '.head_sha' <<<"${candidate}")
+    echo "No pull_request run for ${wf} at exact HEAD ${HEAD_SHA:0:7}; falling back to this PR's most recent run instead, at ${candidate_sha:0:7}." >&2
+  fi
+  printf '%s' "${candidate}"
+}
+
+# Print the matching pull_request run JSON for workflow $1 at commit $2, or
+# empty. Split out of find_pr_run so the exact-match query (head_sha=$2,
+# server-side filtered) and its fallback (branch-only, no head_sha) share
+# the exact same PR-number/repo/branch disambiguation logic below instead
+# of two copies drifting apart.
+_find_pr_run_at() {
+  local wf="$1" sha="$2"
   local runs
   # Filter by head_sha. This repo exceeds 100 pull_request e2e runs
   # per day, so an unfiltered first page is not the current head
   # (osac-project/osac#550: /lgtm missed a 22h-old fork run).
   runs=$(gh api \
-    "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=100" \
+    "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request&head_sha=${sha}&per_page=100" \
     --jq '[.workflow_runs[]]')
   # Prefer PR-number match; fork runs often have empty pull_requests —
   # fall back only when head repo+branch uniquely match this PR.
-  jq -c --arg sha "${HEAD_SHA}" --argjson pr "${PR_NUMBER}" \
+  jq -c --arg sha "${sha}" --argjson pr "${PR_NUMBER}" \
     --arg repo "${HEAD_REPO}" --arg ref "${HEAD_REF}" '
     ([.[]
       | select(.head_sha == $sha)
