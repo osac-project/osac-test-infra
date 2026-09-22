@@ -493,6 +493,7 @@ jobs:
         uses: ./.github/actions/install-grpcurl
 
       - name: Install infrastructure operators
+        id: install-infra
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
@@ -549,6 +550,46 @@ jobs:
           cd "${INSTALLER_DIR}"
 
           make install-infra PLATFORM=openshift PROFILE=caas-ci NS="${INSTALLER_NAMESPACE}"
+
+          # The osac chart's pre-install validation requires a cluster-scoped
+          # Metal3 Provisioning CR whenever bmf.metal3.enabled is set in the
+          # instance values under test (the same file install-osac renders).
+          # Read it from the cloned installer so the "Enable Metal3
+          # provisioning" step below only runs for installs that need it --
+          # runs without metal3 keep the existing flow untouched.
+          METAL3_ENABLED=$(yq '.bmf.metal3.enabled // false' values/caas-ci/instance.yaml)
+          echo "bmf.metal3.enabled in values/caas-ci/instance.yaml: ${METAL3_ENABLED}"
+          echo "metal3-enabled=${METAL3_ENABLED}" >> "$GITHUB_OUTPUT"
+
+      # BMO only starts the Ironic stack once a Provisioning CR exists, and
+      # the osac chart's pre-install hook (OSAC-4140) refuses to install a
+      # metal3-enabled osac without one. Gated on the value above so
+      # non-metal3 CaaS runs are unaffected.
+      - name: Enable Metal3 provisioning
+        if: steps.install-infra.outputs.metal3-enabled == 'true'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+        run: |
+          set -euo pipefail
+          echo "Applying Metal3 Provisioning CR (watchAllNamespaces)..."
+          oc apply -f - <<'EOF'
+          apiVersion: metal3.io/v1alpha1
+          kind: Provisioning
+          metadata:
+            name: provisioning-configuration
+          spec:
+            provisioningNetwork: "Disabled"
+            watchAllNamespaces: true
+          EOF
+          echo "Waiting for metal3 pods to appear..."
+          oc wait --for=create pods \
+            -l baremetal.openshift.io/cluster-baremetal-operator=metal3-state \
+            -n openshift-machine-api --timeout=300s
+          echo "Waiting for metal3 pods to be ready..."
+          oc wait --for=condition=Ready pods \
+            -l baremetal.openshift.io/cluster-baremetal-operator=metal3-state \
+            -n openshift-machine-api --timeout=600s
+          echo "Metal3 provisioning enabled."
 
       - name: Install OSAC
         env:
