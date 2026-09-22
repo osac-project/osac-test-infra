@@ -5,6 +5,18 @@
   register: _kubeconfig
   failed_when: not _kubeconfig.stat.exists
 
+- name: Validate OSAC checkout path
+  ansible.builtin.assert:
+    that:
+      - osac_dir is string
+      - osac_dir | trim is match('^/opt/[^./][^/]*/?$')
+    fail_msg: "Refusing to remove unsafe OSAC checkout path '{{ osac_dir }}'; use a direct child of /opt."
+
+- name: Remove previous OSAC checkout
+  ansible.builtin.file:
+    path: "{{ osac_dir }}"
+    state: absent
+
 - name: Clone osac
   ansible.builtin.git:
     repo: "{{ osac_repo }}"
