@@ -711,13 +711,11 @@
       template:
         id: "{{ _bmi_template.json.id }}"
       published: true
-      field_definitions:
-        - path: "ssh_public_key"
-          display_name: "SSH Public Key"
-          editable: true
-        - path: "network_attachments"
-          display_name: "Network Attachments"
-          editable: true
+      fields:
+        ssh_public_key:
+          editable: {}
+        network_attachments:
+          editable: {}
     validate_certs: false
     status_code: [200, 201, 409]
 
@@ -737,16 +735,13 @@
       template:
         id: "{{ _bmi_template.json.id }}"
       published: true
-      field_definitions:
-        - path: "ssh_public_key"
-          display_name: "SSH Public Key"
-          editable: true
-        - path: "network_attachments"
-          display_name: "Network Attachments"
-          editable: true
-        - path: "auto_external_ip_attachment"
-          display_name: "Auto External IP"
-          editable: true
+      fields:
+        ssh_public_key:
+          editable: {}
+        network_attachments:
+          editable: {}
+        auto_external_ip_attachment:
+          editable: {}
     validate_certs: false
     status_code: [200, 201, 409]
 
