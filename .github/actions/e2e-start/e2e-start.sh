@@ -185,52 +185,47 @@ PENDING=0
 STALE=0
 TIMEOUTS=0
 
-# Print the matching pull_request run JSON for workflow $1, preferring an
-# exact match at HEAD_SHA but falling back to the most recent pull_request
-# run anywhere else in this PR (same branch) when the exact commit never
-# got one of its own. Confirmed live (osac-project/osac#1173): a
-# synchronize push can silently fail to produce a fresh pull_request run
-# at all for some/all of the e2e-*-full-install workflows -- and
-# closing+reopening the PR didn't produce one either. Treat "does this PR
-# have a usable run to replay" as the real question, not "does this exact
-# commit have one" -- the caller already re-validates the PR is still
-# open and the label/approval still current immediately before reusing
-# whatever candidate this returns, same as it always did for an
-# exact-commit match.
+# Print the matching pull_request run JSON for workflow $1 at HEAD_SHA, or
+# empty. See find_pr_run_fallback below for what the caller does with this
+# coming up empty even after its full wait.
 find_pr_run() {
   local wf="$1"
-  local runs candidate candidate_sha
+  _find_pr_run_at "${wf}" "${HEAD_SHA}"
+}
 
-  candidate=$(_find_pr_run_at "${wf}" "${HEAD_SHA}")
-  if [[ -n "${candidate}" && "${candidate}" != "null" ]]; then
-    printf '%s' "${candidate}"
-    return
-  fi
-
+# Print the most recent pull_request run JSON for workflow $1 anywhere else
+# on this same PR, for diagnostics only -- NOT a substitute for an
+# exact-HEAD run. Confirmed live (osac-project/osac#1173): a synchronize
+# push can silently fail to produce a fresh pull_request run at all for
+# some/all of the e2e-*-full-install workflows, and closing+reopening the
+# PR didn't produce one either.
+#
+# This is intentionally diagnostic-only, not a real fallback: `gh run
+# rerun` replays a run's ORIGINAL triggering event verbatim, including its
+# own frozen github.event.pull_request.head.sha, so rerunning a run found
+# here would re-validate and post its e2e-*-gate check against that OLDER
+# commit -- never against the PR's actual current HEAD_SHA (confirmed by
+# reading e2e-bmaas-full-install-caller.yml's gate job, which sources its
+# own HEAD_SHA the same way). The caller uses this only to name what's
+# available in its error message; it must never be reused as if it were an
+# exact-HEAD match.
+#
+# Matched only by direct PR-number evidence in .pull_requests[] -- unlike
+# _find_pr_run_at's exact-sha lookup, this has no head_sha to anchor a
+# repo+branch-only match, so accepting one here on repo+branch alone (as
+# the exact-match path safely does) would risk matching a run this PR was
+# never actually associated with. Runs without that evidence (e.g. some
+# fork PRs) are simply not reportable here.
+find_pr_run_fallback() {
+  local wf="$1"
+  local runs
   [[ -z "${HEAD_REF}" ]] && return
-  # No head_sha filter this time -- take whatever's most recent for this
-  # PR's branch. GitHub returns runs newest-first, so the first PR/branch
-  # match after filtering is the most recent one.
   runs=$(gh api \
     "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request&branch=${HEAD_REF}&per_page=100" \
     --jq '[.workflow_runs[]]')
-  candidate=$(jq -c --argjson pr "${PR_NUMBER}" \
-    --arg repo "${HEAD_REPO}" --arg ref "${HEAD_REF}" '
-    ([.[] | select(any(.pull_requests[]?; .number == $pr))][0])
-    // (if ($repo | length) > 0 and ($ref | length) > 0 then
-        ([.[]
-          | select((.pull_requests // []) | length == 0)
-          | select((.head_repository.full_name // "") == $repo)
-          | select(.head_branch == $ref)
-        ][0])
-      else empty end)
-    // empty
-  ' <<<"${runs}")
-  if [[ -n "${candidate}" && "${candidate}" != "null" ]]; then
-    candidate_sha=$(jq -r '.head_sha' <<<"${candidate}")
-    echo "No pull_request run for ${wf} at exact HEAD ${HEAD_SHA:0:7}; falling back to this PR's most recent run instead, at ${candidate_sha:0:7}." >&2
-  fi
-  printf '%s' "${candidate}"
+  jq -c --argjson pr "${PR_NUMBER}" '
+    [.[] | select(any(.pull_requests[]?; .number == $pr))][0] // empty
+  ' <<<"${runs}"
 }
 
 # Print the matching pull_request run JSON for workflow $1 at commit $2, or
@@ -438,7 +433,14 @@ start_via_pr_run() {
     sleep 2
   done
   if [[ -z "${candidates}" || "${candidates}" == "null" ]]; then
-    echo "No pull_request run for ${wf} at ${HEAD_SHA:0:7} on PR #${PR_NUMBER}."
+    local fallback fallback_sha
+    fallback=$(find_pr_run_fallback "${wf}")
+    if [[ -n "${fallback}" && "${fallback}" != "null" ]]; then
+      fallback_sha=$(jq -r '.head_sha' <<<"${fallback}")
+      echo "No pull_request run for ${wf} at ${HEAD_SHA:0:7} on PR #${PR_NUMBER} (closest available: a run at ${fallback_sha:0:7} -- not reusable, a rerun keeps its own original commit and would post the gate against that commit, not this HEAD)."
+    else
+      echo "No pull_request run for ${wf} at ${HEAD_SHA:0:7} on PR #${PR_NUMBER}."
+    fi
     ERRORS=$((ERRORS + 1))
     return
   fi
