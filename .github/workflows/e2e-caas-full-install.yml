@@ -739,6 +739,15 @@ jobs:
         run: |
           # INSTALLER_DIR is resolved and persisted by the earlier install step (via $GITHUB_ENV)
 
+          # OSAC-4134 removed this script from the installer: CaaS agent
+          # provisioning moved from CI to osac-operator. When the installer
+          # under test no longer ships the script, the install manages its
+          # own agents and this step is a no-op.
+          if [ ! -f "${INSTALLER_DIR}/scripts/setup-caas-agents.sh" ]; then
+            echo "setup-caas-agents.sh not found in ${INSTALLER_DIR}; agent setup owned by osac-operator -- skipping"
+            exit 0
+          fi
+
           LIBVIRT_NETWORK="test-infra-net-${CLONE_NAME}" \
           INSTALLER_NAMESPACE="${INSTALLER_NAMESPACE}" \
           AGENT_VM_NAME="agent-${CLONE_NAME}" \
