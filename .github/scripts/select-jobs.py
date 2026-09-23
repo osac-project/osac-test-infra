@@ -46,7 +46,18 @@ import subprocess
 import sys
 import time
 
-CONTEXT_FILE = os.environ["CONTEXT_FILE"]
+# MODE selects which entry point main() dispatches to. "report" (default)
+# is the original, async, cross-repo/cross-run Jobs Selection PR-comment
+# path (requires CONTEXT_FILE from a separate jobs-selection.yml run in
+# osac -- see run_report_mode()). "merge-queue-preview" is Phase 3a of the
+# CI-gating rollout plan: a synchronous, single-job, informational-only
+# preview run from inside a merge_group job in each
+# e2e-{vmaas,caas,bmaas}-full-install.yml -- see run_merge_queue_preview().
+MODE = os.environ.get("MODE", "report")
+# CONTEXT_FILE/DECISION_FILE are only required by run_report_mode() --
+# read leniently here (not os.environ[...]) so run_merge_queue_preview(),
+# which needs neither, can run standalone without them ever being set.
+CONTEXT_FILE = os.environ.get("CONTEXT_FILE", "")
 GRAPHIFY_DIR = os.environ.get("GRAPHIFY_DIR", "")
 PR_DIFF = os.environ.get("PR_DIFF", '""')
 # Defaults to True (trust the diff) rather than False, so any OTHER
@@ -54,7 +65,7 @@ PR_DIFF = os.environ.get("PR_DIFF", '""')
 # future caller, or a local test run) keeps today's behavior instead of
 # silently discarding every Gemini verdict for no reason.
 PR_DIFF_AVAILABLE = os.environ.get("PR_DIFF_AVAILABLE", "true").lower() == "true"
-DECISION_FILE = os.environ["DECISION_FILE"]
+DECISION_FILE = os.environ.get("DECISION_FILE", "")
 # Optional -- set by callers that want the full structured decision (every
 # suite/job row, AI confidence, cost/token counts, model) as a standalone
 # machine-readable artifact, mirroring ai-diagnose-failure.py's own
@@ -1084,7 +1095,134 @@ def build_selection_json(
     }
 
 
+def run_merge_queue_preview():
+    """Phase 3a of the CI-gating rollout plan -- informational preview
+    only. Proves the Vertex AI/WIF pipeline actually works synchronously
+    inside a merge_group job (only just made possible by widening the WIF
+    pool's attribute condition to also trust refs/heads/gh-readonly-queue/*,
+    previously refs/heads/main only) WITHOUT changing what any real job
+    runs. Called in-line from a dedicated, dead-end job
+    (e2e-suite-preview) in each e2e-{vmaas,caas,bmaas}-full-install.yml --
+    that job is not a `needs:` of e2e-<suite>-full-install, e2e-<suite>-gate,
+    or anything else in the required-check chain, so this function's
+    result can never affect merge outcomes today.
+
+    Fully self-contained: unlike run_report_mode() below, there is no
+    CONTEXT_FILE artifact, no cross-run/cross-workflow coordination, and
+    no deterministic pre-classification available (that lives in osac's
+    separate jobs-selection.yml, computed once for all three suites
+    together from a real dorny/paths-filter pass -- reproducing it here
+    would reintroduce the cross-run coordination this mode is deliberately
+    avoiding). Gemini is handed an honest "nothing pre-classified" context
+    and judges purely from the diff; SYSTEM_INSTRUCTION/build_user_content/
+    call_gemini/parse_gemini_decisions are reused completely unchanged from
+    run_report_mode() -- only the input context and the final rendering
+    (a plain 3-row table, not the full jobs-selection job-groups layout,
+    which depends on data this mode doesn't have) differ.
+
+    HARD REQUIREMENT: must never raise and must never cause the calling
+    job to fail. There is no decision here anything downstream depends on
+    -- a failure just means the step summary says "preview unavailable"
+    instead of showing a verdict, never a blocked merge. Every branch
+    below is wrapped accordingly; the outer try/except is a last-resort
+    backstop for anything the inner guards didn't anticipate.
+
+    Outputs (<suite>-preview) are emitted for a possible future phase but
+    are NOT consumed by anything yet -- see the calling workflow's own
+    comment.
+    """
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+    output_path = os.environ.get("GITHUB_OUTPUT", "")
+    header = (
+        "## \U0001f50d E2E Suite AI Preview (Phase 3a -- informational only)\n\n"
+        "**This preview does not affect what runs.** No deterministic "
+        "pre-classification is available in this mode (that lives in "
+        "osac's separate Jobs Selection PR comment) -- Gemini judges "
+        "purely from the diff. Outputs are emitted for a possible future "
+        "phase but nothing consumes them yet.\n\n"
+    )
+
+    def write_summary(body):
+        if not summary_path:
+            _safe_print(body)
+            return
+        try:
+            with open(summary_path, "a") as f:
+                f.write(body)
+        except Exception as exc:  # noqa: BLE001 -- must never crash the job
+            _safe_print(f"WARNING: failed to write GITHUB_STEP_SUMMARY: {exc!r}", file=sys.stderr)
+
+    def write_outputs(decisions):
+        if not output_path:
+            return
+        try:
+            with open(output_path, "a") as f:
+                for suite in SUITES:
+                    f.write(f"{suite}-preview={decisions.get(suite, 'unavailable')}\n")
+        except Exception as exc:  # noqa: BLE001 -- must never crash the job
+            _safe_print(f"WARNING: failed to write GITHUB_OUTPUT: {exc!r}", file=sys.stderr)
+
+    def unavailable(reason):
+        write_summary(header + f"_Preview unavailable: {reason}._\n")
+        write_outputs({})
+
+    try:
+        if not PR_DIFF_AVAILABLE:
+            unavailable("PR diff could not be fetched for this merge_group run")
+            return
+
+        # Honest "nothing pre-classified" context -- see docstring above.
+        # build_user_content() is otherwise unchanged from run_report_mode();
+        # feeding it all-False/empty buckets just means every suite's
+        # "clearly relevant" section reads empty, which is the truth in
+        # this mode.
+        synthetic_context = {
+            "deterministic": {"vmaas": False, "caas": False, "bmaas": False},
+            "deterministic_files": {"vmaas": [], "caas": [], "bmaas": []},
+            "ambiguous_files": [],
+            "config_files": [],
+            "netris_relevant_files": [],
+        }
+        user_content = build_user_content(synthetic_context, graphify_context="")
+        response_text = call_gemini(user_content)
+        if not response_text:
+            unavailable("Gemini produced no response")
+            return
+        decisions, reasons, netris, confidence = parse_gemini_decisions(response_text)
+        if not decisions:
+            unavailable("Gemini's response did not parse into a valid decision block")
+            return
+
+        cost_usd, input_tokens, output_tokens, cost_complete = aggregate_cost(_last_usage_metadata, GEMINI_MODEL)
+        cost_line = format_cost_line(cost_usd, input_tokens, output_tokens, GEMINI_MODEL, complete=cost_complete)
+        netris_note = _build_netris_note([], netris)
+
+        lines = [header, "| Suite | AI verdict | Reason |", "|---|---|---|"]
+        for suite in SUITES:
+            lines.append(f"| {suite.upper()} | {decisions.get(suite, 'unavailable')} | {reasons.get(suite, '')} |")
+        lines.append("")
+        lines.append(f"_AI judgment confidence: {confidence}%._" if confidence is not None else "_Confidence not reported._")
+        if netris_note:
+            lines.append(f"\n\U0001f50c **Netris/Agentless-Net signal**: {netris_note}")
+        lines.append(f"<sub>{cost_line}</sub>\n")
+        write_summary("\n".join(lines))
+        write_outputs(decisions)
+    except Exception as exc:  # noqa: BLE001 -- this job must never fail a merge
+        _safe_print(f"WARNING: e2e suite preview failed unexpectedly: {exc!r}", file=sys.stderr)
+        try:
+            unavailable(f"unexpected error ({exc!r})")
+        except Exception:  # noqa: BLE001 -- last-resort backstop, never propagate
+            pass
+
+
 def main():
+    if MODE == "merge-queue-preview":
+        run_merge_queue_preview()
+    else:
+        run_report_mode()
+
+
+def run_report_mode():
     context = load_context()
     ambiguous_files = context.get("ambiguous_files", [])
     config_files = context.get("config_files", [])
