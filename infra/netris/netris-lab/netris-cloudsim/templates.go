@@ -453,7 +453,6 @@ packages:
 # every boot
 bootcmd:
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/bootcmd.log' ]
-  - [ sh, -c, 'bash /etc/network_nics_up.sh' ]
 # run once for setup
 runcmd:
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/runcmd.log' ]
