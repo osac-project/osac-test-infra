@@ -68,9 +68,7 @@
       case "$status" in \
         "status: done") exit 0 ;; \
         "status: error"*) \
-          echo "$status"; \
-          cloud-init status --long 2>&1 || true; \
-          tail -n 100 /var/log/cloud-init-output.log 2>/dev/null || true; \
+          echo "cloud-init reported an error on this softgate; details are omitted from CI output"; \
           exit 2 ;; \
         *) echo "$status"; exit 1 ;; \
       esac' 2>&1
