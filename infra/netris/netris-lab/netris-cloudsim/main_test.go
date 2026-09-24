@@ -59,21 +59,26 @@ func TestPrepareCloudInitSGDoesNotRunNetworkScriptFromBootcmd(t *testing.T) {
 
 	bootcmdStart := strings.Index(cloudInit, "bootcmd:")
 	runcmdStart := -1
+	writeFilesStart := -1
 	if bootcmdStart >= 0 {
-		runcmdStart = strings.Index(cloudInit[bootcmdStart:], "# run once for setup")
+		runcmdStart = strings.Index(cloudInit[bootcmdStart:], "runcmd:")
 		if runcmdStart >= 0 {
 			runcmdStart += bootcmdStart
 		}
+		writeFilesStart = strings.Index(cloudInit[bootcmdStart:], "write_files:")
+		if writeFilesStart >= 0 {
+			writeFilesStart += bootcmdStart
+		}
 	}
-	if bootcmdStart < 0 || runcmdStart < 0 {
-		t.Fatalf("cloud-init is missing the expected bootcmd/runcmd sections")
+	if bootcmdStart < 0 || runcmdStart < 0 || writeFilesStart < 0 || runcmdStart >= writeFilesStart {
+		t.Fatalf("cloud-init is missing the expected bootcmd/runcmd/write_files sections")
 	}
 
 	if strings.Contains(cloudInit[bootcmdStart:runcmdStart], "network_nics_up.sh") {
 		t.Fatal("softgate bootcmd must not execute network_nics_up.sh")
 	}
 
-	if count := strings.Count(cloudInit, "bash /etc/network_nics_up.sh"); count != 1 {
+	if count := strings.Count(cloudInit[runcmdStart:writeFilesStart], "bash /etc/network_nics_up.sh"); count != 1 {
 		t.Fatalf("network_nics_up.sh invocation count = %d, want 1", count)
 	}
 }
