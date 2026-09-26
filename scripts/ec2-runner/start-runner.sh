@@ -9,11 +9,9 @@
 # after this script's SSH session ends, so it's installed as a systemd unit
 # rather than a foreground process.
 #
-# The runner version pinned here should track RUNNER_VERSION in
-# scripts/runners/action-runners-setup.sh -- confirmed during implementation
-# that action-runners-setup.sh's pinned 2.325.0 is now deprecated by GitHub's
-# backend ("Runner version v2.325.0 is deprecated and cannot receive
-# messages"); that script's pin is stale too and should be bumped separately.
+# The runner version is pinned here for this ephemeral EC2 runner. The
+# persistent runner installer in scripts/runners/action-runners-setup.sh has
+# its own version pin and is updated independently.
 #
 # The runner also refuses to run as root unless RUNNER_ALLOW_RUNASROOT=1 is
 # set (GitHub's own safety check in run-helper.sh) -- required here since
@@ -39,8 +37,7 @@
 #                  script's header for why it's per-run, not shared
 #
 # Optional env vars:
-#   RUNNER_VERSION   GitHub Actions runner version (default: 2.335.1, keep in
-#                    sync with scripts/runners/action-runners-setup.sh)
+#   RUNNER_VERSION   GitHub Actions runner version (default: 2.337.0)
 #   RUNNER_CONNECT_TIMEOUT_SECONDS  timeout waiting for the runner to report
 #                    it has actually connected to GitHub (default 60). A
 #                    systemd "active" unit only proves the process is still
@@ -64,7 +61,7 @@ RED="\e[31m"
 : "${JIT_CONFIG:?JIT_CONFIG is required}"
 : "${KNOWN_HOSTS_FILE:?KNOWN_HOSTS_FILE is required}"
 
-RUNNER_VERSION="${RUNNER_VERSION:-2.335.1}"
+RUNNER_VERSION="${RUNNER_VERSION:-2.337.0}"
 RUNNER_CONNECT_TIMEOUT_SECONDS="${RUNNER_CONNECT_TIMEOUT_SECONDS:-60}"
 RUNNER_DIR="/opt/actions-runner"
 SERVICE_NAME="osac-ephemeral-runner"
