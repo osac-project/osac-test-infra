@@ -35,7 +35,7 @@ func TestControllerInfoUsesConfiguredBackendVersion(t *testing.T) {
 	}
 }
 
-func TestPrepareCloudInitSGDoesNotRunNetworkScriptFromBootcmd(t *testing.T) {
+func TestPrepareCloudInitSGGuardsNetworkScriptInBootcmd(t *testing.T) {
 	cloudInit := prepareCloudInitSG(map[string]interface{}{
 		"hostname":          "softgate",
 		"passwordHash":      "hash",
@@ -74,8 +74,9 @@ func TestPrepareCloudInitSGDoesNotRunNetworkScriptFromBootcmd(t *testing.T) {
 		t.Fatalf("cloud-init is missing the expected bootcmd/runcmd/write_files sections")
 	}
 
-	if strings.Contains(cloudInit[bootcmdStart:runcmdStart], "network_nics_up.sh") {
-		t.Fatal("softgate bootcmd must not execute network_nics_up.sh")
+	bootcmd := cloudInit[bootcmdStart:runcmdStart]
+	if !strings.Contains(bootcmd, "if [ -x /etc/network_nics_up.sh ]; then bash /etc/network_nics_up.sh; fi") {
+		t.Fatal("softgate bootcmd must run network_nics_up.sh only when the helper exists")
 	}
 
 	if count := strings.Count(cloudInit[runcmdStart:writeFilesStart], "bash /etc/network_nics_up.sh"); count != 1 {
