@@ -561,26 +561,38 @@ jobs:
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=bmaas_networking
 
-      - name: Archive Netris artifacts
+      - name: Stage Netris artifacts for redacted collection
         if: always()
         shell: bash
-        continue-on-error: true
         run: |
-          archive_paths=()
-          [[ -d reports ]] && archive_paths+=(reports)
-          [[ -d infra/netris/logs ]] && archive_paths+=(infra/netris/logs)
-          if (( ${#archive_paths[@]} > 0 )); then
-            tar -czf bmaas-netris-artifacts.tar.gz "${archive_paths[@]}"
+          set -euo pipefail
+          staging_dir="${RUNNER_TEMP}/osac-artifacts"
+          cleanup_stage() {
+            rm -rf -- "${staging_dir}/reports" "${staging_dir}/netris-logs"
+          }
+          trap cleanup_stage ERR
+          mkdir -p "${staging_dir}"
+          [[ -d reports ]] && cp -a reports "${staging_dir}/reports"
+          [[ -d infra/netris/logs ]] && cp -a infra/netris/logs "${staging_dir}/netris-logs"
+          if [[ -d "${staging_dir}/netris-logs" ]]; then
+            find "${staging_dir}/netris-logs" -type d \( -name must-gather -o -name inspect \) \
+              -prune -print -exec rm -rf -- {} +
+            remaining=$(find "${staging_dir}/netris-logs" -type d \( -name must-gather -o -name inspect \) -print -quit)
+            if [[ -n "${remaining}" ]]; then
+              echo "::error::Refusing to stage raw must-gather/inspect diagnostics: ${remaining}"
+              cleanup_stage
+              exit 1
+            fi
           fi
+          trap - ERR
 
-      - name: Upload artifacts
+      - name: Gather and redact Netris artifacts
         if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: ./.github/actions/gather-artifacts
         with:
-          name: bmaas-netris-artifacts
-          path: bmaas-netris-artifacts.tar.gz
-          if-no-files-found: ignore
+          namespace: osac-e2e-ci
+          kubeconfig-path: /root/.kube/config
+          artifact-name: bmaas-netris-artifacts
 
       - name: Gather EC2 runner artifacts
         if: always()

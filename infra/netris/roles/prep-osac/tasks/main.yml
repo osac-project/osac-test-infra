@@ -257,17 +257,7 @@
     enabled: true
     daemon_reload: true
 
-# --- BMF secrets (must exist before Helm install so BMF pod can mount them) ---
-
-- name: Ensure OSAC namespace exists for BMF secrets
-  when: bare_metal_services | bool
-  ansible.builtin.command:
-    cmd: oc create namespace {{ osac_namespace }}
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _ns_create
-  failed_when: false
-  changed_when: _ns_create.rc == 0
+# --- Metal3 validation prerequisites ---
 
 - name: Ensure Provisioning CR exists for Metal3 validation
   when: bare_metal_services | bool

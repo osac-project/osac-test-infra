@@ -63,13 +63,21 @@
 
 - name: Wait for cloud-init to finish on softgates
   shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
-      "cloud-init status 2>/dev/null | grep -qE 'done|error'" 2>/dev/null
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} ' \
+      status=$(cloud-init status 2>/dev/null || true); \
+      case "$status" in \
+        "status: done") exit 0 ;; \
+        "status: error"*) \
+          echo "cloud-init reported an error on this softgate; details are omitted from CI output"; \
+          exit 2 ;; \
+        *) echo "$status"; exit 1 ;; \
+      esac' 2>&1
   loop: "{{ softgates }}"
   register: _sg_cloudinit
-  until: _sg_cloudinit is not failed
+  until: _sg_cloudinit.rc in [0, 2]
   retries: 60
   delay: 15
+  failed_when: _sg_cloudinit.rc == 2
   changed_when: false
 
 - name: Restore lab DNS on softgates
