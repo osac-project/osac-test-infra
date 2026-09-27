@@ -26,10 +26,18 @@
 
 # The isolated Netris lab exposes its controller API through an HTTP NodePort.
 # Keep _netris_ctl_url as HTTP because the Netris API clients and the deployed
-# fulfillment jobs use that endpoint.  The production OSAC chart schema now
-# requires HTTPS for this low-level setting, so relax only that property in the
-# cloned chart while retaining schema validation for every other value.
+# fulfillment jobs use that endpoint. The networking facade and the AAP values
+# it derives both validate controller URLs as HTTPS-only, so relax only those
+# Netris URL patterns in the cloned chart while retaining every other schema
+# validation rule.
 - name: Allow HTTP Netris controller URL in the isolated lab
+  ansible.builtin.replace:
+    path: "{{ osac_installer_dir }}/charts/osac/values.schema.json"
+    regexp: '(?s)("controllerUrl"\s*:\s*\{\s*"minLength"\s*:\s*1\s*,\s*"pattern"\s*:\s*"\^)(https://)'
+    replace: '\1https?://'
+    validate: "python3 -m json.tool %s"
+
+- name: Allow HTTP derived Netris controller URL in the isolated lab
   ansible.builtin.replace:
     path: "{{ osac_installer_dir }}/charts/osac/values.schema.json"
     regexp: '(?s)("NETRIS_CONTROLLER_URL"\s*:\s*\{\s*"type"\s*:\s*"string"\s*,\s*"pattern"\s*:\s*"\^\$\|\^)(https://)'
@@ -109,6 +117,29 @@
   register: _ssh_private_key
   no_log: true
 
+# The networking facade can source the Netris password from this fixed Secret,
+# which is mounted by both AAP fulfillment instance groups. Create it before
+# Helm renders the AAP resources so the externalSecret path is usable on fresh
+# installs as well as on upgrades.
+- name: Ensure OSAC namespace exists for external Netris credentials
+  ansible.builtin.shell:
+    cmd: |
+      oc create namespace {{ osac_namespace }} --dry-run=client -o yaml | oc apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _osac_namespace
+  changed_when: "'created' in _osac_namespace.stdout or 'configured' in _osac_namespace.stdout"
+
+- name: Create external Netris credentials Secret
+  ansible.builtin.shell:
+    cmd: |
+      oc create secret generic netris-credentials \
+        --from-literal=NETRIS_PASSWORD={{ netris_password }} \
+        -n {{ osac_namespace }} --dry-run=client -o yaml | oc apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
+
 # --- Resolve OCP release CLI image ---
 
 - name: Get CLI image from OCP release
@@ -138,29 +169,27 @@
       {{ {'cliImage': _ocp_cli_image.stdout | trim,
           'bundledPostgres': {'enabled': true},
           'lvms': {'enabled': true, 'channel': 'stable-' + ocp_version},
+          'global': {'networking': {'fabricManager': 'netris', 'k8sManager': '', 'netris': {
+              'controllerUrl': _netris_ctl_url,
+              'credentials': {'username': netris_username, 'externalSecret': true},
+              'siteId': _netris_site_id | string,
+              'tenantId': '1',
+              'tenantName': 'Admin',
+              'mgmtVpcId': _netris_mgmt_vpc_id | string,
+              'mgmtVpcName': ocp_vpc_name,
+              'resourceClassMap': _netris_resource_class_map | string
+            }}},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}},
-                       'controllers': {'networkingProvisioning': true},
-                       'networkManagers': {'enabled': true, 'fabricManagers': {'netris': {'enabled': true}}}},
+                       'controllers': {'networkingProvisioning': true}},
           'bmf': {'env': {'enableNetworkingProvisioning': 'true'}},
-          'networkClass': {'enabled': true, 'title': 'Netris', 'fabricManager': 'netris'},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
-              'NETWORK_CLASS': 'netris',
-              'NETWORK_STEPS_COLLECTION': 'netris.steps',
               'EXTERNAL_ACCESS_BASE_DOMAIN': ocp_base_domain,
               'EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS': ocp_base_domain,
               'EXTERNAL_ACCESS_API_INTERNAL_NETWORK': 'hypershift',
               'HOSTED_CLUSTER_BASE_DOMAIN': ocp_base_domain,
               'HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY': 'SingleReplica',
               'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY': 'SingleReplica',
-              'NETRIS_CONTROLLER_URL': _netris_ctl_url,
-              'NETRIS_USERNAME': netris_username,
-              'NETRIS_SITE_ID': _netris_site_id | string,
-              'NETRIS_TENANT_ID': '1',
-              'NETRIS_TENANT_NAME': 'Admin',
-              'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
-              'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
               'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name,
-              'NETRIS_RESOURCE_CLASS_MAP': _netris_resource_class_map | to_json,
               'SERVER_MGMT_ROUTE_DESTINATION': '192.168.16.0/20',
               'SERVER_MGMT_ROUTE_GATEWAY': '192.168.16.1',
               'SERVER_SSH_BASTION_HOST': '192.168.16.254',
@@ -169,21 +198,13 @@
               'DNS_CLASS': 'dns.route53.dns',
               'DNS_ZONE': dns_hosted_zone
             }, 'secret': {
-              'NETRIS_PASSWORD': netris_password,
               'AWS_ACCESS_KEY_ID': aws_access_key_id,
               'AWS_SECRET_ACCESS_KEY': aws_secret_access_key,
               'SERVER_SSH_KEY': _ssh_private_key.content | b64decode,
               'SERVER_SSH_BASTION_KEY': _ssh_private_key.content | b64decode
             }},
             'networkFulfillment': {'enabled': true, 'config': {
-              'NETRIS_CONTROLLER_URL': _netris_ctl_url,
-              'NETRIS_USERNAME': netris_username,
-              'NETRIS_SITE_ID': _netris_site_id | string,
-              'NETRIS_TENANT_ID': '1',
-              'NETRIS_TENANT_NAME': 'Admin',
               'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name
-            }, 'secret': {
-              'NETRIS_PASSWORD': netris_password
             }}
           }},
           'clusterFulfillment': {'config': {
