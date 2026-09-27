@@ -24,6 +24,18 @@
     version: "{{ osac_branch }}"
     force: true
 
+# The isolated Netris lab exposes its controller API through an HTTP NodePort.
+# Keep _netris_ctl_url as HTTP because the Netris API clients and the deployed
+# fulfillment jobs use that endpoint.  The production OSAC chart schema now
+# requires HTTPS for this low-level setting, so relax only that property in the
+# cloned chart while retaining schema validation for every other value.
+- name: Allow HTTP Netris controller URL in the isolated lab
+  ansible.builtin.replace:
+    path: "{{ osac_installer_dir }}/charts/osac/values.schema.json"
+    regexp: '(?s)("NETRIS_CONTROLLER_URL"\s*:\s*\{\s*"type"\s*:\s*"string"\s*,\s*"pattern"\s*:\s*"\^\$\|\^)(https://)'
+    replace: '\1https?://'
+    validate: "python3 -m json.tool %s"
+
 - name: Determine values directory
   ansible.builtin.set_fact:
     _values_dir: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}"
