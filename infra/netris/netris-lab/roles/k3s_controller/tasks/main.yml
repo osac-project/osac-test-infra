@@ -136,8 +136,12 @@
   when: _nctl_exists.rc != 0
   shell: |
     set -e
-    kubectl rollout status deployment --all -n netris-controller --timeout=600s
-    kubectl rollout status statefulset --all -n netris-controller --timeout=600s
+    for resource in deployment statefulset; do
+      while read -r name; do
+        [ -n "$name" ] || continue
+        kubectl rollout status "$name" -n netris-controller --timeout=600s
+      done < <(kubectl get "$resource" -n netris-controller -o name)
+    done
     kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=netris-controller -n netris-controller --timeout=600s
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -180,8 +184,12 @@
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   shell: |
     set -e
-    kubectl rollout status deployment --all -n netris-controller --timeout=600s
-    kubectl rollout status statefulset --all -n netris-controller --timeout=600s
+    for resource in deployment statefulset; do
+      while read -r name; do
+        [ -n "$name" ] || continue
+        kubectl rollout status "$name" -n netris-controller --timeout=600s
+      done < <(kubectl get "$resource" -n netris-controller -o name)
+    done
     kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=netris-controller -n netris-controller --timeout=600s
   changed_when: false
 
