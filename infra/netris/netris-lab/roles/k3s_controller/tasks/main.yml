@@ -91,47 +91,98 @@
   changed_when: false
   failed_when: false
 
+- name: Record controller Helm job before baseline install
+  when: _nctl_exists.rc != 0
+  shell: kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null || true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _baseline_helm_job_before
+  changed_when: false
+
 - name: Deploy baseline netris-controller (no image overrides)
   when: _nctl_exists.rc != 0
   template:
     src: netris-controller-baseline.yaml.j2
     dest: /var/lib/rancher/k3s/server/manifests/netris-controller.yaml
+  register: _baseline_manifest
 
 - name: Deploy traefik config
   copy:
     src: traefik-config.yaml
     dest: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
 
-- name: Wait for baseline netris-controller pods to be Running
-  when: _nctl_exists.rc != 0
+- name: Wait for baseline controller Helm install to complete
+  when:
+    - _nctl_exists.rc != 0
+    - _baseline_manifest.changed
   shell: |
-    total=$(kubectl get pods -n netris-controller --no-headers 2>/dev/null | grep -v Completed | wc -l)
-    running=$(kubectl get pods -n netris-controller --no-headers 2>/dev/null | grep -v Completed | grep -c Running)
-    if [ "$total" -ge 10 ] && [ "$running" -eq "$total" ]; then echo "ready"; else echo "waiting ($running/$total)"; fi
+    previous_uid="{{ _baseline_helm_job_before.stdout | trim }}"
+    deadline=$(( $(date +%s) + 600 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      current_uid=$(kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
+      if [ -n "$current_uid" ] && [ "$current_uid" != "$previous_uid" ]; then
+        kubectl wait --for=condition=complete --timeout=600s job/helm-install-netris-controller -n netris-controller
+        exit 0
+      fi
+      sleep 5
+    done
+    echo "Timed out waiting for the baseline Helm job to be recreated" >&2
+    exit 1
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-  register: _baseline_ready
-  until: _baseline_ready.stdout == "ready"
-  retries: 60
-  delay: 10
+  changed_when: false
+
+- name: Wait for baseline controller workloads to be ready
+  when: _nctl_exists.rc != 0
+  shell: |
+    set -e
+    kubectl rollout status deployment --all -n netris-controller --timeout=600s
+    kubectl rollout status statefulset --all -n netris-controller --timeout=600s
+    kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=netris-controller -n netris-controller --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+- name: Record controller Helm job before image upgrade
+  shell: kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null || true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _upgrade_helm_job_before
   changed_when: false
 
 - name: Upgrade netris-controller with image overrides
   template:
     src: netris-controller.yaml.j2
     dest: /var/lib/rancher/k3s/server/manifests/netris-controller.yaml
+  register: _upgrade_manifest
 
-- name: Wait for all netris-controller pods to be Running
+- name: Wait for controller Helm upgrade to complete
+  when: _upgrade_manifest.changed
   shell: |
-    total=$(kubectl get pods -n netris-controller --no-headers 2>/dev/null | grep -v Completed | wc -l)
-    running=$(kubectl get pods -n netris-controller --no-headers 2>/dev/null | grep -v Completed | grep -c Running)
-    if [ "$total" -ge 10 ] && [ "$running" -eq "$total" ]; then echo "ready"; else echo "waiting ($running/$total)"; fi
+    previous_uid="{{ _upgrade_helm_job_before.stdout | trim }}"
+    deadline=$(( $(date +%s) + 600 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      current_uid=$(kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
+      if [ -n "$current_uid" ] && [ "$current_uid" != "$previous_uid" ]; then
+        kubectl wait --for=condition=complete --timeout=600s job/helm-install-netris-controller -n netris-controller
+        exit 0
+      fi
+      sleep 5
+    done
+    echo "Timed out waiting for the controller Helm job to be recreated" >&2
+    exit 1
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-  register: pods_ready
-  until: pods_ready.stdout == "ready"
-  retries: 60
-  delay: 10
+  changed_when: false
+
+- name: Wait for controller workloads to be ready
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  shell: |
+    set -e
+    kubectl rollout status deployment --all -n netris-controller --timeout=600s
+    kubectl rollout status statefulset --all -n netris-controller --timeout=600s
+    kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=netris-controller -n netris-controller --timeout=600s
   changed_when: false
 
 - name: Get traefik NodePort for web
