@@ -139,7 +139,8 @@
           'bundledPostgres': {'enabled': true},
           'lvms': {'enabled': true, 'channel': 'stable-' + ocp_version},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}},
-                       'controllers': {'networkingProvisioning': true}},
+                       'controllers': {'networkingProvisioning': true},
+                       'networkManagers': {'enabled': true, 'fabricManagers': {'netris': {'enabled': true}}}},
           'bmf': {'env': {'enableNetworkingProvisioning': 'true'}},
           'networkClass': {'enabled': true, 'title': 'Netris', 'fabricManager': 'netris'},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
