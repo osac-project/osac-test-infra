@@ -177,7 +177,7 @@
               'tenantName': 'Admin',
               'mgmtVpcId': _netris_mgmt_vpc_id | string,
               'mgmtVpcName': ocp_vpc_name,
-              'resourceClassMap': _netris_resource_class_map | string
+              'resourceClassMap': _netris_resource_class_map | to_json
             }}},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}},
                        'controllers': {'networkingProvisioning': true}},
