@@ -117,29 +117,6 @@
   register: _ssh_private_key
   no_log: true
 
-# The networking facade can source the Netris password from this fixed Secret,
-# which is mounted by both AAP fulfillment instance groups. Create it before
-# Helm renders the AAP resources so the externalSecret path is usable on fresh
-# installs as well as on upgrades.
-- name: Ensure OSAC namespace exists for external Netris credentials
-  ansible.builtin.shell:
-    cmd: |
-      oc create namespace {{ osac_namespace }} --dry-run=client -o yaml | oc apply -f -
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _osac_namespace
-  changed_when: "'created' in _osac_namespace.stdout or 'configured' in _osac_namespace.stdout"
-
-- name: Create external Netris credentials Secret
-  ansible.builtin.shell:
-    cmd: |
-      oc create secret generic netris-credentials \
-        --from-literal=NETRIS_PASSWORD={{ netris_password }} \
-        -n {{ osac_namespace }} --dry-run=client -o yaml | oc apply -f -
-  environment:
-    KUBECONFIG: /root/.kube/config
-  no_log: true
-
 # --- Resolve OCP release CLI image ---
 
 - name: Get CLI image from OCP release

@@ -174,8 +174,15 @@ prep-osac:
 	ansible-playbook playbooks/prep-osac.yml $(ANSIBLE_EXTRA)
 
 run-osac-setup:
-	@echo "=== Installing OSAC via Helm (make install) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install \
+	@echo "=== Installing OSAC infrastructure via Helm (make install-infra) ==="
+	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install-infra \
+		PLATFORM=openshift \
+		PROFILE=$(OSAC_PROFILE) \
+		NS=$(OSAC_NAMESPACE)
+	@echo "=== Creating external Netris credentials ==="
+	ansible-playbook playbooks/create-netris-credentials.yml $(ANSIBLE_EXTRA)
+	@echo "=== Installing OSAC application via Helm (make install-osac) ==="
+	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install-osac \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE)

@@ -1,0 +1,13 @@
+---
+# osac-infra owns the target namespace. This role therefore runs only after
+# install-infra has created it and before install-osac renders the networking
+# facade's AAP instance groups.
+- name: Create external Netris credentials Secret
+  ansible.builtin.shell:
+    cmd: |
+      oc create secret generic netris-credentials \
+        --from-literal=NETRIS_PASSWORD={{ netris_password }} \
+        -n {{ osac_namespace }} --dry-run=client -o yaml | oc apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  no_log: true
