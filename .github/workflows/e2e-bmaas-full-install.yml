@@ -75,8 +75,9 @@ on:
           '[{"repo":"osac-project/osac","ref":"my-branch","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"osac-project/osac","ref":"my-branch","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'.
           Each entry supports repo, ref, imageKey (required), containerfile
           (default "Containerfile"), buildType ("containerfile" default, or "ansible-builder"),
-          and context (build context directory relative to repo root; when omitted,
-          defaults to the containerfile's parent directory).
+          context (build context directory relative to repo root; when omitted,
+          defaults to the containerfile's parent directory), and buildArgs
+          (optional array of NAME=VALUE strings passed to podman build as --build-arg).
           Empty array (default) builds
           nothing from source -- use image-overrides for pre-built images instead.
         required: false
@@ -412,12 +413,23 @@ jobs:
               build_context="${component_dir}"
             fi
 
+            # buildArgs is optional. Callers that omit it keep the previous
+            # podman build command; each NAME=VALUE entry becomes --build-arg.
+            build_args=()
+            if ! echo "${COMPONENTS_JSON}" | jq -e ".[$i] | .buildArgs == null or (.buildArgs | type == \"array\" and all(type == \"string\" and test(\"^[A-Za-z_][A-Za-z0-9_]*=.+\") and (test(\"[\\n\\r]\") | not)))" >/dev/null; then
+              echo "::error::components[$i].buildArgs must be an array of NAME=VALUE strings"
+              exit 1
+            fi
+            while IFS= read -r arg; do
+              build_args+=(--build-arg "${arg}")
+            done < <(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildArgs // [] | .[]")
+
             if [[ "${build_type}" == "ansible-builder" ]]; then
               python3 -m pip install --quiet 'ansible-builder~=3.0'
               ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
-              podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
+              podman build "${build_args[@]}" -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
             else
-              podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
+              podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG "${build_args[@]}" -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
             fi
 
             # Extract the osac CLI baked into the fulfillment-service image
