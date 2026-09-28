@@ -10,18 +10,33 @@
 - name: Pull and save container images
   shell: |
     cache_dir="{{ k3s_image_cache_dir }}"
+    failed=0
     for img in {{ container_images | join(' ') }}; do
       fname=$(echo "$img" | sed 's|[/:]|_|g')
       dest="${cache_dir}/${fname}"
-      [ -d "$dest" ] && echo "CACHED $img" && continue
-      if skopeo copy "docker://${img}" "dir:${dest}" >/dev/null 2>&1; then
-        echo "$img" > "${dest}/image-ref"
+      [ -f "${dest}/image-ref" ] && echo "CACHED $img" && continue
+      saved=0
+      for attempt in 1 2 3 4 5; do
+        rm -rf "$dest"
+        if skopeo copy "docker://${img}" "dir:${dest}" >/dev/null 2>&1; then
+          echo "$img" > "${dest}/image-ref"
+          saved=1
+          break
+        fi
+        if [ "$attempt" -lt 5 ]; then
+          delay=$((attempt * 5))
+          echo "Retrying image pull for ${img} in ${delay}s (attempt ${attempt}/5)" >&2
+          sleep "$delay"
+        fi
+      done
+      if [ "$saved" -eq 1 ]; then
         echo "SAVED  $img"
       else
-        rm -rf "$dest"
         echo "FAILED $img"
+        failed=1
       fi
     done
+    [ "$failed" -eq 0 ] || exit 1
   register: cache_result
 
 - name: Show pull results
@@ -35,7 +50,7 @@
     mode: '0644'
   register: cloud_dl
   until: cloud_dl is success
-  retries: 3
+  retries: 5
   delay: 10
   loop:
     - { url: "{{ cumulus_image_url }}", name: "{{ cumulus_image_name }}" }

@@ -26,8 +26,11 @@
   changed_when: false
 
 - name: Check if FRR is running
-  shell: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.122.15 "systemctl is-active frr" 2>/dev/null
+  shell: ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=5 root@192.168.122.15 "systemctl is-active frr" 2>/dev/null
   register: isp_frr_check
+  until: isp_frr_check.rc == 0
+  retries: 5
+  delay: 5
   changed_when: false
   ignore_errors: true
 
@@ -37,7 +40,7 @@
 # best-effort semantics (never fails the play) even when the timeout kills it.
 - name: Wait for cloud-init to finish on ISP server
   when: isp_frr_check.stdout is not defined or isp_frr_check.stdout != "active"
-  shell: timeout -s 9 5m ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@192.168.122.15 "cloud-init status --wait 2>/dev/null || true" || true
+  shell: timeout -s 9 5m ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 -o ServerAliveInterval=30 root@192.168.122.15 "cloud-init status --wait 2>/dev/null || true" || true
   changed_when: false
 
 # Unlike the cloud-init wait above, this one is expected to actually
@@ -52,10 +55,11 @@
 - name: Install and start FRR on ISP server
   when: isp_frr_check.stdout is not defined or isp_frr_check.stdout != "active"
   shell: |
-    timeout -s 9 10m ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@192.168.122.15 "
+    timeout -s 9 10m ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 -o ServerAliveInterval=30 root@192.168.122.15 "
       set -e -o pipefail
       echo 'Acquire::ForceIPv4 \"true\";' > /etc/apt/apt.conf.d/99force-ipv4
-      apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y frr 2>&1 | tail -3
+      echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
+      apt-get -o Acquire::Retries=5 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y frr 2>&1 | tail -3
       sed -i '/bgpd=no/c\bgpd=yes' /etc/frr/daemons
       test -f /tmp/frr.conf && cp /tmp/frr.conf /etc/frr/frr.conf || true
       systemctl restart frr

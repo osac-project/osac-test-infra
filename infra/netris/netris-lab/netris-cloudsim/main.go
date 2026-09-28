@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apparentlymart/go-cidr/cidr"
 	napi "github.com/netrisai/netriswebapi/v2"
@@ -449,7 +450,7 @@ func main() {
 						"netrisASN":             netrisInfo.SiteObject.PublicAsn,
 						"bgpPassword":           conf.Get("bgp_password"),
 						"dnsServer":             dnsServer,
-							"passwordHash":          vmRootPasswordHash,
+						"passwordHash":          vmRootPasswordHash,
 					}, "isp-server")
 					if err != nil {
 						return err
@@ -472,7 +473,7 @@ func main() {
 						"netrisASN":             netrisInfo.SiteObject.PublicAsn,
 						"bgpPassword":           conf.Get("bgp_password"),
 						"dnsServer":             dnsServer,
-							"passwordHash":          vmRootPasswordHash,
+						"passwordHash":          vmRootPasswordHash,
 					}, "isp-server")
 					if err != nil {
 						return err
@@ -503,7 +504,7 @@ func main() {
 					// Specific resource values
 					specificHostVCPUs := 4     // CPUs for specific hosts (0 for server_vcpu value)
 					specificHostMemory := 8192 // Memory in MB for specific hosts (0 for server_memory value)
-					specificHostVolume := 100   // Volume size in GB for specific hosts (0 for server_volume_size or 6 GB)
+					specificHostVolume := 100  // Volume size in GB for specific hosts (0 for server_volume_size or 6 GB)
 
 					// Get hypers_list from config and parse as slice
 					var hyperIPs []string
@@ -648,18 +649,20 @@ func main() {
 			}
 
 			script := fmt.Sprintf(`
+set -e -o pipefail
 if command -v apt-get &>/dev/null; then
-  sudo apt-get update
-  sudo apt-get install openvpn -y
+  echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-netris-retries >/dev/null
+  sudo apt-get -o Acquire::Retries=5 update
+  sudo apt-get -o Acquire::Retries=5 install openvpn -y
 elif command -v dnf &>/dev/null; then
-  sudo dnf install -y openvpn
+  sudo dnf install --setopt=retries=5 -y openvpn
 fi
 
-sudo curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ta.key -o /etc/openvpn/ta.key
-sudo curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myclient1.crt -o /etc/openvpn/myclient1.crt
-sudo curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myclient1.key -o /etc/openvpn/myclient1.key
-sudo curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ca.crt -o /etc/openvpn/ca.crt
-sudo curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/client.conf -o /etc/openvpn/client.conf
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ta.key -o /etc/openvpn/ta.key
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myclient1.crt -o /etc/openvpn/myclient1.crt
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myclient1.key -o /etc/openvpn/myclient1.key
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ca.crt -o /etc/openvpn/ca.crt
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/client.conf -o /etc/openvpn/client.conf
 
 sudo sed -i 's/my-server-2 1194/%s 1194/g' /etc/openvpn/client.conf
 
@@ -694,7 +697,7 @@ echo "VPN client configured and started successfully"
 					aliasesBuilder.WriteString("# Management Server\n")
 					ipStr := strings.Split(serversGW, "/")[0]
 					user := "root"
-					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no %s@%s'\n", vm.Name, user, ipStr))
+					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 %s@%s'\n", vm.Name, user, ipStr))
 					aliasesBuilder.WriteString("\n")
 					break
 				}
@@ -706,7 +709,7 @@ echo "VPN client configured and started successfully"
 					aliasesBuilder.WriteString("# ISP Server\n")
 					ipStr := "192.168.122.15"
 					user := "root"
-					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no %s@%s'\n", vm.Name, user, ipStr))
+					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 %s@%s'\n", vm.Name, user, ipStr))
 					aliasesBuilder.WriteString("\n")
 					break
 				}
@@ -725,7 +728,7 @@ echo "VPN client configured and started successfully"
 						ipStr = strings.Split(ipStr, "/")[0]
 					}
 					user := "root"
-					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no %s@%s'\n", vm.Name, user, ipStr))
+					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 %s@%s'\n", vm.Name, user, ipStr))
 				}
 			}
 			if hasSoftgates {
@@ -745,7 +748,7 @@ echo "VPN client configured and started successfully"
 						ipStr = strings.Split(ipStr, "/")[0]
 					}
 					user := "cumulus"
-					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no %s@%s'\n", vm.Name, user, ipStr))
+					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 %s@%s'\n", vm.Name, user, ipStr))
 				}
 			}
 			if hasSwitches {
@@ -765,7 +768,7 @@ echo "VPN client configured and started successfully"
 						ipStr = strings.Split(ipStr, "/")[0]
 					}
 					user := "root"
-					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no %s@%s'\n", vm.Name, user, ipStr))
+					aliasesBuilder.WriteString(fmt.Sprintf("alias %s='ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 %s@%s'\n", vm.Name, user, ipStr))
 				}
 			}
 			if hasServers {
@@ -951,6 +954,26 @@ func controllerInfo(ctlCfg NetrisController, authKey string, aptRepo string) Net
 }
 
 func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW string, aptRepo string) (*NetrisInfo, error) {
+	const maxAttempts = 5
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		netrisInfo, err := getFromNetrisOnce(ctx, ctlCfg, serversGW, aptRepo)
+		if err == nil {
+			return netrisInfo, nil
+		}
+		lastErr = err
+		if attempt < maxAttempts {
+			delay := time.Duration(attempt*5) * time.Second
+			ctx.Log.Warn(fmt.Sprintf("Netris API request failed (attempt %d/%d); retrying in %s: %v", attempt, maxAttempts, delay, err), nil)
+			time.Sleep(delay)
+		}
+	}
+
+	return nil, fmt.Errorf("Netris API requests failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+func getFromNetrisOnce(ctx *pulumi.Context, ctlCfg NetrisController, serversGW string, aptRepo string) (*NetrisInfo, error) {
 	// Netris Client
 	nclient, err := napi.Client(ctlCfg.URL, ctlCfg.Login, ctlCfg.Pass, 60)
 	if err != nil {

@@ -27,8 +27,18 @@
 
 - name: Install K3s
   when: k3s_check.rc != 0
-  shell: "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -"
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      curl --fail --silent --show-error --location \
+        --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+        https://get.k3s.io -o /tmp/install-k3s.sh
+      INSTALL_K3S_VERSION={{ k3s_version }} sh /tmp/install-k3s.sh
+    executable: /bin/bash
   register: k3s_install
+  until: k3s_install.rc == 0
+  retries: 5
+  delay: 10
 
 - name: Ensure K3s is running
   systemd:
@@ -89,15 +99,22 @@
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: _nctl_exists
   changed_when: false
-  failed_when: false
+  until: _nctl_exists.rc == 0 or 'NotFound' in _nctl_exists.stderr
+  retries: 5
+  delay: 5
+  failed_when: _nctl_exists.rc != 0 and 'NotFound' not in _nctl_exists.stderr
 
 - name: Record controller Helm job before baseline install
   when: _nctl_exists.rc != 0
-  shell: kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null || true
+  shell: kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: _baseline_helm_job_before
   changed_when: false
+  until: _baseline_helm_job_before.rc == 0 or 'NotFound' in _baseline_helm_job_before.stderr
+  retries: 5
+  delay: 5
+  failed_when: _baseline_helm_job_before.rc != 0 and 'NotFound' not in _baseline_helm_job_before.stderr
 
 - name: Deploy baseline netris-controller (no image overrides)
   when: _nctl_exists.rc != 0
@@ -148,11 +165,15 @@
   changed_when: false
 
 - name: Record controller Helm job before image upgrade
-  shell: kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null || true
+  shell: kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: _upgrade_helm_job_before
   changed_when: false
+  until: _upgrade_helm_job_before.rc == 0 or 'NotFound' in _upgrade_helm_job_before.stderr
+  retries: 5
+  delay: 5
+  failed_when: _upgrade_helm_job_before.rc != 0 and 'NotFound' not in _upgrade_helm_job_before.stderr
 
 - name: Upgrade netris-controller with image overrides
   template:
@@ -198,6 +219,9 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: traefik_nodeport
+  until: traefik_nodeport.rc == 0 and (traefik_nodeport.stdout | length) > 0
+  retries: 5
+  delay: 5
   changed_when: false
 
 - name: Set controller_nodeport fact
@@ -256,7 +280,8 @@
     status_code: 200
     timeout: 60
   register: api_verify
-  retries: 10
+  until: (api_verify.status | default(0)) == 200
+  retries: 5
   delay: 10
 
 - name: Check if license file exists
@@ -266,12 +291,14 @@
 
 - name: Apply license via collection
   when: license_file.stat.exists
-  ansible.builtin.include_role:
-    name: netris.controller.license
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
   vars:
-    netris_controller_url: "http://localhost:{{ controller_nodeport }}"
-    netris_username: "{{ netris_login }}"
-    netris_validate_certs: false
-    netris_timeout: 30
-    license_state: present
-    license_key_file: "{{ netris_license_file }}"
+    netris_retry_role_name: netris.controller.license
+    netris_retry_role_vars:
+      netris_controller_url: "http://localhost:{{ controller_nodeport }}"
+      netris_username: "{{ netris_login }}"
+      netris_validate_certs: false
+      netris_timeout: 30
+      license_state: present
+      license_key_file: "{{ netris_license_file }}"
+    netris_retry_attempt: 1

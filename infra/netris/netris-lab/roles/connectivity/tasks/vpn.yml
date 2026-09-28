@@ -27,7 +27,7 @@
   changed_when: false
 
 - name: Wait for mgmt-server OpenVPN server
-  shell: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.122.10 "systemctl is-active openvpn@server"
+  shell: ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=5 root@192.168.122.10 "systemctl is-active openvpn@server"
   register: vpn_server_check
   until: vpn_server_check.stdout == "active"
   retries: 30
@@ -35,13 +35,17 @@
   changed_when: false
 
 - name: Fix OpenVPN server topology
-  shell: |
-    ssh -o StrictHostKeyChecking=no root@192.168.122.10 "
+  ansible.builtin.shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 root@192.168.122.10 "
       if ! grep -q 'topology subnet' /etc/openvpn/server.conf; then
         sed -i '/^server /a topology subnet' /etc/openvpn/server.conf
         systemctl restart openvpn@server
       fi
     "
+  register: _vpn_topology_fix
+  until: _vpn_topology_fix.rc == 0
+  retries: 5
+  delay: 10
   changed_when: false
 
 - name: Create RHEL openvpn client directory

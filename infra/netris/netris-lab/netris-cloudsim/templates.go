@@ -131,11 +131,12 @@ packages:
 {{- end }}
 # every boot
 bootcmd:
+  - printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/80-netris-retries
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/bootcmd.log' ]
 # run once for setup
 runcmd:
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/runcmd.log' ]
-  - [ sh, -c, 'apt-get update && apt-get install isc-dhcp-client -y' ]
+  - [ sh, -c, 'apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install isc-dhcp-client -y' ]
   - [dhclient, -v]
   - |
     #!/bin/bash
@@ -188,7 +189,7 @@ runcmd:
     echo "deb [signed-by=/usr/share/keyrings/netris-public-keyring.gpg] http://repo.netris.ai/repo/ noble {{ .ctlInfo.AptRepo }}" | sudo tee /etc/apt/sources.list.d/netris.list
     # Wait until internet is accessible
     check_connectivity
-    apt-get update && apt-get install -y netris-hnp
+    apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install -y netris-hnp
     sudo sed -i '/preserve_hostname: false/c\preserve_hostname: true' /etc/cloud/cloud.cfg
 write_files:
   - path: /root/netris-public.key
@@ -452,12 +453,13 @@ packages:
 {{- end }}
 # every boot
 bootcmd:
+  - printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/80-netris-retries
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/bootcmd.log' ]
   - [ sh, -c, 'if [ -x /etc/network_nics_up.sh ]; then bash /etc/network_nics_up.sh; fi' ]
 # run once for setup
 runcmd:
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/runcmd.log' ]
-  - [ sh, -c, 'apt-get update && apt-get install isc-dhcp-client -y' ]
+  - [ sh, -c, 'apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install isc-dhcp-client -y' ]
   - [dhclient, -v]
   - |
     #!/bin/bash
@@ -527,7 +529,8 @@ runcmd:
     rm -f /etc/resolv.conf
     echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
 
-    curl -fsSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug
+    set -o pipefail
+    curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug || exit $?
 
     # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
     echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
@@ -660,6 +663,7 @@ packages:
 {{- end }}
 # every boot
 bootcmd:
+  - printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/80-netris-retries
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/bootcmd.log' ]
 # run once for setup
 runcmd:
@@ -858,6 +862,7 @@ packages:
 {{- end }}
 # every boot
 bootcmd:
+  - printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/80-netris-retries
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/bootcmd.log' ]
 # run once for setup
 runcmd:
@@ -1043,6 +1048,7 @@ packages:
 {{- end }}
 # every boot
 bootcmd:
+  - printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/80-netris-retries
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/bootcmd.log' ]
 # run once for setup
 runcmd:
@@ -1056,11 +1062,11 @@ runcmd:
   - [ sh, -c, 'echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf' ]
   - [ sh, -c, 'sysctl -p' ]
   - [ sh, -c, 'iptables-restore < /etc/iptables/rules.v4' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ca.crt -o /etc/openvpn/ca.crt' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/dh.pem -o /etc/openvpn/dh.pem' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myservername.crt -o /etc/openvpn/myservername.crt' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myservername.key -o /etc/openvpn/myservername.key' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ta.key -o /etc/openvpn/ta.key' ]
+  - [ sh, -c, 'curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ca.crt -o /etc/openvpn/ca.crt' ]
+  - [ sh, -c, 'curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/dh.pem -o /etc/openvpn/dh.pem' ]
+  - [ sh, -c, 'curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myservername.crt -o /etc/openvpn/myservername.crt' ]
+  - [ sh, -c, 'curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myservername.key -o /etc/openvpn/myservername.key' ]
+  - [ sh, -c, 'curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ta.key -o /etc/openvpn/ta.key' ]
   - [ sh, -c, 'cp /tmp/ovpn-server.conf /etc/openvpn/server.conf' ]
   - [ sh, -c, 'mkdir /etc/openvpn/ccd' ]
   - [ sh, -c, 'echo "ifconfig-push 10.8.0.2 255.255.255.0" > /etc/openvpn/ccd/myclient1' ]
@@ -1132,7 +1138,7 @@ write_files:
 
       # Uncomment to setup SSH key authentication for Ansible
       mkdir -p /home/cumulus/.ssh
-      wget -q -O /home/cumulus/.ssh/authorized_keys $SSH_URL
+      wget --tries=5 --waitretry=5 --timeout=30 -q -O /home/cumulus/.ssh/authorized_keys $SSH_URL
 
       # Uncomment to unexpire and change the default cumulus user password
       passwd -x 99999 cumulus
@@ -1217,9 +1223,10 @@ write_files:
 
       # Check if NOS is cumulus_nvue
       if [ "$NOS" == "cumulus_nvue" ]; then
-          curl -fksSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --hw-nos cumulus_nvue --apt-repo $APT_REPO --debug
+          set -o pipefail
+          curl --fail --insecure --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --hw-nos cumulus_nvue --apt-repo $APT_REPO --debug || exit $?
       else
-          curl -fksSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION_OLD --hostname $HOSTNAME --auth $AUTHKEY --apt-repo $APT_REPO --debug
+          curl --fail --insecure --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION_OLD --hostname $HOSTNAME --auth $AUTHKEY --apt-repo $APT_REPO --debug || exit $?
       fi
 
       reboot

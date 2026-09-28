@@ -2,7 +2,7 @@
 # === Bootstrap packages (needed before anything else) ===
 
 - name: Install bootstrap packages
-  dnf:
+  ansible.builtin.dnf:
     name:
       - tar
       - gzip
@@ -10,11 +10,20 @@
       - curl
       - python3-pip
     state: present
+  register: _bootstrap_packages
+  until: _bootstrap_packages is succeeded
+  retries: 5
+  delay: 10
 
 # === Ansible collections ===
 
 - name: Install Ansible collections
-  command: ansible-galaxy collection install -r {{ role_path }}/../../requirements.yml -p {{ role_path }}/../../collections --force
+  ansible.builtin.command:
+    cmd: ansible-galaxy collection install -r {{ role_path }}/../../requirements.yml -p {{ role_path }}/../../collections --force
+  register: _collection_install
+  until: _collection_install.rc == 0
+  retries: 5
+  delay: 10
   changed_when: false
 
 # === Software tools ===
@@ -29,9 +38,14 @@
   when: go_check.rc != 0
   block:
     - name: Download Go
-      get_url:
+      ansible.builtin.get_url:
         url: https://go.dev/dl/go1.21.13.linux-amd64.tar.gz
         dest: /tmp/go1.21.13.linux-amd64.tar.gz
+        timeout: 60
+      register: _go_download
+      until: _go_download is succeeded
+      retries: 5
+      delay: 10
     - name: Extract Go
       unarchive:
         src: /tmp/go1.21.13.linux-amd64.tar.gz
@@ -51,9 +65,18 @@
 
 - name: Install Pulumi
   when: pulumi_check.rc != 0
-  shell: curl -fsSL https://get.pulumi.com | sh
-  args:
-    creates: /root/.pulumi/bin/pulumi
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      curl --fail --silent --show-error --location \
+        --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+        https://get.pulumi.com -o /tmp/install-pulumi.sh
+      sh /tmp/install-pulumi.sh
+    executable: /bin/bash
+  register: _pulumi_install
+  until: _pulumi_install.rc == 0
+  retries: 5
+  delay: 10
 
 - name: Set PULUMI_CONFIG_PASSPHRASE
   lineinfile:
@@ -75,26 +98,43 @@
 
 - name: Install OpenTofu
   when: tofu_check.rc != 0
-  shell: |
-    curl -fsSL https://get.opentofu.org/install-opentofu.sh -o /tmp/install-opentofu.sh
-    chmod +x /tmp/install-opentofu.sh
-    /tmp/install-opentofu.sh --install-method rpm
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      curl --fail --silent --show-error --location \
+        --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+        https://get.opentofu.org/install-opentofu.sh -o /tmp/install-opentofu.sh
+      chmod +x /tmp/install-opentofu.sh
+      /tmp/install-opentofu.sh --install-method rpm
+    executable: /bin/bash
+  register: _tofu_install
+  until: _tofu_install.rc == 0
+  retries: 5
+  delay: 10
 
 - name: Enable EPEL repository (Rocky/CentOS)
-  dnf:
+  ansible.builtin.dnf:
     name: epel-release
     state: present
   when: ansible_distribution in ['Rocky', 'CentOS']
+  register: _epel_package_install
+  until: _epel_package_install is succeeded
+  retries: 5
+  delay: 10
 
 - name: Enable EPEL repository (RHEL)
-  dnf:
+  ansible.builtin.dnf:
     name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_distribution_major_version }}.noarch.rpm
     state: present
     disable_gpg_check: true
   when: ansible_distribution == 'RedHat'
+  register: _epel_package_install
+  until: _epel_package_install is succeeded
+  retries: 5
+  delay: 10
 
 - name: Install required packages
-  dnf:
+  ansible.builtin.dnf:
     name:
       - openvpn
       - socat
@@ -113,6 +153,10 @@
       - skopeo
       - nftables
     state: present
+  register: _required_packages
+  until: _required_packages is succeeded
+  retries: 5
+  delay: 10
 
 # === Host-side E2E test tools ===
 #
@@ -127,12 +171,20 @@
   changed_when: false
   failed_when: false
 
+- name: Pull uv image from the official container registry
+  ansible.builtin.command:
+    cmd: podman pull ghcr.io/astral-sh/uv:latest
+  register: _uv_image_pull
+  until: _uv_image_pull.rc == 0
+  retries: 5
+  delay: 10
+  when: _uv_check.rc != 0
+
 - name: Install uv from the official container image
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
       uv_image='ghcr.io/astral-sh/uv:latest'
-      podman pull "${uv_image}"
       uv_container="$(podman create "${uv_image}")"
       trap 'podman rm -f "${uv_container}" >/dev/null 2>&1 || true' EXIT
       podman cp "${uv_container}:/uv" /usr/local/bin/uv
@@ -156,10 +208,10 @@
       grpcurl_url="https://github.com/fullstorydev/grpcurl/releases/download/v${grpcurl_version}"
       grpcurl_tmp="$(mktemp -d)"
       trap 'rm -rf "${grpcurl_tmp}"' EXIT
-      curl --fail --location --retry 5 --retry-delay 2 \
+      curl --fail --location --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
         --output "${grpcurl_tmp}/${grpcurl_tarball}" \
         "${grpcurl_url}/${grpcurl_tarball}"
-      curl --fail --location --retry 5 --retry-delay 2 \
+      curl --fail --location --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
         --output "${grpcurl_tmp}/checksums.txt" \
         "${grpcurl_url}/grpcurl_${grpcurl_version}_checksums.txt"
       grep " ${grpcurl_tarball}$" "${grpcurl_tmp}/checksums.txt" \
@@ -189,8 +241,16 @@
       - pip
       - install
       - --ignore-installed
+      - --retries
+      - "5"
+      - --timeout
+      - "30"
       - bcrypt
       - netaddr
+  register: _netris_python_install
+  until: _netris_python_install.rc == 0
+  retries: 5
+  delay: 10
   changed_when: true
   when: _netris_dependencies_import.rc != 0
 
@@ -225,7 +285,11 @@
   changed_when: false
 
 - name: Verify SSH to localhost
-  command: ssh -o BatchMode=yes root@127.0.0.1 echo OK
+  command: ssh -o BatchMode=yes -o ConnectionAttempts=5 -o ConnectTimeout=5 root@127.0.0.1 echo OK
+  register: _ssh_local_check
+  until: _ssh_local_check.rc == 0
+  retries: 5
+  delay: 5
   changed_when: false
 
 - name: Set rmem_default sysctl
