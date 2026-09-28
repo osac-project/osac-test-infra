@@ -166,7 +166,8 @@ for i in $(seq 1 "${BMH_COUNT}"); do
   VARS_PATH="${VM_DISK_DIR}/${VM_NAME}-VARS.fd"
 
   echo "  Creating VM: ${VM_NAME} (MAC: ${MAC})..."
-  qemu-img create -f qcow2 "${DISK_PATH}" 50G
+  # Assisted needs at least 100 GB; 150 GB was verified locally for worker installs.
+  qemu-img create -f qcow2 "${DISK_PATH}" 150G
   cp "${OVMF_VARS}" "${VARS_PATH}"
 
   # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails with
