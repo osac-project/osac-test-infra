@@ -1,9 +1,11 @@
 ---
 - name: Read E-BGP sessions via collection
-  ansible.builtin.include_role:
-    name: netris.controller.ebgp
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
   vars:
-    ebgp_state: read
+    netris_retry_role_name: netris.controller.ebgp
+    netris_retry_role_vars:
+      ebgp_state: read
+    netris_retry_attempt: 1
 
 - name: Check E-BGP sessions
   ansible.builtin.set_fact:
