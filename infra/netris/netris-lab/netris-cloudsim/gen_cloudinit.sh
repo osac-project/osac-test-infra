@@ -78,6 +78,6 @@ ${PUBLIC_BRIDGE_CMDS}
   - [ sh, -c, 'sudo virsh pool-start default' ]
   - [ sh, -c, 'sudo virsh pool-autostart default' ]
   - [ sh, -c, 'iptables -I FORWARD -p tcp --dport 1194 -j ACCEPT' ]
-  - [ sh, -c, 'sudo curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 http://downloads.netris.ai/cumulus-linux-5.11.3-vx-amd64-qemu.qcow2 -o /var/lib/libvirt/images/cumulus-linux-5.11.3.qcow2' ]
-  - [ sh, -c, 'sudo curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img -o /var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img' ]
+  - [ sh, -c, 'sudo curl http://downloads.netris.ai/cumulus-linux-5.11.3-vx-amd64-qemu.qcow2 -o /var/lib/libvirt/images/cumulus-linux-5.11.3.qcow2' ]
+  - [ sh, -c, 'sudo curl https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img -o /var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img' ]
 EOF

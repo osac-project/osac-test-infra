@@ -47,11 +47,11 @@ rebuild_vm_on_hypervisor() {
     echo "Checking VM on hypervisor: $hypervisor_ip"
 
     # Check if the VM exists on the hypervisor
-    if ssh -o ConnectionAttempts=5 -o ConnectTimeout=10 "${SSH_USER}@${hypervisor_ip}" "sudo virsh dominfo ${VM_NAME} &>/dev/null"; then
+    if ssh "${SSH_USER}@${hypervisor_ip}" "sudo virsh dominfo ${VM_NAME} &>/dev/null"; then
         echo "VM $VM_NAME found on hypervisor $hypervisor_ip. Proceeding with rebuild..."
 
         # Run the rebuild commands remotely
-        ssh -o ConnectionAttempts=5 -o ConnectTimeout=10 "${SSH_USER}@${hypervisor_ip}" << EOF
+        ssh "${SSH_USER}@${hypervisor_ip}" << EOF
 VOL_NAME=\$(sudo virsh domblklist "$VM_NAME" --details | grep disk | awk '{print \$4}')
 VOLUME_PATH=\$(sudo virsh vol-path --pool default "\$VOL_NAME")
 

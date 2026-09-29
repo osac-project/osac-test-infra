@@ -30,9 +30,6 @@
   register: _gather_fulfillment_host
   changed_when: false
   failed_when: false
-  until: _gather_fulfillment_host.rc == 0 and (_gather_fulfillment_host.stdout | length) > 0
-  retries: 4
-  delay: 2
 
 - name: Get service account token for gather
   ansible.builtin.shell:
@@ -42,14 +39,11 @@
   register: _gather_sa_token
   changed_when: false
   failed_when: false
-  until: _gather_sa_token.rc == 0 and (_gather_sa_token.stdout | length) > 0
-  retries: 4
-  delay: 2
   no_log: true
 
 - name: Gather fulfillment host types
   ansible.builtin.shell: |
-    curl -sfk --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 30 --connect-timeout 5 --max-time 60 -H "Authorization: Bearer ${GATHER_TOKEN}" \
+    curl -sfk -H "Authorization: Bearer ${GATHER_TOKEN}" \
       "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/host_types" \
       2>&1 | python3 -m json.tool > {{ _gather_dir }}/caas/fulfillment-api/host-types.json 2>&1 \
       || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/host-types.json
@@ -62,7 +56,7 @@
 
 - name: Gather fulfillment cluster catalog items
   ansible.builtin.shell: |
-    curl -sfk --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 30 --connect-timeout 5 --max-time 60 -H "Authorization: Bearer ${GATHER_TOKEN}" \
+    curl -sfk -H "Authorization: Bearer ${GATHER_TOKEN}" \
       "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/cluster_catalog_items" \
       2>&1 | python3 -m json.tool > {{ _gather_dir }}/caas/fulfillment-api/catalog-items.json 2>&1 \
       || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/catalog-items.json
@@ -75,7 +69,7 @@
 
 - name: Gather fulfillment clusters
   ansible.builtin.shell: |
-    curl -sfk --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 30 --connect-timeout 5 --max-time 60 -H "Authorization: Bearer ${GATHER_TOKEN}" \
+    curl -sfk -H "Authorization: Bearer ${GATHER_TOKEN}" \
       "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/clusters" 2>/dev/null \
       | python3 -c "
     import sys, json
@@ -100,7 +94,7 @@
 
 - name: Gather fulfillment cluster templates
   ansible.builtin.shell: |
-    curl -sfk --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 30 --connect-timeout 5 --max-time 60 -H "Authorization: Bearer ${GATHER_TOKEN}" \
+    curl -sfk -H "Authorization: Bearer ${GATHER_TOKEN}" \
       "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/cluster_templates" \
       2>&1 | python3 -m json.tool > {{ _gather_dir }}/caas/fulfillment-api/cluster-templates.json 2>&1 \
       || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/cluster-templates.json
@@ -133,9 +127,6 @@
   register: _hc_ns
   changed_when: false
   failed_when: false
-  until: _hc_ns.rc == 0 and (_hc_ns.stdout | length) > 0
-  retries: 4
-  delay: 2
 
 - name: Get hosted cluster name
   ansible.builtin.shell:
@@ -146,23 +137,17 @@
   register: _hc_name
   changed_when: false
   failed_when: false
-  until: _hc_name.rc == 0 and (_hc_name.stdout | length) > 0
-  retries: 4
-  delay: 2
   when: _hc_ns.stdout | default('') | length > 0
 
 - name: Extract hosted cluster kubeconfig
   ansible.builtin.shell: |
-    for attempt in 1 2 3 4; do
-      SECRET_NAME=$(oc --request-timeout=15s get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].status.kubeconfig.name}' 2>/dev/null)
-      if [ -n "${SECRET_NAME}" ] && \
-        oc --request-timeout=15s get secret "${SECRET_NAME}" -n "{{ _hc_ns.stdout }}" -o jsonpath='{.data.kubeconfig}' 2>/dev/null \
-          | base64 -d > /tmp/caas-hosted-kubeconfig 2>/dev/null && [ -s /tmp/caas-hosted-kubeconfig ]; then
-        exit 0
-      fi
-      [ "$attempt" -eq 4 ] || sleep 2
-    done
-    echo "hosted cluster kubeconfig unavailable after 4 attempts"
+    SECRET_NAME=$(oc --request-timeout=15s get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].status.kubeconfig.name}' 2>/dev/null)
+    if [ -n "${SECRET_NAME}" ] && \
+      oc --request-timeout=15s get secret "${SECRET_NAME}" -n "{{ _hc_ns.stdout }}" -o jsonpath='{.data.kubeconfig}' 2>/dev/null \
+        | base64 -d > /tmp/caas-hosted-kubeconfig 2>/dev/null && [ -s /tmp/caas-hosted-kubeconfig ]; then
+      exit 0
+    fi
+    echo "hosted cluster kubeconfig unavailable"
     rm -f /tmp/caas-hosted-kubeconfig
   environment:
     KUBECONFIG: /root/.kube/config
@@ -183,27 +168,21 @@
     fi
 
     export KUBECONFIG="$kubeconfig"
-    retry_oc() {
+    capture_oc() {
       local output="$1"
       shift
-      local attempt
-      for attempt in 1 2 3 4; do
-        oc --request-timeout=15s "$@" > "$output" 2>&1
-        [ "$?" -eq 0 ] && return 0
-        [ "$attempt" -eq 4 ] || sleep 2
-      done
-      return 1
+      oc --request-timeout=15s "$@" > "$output" 2>&1
     }
 
-    retry_oc "$out/nodes.txt" get nodes -o wide || true
-    retry_oc "$out/clusteroperators.txt" get clusteroperators -o wide || true
-    retry_oc "$out/clusterversion.txt" get clusterversion -o wide || true
-    retry_oc "$out/pods-all.txt" get pods -A -o wide || true
-    retry_oc "$out/workloads.txt" get deployments,statefulsets,daemonsets,jobs -A -o wide || true
-    retry_oc "$out/events.txt" get events -A --sort-by=.metadata.creationTimestamp || true
+    capture_oc "$out/nodes.txt" get nodes -o wide || true
+    capture_oc "$out/clusteroperators.txt" get clusteroperators -o wide || true
+    capture_oc "$out/clusterversion.txt" get clusterversion -o wide || true
+    capture_oc "$out/pods-all.txt" get pods -A -o wide || true
+    capture_oc "$out/workloads.txt" get deployments,statefulsets,daemonsets,jobs -A -o wide || true
+    capture_oc "$out/events.txt" get events -A --sort-by=.metadata.creationTimestamp || true
 
     pod_data=$(mktemp)
-    retry_oc "$pod_data" get pods -A -o json || true
+    capture_oc "$pod_data" get pods -A -o json || true
     pods=$(jq -r '
       .items[]
       | select(.status.phase != "Succeeded")
@@ -223,8 +202,8 @@
     while IFS=$'\t' read -r namespace pod; do
       [ -n "$namespace" ] && [ -n "$pod" ] || continue
       safe_name=$(printf '%s-%s' "$namespace" "$pod" | tr -c 'A-Za-z0-9._-' '_')
-      retry_oc "$out/pods/${safe_name}.log" logs "$pod" -n "$namespace" --all-containers --timestamps --tail=2000 || true
-      retry_oc "$out/pods/${safe_name}-previous.log" logs "$pod" -n "$namespace" --all-containers --previous --timestamps --tail=2000 || true
+      capture_oc "$out/pods/${safe_name}.log" logs "$pod" -n "$namespace" --all-containers --timestamps --tail=2000 || true
+      capture_oc "$out/pods/${safe_name}-previous.log" logs "$pod" -n "$namespace" --all-containers --previous --timestamps --tail=2000 || true
     done <<< "$pods"
 
     echo "Collected hosted-cluster status and unhealthy-pod logs; raw must-gather and inspect archives are excluded from the upload."

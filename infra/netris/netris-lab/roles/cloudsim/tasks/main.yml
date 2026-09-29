@@ -4,9 +4,6 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: traefik_nodeport
-  until: traefik_nodeport.rc == 0 and (traefik_nodeport.stdout | length) > 0
-  retries: 5
-  delay: 5
   changed_when: false
 
 - name: Set controller_url fact
@@ -66,11 +63,8 @@
     pulumi refresh --yes 2>&1
   environment:
     PULUMI_CONFIG_PASSPHRASE: ""
-  register: pulumi_refresh
-  until: pulumi_refresh.rc == 0
-  retries: 5
-  delay: 10
   changed_when: false
+  failed_when: false
 
 - name: Deploy cloudsim VMs
   shell: |
@@ -80,9 +74,6 @@
   environment:
     PULUMI_CONFIG_PASSPHRASE: ""
   register: pulumi_up
-  until: pulumi_up.rc == 0
-  retries: 5
-  delay: 10
   changed_when: "'0 created' not in pulumi_up.stdout"
 
 - name: Verify VMs are running

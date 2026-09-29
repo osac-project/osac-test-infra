@@ -19,10 +19,6 @@
     export PULUMI_CONFIG_PASSPHRASE=""
     cd {{ cloudsim_dir }}
     pulumi destroy --yes
-  register: _pulumi_destroy
-  until: _pulumi_destroy.rc == 0
-  retries: 5
-  delay: 10
   ignore_errors: true
 
 - name: Remove any orphaned VMs
@@ -38,23 +34,14 @@
   shell: |
     cd {{ topology_dir }}
     tofu destroy -auto-approve
-  register: _tofu_destroy
-  until: _tofu_destroy.rc == 0
-  retries: 5
-  delay: 10
   ignore_errors: true
 
 - name: Delete Netris controller from K3s
   shell: |
-    set -e
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-    kubectl delete namespace netris-controller --ignore-not-found --timeout=60s
+    kubectl delete namespace netris-controller --timeout=60s 2>/dev/null || true
     rm -f /var/lib/rancher/k3s/server/manifests/netris-controller.yaml
     rm -f /var/lib/rancher/k3s/server/manifests/cert-manager.yaml
-  register: _controller_delete
-  until: _controller_delete.rc == 0
-  retries: 5
-  delay: 10
   ignore_errors: true
 
 - name: Uninstall K3s

@@ -17,37 +17,30 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: traefik_np
-  until: traefik_np.rc == 0 and (traefik_np.stdout | length) > 0
-  retries: 5
-  delay: 5
   changed_when: false
 
 - name: Refresh Netris auth (cookie from earlier roles may have expired)
-  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
+  ansible.builtin.include_role:
+    name: netris.controller.auth
   vars:
-    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
-    netris_retry_role_name: netris.controller.auth
     netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"
     netris_username: "{{ netris_login }}"
     netris_validate_certs: false
     netris_timeout: 30
-    netris_retry_attempt: 1
 
 - name: Get auth token via collection
-  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
+  ansible.builtin.include_role:
+    name: netris.controller.general
   vars:
-    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
-    netris_retry_role_name: netris.controller.general
     netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"
     netris_username: "{{ netris_login }}"
     general_state: read
-    netris_retry_attempt: 1
 
 - name: Wait for mgmt-server DHCP to be active
   ansible.builtin.shell:
     cmd: >-
       sshpass -p "{{ vm_root_password | default('netris') }}"
-      ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=5
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
       root@192.168.122.10 "systemctl is-active isc-dhcp-server"
   register: _dhcp_status
   until: _dhcp_status.stdout == "active"
@@ -70,7 +63,7 @@
 
 - name: Wait for cloud-init to finish on softgates
   shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=5 root@{{ item.mgmt_ip }} ' \
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} ' \
       status=$(cloud-init status 2>/dev/null || true); \
       case "$status" in \
         "status: done") exit 0 ;; \
@@ -89,20 +82,16 @@
 
 - name: Restore lab DNS on softgates
   shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
       "echo 'nameserver {{ dns_server }}' > /etc/resolv.conf" 2>/dev/null
   loop: "{{ softgates }}"
-  register: _softgate_dns_restore
-  until: _softgate_dns_restore.rc == 0
-  retries: 5
-  delay: 10
   changed_when: false
 
 - name: Wait for all softgate agents to become active
   shell: |
     failed=""
     for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
-      status=$(ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=5 root@${ip} "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null)
+      status=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null)
       if [ "$status" != "active" ]; then
         failed="${failed} ${ip}"
       fi

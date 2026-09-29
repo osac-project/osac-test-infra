@@ -7,9 +7,6 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: haproxy_pod_ip
-  until: haproxy_pod_ip.rc == 0 and (haproxy_pod_ip.stdout | length) > 0
-  retries: 5
-  delay: 5
   changed_when: false
 
 - name: Create socat env directory
@@ -47,9 +44,6 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: traefik_np
-  until: traefik_np.rc == 0 and (traefik_np.stdout | length) > 0
-  retries: 5
-  delay: 5
   changed_when: false
 
 - name: Create web API socat env files (port 80 -> traefik NodePort)
