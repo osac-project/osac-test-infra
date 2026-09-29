@@ -431,6 +431,241 @@
           ]
         }
       ]
+    },
+    {
+      "title": "Merge Queue",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Merge Queue Latency Percentiles",
+      "description": "p50, p90, and p99 latency for PRs passing through the merge queue (entered queue to merged). Only includes PRs that used the merge queue. Not affected by the Category/Workflow/Job Type filters -- only Repository does.",
+      "type": "table",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 26 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No merge queue PRs"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p50_queue_wait_display" },
+            "properties": [
+              { "id": "displayName", "value": "p50 (median)" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p90_queue_wait_display" },
+            "properties": [
+              { "id": "displayName", "value": "p90" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p99_queue_wait_display" },
+            "properties": [
+              { "id": "displayName", "value": "p99" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "total_queued_prs" },
+            "properties": [
+              { "id": "displayName", "value": "PRs" }
+            ]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": ".*_seconds" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/merge-queue-metrics?repo=${repo_filter}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "$",
+          "columns": [
+            { "selector": "p50_queue_wait_display", "text": "p50_queue_wait_display", "type": "string" },
+            { "selector": "p90_queue_wait_display", "text": "p90_queue_wait_display", "type": "string" },
+            { "selector": "p99_queue_wait_display", "text": "p99_queue_wait_display", "type": "string" },
+            { "selector": "total_queued_prs", "text": "total_queued_prs", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Merge Queue Latency by Repo",
+      "description": "Per-repo merge queue latency percentiles (p50, p90, p99) for PRs merged within the selected time range. Only includes PRs that used the merge queue.",
+      "type": "table",
+      "gridPos": { "h": 4, "w": 16, "x": 8, "y": 26 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No merge queue PRs"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "repo" },
+            "properties": [
+              { "id": "displayName", "value": "Repository" },
+              { "id": "custom.width", "value": 160 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p50_queue_wait_display" },
+            "properties": [
+              { "id": "displayName", "value": "Queue Wait (p50)" },
+              { "id": "custom.width", "value": 130 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p90_queue_wait_display" },
+            "properties": [
+              { "id": "displayName", "value": "Queue Wait (p90)" },
+              { "id": "custom.width", "value": 130 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p99_queue_wait_display" },
+            "properties": [
+              { "id": "displayName", "value": "Queue Wait (p99)" },
+              { "id": "custom.width", "value": 130 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "total_queued_prs" },
+            "properties": [
+              { "id": "displayName", "value": "PRs" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p50_queue_wait_seconds" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": ".*approval_to_queue.*" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "p9[09]_queue_wait_seconds" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "p50_queue_wait_seconds", "desc": true }],
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/merge-queue-metrics?repo=${repo_filter}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "by_repo",
+          "columns": [
+            { "selector": "repo", "text": "repo", "type": "string" },
+            { "selector": "p50_queue_wait_display", "text": "p50_queue_wait_display", "type": "string" },
+            { "selector": "p50_queue_wait_seconds", "text": "p50_queue_wait_seconds", "type": "number" },
+            { "selector": "p90_queue_wait_display", "text": "p90_queue_wait_display", "type": "string" },
+            { "selector": "p90_queue_wait_seconds", "text": "p90_queue_wait_seconds", "type": "number" },
+            { "selector": "p99_queue_wait_display", "text": "p99_queue_wait_display", "type": "string" },
+            { "selector": "p99_queue_wait_seconds", "text": "p99_queue_wait_seconds", "type": "number" },
+            { "selector": "total_queued_prs", "text": "total_queued_prs", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Merge Queue Slowest PRs",
+      "description": "PRs that spent the longest time in the merge queue within the selected time range. Useful for investigating queue-level delays (bisection loops, capacity issues, flaky batches causing ejection and re-entry).",
+      "type": "table",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 30 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No merge queue PRs in this window"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "repo" },
+            "properties": [{ "id": "displayName", "value": "Repository" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "number" },
+            "properties": [
+              { "id": "displayName", "value": "PR" },
+              { "id": "unit", "value": "none" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "title" },
+            "properties": [
+              { "id": "displayName", "value": "Title" },
+              { "id": "custom.width", "value": 400 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "author" },
+            "properties": [
+              { "id": "displayName", "value": "Author" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "queue_wait_display" },
+            "properties": [
+              { "id": "displayName", "value": "Queue Wait" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "queue_wait_seconds" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "merged_at" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "queue_wait_seconds", "desc": true }],
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/merge-queue-metrics?repo=${repo_filter}&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": { "method": "GET", "data": "" },
+          "root_selector": "slowest_prs",
+          "columns": [
+            { "selector": "repo", "text": "repo", "type": "string" },
+            { "selector": "number", "text": "number", "type": "number" },
+            { "selector": "title", "text": "title", "type": "string" },
+            { "selector": "author", "text": "author", "type": "string" },
+            { "selector": "queue_wait_display", "text": "queue_wait_display", "type": "string" },
+            { "selector": "queue_wait_seconds", "text": "queue_wait_seconds", "type": "number" }
+          ]
+        }
+      ]
     }
   ],
   "schemaVersion": 39,

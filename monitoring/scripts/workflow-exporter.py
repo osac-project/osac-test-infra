@@ -993,6 +993,26 @@ class WorkflowExporter:
             return None
         return max(0, round((end_dt - start_dt).total_seconds()))
 
+    @staticmethod
+    def _percentile(sorted_values, p):
+        """Compute the p-th percentile from an already-sorted list of
+        numeric values using linear interpolation. Returns None if the
+        list is empty. Used for merge-queue latency percentile
+        breakdowns (p50/p90/p99) alongside the existing
+        statistics.median usage -- kept as a standalone helper so
+        callers can sort once and compute multiple percentiles without
+        re-sorting per call.
+        """
+        if not sorted_values:
+            return None
+        n = len(sorted_values)
+        k = (n - 1) * p / 100
+        f = int(k)
+        c = f + 1
+        if c >= n:
+            return round(sorted_values[f])
+        return round(sorted_values[f] + (k - f) * (sorted_values[c] - sorted_values[f]))
+
     def _upsert_pr_merge(self, repo, pr):
         """Persist a merged PR's timing/retest data into pr_merges.
 
@@ -3012,6 +3032,124 @@ class WorkflowExporter:
         ]
         return result
 
+    def get_merge_queue_metrics_json(self, params):
+        """Merge queue latency percentiles and throughput, filtered by when
+        the PR was *merged* (same convention as get_pr_merge_time_json).
+
+        Only includes PRs that actually went through the merge queue
+        (via_merge_queue = 1) -- PRs merged without the queue have no
+        queue-wait data and would dilute the percentiles with NULLs.
+
+        Query params: since, until (ISO 8601, compared against merged_at),
+        repo (optional, exact match).
+
+        Reports p50/p90/p99 for two timing metrics:
+        - queue_wait: time spent in the merge queue (entered → merged).
+          Answers "how long does the queue itself take."
+        - approval_to_queue: first approval → entered merge queue.
+          Answers "how long between approval and entering the queue,"
+          which includes human delays (label-gate, batch wait, retests).
+
+        Returns: {"p50_queue_wait_seconds": N, "p50_queue_wait_display": "Xm Ys",
+                  "p90_queue_wait_seconds": N, "p90_queue_wait_display": "Xm Ys",
+                  "p99_queue_wait_seconds": N, "p99_queue_wait_display": "Xm Ys",
+                  "p50_approval_to_queue_seconds": N|None, ...,
+                  "p90_approval_to_queue_seconds": N|None, ...,
+                  "p99_approval_to_queue_seconds": N|None, ...,
+                  "total_queued_prs": N,
+                  "by_repo": [{"repo":.., ...same percentile fields..}, ...]}
+        """
+        repo_filter = self._parse_grafana_param(params, "repo")
+        since_str = params.get("since", [None])[0]
+        until_str = params.get("until", [None])[0]
+
+        args = {"repo": repo_filter, "since": None, "until": None}
+        if since_str:
+            try:
+                args["since"] = self._normalize_iso(since_str)
+            except (ValueError, TypeError):
+                pass
+        if until_str:
+            try:
+                args["until"] = self._normalize_iso(until_str)
+            except (ValueError, TypeError):
+                pass
+
+        sql = (
+            "SELECT repo, number, title, author, merged_at, "
+            "queue_wait_seconds, approval_to_queue_seconds FROM pr_merges "
+            "WHERE via_merge_queue = 1 "
+            "AND (:repo IS NULL OR repo = :repo) "
+            "AND (:since IS NULL OR merged_at >= :since) "
+            "AND (:until IS NULL OR merged_at < :until)"
+        )
+
+        with self._db() as conn:
+            rows = conn.execute(sql, args).fetchall()
+
+        def percentile_stats(rs):
+            """Compute p50/p90/p99 for queue-wait and approval-to-queue
+            from a list of pr_merges rows. Returns a dict with display
+            strings and raw seconds for each percentile, plus a count.
+            """
+            queue_vals = sorted(r["queue_wait_seconds"] for r in rs if r["queue_wait_seconds"] is not None)
+            a2q_vals = sorted(r["approval_to_queue_seconds"] for r in rs if r["approval_to_queue_seconds"] is not None)
+            p50_qw = self._percentile(queue_vals, 50)
+            p90_qw = self._percentile(queue_vals, 90)
+            p99_qw = self._percentile(queue_vals, 99)
+            p50_a2q = self._percentile(a2q_vals, 50)
+            p90_a2q = self._percentile(a2q_vals, 90)
+            p99_a2q = self._percentile(a2q_vals, 99)
+            return {
+                "p50_queue_wait_seconds": p50_qw,
+                "p50_queue_wait_display": self._fmt_duration(p50_qw) if p50_qw is not None else "n/a",
+                "p90_queue_wait_seconds": p90_qw,
+                "p90_queue_wait_display": self._fmt_duration(p90_qw) if p90_qw is not None else "n/a",
+                "p99_queue_wait_seconds": p99_qw,
+                "p99_queue_wait_display": self._fmt_duration(p99_qw) if p99_qw is not None else "n/a",
+                "p50_approval_to_queue_seconds": p50_a2q,
+                "p50_approval_to_queue_display": self._fmt_duration(p50_a2q) if p50_a2q is not None else "n/a",
+                "p90_approval_to_queue_seconds": p90_a2q,
+                "p90_approval_to_queue_display": self._fmt_duration(p90_a2q) if p90_a2q is not None else "n/a",
+                "p99_approval_to_queue_seconds": p99_a2q,
+                "p99_approval_to_queue_display": self._fmt_duration(p99_a2q) if p99_a2q is not None else "n/a",
+                "total_queued_prs": len(rs),
+            }
+
+        by_repo_rows = {}
+        for r in rows:
+            by_repo_rows.setdefault(r["repo"], []).append(r)
+
+        result = percentile_stats(rows)
+        result["by_repo"] = sorted(
+            ({"repo": repo, **percentile_stats(rs)} for repo, rs in by_repo_rows.items()),
+            key=lambda x: x["repo"],
+        )
+
+        # Slowest PRs — same spirit as approval_outliers in
+        # get_pr_merge_time_json: the PRs that spent the longest time in
+        # the merge queue, capped at 5. Useful for investigating
+        # queue-level delays (bisection loops, capacity issues, flaky
+        # batches that caused ejection and re-entry).
+        slowest = sorted(
+            (r for r in rows if r["queue_wait_seconds"] is not None),
+            key=lambda r: r["queue_wait_seconds"],
+            reverse=True,
+        )[:5]
+        result["slowest_prs"] = [
+            {
+                "repo": r["repo"],
+                "number": r["number"],
+                "title": r["title"],
+                "author": r["author"],
+                "merged_at": r["merged_at"],
+                "queue_wait_seconds": r["queue_wait_seconds"],
+                "queue_wait_display": self._fmt_duration(r["queue_wait_seconds"]),
+            }
+            for r in slowest
+        ]
+        return result
+
 
 # ---------------------------------------------------------------------------
 # Custom HTTP handler: /metrics + /api/jobs
@@ -3069,6 +3207,16 @@ class ExporterHandler(BaseHTTPRequestHandler):
             params = parse_qs(parsed.query)
             merge_time = self.exporter.get_pr_merge_time_json(params)
             payload = json.dumps(merge_time, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
+        elif parsed.path == "/api/merge-queue-metrics":
+            params = parse_qs(parsed.query)
+            data = self.exporter.get_merge_queue_metrics_json(params)
+            payload = json.dumps(data, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
