@@ -64,12 +64,21 @@
     - ta.key
     - myclient1.crt
     - myclient1.key
+  register: _vpn_client_files
+
+- name: Remove loopback VPN remotes
+  lineinfile:
+    path: /etc/openvpn/client/client.conf
+    regexp: '^remote\s+127\.0\.0\.1(?:\s|$)'
+    state: absent
+  register: _vpn_loopback_remote
 
 - name: Fix VPN remote address
   lineinfile:
     path: /etc/openvpn/client/client.conf
     regexp: '^remote\s+'
     line: 'remote 192.168.122.10 1194'
+  register: _vpn_remote_address
 
 - name: Set VPN client topology to subnet
   lineinfile:
@@ -105,10 +114,10 @@
   systemd:
     daemon_reload: true
 
-- name: Start OpenVPN client
+- name: Ensure OpenVPN client uses current config
   systemd:
     name: openvpn-client@client
-    state: started
+    state: "{{ 'restarted' if _vpn_client_files.changed or _vpn_loopback_remote.changed or _vpn_remote_address.changed else 'started' }}"
     enabled: true
 
 - name: Wait for tun0 interface
