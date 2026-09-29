@@ -632,8 +632,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -s /root/.kube/config ]]; then
-            echo 'path=/root/.kube/config' >> "$GITHUB_OUTPUT"
+          artifact_kubeconfig="${RUNNER_TEMP}/netris-artifact-kubeconfig"
+          if [[ -s /root/.kube/config ]] && install -m 600 /root/.kube/config "$artifact_kubeconfig"; then
+            echo "path=${artifact_kubeconfig}" >> "$GITHUB_OUTPUT"
           else
             umask 077
             placeholder="${RUNNER_TEMP}/netris-empty-kubeconfig"
