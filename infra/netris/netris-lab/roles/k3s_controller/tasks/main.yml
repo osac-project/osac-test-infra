@@ -108,7 +108,7 @@
     dest: /var/lib/rancher/k3s/server/manifests/cert-manager.yaml
 
 - name: Check if netris-controller is already deployed
-  shell: kubectl get helmchart netris-controller -n netris-controller -o name 2>/dev/null
+  shell: kubectl get helmchart netris-controller -n netris-controller -o name
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: _nctl_exists
@@ -120,7 +120,7 @@
 
 - name: Record controller Helm job before baseline install
   when: _nctl_exists.rc != 0
-  shell: kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}' 2>/dev/null
+  shell: kubectl get job helm-install-netris-controller -n netris-controller -o jsonpath='{.metadata.uid}'
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: _baseline_helm_job_before
