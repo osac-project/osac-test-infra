@@ -66,13 +66,13 @@
       delay: 2
     - label: K3s workloads
       path: k3s/workloads.txt
-      argv: [kubectl, --request-timeout=15s, get, deployments,statefulsets,daemonsets,jobs,services, -A, -o, wide]
+      argv: [kubectl, --request-timeout=15s, get, 'deployments,statefulsets,daemonsets,jobs,services', -A, -o, wide]
       environment: { KUBECONFIG: /etc/rancher/k3s/k3s.yaml }
       retries: 4
       delay: 2
     - label: Netris Helm resources
       path: k3s/helm-resources.txt
-      argv: [kubectl, --request-timeout=15s, get, helmcharts,helmchartconfigs, -A, -o, wide]
+      argv: [kubectl, --request-timeout=15s, get, 'helmcharts,helmchartconfigs', -A, -o, wide]
       environment: { KUBECONFIG: /etc/rancher/k3s/k3s.yaml }
       retries: 4
       delay: 2
