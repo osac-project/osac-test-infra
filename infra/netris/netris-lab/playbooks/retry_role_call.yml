@@ -7,7 +7,6 @@
     - name: Execute Netris controller role
       ansible.builtin.include_role:
         name: "{{ netris_retry_role_name }}"
-      vars: "{{ netris_retry_role_vars | default({}) }}"
   rescue:
     - name: Fail after the final Netris controller role attempt
       ansible.builtin.fail:
