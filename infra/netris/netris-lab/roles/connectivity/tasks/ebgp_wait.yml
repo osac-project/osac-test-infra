@@ -4,8 +4,7 @@
   vars:
     netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.ebgp
-    netris_retry_role_vars:
-      ebgp_state: read
+    ebgp_state: read
     netris_retry_attempt: 1
 
 - name: Check E-BGP sessions

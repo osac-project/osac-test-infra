@@ -35,7 +35,6 @@
   vars:
     netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.auth
-    netris_retry_role_vars: {}
     netris_retry_attempt: 1
   ignore_errors: true
 
@@ -44,8 +43,7 @@
   vars:
     netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.license
-    netris_retry_role_vars:
-      license_state: read
+    license_state: read
     netris_retry_attempt: 1
   ignore_errors: true
 
@@ -54,8 +52,7 @@
   vars:
     netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.inventory
-    netris_retry_role_vars:
-      inventory_state: read
+    inventory_state: read
     netris_retry_attempt: 1
   ignore_errors: true
 
@@ -64,8 +61,7 @@
   vars:
     netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.ebgp
-    netris_retry_role_vars:
-      ebgp_state: read
+    ebgp_state: read
     netris_retry_attempt: 1
   ignore_errors: true
 
