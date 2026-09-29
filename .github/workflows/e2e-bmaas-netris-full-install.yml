@@ -299,6 +299,8 @@ jobs:
     timeout-minutes: 360
     permissions:
       contents: read
+    env:
+      ANSIBLE_LOG_PATH: ${{ github.workspace }}/infra/netris/logs/ansible.log
     outputs:
       result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
     steps:
@@ -308,6 +310,19 @@ jobs:
           repository: ${{ inputs.test-infra-repository || github.repository }}
           ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || github.ref }}
           persist-credentials: false
+
+      - name: Prepare Netris diagnostic log directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p infra/netris/logs
+          {
+            printf 'repository=%s\n' "${GITHUB_REPOSITORY}"
+            printf 'workflow=%s\n' "${GITHUB_WORKFLOW}"
+            printf 'run_id=%s\nrun_attempt=%s\n' "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'ref=%s\ncommit=%s\n' "${GITHUB_REF}" "$(git rev-parse HEAD)"
+            printf 'run_url=%s/%s/actions/runs/%s\n' "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
+          } > infra/netris/logs/run-metadata.txt
 
       - name: Validate OSAC source inputs
         shell: bash
@@ -592,6 +607,7 @@ jobs:
         with:
           namespace: osac-e2e-ci
           kubeconfig-path: /root/.kube/config
+          allow-missing-kubeconfig: true
           artifact-name: bmaas-netris-artifacts
 
       - name: Gather EC2 runner artifacts

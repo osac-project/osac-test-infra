@@ -30,9 +30,23 @@
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      curl --fail --silent --show-error --location \
+      diagnostic_dir=/tmp/netris-k3s-installer
+      mkdir -p "${diagnostic_dir}"
+      attempt_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+      result_file="${diagnostic_dir}/${attempt_id}-curl-result.txt"
+      curl --fail-with-body --silent --show-error --location \
         --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
-        https://get.k3s.io -o /tmp/install-k3s.sh
+        --connect-timeout 10 --max-time 180 \
+        --dump-header "${diagnostic_dir}/${attempt_id}-response-headers.txt" \
+        --output "${diagnostic_dir}/${attempt_id}-response-body.txt" \
+        --write-out 'http_code=%{http_code}\nremote_ip=%{remote_ip}\nurl_effective=%{url_effective}\n' \
+        https://get.k3s.io >"${result_file}" 2>&1 || {
+          curl_rc=$?
+          printf 'curl_exit_code=%s\n' "${curl_rc}" >>"${result_file}"
+          cat "${result_file}" >&2
+          exit "${curl_rc}"
+        }
+      cp "${diagnostic_dir}/${attempt_id}-response-body.txt" /tmp/install-k3s.sh
       INSTALL_K3S_VERSION={{ k3s_version }} sh /tmp/install-k3s.sh
     executable: /bin/bash
   register: k3s_install
