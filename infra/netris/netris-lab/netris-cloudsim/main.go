@@ -654,19 +654,27 @@ if command -v apt-get &>/dev/null; then
   echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-netris-retries >/dev/null
   sudo apt-get -o Acquire::Retries=5 update
   sudo apt-get -o Acquire::Retries=5 install openvpn -y
+  openvpn_client_dir=/etc/openvpn
+  openvpn_client_service=openvpn@client
 elif command -v dnf &>/dev/null; then
   sudo dnf install --setopt=retries=5 -y openvpn
+  openvpn_client_dir=/etc/openvpn/client
+  openvpn_client_service=openvpn-client@client
+else
+  echo "Unsupported package manager; cannot install OpenVPN" >&2
+  exit 1
 fi
 
-sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ta.key -o /etc/openvpn/ta.key
-sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myclient1.crt -o /etc/openvpn/myclient1.crt
-sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myclient1.key -o /etc/openvpn/myclient1.key
-sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ca.crt -o /etc/openvpn/ca.crt
-sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/client.conf -o /etc/openvpn/client.conf
+sudo mkdir -p "${openvpn_client_dir}"
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ta.key -o "${openvpn_client_dir}/ta.key"
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myclient1.crt -o "${openvpn_client_dir}/myclient1.crt"
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myclient1.key -o "${openvpn_client_dir}/myclient1.key"
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ca.crt -o "${openvpn_client_dir}/ca.crt"
+sudo curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/client.conf -o "${openvpn_client_dir}/client.conf"
 
-sudo sed -i 's/my-server-2 1194/%s 1194/g' /etc/openvpn/client.conf
+sudo sed -i 's/my-server-2 1194/%s 1194/g' "${openvpn_client_dir}/client.conf"
 
-sudo systemctl restart openvpn@client
+sudo systemctl restart "${openvpn_client_service}"
 echo "VPN client configured and started successfully"
 `, hypersList[0])
 
