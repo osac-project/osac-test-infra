@@ -607,7 +607,6 @@ jobs:
         with:
           namespace: osac-e2e-ci
           kubeconfig-path: /root/.kube/config
-          allow-missing-kubeconfig: true
           artifact-name: bmaas-netris-artifacts
 
       - name: Gather EC2 runner artifacts

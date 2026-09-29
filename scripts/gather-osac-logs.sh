@@ -6,9 +6,7 @@
 #   KUBECONFIG=/path/to/kubeconfig ./scripts/gather-osac-logs.sh [output-dir]
 #
 # Environment:
-#   KUBECONFIG             — path to cluster kubeconfig
-#   ALLOW_MISSING_KUBECONFIG — redact/upload staged artifacts without cluster access (default: false)
-#   SKIP_CLUSTER_COLLECTION — redact staged artifacts after a failed/timed-out collection pass
+#   KUBECONFIG             — path to cluster kubeconfig (required)
 #   E2E_NAMESPACE          — OSAC namespace (default: osac-e2e-ci)
 #   OSAC_AGENT_NAMESPACE   — namespace where Assisted Installer Agent CRs live (default: hardware-inventory)
 #   JUNIT_PATH             — path to JUnit XML to include (optional)
@@ -20,12 +18,7 @@ ARTIFACT_DIR="${1:-./osac-logs}"
 E2E_NAMESPACE="${E2E_NAMESPACE:-osac-e2e-ci}"
 JUNIT_PATH="${JUNIT_PATH:-}"
 
-HAS_KUBECONFIG=false
-if [[ "${SKIP_CLUSTER_COLLECTION:-false}" == "true" ]]; then
-    HAS_KUBECONFIG=false
-elif [[ -f "${KUBECONFIG:-}" ]]; then
-    HAS_KUBECONFIG=true
-elif [[ "${ALLOW_MISSING_KUBECONFIG:-false}" != "true" ]]; then
+if [[ ! -f "${KUBECONFIG:-}" ]]; then
     echo "ERROR: KUBECONFIG not set or file does not exist" >&2
     exit 1
 fi
@@ -34,7 +27,6 @@ mkdir -p "${ARTIFACT_DIR}"
 
 # ── Collect ──────────────────────────────────────────────────────────
 
-if [[ "${HAS_KUBECONFIG}" == true ]]; then
 echo "Gathering OSAC logs from namespace ${E2E_NAMESPACE}..."
 
 collect_namespace_logs() {
@@ -415,20 +407,6 @@ if [[ -n "${JUNIT_PATH}" ]]; then
     if [[ -e "${E2E_LOGS[0]}" ]]; then
         sort -m -t' ' -k1,1 "${E2E_LOGS[@]}" > "${ARTIFACT_DIR}/e2e.log"
     fi
-fi
-else
-    if [[ "${SKIP_CLUSTER_COLLECTION:-false}" == "true" ]]; then
-        collection_reason="cluster collection failed or timed out"
-    else
-        collection_reason="management cluster kubeconfig was unavailable"
-    fi
-    cat >"${ARTIFACT_DIR}/cluster-collection-status.txt" <<EOF
-status=skipped
-reason=${collection_reason}
-cluster_diagnostics=not collected
-staged_lab_diagnostics=preserved and passed through redaction
-EOF
-    echo "${collection_reason}; preserving and redacting staged diagnostics."
 fi
 
 # ── Redact ───────────────────────────────────────────────────────────
