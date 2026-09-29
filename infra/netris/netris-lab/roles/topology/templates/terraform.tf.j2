@@ -2,7 +2,8 @@ terraform {
   required_providers {
     netris = {
       source  = "netrisai/netris"
-      version = ">=3.6.3"
+      # Netris provider 3.6.23+ requires controller 4.18.0+; this lab uses 4.16.x.
+      version = "=3.6.22"
     }
   }
 }
