@@ -8,6 +8,10 @@ netris_username: "netris"
 netris_password: "{{ lookup('ini', 'netris_password section=default file=' + config_path, errors='ignore') | default(lookup('env', 'NETRIS_PASSWORD'), true) }}"
 netris_validate_certs: false
 
+# Quay credentials for pulling private snapshot flavor images.
+quay_username: "{{ lookup('ini', 'quay_username section=default file=' + config_path, errors='ignore') | default(lookup('env', 'QUAY_USERNAME'), true) }}"
+quay_password: "{{ lookup('ini', 'quay_password section=default file=' + config_path, errors='ignore') | default(lookup('env', 'QUAY_PASSWORD'), true) }}"
+
 # VM console root password (plain text — hashed at deploy time)
 vm_root_password: "netris"
 

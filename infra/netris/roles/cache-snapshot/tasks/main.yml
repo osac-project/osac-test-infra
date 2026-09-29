@@ -7,6 +7,39 @@
 - name: Pull and extract flavor image
   when: not _flavor_cached.stat.exists
   block:
+    - name: Require Quay credentials for the snapshot flavor image
+      ansible.builtin.assert:
+        that:
+          - quay_username | length > 0
+          - quay_password | length > 0
+        fail_msg: >-
+          Set quay_username and quay_password in infra/netris/config. The account
+          must have pull access to quay.io/osac-project/cluster-flavors.
+
+    - name: Log in to Quay for snapshot flavor pull
+      ansible.builtin.command:
+        argv:
+          - podman
+          - login
+          - quay.io
+          - --authfile
+          - /tmp/auth.json
+          - --username
+          - "{{ quay_username }}"
+          - --password-stdin
+        stdin: "{{ quay_password }}"
+      register: _quay_login
+      until: _quay_login.rc == 0
+      retries: 3
+      delay: 30
+      no_log: true
+
+    - name: Restrict Quay auth file permissions
+      ansible.builtin.file:
+        path: /tmp/auth.json
+        state: file
+        mode: "0600"
+
     - name: Ensure cache directory exists
       ansible.builtin.file:
         path: "{{ snapshot_flavor_dir }}"
@@ -24,6 +57,7 @@
         cmd: >-
           skopeo copy
           --retry-times 5
+          --src-authfile /tmp/auth.json
           docker://{{ snapshot_flavor_image }}
           oci:{{ _oci_tmp.path }}/oci:latest
       register: _skopeo_pull
@@ -125,6 +159,11 @@
       failed_when: false
 
   always:
+    - name: Remove temporary Quay auth file
+      ansible.builtin.file:
+        path: /tmp/auth.json
+        state: absent
+
     - name: Clean up OCI temp directory
       ansible.builtin.file:
         path: "{{ _oci_tmp.path }}"
