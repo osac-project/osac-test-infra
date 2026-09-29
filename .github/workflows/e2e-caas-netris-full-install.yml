@@ -763,12 +763,33 @@ jobs:
           fi
           trap - ERR
 
+      - name: Select kubeconfig for artifact collection
+        id: artifact-kubeconfig
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -s /root/.kube/config ]]; then
+            echo 'path=/root/.kube/config' >> "$GITHUB_OUTPUT"
+          else
+            umask 077
+            placeholder="${RUNNER_TEMP}/netris-empty-kubeconfig"
+            : > "$placeholder"
+            echo "path=${placeholder}" >> "$GITHUB_OUTPUT"
+            mkdir -p "${RUNNER_TEMP}/osac-artifacts"
+            cat > "${RUNNER_TEMP}/osac-artifacts/cluster-collection-status.txt" <<'EOF'
+          status=skipped
+          reason=management kubeconfig was not created
+          staged_lab_diagnostics=will be redacted and uploaded
+          EOF
+          fi
+
       - name: Gather and redact Netris artifacts
         if: always()
         uses: ./.github/actions/gather-artifacts
         with:
           namespace: osac-e2e-ci
-          kubeconfig-path: /root/.kube/config
+          kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
           artifact-name: caas-netris-artifacts
 
       # Not part of the formal backend contract (infra/contract.md's target
