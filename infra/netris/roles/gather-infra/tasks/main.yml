@@ -21,6 +21,15 @@
     - systemd
     - journal
 
+- name: Gather comprehensive Netris lab diagnostics
+  ansible.builtin.command:
+    argv:
+      - bash
+      - "{{ netris_lab_dir }}/scripts/gather-lab-logs.sh"
+      - "{{ _gather_dir }}/lab"
+  changed_when: false
+  failed_when: false
+
 # ── Host ──
 - name: Gather uptime
   ansible.builtin.shell: uptime > {{ _gather_dir }}/lab/host/uptime 2>&1
@@ -95,28 +104,6 @@
   changed_when: false
   failed_when: false
 
-# ── K3s ──
-- name: Gather K3s nodes
-  ansible.builtin.shell: kubectl get nodes -o wide > {{ _gather_dir }}/lab/k3s/nodes 2>&1
-  environment:
-    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-  changed_when: false
-  failed_when: false
-
-- name: Gather K3s pods
-  ansible.builtin.shell: kubectl get pods --all-namespaces -o wide > {{ _gather_dir }}/lab/k3s/pods-all 2>&1
-  environment:
-    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-  changed_when: false
-  failed_when: false
-
-- name: Gather Netris controller pods
-  ansible.builtin.shell: kubectl get pods -n netris-controller -o wide > {{ _gather_dir }}/lab/k3s/pods-netris-controller 2>&1
-  environment:
-    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-  changed_when: false
-  failed_when: false
-
 # ── Netris controller API ──
 - name: Discover Netris controller URL for gather
   ansible.builtin.shell: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
@@ -125,19 +112,22 @@
   register: _gather_traefik_np
   changed_when: false
   failed_when: false
+  until: _gather_traefik_np.rc == 0 and (_gather_traefik_np.stdout | length) > 0
+  retries: 4
+  delay: 2
 
 - name: Set Netris controller URL for gather
   ansible.builtin.set_fact:
     _gather_netris_url: "http://localhost:{{ _gather_traefik_np.stdout | default('0') }}"
 
 - name: Check Netris controller API
-  ansible.builtin.shell: "curl -sf -o /dev/null -w '%{http_code}' {{ _gather_netris_url }} > {{ _gather_dir }}/lab/netris/api-status 2>&1 || echo 'unreachable' > {{ _gather_dir }}/lab/netris/api-status"
+  ansible.builtin.shell: "curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 20 --connect-timeout 5 --max-time 30 -o /dev/null -w '%{http_code}' {{ _gather_netris_url }} > {{ _gather_dir }}/lab/netris/api-status 2>&1 || echo 'unreachable' > {{ _gather_dir }}/lab/netris/api-status"
   changed_when: false
   failed_when: false
 
 - name: Login to Netris controller
   ansible.builtin.shell: |
-    curl -sf -c - {{ _gather_netris_url }}/api/auth \
+    curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 20 --connect-timeout 5 --max-time 30 -c - {{ _gather_netris_url }}/api/auth \
       -H 'Content-Type: application/json' \
       -d '{"user":"{{ netris_login }}","password":"{{ netris_password }}","auth_scheme_id":1}' \
       2>/dev/null | grep connect.sid | awk '{print $NF}'
@@ -147,22 +137,22 @@
   no_log: true
 
 - name: Gather Netris VPCs
-  ansible.builtin.shell: "curl -sf -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/vpc 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/vpcs 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/vpcs"
+  ansible.builtin.shell: "curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 20 --connect-timeout 5 --max-time 30 -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/vpc 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/vpcs 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/vpcs"
   changed_when: false
   failed_when: false
 
 - name: Gather Netris VNets
-  ansible.builtin.shell: "curl -sf -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/vnet 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/vnets 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/vnets"
+  ansible.builtin.shell: "curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 20 --connect-timeout 5 --max-time 30 -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/vnet 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/vnets 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/vnets"
   changed_when: false
   failed_when: false
 
 - name: Gather Netris subnets
-  ansible.builtin.shell: "curl -sf -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/ipam/subnets 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/subnets 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/subnets"
+  ansible.builtin.shell: "curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 20 --connect-timeout 5 --max-time 30 -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/ipam/subnets 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/subnets 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/subnets"
   changed_when: false
   failed_when: false
 
 - name: Gather Netris NAT rules
-  ansible.builtin.shell: "curl -sf -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/nat 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/nats 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/nats"
+  ansible.builtin.shell: "curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 20 --connect-timeout 5 --max-time 30 -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/nat 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/nats 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/nats"
   changed_when: false
   failed_when: false
 
@@ -185,12 +175,25 @@
 
 - name: Gather DNS resolution test
   ansible.builtin.shell: |
+    resolve_with_retry() {
+      local host="$1"
+      local attempt
+      for attempt in 1 2 3 4 5; do
+        if getent hosts "$host"; then
+          return 0
+        fi
+        echo "DNS lookup attempt ${attempt}/5 failed for ${host}"
+        [ "$attempt" -eq 5 ] || sleep 2
+      done
+      echo "unresolvable"
+      return 0
+    }
     {
       echo "=== api.{{ ocp_cluster_name }}.{{ ocp_base_domain }} ==="
-      getent hosts api.{{ ocp_cluster_name }}.{{ ocp_base_domain }} 2>&1 || echo "unresolvable"
+      resolve_with_retry api.{{ ocp_cluster_name }}.{{ ocp_base_domain }} 2>&1
       echo
       echo "=== *.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }} ==="
-      getent hosts test.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }} 2>&1 || echo "unresolvable"
+      resolve_with_retry test.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }} 2>&1
       echo
       echo "=== /etc/resolv.conf ==="
       cat /etc/resolv.conf

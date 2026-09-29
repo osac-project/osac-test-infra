@@ -306,6 +306,8 @@ jobs:
     timeout-minutes: 600
     permissions:
       contents: read
+    env:
+      ANSIBLE_LOG_PATH: ${{ github.workspace }}/infra/netris/logs/ansible.log
     outputs:
       result: ${{ steps.deploy-caas.outcome == 'success' && steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
     steps:
@@ -349,6 +351,19 @@ jobs:
           # workflow's test source handling.
           rm -rf tests/
           cp -a "${OSAC_CLONE_DIR}/tests" ./tests
+
+      - name: Prepare Netris diagnostic log directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p infra/netris/logs
+          {
+            printf 'repository=%s\n' "${GITHUB_REPOSITORY}"
+            printf 'workflow=%s\n' "${GITHUB_WORKFLOW}"
+            printf 'run_id=%s\nrun_attempt=%s\n' "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'ref=%s\ncommit=%s\n' "${GITHUB_REF}" "$(git rev-parse HEAD)"
+            printf 'run_url=%s/%s/actions/runs/%s\n' "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
+          } > infra/netris/logs/run-metadata.txt
 
       # SECURITY: EXTRA_VARS ends up passed as EXTRA_VARS='$(EXTRA_VARS)' on
       # a recipe line through several layers of make (root Makefile ->
@@ -723,23 +738,39 @@ jobs:
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=caas
 
-      - name: Archive Netris artifacts
+      - name: Stage Netris artifacts for redacted collection
         if: always()
         shell: bash
-        continue-on-error: true
         run: |
-          if [[ -d infra/netris/logs ]]; then
-            tar -czf caas-netris-artifacts.tar.gz infra/netris/logs
+          set -euo pipefail
+          staging_dir="${RUNNER_TEMP}/osac-artifacts"
+          cleanup_stage() {
+            rm -rf -- "${staging_dir}/reports" "${staging_dir}/netris-logs"
+          }
+          trap cleanup_stage ERR
+          mkdir -p "${staging_dir}"
+          [[ -d reports ]] && cp -a reports "${staging_dir}/reports"
+          [[ -d infra/netris/logs ]] && cp -a infra/netris/logs "${staging_dir}/netris-logs"
+          if [[ -d "${staging_dir}/netris-logs" ]]; then
+            find "${staging_dir}/netris-logs" -type d \( -name must-gather -o -name inspect \) \
+              -prune -print -exec rm -rf -- {} +
+            remaining=$(find "${staging_dir}/netris-logs" -type d \( -name must-gather -o -name inspect \) -print -quit)
+            if [[ -n "${remaining}" ]]; then
+              echo "::error::Refusing to stage raw must-gather/inspect diagnostics: ${remaining}"
+              cleanup_stage
+              exit 1
+            fi
           fi
+          trap - ERR
 
-      - name: Upload artifacts
+      - name: Gather and redact Netris artifacts
         if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: ./.github/actions/gather-artifacts
         with:
-          name: caas-netris-artifacts
-          path: caas-netris-artifacts.tar.gz
-          if-no-files-found: ignore
+          namespace: osac-e2e-ci
+          kubeconfig-path: /root/.kube/config
+          allow-missing-kubeconfig: true
+          artifact-name: caas-netris-artifacts
 
       # Not part of the formal backend contract (infra/contract.md's target
       # list doesn't include it), so called directly
