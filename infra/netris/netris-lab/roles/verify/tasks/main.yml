@@ -31,16 +31,18 @@
   ignore_errors: true
 
 - name: Authenticate to controller
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
   vars:
+    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.auth
     netris_retry_role_vars: {}
     netris_retry_attempt: 1
   ignore_errors: true
 
 - name: Get license status
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
   vars:
+    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.license
     netris_retry_role_vars:
       license_state: read
@@ -48,8 +50,9 @@
   ignore_errors: true
 
 - name: Get inventory health
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
   vars:
+    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.inventory
     netris_retry_role_vars:
       inventory_state: read
@@ -57,8 +60,9 @@
   ignore_errors: true
 
 - name: Get E-BGP status
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
   vars:
+    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.ebgp
     netris_retry_role_vars:
       ebgp_state: read

@@ -23,8 +23,9 @@
   changed_when: false
 
 - name: Refresh Netris auth (cookie from earlier roles may have expired)
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
   vars:
+    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.auth
     netris_retry_role_vars:
       netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"
@@ -34,8 +35,9 @@
     netris_retry_attempt: 1
 
 - name: Get auth token via collection
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
   vars:
+    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
     netris_retry_role_name: netris.controller.general
     netris_retry_role_vars:
       netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"

@@ -22,6 +22,6 @@
       when: netris_retry_attempt | int < netris_retry_max_attempts | default(5) | int
 
     - name: Retry Netris controller role
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/retry_role_call.yml"
+      ansible.builtin.include_tasks: "{{ netris_retry_role_call_path }}"
       vars:
         netris_retry_attempt: "{{ netris_retry_attempt | int + 1 }}"
