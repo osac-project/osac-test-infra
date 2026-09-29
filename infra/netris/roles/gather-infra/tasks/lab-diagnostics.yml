@@ -1,0 +1,255 @@
+---
+- name: Capture Netris host, network, and K3s diagnostics
+  ansible.builtin.include_tasks: capture-command.yml
+  loop:
+    - label: host run metadata
+      path: host/run-metadata.txt
+      argv: [bash, -c, 'echo "hostname=$(hostname -f 2>/dev/null || hostname)"; echo "kernel=$(uname -r)"; echo "boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"; uptime; cat /etc/os-release']
+    - label: host resources
+      path: host/resources.txt
+      argv: [bash, -c, 'free -h; echo; df -hT; echo; df -ih; echo; lscpu']
+    - label: block devices
+      path: host/block-devices.txt
+      argv: [lsblk, -o, 'NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT']
+    - label: network interfaces
+      path: networking/interfaces.txt
+      argv: [ip, -details, -brief, address, show]
+    - label: network routes and rules
+      path: networking/routes-and-rules.txt
+      argv: [bash, -c, 'ip -4 route show table all; echo; ip -6 route show table all; echo; ip rule show']
+    - label: neighbor table
+      path: networking/neighbors.txt
+      argv: [ip, neigh, show]
+    - label: firewall state
+      path: networking/firewall.txt
+      argv: [bash, -c, 'firewall-cmd --state 2>&1; echo; firewall-cmd --get-active-zones 2>&1; echo; nft list ruleset 2>&1 || iptables-save 2>&1']
+    - label: resolver configuration
+      path: dns/resolv-conf.txt
+      argv: [cat, /etc/resolv.conf]
+    - label: DNS resolution for K3s installer
+      path: dns/get-k3s-hosts.txt
+      argv: [getent, ahosts, get.k3s.io]
+      retries: 5
+      delay: 2
+    - label: failed systemd units
+      path: systemd/failed-units.txt
+      argv: [systemctl, --failed, --no-pager]
+    - label: systemd unit inventory
+      path: systemd/lab-units.txt
+      argv: [systemctl, list-units, --all, --no-pager, 'k3s*', 'libvirt*', 'virtqemud*', 'dnsmasq*', 'openvpn*', 'socat-forwarder@*', 'NetworkManager*', 'firewalld*']
+    - label: host warning and error journal
+      path: journal/warnings-errors.txt
+      argv: [journalctl, -b, --no-pager, -p, warning, -n, '2000']
+    - label: kernel warning and error journal
+      path: journal/kernel-warnings-errors.txt
+      argv: [journalctl, -k, -b, --no-pager, -p, warning, -n, '2000']
+    - label: K3s container list
+      path: k3s/containers.txt
+      argv: [bash, -c, 'k3s crictl ps -a 2>&1 || crictl ps -a 2>&1']
+    - label: K3s nodes
+      path: k3s/nodes.txt
+      argv: [kubectl, --request-timeout=15s, get, nodes, -o, wide]
+      environment: { KUBECONFIG: /etc/rancher/k3s/k3s.yaml }
+      retries: 4
+      delay: 2
+    - label: K3s pods
+      path: k3s/pods-all.txt
+      argv: [kubectl, --request-timeout=15s, get, pods, -A, -o, wide]
+      environment: { KUBECONFIG: /etc/rancher/k3s/k3s.yaml }
+      retries: 4
+      delay: 2
+    - label: K3s events
+      path: k3s/events.txt
+      argv: [kubectl, --request-timeout=15s, get, events, -A, --sort-by=.metadata.creationTimestamp]
+      environment: { KUBECONFIG: /etc/rancher/k3s/k3s.yaml }
+      retries: 4
+      delay: 2
+    - label: K3s workloads
+      path: k3s/workloads.txt
+      argv: [kubectl, --request-timeout=15s, get, deployments,statefulsets,daemonsets,jobs,services, -A, -o, wide]
+      environment: { KUBECONFIG: /etc/rancher/k3s/k3s.yaml }
+      retries: 4
+      delay: 2
+    - label: Netris Helm resources
+      path: k3s/helm-resources.txt
+      argv: [kubectl, --request-timeout=15s, get, helmcharts,helmchartconfigs, -A, -o, wide]
+      environment: { KUBECONFIG: /etc/rancher/k3s/k3s.yaml }
+      retries: 4
+      delay: 2
+  loop_control:
+    loop_var: _gather_lab_command
+
+- name: Capture systemd and journal diagnostics by service
+  ansible.builtin.include_tasks: capture-systemd-service.yml
+  loop:
+    - k3s
+    - libvirtd
+    - virtqemud
+    - dnsmasq
+    - openvpn-client@client
+    - firewalld
+    - NetworkManager
+  loop_control:
+    loop_var: _gather_systemd_unit
+
+- name: Capture SELinux denials
+  ansible.builtin.shell:
+    cmd: >-
+      ausearch -m AVC -ts boot 2>&1
+      || journalctl -b --no-pager | grep -i 'avc:.*denied' | tail -n 1000
+      || true
+  register: _gather_selinux_denials
+  changed_when: false
+  failed_when: false
+
+- name: Write SELinux denial diagnostics
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/lab/journal/selinux-denials.txt"
+    mode: "0644"
+    content: "{{ _gather_selinux_denials.stdout }}\n{{ _gather_selinux_denials.stderr }}"
+  changed_when: false
+
+- name: Capture K3s pod inventory as JSON
+  ansible.builtin.command:
+    argv: [kubectl, --request-timeout=15s, get, pods, -A, -o, json]
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _gather_k3s_pod_inventory_result
+  changed_when: false
+  failed_when: false
+  until: _gather_k3s_pod_inventory_result.rc == 0
+  retries: 4
+  delay: 2
+
+- name: Write K3s pod inventory JSON
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/lab/k3s/pods-inventory.json"
+    mode: "0644"
+    content: "{{ _gather_k3s_pod_inventory_result.stdout | default('') }}\n{{ _gather_k3s_pod_inventory_result.stderr | default('') }}"
+  changed_when: false
+
+- name: Set K3s pod inventory for log collection
+  ansible.builtin.set_fact:
+    _gather_k3s_pods: "{{ (_gather_k3s_pod_inventory_result.stdout | from_json)['items'] | default([]) }}"
+  when: _gather_k3s_pod_inventory_result.rc == 0
+
+- name: Capture current K3s application container logs
+  ansible.builtin.include_tasks: capture-k3s-pod-log.yml
+  loop: "{{ query('subelements', _gather_k3s_pods | default([]), 'spec.containers') }}"
+  loop_control:
+    loop_var: _gather_pod_container
+  vars:
+    _gather_pod_log_previous: false
+
+- name: Capture previous K3s application container logs
+  ansible.builtin.include_tasks: capture-k3s-pod-log.yml
+  loop: "{{ query('subelements', _gather_k3s_pods | default([]), 'spec.containers') }}"
+  loop_control:
+    loop_var: _gather_pod_container
+  vars:
+    _gather_pod_log_previous: true
+
+- name: Capture current K3s init container logs
+  ansible.builtin.include_tasks: capture-k3s-pod-log.yml
+  loop: "{{ query('subelements', _gather_k3s_pods | default([]), 'spec.initContainers', {'skip_missing': true}) }}"
+  loop_control:
+    loop_var: _gather_pod_container
+  vars:
+    _gather_pod_log_previous: false
+
+- name: Capture previous K3s init container logs
+  ansible.builtin.include_tasks: capture-k3s-pod-log.yml
+  loop: "{{ query('subelements', _gather_k3s_pods | default([]), 'spec.initContainers', {'skip_missing': true}) }}"
+  loop_control:
+    loop_var: _gather_pod_container
+  vars:
+    _gather_pod_log_previous: true
+
+- name: Capture libvirt domain inventory
+  ansible.builtin.command:
+    argv: [virsh, list, --all, --name]
+  register: _gather_libvirt_domains_result
+  changed_when: false
+  failed_when: false
+
+- name: Write libvirt domain inventory
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/lab/libvirt/domains.txt"
+    mode: "0644"
+    content: "{{ _gather_libvirt_domains_result.stdout | default('') }}\n{{ _gather_libvirt_domains_result.stderr | default('') }}"
+  changed_when: false
+
+- name: Capture libvirt domain details and XML
+  ansible.builtin.include_tasks: capture-command.yml
+  loop: "{{ _gather_libvirt_domains_result.stdout_lines | default([]) | reject('equalto', '') | list }}"
+  loop_control:
+    loop_var: _gather_domain_name
+  vars:
+    _gather_lab_command:
+      label: "libvirt domain {{ _gather_domain_name }}"
+      path: "libvirt/domains/{{ _gather_domain_name | regex_replace('[^A-Za-z0-9_.-]', '_') }}.txt"
+      argv:
+        - bash
+        - -c
+        - >-
+          virsh dominfo "$1";
+          virsh domstate "$1" --reason;
+          virsh domifaddr "$1" --source lease || true;
+          virsh dumpxml "$1"
+        - _
+        - "{{ _gather_domain_name }}"
+
+- name: Find libvirt QEMU logs
+  ansible.builtin.find:
+    paths: /var/log/libvirt/qemu
+    patterns: "*.log"
+    file_type: file
+    recurse: false
+  register: _gather_qemu_logs
+  changed_when: false
+  failed_when: false
+
+- name: Capture recent libvirt QEMU logs
+  ansible.builtin.include_tasks: capture-command.yml
+  loop: "{{ _gather_qemu_logs.files | default([]) }}"
+  loop_control:
+    loop_var: _gather_qemu_log
+  vars:
+    _gather_lab_command:
+      label: "QEMU log {{ _gather_qemu_log.path | basename }}"
+      path: "libvirt/qemu/{{ _gather_qemu_log.path | basename }}"
+      argv: [tail, -n, '4000', "{{ _gather_qemu_log.path }}"]
+
+- name: Find K3s installer response diagnostics
+  ansible.builtin.find:
+    paths: /tmp/netris-k3s-installer
+    patterns: "*"
+    file_type: file
+    recurse: false
+  register: _gather_k3s_installer_files
+  changed_when: false
+  failed_when: false
+
+- name: Copy K3s installer response diagnostics
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ _gather_dir }}/lab/k3s/installer/{{ item.path | basename }}"
+    remote_src: true
+    mode: "0644"
+  loop: "{{ _gather_k3s_installer_files.files | default([]) }}"
+  failed_when: false
+
+- name: Capture installed K3s installer script checksum
+  ansible.builtin.include_tasks: capture-command.yml
+  vars:
+    _gather_lab_command:
+      label: K3s installer script checksum
+      path: k3s/installer/install-script-sha256.txt
+      argv: [sha256sum, /tmp/install-k3s.sh]
+
+- name: Write lab diagnostics collection status
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/lab/collection-status.txt"
+    mode: "0644"
+    content: "Netris lab diagnostics collected by Ansible at {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}\n"
+  changed_when: false

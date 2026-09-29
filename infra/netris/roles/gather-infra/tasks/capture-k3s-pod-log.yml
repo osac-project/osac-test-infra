@@ -1,0 +1,33 @@
+---
+- name: "Capture {{ _gather_pod_container.0.metadata.namespace }}/{{ _gather_pod_container.0.metadata.name }} container log"
+  ansible.builtin.command:
+    argv: >-
+      {{
+        [
+          'kubectl', '--request-timeout=15s', 'logs',
+          _gather_pod_container.0.metadata.name,
+          '-n', _gather_pod_container.0.metadata.namespace,
+          '-c', _gather_pod_container.1.name
+        ]
+        + (['--previous'] if (_gather_pod_log_previous | bool) else [])
+        + ['--timestamps', '--tail=3000']
+      }}
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _gather_pod_log_result
+  changed_when: false
+  failed_when: false
+  until: _gather_pod_log_result.rc == 0
+  retries: 3
+  delay: 2
+
+- name: Write K3s pod container log
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/lab/k3s/pods/{{ _gather_pod_container.0.metadata.namespace | regex_replace('[^A-Za-z0-9_.-]', '_') }}-{{ _gather_pod_container.0.metadata.name | regex_replace('[^A-Za-z0-9_.-]', '_') }}-{{ _gather_pod_container.1.name | regex_replace('[^A-Za-z0-9_.-]', '_') }}{{ '-previous' if (_gather_pod_log_previous | bool) else '' }}.log"
+    mode: "0644"
+    content: |
+      attempts={{ _gather_pod_log_result.attempts | default(1) }}
+      exit_code={{ _gather_pod_log_result.rc | default(-1) }}
+      {{ _gather_pod_log_result.stdout | default('') }}
+      {{ _gather_pod_log_result.stderr | default('') }}
+  changed_when: false
