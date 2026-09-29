@@ -29,9 +29,6 @@
           - --password-stdin
         stdin: "{{ quay_password }}"
       register: _quay_login
-      until: _quay_login.rc == 0
-      retries: 3
-      delay: 30
       no_log: true
 
     - name: Restrict Quay auth file permissions

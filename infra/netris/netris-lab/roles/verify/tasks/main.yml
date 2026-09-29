@@ -5,9 +5,6 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: k3s_nodes
-  until: k3s_nodes.rc == 0
-  retries: 5
-  delay: 5
   ignore_errors: true
 
 - name: Check controller pods
@@ -15,9 +12,6 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: pod_count
-  until: pod_count.rc == 0
-  retries: 5
-  delay: 5
   ignore_errors: true
 
 - name: Check VMs
@@ -31,38 +25,29 @@
   ignore_errors: true
 
 - name: Authenticate to controller
-  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
-  vars:
-    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
-    netris_retry_role_name: netris.controller.auth
-    netris_retry_attempt: 1
+  ansible.builtin.include_role:
+    name: netris.controller.auth
   ignore_errors: true
 
 - name: Get license status
-  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
+  ansible.builtin.include_role:
+    name: netris.controller.license
   vars:
-    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
-    netris_retry_role_name: netris.controller.license
     license_state: read
-    netris_retry_attempt: 1
   ignore_errors: true
 
 - name: Get inventory health
-  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
+  ansible.builtin.include_role:
+    name: netris.controller.inventory
   vars:
-    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
-    netris_retry_role_name: netris.controller.inventory
     inventory_state: read
-    netris_retry_attempt: 1
   ignore_errors: true
 
 - name: Get E-BGP status
-  ansible.builtin.include_tasks: "{{ role_path }}/../../playbooks/retry_role_call.yml"
+  ansible.builtin.include_role:
+    name: netris.controller.ebgp
   vars:
-    netris_retry_role_call_path: "{{ role_path }}/../../playbooks/retry_role_call.yml"
-    netris_retry_role_name: netris.controller.ebgp
     ebgp_state: read
-    netris_retry_attempt: 1
   ignore_errors: true
 
 # --- Print results ---

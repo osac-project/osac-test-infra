@@ -61,10 +61,10 @@
       TOKEN=$(oc create token -n {{ osac_namespace }} admin 2>/dev/null)
       HOST=$(oc get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}' 2>/dev/null)
       if [ -n "$TOKEN" ] && [ -n "$HOST" ]; then
-        curl -sk --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 30 --connect-timeout 5 --max-time 60 -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/host_types" > {{ _gather_dir }}/bmaas/host-types.json 2>/dev/null
-        curl -sk --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 30 --connect-timeout 5 --max-time 60 -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_templates" > {{ _gather_dir }}/bmaas/bmi-templates.json 2>/dev/null
-        curl -sk --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 30 --connect-timeout 5 --max-time 60 -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_catalog_items" > {{ _gather_dir }}/bmaas/bmi-catalog-items.json 2>/dev/null
-        curl -sk --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 30 --connect-timeout 5 --max-time 60 -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instances" | python3 -c 'import sys,json; d=json.load(sys.stdin); [i.pop("template_parameters",None) for i in d.get("items",[])]; json.dump(d,sys.stdout,indent=2)' > {{ _gather_dir }}/bmaas/bmi-instances.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/host_types" > {{ _gather_dir }}/bmaas/host-types.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_templates" > {{ _gather_dir }}/bmaas/bmi-templates.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_catalog_items" > {{ _gather_dir }}/bmaas/bmi-catalog-items.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instances" | python3 -c 'import sys,json; d=json.load(sys.stdin); [i.pop("template_parameters",None) for i in d.get("items",[])]; json.dump(d,sys.stdout,indent=2)' > {{ _gather_dir }}/bmaas/bmi-instances.json 2>/dev/null
       fi
   environment:
     KUBECONFIG: /root/.kube/config

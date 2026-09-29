@@ -4,9 +4,6 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: traefik_nodeport
-  until: traefik_nodeport.rc == 0 and (traefik_nodeport.stdout | length) > 0
-  retries: 5
-  delay: 5
   changed_when: false
 
 - name: Set controller_url fact
@@ -50,14 +47,10 @@
     dest: "{{ topology_dir }}/ipam-vars.tf"
 
 - name: Initialize OpenTofu
-  ansible.builtin.shell: tofu init
+  shell: tofu init
   args:
     chdir: "{{ topology_dir }}"
-  register: tofu_init
-  until: tofu_init.rc == 0
-  retries: 5
-  delay: 10
-  changed_when: false
+    creates: "{{ topology_dir }}/.terraform.lock.hcl"
 
 # The softgate and fabric-link resources have no explicit depends_on and
 # can be created concurrently under default parallelism, occasionally

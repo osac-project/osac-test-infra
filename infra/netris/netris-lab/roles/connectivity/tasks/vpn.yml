@@ -27,7 +27,7 @@
   changed_when: false
 
 - name: Wait for mgmt-server OpenVPN server
-  shell: ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=5 root@192.168.122.10 "systemctl is-active openvpn@server"
+  shell: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.122.10 "systemctl is-active openvpn@server"
   register: vpn_server_check
   until: vpn_server_check.stdout == "active"
   retries: 30
@@ -35,17 +35,13 @@
   changed_when: false
 
 - name: Fix OpenVPN server topology
-  ansible.builtin.shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectionAttempts=5 -o ConnectTimeout=10 root@192.168.122.10 "
+  shell: |
+    ssh -o StrictHostKeyChecking=no root@192.168.122.10 "
       if ! grep -q 'topology subnet' /etc/openvpn/server.conf; then
         sed -i '/^server /a topology subnet' /etc/openvpn/server.conf
         systemctl restart openvpn@server
       fi
     "
-  register: _vpn_topology_fix
-  until: _vpn_topology_fix.rc == 0
-  retries: 5
-  delay: 10
   changed_when: false
 
 - name: Create RHEL openvpn client directory
@@ -64,21 +60,12 @@
     - ta.key
     - myclient1.crt
     - myclient1.key
-  register: _vpn_client_files
-
-- name: Remove loopback VPN remotes
-  lineinfile:
-    path: /etc/openvpn/client/client.conf
-    regexp: '^remote\s+127\.0\.0\.1(?:\s|$)'
-    state: absent
-  register: _vpn_loopback_remote
 
 - name: Fix VPN remote address
   lineinfile:
     path: /etc/openvpn/client/client.conf
     regexp: '^remote\s+'
     line: 'remote 192.168.122.10 1194'
-  register: _vpn_remote_address
 
 - name: Set VPN client topology to subnet
   lineinfile:
@@ -114,10 +101,10 @@
   systemd:
     daemon_reload: true
 
-- name: Ensure OpenVPN client uses current config
+- name: Start OpenVPN client
   systemd:
     name: openvpn-client@client
-    state: "{{ 'restarted' if _vpn_client_files.changed or _vpn_loopback_remote.changed or _vpn_remote_address.changed else 'started' }}"
+    state: started
     enabled: true
 
 - name: Wait for tun0 interface
