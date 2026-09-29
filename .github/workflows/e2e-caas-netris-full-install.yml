@@ -769,7 +769,6 @@ jobs:
         with:
           namespace: osac-e2e-ci
           kubeconfig-path: /root/.kube/config
-          allow-missing-kubeconfig: true
           artifact-name: caas-netris-artifacts
 
       # Not part of the formal backend contract (infra/contract.md's target

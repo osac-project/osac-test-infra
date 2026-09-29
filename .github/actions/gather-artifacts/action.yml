@@ -12,10 +12,6 @@ inputs:
   kubeconfig-path:
     description: "Path to the cluster kubeconfig"
     required: true
-  allow-missing-kubeconfig:
-    description: "Upload already-staged diagnostics when cluster access is unavailable"
-    required: false
-    default: "false"
   artifact-name:
     description: "Name for the uploaded artifact"
     required: false
@@ -35,20 +31,10 @@ runs:
         KUBECONFIG: ${{ inputs.kubeconfig-path }}
         E2E_NAMESPACE: ${{ inputs.namespace }}
         JUNIT_PATH: ${{ inputs.junit-path }}
-        ALLOW_MISSING_KUBECONFIG: ${{ inputs.allow-missing-kubeconfig }}
       run: |
-        set -euo pipefail
         ARTIFACT_DIR="${RUNNER_TEMP}/osac-artifacts"
         if timeout 900 "$GITHUB_WORKSPACE/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}"; then
           touch "${ARTIFACT_DIR}/.redaction-complete"
-        elif [[ "${ALLOW_MISSING_KUBECONFIG}" == "true" ]]; then
-          echo "::warning::Cluster diagnostic collection failed or timed out; preserving staged lab logs through the redaction-only pass."
-          ALLOW_MISSING_KUBECONFIG=true SKIP_CLUSTER_COLLECTION=true \
-            timeout 900 "$GITHUB_WORKSPACE/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}"
-          touch "${ARTIFACT_DIR}/.redaction-complete"
-        else
-          echo "::error::Cluster diagnostic collection failed; refusing to upload unredacted artifacts."
-          exit 1
         fi
 
     - name: Verify redaction complete
