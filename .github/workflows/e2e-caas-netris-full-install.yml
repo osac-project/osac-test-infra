@@ -516,7 +516,7 @@ jobs:
 
             # Map imageKey to ansible extra-var name
             case "${image_key}" in
-              service.images.service)      var_name="fulfillment_service_image" ;;
+              service.images.service.repository) var_name="fulfillment_service_image" ;;
               operator.image.repository)   var_name="osac_operator_image" ;;
               aap.bootstrap.image)         var_name="osac_aap_image" ;;
               aap.configAsCode.eeImage)    var_name="osac_aap_ee_image" ;;

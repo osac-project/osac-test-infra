@@ -45,7 +45,7 @@ on:
         type: string
         default: "sno-4-22"
       image-overrides:
-        description: "JSON object mapping Helm value paths to image refs, e.g. '{\"service.images.service\":\"ghcr.io/osac-project/osac:pr-123\"}'"
+        description: "JSON object mapping Helm value paths to image refs, e.g. '{\"service.images.service.repository\":\"ghcr.io/osac-project/fulfillment-service\"}'"
         required: false
         type: string
         default: "{}"
@@ -72,7 +72,7 @@ on:
       components:
         description: >-
           JSON array of components to build from source and load onto the cluster, e.g.
-          '[{"repo":"osac-project/osac","ref":"my-branch","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"osac-project/osac","ref":"my-branch","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'.
+          '[{"repo":"osac-project/osac","ref":"my-branch","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository"},{"repo":"osac-project/osac","ref":"my-branch","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'.
           Each entry supports repo, ref, imageKey (required), containerfile
           (default "Containerfile"), buildType ("containerfile" default, or "ansible-builder"),
           and context (build context directory relative to repo root; when omitted,
@@ -428,7 +428,7 @@ jobs:
             # off imageKey (not a repo-name substring), so this works
             # whether repo is fulfillment-service's own repo or a
             # monorepo like osac-project/osac.
-            if [[ "${image_key}" == "service.images.service" ]]; then
+            if [[ "${image_key}" == "service.images.service.repository" ]]; then
               cli_container=$(podman create "${tag}")
               trap 'podman rm "${cli_container}" >/dev/null 2>&1 || true' EXIT
               podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
