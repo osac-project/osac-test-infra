@@ -152,6 +152,7 @@ jobs:
     runs-on: ${{ inputs.runner-label }}
     environment: e2e-test
     permissions:
+      actions: read # needed by the step-resolution step to query the current run's jobs/logs
       contents: read
       id-token: write # only exercised when enable-ai-diagnostic is true (always false for fork PR runs)
     outputs:
@@ -784,6 +785,76 @@ jobs:
         uses: ./.github/actions/vertex-ai-auth
         id: vertex-auth
 
+      # ── Resolve the failing step and download its log ──────────
+      # The Phase-2 (workflow_run) diagnostic path already does this
+      # in ai-diagnostic-e2e.yml.  For the in-job path (schedule /
+      # workflow_dispatch), we need to do it ourselves so
+      # ai-diagnose-failure.py receives FAILED_STEP_NAME and
+      # JOB_LOG_PATH instead of falling back to UNKNOWN.
+      - name: Identify and download the failing step's log
+        id: job-log
+        if: failure() && inputs.enable-ai-diagnostic
+        continue-on-error: true # must never block Teardown below
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+          run_id="${GITHUB_RUN_ID}"
+
+          # Fetch the current job's metadata (steps array included).
+          # GITHUB_JOB is the job *id* ("e2e"), but the API returns the
+          # display name which may include a matrix suffix.  Match on
+          # the id-based name or the display name.
+          job_json=$(gh api --paginate "repos/${repo}/actions/runs/${run_id}/jobs?per_page=100" \
+            --jq ".jobs[] | select(.name == \"${GITHUB_JOB}\" or (.name | test(\"^e2e(\\\\s*/.*)?$\")))" | head -1)
+          if [[ -z "${job_json}" ]]; then
+            echo "Could not find own job in run ${run_id}; diagnosing without job-log signal."
+            echo "step-name=" >> "${GITHUB_OUTPUT}"
+            echo "path=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          job_id=$(jq -r '.id' <<<"${job_json}")
+
+          # Earliest step whose own conclusion is "failure" -- the real
+          # root-cause step (later failures like Teardown are downstream
+          # consequences).
+          failed_step=$(jq -c '[.steps[]? | select(.conclusion == "failure")] | sort_by(.number) | first // empty' <<<"${job_json}")
+          step_name=$(jq -r 'if . == null then "" else (.name // "") end' <<<"${failed_step}")
+          step_started=$(jq -r 'if . == null then "" else (.started_at // "") end' <<<"${failed_step}")
+          step_completed=$(jq -r 'if . == null then "" else (.completed_at // "") end' <<<"${failed_step}")
+          echo "step-name=${step_name}" >> "${GITHUB_OUTPUT}"
+          if [[ -n "${step_name}" ]]; then
+            echo "Failing step: '${step_name}' (${step_started} - ${step_completed})"
+          else
+            echo "No step with conclusion=failure found on this job."
+          fi
+
+          log_path="${RUNNER_TEMP}/job.log"
+          if ! gh api --allow-escape-sequences "repos/${repo}/actions/jobs/${job_id}/logs" > "${log_path}" 2>/dev/null; then
+            echo "Failed to download log for job ${job_id}; diagnosing without job-log signal."
+            echo "path=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          step_log_path="${RUNNER_TEMP}/failed-step.log"
+          if [[ -n "${step_started}" && -n "${step_completed}" ]]; then
+            awk -v start="${step_started}" -v end="${step_completed}" '
+              {
+                ts = $1
+                sub(/\.[0-9]+Z$/, "Z", ts)
+                if (ts >= start && ts <= end) print
+              }
+            ' "${log_path}" > "${step_log_path}" || true
+          fi
+
+          if [[ -s "${step_log_path}" ]]; then
+            echo "path=${step_log_path}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "path=${log_path}" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Run AI failure diagnosis
         id: diagnose-script
         if: failure() && inputs.enable-ai-diagnostic
@@ -796,6 +867,8 @@ jobs:
           GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
           WORKFLOW_NAME: "E2E BMaaS Full Install"
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILED_STEP_NAME: ${{ steps.job-log.outputs.step-name }}
+          JOB_LOG_PATH: ${{ steps.job-log.outputs.path }}
           # Also written here (not just GITHUB_STEP_SUMMARY) so the Slack
           # steps below can grab the raw diagnosis text on its own,
           # without re-parsing the job summary.
