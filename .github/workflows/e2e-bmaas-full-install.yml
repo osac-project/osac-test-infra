@@ -168,6 +168,31 @@ jobs:
           ref: ${{ inputs.test-infra-ref || '' }}
           persist-credentials: false
 
+      # When no components are built from source and no CLI version is
+      # pinned explicitly, resolve the osac mono-repo HEAD SHA so every
+      # artifact — test overlay, CLI binary, installer charts — is
+      # drawn from the exact same commit.  Without this, each clone
+      # independently resolves "main" at whatever HEAD happens to be
+      # at that instant, and the CLI comes from the latest *published*
+      # release (which can lag main by days), causing flag mismatches
+      # and test failures (OSAC-5356).
+      - name: Resolve osac SHA for version consistency
+        id: resolve-sha
+        if: inputs.components == '[]' && inputs.osac-cli-version == ''
+        env:
+          TEST_REF: ${{ inputs.test-ref }}
+          TEST_REPOSITORY: ${{ inputs.test-repository }}
+        run: |
+          SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
+                  "refs/heads/${TEST_REF}" | awk '{print $1}')
+          if [[ -z "${SHA}" ]]; then
+            echo "::error::Failed to resolve SHA for ${TEST_REPOSITORY}@${TEST_REF}"
+            exit 1
+          fi
+          echo "Pinned ${TEST_REPOSITORY}@${TEST_REF} → ${SHA}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "PINNED_OSAC_SHA=${SHA}" >> "$GITHUB_ENV"
+
       - name: Overlay tests from osac mono-repo
         env:
           TEST_REF: ${{ inputs.test-ref }}
@@ -181,8 +206,11 @@ jobs:
           git init "$OSAC_CLONE_DIR"
           git -C "$OSAC_CLONE_DIR" sparse-checkout init --cone
           git -C "$OSAC_CLONE_DIR" sparse-checkout set tests
+          # Use SHA-pinned ref when available (OSAC-5356: no-build path
+          # version consistency), otherwise fall back to the branch name.
+          EFFECTIVE_REF="${PINNED_OSAC_SHA:-${TEST_REF}}"
           git -C "$OSAC_CLONE_DIR" fetch --depth 1 \
-            "https://github.com/${TEST_REPOSITORY}.git" "${TEST_REF}"
+            "https://github.com/${TEST_REPOSITORY}.git" "${EFFECTIVE_REF}"
           git -C "$OSAC_CLONE_DIR" checkout FETCH_HEAD
           # Overlay tests/ only. Do not copy pyproject.toml: osac's is named
           # osac-e2e and has no uv.lock, which breaks uv sync --frozen.
@@ -466,28 +494,36 @@ jobs:
             echo "::endgroup::"
           done
 
-      # ── CLI fallback: extract from the published fulfillment-service image ──
-      # When no component build produced an OSAC CLI binary (e.g. the
-      # default empty-components path from osac-test-infra main triggers),
-      # extract one from the latest published fulfillment-service image so
-      # the CLI always matches what is deployed.  Without this, the
-      # test-image Containerfile falls back to the latest GitHub release,
-      # which can be days behind main and may lack flags that the HEAD test
-      # code depends on (e.g. osac-project/osac#1061 renamed --cores to
-      # --vcpus, causing "unknown flag" failures — see osac#1015).
-      - name: Extract OSAC CLI from published image (fallback)
-        if: env.OSAC_CLI_BIN == ''
+      # When no components are built from source, build the
+      # fulfillment-service image at the pinned SHA to extract the CLI
+      # binary — guarantees version-matched parity between the service
+      # and the CLI used by tests (OSAC-5356).  Builds from source
+      # rather than pulling a pre-built registry image so there is no
+      # dependency on publish-image CI timing.
+      - name: Build CLI from osac source
+        if: steps.resolve-sha.outputs.sha != ''
+        env:
+          TEST_REPOSITORY: ${{ inputs.test-repository }}
         run: |
-          echo "::group::Extract OSAC CLI from published image"
-          IMAGE="ghcr.io/osac-project/fulfillment-service:latest"
-          echo "Pulling ${IMAGE}..."
-          podman pull "${IMAGE}"
-          cli_container=$(podman create "${IMAGE}")
+          echo "::group::Build fulfillment-service for CLI extraction"
+          FS_SRC="$RUNNER_TEMP/osac-cli-build-src"
+          git init "${FS_SRC}"
+          git -C "${FS_SRC}" fetch --depth 1 \
+            "https://github.com/${TEST_REPOSITORY}.git" "${PINNED_OSAC_SHA}"
+          git -C "${FS_SRC}" checkout FETCH_HEAD
+
+          FS_TAG="localhost/fulfillment-service-cli:${GITHUB_RUN_ID}"
+          podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG \
+            -t "${FS_TAG}" \
+            -f "${FS_SRC}/fulfillment-service/Containerfile" \
+            "${FS_SRC}"
+
+          cli_container=$(podman create "${FS_TAG}")
+          trap 'podman rm "${cli_container}" >/dev/null 2>&1 || true' EXIT
           podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
-          podman rm "${cli_container}" >/dev/null 2>&1 || true
           chmod +x "$RUNNER_TEMP/osac-cli-bin"
           echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
-          echo "Extracted OSAC CLI from ${IMAGE}"
+          echo "Extracted CLI from locally-built image at ${PINNED_OSAC_SHA}"
           echo "::endgroup::"
 
       - name: Build test image
@@ -536,9 +572,13 @@ jobs:
           # clone, and a second git-clone at the branch name would race.
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
           PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
+          # Fall back to the no-build-path SHA resolved earlier (OSAC-5356)
+          if [[ -z "${PINNED_SHA}" ]]; then
+            PINNED_SHA="${PINNED_OSAC_SHA:-}"
+          fi
 
           if [[ -n "${PINNED_SHA}" ]]; then
-            echo "Cloning installer at component-resolved commit (${PINNED_SHA})."
+            echo "Cloning installer at pinned commit (${PINNED_SHA})."
             git init "${INSTALLER_CLONE_DIR}"
             git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 \
               "https://github.com/${INSTALLER_REPO}.git" "${PINNED_SHA}"
