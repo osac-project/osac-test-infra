@@ -35,7 +35,7 @@ class CallbackModule(CallbackModule_default):  # pylint: disable=too-few-public-
         self._reported_failure_details = set()
 
     def _display_failure_details(self, result, label):
-        result_data = result.result
+        result_data = result._result
         if (
             result_data.get('censored')
             or result_data.get('_ansible_no_log')
@@ -82,12 +82,12 @@ class CallbackModule(CallbackModule_default):  # pylint: disable=too-few-public-
 
     def v2_runner_on_ok(self, result):
         super().v2_runner_on_ok(result)
-        if self._display.verbosity <= 2 and self._has_nonzero_result(result.result):
+        if self._display.verbosity <= 2 and self._has_nonzero_result(result._result):
             self._display_failure_details(result, 'ANSIBLE CONTINUED AFTER NONZERO RESULT')
 
     def v2_runner_item_on_ok(self, result):
         super().v2_runner_item_on_ok(result)
-        if self._display.verbosity <= 2 and self._has_nonzero_result(result.result):
+        if self._display.verbosity <= 2 and self._has_nonzero_result(result._result):
             self._display_failure_details(result, 'ANSIBLE CONTINUED AFTER NONZERO RESULT')
 
     def _dump_results(self, result, indent=None, sort_keys=True, keep_invocation=False):
