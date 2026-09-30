@@ -31,7 +31,7 @@ on:
         required: false
         default: ""
       osac-aap-ee-image:
-        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        description: "Override osac-aap execution-environment image (must be an immutable registry digest reference, e.g. quay.io/org/osac-ee@sha256:<64 hex chars>) -- empty means no override"
         required: false
         default: ""
       osac-repo:
