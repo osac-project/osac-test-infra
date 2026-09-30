@@ -581,5 +581,130 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(result["vmaas"]["decision"], "sanity")
 
 
+class MergeQueuePreviewTests(unittest.TestCase):
+    """Phase 3a: run_merge_queue_preview() is fully self-contained (no
+    CONTEXT_FILE/DECISION_FILE at all -- unlike run_report_mode()) and must
+    never raise or exit non-zero, since nothing downstream can safely
+    absorb a crash from a job with no real decision to make. Every test
+    here asserts BOTH the summary content AND that no exception escapes.
+    """
+
+    def setUp(self):
+        tmpdir = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmpdir, ignore_errors=True))
+        self.summary_path = os.path.join(tmpdir, "step-summary.md")
+        self.output_path = os.path.join(tmpdir, "github-output.txt")
+        # Both files must exist for the open(..., "a") calls inside
+        # run_merge_queue_preview to succeed -- GitHub Actions always
+        # pre-creates GITHUB_STEP_SUMMARY/GITHUB_OUTPUT as empty files.
+        open(self.summary_path, "w").close()
+        open(self.output_path, "w").close()
+        self.env_patcher = mock.patch.dict(
+            os.environ, {"GITHUB_STEP_SUMMARY": self.summary_path, "GITHUB_OUTPUT": self.output_path}
+        )
+        self.env_patcher.start()
+        self.addCleanup(self.env_patcher.stop)
+        select_jobs.PR_DIFF_AVAILABLE = True
+        select_jobs.PR_DIFF = json.dumps("diff --git a/x b/x\n+print(1)\n")
+        self.addCleanup(lambda: setattr(select_jobs, "PR_DIFF_AVAILABLE", True))
+
+    def _read_summary(self):
+        with open(self.summary_path) as f:
+            return f.read()
+
+    def _read_outputs(self):
+        with open(self.output_path) as f:
+            return dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
+
+    def test_successful_parse_writes_preview_and_outputs(self):
+        fake_response = (
+            "VMAAS: regression | touches provisioning logic\n"
+            "CAAS: sanity | shared helper touched\n"
+            "BMAAS: skip | no evidence\n"
+            "NETRIS: no | no evidence\n"
+            "CONFIDENCE: 77"
+        )
+        with mock.patch.object(select_jobs, "call_gemini", return_value=fake_response) as mock_call_gemini:
+            select_jobs.run_merge_queue_preview()
+        mock_call_gemini.assert_called_once()
+        summary = self._read_summary()
+        self.assertIn("Phase 3a -- informational only", summary)
+        self.assertIn("does not affect what runs", summary)
+        self.assertIn("| VMAAS | regression | touches provisioning logic |", summary)
+        self.assertIn("77%", summary)
+        outputs = self._read_outputs()
+        self.assertEqual(outputs["vmaas-preview"], "regression")
+        self.assertEqual(outputs["caas-preview"], "sanity")
+        self.assertEqual(outputs["bmaas-preview"], "skip")
+
+    def test_gemini_failure_exits_cleanly_with_preview_unavailable(self):
+        with mock.patch.object(select_jobs, "call_gemini", return_value=None):
+            select_jobs.run_merge_queue_preview()  # must not raise
+        summary = self._read_summary()
+        self.assertIn("Preview unavailable", summary)
+        self.assertIn("Gemini produced no response", summary)
+        outputs = self._read_outputs()
+        self.assertEqual(outputs["vmaas-preview"], "unavailable")
+
+    def test_unparseable_response_exits_cleanly(self):
+        with mock.patch.object(select_jobs, "call_gemini", return_value="not a valid decision block"):
+            select_jobs.run_merge_queue_preview()  # must not raise
+        summary = self._read_summary()
+        self.assertIn("Preview unavailable", summary)
+        self.assertIn("did not parse", summary)
+
+    def test_diff_unavailable_skips_gemini_entirely(self):
+        select_jobs.PR_DIFF_AVAILABLE = False
+        with mock.patch.object(select_jobs, "call_gemini") as mock_call_gemini:
+            select_jobs.run_merge_queue_preview()
+        mock_call_gemini.assert_not_called()
+        summary = self._read_summary()
+        self.assertIn("Preview unavailable", summary)
+        self.assertIn("PR diff could not be fetched", summary)
+
+    def test_call_gemini_raising_does_not_propagate(self):
+        # Belt-and-braces: even an unanticipated exception from call_gemini
+        # itself (which is documented to never raise, but this function's
+        # own hard requirement is to survive regardless) must not escape.
+        with mock.patch.object(select_jobs, "call_gemini", side_effect=RuntimeError("boom")):
+            select_jobs.run_merge_queue_preview()  # must not raise
+        summary = self._read_summary()
+        self.assertIn("Preview unavailable", summary)
+        self.assertIn("unexpected error", summary)
+
+    def test_missing_github_step_summary_env_does_not_crash(self):
+        # No GITHUB_STEP_SUMMARY/GITHUB_OUTPUT set at all (e.g. a local,
+        # non-Actions invocation) -- must fall back to printing instead of
+        # raising on a missing/empty path.
+        del os.environ["GITHUB_STEP_SUMMARY"]
+        del os.environ["GITHUB_OUTPUT"]
+        with mock.patch.object(select_jobs, "call_gemini", return_value=None):
+            select_jobs.run_merge_queue_preview()  # must not raise
+
+    def test_main_dispatches_to_preview_mode_via_env_var(self):
+        select_jobs.MODE = "merge-queue-preview"
+        self.addCleanup(lambda: setattr(select_jobs, "MODE", "report"))
+        with mock.patch.object(select_jobs, "run_merge_queue_preview") as mock_preview, mock.patch.object(
+            select_jobs, "run_report_mode"
+        ) as mock_report:
+            select_jobs.main()
+        mock_preview.assert_called_once()
+        mock_report.assert_not_called()
+
+    def test_main_defaults_to_report_mode(self):
+        select_jobs.MODE = "report"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context_path = _write_context(tmpdir, ambiguous_files=[])
+            decision_path = os.path.join(tmpdir, "decision.md")
+            select_jobs.CONTEXT_FILE = context_path
+            select_jobs.DECISION_FILE = decision_path
+            select_jobs.PR_DIFF_AVAILABLE = True
+            with mock.patch.object(select_jobs, "run_merge_queue_preview") as mock_preview, mock.patch.object(
+                select_jobs, "call_gemini"
+            ):
+                select_jobs.main()
+        mock_preview.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
