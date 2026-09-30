@@ -27,9 +27,6 @@
 #                         back out of the config file's [default]
 #                         netris_password key by infra/netris's
 #                         inventory/group_vars/all.yml.
-#   QUAY_USERNAME         Quay account with pull access to
-#                         quay.io/osac-project/cluster-flavors
-#   QUAY_PASSWORD         password/token for QUAY_USERNAME
 #   AAP_LICENSE_ZIP_PATH  local path to the already-fetched, already
 #                         base64-decoded AAP license zip
 #   PULL_SECRET_JSON_PATH local path to the already-fetched pull secret JSON
@@ -37,6 +34,11 @@
 #                         shared hosted zone)
 #
 # Optional env vars:
+#   QUAY_USERNAME         Quay account with pull access to
+#                         quay.io/osac-project/cluster-flavors; when both
+#                         Quay env vars are omitted, credentials are read
+#                         from the matching auth entry in PULL_SECRET_JSON_PATH
+#   QUAY_PASSWORD         password/token for QUAY_USERNAME
 #   REMOTE_STAGING_DIR    fixed path on the box to stage secrets at
 #                         (default: /root/caas-netris-secrets) -- must match
 #                         stage-caas-netris-secrets.sh's value
@@ -53,11 +55,38 @@ GREEN="\e[32m"
 : "${KNOWN_HOSTS_FILE:?KNOWN_HOSTS_FILE is required}"
 : "${NETRIS_LICENSE:?NETRIS_LICENSE is required}"
 : "${NETRIS_PASSWORD:?NETRIS_PASSWORD is required}"
-: "${QUAY_USERNAME:?QUAY_USERNAME is required}"
-: "${QUAY_PASSWORD:?QUAY_PASSWORD is required}"
 : "${AAP_LICENSE_ZIP_PATH:?AAP_LICENSE_ZIP_PATH is required}"
 : "${PULL_SECRET_JSON_PATH:?PULL_SECRET_JSON_PATH is required}"
 : "${LAB_NAME:?LAB_NAME is required}"
+
+# Older workflow definitions invoke this PR's script while staging the
+# merged pull secret but do not pass the raw Quay credentials separately.
+# Derive them from the same auth entry when needed, so the CI config still
+# receives the same username/password keys that local setup reads.
+if [[ -z "${QUAY_USERNAME:-}" && -z "${QUAY_PASSWORD:-}" ]]; then
+    if ! QUAY_AUTH=$(jq -er '.auths["quay.io/osac-project"].auth | select(type == "string" and length > 0)' "${PULL_SECRET_JSON_PATH}" 2>/dev/null); then
+        echo "Quay credentials are missing: pass QUAY_USERNAME and QUAY_PASSWORD or provide a pull secret with quay.io/osac-project auth" >&2
+        exit 1
+    fi
+    if ! QUAY_CREDENTIALS=$(printf '%s' "${QUAY_AUTH}" | base64 -d 2>/dev/null); then
+        echo "Could not decode Quay auth from ${PULL_SECRET_JSON_PATH}" >&2
+        exit 1
+    fi
+    if [[ "${QUAY_CREDENTIALS}" != *:* ]]; then
+        echo "Quay auth in ${PULL_SECRET_JSON_PATH} is not in username:password form" >&2
+        exit 1
+    fi
+    QUAY_USERNAME="${QUAY_CREDENTIALS%%:*}"
+    QUAY_PASSWORD="${QUAY_CREDENTIALS#*:}"
+elif [[ -z "${QUAY_USERNAME:-}" || -z "${QUAY_PASSWORD:-}" ]]; then
+    echo "Set both QUAY_USERNAME and QUAY_PASSWORD, or omit both to use pull-secret auth" >&2
+    exit 1
+fi
+
+if [[ -z "${QUAY_USERNAME}" || -z "${QUAY_PASSWORD}" ]]; then
+    echo "Quay username and password must both be non-empty" >&2
+    exit 1
+fi
 
 REMOTE_STAGING_DIR="${REMOTE_STAGING_DIR:-/root/caas-netris-secrets}"
 
