@@ -278,6 +278,8 @@ jobs:
           PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
           NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
           NETRIS_PASSWORD: ${{ steps.netris-password.outputs.NETRIS_PASSWORD }}
+          QUAY_USERNAME: ${{ steps.vault-secrets.outputs.QUAY_USER }}
+          QUAY_PASSWORD: ${{ steps.vault-secrets.outputs.QUAY_PASSWORD }}
           AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
           PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
           LAB_NAME: ci-${{ github.run_id }}
