@@ -27,6 +27,9 @@
 #                         back out of the config file's [default]
 #                         netris_password key by infra/netris's
 #                         inventory/group_vars/all.yml.
+#   QUAY_USERNAME         Quay account with pull access to
+#                         quay.io/osac-project/cluster-flavors
+#   QUAY_PASSWORD         password/token for QUAY_USERNAME
 #   AAP_LICENSE_ZIP_PATH  local path to the already-fetched, already
 #                         base64-decoded AAP license zip
 #   PULL_SECRET_JSON_PATH local path to the already-fetched pull secret JSON
@@ -50,6 +53,8 @@ GREEN="\e[32m"
 : "${KNOWN_HOSTS_FILE:?KNOWN_HOSTS_FILE is required}"
 : "${NETRIS_LICENSE:?NETRIS_LICENSE is required}"
 : "${NETRIS_PASSWORD:?NETRIS_PASSWORD is required}"
+: "${QUAY_USERNAME:?QUAY_USERNAME is required}"
+: "${QUAY_PASSWORD:?QUAY_PASSWORD is required}"
 : "${AAP_LICENSE_ZIP_PATH:?AAP_LICENSE_ZIP_PATH is required}"
 : "${PULL_SECRET_JSON_PATH:?PULL_SECRET_JSON_PATH is required}"
 : "${LAB_NAME:?LAB_NAME is required}"
@@ -64,6 +69,11 @@ REMOTE_STAGING_DIR="${REMOTE_STAGING_DIR:-/root/caas-netris-secrets}"
 # caller breaking the config file, not an expected failure today.
 if [[ "$NETRIS_PASSWORD" == *$'\n'* ]] || [[ "$NETRIS_PASSWORD" == *%* ]]; then
     echo "NETRIS_PASSWORD must not contain newlines or '%' -- both break the staged INI config file" >&2
+    exit 1
+fi
+
+if [[ "$QUAY_USERNAME" == *$'\n'* || "$QUAY_PASSWORD" == *$'\n'* ]]; then
+    echo "Quay credentials must not contain newlines -- they are written to the staged INI config file" >&2
     exit 1
 fi
 
@@ -98,6 +108,8 @@ cat > "$CONFIG_FILE" <<EOF
 [default]
 lab_name = ${LAB_NAME}
 netris_password = ${NETRIS_PASSWORD}
+quay_username = ${QUAY_USERNAME}
+quay_password = ${QUAY_PASSWORD}
 EOF
 
 ssh_exec "mkdir -p '${REMOTE_STAGING_DIR}' && chmod 700 '${REMOTE_STAGING_DIR}'"
