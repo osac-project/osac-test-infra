@@ -124,6 +124,7 @@ DIAGNOSIS_FILE = os.environ.get("DIAGNOSIS_FILE", "")
 # sticky PR comment/Check Run (which only ever show the rendered
 # markdown) for later querying/aggregation across runs.
 DIAGNOSIS_JSON_FILE = os.environ.get("DIAGNOSIS_JSON_FILE", "")
+LAYA_SHADOW_FILE = os.environ.get("LAYA_SHADOW_FILE", "")
 WORKFLOW_NAME = os.environ.get("WORKFLOW_NAME", "E2E job")
 RUN_URL = os.environ.get("RUN_URL", "")
 # Optional, fork-PR-only (Phase 2 already resolves the PR number to gate the
@@ -893,6 +894,7 @@ def build_diagnosis_json(
     failed_step_name,
     no_test_evidence,
     changed_files,
+    laya_shadow=None,
 ):
     """Build the full structured diagnosis as a plain, JSON-serializable
     dict -- the machine-readable counterpart to build_diagnosis_body's
@@ -926,7 +928,7 @@ def build_diagnosis_json(
     separate call sites.
     """
     summary, causal_chain, evidence, _footer = split_sections(diagnosis)
-    return {
+    result = {
         "schema_version": 1,
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "workflow_name": workflow_name or None,
@@ -952,6 +954,25 @@ def build_diagnosis_json(
         "no_test_evidence": no_test_evidence,
         "changed_files": changed_files,
     }
+    if laya_shadow is not None:
+        result["laya_shadow"] = laya_shadow
+    return result
+
+
+def load_laya_shadow(path):
+    """Read supplementary shadow metadata without risking the Vertex result."""
+    if not path:
+        return None
+    try:
+        if os.path.getsize(path) > 16 * 1024:
+            return None
+        with open(path) as stream:
+            result = json.load(stream)
+        if not isinstance(result, dict) or result.get("mode") not in ("shadow", "disabled"):
+            return None
+        return result
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def build_diagnosis_body(diagnosis, run_url, workflow_name, category, incomplete=False):
@@ -2220,6 +2241,7 @@ correct.
                 FAILED_STEP_NAME,
                 no_test_evidence,
                 CHANGED_FILES.split("\n") if CHANGED_FILES else [],
+                load_laya_shadow(LAYA_SHADOW_FILE),
             )
             with open(tmp_path, "w") as f:
                 json.dump(diagnosis_json, f, indent=2)

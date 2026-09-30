@@ -491,6 +491,42 @@ jobs:
             echo "path=${log_path}" >> "${GITHUB_OUTPUT}"
           fi
 
+      # OSAC-5641: record a bounded first-pass route without changing the
+      # Vertex diagnosis, sticky comment, status, or E2E gate. This job runs
+      # on ubuntu-latest, which has no demonstrated route to the private Laya
+      # endpoint. Require explicit enablement and a reachable endpoint before
+      # making a request. Service errors are recorded as abstentions, and
+      # this step is supplementary even if the helper itself fails.
+      - name: Record Laya shadow route
+        continue-on-error: true
+        env:
+          ARTIFACT_DIR: ${{ steps.artifact.outputs.dir }}
+          JUNIT_PATH: ${{ steps.artifact.outputs.dir }}/junit.xml
+          JOB_LOG_PATH: ${{ steps.job-log.outputs.path }}
+          FAILED_STEP_NAME: ${{ steps.job-log.outputs.step-name }}
+          LAYA_SHADOW_ENABLED: ${{ vars.OSAC_LAYA_SHADOW_ENABLED || 'false' }}
+          LAYA_ENDPOINT: ${{ vars.OSAC_LAYA_ENDPOINT || '' }}
+          LAYA_SHADOW_FILE: ${{ runner.temp }}/laya-shadow.json
+          FAILED_RUN_ID: ${{ github.event.workflow_run.id }}
+          FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: python3 .github/scripts/laya-shadow.py
+
+      # Persist the observation even when Vertex authentication or diagnosis
+      # later fails. The helper writes only fixed failure descriptions,
+      # source references, and run identifiers; upload never consumes raw logs.
+      - name: Upload Laya shadow observation
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: laya-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/laya-shadow.json
+          retention-days: 90
+          if-no-files-found: warn
+
       - name: Authenticate for AI diagnosis
         id: vertex-auth
         uses: ./.github/actions/vertex-ai-auth
@@ -598,6 +634,7 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
           DIAGNOSIS_JSON_FILE: ${{ runner.temp }}/diagnosis.json
+          LAYA_SHADOW_FILE: ${{ runner.temp }}/laya-shadow.json
           CHANGED_FILES: ${{ steps.pr-context.outputs.files }}
           PR_DIFF: ${{ steps.pr-context.outputs.diff }}
           KNOWN_ISSUES: ${{ steps.known-issues.outputs.text }}
