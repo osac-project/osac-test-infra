@@ -493,6 +493,7 @@ jobs:
         uses: ./.github/actions/install-grpcurl
 
       - name: Install infrastructure operators
+        id: install-infra
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
@@ -549,6 +550,36 @@ jobs:
           cd "${INSTALLER_DIR}"
 
           make install-infra PLATFORM=openshift PROFILE=caas-ci NS="${INSTALLER_NAMESPACE}"
+
+          # The osac chart's pre-install validation requires a cluster-scoped
+          # Metal3 Provisioning CR whenever bmf.metal3.enabled is set in the
+          # instance values under test (the same file install-osac renders).
+          # Read it from the cloned installer so the "Setup virtual
+          # BareMetalHosts" step below only runs for installs that need it --
+          # runs without metal3 keep the existing flow untouched.
+          METAL3_ENABLED=$(yq '.bmf.metal3.enabled // false' values/caas-ci/instance.yaml)
+          echo "bmf.metal3.enabled in values/caas-ci/instance.yaml: ${METAL3_ENABLED}"
+          echo "metal3-enabled=${METAL3_ENABLED}" >> "$GITHUB_OUTPUT"
+
+      # Same shared setup e2e-bmaas-full-install uses: applies the cluster-
+      # scoped Provisioning CR (watchAllNamespaces) the osac chart's
+      # pre-install hook (OSAC-4140) requires, starts sushy-tools, and
+      # creates BareMetalHosts labeled osac.openshift.io/host-type=default
+      # that the caas e2e baremetal worker tests allocate. Gated on the value
+      # above so non-metal3 CaaS runs are unaffected. teardown.sh removes the
+      # VMs, storage pool, and sushy-emulator by CLONE_NAME.
+      - name: Setup virtual BareMetalHosts
+        if: steps.install-infra.outputs.metal3-enabled == 'true'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          # Must match bmf.metal3.namespace in the caas-ci values / install args.
+          BMH_NAMESPACE: host-inventory
+          # Peak concurrent demand: test_cluster_create_with_two_node_sets
+          # holds two hosts (compute + gpu instance types, both selecting
+          # host-type=default) while test_worker_tenant_status holds one on a
+          # different xdist worker (pytest -n 4 --dist loadfile).
+          BMH_COUNT: "3"
+        run: bash .github/scripts/setup-virtual-bmh.sh
 
       - name: Install OSAC
         env:
@@ -707,6 +738,15 @@ jobs:
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
         run: |
           # INSTALLER_DIR is resolved and persisted by the earlier install step (via $GITHUB_ENV)
+
+          # OSAC-4134 removed this script from the installer: CaaS agent
+          # provisioning moved from CI to osac-operator. When the installer
+          # under test no longer ships the script, the install manages its
+          # own agents and this step is a no-op.
+          if [ ! -f "${INSTALLER_DIR}/scripts/setup-caas-agents.sh" ]; then
+            echo "setup-caas-agents.sh not found in ${INSTALLER_DIR}; agent setup owned by osac-operator -- skipping"
+            exit 0
+          fi
 
           LIBVIRT_NETWORK="test-infra-net-${CLONE_NAME}" \
           INSTALLER_NAMESPACE="${INSTALLER_NAMESPACE}" \
