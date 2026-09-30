@@ -39,7 +39,7 @@ class CallbackModule(CallbackModule_default):  # pylint: disable=too-few-public-
         if (
             result_data.get('censored')
             or result_data.get('_ansible_no_log')
-            or getattr(result.task, 'no_log', False)
+            or getattr(result._task, 'no_log', False)
         ):
             return
 
@@ -53,12 +53,12 @@ class CallbackModule(CallbackModule_default):  # pylint: disable=too-few-public-
             return
 
         details = '\n'.join(detail_lines)
-        detail_key = (result.host.get_name(), result.task._uuid, details)
+        detail_key = (result._host.get_name(), result._task._uuid, details)
         if detail_key in self._reported_failure_details:
             return
         self._reported_failure_details.add(detail_key)
 
-        task_name = result.task_name or result.task
+        task_name = result.task_name or result._task
         attempt = result_data.get('attempts', 'unknown')
         self._display.display(
             '%s: [%s]: %s (attempt %s)\n%s'
