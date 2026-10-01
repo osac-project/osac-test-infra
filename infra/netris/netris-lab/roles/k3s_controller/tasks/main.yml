@@ -27,7 +27,12 @@
 
 - name: Install K3s
   when: k3s_check.rc != 0
-  shell: "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -"
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      curl --fail --silent --show-error --location https://get.k3s.io \
+        | INSTALL_K3S_VERSION={{ k3s_version }} sh -
+    executable: /bin/bash
   register: k3s_install
 
 - name: Ensure K3s is running

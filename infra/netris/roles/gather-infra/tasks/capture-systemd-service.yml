@@ -1,0 +1,16 @@
+---
+- name: "Capture systemd status for {{ _gather_systemd_unit }}"
+  ansible.builtin.include_tasks: capture-command.yml
+  vars:
+    _gather_lab_command:
+      label: "systemd status {{ _gather_systemd_unit }}"
+      path: "systemd/{{ _gather_systemd_unit | regex_replace('[^A-Za-z0-9_.@-]', '_') }}-status.txt"
+      argv: [systemctl, status, "{{ _gather_systemd_unit }}", --no-pager, --full]
+
+- name: "Capture journal for {{ _gather_systemd_unit }}"
+  ansible.builtin.include_tasks: capture-command.yml
+  vars:
+    _gather_lab_command:
+      label: "journal {{ _gather_systemd_unit }}"
+      path: "journal/{{ _gather_systemd_unit | regex_replace('[^A-Za-z0-9_.@-]', '_') }}.txt"
+      argv: [journalctl, -b, -u, "{{ _gather_systemd_unit }}", --no-pager, -n, '1500']

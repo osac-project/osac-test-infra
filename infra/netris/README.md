@@ -40,7 +40,7 @@ Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softga
 - **Netris license key** — place at repo root as `license.key`
 - **OSAC/AAP license** — place at repo root as `license.zip`
 - **OpenShift pull secret** — place at `/root/pull-secret` (or set `pull_secret_path`; download from [console.redhat.com](https://console.redhat.com/openshift/downloads))
-- **Config file** — place a `config` file at the repo root (INI format, gitignored) with lab name and AWS credentials. Credentials can be obtained from the [CI vault](https://vault.ci.openshift.org/ui/vault/secrets/kv/kv/selfservice%2Fosac%2Fpacket-osac). See Quick Start below. The IAM user needs `route53:ChangeResourceRecordSets`, `route53:ListHostedZones`, and `route53:GetChange` permissions on the hosted zone.
+- **Config file** — place `infra/netris/config` (INI format, gitignored) with your lab name, AWS credentials, and Quay username/password. The Quay account must have pull access to `quay.io/osac-project/cluster-flavors` for the snapshot flavor download to work. AWS credentials can be obtained from the [CI vault](https://vault.ci.openshift.org/ui/vault/secrets/kv/kv/selfservice%2Fosac%2Fpacket-osac). See Quick Start below. The IAM user needs `route53:ChangeResourceRecordSets`, `route53:ListHostedZones`, and `route53:GetChange` permissions on the hosted zone.
 
 All system packages, tools, and SSH keys are installed automatically by `make setup-infra`. A pre-flight check validates all required files, KVM support, and minimum memory before deploying.
 
@@ -55,15 +55,17 @@ cp /path/to/license.key ./license.key
 cp /path/to/license.zip ./license.zip
 cp /path/to/pull-secret /root/pull-secret
 
-# Create config file (unique lab name + AWS credentials for Route 53 DNS)
+# Create infra/netris/config (unique lab name, AWS credentials, and Quay credentials)
 # lab_name becomes a subdomain under the shared hosted zone (e.g., jsmith.ecoeng-osac-ci.devcluster.openshift.com)
-cat > config << EOF
+cat > infra/netris/config << EOF
 [default]
 lab_name = <unique-lab-name>
 aws_access_key_id = <your-key>
 aws_secret_access_key = <your-secret>
 aws_region = us-east-1
 netris_password = <your-netris-password>
+quay_username = <your-quay-username>
+quay_password = <your-quay-password>
 EOF
 
 # Install prerequisites and cache images (shared, run once)
@@ -423,6 +425,10 @@ dns_server: "10.0.0.1"
 | `aap_project_git_branch` | `""` | AAP config-as-code project git branch override (test PR playbooks/collections) | no |
 
 #### Snapshot Deployment (fast path)
+
+The account configured with `quay_username` and `quay_password` must have pull access to
+`quay.io/osac-project/cluster-flavors`. Setup logs in with these credentials when it downloads
+the flavor image; it reports an actionable error if the credentials are missing or lack access.
 
 | Variable | Default | Description | Tested |
 |----------|---------|-------------|--------|

@@ -274,6 +274,8 @@ jobs:
           PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
           NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
           NETRIS_PASSWORD: ${{ steps.netris-password.outputs.NETRIS_PASSWORD }}
+          QUAY_USERNAME: ${{ steps.vault-secrets.outputs.QUAY_USER }}
+          QUAY_PASSWORD: ${{ steps.vault-secrets.outputs.QUAY_PASSWORD }}
           AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
           PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
           LAB_NAME: ci-${{ github.run_id }}
@@ -299,6 +301,8 @@ jobs:
     timeout-minutes: 360
     permissions:
       contents: read
+    env:
+      ANSIBLE_LOG_PATH: ${{ github.workspace }}/infra/netris/logs/ansible.log
     outputs:
       result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
     steps:
@@ -308,6 +312,19 @@ jobs:
           repository: ${{ inputs.test-infra-repository || github.repository }}
           ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || github.ref }}
           persist-credentials: false
+
+      - name: Prepare Netris diagnostic log directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p infra/netris/logs
+          {
+            printf 'repository=%s\n' "${GITHUB_REPOSITORY}"
+            printf 'workflow=%s\n' "${GITHUB_WORKFLOW}"
+            printf 'run_id=%s\nrun_attempt=%s\n' "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'ref=%s\ncommit=%s\n' "${GITHUB_REF}" "$(git rev-parse HEAD)"
+            printf 'run_url=%s/%s/actions/runs/%s\n' "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
+          } > infra/netris/logs/run-metadata.txt
 
       - name: Validate OSAC source inputs
         shell: bash
@@ -586,12 +603,34 @@ jobs:
           fi
           trap - ERR
 
+      - name: Select kubeconfig for artifact collection
+        id: artifact-kubeconfig
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_kubeconfig="${RUNNER_TEMP}/netris-artifact-kubeconfig"
+          if [[ -s /root/.kube/config ]] && install -m 600 /root/.kube/config "$artifact_kubeconfig"; then
+            echo "path=${artifact_kubeconfig}" >> "$GITHUB_OUTPUT"
+          else
+            umask 077
+            placeholder="${RUNNER_TEMP}/netris-empty-kubeconfig"
+            : > "$placeholder"
+            echo "path=${placeholder}" >> "$GITHUB_OUTPUT"
+            mkdir -p "${RUNNER_TEMP}/osac-artifacts"
+            cat > "${RUNNER_TEMP}/osac-artifacts/cluster-collection-status.txt" <<'EOF'
+          status=skipped
+          reason=management kubeconfig was not created
+          staged_lab_diagnostics=will be redacted and uploaded
+          EOF
+          fi
+
       - name: Gather and redact Netris artifacts
         if: always()
         uses: ./.github/actions/gather-artifacts
         with:
           namespace: osac-e2e-ci
-          kubeconfig-path: /root/.kube/config
+          kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
           artifact-name: bmaas-netris-artifacts
 
       - name: Gather EC2 runner artifacts

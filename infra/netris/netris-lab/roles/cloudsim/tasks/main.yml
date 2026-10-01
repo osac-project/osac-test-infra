@@ -63,8 +63,17 @@
     pulumi refresh --yes 2>&1
   environment:
     PULUMI_CONFIG_PASSPHRASE: ""
+  register: pulumi_refresh
   changed_when: false
   failed_when: false
+
+- name: Show Pulumi refresh error output
+  ansible.builtin.debug:
+    msg: |
+      Pulumi refresh failed (rc={{ pulumi_refresh.rc }}):
+      {{ pulumi_refresh.stdout | default('') }}
+      {{ pulumi_refresh.stderr | default('') }}
+  when: pulumi_refresh.rc != 0
 
 - name: Deploy cloudsim VMs
   shell: |
