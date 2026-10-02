@@ -2062,15 +2062,16 @@ class WorkflowExporter:
     def _parse_grafana_param(self, params, key):
         """Parse a Grafana template variable query param.
 
-        Returns the cleaned value, or None if the value is empty, "All",
-        contains unresolved template syntax like "${var}", or has
-        trailing colons from Grafana variable quirks.
+        Returns the cleaned value, or None if the value is empty, "All", Grafana's
+        built-in all-value (".*"), contains unresolved template syntax like
+        "${var}", or has trailing colons from Grafana variable quirks.
         """
         raw = params.get(key, [None])[0]
         if not raw:
             return None
         cleaned = raw.strip().rstrip(":").strip()
         if (cleaned.lower() == "all"
+                or cleaned == ".*"
                 or cleaned == ""
                 or "${" in cleaned):
             return None
@@ -2132,6 +2133,8 @@ class WorkflowExporter:
                       skipped, since an ai row is essentially never
                       conclusion=="failure" regardless of whether the
                       Diagnose job's real work ran (see AI_DIAGNOSIS_STEP).
+          exclude_status - omit jobs with this conclusion/status
+          assigned_only - when true, omit jobs without a runner assignment
           runner    - filter by machine/runner name (matches a
                       "<runner>-runner-" prefix, case-insensitively;
                       runner_name can hold more than one comma-joined
@@ -2146,11 +2149,13 @@ class WorkflowExporter:
         job_type_filter = self._parse_grafana_param(params, "job_type")
         category_filter = self._parse_grafana_param(params, "category")
         failure_reason_filter = self._parse_grafana_param(params, "failure_reason")
+        exclude_status_filter = self._parse_grafana_param(params, "exclude_status")
         runner_filter = self._parse_grafana_param(params, "runner")
         search_filter = self._parse_grafana_param(params, "search")
         search_lower = search_filter.lower() if search_filter else None
         limit = self._parse_limit(params)
         include_active = params.get("active", ["false"])[0].lower() == "true"
+        assigned_only = params.get("assigned_only", ["false"])[0].lower() == "true"
 
         # Parse time-range filters — kept as both datetime objects (for the
         # in-memory active_runs filter below) and normalized strings (for
@@ -2228,6 +2233,9 @@ class WorkflowExporter:
         elif status_filter:
             where.append("conclusion = :status")
             args["status"] = status_filter
+        if exclude_status_filter:
+            where.append("LOWER(COALESCE(conclusion, '')) != :exclude_status")
+            args["exclude_status"] = exclude_status_filter.lower()
         if repo_filter:
             where.append("repo = :repo")
             args["repo"] = repo_filter
@@ -2249,6 +2257,8 @@ class WorkflowExporter:
             runner_lower = runner_filter.lower()
             args["runner_start"] = f"{runner_lower}-runner-%"
             args["runner_mid"] = f"%, {runner_lower}-runner-%"
+        if assigned_only:
+            where.append("runner_name IS NOT NULL AND TRIM(runner_name) != ''")
         if wf_filters:
             where.append("(" + " OR ".join(
                 f"LOWER(workflow) LIKE :wf{i}" for i in range(len(wf_filters))
@@ -2304,6 +2314,10 @@ class WorkflowExporter:
                     # conclusion == "failure" yet -- same precedence as
                     # the SQL branch above.
                     return False
+                if exclude_status_filter:
+                    active_status = str(job.get("conclusion") or job.get("status") or "")
+                    if active_status.lower() == exclude_status_filter.lower():
+                        return False
                 if status_filter and job.get("conclusion") != status_filter:
                     return False
                 if repo_filter and job["repo"] != repo_filter:
@@ -2325,6 +2339,8 @@ class WorkflowExporter:
                     tokens = [t.strip().lower() for t in job.get("runner_name", "").split(",")]
                     if not any(t.startswith(f"{runner_filter.lower()}-runner-") for t in tokens):
                         return False
+                if assigned_only and not job.get("runner_name", "").strip():
+                    return False
                 if allowed_events and job.get("event") not in allowed_events:
                     return False
                 if search_lower:
@@ -2641,6 +2657,10 @@ class WorkflowExporter:
         from each matching failed job. Entries below FAILED_STEPS_OTHER_THRESHOLD
         of the total are combined into a single "Other" entry.
 
+        The optional `top` parameter returns only the highest-count entries.
+        Without it, low-frequency entries are folded into "Other" to keep
+        the legacy pie-chart view readable.
+
         Returns: [{"step": "step_name", "count": N}, ...] sorted by count desc.
         """
         jobs = self.get_jobs_json(params)
@@ -2653,6 +2673,20 @@ class WorkflowExporter:
                 entry = entry.strip()
                 if entry:
                     step_counts[entry] = step_counts.get(entry, 0) + 1
+
+        top_raw = params.get("top", [None])[0]
+        try:
+            top = max(1, int(top_raw)) if top_raw is not None else None
+        except (TypeError, ValueError):
+            top = None
+
+        if top is not None:
+            return [
+                {"step": step, "count": count}
+                for step, count in sorted(
+                    step_counts.items(), key=lambda item: item[1], reverse=True
+                )[:top]
+            ]
 
         total = sum(step_counts.values())
         main = []
