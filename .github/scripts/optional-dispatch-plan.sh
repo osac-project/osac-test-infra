@@ -35,6 +35,20 @@ TRIGGER=$(jq -er --arg command "${COMMAND}" \
   '.[] | select(.command == $command) | (.trigger // "workflow_dispatch")' "${REGISTRY_JSON}")
 LABEL=$(jq -r --arg command "${COMMAND}" \
   '.[] | select(.command == $command) | (.label // "")' "${REGISTRY_JSON}")
+CUSTOM_INPUTS=$(jq -cer --arg command "${COMMAND}" \
+  '.[] | select(.command == $command) | if has("inputs") then .inputs else {} end' "${REGISTRY_JSON}")
+if ! jq -e '
+  type == "object" and all(.[]; type == "string")
+' <<<"${CUSTOM_INPUTS}" >/dev/null 2>&1; then
+  echo "optional-dispatch-plan: custom inputs must be an object of string values" >&2
+  exit 1
+fi
+if ! jq -e '
+  all(keys[]; test("\\A[A-Za-z][A-Za-z0-9_-]*\\z"))
+' <<<"${CUSTOM_INPUTS}" >/dev/null 2>&1; then
+  echo "optional-dispatch-plan: invalid custom input name" >&2
+  exit 1
+fi
 MARKER="PR #${PR_NUMBER} @ ${HEAD_SHA}"
 
 DISPATCH_ARGS=()
@@ -51,8 +65,32 @@ if [[ "${TRIGGER}" == "workflow_dispatch" ]]; then
       -f "fork-pr-author=${HEAD_AUTHOR}"
     )
   fi
+  while IFS= read -r input_name; do
+    [[ "${input_name}" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]] || {
+      echo "optional-dispatch-plan: invalid custom input name: ${input_name}" >&2
+      exit 1
+    }
+    case "${input_name}" in
+      pr-number|pr-repository|pr-ref|pr-sha|fork-pr-author|fork-pr-author-association)
+        echo "optional-dispatch-plan: custom inputs cannot override PR context: ${input_name}" >&2
+        exit 1
+        ;;
+    esac
+    if ! jq -e --arg name "${input_name}" '
+      (.[$name] | type == "string") and
+      (.[$name] | (contains("\n") or contains("\r")) | not)
+    ' <<<"${CUSTOM_INPUTS}" >/dev/null 2>&1; then
+      echo "optional-dispatch-plan: custom input values may not contain line breaks: ${input_name}" >&2
+      exit 1
+    fi
+    input_value=$(jq -r --arg name "${input_name}" '.[$name]' <<<"${CUSTOM_INPUTS}")
+    DISPATCH_ARGS+=(-f "${input_name}=${input_value}")
+  done < <(jq -r 'keys[]' <<<"${CUSTOM_INPUTS}")
 elif [[ "${TRIGGER}" != "label" || -z "${LABEL}" ]]; then
   echo "optional-dispatch-plan: invalid trigger metadata for ${COMMAND}" >&2
+  exit 1
+elif [[ "$(jq 'length' <<<"${CUSTOM_INPUTS}")" -ne 0 ]]; then
+  echo "optional-dispatch-plan: custom inputs require a workflow_dispatch trigger" >&2
   exit 1
 fi
 

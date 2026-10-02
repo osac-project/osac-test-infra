@@ -79,9 +79,36 @@ for ((index = 0; index < WORKFLOW_COUNT; index++)); do
   trigger=$(jq -r --argjson index "${index}" '.workflows[$index].trigger // "workflow_dispatch"' "${REGISTRY_JSON}")
   label=$(jq -r --argjson index "${index}" '.workflows[$index].label // ""' "${REGISTRY_JSON}")
   retestable_type=$(jq -r --argjson index "${index}" '
-    .workflows[$index].retestable // empty |
-    if . == "" then "missing" else type end
+    if (.workflows[$index] | has("retestable")) then
+      (.workflows[$index].retestable | type)
+    else
+      "missing"
+    end
   ' "${REGISTRY_JSON}")
+  inputs=$(jq -c --argjson index "${index}" '.workflows[$index] | if has("inputs") then .inputs else {} end' "${REGISTRY_JSON}")
+  if ! jq -en --argjson inputs "${inputs}" '
+    ($inputs | type) == "object" and
+    ($inputs | all(.[]; type == "string" and ((contains("\n") or contains("\r")) | not)))
+  ' >/dev/null 2>&1; then
+    die "workflows[${index}].inputs must be an object of string values without line breaks"
+  fi
+  if ! jq -en --argjson inputs "${inputs}" '
+    $inputs | all(keys[]; test("\\A[A-Za-z][A-Za-z0-9_-]*\\z"))
+  ' >/dev/null 2>&1; then
+    die "workflows[${index}].inputs has an invalid input name"
+  fi
+  while IFS= read -r input_name; do
+    [[ "${input_name}" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]] ||
+      die "workflows[${index}].inputs has an invalid input name: ${input_name}"
+    case "${input_name}" in
+      pr-number|pr-repository|pr-ref|pr-sha|fork-pr-author|fork-pr-author-association)
+        die "workflows[${index}].inputs may not override trusted-context input: ${input_name}"
+        ;;
+    esac
+  done < <(jq -r 'keys[]' <<<"${inputs}")
+  if [[ "${trigger}" == "label" && "$(jq 'length' <<<"${inputs}")" -ne 0 ]]; then
+    die "workflows[${index}].inputs is only valid for workflow_dispatch triggers"
+  fi
 
   [[ "${command}" =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
     die "workflows[${index}].command must match [a-z0-9][a-z0-9-]*"
@@ -132,9 +159,10 @@ for ((index = 0; index < WORKFLOW_COUNT; index++)); do
     --arg label "${label}" \
     --arg workflow_id "${workflow_id}" \
     --argjson retestable "$(jq -r --argjson index "${index}" '.workflows[$index].retestable' "${REGISTRY_JSON}")" \
+    --argjson inputs "${inputs}" \
     '{command: $command, workflow: $workflow, name: $name, description: $description,
       trigger: $trigger, label: $label, workflow_id: ($workflow_id | tonumber),
-      retestable: $retestable}' \
+      retestable: $retestable, inputs: $inputs}' \
     >>"${ENTRIES_JSONL}"
 done
 
