@@ -829,9 +829,10 @@ jobs:
             fi
           fi
 
-          FILTER_ARGS=""
+          # Keep compound -k expressions in one argument, just like -m below.
+          FILTER_ARGS=()
           if [ -n "${TEST_FILTER}" ]; then
-            FILTER_ARGS="-k ${TEST_FILTER}"
+            FILTER_ARGS=(-k "${TEST_FILTER}")
           fi
 
           # Array, not a plain string: TEST_MARKER can be a compound pytest
@@ -862,7 +863,7 @@ jobs:
             -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
             -e METERING_ADAPTER_URL="${METERING_ADAPTER_URL}" \
             "${E2E_IMAGE}" \
-            pytest ${TEST_ARGS} ${FILTER_ARGS} "${MARKER_ARGS[@]}" \
+            pytest ${TEST_ARGS} "${FILTER_ARGS[@]}" "${MARKER_ARGS[@]}" \
               --junitxml=/tmp/test-output/junit.xml -v
 
       - name: Gather artifacts
