@@ -57,6 +57,11 @@ on:
         description: "Optional pytest -k filter expression"
         required: false
         default: ""
+      debug-on-failure:
+        description: "After a failure in the Netris E2E job, keep the lab available for 30 minutes after diagnostics before automatic teardown"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-caas-netris-full-install-${{ github.run_id }}
@@ -77,3 +82,4 @@ jobs:
       components: ${{ inputs.components || '[]' }}
       test-marker: ${{ inputs.test-marker }}
       test-filter: ${{ inputs.test-filter }}
+      debug-on-failure: ${{ inputs.debug-on-failure }}

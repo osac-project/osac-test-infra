@@ -95,6 +95,11 @@ on:
         required: false
         type: string
         default: ""
+      debug-on-failure:
+        description: "After an E2E job failure, keep the Netris lab available for 30 minutes after diagnostics before automatic teardown"
+        required: false
+        type: boolean
+        default: false
       test-infra-repository:
         description: "Repository to checkout for actions and scripts (for cross-repo calls)"
         required: false
@@ -740,6 +745,14 @@ jobs:
           name: caas-netris-artifacts
           path: caas-netris-artifacts.tar.gz
           if-no-files-found: ignore
+
+      - name: Hold failed Netris lab for investigation
+        if: failure() && inputs.debug-on-failure
+        shell: bash
+        timeout-minutes: 35
+        run: |
+          echo "::notice title=Debug hold::Failure diagnostics are complete. The Netris lab and its DNS records will remain available for 30 minutes, then cleanup and EC2 teardown will run automatically."
+          sleep 1800
 
       # Not part of the formal backend contract (infra/contract.md's target
       # list doesn't include it), so called directly

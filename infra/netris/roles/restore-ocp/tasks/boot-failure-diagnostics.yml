@@ -1,0 +1,202 @@
+---
+- name: Set OCP boot-failure diagnostics directory
+  ansible.builtin.set_fact:
+    _ocp_boot_failure_diag_dir: "{{ playbook_dir }}/../logs/ocp-boot-failure"
+
+- name: Create OCP boot-failure diagnostics directory
+  ansible.builtin.file:
+    path: "{{ _ocp_boot_failure_diag_dir }}"
+    state: directory
+    mode: "0755"
+  failed_when: false
+
+- name: Record OCP boot-failure target details
+  ansible.builtin.copy:
+    dest: "{{ _ocp_boot_failure_diag_dir }}/target.txt"
+    mode: "0644"
+    content: |
+      VM: {{ ocp_vm_name }}
+      SSH target (Netris DNAT): {{ ocp_dnat_ip }}
+      Configured OCP node address: {{ ocp_node_ip }}
+      Boot-time interface configured by this role: ens6
+      Runtime OCP external bridge to inspect: br-ex
+      Expected guest default gateway: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
+  failed_when: false
+
+- name: Save the latest SSH probe result
+  ansible.builtin.copy:
+    dest: "{{ _ocp_boot_failure_diag_dir }}/ssh-probe.txt"
+    mode: "0644"
+    content: |
+      Attempts: {{ _ssh_check.attempts | default('unknown') }}
+      Return code: {{ _ssh_check.rc | default('unknown') }}
+      Message: {{ _ssh_check.msg | default('') }}
+      Standard output:
+      {{ _ssh_check.stdout | default('') }}
+      Standard error:
+      {{ _ssh_check.stderr | default('') }}
+  failed_when: false
+
+- name: Capture OCP VM libvirt state and interfaces
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      {
+        echo "=== Captured at ==="
+        date -Is
+        echo
+        echo "=== Domain state ==="
+        virsh domstate "$OCP_VM_NAME"
+        echo
+        echo "=== Domain info ==="
+        virsh dominfo "$OCP_VM_NAME"
+        echo
+        echo "=== Domain interfaces ==="
+        virsh domiflist "$OCP_VM_NAME"
+        echo
+        echo "=== Guest addresses (libvirt available sources) ==="
+        virsh domifaddr "$OCP_VM_NAME"
+        echo
+        echo "=== Domain disks ==="
+        virsh domblklist "$OCP_VM_NAME"
+      } > "{{ _ocp_boot_failure_diag_dir }}/libvirt.txt" 2>&1
+  environment:
+    OCP_VM_NAME: "{{ ocp_vm_name }}"
+  changed_when: false
+  failed_when: false
+
+- name: Capture guest ens6, routes, and SSH service through QEMU guest agent
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      output="{{ _ocp_boot_failure_diag_dir }}/guest-agent.txt"
+      {
+        echo "Best-effort query through the QEMU guest agent. An unavailable agent is recorded below."
+        echo
+        start_response=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c","echo ENS6_ADDRESSES; ip -brief address show dev ens6; echo BR_EX_ADDRESSES; ip -brief address show dev br-ex; echo ALL_INTERFACE_ADDRESSES; ip -brief address; echo ROUTES; ip route show; echo SSHD_ACTIVE_STATE; systemctl is-active sshd.service; echo SSHD_STATUS; systemctl status sshd.service --no-pager -l; echo LISTENING_SOCKETS; ss -lntp"],"capture-output":true}}' 2>&1)
+        echo "guest-exec response: $start_response"
+        guest_pid=$(printf '%s' "$start_response" | jq -r '.return.pid // empty' 2>/dev/null)
+        if [ -z "$guest_pid" ]; then
+          echo "Guest command did not start; check whether a responsive QEMU guest agent is configured."
+          exit 0
+        fi
+
+        attempt=0
+        while [ "$attempt" -lt 10 ]; do
+          status_response=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$guest_pid}}" 2>&1)
+          if [ "$(printf '%s' "$status_response" | jq -r '.return.exited // false' 2>/dev/null)" = "true" ]; then
+            echo
+            echo "=== Guest command output ==="
+            printf '%s' "$status_response" | jq -r '.return["out-data"] // empty' | base64 -d 2>/dev/null
+            printf '%s' "$status_response" | jq -r '.return["err-data"] // empty' | base64 -d 2>/dev/null >&2
+            exit 0
+          fi
+          attempt=$((attempt + 1))
+          sleep 1
+        done
+        echo "Timed out waiting for guest-exec to finish. Last response: $status_response"
+      } > "$output" 2>&1
+  environment:
+    OCP_VM_NAME: "{{ ocp_vm_name }}"
+  changed_when: false
+  failed_when: false
+
+- name: Capture host routes and TCP reachability to guest and DNAT addresses
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      {
+        echo "=== Captured at ==="
+        date -Is
+        for target in "{{ ocp_node_ip }}" "{{ ocp_dnat_ip }}"; do
+          echo
+          echo "=== Route to $target ==="
+          ip route get "$target"
+          echo
+          echo "=== Neighbor entry for $target ==="
+          ip neigh show to "$target"
+          for port in 22 6443; do
+            echo
+            echo "=== TCP probe $target:$port ==="
+            timeout 5s bash -c 'printf "" > /dev/tcp/$1/$2' _ "$target" "$port"
+            echo "probe exit code: $?"
+          done
+        done
+      } > "{{ _ocp_boot_failure_diag_dir }}/host-network-probes.txt" 2>&1
+  changed_when: false
+  failed_when: false
+
+- name: Capture DNS and HTTP endpoint probes after failure
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      {
+        echo "=== Captured at ==="
+        date -Is
+        for host in "$OCP_API_HOST" "$OCP_API_INT_HOST" "$OCP_CONSOLE_HOST"; do
+          echo
+          echo "=== DNS lookup $host ==="
+          timeout 5s getent ahostsv4 "$host"
+          echo "getent exit code: $?"
+        done
+        for url in \
+          "https://$OCP_API_HOST:6443/healthz" \
+          "https://$OCP_API_INT_HOST:6443/healthz" \
+          "https://$OCP_CONSOLE_HOST/"; do
+          echo
+          echo "=== HTTP probe $url ==="
+          timeout 12s curl --silent --show-error --insecure --noproxy '*' \
+            --connect-timeout 5 --max-time 10 --output /dev/null \
+            --write-out 'HTTP %{http_code}; remote %{remote_ip}\n' "$url"
+          echo "curl exit code: $?"
+        done
+      } > "{{ _ocp_boot_failure_diag_dir }}/endpoint-probes.txt" 2>&1
+  environment:
+    OCP_API_HOST: "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+    OCP_API_INT_HOST: "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+    OCP_CONSOLE_HOST: >-
+      {{ (_ocp_console_route_host.stdout | default('', true) | trim)
+         or ('console-openshift-console.apps.' ~ ocp_cluster_name ~ '.' ~ ocp_base_domain) }}
+  changed_when: false
+  failed_when: false
+
+- name: Capture OCP VM QEMU log tail
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      qemu_log="/var/log/libvirt/qemu/{{ ocp_vm_name }}.log"
+      if [ -r "$qemu_log" ]; then
+        tail -n 500 "$qemu_log"
+      else
+        echo "QEMU log is not readable at $qemu_log"
+      fi
+      exit 0
+    executable: /bin/bash
+  register: _ocp_qemu_log
+  changed_when: false
+  failed_when: false
+
+- name: Save OCP VM QEMU log tail
+  ansible.builtin.copy:
+    dest: "{{ _ocp_boot_failure_diag_dir }}/qemu-log-tail.txt"
+    content: "{{ _ocp_qemu_log.stdout | default('No QEMU log output was captured.') }}\n"
+    mode: "0644"
+  failed_when: false
+
+- name: Capture OCP VM serial console output
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      {
+        if command -v script >/dev/null 2>&1; then
+          timeout 12s script -q -c 'timeout --signal=INT 10s virsh console --force --safe "$OCP_VM_NAME"' /dev/null
+          echo "Console capture exit code: $?"
+        else
+          echo "Cannot capture serial console: util-linux script command is unavailable."
+        fi
+      } > "{{ _ocp_boot_failure_diag_dir }}/serial-console.txt" 2>&1
+      exit 0
+  environment:
+    OCP_VM_NAME: "{{ ocp_vm_name }}"
+  changed_when: false
+  failed_when: false

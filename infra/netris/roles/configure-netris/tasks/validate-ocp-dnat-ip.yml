@@ -1,0 +1,158 @@
+---
+- name: Read Netris IPAM subnets for OCP DNAT validation
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _ocp_dnat_ipam_subnets_response
+  no_log: true
+
+- name: Initialize matching Netris NAT subnets
+  ansible.builtin.set_fact:
+    _ocp_dnat_ipam_nat_subnets: []
+
+- name: Find the Netris NAT subnet containing the OCP DNAT frontend
+  ansible.builtin.set_fact:
+    _ocp_dnat_ipam_nat_subnets: "{{ _ocp_dnat_ipam_nat_subnets + [item] }}"
+  loop: "{{ _ocp_dnat_ipam_subnets_response.json.data | default([]) }}"
+  loop_control:
+    label: "{{ item.name | default(item.prefix | default('unnamed subnet')) }}"
+  when:
+    - item.purpose | default('') == 'nat'
+    - ocp_dnat_ip | ansible.utils.ipaddr(item.prefix)
+  no_log: true
+
+- name: Require exactly one Netris NAT subnet to own the configured frontend
+  ansible.builtin.assert:
+    that:
+      - _ocp_dnat_ipam_nat_subnets | length == 1
+      - ocp_snat_ip | ansible.utils.ipaddr(_ocp_dnat_ipam_nat_subnets[0].prefix)
+    fail_msg: >-
+      OCP SNAT {{ ocp_snat_ip }} and DNAT frontend {{ ocp_dnat_ip }} must belong
+      to exactly one Netris IPAM subnet with purpose 'nat'. Matching subnets:
+      {{ _ocp_dnat_ipam_nat_subnets | map(attribute='prefix') | list }}.
+      Check the lab NAT allocation and OCP NAT IP configuration.
+
+- name: Read IPAM host allocations from the OCP DNAT NAT subnet
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/hosts/{{ _ocp_dnat_ipam_nat_subnets[0].id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _ocp_dnat_ipam_hosts_response
+  no_log: true
+
+- name: Find IPAM hosts already assigned the OCP DNAT frontend
+  ansible.builtin.set_fact:
+    _ocp_dnat_ipam_host_claims: >-
+      {{ _ocp_dnat_ipam_hosts_response.json.data | default([])
+         | selectattr('address', 'in', [ocp_dnat_ip, ocp_snat_ip])
+         | map(attribute='address') | list }}
+  no_log: true
+
+- name: Require the OCP DNAT frontend to be unassigned in Netris IPAM
+  ansible.builtin.assert:
+    that:
+      - _ocp_dnat_ipam_host_claims | length == 0
+    fail_msg: >-
+      OCP SNAT/DNAT address(es) {{ _ocp_dnat_ipam_host_claims }} are already
+      assigned to IPAM hosts in NAT subnet
+      {{ _ocp_dnat_ipam_nat_subnets[0].prefix }}. Choose unassigned NAT IPs.
+
+- name: Read existing Netris NAT rules for OCP DNAT validation
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/nat"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _ocp_dnat_nat_rules_response
+  no_log: true
+
+- name: Store existing Netris NAT rules for validation
+  ansible.builtin.set_fact:
+    _ocp_dnat_nat_rules: >-
+      {{ _ocp_dnat_nat_rules_response.json.data
+         | default(_ocp_dnat_nat_rules_response.json) }}
+  no_log: true
+
+- name: Find an existing OCP DNAT rule by its expected name
+  ansible.builtin.set_fact:
+    _ocp_existing_dnat_rules: >-
+      {{ _ocp_dnat_nat_rules
+         | selectattr('name', 'equalto', ocp_vpc_name ~ '-dnat')
+         | list }}
+  no_log: true
+
+- name: Reject duplicate Netris rules with the OCP DNAT name
+  ansible.builtin.assert:
+    that:
+      - _ocp_existing_dnat_rules | length <= 1
+    fail_msg: >-
+      Multiple Netris NAT rules are named {{ ocp_vpc_name }}-dnat. Remove the
+      duplicate rules before deploying OCP.
+
+- name: Verify an existing OCP DNAT rule matches the configured frontend and backend
+  ansible.builtin.assert:
+    that:
+      - _ocp_existing_dnat.action | lower == 'dnat'
+      - (_ocp_existing_dnat.destinationAddress | ansible.utils.ipaddr('address')) == ocp_dnat_ip
+      - (_ocp_existing_dnat.destinationAddress | ansible.utils.ipaddr('prefix') | int) == 32
+      - (_ocp_existing_dnat.dnatToIP | ansible.utils.ipaddr('address')) == ocp_node_ip
+    fail_msg: >-
+      Existing Netris rule {{ ocp_vpc_name }}-dnat does not match the expected
+      mapping {{ ocp_dnat_ip }}/32 -> {{ ocp_node_ip }}. The NAT role would keep
+      the existing rule by name, so correct or remove it before deploying.
+  vars:
+    _ocp_existing_dnat: "{{ _ocp_existing_dnat_rules[0] }}"
+  when: _ocp_existing_dnat_rules | length == 1
+
+- name: Initialize conflicting Netris NAT rule names
+  ansible.builtin.set_fact:
+    _ocp_dnat_conflicting_nat_names: []
+
+- name: Find other DNAT rules whose frontend includes the OCP DNAT IP
+  ansible.builtin.set_fact:
+    _ocp_dnat_conflicting_nat_names: "{{ _ocp_dnat_conflicting_nat_names + [item.name | default(item.id | string)] }}"
+  loop: "{{ _ocp_dnat_nat_rules }}"
+  loop_control:
+    label: "{{ item.name | default(item.id | default('unnamed NAT rule')) }}"
+  when:
+    - item.name | default('') != ocp_vpc_name ~ '-dnat'
+    - item.action | default('') | lower == 'dnat'
+    - item.destinationAddress is defined
+    - ocp_dnat_ip | ansible.utils.ipaddr(item.destinationAddress)
+  no_log: true
+
+- name: Find SNAT rules that also translate to the OCP DNAT IP
+  ansible.builtin.set_fact:
+    _ocp_dnat_conflicting_nat_names: "{{ _ocp_dnat_conflicting_nat_names + [item.name | default(item.id | string)] }}"
+  loop: "{{ _ocp_dnat_nat_rules }}"
+  loop_control:
+    label: "{{ item.name | default(item.id | default('unnamed NAT rule')) }}"
+  when:
+    - item.name | default('') != ocp_vpc_name ~ '-dnat'
+    - item.action | default('') | lower == 'snat'
+    - item.snatToIP is defined
+    - (item.snatToIP | ansible.utils.ipaddr('address')) == ocp_dnat_ip
+  no_log: true
+
+- name: Require the OCP DNAT frontend IP to be unused by other Netris NAT rules
+  ansible.builtin.assert:
+    that:
+      - _ocp_dnat_conflicting_nat_names | length == 0
+    fail_msg: >-
+      OCP DNAT frontend {{ ocp_dnat_ip }} is already used by other Netris NAT
+      rule(s): {{ _ocp_dnat_conflicting_nat_names | unique | list }}. Choose an
+      unused IP from the Netris NAT allocation or remove the conflicting rule.

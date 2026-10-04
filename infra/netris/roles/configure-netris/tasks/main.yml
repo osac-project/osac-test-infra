@@ -1,4 +1,12 @@
 ---
+- name: Load Netris lab connectivity settings for validation
+  ansible.builtin.include_vars:
+    file: "{{ netris_lab_dir }}/group_vars/all.yml"
+    name: _netris_lab_settings
+
+- name: Validate OCP node subnet and gateway configuration
+  ansible.builtin.include_tasks: validate-ocp-network-inputs.yml
+
 - name: Discover Netris controller URL
   ansible.builtin.shell:
     cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
@@ -17,6 +25,34 @@
 - name: Authenticate to Netris controller
   ansible.builtin.include_role:
     name: netris.controller.auth
+
+- name: Validate the configured OCP DNAT frontend IP
+  ansible.builtin.include_tasks: validate-ocp-dnat-ip.yml
+
+- name: Read the host route to the OCP DNAT frontend
+  ansible.builtin.command:
+    argv:
+      - ip
+      - -4
+      - route
+      - get
+      - "{{ ocp_dnat_ip }}"
+  register: _ocp_dnat_host_route
+  changed_when: false
+
+- name: Require the isolated lab route to use the Netris ISP path
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('via ' ~ (_netris_lab_settings.bgp_link_subnet
+                    | ansible.utils.ipaddr('network')
+                    | ansible.utils.ipmath(2))) in _ocp_dnat_host_route.stdout
+      - "('dev ' ~ _netris_lab_settings.public_bridge_name) in _ocp_dnat_host_route.stdout"
+    fail_msg: >-
+      Host route to OCP DNAT frontend {{ ocp_dnat_ip }} does not use the
+      isolated Netris ISP next hop and public bridge:
+      {{ _ocp_dnat_host_route.stdout | trim }}.
+  when: _netris_lab_settings.connectivity_mode == 'isolated'
 
 # Point the Default DHCP option set at the lab's configurable DNS server. This
 # option set is what every V-Net DHCP hands out (the OCP mgmt-cluster V-Net and
@@ -122,6 +158,9 @@
     nat_vpc_id: "{{ vpc_id }}"
     nat_destination_address: "{{ ocp_dnat_ip }}/32"
     nat_dnat_to_ip: "{{ ocp_node_ip }}"
+
+- name: Verify Netris OCP subnet, VNet, and DNAT configuration
+  ansible.builtin.include_tasks: verify-ocp-netris-resources.yml
 
 - name: Create ACL permit rule for mgmt cluster
   ansible.builtin.include_role:

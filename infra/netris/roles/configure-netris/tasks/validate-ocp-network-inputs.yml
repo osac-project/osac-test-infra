@@ -1,0 +1,23 @@
+---
+- name: Validate OCP node and gateway are usable addresses in the configured subnet
+  ansible.builtin.assert:
+    that:
+      - ocp_subnet_cidr | ansible.utils.ipaddr('network')
+      - ocp_subnet_cidr | ansible.utils.ipaddr('prefix') | int <= 30
+      - ocp_node_ip | ansible.utils.ipaddr('address') == ocp_node_ip
+      - ocp_node_ip | ansible.utils.ipaddr(ocp_subnet_cidr)
+      - ocp_node_ip != (ocp_subnet_cidr | ansible.utils.ipaddr('network'))
+      - ocp_node_ip != (ocp_subnet_cidr | ansible.utils.ipaddr('broadcast'))
+      - ocp_gateway | ansible.utils.ipaddr(ocp_subnet_cidr)
+      - ocp_gateway | ansible.utils.ipaddr('prefix') | int == ocp_subnet_cidr | ansible.utils.ipaddr('prefix') | int
+      - (ocp_gateway | ansible.utils.ipaddr('address')) != (ocp_subnet_cidr | ansible.utils.ipaddr('network'))
+      - (ocp_gateway | ansible.utils.ipaddr('address')) != (ocp_subnet_cidr | ansible.utils.ipaddr('broadcast'))
+      - (ocp_gateway | ansible.utils.ipaddr('address')) != ocp_node_ip
+      - ocp_snat_ip | ansible.utils.ipaddr('address') == ocp_snat_ip
+      - ocp_dnat_ip | ansible.utils.ipaddr('address') == ocp_dnat_ip
+      - ocp_snat_ip != ocp_dnat_ip
+    fail_msg: >-
+      Invalid OCP/Netris addressing: node {{ ocp_node_ip }}, gateway
+      {{ ocp_gateway }}, subnet {{ ocp_subnet_cidr }}, SNAT {{ ocp_snat_ip }},
+      and DNAT {{ ocp_dnat_ip }} must be valid IPv4 settings;
+      the node and gateway must be usable addresses in the subnet.

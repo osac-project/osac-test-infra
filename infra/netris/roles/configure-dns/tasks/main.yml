@@ -44,6 +44,7 @@
       aws route53 change-resource-record-sets
       --hosted-zone-id {{ _r53_zone_id.stdout | trim }}
       --change-batch '{{ _r53_batch | to_json }}'
+      --output json
   vars:
     _r53_batch:
       Changes:
@@ -73,11 +74,71 @@
     AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ aws_region }}"
   changed_when: true
+  register: _r53_ocp_records_change
+
+- name: Wait for OCP Route 53 records to become authoritative
+  ansible.builtin.command:
+    argv:
+      - aws
+      - route53
+      - get-change
+      - --id
+      - "{{ (_r53_ocp_records_change.stdout | from_json).ChangeInfo.Id }}"
+      - --query
+      - ChangeInfo.Status
+      - --output
+      - text
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+  register: _r53_ocp_change_status
+  until: _r53_ocp_change_status.stdout | trim == 'INSYNC'
+  retries: 36
+  delay: 5
+  changed_when: false
+
+- name: Read back each OCP Route 53 record target
+  ansible.builtin.command:
+    argv:
+      - aws
+      - route53
+      - list-resource-record-sets
+      - --hosted-zone-id
+      - "{{ _r53_zone_id.stdout | trim }}"
+      - --query
+      - "ResourceRecordSets[?Name == '{{ item }}'].ResourceRecords[].Value"
+      - --output
+      - text
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+  loop:
+    - "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+    - "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+    - "*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+  loop_control:
+    label: "{{ item }}"
+  register: _r53_ocp_record_checks
+  changed_when: false
+
+- name: Require OCP Route 53 records to target the Netris DNAT frontend
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == ocp_dnat_ip
+    fail_msg: >-
+      Route 53 record {{ item.item }} resolves to {{ item.stdout | trim }};
+      expected {{ ocp_dnat_ip }}.
+  loop: "{{ _r53_ocp_record_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
 - name: Configure DNS for OCP SNO
   ansible.builtin.copy:
     content: |
       address=/api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
+      address=/api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
       address=/.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
     dest: /etc/dnsmasq.d/ocp-sno.conf
     mode: "0644"
@@ -95,3 +156,49 @@
     insertbefore: BOF
     line: "nameserver 127.0.0.1"
     state: present
+
+- name: Apply the local dnsmasq records before checking resolution
+  ansible.builtin.meta: flush_handlers
+
+- name: Resolve OCP endpoints through the host resolver
+  block:
+    - name: Check local resolution for OCP API, API-int, and console
+      ansible.builtin.command:
+        argv:
+          - getent
+          - ahostsv4
+          - "{{ item }}"
+      loop:
+        - "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+        - "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+        - "console-openshift-console.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+      loop_control:
+        label: "{{ item }}"
+      register: _ocp_local_dns_checks
+      until:
+        - _ocp_local_dns_checks.rc == 0
+        - ocp_dnat_ip in _ocp_local_dns_checks.stdout
+      retries: 10
+      delay: 3
+      changed_when: false
+  rescue:
+    - name: Create the OCP endpoint diagnostics directory
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../logs/ocp-boot-failure"
+        state: directory
+        mode: "0755"
+      failed_when: false
+
+    - name: Save failed local OCP DNS probe results
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../logs/ocp-boot-failure/local-dns-probes.json"
+        content: "{{ _ocp_local_dns_checks | default({}) | to_nice_json }}\n"
+        mode: "0644"
+      failed_when: false
+
+    - name: Preserve failure because local OCP DNS does not target the DNAT frontend
+      ansible.builtin.fail:
+        msg: >-
+          Local DNS did not resolve every OCP API and console endpoint to
+          {{ ocp_dnat_ip }}. Probe details were saved to
+          {{ playbook_dir }}/../logs/ocp-boot-failure/local-dns-probes.json.

@@ -426,16 +426,28 @@
     _vm_ssh_ip: "{{ ocp_dnat_ip }}"
 
 - name: Wait for SSH via DNAT IP
-  ansible.builtin.command:
-    cmd: >-
-      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
-      -i {{ snapshot_flavor_dir }}/crypto/cluster-tool.key
-      core@{{ _vm_ssh_ip }} hostname
-  register: _ssh_check
-  until: _ssh_check.rc == 0
-  retries: 60
-  delay: 5
-  changed_when: false
+  block:
+    - name: Probe SSH through DNAT until the VM responds
+      ansible.builtin.command:
+        cmd: >-
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+          -i {{ snapshot_flavor_dir }}/crypto/cluster-tool.key
+          core@{{ _vm_ssh_ip }} hostname
+      register: _ssh_check
+      until: _ssh_check.rc == 0
+      retries: 60
+      delay: 5
+      changed_when: false
+  rescue:
+    - name: Capture OCP VM boot-failure diagnostics
+      ansible.builtin.include_tasks: boot-failure-diagnostics.yml
+
+    - name: Preserve failure because SSH did not become available
+      ansible.builtin.fail:
+        msg: >-
+          VM {{ ocp_vm_name }} did not become reachable via SSH at DNAT IP
+          {{ _vm_ssh_ip }} after 60 attempts. Best-effort boot diagnostics
+          were saved to {{ _ocp_boot_failure_diag_dir }}.
 
 - name: Report VM booted
   ansible.builtin.debug:
@@ -547,6 +559,86 @@
   until: _co_health.rc == 0
   retries: 40
   delay: 30
+
+- name: Verify OCP API and ingress through the Netris DNAT frontend
+  block:
+    - name: Check OCP API health through public DNS and DNAT
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --fail
+          - --silent
+          - --show-error
+          - --insecure
+          - --noproxy
+          - "*"
+          - --connect-timeout
+          - "5"
+          - --max-time
+          - "15"
+          - "https://api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}:6443/healthz"
+      register: _ocp_external_api_health
+      until:
+        - _ocp_external_api_health.rc == 0
+        - _ocp_external_api_health.stdout | trim == 'ok'
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Get the OCP console route host for the ingress probe
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - route
+          - console
+          - -n
+          - openshift-console
+          - -o
+          - jsonpath={.spec.host}
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _ocp_console_route_host
+      until: _ocp_console_route_host.rc == 0 and _ocp_console_route_host.stdout | length > 0
+      retries: 12
+      delay: 10
+      changed_when: false
+
+    - name: Check OCP console ingress through public DNS and DNAT
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --insecure
+          - --noproxy
+          - "*"
+          - --connect-timeout
+          - "5"
+          - --max-time
+          - "15"
+          - --output
+          - /dev/null
+          - --write-out
+          - "%{http_code}"
+          - "https://{{ _ocp_console_route_host.stdout | trim }}/"
+      register: _ocp_external_ingress_status
+      until:
+        - _ocp_external_ingress_status.rc == 0
+        - _ocp_external_ingress_status.stdout | trim in ['200', '301', '302', '303', '307', '308']
+      retries: 30
+      delay: 10
+      changed_when: false
+  rescue:
+    - name: Capture diagnostics for external OCP access failure
+      ansible.builtin.include_tasks: boot-failure-diagnostics.yml
+
+    - name: Preserve failure because OCP API or ingress is unreachable through DNAT
+      ansible.builtin.fail:
+        msg: >-
+          OCP API or console ingress did not become reachable through
+          {{ ocp_dnat_ip }}. Diagnostics were saved to
+          {{ _ocp_boot_failure_diag_dir | default('the OCP boot diagnostics directory') }}.
 
 # recert's --extend-expiration regenerates every certificate it finds in
 # etcd, including MCE's self-signed cluster-proxy-signer CA. That CA has no
