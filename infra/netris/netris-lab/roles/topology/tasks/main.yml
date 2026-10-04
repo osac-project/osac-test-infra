@@ -15,6 +15,46 @@
     path: "{{ topology_dir }}"
     state: directory
 
+# Provider 3.6.23 introduced the inventory-profile AAA schema. Keep older
+# locked providers usable by omitting that block; the controller defaults to
+# local authentication when the AAA setting is absent.
+- name: Check for an existing OpenTofu provider lock
+  stat:
+    path: "{{ topology_dir }}/.terraform.lock.hcl"
+  register: topology_provider_lock
+
+- name: Read existing OpenTofu provider lock
+  slurp:
+    src: "{{ topology_dir }}/.terraform.lock.hcl"
+  register: topology_provider_lock_contents
+  when: topology_provider_lock.stat.exists
+
+- name: Parse the locked Netris provider version
+  set_fact:
+    topology_netris_provider_version: >-
+      {{
+        topology_provider_lock_contents.content | b64decode
+        | regex_findall('provider "[^"]*netrisai/netris" {[^}]*version *= *"([^"]+)"')
+        | first
+        | default('', true)
+      }}
+  when: topology_provider_lock.stat.exists
+
+- name: Require the existing lock to identify the Netris provider
+  assert:
+    that:
+      - topology_netris_provider_version | length > 0
+    fail_msg: "Could not read the Netris provider version from {{ topology_dir }}/.terraform.lock.hcl"
+  when: topology_provider_lock.stat.exists
+
+- name: Determine whether the locked Netris provider supports AAA
+  set_fact:
+    netris_provider_aaa_supported: >-
+      {{
+        topology_provider_lock.stat.exists
+        and ((topology_netris_provider_version | default('0.0.0')) is version('3.6.23', '>='))
+      }}
+
 - name: Copy static .tf files
   copy:
     src: "{{ item }}"
@@ -51,6 +91,49 @@
   args:
     chdir: "{{ topology_dir }}"
     creates: "{{ topology_dir }}/.terraform.lock.hcl"
+
+# On a first run, init selects the provider version. Re-check its lock before
+# deciding whether the generated inventory profiles can include the AAA block.
+- name: Read provider lock created by OpenTofu initialization
+  slurp:
+    src: "{{ topology_dir }}/.terraform.lock.hcl"
+  register: topology_initialized_provider_lock
+  when: not topology_provider_lock.stat.exists
+
+- name: Parse the initialized Netris provider version
+  set_fact:
+    topology_netris_provider_version: >-
+      {{
+        topology_initialized_provider_lock.content | b64decode
+        | regex_findall('provider "[^"]*netrisai/netris" {[^}]*version *= *"([^"]+)"')
+        | first
+        | default('', true)
+      }}
+  when: not topology_provider_lock.stat.exists
+
+- name: Require the initialized lock to identify the Netris provider
+  assert:
+    that:
+      - topology_netris_provider_version | length > 0
+    fail_msg: "Could not read the Netris provider version from {{ topology_dir }}/.terraform.lock.hcl"
+  when: not topology_provider_lock.stat.exists
+
+- name: Determine whether the initialized Netris provider supports AAA
+  set_fact:
+    netris_provider_aaa_supported: >-
+      {{ topology_netris_provider_version is version('3.6.23', '>=') }}
+  when: not topology_provider_lock.stat.exists
+
+- name: Render topology templates with the selected provider schema
+  template:
+    src: "{{ item }}.j2"
+    dest: "{{ topology_dir }}/{{ item }}"
+  loop:
+    - east-west.tf
+    - north-south.tf
+  when:
+    - not topology_provider_lock.stat.exists
+    - netris_provider_aaa_supported | bool
 
 # The softgate and fabric-link resources have no explicit depends_on and
 # can be created concurrently under default parallelism, occasionally

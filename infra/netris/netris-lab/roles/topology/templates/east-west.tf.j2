@@ -54,6 +54,14 @@ resource "netris_inventory_profile" "inv-profile-1" {
   dnsservers                      = [
                                       "{{ dns_server }}"
   ]
+{% if netris_provider_aaa_supported | bool %}
+  aaa {
+    authorder = ["local"]
+    local {
+      enabled = true
+    }
+  }
+{% endif %}
   fabricsettings                  {
     optimisebgpoverlay              = true
     unnumberedbgpunderlay           = true
