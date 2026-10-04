@@ -3,8 +3,39 @@
 #   - storageFulfillment: per-tenant StorageClasses (ClusterStorageReady)
 #   - lvms: register StorageBackend + StorageTier named "local" (VMaaS disk tests)
 #   - echoAdapter: metering tests and the workflow metering-adapter step
+#   - Netris: the shared default NetworkClass used by NAT and BMaaS tests
+# Keep full-ci's custom ci.steps cluster-fulfillment backend and provide the
+# shared Netris connection settings to both AAP instance groups explicitly.
+global:
+  networking:
+    fabricManager: netris
+    k8sManager: ""
+    netris:
+      controllerUrl: "https://test-ctl.netris.io"
+      credentials:
+        username: "netris"
+        # NETRIS_PASSWORD is provided by the externally managed secret.
+        externalSecret: true
+      siteId: "1"
+      tenantId: "1"
+      tenantName: Admin
+
 aap:
   instanceGroups:
+    clusterFulfillment:
+      config:
+        NETRIS_CONTROLLER_URL: "https://test-ctl.netris.io"
+        NETRIS_USERNAME: "netris"
+        NETRIS_SITE_ID: "1"
+        NETRIS_TENANT_ID: "1"
+        NETRIS_TENANT_NAME: Admin
+    networkFulfillment:
+      config:
+        NETRIS_CONTROLLER_URL: "https://test-ctl.netris.io"
+        NETRIS_USERNAME: "netris"
+        NETRIS_SITE_ID: "1"
+        NETRIS_TENANT_ID: "1"
+        NETRIS_TENANT_NAME: Admin
     storageFulfillment:
       enabled: true
 

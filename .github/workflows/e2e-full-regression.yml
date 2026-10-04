@@ -7,8 +7,9 @@
 #
 # Until osac main's values/full-ci matches the per-suite CI profiles, this
 # workflow deep-merges .github/overlays/full-ci-{infra,instance}.yaml into the
-# cloned installer values (Keycloak devFixtures, AAP storageFulfillment,
-# LVMS StorageTier "local", metering echo-adapter) before the first helm install.
+# cloned installer values before the first Helm install. The instance overlay
+# also selects the shared Netris NetworkClass while preserving full-ci's
+# custom ci.steps cluster-fulfillment backend.
 name: E2E Full Regression
 
 on:
@@ -586,7 +587,8 @@ jobs:
           echo "::group::Merged full-ci values"
           echo "--- infra.yaml (keycloak) ---"
           yq '.keycloak' values/full-ci/infra.yaml
-          echo "--- instance.yaml (aap.instanceGroups, lvms, metering.echoAdapter) ---"
+          echo "--- instance.yaml (networking, AAP groups, lvms, metering.echoAdapter) ---"
+          yq '.global.networking | {fabricManager, k8sManager, netris: {controllerUrl, siteId, tenantId, tenantName}}' values/full-ci/instance.yaml
           yq '.aap.instanceGroups' values/full-ci/instance.yaml
           yq '.lvms' values/full-ci/instance.yaml
           yq '.metering.echoAdapter' values/full-ci/instance.yaml
@@ -868,20 +870,19 @@ jobs:
         run: |
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
 
-          # One install (PROFILE=full-ci) runs every cluster-tool suite.
-          # Networking stays Netris-only. -n 0: BMaaS BMH tests must not race.
-          # VMaaS ExternalIPPool needs k8s-only MetalLB (vmaas-ci NetworkClass);
-          # full-ci's singleton NetworkClass is cudn_net, which cannot provision
-          # EIP pools. Do not flip that class here — CaaS/BMaaS share the install.
+          # One install (PROFILE=full-ci) runs every cluster-tool suite. Its
+          # shared default NetworkClass is Netris-backed for NAT and BMaaS.
+          # VMaaS ExternalIPPool needs k8s-only MetalLB (vmaas-ci NetworkClass),
+          # so keep that suite excluded from this shared install. -n 0 prevents
+          # BMaaS BMH tests from racing.
           #
           # test_disabled_services.py asserts BMaaS is off (vmaas-ci). full-ci
           # enables VMaaS+CaaS+BMaaS, so BMI gRPC/REST/reflection/controller
           # checks fail by design.
           #
           # Cluster create via references/ needs a fabric NIC on host type
-          # ci-worker. full-ci does not stamp that role (cudn_net singleton).
-          # Subnet-by-name cleanup hits the same CUDN NetworkClass (grpcurl
-          # Subnets/Delete). Skip those names; keep the rest of the file.
+          # ci-worker, which full-ci does not stamp. The name-based subnet
+          # cleanup cases remain excluded until verified with the shared class.
           FILTER="not TestBmaasNetworking and not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name"
           if [ -n "${TEST_FILTER}" ]; then
             FILTER="(${TEST_FILTER}) and ${FILTER}"
