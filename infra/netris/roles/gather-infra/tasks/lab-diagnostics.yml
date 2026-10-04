@@ -98,6 +98,7 @@
   changed_when: false
 
 - name: Capture K3s pod inventory as JSON
+  no_log: true
   ansible.builtin.command:
     argv: [kubectl, --request-timeout=15s, get, pods, -A, -o, json]
   environment:
@@ -107,6 +108,7 @@
   failed_when: false
 
 - name: Write K3s pod inventory JSON
+  no_log: true
   ansible.builtin.copy:
     dest: "{{ _gather_dir }}/lab/k3s/pods-inventory.json"
     mode: "0644"
@@ -114,6 +116,7 @@
   changed_when: false
 
 - name: Set K3s pod inventory for log collection
+  no_log: true
   ansible.builtin.set_fact:
     _gather_k3s_pods: "{{ (_gather_k3s_pod_inventory_result.stdout | from_json)['items'] | default([]) }}"
   when: _gather_k3s_pod_inventory_result.rc == 0
@@ -123,6 +126,7 @@
   loop: "{{ query('subelements', _gather_k3s_pods | default([]), 'spec.containers') }}"
   loop_control:
     loop_var: _gather_pod_container
+    label: "{{ _gather_pod_container.0.metadata.namespace }}/{{ _gather_pod_container.0.metadata.name }}/{{ _gather_pod_container.1.name }}"
   vars:
     _gather_pod_log_previous: false
 
@@ -131,6 +135,7 @@
   loop: "{{ query('subelements', _gather_k3s_pods | default([]), 'spec.containers') }}"
   loop_control:
     loop_var: _gather_pod_container
+    label: "{{ _gather_pod_container.0.metadata.namespace }}/{{ _gather_pod_container.0.metadata.name }}/{{ _gather_pod_container.1.name }}"
   vars:
     _gather_pod_log_previous: true
 
@@ -139,6 +144,7 @@
   loop: "{{ query('subelements', _gather_k3s_pods | default([]), 'spec.initContainers', {'skip_missing': true}) }}"
   loop_control:
     loop_var: _gather_pod_container
+    label: "{{ _gather_pod_container.0.metadata.namespace }}/{{ _gather_pod_container.0.metadata.name }}/{{ _gather_pod_container.1.name }}"
   vars:
     _gather_pod_log_previous: false
 
@@ -147,6 +153,7 @@
   loop: "{{ query('subelements', _gather_k3s_pods | default([]), 'spec.initContainers', {'skip_missing': true}) }}"
   loop_control:
     loop_var: _gather_pod_container
+    label: "{{ _gather_pod_container.0.metadata.namespace }}/{{ _gather_pod_container.0.metadata.name }}/{{ _gather_pod_container.1.name }}"
   vars:
     _gather_pod_log_previous: true
 
