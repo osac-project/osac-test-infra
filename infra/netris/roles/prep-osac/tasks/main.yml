@@ -225,6 +225,7 @@
 # --- Copy files to values directory ---
 
 - name: Copy AAP license file to values directory
+  no_log: true
   ansible.builtin.copy:
     src: "{{ osac_license_path }}"
     dest: "{{ _values_dir }}/license.zip"
@@ -232,6 +233,7 @@
     mode: "0644"
 
 - name: Copy pull secret to values directory
+  no_log: true
   ansible.builtin.copy:
     src: "{{ pull_secret_path }}"
     dest: "{{ _values_dir }}/pull-secret.json"
@@ -239,6 +241,7 @@
     mode: "0644"
 
 - name: Copy SSH keys for Netris integration
+  no_log: true
   ansible.builtin.copy:
     src: "{{ ssh_public_key_path | regex_replace('\\.pub$', '') }}"
     dest: "{{ _values_dir }}/{{ item }}"

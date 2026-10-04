@@ -37,6 +37,7 @@
     general_state: read
 
 - name: Wait for mgmt-server DHCP to be active
+  no_log: true
   ansible.builtin.shell:
     cmd: >-
       sshpass -p "{{ vm_root_password | default('netris') }}"

@@ -5,6 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get general settings
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/general"
     method: GET
@@ -16,6 +17,7 @@
   register: _general_resp
 
 - name: Set general facts
+  no_log: true
   ansible.builtin.set_fact:
     netris_general_settings: "{{ _general_resp.json.data }}"
     netris_auth_token: "{{ _general_resp.json.data | selectattr('name', 'equalto', 'netris_auth_token') | map(attribute='value') | first | default('') }}"

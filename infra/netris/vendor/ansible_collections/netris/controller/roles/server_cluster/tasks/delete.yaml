@@ -22,6 +22,7 @@
   when: server_cluster_list_resp.json is mapping
 
 - name: Delete server cluster
+  no_log: true
   when: _existing_server_cluster is defined and _existing_server_cluster is not none
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster/{{ _existing_server_cluster.id }}"

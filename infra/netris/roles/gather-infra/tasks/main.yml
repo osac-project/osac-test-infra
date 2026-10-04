@@ -132,21 +132,25 @@
   no_log: true
 
 - name: Gather Netris VPCs
+  no_log: true
   ansible.builtin.shell: "curl --fail --silent --show-error -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/vpc 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/vpcs 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/vpcs"
   changed_when: false
   failed_when: false
 
 - name: Gather Netris VNets
+  no_log: true
   ansible.builtin.shell: "curl --fail --silent --show-error -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/vnet 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/vnets 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/vnets"
   changed_when: false
   failed_when: false
 
 - name: Gather Netris subnets
+  no_log: true
   ansible.builtin.shell: "curl --fail --silent --show-error -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/ipam/subnets 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/subnets 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/subnets"
   changed_when: false
   failed_when: false
 
 - name: Gather Netris NAT rules
+  no_log: true
   ansible.builtin.shell: "curl --fail --silent --show-error -b 'connect.sid={{ _gather_netris_cookie.stdout }}' {{ _gather_netris_url }}/api/v2/nat 2>&1 | python3 -m json.tool > {{ _gather_dir }}/lab/netris/nats 2>&1 || echo 'unavailable' > {{ _gather_dir }}/lab/netris/nats"
   changed_when: false
   failed_when: false

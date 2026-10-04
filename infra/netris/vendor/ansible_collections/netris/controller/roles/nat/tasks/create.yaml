@@ -69,6 +69,7 @@
   when: _existing_nat is mapping
 
 - name: Create NAT rule
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/nat"
     method: POST

@@ -308,7 +308,7 @@
   when: (_netris_url.stdout | trim | length) > 0
   failed_when: false
   changed_when: "'deletes' in (_netris_cleanup.stdout | default(''))"
-  no_log: false
+  no_log: true
 
 - name: Warn if Netris URL undiscoverable
   ansible.builtin.debug:

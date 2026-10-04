@@ -208,6 +208,7 @@
     mode: "0600"
 
 - name: Get service account token
+  no_log: true
   ansible.builtin.shell:
     cmd: oc create token -n {{ snapshot_osac_namespace | default(osac_namespace) }} admin
   environment:
@@ -219,6 +220,7 @@
   delay: 15
 
 - name: Create host type
+  no_log: true
   ansible.builtin.uri:
     url: "{{ caas_fulfillment_api }}/api/private/v1/host_types"
     method: POST
@@ -349,6 +351,7 @@
   no_log: true
 
 - name: Launch publish-templates job
+  no_log: true
   ansible.builtin.uri:
     url: "https://{{ _aap_route.stdout }}/api/controller/v2/job_templates/osac-publish-templates/launch/"
     method: POST
@@ -392,6 +395,7 @@
 
 # Step 5: Create catalog item from template
 - name: Create cluster catalog item
+  no_log: true
   ansible.builtin.uri:
     url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_catalog_items"
     method: POST

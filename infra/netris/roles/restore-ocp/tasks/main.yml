@@ -249,6 +249,7 @@
       changed_when: true
 
     - name: Copy pull-secret to disk
+      no_log: true
       ansible.builtin.copy:
         src: "{{ pull_secret_path }}"
         dest: "{{ _var }}lib/snapshot-recert/crypto/pull-secret"

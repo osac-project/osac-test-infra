@@ -167,6 +167,7 @@
   no_log: true
 
 - name: Parse Keycloak credentials
+  no_log: true
   ansible.builtin.set_fact:
     _keycloak_user: "{{ (_keycloak_creds_raw.stdout | default('|')).split('|')[0] | default('admin', true) }}"
     _keycloak_pass: "{{ (_keycloak_creds_raw.stdout | default('|')).split('|')[1] | default('admin', true) }}"
@@ -185,6 +186,7 @@
   no_log: true
 
 - name: Parse fulfillment credentials
+  no_log: true
   ansible.builtin.set_fact:
     _fulfillment_client_id: "{{ (_fulfillment_creds_raw.stdout | default('|')).split('|')[0] | default('', true) }}"
     _fulfillment_client_secret: "{{ (_fulfillment_creds_raw.stdout | default('|')).split('|')[1] | default('', true) }}"

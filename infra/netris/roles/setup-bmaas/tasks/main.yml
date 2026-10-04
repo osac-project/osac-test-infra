@@ -61,6 +61,7 @@
 # to set the explicit DHCP range; VPC/IPAM/SNAT reuse the roles (mirrors
 # configure-netris).
 - name: Set up BM provisioning V-Net
+  no_log: true
   when: bmaas_provisioning_enabled | bool
   block:
     - name: Discover Netris controller URL (k3s)
@@ -490,6 +491,7 @@
          | map(attribute='name') | list }}
 
 - name: Create BMC credential secrets
+  no_log: true
   ansible.builtin.shell:
     cmd: |
       oc apply -f - <<'EOF'
@@ -578,6 +580,7 @@
     _fulfillment_api: "https://{{ _fulfillment_host.stdout }}"
 
 - name: Get service account token
+  no_log: true
   ansible.builtin.shell:
     cmd: oc create token -n {{ osac_namespace }} admin
   environment:
@@ -606,6 +609,7 @@
     mode: "0600"
 
 - name: Create host type
+  no_log: true
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/host_types"
     method: POST
@@ -626,6 +630,7 @@
 # fulfillment-service resolves it as an ID at BMI-create time (host_type by
 # name yields "host type 'default' ... not found"). Look it up by name.
 - name: List host types
+  no_log: true
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/host_types"
     method: GET
@@ -666,6 +671,7 @@
   changed_when: true
 
 - name: Wait for BMI template to be published by AAP
+  no_log: true
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}"
     method: GET
@@ -682,6 +688,7 @@
 # interface validation for BMIs created from it. Link it to the host type so the
 # tenant's network-attachment interface is validated against the interfaces list.
 - name: Link BMI template to host type
+  no_log: true
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=host_type"
     method: PATCH
@@ -696,6 +703,7 @@
     status_code: [200]
 
 - name: Create BMI catalog item
+  no_log: true
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items"
     method: POST
@@ -720,6 +728,7 @@
     status_code: [200, 201, 409]
 
 - name: Create BMI catalog item with auto ExternalIP
+  no_log: true
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items"
     method: POST

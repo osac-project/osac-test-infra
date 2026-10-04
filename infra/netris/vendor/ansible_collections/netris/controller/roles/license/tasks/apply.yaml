@@ -5,6 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Check current license
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/license"
     method: GET
@@ -16,12 +17,14 @@
   register: _license_check
 
 - name: Read license key file
+  no_log: true
   when: not (_license_check.json.isSuccess | default(false))
   ansible.builtin.slurp:
     src: "{{ license_key_file }}"
   register: _license_key_raw
 
 - name: Apply license key
+  no_log: true
   when: not (_license_check.json.isSuccess | default(false))
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/license"

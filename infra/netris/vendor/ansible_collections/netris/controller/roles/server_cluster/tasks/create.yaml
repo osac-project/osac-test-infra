@@ -30,6 +30,7 @@
     - server_cluster_servers[0] is string
 
 - name: Get Netris inventory servers
+  no_log: true
   when:
     - server_cluster_servers | length > 0
     - _server_names is defined
@@ -117,6 +118,7 @@
     - server_cluster_admin_name is defined
 
 - name: Create new server cluster
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster"
     method: POST
@@ -143,6 +145,7 @@
     server_cluster_created: "{{ _existing_server_cluster is not defined or _existing_server_cluster is none }}"
 
 - name: Wait for server cluster to be active
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster/{{ server_cluster_id }}"
     method: GET

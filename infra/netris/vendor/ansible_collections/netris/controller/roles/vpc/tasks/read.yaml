@@ -5,6 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get VPCs
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/vpc"
     method: GET

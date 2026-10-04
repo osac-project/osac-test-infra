@@ -5,6 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Create L4LB
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/l4lb"
     method: POST

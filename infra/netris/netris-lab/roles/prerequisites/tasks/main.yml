@@ -203,6 +203,7 @@
   changed_when: false
 
 - name: Ensure root SSH key exists
+  no_log: true
   command: ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa
   args:
     creates: /root/.ssh/id_rsa

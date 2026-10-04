@@ -253,6 +253,7 @@
     daemon_reload: true
 
 - name: Verify controller API
+  no_log: true
   uri:
     url: "http://localhost:{{ controller_nodeport }}/api/auth"
     method: POST
@@ -270,6 +271,7 @@
   register: license_file
 
 - name: Apply license via collection
+  no_log: true
   when: license_file.stat.exists
   ansible.builtin.include_role:
     name: netris.controller.license

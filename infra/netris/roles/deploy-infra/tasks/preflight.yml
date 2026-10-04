@@ -34,6 +34,7 @@
     _lab_name_ok: "{{ lab_name != 'default' }}"
 
 - name: Check AWS credentials
+  no_log: true
   ansible.builtin.set_fact:
     _aws_creds_ok: "{{ aws_access_key_id | length > 0 and aws_secret_access_key | length > 0 }}"
 

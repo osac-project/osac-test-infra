@@ -50,6 +50,7 @@
     state: directory
 
 - name: Copy VPN client config to RHEL path
+  no_log: true
   copy:
     src: "/etc/openvpn/{{ item }}"
     dest: "/etc/openvpn/client/{{ item }}"

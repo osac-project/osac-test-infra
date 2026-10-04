@@ -20,6 +20,7 @@
   failed_when: false
 
 - name: Tear down fulfillment API resources
+  no_log: true
   when: _fulfillment_host.rc == 0 and (_fulfillment_host.stdout | length > 0)
   block:
     - name: Set fulfillment API URL
@@ -223,6 +224,7 @@
 # order: DNAT rules, SNAT rule, SNAT NAT pool, V-Net, provisioning IPAM, then the
 # VPC. Every role delete is idempotent (find-by-name, skip if already gone).
 - name: Tear down BM provisioning V-Net
+  no_log: true
   when: bmaas_provisioning_enabled | bool
   block:
     - name: Discover Netris controller URL (k3s)

@@ -1,5 +1,6 @@
 ---
 - name: Get Route 53 hosted zone ID
+  no_log: true
   ansible.builtin.shell:
     cmd: >-
       aws route53 list-hosted-zones-by-name
@@ -14,6 +15,7 @@
   changed_when: false
 
 - name: Check for existing OCP record under this lab name
+  no_log: true
   ansible.builtin.shell:
     cmd: >-
       aws route53 list-resource-record-sets
@@ -39,6 +41,7 @@
     _r53_existing.stdout | trim != ocp_dnat_ip
 
 - name: Create OCP DNS records in Route 53
+  no_log: true
   ansible.builtin.shell:
     cmd: >-
       aws route53 change-resource-record-sets

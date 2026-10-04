@@ -46,6 +46,7 @@
     mode: "0755"
 
 - name: Copy AAP license to values directory
+  no_log: true
   ansible.builtin.copy:
     src: "{{ osac_license_path }}"
     dest: "{{ osac_installer_dir }}/{{ _values_dir }}/license.zip"
@@ -53,6 +54,7 @@
     mode: "0644"
 
 - name: Copy pull-secret to values directory
+  no_log: true
   ansible.builtin.copy:
     src: "{{ pull_secret_path }}"
     dest: "{{ osac_installer_dir }}/{{ _values_dir }}/pull-secret.json"

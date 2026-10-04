@@ -41,6 +41,7 @@
   no_log: true
 
 - name: Read intended AAP project pin from config-as-code-ig
+  no_log: true
   ansible.builtin.shell:
     cmd: |
       echo "uri=$(oc get secret config-as-code-ig -n {{ snapshot_osac_namespace }} -o jsonpath='{.data.AAP_PROJECT_GIT_URI}' | base64 -d)"
@@ -51,11 +52,13 @@
   changed_when: false
 
 - name: Parse intended AAP project pin
+  no_log: true
   ansible.builtin.set_fact:
     _aap_expected_uri: "{{ _aap_pin_secret.stdout_lines | select('match', '^uri=') | first | regex_replace('^uri=', '') }}"
     _aap_expected_branch: "{{ _aap_pin_secret.stdout_lines | select('match', '^branch=') | first | regex_replace('^branch=', '') }}"
 
 - name: Fail if config-as-code-ig pin is incomplete
+  no_log: true
   ansible.builtin.fail:
     msg: >-
       config-as-code-ig missing AAP_PROJECT_GIT_URI/BRANCH
@@ -245,6 +248,7 @@
   no_log: true
 
 - name: Launch osac-config-as-code (apply pin-driven Controller config)
+  no_log: true
   ansible.builtin.uri:
     url: "https://{{ _aap_pin_route.stdout }}/api/controller/v2/job_templates/osac-config-as-code/launch/"
     method: POST

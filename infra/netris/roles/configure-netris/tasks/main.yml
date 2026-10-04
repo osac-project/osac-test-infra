@@ -24,6 +24,7 @@
 # (1.1.1.1/8.8.8.8), which are unreachable on labs that only allow an internal
 # resolver — leaving DHCP clients (e.g. the metal3 IPA) unable to resolve quay.io.
 - name: Get DHCP option sets
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/dhcp-option-set"
     method: GET
@@ -40,6 +41,7 @@
          | selectattr('isDefault', 'equalto', true) | list | first | default({}) }}
 
 - name: Set lab DNS server on the default DHCP option set
+  no_log: true
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/dhcp-option-set/{{ _default_dhcp_option_set.id }}"
     method: PUT
