@@ -1,8 +1,15 @@
 ---
-- name: Load Netris lab connectivity settings for validation
-  ansible.builtin.include_vars:
-    file: "{{ netris_lab_dir }}/group_vars/all.yml"
-    name: _netris_lab_settings
+- name: Read Netris lab connectivity values for route validation
+  ansible.builtin.set_fact:
+    _netris_lab_connectivity_mode: >-
+      {{ (lookup('ansible.builtin.file', netris_lab_dir ~ '/group_vars/all.yml')
+          | from_yaml).connectivity_mode }}
+    _netris_lab_bgp_link_subnet: >-
+      {{ (lookup('ansible.builtin.file', netris_lab_dir ~ '/group_vars/all.yml')
+          | from_yaml).bgp_link_subnet }}
+    _netris_lab_public_bridge_name: >-
+      {{ (lookup('ansible.builtin.file', netris_lab_dir ~ '/group_vars/all.yml')
+          | from_yaml).public_bridge_name }}
 
 - name: Validate OCP node subnet and gateway configuration
   ansible.builtin.include_tasks: validate-ocp-network-inputs.yml
@@ -44,15 +51,15 @@
   ansible.builtin.assert:
     that:
       - >-
-        ('via ' ~ (_netris_lab_settings.bgp_link_subnet
+        ('via ' ~ (_netris_lab_bgp_link_subnet
                     | ansible.utils.ipaddr('network')
                     | ansible.utils.ipmath(2))) in _ocp_dnat_host_route.stdout
-      - "('dev ' ~ _netris_lab_settings.public_bridge_name) in _ocp_dnat_host_route.stdout"
+      - "('dev ' ~ _netris_lab_public_bridge_name) in _ocp_dnat_host_route.stdout"
     fail_msg: >-
       Host route to OCP DNAT frontend {{ ocp_dnat_ip }} does not use the
       isolated Netris ISP next hop and public bridge:
       {{ _ocp_dnat_host_route.stdout | trim }}.
-  when: _netris_lab_settings.connectivity_mode == 'isolated'
+  when: _netris_lab_connectivity_mode == 'isolated'
 
 # Point the Default DHCP option set at the lab's configurable DNS server. This
 # option set is what every V-Net DHCP hands out (the OCP mgmt-cluster V-Net and
