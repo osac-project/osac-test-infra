@@ -106,7 +106,7 @@
 - name: Verify an existing OCP DNAT rule matches the configured frontend and backend
   ansible.builtin.assert:
     that:
-      - _ocp_existing_dnat.action | lower == 'dnat'
+      - (_ocp_existing_dnat.action.value | default(_ocp_existing_dnat.action) | lower) == 'dnat'
       - (_ocp_existing_dnat.destinationAddress | ansible.utils.ipaddr('address')) == ocp_dnat_ip
       - (_ocp_existing_dnat.destinationAddress | ansible.utils.ipaddr('prefix') | int) == 32
       - (_ocp_existing_dnat.dnatToIP | ansible.utils.ipaddr('address')) == ocp_node_ip
@@ -130,7 +130,7 @@
     label: "{{ item.name | default(item.id | default('unnamed NAT rule')) }}"
   when:
     - item.name | default('') != ocp_vpc_name ~ '-dnat'
-    - item.action | default('') | lower == 'dnat'
+    - (item.action.value | default(item.action | default('')) | lower) == 'dnat'
     - item.destinationAddress is defined
     - ocp_dnat_ip | ansible.utils.ipaddr(item.destinationAddress)
   no_log: true
@@ -143,7 +143,7 @@
     label: "{{ item.name | default(item.id | default('unnamed NAT rule')) }}"
   when:
     - item.name | default('') != ocp_vpc_name ~ '-dnat'
-    - item.action | default('') | lower == 'snat'
+    - (item.action.value | default(item.action | default('')) | lower) == 'snat'
     - item.snatToIP is defined
     - (item.snatToIP | ansible.utils.ipaddr('address')) == ocp_dnat_ip
   no_log: true

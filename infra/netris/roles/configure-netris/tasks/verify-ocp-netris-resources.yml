@@ -117,17 +117,30 @@
     that:
       - _ocp_configured_vnets | length == 1
 
+- name: Read detailed Netris OCP VNet configuration
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _ocp_configured_vnets[0].id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _ocp_configured_vnet_detail_response
+  no_log: true
+
 - name: Require the Netris OCP VNet to match the expected gateway and server port
   ansible.builtin.assert:
     that:
-      - (_ocp_configured_vnets[0].vpc.id | default(-1) | int) == vpc_id | int
+      - (_ocp_configured_vnet_detail_response.json.data.vpc.id | default(-1) | int) == vpc_id | int
       - >-
-        (_ocp_configured_vnets[0].gateways | default([])
+        (_ocp_configured_vnet_detail_response.json.data.gateways | default([])
          | selectattr('prefix', 'equalto', ocp_gateway)
          | selectattr('dhcpEnabled', 'equalto', false) | list | length) == 1
       - >-
         (ocp_server_ports | map(attribute='name') | list
-         | difference(_ocp_configured_vnets[0].ports | default([])
+         | difference(_ocp_configured_vnet_detail_response.json.data.ports | default([])
                      | map(attribute='name') | list) | length) == 0
     fail_msg: >-
       Netris VNet {{ ocp_vnet_name }} must belong to VPC {{ vpc_id }}, attach
@@ -138,7 +151,7 @@
   ansible.builtin.assert:
     that:
       - >-
-        (_ocp_configured_vnets[0].ports | default([])
+        (_ocp_configured_vnet_detail_response.json.data.ports | default([])
          | selectattr('name', 'equalto', item.name)
          | selectattr('accessMode', 'equalto', item.accessMode | default(false))
          | list | length) == 1
@@ -162,8 +175,8 @@
 - name: Require the Netris OCP SNAT rule to match the expected subnet translation
   ansible.builtin.assert:
     that:
-      - _ocp_configured_snat.action | lower == 'snat'
-      - _ocp_configured_snat.state | lower == 'enabled'
+      - (_ocp_configured_snat.action.value | default(_ocp_configured_snat.action) | lower) == 'snat'
+      - (_ocp_configured_snat.state.value | default(_ocp_configured_snat.state) | lower) == 'enabled'
       - (_ocp_configured_snat.site.id | default(-1) | int) == 1
       - (_ocp_configured_snat.vpc.id | default(-1) | int) == vpc_id | int
       - (_ocp_configured_snat.sourceAddress | ansible.utils.ipaddr('address')) == (ocp_subnet_cidr | ansible.utils.ipaddr('address'))
@@ -179,15 +192,15 @@
 - name: Require the Netris OCP DNAT rule to match the complete expected mapping
   ansible.builtin.assert:
     that:
-      - _ocp_configured_dnat.action | lower == 'dnat'
-      - _ocp_configured_dnat.state | lower == 'enabled'
-      - _ocp_configured_dnat.protocol | lower == 'all'
+      - (_ocp_configured_dnat.action.value | default(_ocp_configured_dnat.action) | lower) == 'dnat'
+      - (_ocp_configured_dnat.state.value | default(_ocp_configured_dnat.state) | lower) == 'enabled'
+      - (_ocp_configured_dnat.protocol.value | default(_ocp_configured_dnat.protocol) | lower) == 'all'
       - (_ocp_configured_dnat.site.id | default(-1) | int) == 1
       - (_ocp_configured_dnat.vpc.id | default(-1) | int) == vpc_id | int
       - (_ocp_configured_dnat.destinationAddress | ansible.utils.ipaddr('address')) == ocp_dnat_ip
       - (_ocp_configured_dnat.destinationAddress | ansible.utils.ipaddr('prefix') | int) == 32
       - (_ocp_configured_dnat.dnatToIP | ansible.utils.ipaddr('address')) == ocp_node_ip
-      - (_ocp_configured_dnat.dnatToPort | default('', true) | string) == ''
+      - (_ocp_configured_dnat.dnatToPort | default(0, true) | int) == 0
       - _ocp_configured_dnat.sourceAddress == '0.0.0.0/0'
       - _ocp_configured_dnat.sourcePort | string == '1-65535'
       - _ocp_configured_dnat.destinationPort | string == '1-65535'
