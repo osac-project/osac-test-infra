@@ -137,7 +137,8 @@
       - >-
         (_ocp_configured_vnet_detail_response.json.data.gateways | default([])
          | selectattr('prefix', 'equalto', ocp_gateway)
-         | selectattr('dhcpEnabled', 'equalto', false) | list | length) == 1
+         | map(attribute='dhcpEnabled', default=false)
+         | select('equalto', false) | list | length) == 1
       - >-
         (ocp_server_ports | map(attribute='name') | list
          | difference(_ocp_configured_vnet_detail_response.json.data.ports | default([])
