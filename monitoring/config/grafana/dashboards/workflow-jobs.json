@@ -1,6 +1,6 @@
 {
   "annotations": { "list": [] },
-  "description": "Operational view of assigned-machine OSAC workflow health, queue saturation, reliability, failure hotspots, duration bottlenecks, and active E2E runs. Run-count panels exclude jobs without a dedicated machine. Queue colors: red = Queued (All), blue = In-Progress (All), orange = selected-category queue, cyan = selected-category in-progress.",
+  "description": "Operational view of OSAC workflow health, queue saturation, reliability, failure hotspots, duration bottlenecks, and active E2E runs. Summary counts reflect the current exporter output and may include jobs without a dedicated machine. Queue colors: red = Queued (All), blue = In-Progress (All), orange = selected-category queue, cyan = selected-category in-progress.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
