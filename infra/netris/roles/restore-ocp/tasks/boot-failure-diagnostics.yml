@@ -65,40 +65,112 @@
   changed_when: false
   failed_when: false
 
-- name: Capture guest ens6, routes, and SSH service through QEMU guest agent
+- name: Capture read-only guest-agent status and network interfaces
   ansible.builtin.shell:
     cmd: |
       set +e
       output="{{ _ocp_boot_failure_diag_dir }}/guest-agent.txt"
       {
-        echo "Best-effort query through the QEMU guest agent. An unavailable agent is recorded below."
+        echo "Read-only queries through the QEMU guest agent."
         echo
-        start_response=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c","echo ENS6_ADDRESSES; ip -brief address show dev ens6; echo BR_EX_ADDRESSES; ip -brief address show dev br-ex; echo ALL_INTERFACE_ADDRESSES; ip -brief address; echo ROUTES; ip route show; echo SSHD_ACTIVE_STATE; systemctl is-active sshd.service; echo SSHD_STATUS; systemctl status sshd.service --no-pager -l; echo LISTENING_SOCKETS; ss -lntp"],"capture-output":true}}' 2>&1)
-        echo "guest-exec response: $start_response"
-        guest_pid=$(printf '%s' "$start_response" | jq -r '.return.pid // empty' 2>/dev/null)
-        if [ -z "$guest_pid" ]; then
-          echo "Guest command did not start; check whether a responsive QEMU guest agent is configured."
-          exit 0
+        echo "=== Guest agent ping ==="
+        timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-ping"}' 2>&1
+        echo "guest-ping exit code: $?"
+        echo
+        echo "=== Guest agent version and relevant command availability ==="
+        guest_info=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-info"}' 2>&1)
+        guest_info_rc=$?
+        if [ "$guest_info_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
+          printf '%s\n' "$guest_info" | jq '.return | {version, supported_commands: [.supported_commands[]? | select(.name == "guest-network-get-interfaces" or .name == "guest-exec")]}'
+        else
+          printf '%s\n' "$guest_info"
+          echo "guest-info exit code: $guest_info_rc"
         fi
-
-        attempt=0
-        while [ "$attempt" -lt 10 ]; do
-          status_response=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$guest_pid}}" 2>&1)
-          if [ "$(printf '%s' "$status_response" | jq -r '.return.exited // false' 2>/dev/null)" = "true" ]; then
-            echo
-            echo "=== Guest command output ==="
-            printf '%s' "$status_response" | jq -r '.return["out-data"] // empty' | base64 -d 2>/dev/null
-            printf '%s' "$status_response" | jq -r '.return["err-data"] // empty' | base64 -d 2>/dev/null >&2
-            exit 0
-          fi
-          attempt=$((attempt + 1))
-          sleep 1
-        done
-        echo "Timed out waiting for guest-exec to finish. Last response: $status_response"
+        echo
+        echo "=== Guest interface addresses and MAC addresses ==="
+        guest_interfaces=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-network-get-interfaces"}' 2>&1)
+        guest_interfaces_rc=$?
+        if [ "$guest_interfaces_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
+          printf '%s\n' "$guest_interfaces" | jq '.return'
+        else
+          printf '%s\n' "$guest_interfaces"
+          echo "guest-network-get-interfaces exit code: $guest_interfaces_rc"
+        fi
       } > "$output" 2>&1
   environment:
     OCP_VM_NAME: "{{ ocp_vm_name }}"
   changed_when: false
+  failed_when: false
+
+- name: Read back Netris OCP VNet state after SSH probe failure
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _ocp_configured_vnets[0].id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _ocp_boot_failure_vnet_response
+  when:
+    - netris_controller_url is defined
+    - netris_session_cookie is defined
+    - _ocp_configured_vnets is defined
+    - _ocp_configured_vnets | length > 0
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Save relevant Netris OCP VNet state
+  ansible.builtin.copy:
+    dest: "{{ _ocp_boot_failure_diag_dir }}/netris-vnet.txt"
+    mode: "0644"
+    content: |
+      Captured at: {{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}
+      {% if _ocp_boot_failure_vnet_response.json.data is defined %}
+      {{ {
+        'name': _ocp_boot_failure_vnet_response.json.data.name | default(ocp_vnet_name),
+        'state': _ocp_boot_failure_vnet_response.json.data.state | default('unknown'),
+        'provisioning': _ocp_boot_failure_vnet_response.json.data.provisioning | default(none),
+        'vpc': _ocp_boot_failure_vnet_response.json.data.vpc | default({}),
+        'gateways': _ocp_boot_failure_vnet_response.json.data.gateways | default([]),
+        'ports': _ocp_boot_failure_vnet_response.json.data.ports | default([])
+      } | to_nice_json }}
+      {% else %}
+      Netris VNet readback unavailable (HTTP {{ _ocp_boot_failure_vnet_response.status | default('unknown') }}): {{ _ocp_boot_failure_vnet_response.msg | default('no response') }}
+      {% endif %}
+  when: _ocp_boot_failure_vnet_response is defined
+  failed_when: false
+
+- name: Read back Netris OCP DNAT state after SSH probe failure
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/nat"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _ocp_boot_failure_nat_response
+  when:
+    - netris_controller_url is defined
+    - netris_session_cookie is defined
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Save the configured Netris OCP DNAT mapping
+  ansible.builtin.copy:
+    dest: "{{ _ocp_boot_failure_diag_dir }}/netris-dnat.txt"
+    mode: "0644"
+    content: |
+      Captured at: {{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}
+      {% set nat_data = _ocp_boot_failure_nat_response.json.data | default(_ocp_boot_failure_nat_response.json | default([])) %}
+      {% set dnat_rules = nat_data | selectattr('name', 'equalto', ocp_vpc_name ~ '-dnat') | list %}
+      {{ dnat_rules | to_nice_json }}
+  when: _ocp_boot_failure_nat_response is defined
   failed_when: false
 
 - name: Capture host routes and TCP reachability to guest and DNAT addresses
@@ -108,13 +180,34 @@
       {
         echo "=== Captured at ==="
         date -Is
+        echo
+        echo "=== Public bridge state ==="
+        ip -s link show dev "$PUBLIC_BRIDGE_NAME"
+        echo
+        echo "=== Public bridge neighbors ==="
+        ip neigh show dev "$PUBLIC_BRIDGE_NAME"
+        echo
+        echo "=== Public bridge forwarding database ==="
+        bridge fdb show br "$PUBLIC_BRIDGE_NAME" 2>&1
         for target in "{{ ocp_node_ip }}" "{{ ocp_dnat_ip }}"; do
           echo
           echo "=== Route to $target ==="
-          ip route get "$target"
+          route_output=$(ip -4 route get "$target" 2>&1)
+          printf '%s\n' "$route_output"
+          next_hop=$(printf '%s\n' "$route_output" | awk '{for (i=1; i<=NF; i++) if ($i == "via") {print $(i+1); exit}}')
+          route_device=$(printf '%s\n' "$route_output" | awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')
           echo
-          echo "=== Neighbor entry for $target ==="
-          ip neigh show to "$target"
+          if [ -n "$next_hop" ]; then
+            echo "=== Neighbor entry for next hop $next_hop on ${route_device:-unknown} ==="
+            if [ -n "$route_device" ]; then
+              ip neigh show to "$next_hop" dev "$route_device"
+            else
+              ip neigh show to "$next_hop"
+            fi
+          else
+            echo "Route has no next-hop gateway; neighbor entry for destination $target:"
+            ip neigh show to "$target"
+          fi
           for port in 22 6443; do
             echo
             echo "=== TCP probe $target:$port ==="
@@ -123,6 +216,36 @@
           done
         done
       } > "{{ _ocp_boot_failure_diag_dir }}/host-network-probes.txt" 2>&1
+  changed_when: false
+  failed_when: false
+  environment:
+    PUBLIC_BRIDGE_NAME: "{{ _netris_lab_public_bridge_name | default('br-public') }}"
+
+- name: Capture packets on the public bridge during DNAT TCP probes
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      output="{{ _ocp_boot_failure_diag_dir }}/dnat-packet-probe.txt"
+      if ! command -v tcpdump >/dev/null 2>&1; then
+        echo "tcpdump is unavailable on the lab host; no packet capture was taken." > "$output"
+        exit 0
+      fi
+
+      timeout -s INT 15s tcpdump -l -ni "$PUBLIC_BRIDGE_NAME" -e -vv -s 128 -c 40 \
+        "host $OCP_DNAT_IP and (tcp port 22 or tcp port 6443)" > "$output" 2>&1 &
+      capture_pid=$!
+      sleep 1
+      for port in 22 6443; do
+        echo "=== TCP probe $OCP_DNAT_IP:$port ===" >> "$output"
+        timeout 3s bash -c 'printf "" > /dev/tcp/$1/$2' _ "$OCP_DNAT_IP" "$port"
+        echo "probe exit code: $?" >> "$output"
+      done
+      wait "$capture_pid"
+      echo "tcpdump exit code: $?" >> "$output"
+      exit 0
+  environment:
+    PUBLIC_BRIDGE_NAME: "{{ _netris_lab_public_bridge_name | default('br-public') }}"
+    OCP_DNAT_IP: "{{ ocp_dnat_ip }}"
   changed_when: false
   failed_when: false
 
