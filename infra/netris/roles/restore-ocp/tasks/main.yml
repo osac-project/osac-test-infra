@@ -272,12 +272,33 @@
               enabled: false
               dhcp: false
               autoconf: false
+          # Management interface stays addressable (for host-side SSH and
+          # diagnostics) but must NOT install a default route, DHCP routes, or
+          # DNS. ens6 is the only interface that reaches the outside world via
+          # the Netris DNAT frontend; a competing default route here would send
+          # DNAT reply traffic (which arrives on ens6) back out the management
+          # link, so external SSH/API through the external IP never completes.
+          - name: {{ caas_netris_mgmt_interface | default('ens4') }}
+            type: ethernet
+            state: up
+            ipv4:
+              enabled: true
+              dhcp: true
+              auto-gateway: false
+              auto-routes: false
+              auto-dns: false
+            ipv6:
+              enabled: false
+              dhcp: false
+              autoconf: false
           routes:
             config:
+            # ens6 owns the sole default route so DNAT return traffic is
+            # symmetric. No metric override: it must win outright, not merely
+            # lose to the management link's DHCP default.
             - destination: 0.0.0.0/0
               next-hop-interface: ens6
               next-hop-address: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
-              metric: 48
               table-id: 254
           dns-resolver:
             config:
@@ -321,10 +342,17 @@
           chown -R 1000:1000 {{ _var }}home/core/.ssh
       changed_when: true
 
-    - name: Disable reverse path filter on ens4 for management access
+    - name: Use loose reverse-path filtering for the multi-homed OCP VM
       ansible.builtin.copy:
         content: |
-          net.ipv4.conf.ens4.rp_filter=0
+          # Loose mode (RFC 3704). The VM is multi-homed (ens6 data path plus
+          # the management interface). Strict rp_filter drops inbound DNAT
+          # packets on ens6 whenever the kernel's reverse-path lookup for the
+          # client source resolves to a different interface, and also drops
+          # management traffic whose source is only reachable off a non-default
+          # link. The effective value is max(all, <iface>), so relaxing "all"
+          # relaxes every interface.
+          net.ipv4.conf.all.rp_filter=2
         dest: "{{ _deploy }}etc/sysctl.d/99-snapshot-rp-filter.conf"
         mode: "0644"
 

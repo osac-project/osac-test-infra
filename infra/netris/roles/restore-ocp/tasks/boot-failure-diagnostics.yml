@@ -22,7 +22,7 @@
       Management bridge: {{ mgmt_bridge_name | default('br-mgmt') }}
       SSH fallback DNAT address: {{ ocp_dnat_ip }}
       Configured OCP node address: {{ ocp_node_ip }}
-      Boot-time interface configured by this role: ens6
+      Boot-time interfaces configured by this role: ens6 (default route) + {{ caas_netris_mgmt_interface | default('ens4') }} (address only, no default route)
       Runtime OCP external bridge to inspect: br-ex
       Expected guest default gateway: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
   failed_when: false
