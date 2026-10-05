@@ -117,7 +117,7 @@
     that:
       - _ocp_configured_vnets | length == 1
 
-- name: Wait for the Netris OCP VNet to become active with the expected ports
+- name: Wait for the Netris OCP VNet to become active
   block:
     - name: Read detailed Netris OCP VNet configuration
       ansible.builtin.uri:
@@ -135,17 +135,13 @@
       delay: 5
       until: >-
         (_ocp_configured_vnet_detail_response.json.data.status.label | default('') | lower) == 'active'
-        and
-        (ocp_server_ports | map(attribute='name') | list
-         | difference(_ocp_configured_vnet_detail_response.json.data.ports | default([])
-                     | map(attribute='name', default='') | list) | length) == 0
   rescue:
     - name: Report Netris OCP VNet convergence failure
       ansible.builtin.fail:
         msg: >-
-          Netris VNet {{ ocp_vnet_name }} did not become active with expected
-          server ports {{ ocp_server_ports | map(attribute='name') | list }}
-          after 24 retries at 5-second intervals. Last status is
+          Netris VNet {{ ocp_vnet_name }} did not become active after 24
+          retries at 5-second intervals. Expected server ports are
+          {{ ocp_server_ports | map(attribute='name') | list }}. Last status is
           {{ _ocp_configured_vnet_detail_response.json.data.status.label | default('unknown') }}
           ({{ _ocp_configured_vnet_detail_response.json.data.status.value | default('unknown') }}).
           API returned port names
@@ -167,10 +163,6 @@
          | selectattr('prefix', 'equalto', ocp_gateway)
          | map(attribute='dhcpEnabled', default=false)
          | select('equalto', false) | list | length) == 1
-      - >-
-        (ocp_server_ports | map(attribute='name') | list
-         | difference(_ocp_configured_vnet_detail_response.json.data.ports | default([])
-                     | map(attribute='name') | list) | length) == 0
     fail_msg: >-
       Netris VNet {{ ocp_vnet_name }} must belong to VPC {{ vpc_id }}, attach
       {{ ocp_server_ports | map(attribute='name') | list }}, and expose gateway
@@ -181,15 +173,25 @@
     that:
       - >-
         (_ocp_configured_vnet_detail_response.json.data.ports | default([])
-         | selectattr('name', 'equalto', item.name)
+         | selectattr('port', 'equalto', _ocp_expected_netris_port)
+         | selectattr('switchName', 'equalto', _ocp_expected_netris_switch)
          | selectattr('accessMode', 'equalto', item.accessMode | default(false))
          | list | length) == 1
     fail_msg: >-
-      Netris VNet {{ ocp_vnet_name }} must attach port {{ item.name }} with
-      accessMode={{ item.accessMode | default(false) }}.
+      Netris VNet {{ ocp_vnet_name }} must attach server port {{ item.name }}
+      (Netris port {{ _ocp_expected_netris_port }} on switch
+      {{ _ocp_expected_netris_switch }}) with
+      accessMode={{ item.accessMode | default(false) }}. API returned port
+      identifiers {{ _ocp_configured_vnet_detail_response.json.data.ports | default([])
+                     | map(attribute='port', default='') | list }} on switches
+      {{ _ocp_configured_vnet_detail_response.json.data.ports | default([])
+         | map(attribute='switchName', default='') | list }}.
   loop: "{{ ocp_server_ports }}"
   loop_control:
     label: "{{ item.name }}"
+  vars:
+    _ocp_expected_netris_port: "{{ item.name.split('@') | first }}"
+    _ocp_expected_netris_switch: "{{ item.name.split('@') | last }}"
 
 - name: Require exactly one Netris OCP DNAT rule
   ansible.builtin.assert:
