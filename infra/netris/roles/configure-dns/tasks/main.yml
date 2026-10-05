@@ -107,7 +107,7 @@
       - --hosted-zone-id
       - "{{ _r53_zone_id.stdout | trim }}"
       - --query
-      - "ResourceRecordSets[?Name == '{{ item }}'].ResourceRecords[].Value"
+      - "ResourceRecordSets[?Name == '{{ item.route53_name }}'].ResourceRecords[].Value"
       - --output
       - text
   environment:
@@ -115,11 +115,16 @@
     AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ aws_region }}"
   loop:
-    - "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
-    - "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
-    - "*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+    - display_name: "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+      route53_name: "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+    - display_name: "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+      route53_name: "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+    # Route 53 returns '*' as the octal escape \052. JMESPath raw strings
+    # require a doubled backslash to match that API response.
+    - display_name: "*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}."
+      route53_name: '\\052.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}.'
   loop_control:
-    label: "{{ item }}"
+    label: "{{ item.display_name }}"
   register: _r53_ocp_record_checks
   changed_when: false
 
@@ -128,11 +133,11 @@
     that:
       - item.stdout | trim == ocp_dnat_ip
     fail_msg: >-
-      Route 53 record {{ item.item }} resolves to {{ item.stdout | trim }};
+      Route 53 record {{ item.item.display_name }} resolves to {{ item.stdout | trim }};
       expected {{ ocp_dnat_ip }}.
   loop: "{{ _r53_ocp_record_checks.results }}"
   loop_control:
-    label: "{{ item.item }}"
+    label: "{{ item.item.display_name }}"
 
 - name: Configure DNS for OCP SNO
   ansible.builtin.copy:
