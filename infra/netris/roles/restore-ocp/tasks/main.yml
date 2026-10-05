@@ -420,10 +420,70 @@
   ansible.builtin.command:
     cmd: virsh start {{ ocp_vm_name }}
 
-# Use DNAT IP since br-ex is on ens6, not management bridge
-- name: Set SSH target IP
+# Prefer the VM's management interface for host-side SSH. This interface is
+# independent of Netris DNAT and is already connected to br-mgmt. Discover its
+# address through QEMU guest agent instead of assuming a DHCP/static address.
+- name: Probe SSH over the VM management network
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      for attempt in $(seq 1 12); do
+        guest_interfaces=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-network-get-interfaces"}' 2>/dev/null)
+        mgmt_ip=$(printf '%s\n' "$guest_interfaces" | python3 -c '
+      import json
+      import sys
+
+      try:
+          interfaces = json.load(sys.stdin).get("return", [])
+      except (json.JSONDecodeError, AttributeError):
+          sys.exit(1)
+
+      for interface in interfaces:
+          if interface.get("name") != sys.argv[1]:
+              continue
+          for address in interface.get("ip-addresses", []):
+              ip = address.get("ip-address", "")
+              if address.get("ip-address-type") == "ipv4" and ip and not ip.startswith(("127.", "169.254.")):
+                  print(ip)
+                  sys.exit(0)
+      sys.exit(1)
+      ' "$MGMT_INTERFACE" 2>/dev/null)
+
+        if [ -n "$mgmt_ip" ]; then
+          echo "Attempt $attempt: probing management SSH at $mgmt_ip" >&2
+          ssh_output=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=3 -i "$SSH_KEY_PATH" "core@$mgmt_ip" true 2>&1)
+          ssh_rc=$?
+          if [ "$ssh_rc" -eq 0 ]; then
+            printf '%s\n' "$mgmt_ip"
+            exit 0
+          fi
+          echo "Management SSH attempt $attempt failed (exit $ssh_rc): $ssh_output" >&2
+        else
+          echo "Attempt $attempt: QEMU guest agent has not reported IPv4 on $MGMT_INTERFACE" >&2
+        fi
+        sleep 5
+      done
+      exit 1
+  environment:
+    OCP_VM_NAME: "{{ ocp_vm_name }}"
+    MGMT_INTERFACE: "{{ caas_netris_mgmt_interface | default('ens4') }}"
+    SSH_KEY_PATH: "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+  register: _mgmt_ssh_check
+  changed_when: false
+  failed_when: false
+
+- name: Select the management SSH address when reachable
+  ansible.builtin.set_fact:
+    _vm_ssh_ip: "{{ _mgmt_ssh_check.stdout | trim }}"
+    _vm_ssh_transport: "management network ({{ caas_netris_mgmt_interface | default('ens4') }})"
+  when: _mgmt_ssh_check.rc == 0
+
+- name: Fall back to the Netris DNAT address when management SSH is unavailable
   ansible.builtin.set_fact:
     _vm_ssh_ip: "{{ ocp_dnat_ip }}"
+    _vm_ssh_transport: "Netris DNAT"
+  when: _mgmt_ssh_check.rc != 0
 
 - name: Wait for SSH via DNAT IP
   block:
@@ -438,6 +498,7 @@
       retries: 60
       delay: 5
       changed_when: false
+  when: _mgmt_ssh_check.rc != 0
   rescue:
     - name: Capture OCP VM boot-failure diagnostics
       ansible.builtin.include_tasks: boot-failure-diagnostics.yml
@@ -445,13 +506,14 @@
     - name: Preserve failure because SSH did not become available
       ansible.builtin.fail:
         msg: >-
-          VM {{ ocp_vm_name }} did not become reachable via SSH at DNAT IP
-          {{ _vm_ssh_ip }} after 60 attempts. Best-effort boot diagnostics
-          were saved to {{ _ocp_boot_failure_diag_dir }}.
+          VM {{ ocp_vm_name }} did not become reachable via SSH over the
+          management network or at DNAT IP {{ _vm_ssh_ip }} after 60 DNAT
+          attempts. Best-effort boot diagnostics were saved to
+          {{ _ocp_boot_failure_diag_dir }}.
 
 - name: Report VM booted
   ansible.builtin.debug:
-    msg: "VM {{ ocp_vm_name }} booted, SSH accessible at {{ _vm_ssh_ip }} (DNAT → {{ ocp_node_ip }})"
+    msg: "VM {{ ocp_vm_name }} booted, SSH accessible at {{ _vm_ssh_ip }} via {{ _vm_ssh_transport }}"
 
 - name: Set SSH command prefix
   ansible.builtin.set_fact:

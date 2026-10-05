@@ -19,9 +19,9 @@ on:
         required: false
         default: "us-east-1"
       tooling-check-cmds:
-        description: "Semicolon-separated commands to verify on the box before JIT registration. Defaults to installing the CaaS/Netris flow's prerequisites."
+        description: "Semicolon-separated commands to verify on the box before JIT registration. Defaults to installing the CaaS/Netris flow's prerequisites, including tcpdump for failure packet capture."
         required: false
-        default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman"
+        default: "dnf install -y ansible-core python3-pip make podman tcpdump; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman; command -v tcpdump"
       osac-operator-image:
         description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
         required: false
@@ -73,7 +73,7 @@ jobs:
     with:
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
-      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make podman tcpdump; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman; command -v tcpdump' }}
       osac-operator-image: ${{ inputs.osac-operator-image || '' }}
       fulfillment-service-image: ${{ inputs.fulfillment-service-image || '' }}
       osac-aap-ee-image: ${{ inputs.osac-aap-ee-image || '' }}

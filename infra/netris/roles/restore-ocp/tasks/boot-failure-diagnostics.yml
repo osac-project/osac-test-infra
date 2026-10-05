@@ -16,11 +16,28 @@
     mode: "0644"
     content: |
       VM: {{ ocp_vm_name }}
-      SSH target (Netris DNAT): {{ ocp_dnat_ip }}
+      Selected SSH target: {{ _vm_ssh_ip | default('not selected') }}
+      Selected SSH transport: {{ _vm_ssh_transport | default('not selected') }}
+      Management interface: {{ caas_netris_mgmt_interface | default('ens4') }}
+      Management bridge: {{ mgmt_bridge_name | default('br-mgmt') }}
+      SSH fallback DNAT address: {{ ocp_dnat_ip }}
       Configured OCP node address: {{ ocp_node_ip }}
       Boot-time interface configured by this role: ens6
       Runtime OCP external bridge to inspect: br-ex
       Expected guest default gateway: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
+  failed_when: false
+
+- name: Save management-network SSH probe result
+  ansible.builtin.copy:
+    dest: "{{ _ocp_boot_failure_diag_dir }}/management-ssh-probe.txt"
+    mode: "0644"
+    content: |
+      Interface: {{ caas_netris_mgmt_interface | default('ens4') }}
+      Return code: {{ _mgmt_ssh_check.rc | default('unknown') }}
+      Discovered address (if reachable): {{ _mgmt_ssh_check.stdout | default('') | trim }}
+      Standard error:
+      {{ _mgmt_ssh_check.stderr | default('') }}
+  when: _mgmt_ssh_check is defined
   failed_when: false
 
 - name: Save the latest SSH probe result
@@ -65,7 +82,7 @@
   changed_when: false
   failed_when: false
 
-- name: Capture read-only guest-agent status and network interfaces
+- name: Capture read-only guest-agent status, network interfaces, and routes
   ansible.builtin.shell:
     cmd: |
       set +e
@@ -81,7 +98,7 @@
         guest_info=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-info"}' 2>&1)
         guest_info_rc=$?
         if [ "$guest_info_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
-          printf '%s\n' "$guest_info" | jq '.return | {version, supported_commands: [.supported_commands[]? | select(.name == "guest-network-get-interfaces" or .name == "guest-exec")]}'
+          printf '%s\n' "$guest_info" | jq '.return | {version, supported_commands: [.supported_commands[]? | select(.name == "guest-network-get-interfaces" or .name == "guest-network-get-route" or .name == "guest-exec")]}'
         else
           printf '%s\n' "$guest_info"
           echo "guest-info exit code: $guest_info_rc"
@@ -95,6 +112,16 @@
         else
           printf '%s\n' "$guest_interfaces"
           echo "guest-network-get-interfaces exit code: $guest_interfaces_rc"
+        fi
+        echo
+        echo "=== Guest routes ==="
+        guest_routes=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-network-get-route"}' 2>&1)
+        guest_routes_rc=$?
+        if [ "$guest_routes_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
+          printf '%s\n' "$guest_routes" | jq '.return'
+        else
+          printf '%s\n' "$guest_routes"
+          echo "guest-network-get-route exit code: $guest_routes_rc"
         fi
       } > "$output" 2>&1
   environment:
