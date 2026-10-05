@@ -22,7 +22,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&assigned_only=true&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+        "url": "http://127.0.0.1:9103/api/counts?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [{ "selector": "success", "text": "Success", "type": "number" }]
       }]
@@ -43,7 +43,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&assigned_only=true&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+        "url": "http://127.0.0.1:9103/api/counts?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [{ "selector": "failure", "text": "Failed", "type": "number" }]
       }]
@@ -64,7 +64,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&assigned_only=true&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+        "url": "http://127.0.0.1:9103/api/counts?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [{ "selector": "cancelled", "text": "Cancelled", "type": "number" }]
       }]
@@ -85,7 +85,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&assigned_only=true&search=${search:percentencode}",
+        "url": "http://127.0.0.1:9103/api/counts?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [{ "selector": "queued", "text": "Queued", "type": "number" }]
       }]
@@ -106,7 +106,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&assigned_only=true&search=${search:percentencode}",
+        "url": "http://127.0.0.1:9103/api/counts?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [{ "selector": "in_progress", "text": "In Progress", "type": "number" }]
       }]
@@ -132,7 +132,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/counts?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&assigned_only=true&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+        "url": "http://127.0.0.1:9103/api/counts?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [{ "selector": "failure_rate", "text": "Failure Rate", "type": "number" }]
       }]
@@ -187,7 +187,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/counts-by-workflow?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&merge_similar=${merge_similar}&assigned_only=true&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+        "url": "http://127.0.0.1:9103/api/counts-by-workflow?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&merge_similar=${merge_similar}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [
           { "selector": "workflow", "text": "workflow", "type": "string" },
@@ -197,8 +197,8 @@
     },
     {
       "id": 9,
-      "title": "▸ TOP 10 FAILING STEPS (TABLE)",
-      "description": "Tabular view of the highest-volume failed steps. The Other bucket is excluded and failure counts use green, yellow, and orange severity colors.",
+      "title": "▸ FAILING STEPS (TABLE)",
+      "description": "Tabular view of failed steps returned by the exporter. The legacy Other bucket is excluded; failure counts use green, yellow, and orange severity colors.",
       "type": "table",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
@@ -213,7 +213,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/failed-steps?top=10&status=failure&category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&assigned_only=true&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+        "url": "http://127.0.0.1:9103/api/failed-steps?status=failure&category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [{ "selector": "step", "text": "step", "type": "string" }, { "selector": "count", "text": "count", "type": "number" }]
       }]
@@ -244,7 +244,7 @@
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/avg-duration-by-type?category=${category}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&status=${status_filter}&assigned_only=true&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+        "url": "http://127.0.0.1:9103/api/avg-duration-by-type?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&status=${status_filter}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [
           { "selector": "job_type", "text": "job_type", "type": "string" },
@@ -255,7 +255,7 @@
     {
       "id": 11,
       "title": "Recent Runs — Active E2E Jobs",
-      "description": "Active E2E runs and recent assigned-machine history. Cancelled runs and rows without a machine assignment are excluded by the exporter query and a non-empty Machine filter.",
+      "description": "Recent E2E runs returned by the exporter; machine assignment and run status are shown when available.",
       "type": "table",
       "gridPos": { "h": 19, "w": 16, "x": 0, "y": 11 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
@@ -288,13 +288,12 @@
         ]
       },
       "options": { "showHeader": true, "cellHeight": "md", "sortBy": [], "footer": { "show": true, "reducer": ["count"], "countRows": true } },
-      "transformations": [{ "id": "filterByValue", "options": { "filters": [{ "config": { "id": "isNotNull", "options": {} }, "fieldName": "runner_name" }, { "config": { "id": "regex", "options": { "value": "^\\S.*$" } }, "fieldName": "runner_name" }], "match": "all", "type": "include" } }],
       "targets": [{
         "refId": "A",
         "type": "json",
         "source": "url",
         "format": "table",
-        "url": "http://127.0.0.1:9103/api/jobs?limit=200&active=true&category=e2e&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&status=${status_filter}&exclude_status=cancelled&assigned_only=true&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
+        "url": "http://127.0.0.1:9103/api/jobs?limit=200&active=true&category=e2e&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&status=${status_filter}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}&since=${__from:date:iso}&until=${__to:date:iso}",
         "url_options": { "method": "GET", "data": "" },
         "columns": [
           { "selector": "status", "text": "status", "type": "string" },
@@ -336,10 +335,10 @@
         "current": { "text": "E2E", "value": "e2e", "selected": true },
         "options": [
           { "text": "E2E", "value": "e2e", "selected": true },
-          { "text": "AI Diagnostic", "value": "ai", "selected": false },
-          { "text": "CI/Build", "value": "ci", "selected": false },
-          { "text": "Lint/Quality", "value": "lint", "selected": false },
-          { "text": "Release/Publish", "value": "release", "selected": false },
+          { "text": "AI", "value": "ai", "selected": false },
+          { "text": "CI", "value": "ci", "selected": false },
+          { "text": "Lint", "value": "lint", "selected": false },
+          { "text": "Release", "value": "release", "selected": false },
           { "text": "Automation", "value": "automation", "selected": false }
         ],
         "includeAll": true,
