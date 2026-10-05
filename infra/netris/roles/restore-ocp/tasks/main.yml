@@ -448,10 +448,36 @@
   ansible.builtin.command:
     cmd: virsh start {{ ocp_vm_name }}
 
-# Prefer the VM's management interface for host-side SSH. This interface is
-# independent of Netris DNAT and is already connected to br-mgmt. Discover its
-# address through QEMU guest agent instead of assuming a DHCP/static address.
-- name: Probe SSH over the VM management network
+# Probe the Netris DNAT external IP (ens6) first. nmstate -- which brings up
+# ens6 and its default route -- is the first thing snapshot-recert runs, so the
+# external path is reachable within a minute or two of boot. Using it as the
+# primary SSH target doubles as an early end-to-end test of DNAT, instead of
+# only discovering a DNAT break ~50 minutes later at the node-Ready check.
+- name: Probe SSH through the Netris DNAT external IP (ens6)
+  ansible.builtin.command:
+    cmd: >-
+      ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+      -o ConnectTimeout=5 -i {{ snapshot_flavor_dir }}/crypto/cluster-tool.key
+      core@{{ ocp_dnat_ip }} true
+  register: _dnat_ssh_check
+  until: _dnat_ssh_check.rc == 0
+  retries: 90
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Select the DNAT (ens6) SSH address when reachable
+  ansible.builtin.set_fact:
+    _vm_ssh_ip: "{{ ocp_dnat_ip }}"
+    _vm_ssh_transport: "Netris DNAT external IP (ens6)"
+  when: _dnat_ssh_check.rc == 0
+
+# Fallback only: if the external path is down, use the VM's management
+# interface (br-mgmt) so the rest of the restore can still run and gather
+# diagnostics. Discover its address through the QEMU guest agent instead of
+# assuming a DHCP/static address.
+- name: Probe SSH over the VM management network (DNAT fallback)
+  when: _dnat_ssh_check.rc != 0
   ansible.builtin.shell:
     cmd: |
       set +e
@@ -501,43 +527,38 @@
   changed_when: false
   failed_when: false
 
-- name: Select the management SSH address when reachable
+- name: Select the management SSH address when DNAT is unavailable
   ansible.builtin.set_fact:
     _vm_ssh_ip: "{{ _mgmt_ssh_check.stdout | trim }}"
-    _vm_ssh_transport: "management network ({{ caas_netris_mgmt_interface | default('ens4') }})"
-  when: _mgmt_ssh_check.rc == 0
+    _vm_ssh_transport: "management network ({{ caas_netris_mgmt_interface | default('ens4') }}) [DNAT fallback]"
+  when:
+    - _dnat_ssh_check.rc != 0
+    - _mgmt_ssh_check.rc == 0
 
-- name: Fall back to the Netris DNAT address when management SSH is unavailable
-  ansible.builtin.set_fact:
-    _vm_ssh_ip: "{{ ocp_dnat_ip }}"
-    _vm_ssh_transport: "Netris DNAT"
-  when: _mgmt_ssh_check.rc != 0
+- name: Warn that the Netris DNAT external path is not working
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: SSH through the Netris DNAT external IP {{ ocp_dnat_ip }} (ens6)
+      did not succeed; fell back to the management interface. The external path
+      is broken -- API and egress through the external IP will not work. See the
+      DNAT reachability diagnostics captured below.
+  when:
+    - _dnat_ssh_check.rc != 0
+    - _mgmt_ssh_check.rc == 0
 
-- name: Wait for SSH via DNAT IP
-  block:
-    - name: Probe SSH through DNAT until the VM responds
-      ansible.builtin.command:
-        cmd: >-
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
-          -i {{ snapshot_flavor_dir }}/crypto/cluster-tool.key
-          core@{{ _vm_ssh_ip }} hostname
-      register: _ssh_check
-      until: _ssh_check.rc == 0
-      retries: 60
-      delay: 5
-      changed_when: false
-  when: _mgmt_ssh_check.rc != 0
-  rescue:
-    - name: Capture OCP VM boot-failure diagnostics
-      ansible.builtin.include_tasks: boot-failure-diagnostics.yml
+- name: Capture DNAT-path diagnostics whenever the external path failed
+  ansible.builtin.include_tasks: boot-failure-diagnostics.yml
+  when: _dnat_ssh_check.rc != 0
 
-    - name: Preserve failure because SSH did not become available
-      ansible.builtin.fail:
-        msg: >-
-          VM {{ ocp_vm_name }} did not become reachable via SSH over the
-          management network or at DNAT IP {{ _vm_ssh_ip }} after 60 DNAT
-          attempts. Best-effort boot diagnostics were saved to
-          {{ _ocp_boot_failure_diag_dir }}.
+- name: Fail when neither the DNAT nor the management path is reachable
+  ansible.builtin.fail:
+    msg: >-
+      VM {{ ocp_vm_name }} did not become reachable via SSH over the Netris
+      DNAT external IP {{ ocp_dnat_ip }} (ens6) or the management network.
+      Boot diagnostics were saved to {{ _ocp_boot_failure_diag_dir }}.
+  when:
+    - _dnat_ssh_check.rc != 0
+    - _mgmt_ssh_check.rc != 0
 
 - name: Report VM booted
   ansible.builtin.debug:

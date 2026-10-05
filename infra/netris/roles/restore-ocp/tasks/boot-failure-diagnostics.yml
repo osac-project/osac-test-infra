@@ -40,18 +40,19 @@
   when: _mgmt_ssh_check is defined
   failed_when: false
 
-- name: Save the latest SSH probe result
+- name: Save the Netris DNAT (ens6) SSH probe result
   ansible.builtin.copy:
     dest: "{{ _ocp_boot_failure_diag_dir }}/ssh-probe.txt"
     mode: "0644"
     content: |
-      Attempts: {{ _ssh_check.attempts | default('unknown') }}
-      Return code: {{ _ssh_check.rc | default('unknown') }}
-      Message: {{ _ssh_check.msg | default('') }}
+      DNAT external IP: {{ ocp_dnat_ip }}
+      Attempts: {{ _dnat_ssh_check.attempts | default('unknown') }}
+      Return code: {{ _dnat_ssh_check.rc | default('unknown') }}
+      Message: {{ _dnat_ssh_check.msg | default('') }}
       Standard output:
-      {{ _ssh_check.stdout | default('') }}
+      {{ _dnat_ssh_check.stdout | default('') }}
       Standard error:
-      {{ _ssh_check.stderr | default('') }}
+      {{ _dnat_ssh_check.stderr | default('') }}
   failed_when: false
 
 - name: Capture OCP VM libvirt state and interfaces
