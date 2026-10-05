@@ -98,7 +98,7 @@ on:
         type: string
         default: "[]"
       osac-cli-version:
-        description: "OSAC CLI version for the test image (e.g. 0.0.73). Defaults to latest GitHub release."
+        description: "OSAC CLI version for the test image (e.g. 0.0.73). Defaults to the CLI in the deployed fulfillment-service image."
         required: false
         type: string
         default: ""
@@ -481,19 +481,6 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Build test image
-        env:
-          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
-          OSAC_VERSION: ${{ inputs.osac-cli-version }}
-        run: |
-          BUILD_ARGS="--build-arg OSAC_VERSION=${OSAC_VERSION}"
-          if [[ -n "${OSAC_CLI_BIN:-}" ]] && [[ -f "${OSAC_CLI_BIN}" ]]; then
-            cp "${OSAC_CLI_BIN}" ./osac-cli-bin
-            BUILD_ARGS="--build-arg OSAC_CLI_BIN=osac-cli-bin"
-          fi
-          podman build --no-cache ${BUILD_ARGS} -t "${E2E_IMAGE}" -f Containerfile .
-          rm -f ./osac-cli-bin
-
       - name: Prepare cluster prerequisites
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
@@ -821,6 +808,70 @@ jobs:
                 \"AWS_ACCESS_KEY_ID\":\"${AWS_ACCESS_KEY_ID}\",
                 \"AWS_SECRET_ACCESS_KEY\":\"${AWS_SECRET_ACCESS_KEY}\"
             }}"
+
+      # OSAC-5922: use the image the cluster actually pulled, including any
+      # Helm image override. Prefer its digest so a mutable :latest tag cannot
+      # move between installation and CLI extraction; use the pod's image
+      # reference when the runtime does not report a pullable digest.
+      - name: Extract OSAC CLI from deployed fulfillment-service image
+        if: env.OSAC_CLI_BIN == '' && inputs.osac-cli-version == ''
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          set -euo pipefail
+          pod=$(oc get pods -n "${INSTALLER_NAMESPACE}" -l app=fulfillment-grpc-server -o json |
+            jq -c '
+              [.items[]
+                | select(.metadata.deletionTimestamp == null)
+                | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))
+                | select(any(.status.containerStatuses[]?; .name == "grpc-server" and .ready == true))
+              ][0] // empty
+            ')
+          if [[ -z "${pod}" ]]; then
+            echo "::error::Could not find a Ready fulfillment gRPC pod in ${INSTALLER_NAMESPACE}"
+            exit 1
+          fi
+          image_id=$(jq -r '.status.containerStatuses[] | select(.name == "grpc-server") | .imageID // empty' <<< "${pod}")
+          image_ref=$(jq -r '.spec.containers[] | select(.name == "grpc-server") | .image // empty' <<< "${pod}")
+          image_id="${image_id#docker-pullable://}"
+          if [[ "${image_id}" == *@sha256:* ]]; then
+            image="${image_id}"
+          elif [[ -n "${image_ref}" ]]; then
+            echo "::warning::No pullable digest for the running fulfillment-service image; using pod image ${image_ref}"
+            image="${image_ref}"
+          else
+            echo "::error::Could not resolve an image for the running fulfillment-service pod"
+            exit 1
+          fi
+          echo "Extracting OSAC CLI from deployed image ${image}"
+          podman pull "${image}"
+          cli_container=$(podman create "${image}")
+          trap 'podman rm "${cli_container}" >/dev/null 2>&1 || true' EXIT
+          podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
+          chmod +x "$RUNNER_TEMP/osac-cli-bin"
+          echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
+
+      - name: Build test image
+        env:
+          E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
+          OSAC_VERSION: ${{ inputs.osac-cli-version }}
+        run: |
+          set -euo pipefail
+          trap 'rm -f ./osac-cli-bin' EXIT
+          BUILD_ARGS=(--build-arg "OSAC_VERSION=${OSAC_VERSION}")
+          if [[ -n "${OSAC_CLI_BIN:-}" ]]; then
+            if [[ ! -f "${OSAC_CLI_BIN}" ]]; then
+              echo "::error::OSAC_CLI_BIN does not point to a file: ${OSAC_CLI_BIN}"
+              exit 1
+            fi
+            cp "${OSAC_CLI_BIN}" ./osac-cli-bin
+            BUILD_ARGS=(--build-arg "OSAC_CLI_BIN=osac-cli-bin")
+          elif [[ -z "${OSAC_VERSION}" ]]; then
+            echo "::error::No CLI extracted from fulfillment-service and no explicit osac-cli-version was provided"
+            exit 1
+          fi
+          podman build --no-cache "${BUILD_ARGS[@]}" -t "${E2E_IMAGE}" -f Containerfile .
 
       - name: Setup CaaS agent
         env:
