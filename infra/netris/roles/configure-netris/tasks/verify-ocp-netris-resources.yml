@@ -117,18 +117,46 @@
     that:
       - _ocp_configured_vnets | length == 1
 
-- name: Read detailed Netris OCP VNet configuration
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _ocp_configured_vnets[0].id }}"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: [200]
-    timeout: "{{ netris_timeout | default(30) }}"
-    validate_certs: "{{ netris_validate_certs | default(false) }}"
-  register: _ocp_configured_vnet_detail_response
-  no_log: true
+- name: Wait for the Netris OCP VNet to become active with the expected ports
+  block:
+    - name: Read detailed Netris OCP VNet configuration
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet/{{ _ocp_configured_vnets[0].id }}"
+        method: GET
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+        return_content: true
+        status_code: [200]
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(false) }}"
+      register: _ocp_configured_vnet_detail_response
+      no_log: true
+      retries: 24
+      delay: 5
+      until: >-
+        (_ocp_configured_vnet_detail_response.json.data.status.label | default('') | lower) == 'active'
+        and
+        (ocp_server_ports | map(attribute='name') | list
+         | difference(_ocp_configured_vnet_detail_response.json.data.ports | default([])
+                     | map(attribute='name', default='') | list) | length) == 0
+  rescue:
+    - name: Report Netris OCP VNet convergence failure
+      ansible.builtin.fail:
+        msg: >-
+          Netris VNet {{ ocp_vnet_name }} did not become active with expected
+          server ports {{ ocp_server_ports | map(attribute='name') | list }}
+          after 24 retries at 5-second intervals. Last status is
+          {{ _ocp_configured_vnet_detail_response.json.data.status.label | default('unknown') }}
+          ({{ _ocp_configured_vnet_detail_response.json.data.status.value | default('unknown') }}).
+          API returned port names
+          {{ _ocp_configured_vnet_detail_response.json.data.ports | default([])
+             | map(attribute='name', default='') | list }}, port identifiers
+          {{ _ocp_configured_vnet_detail_response.json.data.ports | default([])
+             | map(attribute='port', default='') | list }}, interface names
+          {{ _ocp_configured_vnet_detail_response.json.data.ports | default([])
+             | map(attribute='ifName', default='') | list }}, and switch names
+          {{ _ocp_configured_vnet_detail_response.json.data.ports | default([])
+             | map(attribute='switchName', default='') | list }}.
 
 - name: Require the Netris OCP VNet to match the expected gateway and server port
   ansible.builtin.assert:
