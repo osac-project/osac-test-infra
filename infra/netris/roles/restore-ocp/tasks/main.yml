@@ -449,11 +449,13 @@
   ansible.builtin.command:
     cmd: virsh start {{ ocp_vm_name }}
 
-# Probe the Netris DNAT external IP first. nmstate -- which brings up the VPC
-# data NIC and its default route -- is the first thing snapshot-recert runs, so the
-# external path is reachable within a minute or two of boot. Using it as the
-# primary SSH target doubles as an early end-to-end test of DNAT, instead of
-# only discovering a DNAT break ~50 minutes later at the node-Ready check.
+# Require SSH over the Netris DNAT external IP -- the only supported path.
+# nmstate (which brings up the VPC data NIC and its default route) is the first
+# thing snapshot-recert runs, so the external path is reachable within a minute
+# or two of boot. Probing it here is an end-to-end test of DNAT that fails fast
+# with diagnostics, instead of only discovering a DNAT break ~50 minutes later
+# at the node-Ready check. There is no management-interface fallback: the node
+# installation needs the VPC data path, which ens4 cannot substitute for.
 - name: Probe SSH through the Netris DNAT external IP (VPC data NIC)
   ansible.builtin.command:
     cmd: >-
@@ -473,93 +475,17 @@
     _vm_ssh_transport: "Netris DNAT external IP (VPC data NIC)"
   when: _dnat_ssh_check.rc == 0
 
-# Fallback only: if the external path is down, use the VM's management
-# interface (br-mgmt) so the rest of the restore can still run and gather
-# diagnostics. Discover its address through the QEMU guest agent instead of
-# assuming a DHCP/static address.
-- name: Probe SSH over the VM management network (DNAT fallback)
-  when: _dnat_ssh_check.rc != 0
-  ansible.builtin.shell:
-    cmd: |
-      set +e
-      for attempt in $(seq 1 12); do
-        guest_interfaces=$(timeout 5s virsh qemu-agent-command "$OCP_VM_NAME" '{"execute":"guest-network-get-interfaces"}' 2>/dev/null)
-        mgmt_ip=$(printf '%s\n' "$guest_interfaces" | python3 -c '
-      import json
-      import sys
-
-      try:
-          interfaces = json.load(sys.stdin).get("return", [])
-      except (json.JSONDecodeError, AttributeError):
-          sys.exit(1)
-
-      for interface in interfaces:
-          if interface.get("name") != sys.argv[1]:
-              continue
-          for address in interface.get("ip-addresses", []):
-              ip = address.get("ip-address", "")
-              if address.get("ip-address-type") == "ipv4" and ip and not ip.startswith(("127.", "169.254.")):
-                  print(ip)
-                  sys.exit(0)
-      sys.exit(1)
-      ' "$MGMT_INTERFACE" 2>/dev/null)
-
-        if [ -n "$mgmt_ip" ]; then
-          echo "Attempt $attempt: probing management SSH at $mgmt_ip" >&2
-          ssh_output=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=3 -i "$SSH_KEY_PATH" "core@$mgmt_ip" true 2>&1)
-          ssh_rc=$?
-          if [ "$ssh_rc" -eq 0 ]; then
-            printf '%s\n' "$mgmt_ip"
-            exit 0
-          fi
-          echo "Management SSH attempt $attempt failed (exit $ssh_rc): $ssh_output" >&2
-        else
-          echo "Attempt $attempt: QEMU guest agent has not reported IPv4 on $MGMT_INTERFACE" >&2
-        fi
-        sleep 5
-      done
-      exit 1
-  environment:
-    OCP_VM_NAME: "{{ ocp_vm_name }}"
-    MGMT_INTERFACE: "{{ caas_netris_mgmt_interface | default('ens4') }}"
-    SSH_KEY_PATH: "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
-  register: _mgmt_ssh_check
-  changed_when: false
-  failed_when: false
-
-- name: Select the management SSH address when DNAT is unavailable
-  ansible.builtin.set_fact:
-    _vm_ssh_ip: "{{ _mgmt_ssh_check.stdout | trim }}"
-    _vm_ssh_transport: "management network ({{ caas_netris_mgmt_interface | default('ens4') }}) [DNAT fallback]"
-  when:
-    - _dnat_ssh_check.rc != 0
-    - _mgmt_ssh_check.rc == 0
-
-- name: Warn that the Netris DNAT external path is not working
-  ansible.builtin.debug:
-    msg: >-
-      WARNING: SSH through the Netris DNAT external IP {{ ocp_dnat_ip }} (VPC data NIC)
-      did not succeed; fell back to the management interface. The external path
-      is broken -- API and egress through the external IP will not work. See the
-      DNAT reachability diagnostics captured below.
-  when:
-    - _dnat_ssh_check.rc != 0
-    - _mgmt_ssh_check.rc == 0
-
 - name: Capture DNAT-path diagnostics whenever the external path failed
   ansible.builtin.include_tasks: boot-failure-diagnostics.yml
   when: _dnat_ssh_check.rc != 0
 
-- name: Fail when neither the DNAT nor the management path is reachable
+- name: Fail when the required Netris DNAT SSH path is unreachable
   ansible.builtin.fail:
     msg: >-
-      VM {{ ocp_vm_name }} did not become reachable via SSH over the Netris
-      DNAT external IP {{ ocp_dnat_ip }} (VPC data NIC) or the management network.
-      Boot diagnostics were saved to {{ _ocp_boot_failure_diag_dir }}.
-  when:
-    - _dnat_ssh_check.rc != 0
-    - _mgmt_ssh_check.rc != 0
+      VM {{ ocp_vm_name }} did not become reachable via the required Netris
+      DNAT external IP {{ ocp_dnat_ip }}. Boot diagnostics were saved to
+      {{ _ocp_boot_failure_diag_dir }}.
+  when: _dnat_ssh_check.rc != 0
 
 - name: Report VM booted
   ansible.builtin.debug:
