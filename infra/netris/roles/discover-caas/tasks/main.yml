@@ -91,9 +91,12 @@
       done
       sleep 10
       oc rollout restart deployment/assisted-service -n multicluster-engine
-      oc rollout status deployment/assisted-service -n multicluster-engine --timeout=120s
+      oc rollout status deployment/assisted-service -n multicluster-engine --timeout=300s
       oc rollout restart statefulset/assisted-image-service -n multicluster-engine
-      oc rollout status statefulset/assisted-image-service -n multicluster-engine --timeout=120s
+      # assisted-image-service re-caches the RHCOS base images on startup and
+      # serves 503 on /health until they are ready, which can take several
+      # minutes after a restart -- 120s was too short and failed intermittently.
+      oc rollout status statefulset/assisted-image-service -n multicluster-engine --timeout=600s
   environment:
     KUBECONFIG: /root/.kube/config
 
