@@ -139,13 +139,16 @@
 # vmaas-ci disables mce, caas-ci disables cnv). Force-enabling them clobbered the
 # profile and installed CNV on BMaaS, whose golden-image DataVolumes filled the LVMS
 # pool and starved the AAP postgres PVC. lvms/bundledPostgres stay overridden because
-# every profile needs them (lvms also gets the OCP-version-matched channel here).
+# every profile needs them.
+# Shared Netris settings use the chart's global.networking facade. The BM
+# provisioning V-Net stays only on networkFulfillment, where move-attachment runs;
+# clusterFulfillment.config rejects keys outside its declared schema.
 - name: Build values overrides
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ {'cliImage': _ocp_cli_image.stdout | trim,
           'bundledPostgres': {'enabled': true},
-          'lvms': {'enabled': true, 'channel': 'stable-' + ocp_version},
+          'lvms': {'enabled': true},
           'global': {'networking': {'fabricManager': 'netris', 'k8sManager': '', 'netris': {
               'controllerUrl': _netris_ctl_url,
               'credentials': {'username': netris_username, 'externalSecret': true},
@@ -166,7 +169,6 @@
               'HOSTED_CLUSTER_BASE_DOMAIN': ocp_base_domain,
               'HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY': 'SingleReplica',
               'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY': 'SingleReplica',
-              'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name,
               'SERVER_MGMT_ROUTE_DESTINATION': '192.168.16.0/20',
               'SERVER_MGMT_ROUTE_GATEWAY': '192.168.16.1',
               'SERVER_SSH_BASTION_HOST': '192.168.16.254',
@@ -184,13 +186,6 @@
               'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name
             }}
           }},
-          'clusterFulfillment': {'config': {
-              'DNS_CLASS': 'dns.route53.dns',
-              'DNS_ZONE': dns_hosted_zone
-            }, 'secret': {
-              'AWS_ACCESS_KEY_ID': aws_access_key_id,
-              'AWS_SECRET_ACCESS_KEY': aws_secret_access_key
-            }}
          }
          | combine(({'operator': {'image': {
                'repository': osac_operator_image | regex_replace(':([^/]+)$', ''),
