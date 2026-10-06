@@ -474,7 +474,7 @@
 # which appear as the "udp"-type interfaces in domiflist, in order. This is a
 # DIFFERENT MAC than bootMACAddress (the bmc-net NIC) — the DHCP lease the
 # operator's IP-discovery matches against is on the fabric NIC, not the boot
-# NIC. Order matches bmaas_host_type_interfaces' non-lifecycle entries:
+# NIC. Order matches bmaas_instance_type_network_ports' non-lifecycle entries:
 # 1st udp NIC = eth9, 2nd = eth10, ...
 - name: Get VM tenant fabric NIC MACs (Netris udp NICs, ordered)
   ansible.builtin.shell:
@@ -483,10 +483,10 @@
   changed_when: false
   loop: "{{ bmaas_vms }}"
 
-- name: Compute tenant (non-lifecycle) host type interface names
+- name: Compute tenant (non-lifecycle) instance type port names
   ansible.builtin.set_fact:
     _tenant_iface_names: >-
-      {{ bmaas_host_type_interfaces
+      {{ bmaas_instance_type_network_ports
          | rejectattr('role', 'equalto', 'lifecycle')
          | map(attribute='name') | list }}
 
@@ -524,7 +524,7 @@
           # Map each tenant data interface (eth9, eth10, role: fabric) to its
           # Netris fabric NIC MAC so the operator's IP-discovery job matches the
           # DHCP lease by MAC. These are the "udp"-type NICs (not bootMACAddress,
-          # which is the bmc-net NIC). Names come from bmaas_host_type_interfaces.
+          # which is the bmc-net NIC). Names come from bmaas_instance_type_network_ports.
           osac.openshift.io/interface-macs: '{{ dict(_tenant_iface_names | zip(_vm_fabric_macs.results[idx].stdout_lines)) | to_json }}'
       spec:
         online: true
@@ -608,10 +608,10 @@
     dest: /root/.config/osac/config.json
     mode: "0600"
 
-- name: Create host type
+- name: Create bare metal instance type
   no_log: true
   ansible.builtin.uri:
-    url: "{{ _fulfillment_api }}/api/private/v1/host_types"
+    url: "{{ _fulfillment_api }}/api/private/v1/bare_metal_instance_types"
     method: POST
     headers:
       Authorization: "Bearer {{ _sa_token.stdout }}"
@@ -619,51 +619,57 @@
     body_format: json
     body:
       metadata:
-        name: "{{ bmaas_host_type }}"
-      title: "{{ bmaas_host_type_title }}"
-      description: "{{ bmaas_host_type_description }}"
-      interfaces: "{{ bmaas_host_type_interfaces }}"
+        name: "{{ bmaas_instance_type }}"
+      spec:
+        description: "{{ bmaas_instance_type_description }}"
+        host_label_selector:
+          match_labels:
+            osac.openshift.io/host-type: "{{ bmaas_instance_type }}"
+        hardware:
+          cpu:
+            cores: "{{ bmaas_vm_vcpu | int }}"
+            architecture: x86_64
+            threads_per_core: 1
+          memory:
+            total_gb: "{{ (bmaas_vm_memory_mb | int) // 1024 }}"
+          disks:
+            - type: Virtual
+              capacity_gb: "{{ bmaas_vm_disk_gb | int }}"
+              interface: VirtIO
+          network_ports: "{{ bmaas_instance_type_network_ports }}"
     validate_certs: false
     status_code: [200, 201, 409]
 
-# The template's host_type must be the host type's ID, not its name — the
-# fulfillment-service resolves it as an ID at BMI-create time (host_type by
-# name yields "host type 'default' ... not found"). Look it up by name.
-- name: List host types
+# A pre-existing type with this name must select the same BMHs and expose the
+# same ports (POST may return 409 on a repeat setup).
+- name: Get bare metal instance type
   no_log: true
   ansible.builtin.uri:
-    url: "{{ _fulfillment_api }}/api/private/v1/host_types"
+    url: "{{ _fulfillment_api }}/api/private/v1/bare_metal_instance_types/{{ bmaas_instance_type }}"
     method: GET
     headers:
       Authorization: "Bearer {{ _sa_token.stdout }}"
     validate_certs: false
     status_code: [200]
-  register: _host_types
+  register: _bmi_type
 
-- name: Resolve host type id
-  ansible.builtin.set_fact:
-    _host_type_id: >-
-      {{ (_host_types.json.get('items', [])
-          | selectattr('metadata.name', 'equalto', bmaas_host_type)
-          | map(attribute='id') | list | first) }}
-
-- name: Require the BMaaS host type ID to be resolved
+- name: Require the BMIType to match the BMaaS inventory
   ansible.builtin.assert:
     that:
-      - (_host_type_id | default('', true) | string | length) > 0
+      - _bmi_type.json.spec.host_label_selector.match_labels == {'osac.openshift.io/host-type': bmaas_instance_type}
+      - _bmi_type.json.spec.hardware.network_ports == bmaas_instance_type_network_ports
     fail_msg: >-
-      Could not resolve host type '{{ bmaas_host_type }}' to an ID from the
-      fulfillment service. Refusing to label BMHs with the host type name.
+      BMIType '{{ bmaas_instance_type }}' must select BMHs labeled
+      osac.openshift.io/host-type={{ bmaas_instance_type }} and have the
+      configured network ports.
 
-# The BMF operator uses the BMI hostType value as the BMH host-type label
-# selector. The BMI template stores the fulfillment-service resource ID, so
-# BMHs must carry that same ID rather than the display name (for example,
-# "default").
-- name: Label BMHs with the resolved host type ID
+# The fulfillment-service copies the BMIType's selector into the BMI CR; the
+# Metal3 inventory backend matches it against the BMH's host-type label.
+- name: Label BMHs for the instance type selector
   ansible.builtin.command:
     cmd: >-
       oc label bmh {{ item }} -n {{ bmaas_bmh_namespace }}
-      osac.openshift.io/host-type={{ _host_type_id }}
+      osac.openshift.io/host-type={{ bmaas_instance_type }}
       --overwrite
   environment:
     KUBECONFIG: /root/.kube/config
@@ -684,13 +690,13 @@
   retries: 40
   delay: 15
 
-# The published template has no host_type, so the fulfillment-service skips
-# interface validation for BMIs created from it. Link it to the host type so the
-# tenant's network-attachment interface is validated against the interfaces list.
-- name: Link BMI template to host type
+# The published template has no instance type. Set a platform-scoped default
+# so BMIs have a placement selector and their attachments are validated against
+# the BMIType's network ports.
+- name: Link BMI template to instance type
   no_log: true
   ansible.builtin.uri:
-    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=host_type"
+    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=instance_type"
     method: PATCH
     headers:
       Authorization: "Bearer {{ _sa_token.stdout }}"
@@ -698,7 +704,9 @@
     body_format: json
     body:
       id: "{{ bmaas_bmi_template }}"
-      host_type: "{{ _host_type_id }}"
+      instance_type:
+        name: "{{ bmaas_instance_type }}"
+        shared: true
     validate_certs: false
     status_code: [200]
 

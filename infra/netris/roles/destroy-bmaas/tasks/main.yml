@@ -82,11 +82,10 @@
         status_code: [200, 204, 404]
       when: _auto_eip_ci_id | length > 0
 
-    # Unlink the template from the host type (reverse of setup "Link BMI
-    # template to host type"). Must happen before deleting the host type.
-    - name: Unlink BMI template from host type
+    # Unlink the template from the BMIType before deleting the type.
+    - name: Unlink BMI template from instance type
       ansible.builtin.uri:
-        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=host_type"
+        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=instance_type"
         method: PATCH
         headers:
           Authorization: "Bearer {{ _sa_token.stdout }}"
@@ -94,37 +93,37 @@
         body_format: json
         body:
           id: "{{ bmaas_bmi_template }}"
-          host_type: ""
+          instance_type: null
         validate_certs: false
         status_code: [200, 404]
 
-    # Delete host type (reverse of setup "Create host type").
-    - name: List host types
+    # Delete the BMIType created by setup; leave CaaS HostTypes alone.
+    - name: List bare metal instance types
       ansible.builtin.uri:
-        url: "{{ _fulfillment_api }}/api/private/v1/host_types"
+        url: "{{ _fulfillment_api }}/api/private/v1/bare_metal_instance_types"
         method: GET
         headers:
           Authorization: "Bearer {{ _sa_token.stdout }}"
         validate_certs: false
         status_code: [200]
-      register: _ht_list
+      register: _bmi_type_list
 
-    - name: Resolve host type id
+    - name: Resolve bare metal instance type id
       ansible.builtin.set_fact:
-        _ht_id: >-
-          {{ (_ht_list.json.get('items', [])
-              | selectattr('metadata.name', 'equalto', bmaas_host_type)
+        _bmi_type_id: >-
+          {{ (_bmi_type_list.json.get('items', [])
+              | selectattr('metadata.name', 'equalto', bmaas_instance_type)
               | map(attribute='id') | list | first) | default('') }}
 
-    - name: Delete host type
+    - name: Delete bare metal instance type
       ansible.builtin.uri:
-        url: "{{ _fulfillment_api }}/api/private/v1/host_types/{{ _ht_id }}"
+        url: "{{ _fulfillment_api }}/api/private/v1/bare_metal_instance_types/{{ _bmi_type_id }}"
         method: DELETE
         headers:
           Authorization: "Bearer {{ _sa_token.stdout }}"
         validate_certs: false
         status_code: [200, 204, 404]
-      when: _ht_id | length > 0
+      when: _bmi_type_id | length > 0
 
 # ── Discover the virtual BMH VMs (shared by the phases below) ──
 - name: Find BMaaS VMs

@@ -196,24 +196,25 @@ bmaas_vm_vcpu: 4
 bmaas_vm_memory_mb: 8192
 bmaas_vm_disk_gb: 50
 bmaas_bmh_namespace: "host-inventory"
-bmaas_host_type: "default"
-bmaas_host_type_title: "Default Bare Metal Host"
-bmaas_host_type_description: "CI bare metal host type for BMaaS testing"
-# Physical network interfaces of the BM host type. Tenants select an interface
-# by name in the BMI network attachment; the fulfillment-service validates the
-# name against this list (for templates that set host_type). Roles: fabric =
-# tenant east-west data, lifecycle = PXE/BMC (not tenant-attachable). eth9 is
-# the tenant data NIC on the sim-lab BMH VMs (see the Netris V-Net port).
-bmaas_host_type_interfaces:
+bmaas_instance_type: "default"
+bmaas_instance_type_description: "CI bare metal instance type for BMaaS testing"
+# The BMIType's network ports are the physical NICs on the simulated BMHs.
+# The fulfillment-service validates network attachments against these ports;
+# lifecycle ports (PXE/BMC) cannot be attached by tenants. eth9 is the tenant
+# data NIC on the sim-lab BMH VMs (see the Netris V-Net port).
+bmaas_instance_type_network_ports:
   - name: eth9
     role: fabric
-    description: "Tenant data interface (100GbE)"
+    type: Ethernet
+    speed: 100Gbps
   - name: eth10
     role: fabric
-    description: "Ultra-fast storage / AI workload interface (400GbE RoCE)"
+    type: Ethernet
+    speed: 400Gbps
   - name: eth0
     role: lifecycle
-    description: "PXE/BMC provisioning interface"
+    type: Ethernet
+    speed: 1Gbps
 bmaas_bmi_template: "osac.templates.bm_host_provisioning"
 bmaas_catalog_item: "ci-bm-default"
 bmaas_catalog_item_title: "CI Default Bare Metal Instance"
@@ -238,7 +239,7 @@ bmaas_provisioning_dhcp_start: "10.98.0.2"
 # per-host 1:1 DNATs (sequential from dhcp_start) always match. A wider range
 # lets stale leases push new VMs past the DNAT targets after destroy/recreate.
 bmaas_provisioning_dhcp_end: "10.98.0.4"
-bmaas_provisioning_fabric_iface: "eth9"   # must match bmaas_host_type_interfaces fabric NIC
+bmaas_provisioning_fabric_iface: "eth9"   # must match bmaas_instance_type_network_ports fabric NIC
 # External IP the provisioning SNAT maps egress to. Must be host-routed to the
 # ISP (see deploy-infra) and not overlap the other 198.51.100.0/24 pools
 # (nat .0/29, bgp .8/29, l4lb .16/29, tenant .24/29, ocp .1/.2, assisted .9).
