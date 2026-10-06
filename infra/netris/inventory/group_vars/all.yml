@@ -24,8 +24,13 @@ ocp_vnet_name: "ocp-sno-vnet"
 ocp_subnet_cidr: "192.168.40.0/24"
 ocp_gateway: "192.168.40.1/24"
 ocp_node_ip: "192.168.40.2"
+# The OCP node's data interface is ens6, which the netris-cloudsim topology
+# cables to server port eth10 (-> ns-leaf-1); eth9 (-> ns-leaf-0) is ens5.
+# The VNet/DNAT/SNAT must bind the same port the node IP lives on, so use
+# eth10. This also matches the ens6 VPC-interface convention used elsewhere
+# (caas_netris_vpc_interfaces, prep-osac/patch-osac-refresh host-type config).
 ocp_server_ports:
-  - name: "eth9@hgx-pod00-su0-h00"
+  - name: "eth10@hgx-pod00-su0-h00"
     accessMode: true
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
