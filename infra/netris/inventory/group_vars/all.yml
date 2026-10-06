@@ -24,14 +24,19 @@ ocp_vnet_name: "ocp-sno-vnet"
 ocp_subnet_cidr: "192.168.40.0/24"
 ocp_gateway: "192.168.40.1/24"
 ocp_node_ip: "192.168.40.2"
-# The OCP node's data interface is ens6, which the netris-cloudsim topology
-# cables to server port eth10 (-> ns-leaf-1); eth9 (-> ns-leaf-0) is ens5.
-# The VNet/DNAT/SNAT must bind the same port the node IP lives on, so use
-# eth10. This also matches the ens6 VPC-interface convention used elsewhere
-# (caas_netris_vpc_interfaces, prep-osac/patch-osac-refresh host-type config).
+# The VNet/DNAT/SNAT bind server port eth10 (-> ns-leaf-1), the port the OCP
+# node's data NIC is cabled to. eth9 (-> ns-leaf-0) is the other NS uplink.
+# The Netris server-port name is stable, so this value never changes.
 ocp_server_ports:
   - name: "eth10@hgx-pod00-su0-h00"
     accessMode: true
+
+# Linux name of the OCP node's VPC data NIC -- the one cabled to eth10 above,
+# which restore-ocp gives the node IP + default route. The name is NOT stable:
+# bare_metal_services inserts a bmc-net NIC ahead of the data NICs, shifting
+# the enumeration by one, so the same eth10 port is ens6 without BMaaS and
+# ens7 with it. Keep this aligned with ocp_server_ports (eth10).
+ocp_vpc_interface: "{{ 'ens7' if bare_metal_services | default(false) | bool else 'ens6' }}"
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 

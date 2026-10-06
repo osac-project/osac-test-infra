@@ -22,7 +22,7 @@
       Management bridge: {{ mgmt_bridge_name | default('br-mgmt') }}
       SSH fallback DNAT address: {{ ocp_dnat_ip }}
       Configured OCP node address: {{ ocp_node_ip }}
-      Boot-time interfaces configured by this role: ens6 (default route) + {{ caas_netris_mgmt_interface | default('ens4') }} (address only, no default route)
+      Boot-time interfaces configured by this role: {{ ocp_vpc_interface }} (default route) + {{ caas_netris_mgmt_interface | default('ens4') }} (address only, no default route)
       Runtime OCP external bridge to inspect: br-ex
       Expected guest default gateway: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
   failed_when: false
@@ -40,7 +40,7 @@
   when: _mgmt_ssh_check is defined
   failed_when: false
 
-- name: Save the Netris DNAT (ens6) SSH probe result
+- name: Save the Netris DNAT SSH probe result
   ansible.builtin.copy:
     dest: "{{ _ocp_boot_failure_diag_dir }}/ssh-probe.txt"
     mode: "0644"

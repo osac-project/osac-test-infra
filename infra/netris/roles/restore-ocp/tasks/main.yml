@@ -259,7 +259,7 @@
       ansible.builtin.copy:
         content: |
           interfaces:
-          - name: ens6
+          - name: {{ ocp_vpc_interface }}
             type: ethernet
             state: up
             ipv4:
@@ -274,10 +274,11 @@
               autoconf: false
           # Management interface stays addressable (for host-side SSH and
           # diagnostics) but must NOT install a default route, DHCP routes, or
-          # DNS. ens6 is the only interface that reaches the outside world via
-          # the Netris DNAT frontend; a competing default route here would send
-          # DNAT reply traffic (which arrives on ens6) back out the management
-          # link, so external SSH/API through the external IP never completes.
+          # DNS. {{ ocp_vpc_interface }} is the only interface that reaches the
+          # outside world via the Netris DNAT frontend; a competing default
+          # route here would send DNAT reply traffic (which arrives on
+          # {{ ocp_vpc_interface }}) back out the management link, so external
+          # SSH/API through the external IP never completes.
           - name: {{ caas_netris_mgmt_interface | default('ens4') }}
             type: ethernet
             state: up
@@ -293,11 +294,11 @@
               autoconf: false
           routes:
             config:
-            # ens6 owns the sole default route so DNAT return traffic is
-            # symmetric. No metric override: it must win outright, not merely
-            # lose to the management link's DHCP default.
+            # The VPC data interface owns the sole default route so DNAT return
+            # traffic is symmetric. No metric override: it must win outright, not
+            # merely lose to the management link's DHCP default.
             - destination: 0.0.0.0/0
-              next-hop-interface: ens6
+              next-hop-interface: {{ ocp_vpc_interface }}
               next-hop-address: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
               table-id: 254
           dns-resolver:
@@ -345,9 +346,9 @@
     - name: Use loose reverse-path filtering for the multi-homed OCP VM
       ansible.builtin.copy:
         content: |
-          # Loose mode (RFC 3704). The VM is multi-homed (ens6 data path plus
+          # Loose mode (RFC 3704). The VM is multi-homed (VPC data path plus
           # the management interface). Strict rp_filter drops inbound DNAT
-          # packets on ens6 whenever the kernel's reverse-path lookup for the
+          # packets on the VPC NIC whenever the kernel's reverse-path lookup for the
           # client source resolves to a different interface, and also drops
           # management traffic whose source is only reachable off a non-default
           # link. The effective value is max(all, <iface>), so relaxing "all"
@@ -448,12 +449,12 @@
   ansible.builtin.command:
     cmd: virsh start {{ ocp_vm_name }}
 
-# Probe the Netris DNAT external IP (ens6) first. nmstate -- which brings up
-# ens6 and its default route -- is the first thing snapshot-recert runs, so the
+# Probe the Netris DNAT external IP first. nmstate -- which brings up the VPC
+# data NIC and its default route -- is the first thing snapshot-recert runs, so the
 # external path is reachable within a minute or two of boot. Using it as the
 # primary SSH target doubles as an early end-to-end test of DNAT, instead of
 # only discovering a DNAT break ~50 minutes later at the node-Ready check.
-- name: Probe SSH through the Netris DNAT external IP (ens6)
+- name: Probe SSH through the Netris DNAT external IP (VPC data NIC)
   ansible.builtin.command:
     cmd: >-
       ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
@@ -466,10 +467,10 @@
   changed_when: false
   failed_when: false
 
-- name: Select the DNAT (ens6) SSH address when reachable
+- name: Select the DNAT (VPC data NIC) SSH address when reachable
   ansible.builtin.set_fact:
     _vm_ssh_ip: "{{ ocp_dnat_ip }}"
-    _vm_ssh_transport: "Netris DNAT external IP (ens6)"
+    _vm_ssh_transport: "Netris DNAT external IP (VPC data NIC)"
   when: _dnat_ssh_check.rc == 0
 
 # Fallback only: if the external path is down, use the VM's management
@@ -538,7 +539,7 @@
 - name: Warn that the Netris DNAT external path is not working
   ansible.builtin.debug:
     msg: >-
-      WARNING: SSH through the Netris DNAT external IP {{ ocp_dnat_ip }} (ens6)
+      WARNING: SSH through the Netris DNAT external IP {{ ocp_dnat_ip }} (VPC data NIC)
       did not succeed; fell back to the management interface. The external path
       is broken -- API and egress through the external IP will not work. See the
       DNAT reachability diagnostics captured below.
@@ -554,7 +555,7 @@
   ansible.builtin.fail:
     msg: >-
       VM {{ ocp_vm_name }} did not become reachable via SSH over the Netris
-      DNAT external IP {{ ocp_dnat_ip }} (ens6) or the management network.
+      DNAT external IP {{ ocp_dnat_ip }} (VPC data NIC) or the management network.
       Boot diagnostics were saved to {{ _ocp_boot_failure_diag_dir }}.
   when:
     - _dnat_ssh_check.rc != 0
