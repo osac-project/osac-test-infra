@@ -415,7 +415,10 @@ jobs:
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
           fi
-          EXTRA_VARS="{}"
+          # This profile deploys CaaS over the Metal3 BMaaS backend. Keep the
+          # infrastructure setup aligned with caas-ci's bmf.metal3.enabled;
+          # prep-osac uses this flag to create the required Provisioning CR.
+          EXTRA_VARS='{"bare_metal_services":true}'
           declare -A OVERRIDES=(
             [osac_operator_image]="$OSAC_OPERATOR_IMAGE"
             [fulfillment_service_image]="$FULFILLMENT_SERVICE_IMAGE"
