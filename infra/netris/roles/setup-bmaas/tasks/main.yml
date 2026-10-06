@@ -653,6 +653,8 @@
     status_code: [200]
   register: _bmi_type
 
+# Hardware describes the offering; only host_label_selector controls placement.
+# The network port names must still match tenant attachments (e.g. eth9).
 - name: Require the BMIType to match the BMaaS inventory
   ansible.builtin.assert:
     that:
@@ -662,6 +664,14 @@
       BMIType '{{ bmaas_instance_type }}' must select BMHs labeled
       osac.openshift.io/host-type={{ bmaas_instance_type }} and have the
       configured network ports.
+
+- name: Publish BMIType name for mono-repo E2E fixtures
+  ansible.builtin.lineinfile:
+    path: "{{ inventory_dir }}/../.env.infra"
+    regexp: '^OSAC_BMI_INSTANCE_TYPE='
+    line: "OSAC_BMI_INSTANCE_TYPE={{ bmaas_instance_type | quote }}"
+    create: true
+    mode: "0644"
 
 # The fulfillment-service copies the BMIType's selector into the BMI CR; the
 # Metal3 inventory backend matches it against the BMH's host-type label.
@@ -690,26 +700,8 @@
   retries: 40
   delay: 15
 
-# The published template has no instance type. Set a platform-scoped default
-# so BMIs have a placement selector and their attachments are validated against
-# the BMIType's network ports.
-- name: Link BMI template to instance type
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=instance_type"
-    method: PATCH
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      id: "{{ bmaas_bmi_template }}"
-      instance_type:
-        name: "{{ bmaas_instance_type }}"
-        shared: true
-    validate_certs: false
-    status_code: [200]
-
+# The BMIType is an editable default of the offering, not of the shared
+# template: other catalog items can use this template with different types.
 - name: Create BMI catalog item
   no_log: true
   ansible.builtin.uri:
@@ -730,10 +722,16 @@
       fields:
         ssh_public_key:
           editable: {}
+        instance_type:
+          editable:
+            default_value:
+              name: "{{ bmaas_instance_type }}"
+              shared: true
         network_attachments:
           editable: {}
     validate_certs: false
     status_code: [200, 201, 409]
+  register: _bmi_catalog_create
 
 - name: Create BMI catalog item with auto ExternalIP
   no_log: true
@@ -755,12 +753,79 @@
       fields:
         ssh_public_key:
           editable: {}
+        instance_type:
+          editable:
+            default_value:
+              name: "{{ bmaas_instance_type }}"
+              shared: true
         network_attachments:
           editable: {}
         auto_external_ip_attachment:
           editable: {}
     validate_certs: false
     status_code: [200, 201, 409]
+  register: _auto_eip_catalog_create
+
+# POST returns 409 for an existing catalog item; update its default too, so a
+# repeat setup migrates items created before BMIType support without deleting
+# the shared template or any other catalog-item fields.
+- name: List BMI catalog items if either already exists
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _bmi_catalog_items
+  when: _bmi_catalog_create.status == 409 or _auto_eip_catalog_create.status == 409
+
+- name: Resolve existing BMI catalog item IDs
+  ansible.builtin.set_fact:
+    _bmi_catalog_id: >-
+      {{ (_bmi_catalog_items.json.get('items', [])
+          | selectattr('metadata.name', 'equalto', bmaas_catalog_item)
+          | map(attribute='id') | list | first) | default('') }}
+    _auto_eip_catalog_id: >-
+      {{ (_bmi_catalog_items.json.get('items', [])
+          | selectattr('metadata.name', 'equalto', bmaas_auto_eip_catalog_item)
+          | map(attribute='id') | list | first) | default('') }}
+  when: _bmi_catalog_create.status == 409 or _auto_eip_catalog_create.status == 409
+
+- name: Require IDs for existing BMI catalog items
+  ansible.builtin.assert:
+    that:
+      - _bmi_catalog_create.status != 409 or _bmi_catalog_id | length > 0
+      - _auto_eip_catalog_create.status != 409 or _auto_eip_catalog_id | length > 0
+    fail_msg: Could not resolve an existing BMI catalog item to update its instance type default.
+  when: _bmi_catalog_create.status == 409 or _auto_eip_catalog_create.status == 409
+
+- name: Update instance type defaults on existing BMI catalog items
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items/{{ item.id }}?update_mask=fields.instance_type"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ item.id }}"
+      fields:
+        instance_type:
+          editable:
+            default_value:
+              name: "{{ bmaas_instance_type }}"
+              shared: true
+    validate_certs: false
+    status_code: [200]
+  loop:
+    - id: "{{ _bmi_catalog_id | default('') }}"
+      status: "{{ _bmi_catalog_create.status }}"
+    - id: "{{ _auto_eip_catalog_id | default('') }}"
+      status: "{{ _auto_eip_catalog_create.status }}"
+  when: item.status | int == 409
 
 - name: Verify catalog items are accessible
   ansible.builtin.command:

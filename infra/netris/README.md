@@ -453,21 +453,25 @@ the flavor image; it reports an actionable error if the credentials are missing 
 
 #### BMaaS Configuration
 
-`make setup-bmaas` registers a shared BareMetalInstanceType (BMIType), labels the
-simulated BareMetalHosts to match its `host_label_selector`, and sets the shared
-BMI template's `instance_type` default. The separate CaaS HostType setup is unchanged.
+`make setup-bmaas` registers a shared BareMetalInstanceType (BMIType) and labels
+the simulated BareMetalHosts to match its `host_label_selector`. Its hardware
+spec describes the simulated offering; placement uses the selector, not the
+hardware spec. The separate CaaS HostType setup is unchanged.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `bmaas_instance_type` | `default` | BMIType name and matching `osac.openshift.io/host-type` BMH label value |
 | `bmaas_instance_type_description` | `CI bare metal instance type for BMaaS testing` | BMIType description |
 | `bmaas_instance_type_network_ports` | `eth9`, `eth10`, `eth0` | BMIType ports; non-lifecycle names must match the simulated BMH fabric NIC order |
-| `bmaas_vm_vcpu`, `bmaas_vm_memory_mb`, `bmaas_vm_disk_gb` | `4`, `8192`, `50` | Simulated BMH sizing used to populate the BMIType hardware spec |
+| `bmaas_vm_vcpu`, `bmaas_vm_memory_mb`, `bmaas_vm_disk_gb` | `4`, `8192`, `50` | Simulated BMH sizing represented in the BMIType hardware description (not used for host selection) |
 
-The template default is a shared BMIType reference; the BMaaS catalog items leave
-`instance_type` editable so tests may choose another type. `make destroy-bmaas`
-clears the template reference and deletes the BMIType. `make gather-bmaas`
-captures the type list as `bmaas/bare-metal-instance-types.json`.
+Both BMaaS CatalogItems have an editable `fields.instance_type` default pointing
+to this shared BMIType, so tests can omit the type or choose another. The shared
+BMI template is left unchanged. Setup exports `OSAC_BMI_INSTANCE_TYPE` to
+`.env.infra` for the mono-repo E2E fixture, which otherwise looks for a template
+default; `make run-tests` sources this file. `make destroy-bmaas` deletes the
+catalog items and BMIType. `make gather-bmaas` captures the type list as
+`bmaas/bare-metal-instance-types.json`.
 
 ## Testing OSAC Components
 

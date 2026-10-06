@@ -82,21 +82,6 @@
         status_code: [200, 204, 404]
       when: _auto_eip_ci_id | length > 0
 
-    # Unlink the template from the BMIType before deleting the type.
-    - name: Unlink BMI template from instance type
-      ansible.builtin.uri:
-        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=instance_type"
-        method: PATCH
-        headers:
-          Authorization: "Bearer {{ _sa_token.stdout }}"
-          Content-Type: "application/json"
-        body_format: json
-        body:
-          id: "{{ bmaas_bmi_template }}"
-          instance_type: null
-        validate_certs: false
-        status_code: [200, 404]
-
     # Delete the BMIType created by setup; leave CaaS HostTypes alone.
     - name: List bare metal instance types
       ansible.builtin.uri:
