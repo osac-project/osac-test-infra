@@ -424,21 +424,13 @@ jobs:
               podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
             fi
 
-            # Extract the osac CLI baked into the fulfillment-service image
-            # (see osac-project/osac's fulfillment-service/Containerfile)
-            # instead of building it from source separately -- guarantees
-            # byte-for-byte parity with the image actually under test, no
-            # separate build step or Go toolchain needed for this. Keyed
-            # off imageKey (not a repo-name substring), so this works
-            # whether repo is fulfillment-service's own repo or a
-            # monorepo like osac-project/osac.
+            # When the fulfillment-service image is built from source, record
+            # its tag so the shared extract-osac-cli action (below) can pull
+            # the CLI binary from it — keeps inline podman create/cp/chmod in
+            # one place (the action) instead of duplicating it here.
             # Accept both the legacy scalar and the current repository/tag schema.
             if [[ "${image_key}" == "service.images.service" || "${image_key}" == "service.images.service.repository" ]]; then
-              cli_container=$(podman create "${tag}")
-              trap 'podman rm "${cli_container}" >/dev/null 2>&1 || true' EXIT
-              podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
-              chmod +x "$RUNNER_TEMP/osac-cli-bin"
-              echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
+              echo "FULFILLMENT_SERVICE_IMAGE=${tag}" >> "$GITHUB_ENV"
             fi
 
             echo "Loading image onto node ${NODE_NAME}..."
@@ -460,6 +452,44 @@ jobs:
             } >> "$GITHUB_ENV"
             echo "::endgroup::"
           done
+
+      # ── Extract CLI from built fulfillment-service image ──
+      # Uses the shared extract-osac-cli action instead of inline podman
+      # commands — same action the VMaaS workflow uses.
+      - name: Extract OSAC CLI from built fulfillment-service image
+        if: env.FULFILLMENT_SERVICE_IMAGE != ''
+        id: extract-cli-component
+        uses: ./.github/actions/extract-osac-cli
+        with:
+          image: ${{ env.FULFILLMENT_SERVICE_IMAGE }}
+
+      - name: Export OSAC CLI path from component build
+        if: steps.extract-cli-component.outputs.path != ''
+        run: echo "OSAC_CLI_BIN=${{ steps.extract-cli-component.outputs.path }}" >> "$GITHUB_ENV"
+
+      # ── CLI fallback: extract from the published fulfillment-service image ──
+      # When no component build produced an OSAC CLI binary (e.g. the
+      # default empty-components path from osac-test-infra main triggers),
+      # extract one from the latest published fulfillment-service image so
+      # the CLI always matches what is deployed.  Without this, the
+      # test-image Containerfile falls back to the latest GitHub release,
+      # which can be days behind main and may lack flags that the HEAD test
+      # code depends on (e.g. osac-project/osac#1418 added --node-set,
+      # causing "unknown flag" failures — see osac-test-infra#470).
+      - name: Pull latest fulfillment-service image (fallback)
+        if: env.OSAC_CLI_BIN == '' && inputs.osac-cli-version == ''
+        run: podman pull ghcr.io/osac-project/fulfillment-service:latest
+
+      - name: Extract OSAC CLI from published image (fallback)
+        if: env.OSAC_CLI_BIN == '' && inputs.osac-cli-version == ''
+        id: extract-cli-fallback
+        uses: ./.github/actions/extract-osac-cli
+        with:
+          image: ghcr.io/osac-project/fulfillment-service:latest
+
+      - name: Export OSAC CLI path from fallback
+        if: steps.extract-cli-fallback.outputs.path != ''
+        run: echo "OSAC_CLI_BIN=${{ steps.extract-cli-fallback.outputs.path }}" >> "$GITHUB_ENV"
 
       - name: Build test image
         env:
