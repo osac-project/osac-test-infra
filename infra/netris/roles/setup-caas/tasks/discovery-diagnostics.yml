@@ -1,0 +1,153 @@
+---
+# Best-effort diagnostics for when the CaaS discovery agents fail to register
+# with assisted-service. Every task is failed_when: false so a missing tool or
+# unreachable VM never masks the real failure. Written to a directory the
+# archive step picks up, mirroring restore-ocp's boot-failure-diagnostics.
+
+- name: Set CaaS discovery diagnostics directory
+  ansible.builtin.set_fact:
+    _caas_discovery_diag_dir: "{{ playbook_dir }}/../logs/caas-discovery-failure"
+
+- name: Create CaaS discovery diagnostics directory
+  ansible.builtin.file:
+    path: "{{ _caas_discovery_diag_dir }}"
+    state: directory
+    mode: "0755"
+  failed_when: false
+
+- name: Record CaaS discovery target details
+  ansible.builtin.copy:
+    dest: "{{ _caas_discovery_diag_dir }}/target.txt"
+    mode: "0644"
+    content: |
+      Expected agents: {{ caas_agents | length }}
+      Registered agents (last count): {{ _agent_count.stdout | default('unknown') | trim }}
+      Agent / InfraEnv namespace: {{ caas_agent_namespace }}
+      InfraEnv: {{ caas_discovery_infraenv_name }}
+      Discovery VMs: {{ caas_discovery_vms | default([]) | join(', ') }}
+      Registration path: agents DHCP on br-mgmt, use mgmt-server DNS (192.168.16.1),
+      resolve api/*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }} -> {{ ocp_dnat_ip }},
+      and reach assisted-service through the mgmt cluster ingress at {{ ocp_dnat_ip }}:443.
+  failed_when: false
+
+# --- assisted-service side (management cluster) ---
+
+- name: Capture InfraEnv, Agent, and event state
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      {
+        echo "=== InfraEnv (all namespaces) ==="
+        oc get infraenv -A -o wide
+        echo; echo "=== InfraEnv detail ({{ caas_discovery_infraenv_name }}) ==="
+        oc get infraenv {{ caas_discovery_infraenv_name }} -n {{ caas_agent_namespace }} -o yaml
+        echo; echo "=== Agents (all namespaces) ==="
+        oc get agent -A -o wide
+        echo; echo "=== Events in {{ caas_agent_namespace }} ==="
+        oc get events -n {{ caas_agent_namespace }} --sort-by=.lastTimestamp
+      }
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_agent_state
+  changed_when: false
+  failed_when: false
+
+- name: Save InfraEnv and Agent state
+  ansible.builtin.copy:
+    dest: "{{ _caas_discovery_diag_dir }}/infraenv-agents.txt"
+    content: "{{ _caas_agent_state.stdout | default('') }}\n{{ _caas_agent_state.stderr | default('') }}\n"
+    mode: "0644"
+  failed_when: false
+
+- name: Capture assisted-service and image-service recent logs
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      {
+        echo "=== assisted-service (last 300 lines) ==="
+        oc logs -n multicluster-engine deploy/assisted-service -c assisted-service --tail=300
+        echo; echo "=== assisted-image-service (last 100 lines) ==="
+        oc logs -n multicluster-engine statefulset/assisted-image-service --tail=100
+      }
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _assisted_logs
+  changed_when: false
+  failed_when: false
+
+- name: Save assisted-service logs
+  ansible.builtin.copy:
+    dest: "{{ _caas_discovery_diag_dir }}/assisted-service.log"
+    content: "{{ _assisted_logs.stdout | default('') }}\n{{ _assisted_logs.stderr | default('') }}\n"
+    mode: "0644"
+  failed_when: false
+
+# --- per discovery VM ---
+
+- name: Capture discovery VM libvirt and guest network state
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      VM="{{ item }}"
+      {
+        echo "=== domstate ==="; virsh domstate "$VM"
+        echo; echo "=== domiflist (NICs, source network, MAC) ==="; virsh domiflist "$VM"
+        echo; echo "=== guest interfaces (qemu-agent, best-effort) ==="
+        timeout 5s virsh qemu-agent-command "$VM" '{"execute":"guest-network-get-interfaces"}' 2>&1
+        echo; echo "=== guest routes (qemu-agent, best-effort) ==="
+        timeout 5s virsh qemu-agent-command "$VM" '{"execute":"guest-network-get-route"}' 2>&1
+      } > "{{ _caas_discovery_diag_dir }}/vm-{{ item }}-network.txt" 2>&1
+      exit 0
+    executable: /bin/bash
+  loop: "{{ caas_discovery_vms | default([]) }}"
+  changed_when: false
+  failed_when: false
+
+- name: Capture discovery VM serial console
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      VM="{{ item }}"
+      {
+        if command -v script >/dev/null 2>&1; then
+          timeout 15s script -q -c "timeout --signal=INT 12s virsh console --force --safe '$VM'" /dev/null
+          echo "Console capture exit code: $?"
+        else
+          echo "Cannot capture serial console: util-linux script command is unavailable."
+        fi
+      } > "{{ _caas_discovery_diag_dir }}/vm-{{ item }}-console.txt" 2>&1
+      exit 0
+    executable: /bin/bash
+  loop: "{{ caas_discovery_vms | default([]) }}"
+  changed_when: false
+  failed_when: false
+
+# --- mgmt-server: DHCP leases + agent-path reachability ---
+# The discovery agents depend on mgmt-server for DHCP and DNS, and must reach
+# the mgmt cluster ingress (ocp_dnat_ip:443) to register. mgmt-server is the
+# lab's management VM at 192.168.122.10 (same address the connectivity role uses).
+
+- name: Capture mgmt-server DHCP leases and agent-path reachability
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 root@192.168.122.10"
+      ASSISTED="assisted-service-multicluster-engine.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+      {
+        echo "=== DHCP leases (mgmt-server) ==="
+        $SSH "cat /var/lib/dhcp/dhcpd.leases 2>/dev/null || cat /var/lib/dhcpd/dhcpd.leases 2>/dev/null || echo 'no dhcpd.leases found'"
+        echo; echo "=== DNS resolution of assisted endpoint from mgmt-server ==="
+        $SSH "getent hosts $ASSISTED || nslookup $ASSISTED 2>&1"
+        echo; echo "=== Reachability mgmt-server -> {{ ocp_dnat_ip }}:443 ==="
+        $SSH "timeout 5 bash -c '</dev/tcp/{{ ocp_dnat_ip }}/443' && echo OPEN || echo CLOSED/UNREACHABLE"
+      } > "{{ _caas_discovery_diag_dir }}/mgmt-server-dhcp-and-reachability.txt" 2>&1
+      exit 0
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+
+- name: Report CaaS discovery diagnostics location
+  ansible.builtin.debug:
+    msg: "CaaS discovery diagnostics saved to {{ _caas_discovery_diag_dir }}"

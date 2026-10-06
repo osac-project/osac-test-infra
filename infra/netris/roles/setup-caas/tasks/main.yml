@@ -1,15 +1,30 @@
 ---
-# Step 1: Wait for all agents to register from the discovery ISO boot
-- name: Wait for expected number of agents
-  ansible.builtin.shell:
-    cmd: oc get agent -n {{ caas_agent_namespace }} --no-headers 2>/dev/null | wc -l
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _agent_count
-  until: _agent_count.stdout | int >= caas_agents | length
-  retries: 120
-  delay: 15
-  changed_when: false
+# Step 1: Wait for all agents to register from the discovery ISO boot.
+# Budget ~22.5 min (90 x 15s) so the rescue diagnostics still run within the
+# 30-minute step timeout if the agents never register.
+- name: Wait for discovery agents to register
+  block:
+    - name: Wait for expected number of agents
+      ansible.builtin.shell:
+        cmd: oc get agent -n {{ caas_agent_namespace }} --no-headers 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _agent_count
+      until: _agent_count.stdout | int >= caas_agents | length
+      retries: 90
+      delay: 15
+      changed_when: false
+  rescue:
+    - name: Capture CaaS discovery diagnostics
+      ansible.builtin.include_tasks: discovery-diagnostics.yml
+
+    - name: Fail because discovery agents did not register
+      ansible.builtin.fail:
+        msg: >-
+          Only {{ _agent_count.stdout | default('0') | trim }} of
+          {{ caas_agents | length }} discovery agents registered with
+          assisted-service before the timeout. Diagnostics saved to
+          {{ _caas_discovery_diag_dir }}.
 
 - name: Get agent names
   ansible.builtin.shell:
