@@ -106,6 +106,9 @@ jobs:
       installer-ref: ${{ inputs.installer-ref || 'main' }}
       installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}
       image-overrides: ${{ inputs.image-overrides || '{}' }}
+      components: >-
+        ${{ format('[{{"repo":"osac-project/osac","ref":"{0}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}}]',
+        inputs.installer-ref || 'main') }}
       osac-cli-version: ${{ inputs.osac-cli-version || '' }}
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
