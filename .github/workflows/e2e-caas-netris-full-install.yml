@@ -621,7 +621,10 @@ jobs:
 
       - name: Setup CaaS hosts and catalog
         shell: bash
-        timeout-minutes: 30
+        # 45m (was 30m): discover-caas now captures each VM's early-boot console,
+        # and the agent-wait rescue runs discovery diagnostics; both need headroom
+        # under the step timeout so the diagnostics are not truncated.
+        timeout-minutes: 45
         env:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make setup-suite INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
