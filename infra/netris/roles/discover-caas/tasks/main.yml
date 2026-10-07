@@ -105,6 +105,28 @@
   register: _mgmt_forward_result
   changed_when: "'true' in _mgmt_forward_result.stdout"
 
+# The cloudsim dhcpd template deliberately omits 'option routers' for the
+# _servers_mgmt subnet, so discovery agents get a management address but no
+# default route and cannot reach the OCP ingress. Real OCP nodes get their
+# default via the fabric NIC and ignore the DHCP gateway (nmstate
+# auto-gateway/auto-routes: false), but discovery agents only have the
+# management NIC. Add a default route via mgmt-server (which forwards to the
+# ingress) for the servers subnet so the agents can reach assisted-service.
+- name: Give discovery agents a default route via mgmt-server
+  ansible.builtin.shell:
+    cmd: |
+      ssh -o StrictHostKeyChecking=no root@192.168.16.1 "
+        if grep -q 'option routers 192.168.16.1;' /etc/dhcp/dhcpd.conf; then
+          echo false
+        else
+          sed -i '/subnet 192.168.16.0/a option routers 192.168.16.1;' /etc/dhcp/dhcpd.conf
+          systemctl restart isc-dhcp-server 2>/dev/null || true
+          echo true
+        fi
+      "
+  register: _mgmt_routers_result
+  changed_when: "'true' in _mgmt_routers_result.stdout"
+
 - name: Read SSH public key
   ansible.builtin.slurp:
     src: "{{ ssh_public_key_path }}"
