@@ -134,18 +134,14 @@ caas_discovery_infraenv_namespace: "hardware-inventory"
 # Supported keys per VM:
 #   detach_networks: [<libvirt network>, ...]  # detach these NICs before boot
 #   boot_order: "<dev,dev>"                     # virt-xml --boot (default hd,cdrom)
-# Default is a no-op for every VM. Set via EXTRA_VARS or edit here.
+# Default is a no-op for every VM. Set via EXTRA_VARS or edit here to A/B/C-test
+# several hypotheses across the discovery VMs in a single run.
 #
-# TEMPORARY EXPERIMENT (revert once answered): two different hypotheses in one
-# run. h01 is the control (bmc-net attached, boot hd,cdrom). h02 tests the
-# network hypothesis (boots without bmc-net). h03 tests the boot-stall
-# hypothesis (boots cdrom-first, in case the empty disk stalls BIOS before it
-# falls through to the ISO). Whichever of h02/h03 registers points at the cause.
-caas_discovery_vm_overrides:
-  hgx-pod00-su0-h02:
-    detach_networks: ["bmc-net"]
-  hgx-pod00-su0-h03:
-    boot_order: "cdrom,hd"
+# (A prior experiment set h02=detach bmc-net and h03=boot cdrom-first; both
+# failed identically with "curl: (7) Couldn't connect to server" fetching the
+# rootfs, ruling out bmc-net and boot order and pointing at mgmt-server not
+# forwarding the agents to the OCP ingress -- now fixed in discover-caas.)
+caas_discovery_vm_overrides: {}
 
 # CaaS Setup (host type, agent annotations, cluster creation)
 caas_agent_namespace: "{{ caas_discovery_infraenv_namespace }}"
