@@ -375,6 +375,31 @@
     msg: "{{ _discovery_experiment_detach.results | map(attribute='stdout') | select('string') | list }}"
   when: caas_discovery_vm_overrides | default({}) | length > 0
 
+# bmc-net is not used during assisted discovery (agents register over the
+# management network). Its libvirt network is Mode: none (isolated) but
+# DHCP-enabled, so it hands out a default route (10.99.0.1) that competes with
+# and beats the management NIC's. The agents then route to the OCP ingress via
+# bmc-net -- which goes nowhere -- so the rootfs fetch and registration fail
+# with "curl: (7) Couldn't connect to server" (confirmed: mgmt-server sees no
+# conntrack to the ingress). Detach bmc-net for discovery so the management NIC
+# is the sole default route, which mgmt-server forwards to the ingress.
+- name: Detach bmc-net from discovery VMs so it does not hijack the default route
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      VM="{{ item }}"
+      MAC=$(virsh domiflist "$VM" | awk -v n="{{ bmc_net_name }}" '$3 == n {print $5; exit}')
+      if [ -n "$MAC" ]; then
+        virsh detach-interface "$VM" network --mac "$MAC" --config && echo "detached {{ bmc_net_name }} ($MAC) from $VM"
+      else
+        echo "no {{ bmc_net_name }} NIC on $VM; nothing to detach"
+      fi
+    executable: /bin/bash
+  loop: "{{ caas_discovery_vms }}"
+  when: bare_metal_services | default(false) | bool
+  register: _detach_bmc_net
+  changed_when: "'detached' in _detach_bmc_net.stdout | default('')"
+
 - name: Start discovery VMs
   ansible.builtin.command:
     cmd: virsh start {{ item }}
