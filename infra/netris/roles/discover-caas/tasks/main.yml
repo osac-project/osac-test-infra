@@ -305,9 +305,9 @@
     label: "{{ item.item }}"
   changed_when: true
 
-- name: Set boot order to disk then cdrom
+- name: Set boot order (per-VM override, default disk then cdrom)
   ansible.builtin.command:
-    cmd: virt-xml {{ item }} --edit --boot hd,cdrom
+    cmd: virt-xml {{ item }} --edit --boot {{ caas_discovery_vm_overrides[item].boot_order | default('hd,cdrom') }}
   loop: "{{ caas_discovery_vms }}"
   register: _boot_order
   changed_when: "'--boot' not in _boot_order.stderr | default('')"
@@ -353,4 +353,5 @@
     msg: >-
       CaaS discovery: {{ caas_discovery_vms | length }} VMs booted with discovery ISO
       ({{ caas_discovery_vcpu }} vCPU, {{ caas_discovery_memory_mb }}MB RAM,
-      {{ caas_discovery_disk_gb }}GB disk, boot order: disk,cdrom)
+      {{ caas_discovery_disk_gb }}GB disk; default boot order disk,cdrom,
+      per-VM overrides: {{ caas_discovery_vm_overrides | default({}) }})
