@@ -25,6 +25,7 @@
       Agent / InfraEnv namespace: {{ caas_agent_namespace }}
       InfraEnv: {{ caas_discovery_infraenv_name }}
       Discovery VMs: {{ caas_discovery_vms | default([]) | join(', ') }}
+      Per-VM experiment overrides: {{ caas_discovery_vm_overrides | default({}) }}
       Registration path: agents DHCP on br-mgmt, use mgmt-server DNS (192.168.16.1),
       resolve api/*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }} -> {{ ocp_dnat_ip }},
       and reach assisted-service through the mgmt cluster ingress at {{ ocp_dnat_ip }}:443.

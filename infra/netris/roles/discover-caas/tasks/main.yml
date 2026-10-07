@@ -312,6 +312,34 @@
   register: _boot_order
   changed_when: "'--boot' not in _boot_order.stderr | default('')"
 
+# Per-VM discovery experiments (caas_discovery_vm_overrides). No-op unless set.
+# Detach requested NICs before boot so each VM can run a different network
+# config in the same run; diagnostics then show which config registers.
+- name: Apply per-VM discovery experiment — detach networks
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      VM="{{ item.0.key }}"
+      NET="{{ item.1 }}"
+      MAC=$(virsh domiflist "$VM" | awk -v n="$NET" '$3 == n {print $5; exit}')
+      if [ -n "$MAC" ]; then
+        virsh detach-interface "$VM" network --mac "$MAC" --config
+        echo "experiment: detached ${NET} (${MAC}) from ${VM}"
+      else
+        echo "experiment: no ${NET} NIC on ${VM}; nothing to detach"
+      fi
+    executable: /bin/bash
+  loop: "{{ caas_discovery_vm_overrides | default({}) | dict2items | subelements('value.detach_networks', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.key }} detach {{ item.1 }}"
+  register: _discovery_experiment_detach
+  changed_when: "'detached' in _discovery_experiment_detach.stdout | default('')"
+
+- name: Report applied discovery experiments
+  ansible.builtin.debug:
+    msg: "{{ _discovery_experiment_detach.results | map(attribute='stdout') | select('string') | list }}"
+  when: caas_discovery_vm_overrides | default({}) | length > 0
+
 - name: Start discovery VMs
   ansible.builtin.command:
     cmd: virsh start {{ item }}

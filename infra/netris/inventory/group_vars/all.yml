@@ -128,6 +128,23 @@ caas_discovery_disk_gb: 100
 caas_discovery_infraenv_name: "infraenv"
 caas_discovery_infraenv_namespace: "hardware-inventory"
 
+# Per-VM discovery experiments — apply a different config to each discovery VM
+# in a single run, then read the per-VM diagnostics to see which config lets the
+# agent register. Lets one ~1.5h run A/B/C-test several hypotheses at once.
+# Supported keys per VM:
+#   detach_networks: [<libvirt network>, ...]  # detach these NICs before boot
+# Default is a no-op for every VM. Set via EXTRA_VARS or edit here.
+#
+# TEMPORARY EXPERIMENT (revert once answered): test whether the bmc-net NIC
+# breaks agent registration. h01 is the control (keeps bmc-net); h02 and h03
+# boot without bmc-net. If h02/h03 register and h01 does not, bmc-net is the
+# culprit and detaching it (or stripping its default route) is the fix.
+caas_discovery_vm_overrides:
+  hgx-pod00-su0-h02:
+    detach_networks: ["bmc-net"]
+  hgx-pod00-su0-h03:
+    detach_networks: ["bmc-net"]
+
 # CaaS Setup (host type, agent annotations, cluster creation)
 caas_agent_namespace: "{{ caas_discovery_infraenv_namespace }}"
 caas_server_cluster_template_name: "ns-only"
