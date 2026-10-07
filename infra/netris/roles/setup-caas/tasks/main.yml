@@ -422,15 +422,19 @@
       template:
         id: "{{ caas_cluster_template }}"
       published: true
-      field_definitions:
-        - path: "release_image"
-          display_name: "Release Image"
-          editable: true
-        - path: "pull_secret"
-          display_name: "Pull Secret"
-          editable: true
-        - path: "ssh_public_key"
-          display_name: "SSH Public Key"
-          editable: true
+      # Recent CaaS change: ClusterCatalogItem replaced the flat field_definitions
+      # list with typed per-field policies under `fields` (see osac
+      # fulfillment-service examples/catalog-items/ocp-ci-cluster.yaml). Sending
+      # field_definitions now 400s ("unknown field"). create-caas creates clusters
+      # via --template + -f, not through these policies, so a minimal fields block
+      # (mirroring the upstream CI example) is enough.
+      fields:
+        network:
+          pod_cidr:
+            editable:
+              default_value: "10.128.0.0/14"
+          service_cidr:
+            editable:
+              default_value: "172.30.0.0/16"
     validate_certs: false
     status_code: [200, 201, 409]
