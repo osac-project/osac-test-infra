@@ -65,7 +65,7 @@ runs:
           -H "Accept: application/vnd.github+json" \
           "https://api.github.com/orgs/osac-project/members/${PR_AUTHOR_ENCODED}")
         if [[ "${HTTP_CODE}" == "204" ]]; then
-          echo "Fork PR authorized: '${PR_AUTHOR}' is an osac-project org member."
+          echo "Fork PR authorized: author is an osac-project org member."
           echo "::endgroup::"
           exit 0
         fi
@@ -88,14 +88,14 @@ runs:
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/orgs/osac-project/members/${OWNER_ENCODED}")
             if [[ "${HTTP_CODE}" == "204" ]]; then
-              echo "Fork PR authorized: fork owner '${FORK_OWNER}' is an osac-project org member."
+              echo "Fork PR authorized: fork owner is an osac-project org member."
               echo "::endgroup::"
               exit 0
             fi
           fi
         fi
 
-        echo "::error::Fork PR blocked: '${PR_AUTHOR}' is not an osac-project org member."
+        echo "::error::Fork PR blocked: authorization could not be established."
         echo "::error::An org member can approve this PR for testing by commenting /ok-to-test"
         echo "::endgroup::"
         exit 1

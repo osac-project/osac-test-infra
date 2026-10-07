@@ -14,6 +14,14 @@ on:
     - cron: "0 */12 * * *"
   workflow_dispatch:
     inputs:
+      pr-number:
+        description: "PR number for validated recovery"
+        required: false
+        default: ""
+      pr-sha:
+        description: "Exact PR head SHA for validated recovery"
+        required: false
+        default: ""
       test-suite:
         description: "Test suite (vmaas, caas, or empty for all)"
         required: false
@@ -48,13 +56,16 @@ on:
         default: ""
 
 concurrency:
-  group: e2e-vmaas-full-install-${{ github.event.pull_request.number || github.run_id }}
+  group: e2e-vmaas-full-install-${{ github.event.pull_request.number || inputs.pr-number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e-readiness:
     name: e2e-readiness (vmaas)
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request'
+      || (github.event_name == 'workflow_dispatch'
+          && (inputs.pr-number != '' || inputs.pr-sha != ''))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -63,7 +74,34 @@ jobs:
     outputs:
       ready: ${{ steps.check.outputs.ready }}
       reason: ${{ steps.check.outputs.reason }}
+      fork-pr-author-association: ${{ steps.recovery-pr.outputs.fork-pr-author-association }}
+      fork-pr-author: ${{ steps.recovery-pr.outputs.fork-pr-author }}
     steps:
+      - name: Resolve and validate recovery PR
+        if: github.event_name == 'workflow_dispatch' && (inputs.pr-number != '' || inputs.pr-sha != '')
+        id: recovery-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.pr-sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ || ! "${EXPECTED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Recovery requires a numeric PR number and a 40-character PR head SHA."
+            exit 1
+          fi
+          pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+          if [[ "$(jq -r '.state' <<<"${pr_json}")" != "open" \
+              || "$(jq -r '.base.ref // empty' <<<"${pr_json}")" != "main" \
+              || "$(jq -r '.head.sha // empty' <<<"${pr_json}")" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "::error::PR #${PR_NUMBER} is closed, does not target main, or has moved."
+            exit 1
+          fi
+          if [[ "$(jq -r '.head.repo.fork // false' <<<"${pr_json}")" == "true" ]]; then
+            echo "fork-pr-author-association=$(jq -r '.author_association // empty' <<<"${pr_json}")" >> "${GITHUB_OUTPUT}"
+            echo "fork-pr-author=$(jq -r '.user.login // empty' <<<"${pr_json}")" >> "${GITHUB_OUTPUT}"
+          fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           persist-credentials: false
@@ -73,16 +111,18 @@ jobs:
         id: check
         uses: ./.github/actions/check-e2e-readiness
         with:
-          pr-number: ${{ github.event.pull_request.number }}
-          head-sha: ${{ github.event.pull_request.head.sha }}
+          pr-number: ${{ inputs.pr-number || github.event.pull_request.number }}
+          head-sha: ${{ inputs.pr-sha || github.event.pull_request.head.sha }}
 
   e2e-vmaas-full-install:
     needs: [e2e-readiness]
     if: >-
       always()
       && (github.event_name != 'pull_request'
-          || needs.e2e-readiness.result == 'skipped'
-          || needs.e2e-readiness.outputs.ready == 'true')
+          && !(github.event_name == 'workflow_dispatch'
+               && (inputs.pr-number != '' || inputs.pr-sha != ''))
+          || (needs.e2e-readiness.result == 'success'
+              && needs.e2e-readiness.outputs.ready == 'true'))
     permissions:
       contents: read
       # Required by e2e-vmaas-full-install.yml's "e2e" job -- only
@@ -109,9 +149,10 @@ jobs:
       osac-cli-version: ${{ inputs.osac-cli-version || '' }}
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
       # Pass author_association and login for fork PR authorization (empty for non-fork PRs)
-      fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
-      fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
-      pr-number: ${{ github.event.pull_request.number }}
+      test-infra-ref: ${{ inputs.pr-sha || github.event.pull_request.head.sha || '' }}
+      fork-pr-author-association: ${{ needs.e2e-readiness.outputs.fork-pr-author-association || (github.event.pull_request.head.repo.fork && github.event.pull_request.author_association) || '' }}
+      fork-pr-author: ${{ needs.e2e-readiness.outputs.fork-pr-author || (github.event.pull_request.head.repo.fork && github.event.pull_request.user.login) || '' }}
+      pr-number: ${{ inputs.pr-number || github.event.pull_request.number || '' }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
@@ -120,6 +161,8 @@ jobs:
     if: >-
       always()
       && (github.event_name != 'pull_request'
+          && !(github.event_name == 'workflow_dispatch'
+               && (inputs.pr-number != '' || inputs.pr-sha != ''))
           || needs.e2e-readiness.result != 'success'
           || needs.e2e-readiness.outputs.ready == 'true')
     needs: [e2e-readiness, e2e-vmaas-full-install]
@@ -216,3 +259,34 @@ jobs:
             echo "Could not post in_progress check ${CHECK_NAME} (fork PRs may lack checks:write)."
             echo "Required check stays unreported until unlock rerun."
           fi
+
+  e2e-vmaas-report-dispatch-gate:
+    if: >-
+      always()
+      && github.event_name == 'workflow_dispatch'
+      && inputs.pr-number != ''
+      && needs.e2e-readiness.result == 'success'
+      && needs.e2e-readiness.outputs.ready == 'true'
+    needs: [e2e-readiness, e2e-vmaas-full-install]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/report-e2e-dispatch-gate.sh
+      - name: Report completed recovery gate on the PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          HEAD_SHA: ${{ inputs.pr-sha }}
+          GATE_NAME: e2e-vmaas-gate
+          GATE_RESULT: ${{ needs.e2e-vmaas-full-install.result }}
+          WORKFLOW_FILE: e2e-vmaas-full-install-caller.yml
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/report-e2e-dispatch-gate.sh

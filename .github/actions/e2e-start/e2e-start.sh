@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OSAC-3370: replay pull_request e2e runs after an unlock (label or CodeRabbit).
+# OSAC-3370: start full-install e2e after an unlock (label or CodeRabbit).
 # Called from .github/actions/e2e-start (and e2e-on-label.yml).
 #
 # Probe skip-vs-rerun before replaying full-install runs. A second unlock
@@ -20,6 +20,7 @@
 #   EVENT_HEAD_SHA     optional; skip if PR head moved
 #   TRIGGER_LABEL      default e2e-ready
 #   WORKFLOWS          comma-separated workflow filenames
+#   DISPATCH_REF       trusted branch holding caller workflows (default: main)
 #   SKIP_LABEL_CHECK   true skips label/actor checks (CodeRabbit start);
 #                      still revalidates CR APPROVED on HEAD and no human CR
 
@@ -27,6 +28,7 @@ set -euo pipefail
 TRIGGER_LABEL="${TRIGGER_LABEL:-e2e-ready}"
 SKIP_LABEL_CHECK="${SKIP_LABEL_CHECK:-false}"
 WORKFLOWS="${WORKFLOWS:-e2e-vmaas-full-install-caller.yml,e2e-bmaas-full-install-caller.yml,e2e-caas-full-install-caller.yml}"
+DISPATCH_REF="${DISPATCH_REF:-main}"
 
 if [[ "${SKIP_LABEL_CHECK}" != "true" ]]; then
   case "${TRIGGER_LABEL}" in
@@ -225,15 +227,10 @@ find_pr_run() {
 # some/all of the e2e-*-full-install workflows, and closing+reopening the
 # PR didn't produce one either.
 #
-# This is intentionally diagnostic-only, not a real fallback: `gh run
-# rerun` replays a run's ORIGINAL triggering event verbatim, including its
-# own frozen github.event.pull_request.head.sha, so rerunning a run found
-# here would re-validate and post its e2e-*-gate check against that OLDER
-# commit -- never against the PR's actual current HEAD_SHA (confirmed by
-# reading e2e-bmaas-full-install-caller.yml's gate job, which sources its
-# own HEAD_SHA the same way). The caller uses this only to name what's
-# available in its error message; it must never be reused as if it were an
-# exact-HEAD match.
+# This is diagnostic-only, not a rerun candidate: `gh run rerun` replays a
+# run's original event and frozen SHA. When no exact-head run exists, the
+# caller starts a fresh workflow_dispatch run with the validated PR number
+# and SHA instead of replaying this older run.
 #
 # Matched only by direct PR-number evidence in .pull_requests[] -- unlike
 # _find_pr_run_at's exact-sha lookup, this has no head_sha to anchor a
@@ -384,7 +381,104 @@ wait_until_rerun_or_skip() {
   return 1
 }
 
-# Replay workflow $1 from the matching PR run, or skip/count error.
+# Dispatch a fresh workflow on the trusted default branch when a native PR
+# workflow never materialized for this SHA. The OSAC caller validates the
+# live PR head and cost unlock again before testing the supplied revision.
+start_missing_pr_run() {
+  local wf="$1"
+  local cur_sha lbl_rc e2e_rc av_rc candidates run_id rc
+
+  if ! pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}"); then
+    echo "Failed to revalidate PR #${PR_NUMBER} before dispatching ${wf}."
+    ERRORS=$((ERRORS + 1))
+    return
+  fi
+  if ! pr_is_open; then
+    echo "PR #${PR_NUMBER} is no longer open; skipping recovery dispatch for ${wf}."
+    STALE=$((STALE + 1))
+    return
+  fi
+  cur_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+  if [[ "${cur_sha}" != "${HEAD_SHA}" ]]; then
+    echo "PR head moved before dispatching ${wf} (${HEAD_SHA:0:7} → ${cur_sha:0:7}); skipping."
+    STALE=$((STALE + 1))
+    return
+  fi
+
+  if [[ "${SKIP_LABEL_CHECK}" == "true" ]]; then
+    av_rc=0
+    approval_still_valid || av_rc=$?
+    if [[ ${av_rc} -eq 2 ]]; then
+      echo "Failed to fetch reviews for PR #${PR_NUMBER} before dispatching ${wf}."
+      ERRORS=$((ERRORS + 1))
+      return
+    fi
+    if [[ ${av_rc} -ne 0 ]]; then
+      echo "CodeRabbit approval no longer valid before dispatching ${wf}; skipping."
+      STALE=$((STALE + 1))
+      return
+    fi
+  else
+    pr_has_trigger_label
+    lbl_rc=$?
+    if [[ ${lbl_rc} -eq 2 ]]; then
+      echo "Failed to fetch labels for PR #${PR_NUMBER} before dispatching ${wf}."
+      ERRORS=$((ERRORS + 1))
+      return
+    fi
+    if [[ ${lbl_rc} -ne 0 ]]; then
+      echo "${TRIGGER_LABEL} label removed before dispatching ${wf}; skipping."
+      STALE=$((STALE + 1))
+      return
+    fi
+    if [[ "${TRIGGER_LABEL}" == "e2e-ready" ]]; then
+      e2e_rc=0
+      e2e_ready_applied_by_bot || e2e_rc=$?
+      if [[ ${e2e_rc} -eq 2 ]]; then
+        echo "Failed to fetch issue events for PR #${PR_NUMBER} before dispatching ${wf}."
+        ERRORS=$((ERRORS + 1))
+        return
+      fi
+      if [[ ${e2e_rc} -ne 0 ]]; then
+        echo "e2e-ready no longer trusted before dispatching ${wf}; skipping."
+        STALE=$((STALE + 1))
+        return
+      fi
+    fi
+  fi
+
+  # Close the race where GitHub creates the native run just after the wait
+  # above. Its PR-context workflow will report the canonical gate itself.
+  candidates=$(find_pr_run "${wf}")
+  if [[ -n "${candidates}" && "${candidates}" != "null" ]]; then
+    run_id=$(jq -r '.id' <<<"${candidates}")
+    echo "Native pull_request run appeared for ${wf}; checking whether it already picked up this unlock."
+    wait_until_rerun_or_skip "${run_id}"
+    rc=$?
+    if [[ ${rc} -eq 2 ]]; then
+      SKIPPED=$((SKIPPED + 1))
+    elif [[ ${rc} -eq 3 ]]; then
+      PENDING=$((PENDING + 1))
+    elif [[ ${rc} -ne 0 ]]; then
+      TIMEOUTS=$((TIMEOUTS + 1))
+    else
+      RERUN_WF+=("${wf}")
+      RERUN_ID+=("${run_id}")
+    fi
+    return
+  fi
+
+  if gh workflow run "${wf}" --repo "${REPO}" --ref "${DISPATCH_REF}" \
+      --field "pr-number=${PR_NUMBER}" --field "pr-sha=${HEAD_SHA}"; then
+    echo "Dispatched ${wf} on ${DISPATCH_REF} for PR #${PR_NUMBER} at ${HEAD_SHA:0:7}."
+    STARTED=$((STARTED + 1))
+  else
+    echo "Failed to dispatch ${wf} for PR #${PR_NUMBER} at ${HEAD_SHA:0:7}."
+    ERRORS=$((ERRORS + 1))
+  fi
+}
+
+# Replay workflow $1 from the matching PR run, or start a validated dispatch.
 start_via_pr_run() {
   local wf="$1"
   local candidates run_id rc cur_sha lbl_rc e2e_rc av_rc
@@ -466,7 +560,7 @@ start_via_pr_run() {
     else
       echo "No pull_request run for ${wf} at ${HEAD_SHA:0:7} on PR #${PR_NUMBER}."
     fi
-    ERRORS=$((ERRORS + 1))
+    start_missing_pr_run "${wf}"
     return
   fi
 
@@ -564,7 +658,7 @@ rerun_queued_pr_run() {
   fi
 }
 
-echo "${TRIGGER_LABEL} label on PR #${PR_NUMBER} (${HEAD_SHA:0:7}) — starting e2e via pull_request rerun."
+echo "${TRIGGER_LABEL} label on PR #${PR_NUMBER} (${HEAD_SHA:0:7}) — starting full-install e2e."
 if [[ "${SKIP_LABEL_CHECK}" == "true" ]]; then
   echo "skip_label_check=true (CodeRabbit approval start)."
 fi
@@ -581,7 +675,7 @@ for wf in "${E2E_WORKFLOWS[@]}"; do
 done
 
 if [[ ${#RERUN_WF[@]} -eq 0 ]]; then
-  echo "No full-install replay needed; skipping e2e-*-gate invalidation."
+  echo "No native full-install runs to rerun; recovery dispatches report their own gates."
 else
   dismiss_unlock_orphan_gate_checks || true
   echo "Skipping e2e-*-gate Checks API posts; native full-install jobs report required gates (pending until they start)."
@@ -602,7 +696,7 @@ if [[ "${SKIP_LABEL_CHECK}" == "true" ]]; then
     echo "### E2E on CodeRabbit approval"
     echo ""
     if [[ ${STARTED} -gt 0 ]]; then
-      echo "CodeRabbit APPROVED — starting expensive e2e (PR run replay)."
+      echo "CodeRabbit APPROVED — starting expensive full-install e2e."
     else
       echo "CodeRabbit APPROVED — not starting a new full-install run."
     fi
@@ -612,7 +706,7 @@ else
     echo "### E2E on \`${TRIGGER_LABEL}\`"
     echo ""
     if [[ ${STARTED} -gt 0 ]]; then
-      echo "Label \`${TRIGGER_LABEL}\` applied — starting expensive e2e (PR run replay)."
+      echo "Label \`${TRIGGER_LABEL}\` applied — starting expensive full-install e2e."
     else
       echo "Label \`${TRIGGER_LABEL}\` applied — not starting a new full-install run."
     fi
@@ -640,7 +734,7 @@ fi
   if [[ ${ERRORS} -gt 0 ]]; then
     echo "- Errors: ${ERRORS}"
     echo ""
-    echo "Needs a prior \`pull_request\` e2e run at this head for PR #${PR_NUMBER}."
+    echo "One or more suites could not be started; see this run's logs for the failed dispatch or API request."
   fi
 } >> /tmp/e2e-on-label.md
 
