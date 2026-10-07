@@ -9,5 +9,13 @@ spec:
   pullSecretRef:
     name: pull-secret
   sshAuthorizedKey: {{ _ssh_pub_key.content | b64decode | trim }}
+  # Send the discovery agent's kernel/console output to ttyS0 so the serial
+  # console captured by discovery-diagnostics.yml shows the agent boot, the
+  # NICs it brings up, its routes, and any registration error. The minimal ISO
+  # otherwise logs only to the graphical console, leaving the serial capture
+  # blank and the boot-vs-network question unanswerable.
+  kernelArguments:
+    - operation: append
+      value: console=ttyS0,115200n8
   nmStateConfigLabelSelector:
     matchLabels: {}
