@@ -92,6 +92,14 @@
           iptables -t nat -A POSTROUTING -s 192.168.16.0/20 ! -d 192.168.16.0/20 -j MASQUERADE
           changed=true
         fi
+        # ip_forward + NAT are not enough if the FORWARD filter policy is DROP;
+        # accept forwarded traffic to/from the servers network explicitly.
+        for rule in '-s 192.168.16.0/20' '-d 192.168.16.0/20'; do
+          if ! iptables -C FORWARD \$rule -j ACCEPT 2>/dev/null; then
+            iptables -I FORWARD 1 \$rule -j ACCEPT
+            changed=true
+          fi
+        done
         echo \$changed
       "
   register: _mgmt_forward_result
@@ -382,3 +390,32 @@
       ({{ caas_discovery_vcpu }} vCPU, {{ caas_discovery_memory_mb }}MB RAM,
       {{ caas_discovery_disk_gb }}GB disk; default boot order disk,cdrom,
       per-VM overrides: {{ caas_discovery_vm_overrides | default({}) }})
+
+# Capture each VM's serial console for the first ~75s of boot. The agent gets
+# stuck fetching the rootfs in the initramfs stage (no ssh / guest-agent), so
+# this early window is the only place the dracut network setup -- which NICs
+# come up, DHCP results, the default route, DNS -- is visible. Written to a
+# directory the archive step uploads. Best-effort; never fails the play.
+- name: Create discovery early-boot log directory
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/../logs/caas-discovery-boot"
+    state: directory
+    mode: "0755"
+  failed_when: false
+
+- name: Capture discovery VM early-boot serial console
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      VM="{{ item }}"
+      OUT="{{ playbook_dir }}/../logs/caas-discovery-boot/vm-${VM}-earlyboot.txt"
+      if command -v script >/dev/null 2>&1; then
+        timeout 80s script -q -c "timeout --signal=INT 75s virsh console --force --safe '$VM'" /dev/null > "$OUT" 2>&1
+      else
+        echo "util-linux script unavailable; cannot capture serial console" > "$OUT"
+      fi
+      exit 0
+    executable: /bin/bash
+  loop: "{{ caas_discovery_vms }}"
+  changed_when: false
+  failed_when: false

@@ -99,10 +99,31 @@
         timeout 5s virsh qemu-agent-command "$VM" '{"execute":"guest-network-get-interfaces"}' 2>&1
         echo; echo "=== guest routes (qemu-agent, best-effort) ==="
         timeout 5s virsh qemu-agent-command "$VM" '{"execute":"guest-network-get-route"}' 2>&1
+        echo; echo "=== host-visible addresses (domifaddr --source arp) ==="
+        virsh domifaddr "$VM" --source arp 2>&1
+        echo; echo "=== host-visible addresses (domifaddr --source lease) ==="
+        virsh domifaddr "$VM" --source lease 2>&1
       } > "{{ _caas_discovery_diag_dir }}/vm-{{ item }}-network.txt" 2>&1
       exit 0
     executable: /bin/bash
   loop: "{{ caas_discovery_vms | default([]) }}"
+  changed_when: false
+  failed_when: false
+
+- name: Capture mgmt-server forwarding and NAT state
+  ansible.builtin.shell:
+    cmd: |
+      set +e
+      SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 root@192.168.16.1"
+      {
+        echo "=== ip_forward ==="; $SSH "sysctl net.ipv4.ip_forward"
+        echo; echo "=== routes ==="; $SSH "ip route"
+        echo; echo "=== FORWARD filter chain ==="; $SSH "iptables -S FORWARD"
+        echo; echo "=== nat table ==="; $SSH "iptables -t nat -S"
+        echo; echo "=== conntrack to {{ ocp_dnat_ip }} ==="; $SSH "conntrack -L 2>/dev/null | grep {{ ocp_dnat_ip }} || echo 'no conntrack entries (or conntrack tool missing)'"
+      } > "{{ _caas_discovery_diag_dir }}/mgmt-server-forwarding.txt" 2>&1
+      exit 0
+    executable: /bin/bash
   changed_when: false
   failed_when: false
 
