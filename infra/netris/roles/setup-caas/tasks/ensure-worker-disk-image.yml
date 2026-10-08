@@ -124,6 +124,7 @@
     body_format: json
     body:
       metadata:
+        name: "{{ caas_cluster_version | replace('.', '-') }}"
         tenant: shared
       spec:
         version: "{{ caas_cluster_version }}"
