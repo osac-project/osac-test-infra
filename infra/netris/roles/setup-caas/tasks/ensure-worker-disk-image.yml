@@ -1,0 +1,273 @@
+---
+- name: List CaaS worker DiskImages
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/disk_images"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: 200
+  register: _caas_worker_disk_images
+  changed_when: false
+
+- name: Find CaaS worker DiskImage
+  ansible.builtin.set_fact:
+    _caas_worker_disk_image: >-
+      {{
+        (_caas_worker_disk_images.json.items | default([]))
+        | selectattr('metadata.name', 'equalto', caas_cluster_disk_image_name)
+        | list
+        | first
+        | default({})
+      }}
+
+- name: Create CaaS worker DiskImage if absent
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/disk_images"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      metadata:
+        name: "{{ caas_cluster_disk_image_name }}"
+        tenant: shared
+      spec:
+        source_type: SOURCE_TYPE_REGISTRY
+        source_ref: "{{ caas_cluster_disk_image_source_ref }}"
+        guest_os_family: GUEST_OS_FAMILY_LINUX
+        architecture:
+          - ARCHITECTURE_AMD64
+    validate_certs: false
+    status_code: [200, 201, 409]
+  register: _caas_worker_disk_image_create
+  changed_when: _caas_worker_disk_image_create.status in [200, 201]
+  when: _caas_worker_disk_image | length == 0
+
+- name: Refresh CaaS worker DiskImages
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/disk_images"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: 200
+  register: _caas_worker_disk_images
+  changed_when: false
+  until: >-
+    (
+      (_caas_worker_disk_images.json.items | default([]))
+      | selectattr('metadata.name', 'equalto', caas_cluster_disk_image_name)
+      | list
+      | length
+    ) > 0
+  retries: 5
+  delay: 2
+
+- name: Resolve CaaS worker DiskImage
+  ansible.builtin.set_fact:
+    _caas_worker_disk_image: >-
+      {{
+        (_caas_worker_disk_images.json.items | default([]))
+        | selectattr('metadata.name', 'equalto', caas_cluster_disk_image_name)
+        | list
+        | first
+        | default({})
+      }}
+
+- name: Validate CaaS worker DiskImage
+  ansible.builtin.assert:
+    that:
+      - _caas_worker_disk_image.id | default('') | length > 0
+      - >-
+        _caas_worker_disk_image.get('spec', {}).get('sourceRef',
+        _caas_worker_disk_image.get('spec', {}).get('source_ref', ''))
+        == caas_cluster_disk_image_source_ref
+    fail_msg: >-
+      DiskImage '{{ caas_cluster_disk_image_name }}' must exist and reference
+      '{{ caas_cluster_disk_image_source_ref }}'. Check the configured CaaS RHCOS image.
+
+- name: Set CaaS worker DiskImage ID
+  ansible.builtin.set_fact:
+    _caas_worker_disk_image_id: "{{ _caas_worker_disk_image.id }}"
+
+- name: List CaaS worker ClusterVersions
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: 200
+  register: _caas_worker_cluster_versions
+  changed_when: false
+
+- name: Find CaaS worker ClusterVersion
+  ansible.builtin.set_fact:
+    _caas_worker_cluster_version: >-
+      {{
+        (_caas_worker_cluster_versions.json.items | default([]))
+        | selectattr('spec.version', 'equalto', caas_cluster_version)
+        | list
+        | first
+        | default({})
+      }}
+
+- name: Create CaaS worker ClusterVersion if absent
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      metadata:
+        tenant: shared
+      spec:
+        version: "{{ caas_cluster_version }}"
+        image: "{{ caas_cluster_release_image }}"
+        enabled: true
+        is_default: false
+        state: CLUSTER_VERSION_STATE_ACTIVE
+        disk_image:
+          id: "{{ _caas_worker_disk_image_id }}"
+    validate_certs: false
+    status_code: [200, 201, 409]
+  register: _caas_worker_cluster_version_create
+  changed_when: _caas_worker_cluster_version_create.status in [200, 201]
+  when: _caas_worker_cluster_version | length == 0
+
+- name: Refresh CaaS worker ClusterVersions
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: 200
+  register: _caas_worker_cluster_versions
+  changed_when: false
+  until: >-
+    (
+      (_caas_worker_cluster_versions.json.items | default([]))
+      | selectattr('spec.version', 'equalto', caas_cluster_version)
+      | list
+      | length
+    ) > 0
+  retries: 5
+  delay: 2
+
+- name: Resolve CaaS worker ClusterVersion
+  ansible.builtin.set_fact:
+    _caas_worker_cluster_version: >-
+      {{
+        (_caas_worker_cluster_versions.json.items | default([]))
+        | selectattr('spec.version', 'equalto', caas_cluster_version)
+        | list
+        | first
+        | default({})
+      }}
+
+- name: Validate CaaS worker ClusterVersion release image
+  ansible.builtin.assert:
+    that:
+      - _caas_worker_cluster_version.get('id', '') | length > 0
+      - _caas_worker_cluster_version.get('spec', {}).get('image', '') == caas_cluster_release_image
+    fail_msg: >-
+      ClusterVersion '{{ caas_cluster_version }}' must use release image
+      '{{ caas_cluster_release_image }}'.
+
+- name: Read CaaS worker ClusterVersion DiskImage reference
+  ansible.builtin.set_fact:
+    _caas_worker_cluster_version_disk_image: >-
+      {{
+        _caas_worker_cluster_version.get('spec', {}).get('diskImage',
+        _caas_worker_cluster_version.get('spec', {}).get('disk_image', {}))
+      }}
+
+- name: Validate existing CaaS worker ClusterVersion DiskImage reference
+  ansible.builtin.assert:
+    that:
+      - >-
+        (_caas_worker_cluster_version_disk_image.id | default('') | length == 0)
+        or _caas_worker_cluster_version_disk_image.id == _caas_worker_disk_image_id
+      - >-
+        (_caas_worker_cluster_version_disk_image.name | default('') | length == 0)
+        or _caas_worker_cluster_version_disk_image.name == caas_cluster_disk_image_name
+    fail_msg: >-
+      ClusterVersion '{{ caas_cluster_version }}' already references a different
+      DiskImage; refusing to replace that catalog setting.
+
+- name: Attach CaaS worker DiskImage to ClusterVersion
+  ansible.builtin.uri:
+    url: >-
+      {{ caas_fulfillment_api }}/api/private/v1/cluster_versions/{{ _caas_worker_cluster_version.id }}
+      ?update_mask=spec.disk_image
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      id: "{{ _caas_worker_cluster_version.id }}"
+      spec:
+        disk_image:
+          id: "{{ _caas_worker_disk_image_id }}"
+    validate_certs: false
+    status_code: 200
+  register: _caas_worker_cluster_version_update
+  changed_when: true
+  when:
+    - _caas_worker_cluster_version_disk_image.id | default('') | length == 0
+    - _caas_worker_cluster_version_disk_image.name | default('') | length == 0
+
+- name: Refresh CaaS worker ClusterVersions after DiskImage attachment
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: 200
+  register: _caas_worker_cluster_versions
+  changed_when: false
+  until: >-
+    (
+      (_caas_worker_cluster_versions.json.items | default([]))
+      | selectattr('spec.version', 'equalto', caas_cluster_version)
+      | list
+      | length
+    ) > 0
+  retries: 5
+  delay: 2
+
+- name: Resolve CaaS worker ClusterVersion after DiskImage attachment
+  ansible.builtin.set_fact:
+    _caas_worker_cluster_version: >-
+      {{
+        (_caas_worker_cluster_versions.json.items | default([]))
+        | selectattr('spec.version', 'equalto', caas_cluster_version)
+        | list
+        | first
+        | default({})
+      }}
+
+- name: Read attached CaaS worker DiskImage reference
+  ansible.builtin.set_fact:
+    _caas_worker_cluster_version_disk_image: >-
+      {{
+        _caas_worker_cluster_version.get('spec', {}).get('diskImage',
+        _caas_worker_cluster_version.get('spec', {}).get('disk_image', {}))
+      }}
+
+- name: Verify CaaS worker ClusterVersion has a DiskImage
+  ansible.builtin.assert:
+    that:
+      - >-
+        (_caas_worker_cluster_version_disk_image.id | default('') == _caas_worker_disk_image_id)
+        or (_caas_worker_cluster_version_disk_image.name | default('') == caas_cluster_disk_image_name)
+    fail_msg: >-
+      ClusterVersion '{{ caas_cluster_version }}' has no DiskImage attached;
+      CaaS bare-metal worker clusters require one.

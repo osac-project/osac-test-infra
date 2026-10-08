@@ -109,9 +109,13 @@ aws_access_key_id: "{{ lookup('ini', 'aws_access_key_id section=default file=' +
 aws_secret_access_key: "{{ lookup('ini', 'aws_secret_access_key section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_SECRET_ACCESS_KEY'), true) }}"
 aws_region: "{{ lookup('ini', 'aws_region section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_DEFAULT_REGION'), true) | default('us-east-1', true) }}"
 
-# CaaS cluster version -- must match a ClusterVersion present in the
-# deployed fulfillment-service (metadata.name or spec.version).
-caas_cluster_version: "{{ ocp_version }}.0"
+# Release payload used by the CaaS worker cluster. The catalog version is an
+# E2E alias with a matching RHCOS DiskImage attached.
+caas_cluster_release_version: "{{ ocp_version }}.0"
+caas_cluster_version: "{{ caas_cluster_release_version }}-rhcos"
+caas_cluster_release_image: "quay.io/openshift-release-dev/ocp-release:{{ caas_cluster_release_version }}-multi"
+caas_cluster_disk_image_name: "rhcos-{{ ocp_version | replace('.', '-') }}"
+caas_cluster_disk_image_source_ref: "oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:{{ caas_cluster_release_version }}"
 
 # CaaS Discovery (boot remaining servers with discovery ISO)
 caas_discovery_vm_patterns:

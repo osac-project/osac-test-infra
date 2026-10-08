@@ -100,7 +100,7 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 
 | Target | Description | Time |
 |--------|-------------|------|
-| `make setup-caas` | Discover hosts, label agents, register host type, configure osac CLI | ~30 min |
+| `make setup-caas` | Discover hosts, label agents, ensure the shared CaaS worker DiskImage/ClusterVersion catalog entries, register host type, configure osac CLI | ~30 min |
 | `make deploy-caas` | Create CaaS cluster using `ocp_ci_small` template | ~60 min |
 | `make setup-maas` | Same as setup-caas with MaaS host type / sizing; labels only `MAAS_LABEL_HOSTNAMES` (default h02+h03) with `g5` | ~30 min |
 | `make deploy-maas` | Create MaaS cluster (`ocp_4_20_ai_maas` + `-p` template params) | ~60 min |
@@ -438,6 +438,11 @@ dns_server: "10.0.0.1"
 |----------|---------|-------------|--------|
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name | yes (custom) |
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS | defaults only |
+| `caas_cluster_version` | `4.22.0-rhcos` | DiskImage-backed ClusterVersion selected for CaaS workers | defaults only |
+| `caas_cluster_release_version` | `4.22.0` | OCP release version used to build the ClusterVersion release image and RHCOS DiskImage source | defaults only |
+| `caas_cluster_release_image` | `quay.io/openshift-release-dev/ocp-release:4.22.0-multi` | OpenShift release payload for the CaaS ClusterVersion | defaults only |
+| `caas_cluster_disk_image_name` | `rhcos-4-22` | RHCOS DiskImage ensured by `setup-caas` | defaults only |
+| `caas_cluster_disk_image_source_ref` | `oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0` | RHCOS BMI image source | defaults only |
 | `caas_host_type_id` | `ci-worker` | Resource class label for CaaS agents | defaults only |
 | `caas_cluster_baremetal_instance_type` | `ci-worker` | Pre-provisioned shared BareMetalInstanceType selected for CaaS workers; independent of the HostType/resource class | defaults only |
 | `caas_discovery_vcpu` | `4` | Discovery VM vCPUs | yes (8) |

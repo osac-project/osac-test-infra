@@ -233,6 +233,9 @@
   retries: 10
   delay: 15
 
+- name: Ensure CaaS worker DiskImage and ClusterVersion
+  ansible.builtin.include_tasks: ensure-worker-disk-image.yml
+
 - name: Create host type
   ansible.builtin.uri:
     url: "{{ caas_fulfillment_api }}/api/private/v1/host_types"
