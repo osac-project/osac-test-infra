@@ -151,7 +151,7 @@ caas_host_type_id: "ci-worker"
 caas_host_type_title: "CI Worker"
 caas_host_type_description: "Worker nodes for CI testing"
 # Netris per-resource-class entry merged into cluster-fulfillment-ig
-# NETRIS_RESOURCE_CLASS_MAP when the host type key is missing (setup-caas / setup-maas).
+# NETRIS_RESOURCE_CLASS_MAP when the resource-class key is missing (setup-caas / setup-maas).
 caas_netris_server_cluster_template_id: 2
 caas_netris_mgmt_interface: "ens4"
 caas_netris_vpc_interfaces:
@@ -162,10 +162,12 @@ caas_catalog_item_title: "CI OCP Small"
 caas_catalog_item_description: "Small OCP cluster for CI testing"
 caas_cluster_name: "caas-ci-cluster"
 # CaaS creates a hosted control plane plus this many bare-metal worker nodes.
-# The worker instance type is also the key used by NETRIS_RESOURCE_CLASS_MAP.
 caas_cluster_node_set_name: "workers"
 caas_cluster_node_set_size: 3
-caas_cluster_baremetal_instance_type: "{{ caas_host_type_id }}"
+# Shared, admin-managed BareMetalInstanceType for the CaaS workers. Keep this
+# separate from caas_host_type_id, which is still used for resource-class labels
+# and NETRIS_RESOURCE_CLASS_MAP configuration.
+caas_cluster_baremetal_instance_type: "ci-worker"
 # When non-empty, osac create uses --pull-secret-file / --ssh-public-key-file and
 # -p for each entry instead of -f pull_secret= / -f ssh_public_key= (MaaS templates).
 caas_cluster_params: []

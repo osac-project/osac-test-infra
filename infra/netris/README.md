@@ -343,6 +343,7 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS cluster creation |
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name |
 | `caas_host_type_id` | `ci-worker` | Resource class for CaaS agents |
+| `caas_cluster_baremetal_instance_type` | `ci-worker` | Pre-provisioned shared BareMetalInstanceType for CaaS workers; configured independently of the HostType/resource class |
 | `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:caas` | OCI image containing the snapshot flavor |
 | `snapshot_osac_namespace` | `osac-e2e-ci` | OSAC namespace baked into the snapshot |
 | `snapshot_osac_values_file` | `values/caas-ci/values.yaml` | Helm values file for OSAC refresh |
@@ -438,6 +439,7 @@ dns_server: "10.0.0.1"
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name | yes (custom) |
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS | defaults only |
 | `caas_host_type_id` | `ci-worker` | Resource class label for CaaS agents | defaults only |
+| `caas_cluster_baremetal_instance_type` | `ci-worker` | Pre-provisioned shared BareMetalInstanceType selected for CaaS workers; independent of the HostType/resource class | defaults only |
 | `caas_discovery_vcpu` | `4` | Discovery VM vCPUs | yes (8) |
 | `caas_discovery_vcpu_overrides` | `{}` | Per-VM vCPU map (VM name → count); empty = use `caas_discovery_vcpu` | defaults only |
 | `caas_discovery_memory_mb` | `16384` | Discovery VM memory in MB | yes (32768) |

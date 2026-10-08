@@ -118,10 +118,12 @@ gather-bmaas_networking: gather-bmaas
 
 # ---------------------------------------------------------------------------
 # MaaS — thin wrappers over CaaS playbooks with MaaS-specific variable overrides
-# Override any default with MAAS_CLUSTER_NAME=..., MAAS_HOST_TYPE_ID=..., etc.
+# Override any default with MAAS_CLUSTER_NAME=..., MAAS_HOST_TYPE_ID=...,
+# MAAS_BAREMETAL_INSTANCE_TYPE=..., etc.
 # ---------------------------------------------------------------------------
 MAAS_CLUSTER_NAME     ?= maas-cluster
 MAAS_HOST_TYPE_ID     ?= g5
+MAAS_BAREMETAL_INSTANCE_TYPE ?= g5
 MAAS_CLUSTER_TEMPLATE ?= osac.templates.ocp_4_20_ai_maas
 MAAS_CATALOG_ITEM     ?= maas-ocp
 # Discovery VM sizing for setup-maas only (CaaS keeps inventory defaults: 4 vCPU / 16GiB).
@@ -142,7 +144,7 @@ MAAS_EXTRA = \
   -e 'caas_cluster_name=$(MAAS_CLUSTER_NAME)' \
   -e 'caas_host_type_id=$(MAAS_HOST_TYPE_ID)' \
   -e 'caas_cluster_node_set_size=2' \
-  -e 'caas_cluster_baremetal_instance_type=$(MAAS_HOST_TYPE_ID)' \
+  -e 'caas_cluster_baremetal_instance_type=$(MAAS_BAREMETAL_INSTANCE_TYPE)' \
   -e 'caas_host_type_title=MaaS Node' \
   -e 'caas_host_type_description=Bare-metal nodes for MaaS testing' \
   -e 'caas_cluster_template=$(MAAS_CLUSTER_TEMPLATE)' \
