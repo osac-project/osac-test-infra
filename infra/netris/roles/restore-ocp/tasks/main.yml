@@ -623,7 +623,10 @@
       delay: 10
       changed_when: false
 
-    - name: Get the OCP console route host for the ingress probe
+    # The snapshot's console route can still have its original hostname while
+    # the console operator reconciles the restored cluster. Keep reading it
+    # until it matches this run's DNS domain before starting the HTTP probe.
+    - name: Wait for the OCP console route to use this run's hostname
       ansible.builtin.command:
         argv:
           - oc
@@ -637,7 +640,11 @@
       environment:
         KUBECONFIG: /root/.kube/config
       register: _ocp_console_route_host
-      until: _ocp_console_route_host.rc == 0 and _ocp_console_route_host.stdout | length > 0
+      until:
+        - _ocp_console_route_host.rc == 0
+        - >-
+          (_ocp_console_route_host.stdout | trim) ==
+          ('console-openshift-console.apps.' ~ ocp_cluster_name ~ '.' ~ ocp_base_domain)
       retries: 12
       delay: 10
       changed_when: false
