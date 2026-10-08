@@ -15,6 +15,23 @@
   changed_when: false
   failed_when: false
 
+- name: Validate CaaS worker node set
+  ansible.builtin.assert:
+    that:
+      - caas_cluster_node_set_name | default('') | length > 0
+      - caas_cluster_node_set_size | int > 0
+      - caas_cluster_baremetal_instance_type | default('') | length > 0
+    fail_msg: >-
+      CaaS cluster creation requires a positive worker node count and a shared
+      BareMetalInstanceType name. The instance type must also have a matching
+      NETRIS_RESOURCE_CLASS_MAP entry.
+
+- name: Build CaaS worker node-set argument
+  ansible.builtin.set_fact:
+    _caas_worker_node_set_arg: >-
+      name={{ caas_cluster_node_set_name }},size={{ caas_cluster_node_set_size }},
+      baremetal-instance-type={{ caas_cluster_baremetal_instance_type }}
+
 # Default CaaS path: pull_secret / ssh_public_key are template -f fields + release-image.
 # When caas_cluster_params is non-empty (e.g. deploy-maas), use --pull-secret-file /
 # --ssh-public-key-file plus -p for template-specific parameters instead.
@@ -27,6 +44,7 @@
       -f pull_secret={{ pull_secret_path }}
       -f ssh_public_key={{ ssh_public_key_path }}
       --name {{ caas_cluster_name }}
+      --node-set {{ _caas_worker_node_set_arg | quote }}
   register: _cluster_create_fields
   when:
     - _cluster_exists.stdout | default('') != 'exists'
@@ -43,6 +61,7 @@
       --ssh-public-key-file "{{ ssh_public_key_path }}"
       --name "{{ caas_cluster_name }}"
     )
+    args+=(--node-set {{ _caas_worker_node_set_arg | quote }})
     {% for p in caas_cluster_params | default([]) %}
     args+=(-p {{ p | quote }})
     {% endfor %}
