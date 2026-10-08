@@ -10,16 +10,20 @@ on:
   workflow_dispatch:
     inputs:
       pr-number:
-        description: "PR number (set by slash /test; used to read e2e-regression/e2e-serial labels)"
+        description: "PR number (set by slash /test; forces sanity-only selection)"
         required: false
         type: string
         default: ""
       test-suite:
-        description: "Test suite (caas, caas/regression, ...). Default: caas. PR e2e-regression/e2e-serial labels override."
+        description: "Suite (caas/sanity, caas/regression, caas for all). PR-associated runs always use sanity."
         required: false
-        default: "caas"
+        default: "caas/sanity"
       test-filter:
         description: "pytest -k filter"
+        required: false
+        default: ""
+      test-marker:
+        description: "pytest -m marker expression. PR-associated runs always use sanity."
         required: false
         default: ""
       installer-ref:
@@ -72,45 +76,10 @@ jobs:
           pr-number: ${{ github.event.pull_request.number }}
           head-sha: ${{ github.event.pull_request.head.sha }}
 
-  # Only needed for workflow_dispatch (PR labels come from the event payload).
-  # Running this on every PR queued an extra ubuntu-latest job that often sat
-  # until concurrency cancelled it; the gate then treated cancelled as failure.
-  resolve-suite:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      test-suite: ${{ steps.pick.outputs.test-suite }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            .github/scripts/resolve-e2e-suite.sh
-      - name: Resolve test-suite from input or PR labels
-        id: pick
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ inputs.pr-number || '' }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          EXPLICIT_SUITE: ${{ inputs.test-suite || '' }}
-        run: |
-          set -euo pipefail
-          # Unlabeled default stays the full suite (same as main).
-          suite=$(bash .github/scripts/resolve-e2e-suite.sh caas caas "${EXPLICIT_SUITE}")
-          echo "test-suite=${suite}" >>"${GITHUB_OUTPUT}"
-          echo "Resolved test-suite"
-
   e2e-caas-full-install:
-    needs: [e2e-readiness, resolve-suite]
+    needs: [e2e-readiness]
     if: >-
       always()
-      && (needs.resolve-suite.result == 'success'
-          || (needs.resolve-suite.result == 'skipped'
-              && github.event_name != 'workflow_dispatch'))
       && (github.event_name != 'pull_request'
           || needs.e2e-readiness.result == 'skipped'
           || needs.e2e-readiness.outputs.ready == 'true')
@@ -121,14 +90,18 @@ jobs:
       id-token: write
     uses: ./.github/workflows/e2e-caas-full-install.yml
     with:
+      # PR/merge_group and slash-command PR dispatches are sanity-only,
+      # regardless of tier labels or inputs. Periodics include the full suite.
       test-suite: >-
         ${{
-          needs.resolve-suite.outputs.test-suite ||
-          github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-serial') && 'caas/serial' ||
-          github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-regression') && 'caas/regression' ||
-          (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'caas' ||
+          (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.pr-number != '') && 'caas/sanity' ||
           github.event_name == 'schedule' && 'caas' ||
-          'caas'
+          inputs.test-suite || 'caas/sanity'
+        }}
+      test-marker: >-
+        ${{
+          (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.pr-number != '') && 'sanity' ||
+          inputs.test-marker || 'sanity or regression or requires_caas or reference_common'
         }}
       test-filter: ${{ inputs.test-filter || '' }}
       installer-ref: ${{ inputs.installer-ref || 'main' }}
@@ -151,13 +124,12 @@ jobs:
       && (github.event_name != 'pull_request'
           || needs.e2e-readiness.result != 'success'
           || needs.e2e-readiness.outputs.ready == 'true')
-    needs: [e2e-readiness, resolve-suite, e2e-caas-full-install]
+    needs: [e2e-readiness, e2e-caas-full-install]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "e2e-readiness: ${{ needs.e2e-readiness.result }}"
-          echo "resolve-suite: ${{ needs.resolve-suite.result }}"
           echo "e2e-caas-full-install: ${{ needs.e2e-caas-full-install.result }}"
           exit 1
       - if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}

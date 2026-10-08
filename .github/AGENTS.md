@@ -13,10 +13,15 @@
 - `.github/workflows/e2e-on-approval.yml` — CodeRabbit APPROVED: same-repo calls the starter; fork only `fork-handoff`.
 - `.github/workflows/e2e-on-approval-fork.yml` — `workflow_run` replay after `fork-handoff`; verifies CR APPROVED on exact HEAD, then calls the starter. osac calls this via `workflow_call`.
 - `.github/workflows/e2e-ready-label-cleanup.yml` — Removes `e2e-ready` on new pushes
-- Suite selection — unlabeled defaults unchanged (`vmaas` / `caas` full suite; `bmaas/sanity` on PR, `bmaas/serial` on schedule). `/e2e-regression` or `e2e-regression` label → `*/regression`; `/e2e-serial` or `e2e-serial` label → `*/serial` (same job; `e2e-serial` wins if both are set). Tier labels do **not** start e2e.
-- Slash — `/e2e-regression` / `/e2e-serial` apply the tier label only. `/test vmaas` / `caas` / `bmaas` (from `.github/optional-workflows.yml`) dispatch the platform caller, which reads PR labels for the suite. Netris remains label-trigger only.
+- Suite selection — CaaS PR, merge queue, and dispatches carrying `pr-number` always run `caas/sanity` with `-m sanity`, ignoring tier labels and suite/marker overrides. CaaS periodics run `caas` (sanity + regression) plus applicable references. Manual CaaS dispatch without `pr-number` defaults to sanity and allows overrides. The reusable runner never appends references to sanity and fails on empty requested tiers rather than widening selection.
+- Other platforms retain tier-label selection: `vmaas` defaults to the full suite; `bmaas/sanity` on PR, `bmaas/serial` on schedule. `e2e-regression` → `*/regression`; `e2e-serial` → `*/serial` (serial wins). Tier labels do **not** start e2e.
+- Slash — `/e2e-regression` / `/e2e-serial` apply the tier label only. `/test vmaas` / `caas` / `bmaas` (from `.github/optional-workflows.yml`) dispatch the platform caller; VMaaS/BMaaS read PR labels, while CaaS stays sanity-only. Netris remains label-trigger only.
 
 ## Testing
+
+| Area | Required coverage | Command | Boundary |
+|---|---|---|---|
+| CaaS caller and reusable selection | [DEV] Unit/Contract checks in osac | From the osac checkout: `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py` | Real caller YAML and path-selection Bash, temporary test directories; no deployed services or E2E execution. Tests remain in osac, not this repository. |
 
 Run readiness and e2e-gate helper unit tests:
 
