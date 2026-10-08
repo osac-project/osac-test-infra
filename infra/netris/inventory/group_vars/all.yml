@@ -168,10 +168,19 @@ caas_cluster_name: "caas-ci-cluster"
 # CaaS creates a hosted control plane plus this many bare-metal worker nodes.
 caas_cluster_node_set_name: "workers"
 caas_cluster_node_set_size: 3
-# Shared, admin-managed BareMetalInstanceType for the CaaS workers. Keep this
+# Shared BareMetalInstanceType ensured by setup-caas for the workers. Keep this
 # separate from caas_host_type_id, which is still used for resource-class labels
 # and NETRIS_RESOURCE_CLASS_MAP configuration.
 caas_cluster_baremetal_instance_type: "ci-worker"
+caas_cluster_baremetal_instance_type_host_labels:
+  osac.openshift.io/resource_class: "{{ caas_host_type_id }}"
+# These are Netris server-port names, not Linux interface names (ens5/ens6).
+# The first fabric port must match the BM provisioning V-Net's fabric port.
+caas_cluster_baremetal_instance_type_network_ports:
+  - name: "{{ bmaas_provisioning_fabric_iface }}"
+    role: fabric
+    type: Ethernet
+    speed: 100Gbps
 # When non-empty, osac create uses --pull-secret-file / --ssh-public-key-file and
 # -p for each entry instead of -f pull_secret= / -f ssh_public_key= (MaaS templates).
 caas_cluster_params: []

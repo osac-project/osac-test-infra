@@ -186,7 +186,7 @@
   delay: 10
   changed_when: true
 
-# Step 3: Register host type in fulfillment service
+# Step 3: Register worker catalog resources in fulfillment service
 - name: Get fulfillment internal API URL
   ansible.builtin.shell:
     cmd: oc get route fulfillment-internal-api -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.status.ingress[0].host}'
@@ -233,6 +233,9 @@
   retries: 10
   delay: 15
 
+- name: Ensure CaaS worker BareMetalInstanceType
+  ansible.builtin.include_tasks: ensure-worker-instance-type.yml
+
 - name: Ensure CaaS worker DiskImage and ClusterVersion
   ansible.builtin.include_tasks: ensure-worker-disk-image.yml
 
@@ -252,9 +255,9 @@
     validate_certs: false
     status_code: [200, 201, 409]
 
-# AAP netris.steps.cluster_infra looks up netris_resource_class_map[resourceClass]
-# from env NETRIS_RESOURCE_CLASS_MAP (cluster-fulfillment-ig). Install only seeds
-# the then-current caas_host_type_id (e.g. ci-worker); setup-maas needs g5 too.
+# AAP cluster_network looks up the BareMetalInstanceType ID in
+# NETRIS_RESOURCE_CLASS_MAP (cluster-fulfillment-ig). Keep the legacy resource
+# class key too: it can differ from the instance type name (which is its ID).
 # Append only when the key is missing — never overwrite an existing entry.
 - name: Read NETRIS_RESOURCE_CLASS_MAP from cluster-fulfillment-ig
   ansible.builtin.shell:
@@ -268,7 +271,7 @@
   changed_when: false
   failed_when: false
 
-- name: Ensure host type is present in NETRIS_RESOURCE_CLASS_MAP
+- name: Ensure worker resource class and instance type are present in NETRIS_RESOURCE_CLASS_MAP
   ansible.builtin.shell: |
     set -euo pipefail
     python3 <<'PY'
@@ -282,17 +285,23 @@
     if not isinstance(data, dict):
         data = {}
 
-    name = os.environ["NETRIS_RC_NAME"]
-    if name in data and isinstance(data[name], dict) and data[name]:
-        print(f"unchanged {name} already in NETRIS_RESOURCE_CLASS_MAP")
+    names = json.loads(os.environ["NETRIS_RC_NAMES"])
+    missing = [name for name in names if not isinstance(data.get(name), dict) or not data[name]]
+    if not missing:
+        print("unchanged worker entries already in NETRIS_RESOURCE_CLASS_MAP")
         sys.exit(0)
 
-    entry = {
-        "server_cluster_template_id": int(os.environ["NETRIS_RC_TEMPLATE_ID"]),
-        "mgmt_interface": os.environ["NETRIS_RC_MGMT_IF"],
-        "vpc_interfaces": json.loads(os.environ["NETRIS_RC_VPC_IFS"]),
-    }
-    data[name] = entry
+    # Reuse the resource class's discovered configuration for a new instance
+    # type alias. It can differ from the inventory's fallback template ID.
+    entry = data.get(names[0])
+    if not isinstance(entry, dict) or not entry:
+        entry = {
+            "server_cluster_template_id": int(os.environ["NETRIS_RC_TEMPLATE_ID"]),
+            "mgmt_interface": os.environ["NETRIS_RC_MGMT_IF"],
+            "vpc_interfaces": json.loads(os.environ["NETRIS_RC_VPC_IFS"]),
+        }
+    for name in missing:
+        data[name] = entry
     new_json = json.dumps(data, separators=(",", ":"))
     patch = json.dumps({"data": {"NETRIS_RESOURCE_CLASS_MAP": new_json}})
     subprocess.run(
@@ -303,13 +312,13 @@
         ],
         check=True,
     )
-    print(f"patched added {name}={json.dumps(entry)}")
+    print(f"patched added {','.join(missing)}={json.dumps(entry)}")
     PY
   environment:
     KUBECONFIG: /root/.kube/config
     NETRIS_RC_NS: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
     NETRIS_RC_MAP_RAW: "{{ _netris_rc_map_raw.stdout | default('') }}"
-    NETRIS_RC_NAME: "{{ caas_host_type_id }}"
+    NETRIS_RC_NAMES: "{{ [caas_host_type_id, caas_cluster_baremetal_instance_type] | unique | list | to_json }}"
     NETRIS_RC_TEMPLATE_ID: "{{ caas_netris_server_cluster_template_id | default(2) }}"
     NETRIS_RC_MGMT_IF: "{{ caas_netris_mgmt_interface | default('ens4') }}"
     NETRIS_RC_VPC_IFS: "{{ caas_netris_vpc_interfaces | default(['ens6']) | to_json }}"

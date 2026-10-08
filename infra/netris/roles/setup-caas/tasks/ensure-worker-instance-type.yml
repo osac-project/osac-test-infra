@@ -1,0 +1,111 @@
+---
+# BareMetalInstanceType is a shared hardware catalog entry, separate from the
+# legacy HostType. The API uses metadata.name as its ID.
+- name: Validate CaaS worker instance type configuration
+  ansible.builtin.assert:
+    that:
+      - caas_cluster_baremetal_instance_type | default('') | length > 0
+      - caas_cluster_baremetal_instance_type_host_labels is mapping
+      - caas_cluster_baremetal_instance_type_host_labels | length > 0
+      - caas_discovery_vcpu | int > 0
+      - caas_discovery_memory_mb | int >= 1024
+      - caas_discovery_memory_mb | int % 1024 == 0
+      - caas_cluster_baremetal_instance_type_network_ports | selectattr('role', 'equalto', 'fabric') | list | length > 0
+    fail_msg: >-
+      CaaS workers require a named BareMetalInstanceType, a nonempty host label
+      selector, positive CPU/memory sizes (whole GiB), and a fabric network port.
+
+- name: Read CaaS worker BareMetalInstanceType
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/bare_metal_instance_types/{{ caas_cluster_baremetal_instance_type | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: _caas_worker_instance_type_read
+  changed_when: false
+
+- name: Create CaaS worker BareMetalInstanceType if absent
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/bare_metal_instance_types"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      metadata:
+        name: "{{ caas_cluster_baremetal_instance_type }}"
+        tenant: shared
+      spec:
+        description: "CaaS worker hardware for the Netris CI lab"
+        hardware:
+          cpu:
+            cores: "{{ caas_discovery_vcpu | int }}"
+            architecture: x86_64
+            threads_per_core: 1
+          memory:
+            total_gb: "{{ caas_discovery_memory_mb | int // 1024 }}"
+          network_ports: "{{ caas_cluster_baremetal_instance_type_network_ports }}"
+        host_label_selector:
+          match_labels: "{{ caas_cluster_baremetal_instance_type_host_labels }}"
+    validate_certs: false
+    status_code: [200, 201, 409]
+  register: _caas_worker_instance_type_create
+  changed_when: _caas_worker_instance_type_create.status in [200, 201]
+  when: _caas_worker_instance_type_read.status == 404
+
+# Read back after creation (including AlreadyExists) and on reuse. The hardware
+# is immutable, so reject an incompatible existing entry instead of replacing it.
+- name: Refresh CaaS worker BareMetalInstanceType
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/bare_metal_instance_types/{{ caas_cluster_baremetal_instance_type | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: _caas_worker_instance_type_read
+  until: _caas_worker_instance_type_read.status == 200
+  retries: 5
+  delay: 2
+  changed_when: false
+
+- name: Resolve CaaS worker instance type fields
+  ansible.builtin.set_fact:
+    _caas_worker_instance_type: "{{ _caas_worker_instance_type_read.json }}"
+    _caas_worker_instance_type_hardware: "{{ _caas_worker_instance_type_read.json.get('spec', {}).get('hardware', {}) }}"
+    _caas_worker_instance_type_selector: >-
+      {{ _caas_worker_instance_type_read.json.get('spec', {}).get('hostLabelSelector',
+         _caas_worker_instance_type_read.json.get('spec', {}).get('host_label_selector', {})) }}
+
+- name: Validate shared CaaS worker BareMetalInstanceType
+  ansible.builtin.assert:
+    that:
+      - _caas_worker_instance_type.get('id', '') == caas_cluster_baremetal_instance_type
+      - _caas_worker_instance_type.get('metadata', {}).get('name', '') == caas_cluster_baremetal_instance_type
+      - _caas_worker_instance_type.get('metadata', {}).get('tenant', '') == 'shared'
+      - _caas_worker_instance_type.get('metadata', {}).get('project', '') == ''
+      - _caas_worker_instance_type_hardware.get('cpu', {}).get('cores', 0) | int == caas_discovery_vcpu | int
+      - _caas_worker_instance_type_hardware.get('cpu', {}).get('architecture', '') in ['x86_64', 'amd64', 'ARCHITECTURE_AMD64']
+      - >-
+        _caas_worker_instance_type_hardware.get('cpu', {}).get('threadsPerCore',
+        _caas_worker_instance_type_hardware.get('cpu', {}).get('threads_per_core', 0)) | int == 1
+      - >-
+        _caas_worker_instance_type_hardware.get('memory', {}).get('totalGb',
+        _caas_worker_instance_type_hardware.get('memory', {}).get('total_gb', 0)) | int
+        == caas_discovery_memory_mb | int // 1024
+      - >-
+        _caas_worker_instance_type_hardware.get('networkPorts',
+        _caas_worker_instance_type_hardware.get('network_ports', []))
+        == caas_cluster_baremetal_instance_type_network_ports
+      - >-
+        _caas_worker_instance_type_selector.get('matchLabels',
+        _caas_worker_instance_type_selector.get('match_labels', {}))
+        == caas_cluster_baremetal_instance_type_host_labels
+    fail_msg: >-
+      BareMetalInstanceType '{{ caas_cluster_baremetal_instance_type }}' must be
+      shared and match the configured CaaS worker CPU, memory, network ports,
+      and host labels. Hardware is immutable: use a different instance type
+      name or correct the lab configuration instead of reusing this entry.

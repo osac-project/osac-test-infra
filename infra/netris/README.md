@@ -343,10 +343,22 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS cluster creation |
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name |
 | `caas_host_type_id` | `ci-worker` | Resource class for CaaS agents |
-| `caas_cluster_baremetal_instance_type` | `ci-worker` | Pre-provisioned shared BareMetalInstanceType for CaaS workers; configured independently of the HostType/resource class |
+| `caas_cluster_baremetal_instance_type` | `ci-worker` | Shared BareMetalInstanceType ensured by `setup-caas`; independent of the HostType/resource class |
+| `caas_cluster_baremetal_instance_type_host_labels` | `osac.openshift.io/resource_class: ci-worker` | Inventory host selector stored in the instance type; defaults to the configured resource class |
+| `caas_cluster_baremetal_instance_type_network_ports` | `eth9` fabric port | Hardware network ports stored in the instance type; defaults to the BM provisioning fabric port |
 | `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:caas` | OCI image containing the snapshot flavor |
 | `snapshot_osac_namespace` | `osac-e2e-ci` | OSAC namespace baked into the snapshot |
 | `snapshot_osac_values_file` | `values/caas-ci/values.yaml` | Helm values file for OSAC refresh |
+
+`setup-caas` creates the shared worker BareMetalInstanceType when absent and
+validates it before cluster creation. CPU and memory follow
+`caas_discovery_vcpu` and `caas_discovery_memory_mb`. Network port names are
+Netris server ports (for example, `eth9`), while `caas_netris_vpc_interfaces`
+contains Linux interface names (for example, `ens6`). Keep the first fabric
+port aligned with `bmaas_provisioning_fabric_iface`. Existing types with
+different hardware or host selectors fail validation; choose a new type name
+when changing immutable hardware. Both the resource class and instance type
+are registered in `NETRIS_RESOURCE_CLASS_MAP` when missing.
 
 ```bash
 make deploy-ocp EXTRA_VARS="ocp_version=4.18"
@@ -444,7 +456,9 @@ dns_server: "10.0.0.1"
 | `caas_cluster_disk_image_name` | `rhcos-4-22` | RHCOS DiskImage ensured by `setup-caas` | defaults only |
 | `caas_cluster_disk_image_source_ref` | `oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0` | RHCOS BMI image source | defaults only |
 | `caas_host_type_id` | `ci-worker` | Resource class label for CaaS agents | defaults only |
-| `caas_cluster_baremetal_instance_type` | `ci-worker` | Pre-provisioned shared BareMetalInstanceType selected for CaaS workers; independent of the HostType/resource class | defaults only |
+| `caas_cluster_baremetal_instance_type` | `ci-worker` | Shared BareMetalInstanceType ensured by `setup-caas`; independent of the HostType/resource class | defaults only |
+| `caas_cluster_baremetal_instance_type_host_labels` | `osac.openshift.io/resource_class: ci-worker` | Inventory host selector for the worker instance type | defaults only |
+| `caas_cluster_baremetal_instance_type_network_ports` | `eth9` fabric port | Netris hardware ports for the worker instance type | defaults only |
 | `caas_discovery_vcpu` | `4` | Discovery VM vCPUs | yes (8) |
 | `caas_discovery_vcpu_overrides` | `{}` | Per-VM vCPU map (VM name → count); empty = use `caas_discovery_vcpu` | defaults only |
 | `caas_discovery_memory_mb` | `16384` | Discovery VM memory in MB | yes (32768) |
