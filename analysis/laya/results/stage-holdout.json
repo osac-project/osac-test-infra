@@ -1,0 +1,262 @@
+{
+  "arm": "stage",
+  "schema_version": "osac-laya-stage-v2",
+  "extractor_version": "osac-laya-evidence-v1",
+  "predictions": [
+    {
+      "pr": 1279,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1261,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1253,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1217,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1211,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 889,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1247,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 853,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1249,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1229,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1064,
+      "choice": "app_or_e2e",
+      "score": null,
+      "tokens": 0,
+      "method": "failed_step"
+    },
+    {
+      "pr": 1269,
+      "choice": "build_compile",
+      "score": 0.4487,
+      "probabilities": {
+        "build_dependency": 0.1417,
+        "build_compile": 0.4487,
+        "source_checkout": 0.0978,
+        "unknown": 0.3118
+      },
+      "tokens": 156,
+      "method": "laya"
+    },
+    {
+      "pr": 865,
+      "choice": "build_compile",
+      "score": 0.8362,
+      "probabilities": {
+        "build_dependency": 0.0274,
+        "build_compile": 0.8362,
+        "source_checkout": 0.0259,
+        "unknown": 0.1105
+      },
+      "tokens": 157,
+      "method": "laya"
+    },
+    {
+      "pr": 943,
+      "choice": "build_dependency",
+      "score": 0.811,
+      "probabilities": {
+        "build_dependency": 0.811,
+        "build_compile": 0.0607,
+        "source_checkout": 0.027,
+        "unknown": 0.1012
+      },
+      "tokens": 157,
+      "method": "laya"
+    },
+    {
+      "pr": 1018,
+      "choice": "build_dependency",
+      "score": 0.8369,
+      "probabilities": {
+        "build_dependency": 0.8369,
+        "build_compile": 0.0506,
+        "source_checkout": 0.0228,
+        "unknown": 0.0897
+      },
+      "tokens": 156,
+      "method": "laya"
+    },
+    {
+      "pr": 1126,
+      "choice": "unknown",
+      "score": 0.3278,
+      "probabilities": {
+        "build_dependency": 0.2354,
+        "build_compile": 0.3055,
+        "source_checkout": 0.1312,
+        "unknown": 0.3278
+      },
+      "tokens": 157,
+      "method": "laya"
+    },
+    {
+      "pr": 1093,
+      "choice": "unknown",
+      "score": 0.4211,
+      "probabilities": {
+        "build_dependency": 0.1433,
+        "build_compile": 0.3225,
+        "source_checkout": 0.1131,
+        "unknown": 0.4211
+      },
+      "tokens": 156,
+      "method": "laya"
+    },
+    {
+      "pr": 1102,
+      "choice": "unknown",
+      "score": 0.3841,
+      "probabilities": {
+        "build_dependency": 0.1307,
+        "build_compile": 0.2549,
+        "source_checkout": 0.2302,
+        "unknown": 0.3841
+      },
+      "tokens": 156,
+      "method": "laya"
+    },
+    {
+      "pr": 836,
+      "choice": "unknown",
+      "score": 0.4175,
+      "probabilities": {
+        "build_dependency": 0.1415,
+        "build_compile": 0.3266,
+        "source_checkout": 0.1144,
+        "unknown": 0.4175
+      },
+      "tokens": 156,
+      "method": "laya"
+    },
+    {
+      "pr": 1166,
+      "choice": "app_startup",
+      "score": 0.3358,
+      "probabilities": {
+        "aap_policy": 0.1672,
+        "source_checkout": 0.0884,
+        "deployment_config": 0.1867,
+        "app_startup": 0.3358,
+        "unknown": 0.222
+      },
+      "tokens": 284,
+      "method": "laya"
+    },
+    {
+      "pr": 1240,
+      "choice": "deployment_config",
+      "score": 0.2895,
+      "probabilities": {
+        "aap_policy": 0.2061,
+        "source_checkout": 0.1078,
+        "deployment_config": 0.2895,
+        "app_startup": 0.1263,
+        "unknown": 0.2704
+      },
+      "tokens": 277,
+      "method": "laya"
+    },
+    {
+      "pr": 1233,
+      "choice": "unknown",
+      "score": 0.3604,
+      "probabilities": {
+        "aap_policy": 0.1571,
+        "source_checkout": 0.0766,
+        "deployment_config": 0.17,
+        "app_startup": 0.2359,
+        "unknown": 0.3604
+      },
+      "tokens": 224,
+      "method": "laya"
+    }
+  ],
+  "batches": [
+    {
+      "stage": "build",
+      "prs": [
+        1269,
+        865,
+        943,
+        1018,
+        1126
+      ],
+      "seconds": 1.919
+    },
+    {
+      "stage": "build",
+      "prs": [
+        1093,
+        1102,
+        836
+      ],
+      "seconds": 1.105
+    },
+    {
+      "stage": "install",
+      "prs": [
+        1166,
+        1240,
+        1233
+      ],
+      "seconds": 1.703
+    }
+  ],
+  "split": "holdout"
+}
