@@ -151,27 +151,39 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
-- name: Wait for cluster to be ready
-  ansible.builtin.shell:
-    cmd: |
-      STATE=$(osac get clusters {{ caas_cluster_id }} -o json | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('state',''))")
-      echo "$STATE"
-      if [ "$STATE" = "CLUSTER_STATE_FAILED" ]; then exit 2; fi
-  register: _cluster_state
-  until: _cluster_state.stdout == "CLUSTER_STATE_READY"
-  retries: 120
-  delay: 30
-  failed_when: _cluster_state.rc == 2
-  changed_when: false
+- name: Require a ready CaaS cluster
+  block:
+    - name: Wait for cluster to reach READY or FAILED
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          osac get clusters {{ caas_cluster_id | quote }} -o json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('state',''))"
+        executable: /bin/bash
+      register: _cluster_state
+      until:
+        - _cluster_state.rc == 0
+        - _cluster_state.stdout in ['CLUSTER_STATE_READY', 'CLUSTER_STATE_FAILED']
+      retries: 120
+      delay: 30
+      changed_when: false
 
-- name: Fail if cluster ended in FAILED state
-  ansible.builtin.fail:
-    msg: "CaaS cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) is in FAILED state"
-  when: _cluster_state.stdout == "CLUSTER_STATE_FAILED"
+    - name: Verify cluster is ready
+      ansible.builtin.assert:
+        that:
+          - _cluster_state.stdout == 'CLUSTER_STATE_READY'
+        fail_msg: "CaaS cluster entered FAILED state."
+  rescue:
+    - name: Fail deployment when cluster readiness was not reached
+      ansible.builtin.fail:
+        msg: >-
+          CaaS cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) did not
+          become READY. Last state: {{ _cluster_state.stdout | default('unknown', true) }};
+          query exit code: {{ _cluster_state.rc | default('unknown') }}.
+          See the OSAC artifacts for ClusterOrder conditions, operator logs and AAP job output.
 
 - name: Report final cluster state
   ansible.builtin.debug:
     msg: >-
       CaaS cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) is
-      {{ _cluster_state.stdout }}{% if _cluster_state.stdout == 'CLUSTER_STATE_PROGRESSING' %}.
-      Please keep on monitoring the cluster state manually{% endif %}
+      {{ _cluster_state.stdout }}.

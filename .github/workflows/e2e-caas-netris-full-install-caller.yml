@@ -23,15 +23,15 @@ on:
         required: false
         default: "dnf install -y ansible-core python3-pip make podman tcpdump; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman; command -v tcpdump"
       osac-operator-image:
-        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
+        description: "Override osac-operator image -- empty builds from the selected OSAC revision"
         required: false
         default: ""
       fulfillment-service-image:
-        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
+        description: "Override fulfillment-service image -- empty builds from the selected OSAC revision"
         required: false
         default: ""
       osac-aap-ee-image:
-        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        description: "Override AAP bootstrap and execution-environment image -- empty builds from the selected OSAC revision"
         required: false
         default: ""
       osac-repo:
@@ -44,9 +44,9 @@ on:
         default: ""
       components:
         description: >-
-          Optional JSON array of OSAC components to build from source and load
-          onto the cluster. Set repo/ref to the same OSAC PR repository/ref
-          when testing implementation changes; empty builds no PR components.
+          Optional source-build overrides by imageKey. Empty builds all four
+          core CaaS/BMaaS components from osac-repo/osac-branch.
+          Explicit overrides must be compatible with that revision's CRDs.
         required: false
         default: "[]"
       test-marker:

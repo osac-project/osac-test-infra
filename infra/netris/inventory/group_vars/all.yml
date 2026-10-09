@@ -74,6 +74,7 @@ osac_license_path: "{{ inventory_dir }}/../license.zip"
 osac_operator_image: ""
 fulfillment_service_image: ""
 osac_aap_image: ""
+osac_aap_ee_image: ""  # Defaults to osac_aap_image when only one AAP image is supplied
 osac_ui_image: ""
 bmf_operator_image: ""
 

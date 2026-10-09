@@ -50,17 +50,17 @@ on:
         type: string
         default: ""
       osac-operator-image:
-        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
+        description: "Override osac-operator image (registry-pullable reference) -- empty builds from the selected OSAC revision"
         required: false
         type: string
         default: ""
       fulfillment-service-image:
-        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
+        description: "Override fulfillment-service image (registry-pullable reference) -- empty builds from the selected OSAC revision"
         required: false
         type: string
         default: ""
       osac-aap-ee-image:
-        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        description: "Override AAP bootstrap and execution-environment image -- empty builds from the selected OSAC revision"
         required: false
         type: string
         default: ""
@@ -76,12 +76,14 @@ on:
         default: ""
       components:
         description: >-
-          JSON array of components to build from source on the EC2 box and
-          load onto the SNO node. Each entry: repo, ref, containerfile,
+          Optional source-build overrides. By default fulfillment-service,
+          osac-operator, osac-aap and bare-metal-fulfillment-operator are built
+          from the selected OSAC revision and loaded onto the SNO node.
+          Entries override those defaults by imageKey: repo, ref, containerfile,
           imageKey (Helm value path), optional buildType ("ansible-builder"),
           and optional context (build context directory relative to repo root;
           defaults to the containerfile's parent directory).
-          Empty array (default) builds nothing from source.
+          Explicit overrides must be compatible with the selected revision's CRDs.
         required: false
         type: string
         default: "[]"
@@ -321,6 +323,7 @@ jobs:
           persist-credentials: false
 
       - name: Overlay tests from OSAC mono-repo
+        id: osac-source
         env:
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_REF: ${{ inputs.osac-branch }}
@@ -340,10 +343,12 @@ jobs:
 
           OSAC_CLONE_DIR="${RUNNER_TEMP}/osac-test-source"
           git init "${OSAC_CLONE_DIR}"
-          git -C "${OSAC_CLONE_DIR}" sparse-checkout init --cone
-          git -C "${OSAC_CLONE_DIR}" sparse-checkout set tests
           git -C "${OSAC_CLONE_DIR}" fetch --depth 1 "${OSAC_REPO}" "${OSAC_REF}"
           git -C "${OSAC_CLONE_DIR}" checkout FETCH_HEAD
+          OSAC_SHA=$(git -C "${OSAC_CLONE_DIR}" rev-parse HEAD)
+          echo "OSAC source for tests, CLI, images, installer/CRDs and AAP: ${OSAC_REPO}@${OSAC_SHA}"
+          echo "repo=${OSAC_REPO}" >> "$GITHUB_OUTPUT"
+          echo "sha=${OSAC_SHA}" >> "$GITHUB_OUTPUT"
           if [[ ! -f "${OSAC_CLONE_DIR}/tests/e2e/conftest.py" ]]; then
             echo "::error::${OSAC_REPO}@${OSAC_REF} does not contain tests/e2e/conftest.py"
             exit 1
@@ -378,8 +383,8 @@ jobs:
           OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
           FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
           OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
-          OSAC_REPO: ${{ inputs.osac-repo }}
-          OSAC_BRANCH: ${{ inputs.osac-branch }}
+          OSAC_REPO: ${{ steps.osac-source.outputs.repo }}
+          OSAC_BRANCH: ${{ steps.osac-source.outputs.sha }}
         run: |
           for name in OSAC_INSTALLER_IMAGE OSAC_OPERATOR_IMAGE FULFILLMENT_SERVICE_IMAGE OSAC_AAP_EE_IMAGE OSAC_REPO; do
             value="${!name}"
@@ -409,8 +414,8 @@ jobs:
           OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
           FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
           OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
-          OSAC_REPO: ${{ inputs.osac-repo }}
-          OSAC_BRANCH: ${{ inputs.osac-branch }}
+          OSAC_REPO: ${{ steps.osac-source.outputs.repo }}
+          OSAC_BRANCH: ${{ steps.osac-source.outputs.sha }}
         run: |
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
@@ -425,6 +430,8 @@ jobs:
             [osac_aap_image]="$OSAC_AAP_EE_IMAGE"
             [osac_repo]="$OSAC_REPO"
             [osac_branch]="$OSAC_BRANCH"
+            [aap_project_git_uri]="$OSAC_REPO"
+            [aap_project_git_branch]="$OSAC_BRANCH"
           )
           for key in "${!OVERRIDES[@]}"; do
             value="${OVERRIDES[$key]}"
@@ -478,7 +485,9 @@ jobs:
       # subsequent steps in the job, not just this one).
       - name: Add osac CLI to PATH
         shell: bash
-        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "OSAC_CLI_BIN=$HOME/.local/bin/osac" >> "$GITHUB_ENV"
 
       - name: Deploy Netris lab
         shell: bash
@@ -495,14 +504,41 @@ jobs:
         run: make deploy-ocp INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Build and load component images
-        if: inputs.components != '[]' && inputs.components != ''
         id: components
-        timeout-minutes: 30
+        timeout-minutes: 60
         shell: bash
         env:
-          COMPONENTS_JSON: ${{ inputs.components }}
+          COMPONENTS_JSON_INPUT: ${{ inputs.components || '[]' }}
+          OSAC_REPO: ${{ steps.osac-source.outputs.repo }}
+          OSAC_SHA: ${{ steps.osac-source.outputs.sha }}
+          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
+          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
+          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
           KUBECONFIG: /root/.kube/config
         run: |
+          # An empty components input still builds a coherent CaaS/BMaaS stack.
+          # Registry overrides replace the corresponding default build; explicit
+          # components entries retain precedence over registry overrides.
+          CORE_COMPONENTS=$(jq -nc --arg repo "${OSAC_REPO}" --arg ref "${OSAC_SHA}" '
+            [
+              ({repo: $repo, ref: $ref, containerfile: "fulfillment-service/Containerfile", context: ".", imageKey: "service.images.service"}
+                | select(env.FULFILLMENT_SERVICE_IMAGE == "")),
+              ({repo: $repo, ref: $ref, containerfile: "osac-operator/Containerfile", context: ".", imageKey: "operator.image.repository"}
+                | select(env.OSAC_OPERATOR_IMAGE == "")),
+              ({repo: $repo, ref: $ref, containerfile: "osac-aap/execution-environment/execution-environment.yaml", imageKey: "aap.bootstrap.image", buildType: "ansible-builder"}
+                | select(env.OSAC_AAP_EE_IMAGE == "")),
+              {repo: $repo, ref: $ref, containerfile: "bare-metal-fulfillment-operator/Containerfile", context: ".", imageKey: "bmf.image.repository"}
+            ]')
+          COMPONENTS_JSON=$(jq -ce --argjson core "${CORE_COMPONENTS}" '
+            if type != "array" then error("components must be an array") else . end
+            | map(if .imageKey == "service.images.service.repository" then .imageKey = "service.images.service" else . end)
+            | . as $requested
+            | if any(.[]; (.repo | type) != "string" or (.ref | type) != "string" or (.imageKey | type) != "string")
+              then error("each component requires repo, ref and imageKey") else . end
+            | if (map(.imageKey) | unique | length) != length
+              then error("duplicate component imageKey") else . end
+            | [$core[] | select(.imageKey as $key | $requested | all(.[]; .imageKey != $key))] + $requested
+          ' <<< "${COMPONENTS_JSON_INPUT}")
           COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
           IMAGE_OVERRIDES="{}"
           NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
@@ -521,18 +557,26 @@ jobs:
             src="$RUNNER_TEMP/component-${i}-src"
 
             echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
-            if [[ -n "${REPO_PINNED_SHA[$repo]:-}" ]]; then
-              sha="${REPO_PINNED_SHA[$repo]}"
+            repo_url="${repo}"
+            if [[ "${repo_url}" != https://* ]]; then
+              repo_url="https://github.com/${repo_url%.git}.git"
+            fi
+            source_key="${repo_url%.git}@${ref}"
+            if [[ "${repo_url%.git}" == "${OSAC_REPO%.git}" && "${ref}" == "${OSAC_SHA}" ]]; then
+              src="${RUNNER_TEMP}/osac-test-source"
+              sha="${OSAC_SHA}"
+            elif [[ -n "${REPO_PINNED_SHA[$source_key]:-}" ]]; then
+              sha="${REPO_PINNED_SHA[$source_key]}"
               echo "Cloning ${repo} at pinned SHA ${sha} (first clone resolved this from ref '${ref}')."
               git init "${src}"
-              git -C "${src}" fetch --depth 1 "https://github.com/${repo}.git" "${sha}"
+              git -C "${src}" fetch --depth 1 "${repo_url}" "${sha}"
               git -C "${src}" checkout FETCH_HEAD
             else
               git init "${src}"
-              git -C "${src}" fetch --depth 1 "https://github.com/${repo}.git" "${ref}"
+              git -C "${src}" fetch --depth 1 "${repo_url}" "${ref}"
               git -C "${src}" checkout FETCH_HEAD
               sha=$(git -C "${src}" rev-parse HEAD)
-              REPO_PINNED_SHA[$repo]="${sha}"
+              REPO_PINNED_SHA[$source_key]="${sha}"
               echo "Pinned ${repo} to SHA ${sha} (resolved from ref '${ref}')."
             fi
 
@@ -556,16 +600,16 @@ jobs:
 
             if [[ "${build_type}" == "ansible-builder" ]]; then
               /usr/bin/python3 -m pip install --ignore-installed --quiet 'ansible-builder~=3.0'
-              ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
+              # Relative requirements and additional_build_files are resolved
+              # from the execution-environment directory.
+              (cd "${component_dir}" && ansible-builder create --file "${containerfile_name}" --context context)
               podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
             else
-              podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
+              podman build --build-arg GODEBUG=http2client=0 -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
             fi
 
             # Use the CLI from the same fulfillment-service image under test
-            # when one was built from this OSAC ref. Manual runs without a
-            # source component fall back to the pinned/released CLI in the
-            # test Containerfile.
+            # when one was built from this OSAC ref.
             if [[ "${image_key}" == "service.images.service" || "${image_key}" == "service.images.service.repository" ]]; then
               cli_container=$(podman create "${tag}")
               podman cp "${cli_container}:/usr/local/bin/osac" "${RUNNER_TEMP}/osac-cli-bin"
@@ -583,7 +627,7 @@ jobs:
               operator.image.repository)   var_name="osac_operator_image" ;;
               aap.bootstrap.image)         var_name="osac_aap_image" ;;
               aap.configAsCode.eeImage)    var_name="osac_aap_ee_image" ;;
-              bmf.image.repository)        var_name="osac_bmf_image" ;;
+              bmf.image.repository)        var_name="bmf_operator_image" ;;
               *)
                 echo "::error::components[$i].imageKey '${image_key}' is not a recognized override key"
                 exit 1
@@ -610,13 +654,14 @@ jobs:
           rm -f ./osac-cli-bin
 
       - name: Deploy OSAC
+        id: deploy-osac
         timeout-minutes: 90
         shell: bash
         env:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
           COMPONENT_OVERRIDES: ${{ steps.components.outputs.overrides || '{}' }}
         run: |
-          MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
+          MERGED=$(jq -nc --argjson base "${EXTRA_VARS}" --argjson built "${COMPONENT_OVERRIDES}" '$base + $built')
           make deploy-osac INFRA=netris SUITE=caas EXTRA_VARS="${MERGED}"
 
       - name: Setup CaaS hosts and catalog
@@ -699,7 +744,7 @@ jobs:
               -n 0 --junitxml=/tmp/test-output/junit.xml -v
 
       - name: Gather OSAC test artifacts
-        if: always() && steps.deploy-caas.outcome == 'success'
+        if: always() && steps.deploy-osac.outcome != 'skipped' && steps.deploy-osac.outcome != ''
         uses: ./.github/actions/gather-artifacts
         with:
           namespace: osac-e2e-ci

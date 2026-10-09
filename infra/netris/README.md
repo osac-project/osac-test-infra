@@ -429,7 +429,8 @@ dns_server: "10.0.0.1"
 |----------|---------|-------------|--------|
 | `osac_operator_image` | `""` | osac-operator container image override | no |
 | `fulfillment_service_image` | `""` | fulfillment-service container image override | no |
-| `osac_aap_image` | `""` | osac-aap bootstrap image override | no |
+| `osac_aap_image` | `""` | osac-aap bootstrap image override; also used for job execution unless `osac_aap_ee_image` is set | no |
+| `osac_aap_ee_image` | `""` | Optional separate AAP job execution image; local images use the Controller's `missing` pull policy | no |
 | `osac_ui_image` | `""` | osac-ui container image override | no |
 | `bmf_operator_image` | `""` | bare-metal-fulfillment-operator container image override | no |
 | `aap_project_git_uri` | `""` | AAP config-as-code project git URI override (defaults to installer value) | no |
@@ -469,6 +470,28 @@ dns_server: "10.0.0.1"
 ## Testing OSAC Components
 
 All components live in the osac mono-repo. Override `osac_branch` to test a specific branch, and use image variables to override container images.
+
+### CaaS Netris CI revision selection
+
+The **E2E CaaS Netris Full Install** workflow resolves `osac-repo` and
+`osac-branch` once to a commit. By default it builds fulfillment-service,
+osac-operator, osac-aap, and bare-metal-fulfillment-operator from that commit
+and loads them onto the SNO node. The tests, CLI, installer charts/CRDs, and
+AAP project playbooks use the same commit. For a branch run, set those two
+inputs and leave `components` as `[]`; no image inputs are required.
+
+Explicit registry image inputs replace the corresponding default builds.
+Explicit `components` entries override default builds by `imageKey` and take
+precedence over registry image inputs. Such overrides must remain compatible
+with the selected revision's CRDs. The source build step has a 60-minute limit
+for the four components.
+
+The workflow requires the preliminary CaaS cluster to become `READY` before
+starting pytest. A `FAILED` state stops the wait immediately; an exhausted
+readiness wait or repeated API errors also fail deployment. OSAC diagnostics
+run after an attempted OSAC deployment even if deployment or cluster creation
+fails. The OSAC artifact's `aap-jobs/` directory contains job stdout and
+separate failed-task event files, redacted before upload.
 
 > **Note**: `OSAC_VALUES_FILE` is a **Make-level** variable (not an Ansible `EXTRA_VARS` key). It controls which Helm values file is used for both `prep-osac` and `run-osac-setup`. Pass it directly to `make`, not inside `EXTRA_VARS`. Default: `values/caas-ci/values.yaml`.
 

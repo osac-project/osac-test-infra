@@ -134,6 +134,28 @@
     src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
   register: _values_raw
 
+# Older revisions use a string plus images.pullPolicy; newer charts put
+# repository, tag and pullPolicy under images.service. Read the selected
+# revision's chart so local images work with either representation.
+- name: Read fulfillment chart image settings
+  ansible.builtin.slurp:
+    src: "{{ osac_dir }}/fulfillment-service/charts/service/values.yaml"
+  register: _fulfillment_chart_values
+  when: fulfillment_service_image | default('') | length > 0
+
+- name: Build fulfillment image overrides for the selected chart
+  ansible.builtin.set_fact:
+    _fulfillment_images: >-
+      {{ {'service': {
+            'repository': fulfillment_service_image | regex_replace(':([^/]+)$', ''),
+            'tag': (fulfillment_service_image | regex_search(':([^/]+)$', '\1') | first | default('latest')),
+            'pullPolicy': _fulfillment_pull_policy
+          }} if (_fulfillment_chart_values.content | b64decode | from_yaml).images.service is mapping
+          else {'service': fulfillment_service_image, 'pullPolicy': _fulfillment_pull_policy} }}
+  vars:
+    _fulfillment_pull_policy: "{{ 'IfNotPresent' if fulfillment_service_image.startswith('localhost/') else 'Always' }}"
+  when: fulfillment_service_image | default('') | length > 0
+
 # Operator enablement (cnv, mce, metallb) is intentionally NOT overridden here:
 # each values profile declares what it needs (e.g. bmaas-ci disables cnv/mce/metallb,
 # vmaas-ci disables mce, caas-ci disables cnv). Force-enabling them clobbered the
@@ -192,11 +214,15 @@
                'tag': (osac_operator_image | regex_search(':([^/]+)$', '\1') | first | default('latest')),
                'pullPolicy': ('IfNotPresent' if osac_operator_image.startswith('localhost/') else 'Always')
              }}} if osac_operator_image | default('') | length > 0 else {}), recursive=true)
-         | combine(({'service': {'images': {'service': fulfillment_service_image}, 'imagePullPolicy': ('IfNotPresent' if fulfillment_service_image.startswith('localhost/') else 'Always')},
-                     'dbMigrate': {'image': fulfillment_service_image}}
+         | combine(({'service': {'images': _fulfillment_images}}
                     if fulfillment_service_image | default('') | length > 0 else {}), recursive=true)
          | combine(({'aap': {'bootstrap': {'image': osac_aap_image, 'imagePullPolicy': ('IfNotPresent' if osac_aap_image.startswith('localhost/') else 'Always')}}}
                     if osac_aap_image | default('') | length > 0 else {}), recursive=true)
+         | combine(({'aap': {'configAsCode': {
+               'eeImage': _aap_ee_image,
+               'eeImagePull': ('missing' if _aap_ee_image.startswith('localhost/') else 'always')
+             }}}
+                    if _aap_ee_image | length > 0 else {}), recursive=true)
          | combine(({'images': {'ui': osac_ui_image}}
                     if osac_ui_image | default('') | length > 0 else {}), recursive=true)
          | combine(({'bmf': {'image': {
@@ -210,6 +236,8 @@
          | combine(({'aap': {'configAsCode': {'projectGitBranch': aap_project_git_branch}}}
                     if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
       }}
+  vars:
+    _aap_ee_image: "{{ osac_aap_ee_image | default(osac_aap_image, true) }}"
 
 - name: Write patched values file
   ansible.builtin.copy:

@@ -352,22 +352,42 @@ if [[ -n "${AAP_ADMIN_PW}" && -n "${GITHUB_ACTIONS:-}" ]]; then
     echo "::add-mask::${AAP_ADMIN_PW}"
 fi
 if [[ -n "${AAP_ROUTE}" && -n "${AAP_ADMIN_PW}" ]]; then
-    AAP_AUTH=(-sk -u "admin:${AAP_ADMIN_PW}")
+    # Bound requests so an unavailable controller cannot prevent redaction
+    # and upload of the diagnostics already collected.
+    AAP_AUTH=(-sfSk --connect-timeout 10 --max-time 60 -u "admin:${AAP_ADMIN_PW}")
     MAX_PAGES=5
     page=1
     while [[ ${page} -le ${MAX_PAGES} ]]; do
         page_file="${ARTIFACT_DIR}/aap-jobs/jobs-page-${page}.json"
         curl "${AAP_AUTH[@]}" \
-            "https://${AAP_ROUTE}/api/controller/v2/jobs/?page=${page}&page_size=50&order_by=id" \
+            "https://${AAP_ROUTE}/api/controller/v2/jobs/?page=${page}&page_size=50&order_by=-id" \
             > "${page_file}" 2>&1 || break
         jq -e '.results' "${page_file}" &>/dev/null || break
         for job_id in $(jq -r '.results[]?.id // empty' "${page_file}"); do
             status=$(jq -r ".results[] | select(.id == ${job_id}) | .status // \"unknown\"" "${page_file}")
             name=$(jq -r ".results[] | select(.id == ${job_id}) | .name // \"unknown\"" "${page_file}" \
                 | tr -c 'A-Za-z0-9._-' '_' | head -c 100)
-            curl "${AAP_AUTH[@]}" \
-                "https://${AAP_ROUTE}/api/controller/v2/jobs/${job_id}/stdout/?format=txt" \
-                > "${ARTIFACT_DIR}/aap-jobs/job-${job_id}-${status}-${name}.txt" 2>&1 &
+            (
+                curl "${AAP_AUTH[@]}" \
+                    "https://${AAP_ROUTE}/api/controller/v2/jobs/${job_id}/stdout/?format=txt" \
+                    > "${ARTIFACT_DIR}/aap-jobs/job-${job_id}-${status}-${name}.txt" 2>&1 || true
+                if [[ "${status}" == "failed" || "${status}" == "error" ]]; then
+                    # Capture failed task names and output separately from the
+                    # full playbook log. These files pass through the same
+                    # redaction below before the gather action uploads them.
+                    for event_page in $(seq 1 5); do
+                        event_file="${ARTIFACT_DIR}/aap-jobs/job-${job_id}-failed-events-${event_page}.json"
+                        if ! curl "${AAP_AUTH[@]}" \
+                            "https://${AAP_ROUTE}/api/controller/v2/jobs/${job_id}/job_events/?failed=true&page=${event_page}&page_size=100&order_by=counter" \
+                            | jq '{count, next, results: [.results[]? | {counter, event, stdout, task: .event_data.task, task_path: .event_data.task_path}]}' \
+                            > "${event_file}"; then
+                            echo "  Could not collect failed events for AAP job ${job_id}" >&2
+                            break
+                        fi
+                        [[ $(jq -r '.next // empty' "${event_file}") == "" ]] && break
+                    done
+                fi
+            ) &
         done
         next=$(jq -r '.next // empty' "${page_file}")
         [[ -z "${next}" || "${next}" == "null" ]] && break
@@ -376,7 +396,7 @@ if [[ -n "${AAP_ROUTE}" && -n "${AAP_ADMIN_PW}" ]]; then
     wait
     echo "  Captured stdout for $(find "${ARTIFACT_DIR}/aap-jobs" -name "job-*.txt" | wc -l) AAP jobs"
     curl "${AAP_AUTH[@]}" \
-        "https://${AAP_ROUTE}/api/controller/v2/project_updates/?page_size=50&order_by=id" \
+        "https://${AAP_ROUTE}/api/controller/v2/project_updates/?page_size=50&order_by=-id" \
         > "${ARTIFACT_DIR}/aap-jobs/project-updates.json" 2>&1 || true
     if ! jq -e '.results | type == "array"' "${ARTIFACT_DIR}/aap-jobs/project-updates.json" &>/dev/null; then
         echo "  Skipping AAP project updates: invalid response"
