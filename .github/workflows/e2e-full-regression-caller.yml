@@ -29,7 +29,7 @@ on:
         required: false
         default: "{}"
       osac-cli-version:
-        description: "OSAC CLI version (e.g. 0.0.73). Defaults to latest."
+        description: "OSAC CLI version (e.g. 0.0.73). Defaults to the CLI in the deployed fulfillment-service image."
         required: false
         default: ""
       runner-label:
