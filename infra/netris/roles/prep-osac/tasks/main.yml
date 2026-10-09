@@ -165,6 +165,9 @@
 # Shared Netris settings use the chart's global.networking facade. The BM
 # provisioning V-Net stays only on networkFulfillment, where move-attachment runs;
 # clusterFulfillment.config rejects keys outside its declared schema.
+# bootstrap.imagePullPolicy is not a supported chart value. The bootstrap
+# Job omits it, so Kubernetes defaults our non-latest CI tags to IfNotPresent.
+# AAP job execution uses the separate, supported configAsCode.eeImagePull below.
 - name: Build values overrides
   ansible.builtin.set_fact:
     _values_overrides: >-
@@ -216,7 +219,7 @@
              }}} if osac_operator_image | default('') | length > 0 else {}), recursive=true)
          | combine(({'service': {'images': _fulfillment_images}}
                     if fulfillment_service_image | default('') | length > 0 else {}), recursive=true)
-         | combine(({'aap': {'bootstrap': {'image': osac_aap_image, 'imagePullPolicy': ('IfNotPresent' if osac_aap_image.startswith('localhost/') else 'Always')}}}
+         | combine(({'aap': {'bootstrap': {'image': osac_aap_image}}}
                     if osac_aap_image | default('') | length > 0 else {}), recursive=true)
          | combine(({'aap': {'configAsCode': {
                'eeImage': _aap_ee_image,
