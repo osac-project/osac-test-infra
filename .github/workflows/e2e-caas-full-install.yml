@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       test-suite:
-        description: "Test suite to run: caas, or empty string for all"
+        description: "Test suite: caas/sanity, caas/regression, caas for all CaaS, or empty for all suites"
         required: false
         type: string
         default: "caas"
@@ -774,24 +774,17 @@ jobs:
             exit 1
           fi
           echo "url=http://${ROUTE_HOST}" >> "$GITHUB_OUTPUT"
-      - name: Resolve effective test suite (fallback if tier dir is empty)
+      - name: Resolve effective test suite (fail if requested tier is empty)
         env:
           TEST_SUITE: ${{ inputs.test-suite }}
         run: |
-          # VMaaS/CaaS test content hasn't moved into sanity/regression/serial
-          # tier subdirectories yet (only .gitkeep scaffolding exists as of
-          # OSAC-3593) -- if the resolved tier directory has no real tests,
-          # fall back to the base suite name so this never silently collects
-          # zero tests. Generic over any "<suite>/<tier>" shape (sanity,
-          # regression, serial, or any future tier), not hardcoded to one
-          # suffix. Recursive find, not maxdepth 1: BMaaS's own regression/
-          # tier (already populated) nests real tests under regression/networking/,
-          # not directly under regression/*.py.
+          # A requested tier must contain tests: falling back to the base
+          # suite would silently run regression in a sanity-only PR job.
           # Reject anything but word chars/hyphens/underscores in at most one
           # "/tier" segment before it ever reaches a path -- caller-controlled
           # (workflow_dispatch), and a stray "../" here would point `find`
           # outside tests/e2e/ and would still flow into the pytest invocation
-          # below regardless of what this fallback decides.
+          # below regardless of what this validation decides.
           if [[ -n "${TEST_SUITE}" && ! "${TEST_SUITE}" =~ ^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)?$ ]]; then
             echo "::error::test-suite '${TEST_SUITE}' is not a valid suite[/tier] name" >&2
             exit 1
@@ -800,9 +793,9 @@ jobs:
           EFFECTIVE_TEST_SUITE="${TEST_SUITE}"
           if [[ "${TEST_SUITE}" == */* ]]; then
             SUITE_DIR="tests/e2e/${TEST_SUITE}"
-            if ! find "${SUITE_DIR}" -name 'test_*.py' -type f 2>/dev/null | grep -q .; then
-              echo "No test_*.py files found under ${SUITE_DIR} -- falling back to ${TEST_SUITE%/*}"
-              EFFECTIVE_TEST_SUITE="${TEST_SUITE%/*}"
+            if [[ ! -d "${SUITE_DIR}" ]] || [[ -z "$(find "${SUITE_DIR}" -name 'test_*.py' -type f -print -quit)" ]]; then
+              echo "::error::No test_*.py files found under requested tier ${SUITE_DIR}" >&2
+              exit 1
             fi
           fi
           echo "EFFECTIVE_TEST_SUITE=${EFFECTIVE_TEST_SUITE}" >> "$GITHUB_ENV"
@@ -824,7 +817,8 @@ jobs:
             TEST_ARGS="tests/e2e/${EFFECTIVE_TEST_SUITE}/"
             if [ -n "${TEST_MARKER}" ]; then
               case "${EFFECTIVE_TEST_SUITE}" in
-                caas|caas/*) TEST_ARGS="${TEST_ARGS} tests/e2e/references/" ;;
+                # Sanity stays strictly within its directory, even with -m.
+                caas|caas/regression) TEST_ARGS="${TEST_ARGS} tests/e2e/references/" ;;
               esac
             fi
           fi
