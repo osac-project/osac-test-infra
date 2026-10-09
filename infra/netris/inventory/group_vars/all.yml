@@ -183,7 +183,7 @@ caas_cluster_baremetal_instance_type_network_ports:
     type: Ethernet
     speed: 100Gbps
 # When non-empty, osac create uses --pull-secret-file / --ssh-public-key-file and
-# -p for each entry instead of -f pull_secret= / -f ssh_public_key= (MaaS templates).
+# -p for each entry instead of the default CaaS credential arguments (MaaS templates).
 caas_cluster_params: []
 # Empty = label/approve every discovered agent with resource_class (setup-caas).
 # Non-empty = only these inventory hostnames get osac.openshift.io/resource_class

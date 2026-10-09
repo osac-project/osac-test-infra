@@ -32,19 +32,56 @@
       name={{ caas_cluster_node_set_name }},size={{ caas_cluster_node_set_size }},
       baremetal-instance-type={{ caas_cluster_baremetal_instance_type }}
 
-# Default CaaS path: pull_secret / ssh_public_key are template -f fields + release-image.
-# When caas_cluster_params is non-empty (e.g. deploy-maas), use --pull-secret-file /
-# --ssh-public-key-file plus -p for template-specific parameters instead.
+# Template -f parameters preserve the file's trailing newline. Assisted Service
+# interprets that newline as an empty SSH key when registering the worker InfraEnv.
+# Keep the legacy template parameter and the explicit worker field identical.
+- name: Read CaaS SSH public key
+  ansible.builtin.slurp:
+    src: "{{ ssh_public_key_path }}"
+  register: _caas_ssh_public_key_file
+  when:
+    - _cluster_exists.stdout | default('') != 'exists'
+    - (caas_cluster_params | default([]) | length) == 0
+
+- name: Normalize CaaS SSH public key
+  ansible.builtin.set_fact:
+    _caas_ssh_public_key: "{{ _caas_ssh_public_key_file.content | b64decode | trim }}"
+  when:
+    - _cluster_exists.stdout | default('') != 'exists'
+    - (caas_cluster_params | default([]) | length) == 0
+
+- name: Require a non-empty CaaS SSH public key
+  ansible.builtin.assert:
+    that:
+      - _caas_ssh_public_key | length > 0
+    fail_msg: "SSH public key file '{{ ssh_public_key_path }}' is empty after trimming whitespace."
+  when:
+    - _cluster_exists.stdout | default('') != 'exists'
+    - (caas_cluster_params | default([]) | length) == 0
+
+# Default CaaS path: pull secret from a file, normalized SSH key in both fields.
+# MaaS uses explicit credential file flags, whose SSH reader already trims whitespace.
 - name: Create cluster (CaaS template field params)
   ansible.builtin.command:
-    cmd: >-
-      osac create cluster
-      --template {{ caas_cluster_template }}
-      --version {{ caas_cluster_version }}
-      -f pull_secret={{ pull_secret_path }}
-      -f ssh_public_key={{ ssh_public_key_path }}
-      --name {{ caas_cluster_name }}
-      --node-set {{ _caas_worker_node_set_arg | quote }}
+    expand_argument_vars: false
+    argv:
+      - osac
+      - create
+      - cluster
+      - --template
+      - "{{ caas_cluster_template }}"
+      - --version
+      - "{{ caas_cluster_version }}"
+      - -f
+      - "pull_secret={{ pull_secret_path }}"
+      - -p
+      - "ssh_public_key={{ _caas_ssh_public_key }}"
+      - --ssh-public-key
+      - "{{ _caas_ssh_public_key }}"
+      - --name
+      - "{{ caas_cluster_name }}"
+      - --node-set
+      - "{{ _caas_worker_node_set_arg }}"
   register: _cluster_create_fields
   when:
     - _cluster_exists.stdout | default('') != 'exists'
