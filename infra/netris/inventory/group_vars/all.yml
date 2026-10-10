@@ -31,6 +31,9 @@ ocp_gateway: "192.168.40.1/24"
 ocp_node_ip: "192.168.40.2"
 # Optional when Cloudsim's generated SSH aliases are unavailable.
 ocp_vm_mgmt_ip: ""
+ocp_server_ports:
+  - name: "{{ 'eth9@hgx-pod00-su0-h00' if bare_metal_services | default(false) | bool else 'eth10@hgx-pod00-su0-h00' }}"
+    accessMode: true
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 
@@ -74,6 +77,7 @@ osac_branch: "main"
 osac_dir: "/opt/osac"
 osac_installer_dir: "{{ osac_dir }}/osac-installer"
 osac_namespace: "osac-e2e-ci"
+osac_test_tenant_name: "test-infra-tenant"
 osac_values_file: "values/caas-ci/values.yaml"
 osac_license_path: "{{ inventory_dir }}/../license.zip"
 
@@ -120,20 +124,14 @@ aws_region: "{{ lookup('ini', 'aws_region section=default file=' + config_path, 
 # deployed fulfillment-service (metadata.name or spec.version).
 caas_cluster_version: "{{ ocp_version }}.0"
 
-# CaaS Discovery (boot remaining servers with discovery ISO)
-caas_discovery_vm_patterns:
+# CaaS BMaaS worker pool and VM sizing
+caas_worker_vm_patterns:
   - "hgx-pod00-su0-h01"
   - "hgx-pod00-su0-h02"
   - "hgx-pod00-su0-h03"
-caas_discovery_vcpu: 4
-# Optional per-VM vCPU overrides (VM name → count). Empty = use caas_discovery_vcpu for all.
-caas_discovery_vcpu_overrides: {}
-caas_discovery_memory_mb: 16384
-# Optional per-VM memory overrides (VM name → MB). Empty = use caas_discovery_memory_mb for all.
-caas_discovery_memory_mb_overrides: {}
-caas_discovery_disk_gb: 100
-caas_discovery_infraenv_name: "infraenv"
-caas_discovery_infraenv_namespace: "hardware-inventory"
+caas_worker_vcpu: 4
+caas_worker_memory_mb: 16384
+caas_worker_disk_gb: 100
 
 # CaaS agent flow: "hot-pool" (default, legacy) or "cluster-namespace" (Option C).
 # hot-pool: agents live in hardware-inventory, test-infra labels and approves them.
@@ -148,6 +146,35 @@ caas_agent_namespace: "{{ caas_discovery_infraenv_namespace }}"
 caas_server_cluster_template_name: "ns-only"
 caas_server_cluster_template_gateway: "192.168.101.1/24"
 caas_host_type_id: "ci-worker"
+# CaaS Setup (BMaaS instance type, DiskImage and cluster creation)
+# NetworkClass defaults for newly onboarded tenants (including plain BMaaS).
+netris_tenant_network_cidr: "192.168.101.0/24"
+netris_tenant_subnet_cidr: "192.168.101.0/24"
+# One CaaS cluster per tenant subnet; keep the ingress VIP outside DHCP.
+caas_netris_ingress_ip: "192.168.101.28"
+caas_tenant_dhcp_start: "192.168.101.100"
+caas_tenant_dhcp_end: "192.168.101.254"
+# Lab-local ingress probes arrive from the first address on the public BGP
+# link. Derive it from the same subnet used to configure br-public.
+# This /32 does not cover clients entering the lab with other source IPs.
+caas_ingress_return_cidr: "{{ (lookup('file', netris_lab_dir ~ '/group_vars/all.yml') | from_yaml).bgp_link_subnet | ansible.utils.ipaddr('network') | ansible.utils.ipmath(1) }}/32"
+caas_ingress_return_gateway: "192.168.101.1"
+caas_baremetal_instance_type: "ci-worker"
+caas_baremetal_instance_type_profiles:
+  - name: "ci-worker"
+    title: "CI Worker"
+    description: "4 vCPU / 16 GiB worker"
+    cpu_cores: 4
+    memory_total_gb: 16
+  - name: "g5"
+    title: "Simulated G5 Worker"
+    description: "10 vCPU / 20 GiB worker"
+    cpu_cores: 10
+    memory_total_gb: 20
+caas_baremetal_instance_type_fabric_port:
+  name: "eth9"
+  type: "Ethernet"
+  speed: "100Gbps"
 # Netris per-resource-class entry merged into cluster-fulfillment-ig
 # NETRIS_RESOURCE_CLASS_MAP when the resource-class key is missing (setup-caas / setup-maas).
 caas_netris_server_cluster_template_id: 2
@@ -159,20 +186,7 @@ caas_catalog_item: "ci-ocp-small"
 caas_catalog_item_title: "CI OCP Small"
 caas_catalog_item_description: "Small OCP cluster for CI testing"
 caas_cluster_name: "caas-ci-cluster"
-# When non-empty, osac create uses --pull-secret-file / --ssh-public-key-file and
-# -p for each entry instead of -f pull_secret= / -f ssh_public_key= (MaaS templates).
-caas_cluster_params: []
-# Empty = label/approve every discovered agent with resource_class (setup-caas).
-# Non-empty = only these inventory hostnames get osac.openshift.io/resource_class
-# (others are unlabeled). setup-maas defaults to h02+h03 so MaaS claims those workers.
-caas_resource_class_hostnames: []
-caas_agents:
-  - vm_pattern: "hgx-pod00-su0-h01"
-    netris_server_name: "hgx-pod00-su0-h01"
-  - vm_pattern: "hgx-pod00-su0-h02"
-    netris_server_name: "hgx-pod00-su0-h02"
-  - vm_pattern: "hgx-pod00-su0-h03"
-    netris_server_name: "hgx-pod00-su0-h03"
+caas_worker_count: 1
 
 # ── Bare metal services ──────────────────────────────────────────────
 # Enables BMC network, sushy-tools, and BMF operator secrets.
@@ -222,6 +236,7 @@ bmaas_instance_type_description: "CI bare metal instance type for BMaaS testing"
 # the sim-lab BMH VMs (see the Netris V-Net port); eth0 is reserved for
 # lifecycle traffic.
 bmaas_instance_type_network_ports:
+bmaas_create_catalog_items: true
   - name: eth9
     role: fabric
     type: Ethernet

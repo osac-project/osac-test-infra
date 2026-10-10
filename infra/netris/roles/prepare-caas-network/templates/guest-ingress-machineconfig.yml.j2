@@ -1,0 +1,22 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 98-osac-ingress-network
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /etc/osac-ingress/prepare-ingress.sh
+          mode: 493
+          contents:
+            source: data:text/plain;charset=utf-8;base64,{{ lookup('template', role_path ~ '/templates/guest-ingress.sh.j2') | b64encode }}
+        - path: /etc/systemd/system/osac-managed-ingress.service
+          mode: 420
+          contents:
+            source: data:text/plain;charset=utf-8;base64,{{ lookup('file', role_path ~ '/files/osac-managed-ingress.service') | b64encode }}
+    systemd:
+      units:
+        - name: osac-managed-ingress.service
+          enabled: true

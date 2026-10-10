@@ -1,0 +1,251 @@
+---
+# The management-cluster ConfigMap is the NodePool's MachineConfig source.
+# Resolve the exact OSAC order so another hosted cluster is never changed.
+- name: Read the lab public bridge address
+  ansible.builtin.command:
+    argv:
+      - ip
+      - -j
+      - -4
+      - addr
+      - show
+      - dev
+      - "{{ (lookup('file', netris_lab_dir ~ '/group_vars/all.yml') | from_yaml).public_bridge_name }}"
+  register: _caas_public_bridge
+  changed_when: false
+
+- name: Require the expected ingress source on the public bridge
+  ansible.builtin.assert:
+    that:
+      - >-
+        ((_caas_public_bridge.stdout | from_json)[0].addr_info
+         | selectattr('local', 'equalto', caas_ingress_return_cidr.split('/')[0])
+         | list | length) == 1
+    fail_msg: >-
+      The public bridge does not have {{ caas_ingress_return_cidr }} from
+      netris-lab's bgp_link_subnet. Reconcile lab networking before deploying CaaS ingress.
+
+- name: Wait for this cluster's OSAC order
+  kubernetes.core.k8s_info:
+    kubeconfig: /root/.kube/config
+    api_version: osac.openshift.io/v1alpha1
+    kind: ClusterOrder
+    namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    label_selectors:
+      - "osac.openshift.io/clusterorder-uuid={{ caas_cluster_id }}"
+  register: _caas_ingress_order
+  until: _caas_ingress_order.resources | length == 1
+  retries: 60
+  delay: 5
+
+- name: Set the cluster's order name
+  ansible.builtin.set_fact:
+    _caas_ingress_order_name: "{{ _caas_ingress_order.resources[0].metadata.name }}"
+
+- name: Wait for this order's HostedCluster
+  kubernetes.core.k8s_info:
+    kubeconfig: /root/.kube/config
+    api_version: hypershift.openshift.io/v1beta1
+    kind: HostedCluster
+  register: _caas_ingress_hosted_clusters
+  until: >-
+    (_caas_ingress_hosted_clusters.resources | default([])
+     | selectattr('metadata.name', 'equalto', _caas_ingress_order_name) | list | length) == 1
+  retries: 60
+  delay: 5
+
+- name: Set this cluster's HostedCluster namespace
+  ansible.builtin.set_fact:
+    _caas_ingress_hc_namespace: >-
+      {{ (_caas_ingress_hosted_clusters.resources
+          | selectattr('metadata.name', 'equalto', _caas_ingress_order_name)
+          | first).metadata.namespace }}
+
+- name: Wait for this order's worker NodePool
+  kubernetes.core.k8s_info:
+    kubeconfig: /root/.kube/config
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    namespace: "{{ _caas_ingress_hc_namespace }}"
+  register: _caas_ingress_nodepools
+  until: >-
+    (_caas_ingress_nodepools.resources | default([])
+     | selectattr('spec.clusterName', 'equalto', _caas_ingress_order_name)
+     | list | length) == 1
+  retries: 60
+  delay: 5
+
+- name: Set this cluster's worker NodePool
+  ansible.builtin.set_fact:
+    _caas_ingress_nodepool: >-
+      {{ _caas_ingress_nodepools.resources
+         | selectattr('spec.clusterName', 'equalto', _caas_ingress_order_name)
+         | first }}
+
+- name: Validate the guest ingress return route
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import ipaddress, os
+        subnet = ipaddress.ip_network(os.environ['TENANT_SUBNET'])
+        client = ipaddress.ip_network(os.environ['CLIENT_CIDR'])
+        gateway = ipaddress.ip_address(os.environ['GATEWAY'])
+        vip = ipaddress.ip_address(os.environ['INGRESS_VIP'])
+        assert subnet.version == client.version == gateway.version == 4
+        assert subnet.prefixlen == 24, 'Guest interface discovery expects a /24 tenant subnet'
+        assert vip in subnet
+        assert gateway in subnet and gateway not in (subnet.network_address, subnet.broadcast_address)
+        assert not client.overlaps(subnet), 'Return route must target an external client'
+  environment:
+    TENANT_SUBNET: "{{ netris_tenant_subnet_cidr }}"
+    CLIENT_CIDR: "{{ caas_ingress_return_cidr }}"
+    GATEWAY: "{{ caas_ingress_return_gateway }}"
+    INGRESS_VIP: "{{ caas_netris_ingress_ip }}"
+  changed_when: false
+
+- name: Publish managed guest ingress MachineConfig for the worker NodePool
+  kubernetes.core.k8s:
+    kubeconfig: /root/.kube/config
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: osac-managed-ingress
+        namespace: "{{ _caas_ingress_hc_namespace }}"
+      data:
+        config: "{{ lookup('template', role_path ~ '/templates/guest-ingress-machineconfig.yml.j2') }}"
+
+- name: Attach managed ingress config to the worker NodePool
+  ansible.builtin.command:
+    argv:
+      - oc
+      - patch
+      - nodepool
+      - "{{ _caas_ingress_nodepool.metadata.name }}"
+      - -n
+      - "{{ _caas_ingress_hc_namespace }}"
+      - --type=merge
+      - -p
+      - "{{ {'spec': {'config': (_caas_ingress_nodepool.spec.config | default([])) + [{'name': 'osac-managed-ingress'}]}} | to_json }}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  when: "'osac-managed-ingress' not in (_caas_ingress_nodepool.spec.config | default([]) | map(attribute='name') | list)"
+
+- name: Create temporary guest kubeconfig path
+  ansible.builtin.tempfile:
+    state: file
+    prefix: caas-ingress-
+    suffix: .kubeconfig
+  register: _caas_ingress_kubeconfig
+  no_log: true
+
+- name: Configure the hosted cluster ingress return path
+  block:
+    - name: Wait for this HostedCluster's admin kubeconfig
+      ansible.builtin.shell: |
+        set -euo pipefail
+        oc get secret admin-kubeconfig \
+          -n "{{ _caas_ingress_hc_namespace }}-{{ _caas_ingress_order_name }}" \
+          -o jsonpath='{.data.kubeconfig}' \
+          | base64 -d > "{{ _caas_ingress_kubeconfig.path }}"
+        test -s "{{ _caas_ingress_kubeconfig.path }}"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _caas_ingress_kubeconfig_result
+      until: _caas_ingress_kubeconfig_result.rc == 0
+      retries: 60
+      delay: 10
+      changed_when: false
+      no_log: true
+
+    - name: Wait for the guest Network operator configuration
+      ansible.builtin.command:
+        argv:
+          - oc
+          - --kubeconfig
+          - "{{ _caas_ingress_kubeconfig.path }}"
+          - --request-timeout=10s
+          - get
+          - network.operator.openshift.io
+          - cluster
+          - -o
+          - json
+      register: _caas_ingress_guest_network
+      until: _caas_ingress_guest_network.rc == 0
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Enable host routing in the guest OVN gateway
+      ansible.builtin.command:
+        argv:
+          - oc
+          - --kubeconfig
+          - "{{ _caas_ingress_kubeconfig.path }}"
+          - patch
+          - network.operator.openshift.io
+          - cluster
+          - --type=merge
+          - -p
+          - '{"spec":{"defaultNetwork":{"ovnKubernetesConfig":{"gatewayConfig":{"routingViaHost":true}}}}}'
+      when: >-
+        not ((_caas_ingress_guest_network.stdout | from_json).get('spec', {})
+             .get('defaultNetwork', {}).get('ovnKubernetesConfig', {})
+             .get('gatewayConfig', {}).get('routingViaHost', false) | bool)
+
+    - name: Wait for the managed worker configuration to finish rolling out
+      kubernetes.core.k8s_info:
+        kubeconfig: /root/.kube/config
+        api_version: hypershift.openshift.io/v1beta1
+        kind: NodePool
+        namespace: "{{ _caas_ingress_hc_namespace }}"
+        name: "{{ _caas_ingress_nodepool.metadata.name }}"
+      register: _caas_ingress_rolled_nodepool
+      until: >-
+        (_caas_ingress_rolled_nodepool.resources | default([]) | length == 1)
+        and ((_caas_ingress_rolled_nodepool.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'Ready') | map(attribute='status')
+              | first | default('False')) == 'True')
+        and ((_caas_ingress_rolled_nodepool.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'UpdatingConfig') | map(attribute='status')
+              | first | default('True')) == 'False')
+      retries: 120
+      delay: 30
+
+    - name: Ensure the worker NodePool retained managed ingress config
+      ansible.builtin.assert:
+        that:
+          - >-
+            'osac-managed-ingress' in
+            (_caas_ingress_rolled_nodepool.resources[0].spec.config | default([])
+             | map(attribute='name') | list)
+        fail_msg: "The worker NodePool lost its managed ingress MachineConfig reference."
+
+    - name: Wait for the guest Network ClusterOperator to become healthy
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _caas_ingress_kubeconfig.path }}"
+        api_version: config.openshift.io/v1
+        kind: ClusterOperator
+        name: network
+      register: _caas_ingress_network_co
+      until: >-
+        (_caas_ingress_network_co.resources | default([]) | length == 1)
+        and ((_caas_ingress_network_co.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'Available') | map(attribute='status')
+              | first | default('False')) == 'True')
+        and ((_caas_ingress_network_co.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'Degraded') | map(attribute='status')
+              | first | default('True')) == 'False')
+      retries: 80
+      delay: 15
+  always:
+    - name: Remove temporary guest kubeconfig
+      ansible.builtin.file:
+        path: "{{ _caas_ingress_kubeconfig.path }}"
+        state: absent
+      no_log: true

@@ -1,0 +1,68 @@
+---
+- name: Ensure dnsmasq listens on br-mgmt for CaaS worker DNS
+  ansible.builtin.lineinfile:
+    path: /etc/dnsmasq.d/ocp-sno.conf
+    line: "{{ item }}"
+    state: present
+  loop:
+    - "interface=br-mgmt"
+    - "no-dhcp-interface=br-mgmt"
+    - "bind-interfaces"
+  notify: restart dnsmasq
+
+- name: Configure OCP DNS on mgmt-server for CaaS workers
+  ansible.builtin.shell:
+    cmd: |
+      ssh -o StrictHostKeyChecking=no root@192.168.16.1 bash -se <<'REMOTE'
+        changed=false
+        if ! command -v dnsmasq &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq dnsmasq >/dev/null 2>&1
+          changed=true
+        fi
+        mkdir -p /etc/dnsmasq.d
+        DESIRED='address=/api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
+      address=/.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}/{{ ocp_dnat_ip }}
+      listen-address=192.168.16.1
+      bind-interfaces'
+        if [ ! -f /etc/dnsmasq.d/ocp-sno.conf ] || [ "$(cat /etc/dnsmasq.d/ocp-sno.conf)" != "$DESIRED" ]; then
+          echo "$DESIRED" > /etc/dnsmasq.d/ocp-sno.conf
+          changed=true
+        fi
+        mkdir -p /run/dnsmasq
+        echo 'nameserver {{ dns_server }}' > /run/dnsmasq/resolv.conf
+        if ! grep -q 'option domain-name-servers 192.168.16.1' /etc/dhcp/dhcpd.conf; then
+          sed -i 's/option domain-name-servers .*/option domain-name-servers 192.168.16.1, {{ dns_server }};/' /etc/dhcp/dhcpd.conf
+          systemctl restart isc-dhcp-server 2>/dev/null || true
+          changed=true
+        fi
+        systemctl enable dnsmasq 2>/dev/null
+        systemctl restart dnsmasq
+        echo $changed
+      REMOTE
+  register: _mgmt_dns_result
+  changed_when: "'true' in _mgmt_dns_result.stdout"
+
+- name: Add management gateway to CaaS worker DHCP entries when missing
+  delegate_to: 192.168.16.1
+  vars:
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_remote_tmp: /etc/dhcp/.ansible/tmp
+  block:
+    - name: Add a gateway to workers without one
+      ansible.builtin.replace:
+        path: /etc/dhcp/dhcpd.conf
+        regexp: '(?m)^([ \t]*host[ \t]+{{ item | regex_escape }}[ \t]*\{)(?![^}]*\boption\s+routers\s)'
+        replace: '# OSAC CaaS worker gateway\n\1 option routers 192.168.16.1;'
+        validate: /usr/sbin/dhcpd -t -cf %s
+      loop: "{{ caas_worker_vm_patterns }}"
+      register: _worker_gateway_added
+
+    - name: Apply CaaS worker DHCP gateway changes
+      ansible.builtin.systemd:
+        name: isc-dhcp-server
+        state: restarted
+      when: _worker_gateway_added is changed
+
+- name: Apply host DNS changes before BMaaS preparation
+  ansible.builtin.meta: flush_handlers
