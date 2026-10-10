@@ -11,7 +11,7 @@ The [netris-lab](https://github.com/danmanor/netris-lab) deploys a full simulate
 - **4 softgate VMs** — provide NAT/L4LB and BGP peering for internet access
 - **4 server VMs** (hgx-00 to hgx-03) — simulated GPU servers, managed by Netris
 
-This repo takes the first server (hgx-00), resizes it for OCP, configures Netris networking (VPC, VNet, Subnet), and installs OpenShift SNO on it using the Assisted Installer. For CaaS testing, the remaining three servers (hgx-01 to hgx-03) are booted with a discovery ISO and registered as agents for cluster provisioning.
+This repo takes the first server (hgx-00), resizes it for OCP, configures Netris networking (VPC, VNet, Subnet), and installs OpenShift SNO on it using the Assisted Installer. CaaS and MaaS use the remaining three servers as BMaaS-managed worker VMs. BMaaS provides the BareMetalHosts; the OSAC cluster order provisions and assigns only the requested worker count.
 
 ```
 Bare-metal host
@@ -23,10 +23,9 @@ Bare-metal host
     │   ├── VPC/VNet/Subnet configured via Netris API
     │   ├── OCP SNO installed via Assisted Installer
     │   └── OSAC deployed on top
-    └── hgx-01..03 (CaaS only: 4 vCPU, 16G RAM, 100G disk)
-        ├── Booted with discovery ISO from InfraEnv
-        ├── Registered as agents with resource_class + netris.server/name
-        └── Used to provision a CaaS cluster via fulfillment API
+    └── hgx-01..03 (BMaaS worker VMs)
+        ├── Registered as BareMetalHosts and sized by the CaaS/MaaS setup
+        └── Selected by BareMetalInstanceType when the OSAC cluster order runs
 ```
 
 Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softgate SNAT → host iptables masquerade → internet.
@@ -79,7 +78,7 @@ make deploy
 make deploy-fast
 
 # Then run a test flow
-make setup-caas    # CaaS setup: discover hosts, label agents, register host type
+make setup-caas    # CaaS setup: prepare BMaaS workers, host types, DiskImage, and catalog
 make deploy-caas   # CaaS: create cluster
 ```
 
@@ -102,10 +101,16 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 
 | Target | Description | Time |
 |--------|-------------|------|
-| `make setup-caas` | Discover hosts, label agents, register host type, configure osac CLI | ~30 min |
-| `make deploy-caas` | Create CaaS cluster using `ocp_ci_small` template | ~60 min |
-| `make setup-maas` | Same as setup-caas with MaaS host type / sizing; labels only `MAAS_LABEL_HOSTNAMES` (default h02+h03) with `g5` | ~30 min |
-| `make deploy-maas` | Create MaaS cluster (`ocp_4_20_ai_maas` + `-p` template params) | ~60 min |
+| `make setup-caas` | Prepare BMaaS worker VMs, register worker types and DiskImage, and configure the catalog | ~30 min |
+| `make deploy-caas` | Create the CaaS catalog cluster with one `ci-worker` BareMetalInstanceType | ~60 min |
+| `make setup-maas` | Configure all three BMaaS worker VMs as 10 vCPU / 20GiB `g5` hosts; deploy-maas requests two | ~30 min |
+| `make deploy-maas` | Create the MaaS catalog cluster with two `g5` BareMetalInstanceTypes and template defaults | ~60 min |
+
+CaaS and MaaS setup add `192.168.16.1` as the DHCP gateway for configured
+worker hosts only when no router is already set. The gateway remains while the
+cluster runs so workers retain routing after DHCP renewals. Normal cluster
+destruction retains the BMaaS hosts and gateway for reuse; force-destroy removes
+the managed gateway entries. Existing router options are preserved.
 
 ### Destroy
 
@@ -115,8 +120,8 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make destroy-osac` | Tear down OSAC: helm releases, operators, CRDs, namespaces |
 | `make destroy-ocp` | Reset OCP for reinstall: delete cluster, recreate disk, boot VM |
 | `make destroy-infra` | Tear down netris-lab (VMs, K3s, topology) |
-| `make destroy-caas` | CaaS teardown: stop discovery VMs, remove disks/ISO, delete namespace, clean DNS |
-| `make force-destroy-caas` | destroy-caas + strip stuck orders/namespaces, wipe VMs, Netris orphans |
+| `make destroy-caas` | Delete the named OSAC cluster and retain reusable BMaaS hosts |
+| `make force-destroy-caas` | Force-clean stuck orders, remove worker BMHs, wipe worker VMs, and sweep Netris orphans |
 | `make destroy-maas` | destroy-caas with MaaS cluster/host-type overrides |
 | `make force-destroy-maas` | force-destroy-caas with MaaS overrides |
 | `make destroy-bmaas` | BMaaS teardown: remove BMH/K8s resources, stop BMaaS VMs, clean disks, delete BMH namespace |
@@ -126,7 +131,7 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | Target | Description |
 |--------|-------------|
 | `make connectivity` | Re-run lab connectivity (VPN, BGP, softgates) without full redeploy |
-| `make run-osac-setup` | Re-run just `make install` in osac-installer (after prep-osac has run) |
+| `make run-osac-setup` | Run the infrastructure and application Helm installs after prep-osac |
 | `make prep-osac` | Ansible-only OSAC prep (clone, patch values, copy secrets) — no Helm install |
 | `make post-osac` | Scale down MCE operators and filter OS images to target version |
 | `make vendor-update` | Refresh vendored Ansible collections |
@@ -185,14 +190,14 @@ make connectivity   # re-runs VPN, socat, ISP FRR, softgate agents
 
 **Deploy CaaS after OSAC is up:**
 ```bash
-make setup-caas     # discover hosts, label agents, register host type
+make setup-caas     # prepare BMaaS workers and register CaaS prerequisites
 make deploy-caas    # create cluster
 ```
 
 **Deploy MaaS after OSAC is up:**
 ```bash
-make setup-maas     # same discovery path; labels only MAAS_LABEL_HOSTNAMES (default h02+h03) with g5
-make deploy-maas    # create cluster with ocp_4_20_ai_maas + enable_* params
+make setup-maas     # h01–h03 use 10 vCPU / 20GiB and are registered as g5 BMaaS hosts
+make deploy-maas    # create a 2-worker cluster; optional template defaults apply
 ```
 
 **Rebuild from scratch:**
@@ -224,7 +229,8 @@ cd osac-test-infra/infra/netris
 
 # Create env file from template (one per server, gitignored)
 cp scripts/env.sh.example scripts/env.sh
-# Edit scripts/env.sh with: SERVER IP, PASSWORD, LAB_NAME, secrets paths, AWS keys
+# Edit scripts/env.sh with: SERVER IP, PASSWORD, LAB_NAME, NETRIS_PASSWORD, secrets paths, AWS keys
+# For private snapshot flavor pulls, also set QUAY_USERNAME and QUAY_PASSWORD
 ```
 
 **Deploy:**
@@ -232,13 +238,17 @@ cp scripts/env.sh.example scripts/env.sh
 source scripts/env.sh && make deploy-jump
 ```
 
+`NETRIS_PASSWORD` is required by `deploy-jump` and is written to the remote `config` file. Keep it in the gitignored env file; the script sends the generated config over SSH rather than placing the password in the SSH command.
+
+For a private snapshot flavor pull, set both `QUAY_USERNAME` and `QUAY_PASSWORD` in that env file. `deploy-jump` writes them to the remote `config`; the snapshot cache role uses them to create a temporary Skopeo auth file, so a separate Quay `skopeo login` on the worker is unnecessary. They can be left empty when no private flavor pull is needed.
+
 This single command:
 1. Pre-caches container images on your laptop (with retries, avoids rate limits)
 2. Rsyncs the repo + cached images to the server
 3. Bootstraps packages (EPEL, Ansible, pip deps)
 4. Sets up data disk (partition, mount, symlinks, SELinux)
 5. Destroys any previous deployment
-6. Runs the full pipeline: setup-infra → deploy-infra → deploy-ocp → deploy-osac → setup-caas → deploy-caas → post-install
+6. Runs the full pipeline: setup-infra → deploy-infra → deploy-ocp → deploy-osac → post-install → setup-caas → deploy-caas → access-doc
 
 **Monitor:**
 ```bash
@@ -262,7 +272,9 @@ source scripts/env-mylab.sh && make deploy-jump
 | `make access-doc` | Generate handover documentation only |
 | `make health-check` | Quick status verification |
 
-`redeploy-server.sh` steps: `setup-infra` → `deploy-infra` → `deploy-ocp` → `deploy-osac` → `setup-caas|setup-maas` → `deploy-caas|deploy-maas` → `post-install`. Pass `OSAC_DEPLOY_MODE=snapshot` (or `--snapshot`) for refresh instead of Helm install; default is `fresh`.
+`redeploy-server.sh` steps: `setup-infra` → `deploy-infra` → `deploy-ocp` → `deploy-osac` → `post-install` → `setup-caas|setup-maas` → `deploy-caas|deploy-maas` → `access-doc`. Pass `OSAC_DEPLOY_MODE=snapshot` (or `--snapshot`) for refresh instead of Helm install; default is `fresh`.
+
+`post-install` applies the OSAC access fixes and generates the initial access document before workload setup. The final `access-doc` step refreshes it with workload-cluster details.
 
 See the PR description for known issues and workarounds specific to BM/RHEL environments.
 
@@ -304,12 +316,12 @@ OSAC itself is handled by `make deploy-osac` (not part of `deploy-ocp`). In `OSA
 
 `make deploy-osac` runs in three phases:
 
-1. **`prep-osac`** (Ansible) — clones the osac mono-repo, resolves the OCP release CLI image, patches the Helm values file with all CI-specific settings (Netris controller URL/credentials, DNS/AWS settings, SSH keys, instance group config for cluster/network fulfillment), enables required operators (LVMS, MetalLB, CNV, MCE, bundled PostgreSQL), copies license and pull secret to the values directory, and sets up a socat forwarder for OCP ingress on port 9444.
+1. **`prep-osac`** (Ansible) — clones the osac mono-repo, resolves the OCP release CLI image, patches the Helm values file with all CI-specific settings (Netris controller URL/credentials, DNS/AWS settings, SSH keys, instance group config for cluster/network fulfillment), enables LVMS and bundled PostgreSQL while preserving the other operator choices in the selected profile, copies license and pull secret to the values directory, and sets up a socat forwarder for OCP ingress on port 9444.
 
-2. **`run-osac-setup`** (shell) — runs `make install` in the osac-installer directory, which executes three Helm install phases:
-   - **Phase 1** (`install-operators`) — installs OLM subscriptions for cert-manager, AAP, LVMS, MetalLB, CNV, and MCE via the `osac-operators` chart
-   - **Phase 2** (`install-prereqs`) — deploys Keycloak, CA certificates, trust-manager bundles, and operator CRD instances via the `osac-prereqs` chart
-   - **Phase 3** (`install-osac`) — deploys the OSAC umbrella chart (osac-operator, fulfillment-service, osac-aap, osac-ui) with post-install hooks for hub creation and template publishing
+2. **`run-osac-setup`**:
+   - Runs the installer's `make install-infra` for the `osac-deps` and `osac-infra` releases.
+   - Creates the external `netris-credentials` Secret.
+   - Runs the installer's `make install-osac` for the application release, including template publishing and resource-seeding hooks.
 
 3. **`post-osac`** (Ansible) — skipped in fresh mode. In snapshot mode, scales down MCE operators and filters `OS_IMAGES` to only the target OCP version.
 
@@ -344,18 +356,23 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 | `dns_server` | `8.8.8.8` | Upstream DNS server for the lab (override in environments where public DNS is blocked) |
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS cluster creation |
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name |
-| `caas_host_type_id` | `ci-worker` | Resource class for CaaS agents |
+| `caas_baremetal_instance_type` | `ci-worker` | BMaaS BareMetalInstanceType selected for CaaS workers |
 | `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:caas` | OCI image containing the snapshot flavor |
 | `snapshot_osac_namespace` | `osac-e2e-ci` | OSAC namespace baked into the snapshot |
 | `snapshot_osac_values_file` | `values/caas-ci/values.yaml` | Helm values file for OSAC refresh |
 
 ```bash
 make deploy-ocp EXTRA_VARS="ocp_version=4.18"
-make setup-caas EXTRA_VARS="caas_cluster_name=my-cluster caas_discovery_vcpu=8"
+make setup-caas EXTRA_VARS="caas_cluster_name=my-cluster caas_worker_vcpu=8"
 
-# MaaS: default 10 vCPU / 20GiB for h02–h03; h01 stays 4 vCPU / 16GiB via overrides.
-# Grow workers only (e.g. real model headroom) without resizing h01:
-make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
+# CaaS: configure all three VMs at 4 vCPU / 16GiB; create a 1-worker cluster by default.
+make setup-caas
+make deploy-caas CAAS_WORKER_COUNT=1
+
+# MaaS: configure all three VMs at 10 vCPU / 20GiB; create a 2-worker cluster by default.
+# The third eligible worker remains available for later scale-out.
+make setup-maas
+make deploy-maas MAAS_WORKER_COUNT=2
 ```
 
 #### Lab & Identity
@@ -390,6 +407,25 @@ make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
 | `netris_username` | `netris` | Netris API username | defaults only |
 | `netris_password` | *(required)* | Netris API password — no default, set in local config | yes |
 | `dns_server` | `8.8.8.8` | Upstream DNS server threaded through cloud-init, Netris topology, dnsmasq/DHCP, and the OCP NMState resolver. Override in environments where public DNS (8.8.8.8, 1.1.1.1) is unreachable | yes |
+
+CaaS setup uses the fixed test tenant's default network. Fresh and snapshot Helm
+values set `netris_tenant_network_cidr` and `netris_tenant_subnet_cidr` to
+`192.168.101.0/24`. These defaults also apply to newly onboarded BMaaS tenants;
+they do not change the management or BMaaS provisioning networks, or migrate
+existing tenant networks.
+
+`setup-caas` (also used by `setup-maas`) reserves ingress `192.168.101.28` by
+setting the tenant V-Net DHCP range to `192.168.101.100`–`192.168.101.254`, before
+workers are attached. The settings are `caas_netris_ingress_ip`,
+`caas_tenant_dhcp_start`, and `caas_tenant_dhcp_end`. Setup refuses to change DHCP
+on an already populated V-Net.
+
+Setup resolves the tenant Subnet and VirtualNetwork to the associated Netris VPC
+when configuring DHCP. Separate isolated VPCs can reuse `.28`, but two clusters
+in the same subnet need distinct ingress VIPs.
+
+Existing tenants with a different subnet require network recreation or a fresh
+deployment. Merely rerunning setup does not migrate their CIDR.
 
 Set `dns_server` when the lab host cannot reach public DNS resolvers. Override per-run via `EXTRA_VARS`, or set it permanently in [`inventory/group_vars/all.yml`](inventory/group_vars/all.yml):
 
@@ -443,13 +479,12 @@ the flavor image; it reports an actionable error if the credentials are missing 
 |----------|---------|-------------|--------|
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name | yes (custom) |
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS | defaults only |
-| `caas_host_type_id` | `ci-worker` | Resource class label for CaaS agents | defaults only |
-| `caas_discovery_vcpu` | `4` | Discovery VM vCPUs | yes (8) |
-| `caas_discovery_vcpu_overrides` | `{}` | Per-VM vCPU map (VM name → count); empty = use `caas_discovery_vcpu` | defaults only |
-| `caas_discovery_memory_mb` | `16384` | Discovery VM memory in MB | yes (32768) |
-| `caas_discovery_memory_mb_overrides` | `{}` | Per-VM memory map (VM name → MB); empty = use `caas_discovery_memory_mb` | defaults only |
-| `caas_discovery_disk_gb` | `100` | Discovery VM disk in GB | yes (150) |
-| `caas_discovery_vm_patterns` | `[hgx-pod00-su0-h01..03]` | VM names for CaaS discovery | defaults only |
+| `caas_baremetal_instance_type` | `ci-worker` | BMaaS BareMetalInstanceType selected for CaaS workers | defaults only |
+| `caas_worker_vcpu` | `4` | BMaaS worker VM vCPUs | yes (8) |
+| `caas_worker_memory_mb` | `16384` | BMaaS worker VM memory in MB | yes (32768) |
+| `caas_worker_disk_gb` | `100` | BMaaS worker VM disk in GB | yes (150) |
+| `caas_worker_vm_patterns` | `[hgx-pod00-su0-h01..03]` | BMaaS worker VM names | defaults only |
+| `caas_worker_count` | `1` | Number of CaaS BMaaS workers requested; MaaS defaults to `2` | defaults only |
 
 ## Testing OSAC Components
 
@@ -477,3 +512,25 @@ make destroy-osac
 make deploy-osac OSAC_VALUES_FILE=values/bmaas-ci/values.yaml \
   EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true"
 ```
+
+### Netris identity for BMaaS-created CaaS Agents
+
+`prepare-caas-bmaas` installs `test-infra-netris-agents.service` on the hypervisor.
+It maps the configured worker VMs' hardware UUIDs to their Netris server names and
+sets `netris.server/name` on matching Agents in the OSAC namespace. It runs after
+setup exits, so replacement Agents and later scale-out workers receive the label.
+It does not boot discovery media, approve Agents, or select workers.
+
+The `test-infra-netris-agent-identity` ValidatingAdmissionPolicy blocks binding
+only those configured Agents until their label is correct. This prevents the
+OSAC controller and AAP networking job from outrunning the label synchronizer.
+The policy uses the stable `admissionregistration.k8s.io/v1` API. If the service
+is unavailable, those workers wait; inspect it with
+`journalctl -u test-infra-netris-agents -n 50`. Setup must run before deployment.
+The service and policy remain across cluster teardown for reuse.
+
+The legacy `discover-caas` role and its InfraEnv template have been removed.
+BMaaS owns worker power, disks and discovery; setup only reconfigures VMs whose
+persistent hardware/disk configuration differs. Existing claimed, deleting, or
+non-available BMHs are rejected before VM mutation. Standalone BMaaS retains its
+existing defaults; CaaS passes an explicit list of VMs needing reconfiguration.

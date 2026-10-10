@@ -246,6 +246,27 @@
       sed -i '/idp:/,/credentials:/{s|url:.*keycloak.*|url: https://{{ _keycloak_external_host }}|}' \
         {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
 
+# Keep the snapshot path consistent with fresh installs before tenant onboarding.
+- name: Read snapshot Helm values for tenant network defaults
+  ansible.builtin.slurp:
+    src: "{{ osac_installer_dir }}/{{ snapshot_osac_values_file }}"
+  register: _snapshot_tenant_values
+  no_log: true
+
+- name: Configure snapshot tenant network defaults
+  ansible.builtin.copy:
+    dest: "{{ osac_installer_dir }}/{{ snapshot_osac_values_file }}"
+    content: >-
+      {{ (_snapshot_tenant_values.content | b64decode | from_yaml)
+         | combine({'global': {
+             'expertOverrides': {'networkClass': false},
+             'networking': {'networkClass': {'defaults': {
+               'virtualNetworkIPv4CIDR': netris_tenant_network_cidr,
+               'subnetIPv4CIDR': netris_tenant_subnet_cidr}}}}}, recursive=true)
+         | to_nice_yaml }}
+    mode: "0600"
+  no_log: true
+
 - name: Report OSAC prep completed
   ansible.builtin.debug:
     msg: "OSAC prep completed — ready for refresh script"

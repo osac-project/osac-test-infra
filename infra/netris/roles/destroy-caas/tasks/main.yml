@@ -1,9 +1,6 @@
 ---
-# Delete the named CaaS/MaaS cluster via osac CLI, then tear down discovery
-# agents / InfraEnv / worker VM disks.
-#
-# Cluster delete previously no-oped: osac was never logged in in this role, so
-# "get clusters" returned nothing and the delete task was skipped.
+# Delete the named cluster via the OSAC CLI. BMaaS hosts are retained for reuse;
+# OSAC owns the per-order Agents and InfraEnv.
 
 - name: Resolve OSAC namespace for destroy
   ansible.builtin.set_fact:
@@ -38,10 +35,10 @@
     KUBECONFIG: /root/.kube/config
   changed_when: true
 
-- name: Resolve cluster ID for {{ caas_cluster_name }}
+- name: Resolve cluster ID and deletion state for {{ caas_cluster_name }}
   ansible.builtin.shell: |
     set -euo pipefail
-    osac get clusters -o json | python3 -c '
+    osac --tenant "{{ osac_test_tenant_name }}" get clusters -o json | python3 -c '
     import json, sys
     raw = json.load(sys.stdin)
     clusters = raw if isinstance(raw, list) else (raw.get("items") or [raw])
@@ -54,124 +51,68 @@
         meta = c.get("metadata") if isinstance(c.get("metadata"), dict) else {}
         return (meta.get("name") or c.get("name") or "")
 
-    matches = [c.get("id", "") for c in clusters if cluster_name(c) == name and c.get("id")]
-    print(matches[0] if matches else "")
+    matches = [c for c in clusters if cluster_name(c) == name]
+    if len(matches) > 1:
+        sys.exit("Multiple clusters match the configured name; refusing deletion")
+    cluster = matches[0] if matches else {}
+    if matches and not cluster.get("id"):
+        sys.exit("The matching cluster has no ID; refusing deletion")
+    print(json.dumps({
+        "id": cluster.get("id", ""),
+        "deleting": bool((cluster.get("metadata") or {}).get("deletion_timestamp")),
+    }))
     ' "{{ caas_cluster_name }}"
+  args:
+    executable: /bin/bash
   environment:
     KUBECONFIG: /root/.kube/config
-  register: _cluster_id
+  register: _destroy_cluster_lookup
   changed_when: false
-  failed_when: false
+
+- name: Set cluster deletion target
+  ansible.builtin.set_fact:
+    _destroy_cluster: "{{ _destroy_cluster_lookup.stdout | from_json }}"
 
 - name: Report when named cluster is already absent
   ansible.builtin.debug:
     msg: "No osac cluster named '{{ caas_cluster_name }}' — skip osac delete"
-  when: (_cluster_id.stdout | trim | length) == 0
+  when: _destroy_cluster.id | length == 0
+
+- name: Report when cluster deletion is already pending
+  ansible.builtin.debug:
+    msg: "OSAC cluster '{{ caas_cluster_name }}' is already deleting — skip duplicate request"
+  when: _destroy_cluster.deleting
 
 - name: Delete cluster via osac CLI
   ansible.builtin.command:
-    cmd: osac delete cluster {{ _cluster_id.stdout | trim }}
+    cmd: osac --tenant "{{ osac_test_tenant_name }}" delete cluster {{ _destroy_cluster.id }}
   environment:
     KUBECONFIG: /root/.kube/config
   register: _osac_delete
-  when: (_cluster_id.stdout | trim | length) > 0
-  changed_when: _osac_delete.rc == 0
-  failed_when: false
-
-- name: Warn if osac delete failed
-  ansible.builtin.debug:
-    msg: >-
-      osac delete cluster {{ _cluster_id.stdout | trim }} failed
-      (rc={{ _osac_delete.rc }}): {{ _osac_delete.stderr | default(_osac_delete.stdout) | trim }}
   when:
-    - _osac_delete is not skipped
-    - _osac_delete.rc | default(0) != 0
+    - _destroy_cluster.id | length > 0
+    - not _destroy_cluster.deleting
+  changed_when: _osac_delete.rc == 0
 
-# Step 2: Force-delete agents by removing finalizers
-- name: Get agent names
-  ansible.builtin.shell:
-    cmd: oc get agent -n {{ caas_agent_namespace }} -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true
+- name: Confirm OSAC deletion is recorded before returning
+  ansible.builtin.shell: |
+    set -euo pipefail
+    osac --tenant "{{ osac_test_tenant_name }}" get clusters -o json | python3 -c '
+    import json, sys
+    raw = json.load(sys.stdin)
+    clusters = raw if isinstance(raw, list) else (raw.get("items") or [raw])
+    matches = [c for c in clusters if isinstance(c, dict) and c.get("id") == sys.argv[1]]
+    print("absent" if not matches else (
+        "deleting" if (matches[0].get("metadata") or {}).get("deletion_timestamp") else "active"
+    ))
+    ' "{{ _destroy_cluster.id }}"
+  args:
+    executable: /bin/bash
   environment:
     KUBECONFIG: /root/.kube/config
-  register: _agents
+  register: _destroy_cluster_state
+  until: _destroy_cluster_state.rc == 0 and (_destroy_cluster_state.stdout | trim) in ['absent', 'deleting']
+  retries: 5
+  delay: 2
   changed_when: false
-  failed_when: false
-
-- name: Remove finalizers from agents
-  ansible.builtin.command:
-    cmd: >-
-      oc patch agent/{{ item }} -n {{ caas_agent_namespace }}
-      --type=merge -p '{"metadata":{"finalizers":null}}'
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop: "{{ _agents.stdout.split() }}"
-  when: _agents.stdout | length > 0
-  failed_when: false
-  changed_when: true
-
-- name: Delete agents
-  ansible.builtin.command:
-    cmd: oc delete agent --all -n {{ caas_agent_namespace }} --wait=false
-  environment:
-    KUBECONFIG: /root/.kube/config
-  failed_when: false
-  changed_when: true
-
-# Step 3: Force-delete InfraEnv
-- name: Remove finalizers from InfraEnv
-  ansible.builtin.command:
-    cmd: >-
-      oc patch infraenv/{{ caas_discovery_infraenv_name }} -n {{ caas_discovery_infraenv_namespace }}
-      --type=merge -p '{"metadata":{"finalizers":null}}'
-  environment:
-    KUBECONFIG: /root/.kube/config
-  failed_when: false
-  changed_when: true
-
-- name: Delete InfraEnv
-  ansible.builtin.command:
-    cmd: oc delete infraenv {{ caas_discovery_infraenv_name }} -n {{ caas_discovery_infraenv_namespace }} --wait=false
-  environment:
-    KUBECONFIG: /root/.kube/config
-  failed_when: false
-  changed_when: true
-
-# Step 4: Delete InfraEnv namespace
-- name: Delete InfraEnv namespace
-  ansible.builtin.command:
-    cmd: oc delete namespace {{ caas_discovery_infraenv_namespace }} --wait=false
-  environment:
-    KUBECONFIG: /root/.kube/config
-  failed_when: false
-  changed_when: true
-
-# Step 5: Shut down discovery VMs and clean up disks
-- name: Find discovery VMs
-  ansible.builtin.shell:
-    cmd: virsh list --all --name | grep "{{ item }}" || true
-  register: _discovery_vm_lookup
-  changed_when: false
-  failed_when: false
-  loop: "{{ caas_discovery_vm_patterns }}"
-
-- name: Build VM name list
-  ansible.builtin.set_fact:
-    caas_discovery_vms: "{{ _discovery_vm_lookup.results | selectattr('stdout', 'ne', '') | map(attribute='stdout_lines') | map('first') | list }}"
-
-- name: Shut down running VMs
-  ansible.builtin.command:
-    cmd: virsh destroy {{ item }}
-  loop: "{{ caas_discovery_vms }}"
-  failed_when: false
-  changed_when: true
-
-- name: Remove discovery VM disks
-  ansible.builtin.file:
-    path: /var/lib/libvirt/images/{{ item }}-disk.qcow2
-    state: absent
-  loop: "{{ caas_discovery_vms }}"
-
-- name: Remove discovery ISO
-  ansible.builtin.file:
-    path: /var/lib/libvirt/images/caas-discovery.iso
-    state: absent
+  when: _destroy_cluster.id | length > 0

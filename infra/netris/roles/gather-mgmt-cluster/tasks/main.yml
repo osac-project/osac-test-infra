@@ -18,7 +18,7 @@
       {{ [
         _osac_namespace | default('osac-e2e-ci', true),
         bmaas_bmh_namespace | default('host-inventory'),
-        caas_agent_namespace | default('hardware-inventory'),
+        bmaas_bmh_namespace | default('host-inventory'),
         'keycloak',
         'ansible-aap',
         'osac-operators',

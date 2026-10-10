@@ -11,7 +11,7 @@
 #
 # Steps:
 #   setup-infra → deploy-infra → deploy-ocp → deploy-osac
-#     → setup-caas|setup-maas → deploy-caas|deploy-maas → post-install
+#     → post-install → setup-caas|setup-maas → deploy-caas|deploy-maas → access-doc
 #
 # OSAC_DEPLOY_MODE (fresh|snapshot) is passed through to make for deploy-ocp /
 # deploy-osac (same meaning as make deploy vs make deploy-fast):
@@ -99,9 +99,10 @@ status_init() {
               "deploy-infra":{"status":"pending"},
               "deploy-ocp":{"status":"pending"},
               "deploy-osac":{"status":"pending"},
+              "post-install":{"status":"pending"},
               ($setup_flow):{"status":"pending"},
               ($deploy_flow):{"status":"pending"},
-              "post-install":{"status":"pending"}
+              "access-doc":{"status":"pending"}
             }')
         jq --arg id "$RUN_ID" \
             --arg suite "$SUITE" \
@@ -236,9 +237,10 @@ STEPS=(
     deploy-infra
     deploy-ocp
     deploy-osac
+    post-install
     "$SETUP_FLOW"
     "$DEPLOY_FLOW"
-    post-install
+    access-doc
 )
 
 touch "$PROGRESS_FILE"

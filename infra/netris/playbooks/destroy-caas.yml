@@ -1,5 +1,5 @@
 ---
-- name: Destroy CaaS — delete cluster, force-remove agents and InfraEnv, stop VMs
+- name: Destroy CaaS — delete the named cluster and retain BMaaS hosts for reuse
   hosts: all
   gather_facts: false
   roles:

@@ -1,0 +1,218 @@
+---
+# The lab uses one tenant/default subnet. Resolve its VPC, never the management
+# or provisioning VPC, so DHCP is configured on the correct tenant V-Net.
+- name: Validate CaaS ingress and DHCP addresses
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import ipaddress, os
+        network = ipaddress.ip_network(os.environ['TENANT_NETWORK'])
+        subnet = ipaddress.ip_network(os.environ['TENANT_SUBNET'])
+        vip, start, end = [ipaddress.ip_address(os.environ[k])
+                           for k in ('INGRESS_IP', 'DHCP_START', 'DHCP_END')]
+        assert subnet.version == 4 and subnet.subnet_of(network), 'Invalid tenant IPv4 subnet'
+        assert all(subnet.network_address + 1 < ip < subnet.broadcast_address
+                   for ip in (vip, start, end)), 'VIP/DHCP addresses must be usable and exclude the gateway'
+        assert start <= end and not start <= vip <= end, 'DHCP range must exclude the ingress VIP'
+  environment:
+    TENANT_NETWORK: "{{ netris_tenant_network_cidr }}"
+    TENANT_SUBNET: "{{ netris_tenant_subnet_cidr }}"
+    INGRESS_IP: "{{ caas_netris_ingress_ip }}"
+    DHCP_START: "{{ caas_tenant_dhcp_start }}"
+    DHCP_END: "{{ caas_tenant_dhcp_end }}"
+  changed_when: false
+
+- name: Wait for the configured tenant default subnet
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/subnets?filter={{ _tenant_subnet_filter | urlencode }}"
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: 200
+  vars:
+    _tenant_subnet_filter: >-
+      this.metadata.tenant == {{ osac_test_tenant_name | to_json }} && this.metadata.name == "default-ipv4"
+  register: _caas_tenant_subnets
+  until: ((_caas_tenant_subnets.json | default({})).get('items', []) | length) > 0
+  retries: 40
+  delay: 15
+  no_log: true
+
+- name: Require the configured tenant subnet before changing Netris
+  ansible.builtin.assert:
+    that:
+      - _caas_tenant_subnets.json.get('items', []) | length == 1
+      - _caas_tenant_subnets.json['items'][0].spec.ipv4_cidr == netris_tenant_subnet_cidr
+      - not _caas_tenant_subnets.json['items'][0].metadata.get('deletion_timestamp')
+    fail_msg: >-
+      Tenant '{{ osac_test_tenant_name }}' must have one default-ipv4 subnet using
+      {{ netris_tenant_subnet_cidr }}. Updated NetworkClass defaults do not migrate
+      existing tenant networks. Use a fresh tenant network/deployment; setup will
+      not change the CIDR of an existing network.
+
+- name: Wait for the tenant Subnet CR to be ready
+  kubernetes.core.k8s_info:
+    kubeconfig: /root/.kube/config
+    api_version: osac.openshift.io/v1alpha1
+    kind: Subnet
+    namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    label_selectors:
+      - "osac.openshift.io/subnet-uuid={{ _caas_tenant_subnets.json['items'][0].id }}"
+  register: _caas_subnet_cr
+  until:
+    - _caas_subnet_cr.resources | length == 1
+    - (_caas_subnet_cr.resources | first | default({})).get('status', {}).get('phase') == 'Ready'
+  retries: 60
+  delay: 15
+
+- name: Resolve the tenant VirtualNetwork CR
+  kubernetes.core.k8s_info:
+    kubeconfig: /root/.kube/config
+    api_version: osac.openshift.io/v1alpha1
+    kind: VirtualNetwork
+    namespace: "{{ _caas_subnet_cr.resources[0].metadata.namespace }}"
+    label_selectors:
+      - "osac.openshift.io/virtualnetwork-uuid={{ _caas_subnet_cr.resources[0].spec.virtualNetwork }}"
+  register: _caas_vn_cr
+
+- name: Require the tenant VirtualNetwork
+  ansible.builtin.assert:
+    that:
+      - _caas_vn_cr.resources | length == 1
+      - not _caas_vn_cr.resources[0].metadata.get('deletionTimestamp')
+      - not _caas_subnet_cr.resources[0].metadata.get('deletionTimestamp')
+      - _caas_subnet_cr.resources[0].spec.ipv4Cidr == netris_tenant_subnet_cidr
+    fail_msg: "The tenant subnet must refer to one active VirtualNetwork."
+
+# setup-bmaas discovers this URL. Renew auth after the potentially long BMH wait.
+- name: Authenticate to Netris for tenant ingress configuration
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+
+- name: Read Netris VPCs for tenant ingress
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+  vars:
+    vpc_state: read
+
+- name: Require the tenant VPC in Netris
+  ansible.builtin.assert:
+    that:
+      - _caas_vn_cr.resources[0].metadata.name in netris_vpc_by_name
+    fail_msg: "Netris has no VPC matching the tenant VirtualNetwork CR."
+
+- name: Set the CaaS ingress VPC
+  ansible.builtin.set_fact:
+    _caas_ingress_vpc: "{{ netris_vpc_by_name[_caas_vn_cr.resources[0].metadata.name] }}"
+
+- name: Read tenant V-Net configuration
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet"
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    validate_certs: "{{ netris_validate_certs }}"
+    status_code: 200
+  register: _caas_vnets
+  no_log: true
+
+- name: Find the V-Net belonging to the tenant subnet and VPC
+  ansible.builtin.set_fact:
+    _caas_tenant_vnets: >-
+      {{ _caas_vnets.json.data
+         | selectattr('name', 'equalto', _caas_subnet_cr.resources[0].metadata.name)
+         | selectattr('vpc.id', 'equalto', _caas_ingress_vpc.id) | list }}
+
+- name: Require exactly one tenant V-Net
+  ansible.builtin.assert:
+    that:
+      - _caas_tenant_vnets | length == 1
+
+# The list endpoint omits ports and gateway IDs; use details for updates and safety checks.
+- name: Read tenant V-Net details
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _caas_tenant_vnets[0].id }}"
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: no-cache
+    force: true
+    validate_certs: "{{ netris_validate_certs }}"
+    status_code: 200
+  register: _caas_vnet_detail
+  no_log: true
+
+- name: Require the tenant V-Net IPv4 gateway
+  ansible.builtin.assert:
+    that:
+      - _caas_vnet_detail.json.data.name == _caas_subnet_cr.resources[0].metadata.name
+      - _caas_vnet_detail.json.data.vpc.id == _caas_ingress_vpc.id
+      - _caas_vnet_detail.json.data.gateways | selectattr('prefix', 'equalto', _caas_gateway_prefix) | list | length == 1
+    fail_msg: "Expected the tenant V-Net with gateway {{ _caas_gateway_prefix }}."
+  vars:
+    _caas_gateway_prefix: "{{ netris_tenant_subnet_cidr | ansible.utils.ipaddr('1') }}"
+
+- name: Build the tenant gateway configuration with ingress excluded from DHCP
+  ansible.builtin.set_fact:
+    _caas_tenant_gateways: >-
+      {%- set result = namespace(gateways=[]) %}
+      {%- for gateway in _caas_vnet_detail.json.data.gateways %}
+      {%- set updated = gateway | combine({'dhcpEnabled': true,
+          'dhcp': (gateway.dhcp | default({}, true)) | combine({
+            'start': caas_tenant_dhcp_start, 'end': caas_tenant_dhcp_end})})
+          if gateway.prefix == _caas_gateway_prefix else gateway %}
+      {%- set result.gateways = result.gateways + [updated] %}
+      {%- endfor -%}
+      {{ result.gateways }}
+  vars:
+    _caas_gateway_prefix: "{{ netris_tenant_subnet_cidr | ansible.utils.ipaddr('1') }}"
+
+- name: Require an unused V-Net before changing its DHCP range
+  ansible.builtin.assert:
+    that:
+      - _caas_vnet_detail.json.data.ports is defined
+      - _caas_vnet_detail.json.data.ports | default([], true) | length == 0
+    fail_msg: >-
+      The tenant V-Net already has attached hosts. Recreate the workload/network
+      before changing its DHCP range; setup will not invalidate existing leases.
+  when: _caas_tenant_gateways != _caas_vnet_detail.json.data.gateways
+
+- name: Exclude the CaaS ingress VIP from tenant DHCP
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _caas_tenant_vnets[0].id }}"
+    method: PUT
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    body_format: json
+    body:
+      gateways: "{{ _caas_tenant_gateways }}"
+    validate_certs: "{{ netris_validate_certs }}"
+    status_code: 200
+  when: _caas_tenant_gateways != _caas_vnet_detail.json.data.gateways
+  changed_when: true
+  no_log: true
+
+- name: Read back tenant DHCP configuration
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _caas_tenant_vnets[0].id }}"
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: no-cache
+    force: true
+    validate_certs: "{{ netris_validate_certs }}"
+    status_code: 200
+  register: _caas_vnet_readback
+  no_log: true
+
+- name: Verify Netris applied the tenant DHCP range
+  ansible.builtin.assert:
+    that:
+      - _caas_verified_gateways | length == 1
+      - _caas_verified_gateways[0].dhcpEnabled | bool
+      - _caas_verified_gateways[0].dhcp.start == caas_tenant_dhcp_start
+      - _caas_verified_gateways[0].dhcp.end == caas_tenant_dhcp_end
+    fail_msg: "Netris did not apply tenant DHCP range {{ caas_tenant_dhcp_start }} - {{ caas_tenant_dhcp_end }}."
+  vars:
+    _caas_verified_gateways: >-
+      {{ _caas_vnet_readback.json.data.gateways
+         | selectattr('prefix', 'equalto', netris_tenant_subnet_cidr | ansible.utils.ipaddr('1')) | list }}

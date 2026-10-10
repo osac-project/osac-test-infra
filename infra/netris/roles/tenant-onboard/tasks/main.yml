@@ -1,0 +1,96 @@
+---
+- name: Get internal Fulfillment API route
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - route
+      - fulfillment-internal-api
+      - -n
+      - "{{ osac_namespace }}"
+      - -o
+      - jsonpath={.spec.host}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _tenant_onboard_internal_route
+  changed_when: false
+  until: _tenant_onboard_internal_route.rc == 0 and _tenant_onboard_internal_route.stdout | length > 0
+  retries: 10
+  delay: 6
+
+- name: Get public Fulfillment API route
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - route
+      - fulfillment-api
+      - -n
+      - "{{ osac_namespace }}"
+      - -o
+      - jsonpath={.spec.host}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _tenant_onboard_public_route
+  changed_when: false
+  until: _tenant_onboard_public_route.rc == 0 and _tenant_onboard_public_route.stdout | length > 0
+  retries: 10
+  delay: 6
+
+- name: Get Keycloak route
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - route
+      - keycloak
+      - -n
+      - "{{ tenant_onboard_keycloak_namespace }}"
+      - -o
+      - jsonpath={.spec.host}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _tenant_onboard_keycloak_route
+  changed_when: false
+  until: _tenant_onboard_keycloak_route.rc == 0 and _tenant_onboard_keycloak_route.stdout | length > 0
+  retries: 10
+  delay: 6
+
+- name: Read Keycloak administrator credentials from its deployment
+  no_log: true
+  ansible.builtin.shell:
+    cmd: |
+      oc get deployment keycloak-service -n {{ tenant_onboard_keycloak_namespace }} -o json |
+        python3 -c '
+      import json, sys
+      envs = json.load(sys.stdin)["spec"]["template"]["spec"]["containers"][0]["env"]
+      values = {item["name"]: item.get("value", "") for item in envs}
+      print(values.get("KEYCLOAK_ADMIN", "admin"))
+      print(values.get("KEYCLOAK_ADMIN_PASSWORD", "admin"))
+      '
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _tenant_onboard_keycloak_credentials
+  changed_when: false
+
+- name: Ensure fixed OSAC tenant and its two users
+  ansible.builtin.script:
+    cmd: "{{ role_path }}/files/tenant-onboard.sh"
+  environment:
+    KUBECONFIG: /root/.kube/config
+    OSAC_NAMESPACE: "{{ osac_namespace }}"
+    OSAC_TENANT_NAME: "{{ osac_test_tenant_name }}"
+    OSAC_INTERNAL_ADDRESS: "https://{{ _tenant_onboard_internal_route.stdout }}"
+    OSAC_PUBLIC_ADDRESS: "https://{{ _tenant_onboard_public_route.stdout }}"
+    KEYCLOAK_URL: "https://{{ _tenant_onboard_keycloak_route.stdout }}"
+    KEYCLOAK_REALM: "{{ tenant_onboard_realm }}"
+    KEYCLOAK_ADMIN_USER: "{{ _tenant_onboard_keycloak_credentials.stdout_lines[0] | default('admin', true) }}"
+    KEYCLOAK_ADMIN_PASSWORD: "{{ _tenant_onboard_keycloak_credentials.stdout_lines[1] | default('admin', true) }}"
+    TENANT_ADMIN_USER: "{{ tenant_onboard_admin_user }}"
+    TENANT_ADMIN_PASSWORD: "{{ tenant_onboard_admin_password }}"
+    TENANT_USER: "{{ tenant_onboard_user }}"
+    TENANT_USER_PASSWORD: "{{ tenant_onboard_user_password }}"
+    TENANT_PROJECT: "{{ tenant_onboard_project }}"
+  register: _tenant_onboard_result
+  no_log: false
+  changed_when: "'CHANGED' in (_tenant_onboard_result.stdout | default(''))"

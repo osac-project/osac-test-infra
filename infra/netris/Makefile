@@ -2,7 +2,7 @@
 
 OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e bare_metal_services=$(BARE_METAL_SERVICES) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
 # Suite selects CaaS vs MaaS for restore disk grow + redeploy-server.sh flow.
@@ -13,6 +13,16 @@ SUITE ?= caas
 OSAC_NAMESPACE ?= osac-e2e-ci
 OSAC_PROFILE ?= caas-ci
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
+OSAC_TEST_TENANT_NAME ?= test-infra-tenant
+CAAS_BAREMETAL_INSTANCE_TYPE ?= ci-worker
+CAAS_DISK_IMAGE_NAME ?= rhcos-4-22-amd64
+CAAS_DISK_IMAGE_SOURCE_REF ?= oci://quay.io/osac-project/rhcos:4.22.0
+CAAS_WORKER_COUNT ?= 1
+# CaaS and MaaS always provision workers through BMaaS.
+CAAS_WORKER_VCPU ?= 4
+CAAS_WORKER_MEMORY_MB ?= 16384
+# BMaaS, CaaS, and MaaS need the BMC service infrastructure.
+BARE_METAL_SERVICES ?= $(if $(filter caas maas bmaas,$(SUITE)),true,false)
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
@@ -37,6 +47,9 @@ deploy-fast: OSAC_DEPLOY_MODE = snapshot
 deploy-setup:
 	ansible-playbook playbooks/deploy-setup.yml $(ANSIBLE_EXTRA)
 
+tenant-onboarding:
+	ansible-playbook playbooks/tenant-onboarding.yml $(ANSIBLE_EXTRA)
+
 # Backward compatibility alias
 setup-infra: deploy-setup
 
@@ -60,10 +73,23 @@ deploy-osac:
 		> $(ENV_INFRA)
 
 setup-caas:
-	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/setup-caas.yml \
+	  -e 'caas_baremetal_instance_type=$(CAAS_BAREMETAL_INSTANCE_TYPE)' \
+	  -e 'caas_disk_image_name=$(CAAS_DISK_IMAGE_NAME)' \
+	  -e 'caas_disk_image_source_ref=$(CAAS_DISK_IMAGE_SOURCE_REF)' \
+	  -e 'caas_worker_count=$(CAAS_WORKER_COUNT)' \
+	  -e 'caas_worker_vcpu=$(CAAS_WORKER_VCPU)' \
+	  -e 'caas_worker_memory_mb=$(CAAS_WORKER_MEMORY_MB)' \
+	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
+	  $(ANSIBLE_EXTRA)
 
 deploy-caas:
-	ansible-playbook playbooks/deploy-caas.yml $(ANSIBLE_EXTRA)
+	scripts/with-osac-tenant.sh $(OSAC_TEST_TENANT_NAME) ansible-playbook playbooks/deploy-caas.yml \
+	  -e 'caas_baremetal_instance_type=$(CAAS_BAREMETAL_INSTANCE_TYPE)' \
+	  -e 'caas_disk_image_name=$(CAAS_DISK_IMAGE_NAME)' \
+	  -e 'caas_worker_count=$(CAAS_WORKER_COUNT)' \
+	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
+	  $(ANSIBLE_EXTRA)
 
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
@@ -85,10 +111,14 @@ destroy-setup:
 	ansible-playbook playbooks/destroy-setup.yml $(ANSIBLE_EXTRA)
 
 destroy-caas:
-	ansible-playbook playbooks/destroy-caas.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/destroy-caas.yml \
+	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
+	  $(ANSIBLE_EXTRA)
 
 force-destroy-caas:
-	ansible-playbook playbooks/force-destroy-caas.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/force-destroy-caas.yml \
+	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
+	  $(ANSIBLE_EXTRA)
 
 gather-infra:
 	ansible-playbook playbooks/gather-infra.yml $(ANSIBLE_EXTRA)
@@ -118,46 +148,42 @@ gather-bmaas_networking: gather-bmaas
 
 # ---------------------------------------------------------------------------
 # MaaS — thin wrappers over CaaS playbooks with MaaS-specific variable overrides
-# Override any default with MAAS_CLUSTER_NAME=..., MAAS_HOST_TYPE_ID=..., etc.
+# Override defaults with MAAS_CLUSTER_NAME=... and MAAS_BAREMETAL_INSTANCE_TYPE=....
 # ---------------------------------------------------------------------------
 MAAS_CLUSTER_NAME     ?= maas-cluster
-MAAS_HOST_TYPE_ID     ?= g5
+# MaaS selects g5 workers; CaaS retains the ci-worker default.
+MAAS_BAREMETAL_INSTANCE_TYPE ?= g5
+MAAS_WORKER_COUNT ?= 2
 MAAS_CLUSTER_TEMPLATE ?= osac.templates.ocp_4_20_ai_maas
 MAAS_CATALOG_ITEM     ?= maas-ocp
-# Discovery VM sizing for setup-maas only (CaaS keeps inventory defaults: 4 vCPU / 16GiB).
-# Default MaaS: 10 vCPU / 20GiB for h02–h03; h01 stays at 4 vCPU / 16GiB (unused for MaaS workers).
-MAAS_DISCOVERY_VCPU      ?= 10
-MAAS_DISCOVERY_MEMORY_MB ?= 20480
-MAAS_DISCOVERY_VCPU_OVERRIDES ?= {"hgx-pod00-su0-h01":4}
-MAAS_DISCOVERY_MEMORY_MB_OVERRIDES ?= {"hgx-pod00-su0-h01":16384}
-# Only these inventory hostnames get resource_class=g5 (and approval). Empty = all agents.
-# Comma-separated. Keeps h01 out of the MaaS claim pool; setup-caas still labels all as ci-worker.
-MAAS_LABEL_HOSTNAMES ?= hgx-pod00-su0-h02,hgx-pod00-su0-h03
-# Template -p flags for osac create (deploy-maas only). Comma-separated key=value.
-MAAS_CLUSTER_PARAMS   ?= enable_maas=true,enable_keycloak=true,enable_observability=true,enable_dashboard=true
-MAAS_PARAMS_JSON = $(shell python3 -c 'import json; print(json.dumps([p.strip() for p in """$(MAAS_CLUSTER_PARAMS)""".split(",") if p.strip()]))')
-MAAS_LABEL_HOSTNAMES_JSON = $(shell python3 -c 'import json; print(json.dumps([h.strip() for h in """$(MAAS_LABEL_HOSTNAMES)""".split(",") if h.strip()]))')
+# MaaS currently uses the same RHCOS 4.22 DiskImage as CaaS; override independently if needed.
+MAAS_DISK_IMAGE_NAME ?= $(CAAS_DISK_IMAGE_NAME)
+MAAS_DISK_IMAGE_SOURCE_REF ?= $(CAAS_DISK_IMAGE_SOURCE_REF)
+# All three MaaS BMaaS worker VMs use the same size; MAAS_WORKER_COUNT controls the initial cluster size.
+MAAS_WORKER_VCPU      ?= 10
+MAAS_WORKER_MEMORY_MB ?= 20480
 
 MAAS_EXTRA = \
   -e 'caas_cluster_name=$(MAAS_CLUSTER_NAME)' \
-  -e 'caas_host_type_id=$(MAAS_HOST_TYPE_ID)' \
-  -e 'caas_host_type_title=MaaS Node' \
-  -e 'caas_host_type_description=Bare-metal nodes for MaaS testing' \
+  -e 'caas_worker_count=$(MAAS_WORKER_COUNT)' \
+  -e 'caas_disk_image_name=$(MAAS_DISK_IMAGE_NAME)' \
+  -e 'caas_baremetal_instance_type=$(MAAS_BAREMETAL_INSTANCE_TYPE)' \
   -e 'caas_cluster_template=$(MAAS_CLUSTER_TEMPLATE)' \
   -e 'caas_catalog_item=$(MAAS_CATALOG_ITEM)' \
   -e 'caas_catalog_item_title=MaaS OCP' \
   -e 'caas_catalog_item_description=OCP cluster for MaaS testing' \
-  -e 'caas_discovery_vcpu=$(MAAS_DISCOVERY_VCPU)' \
-  -e 'caas_discovery_memory_mb=$(MAAS_DISCOVERY_MEMORY_MB)' \
-  -e '{"caas_discovery_vcpu_overrides":$(MAAS_DISCOVERY_VCPU_OVERRIDES)}' \
-  -e '{"caas_discovery_memory_mb_overrides":$(MAAS_DISCOVERY_MEMORY_MB_OVERRIDES)}' \
-  -e '{"caas_resource_class_hostnames":$(MAAS_LABEL_HOSTNAMES_JSON)}'
+  -e 'caas_worker_vcpu=$(MAAS_WORKER_VCPU)' \
+  -e 'caas_worker_memory_mb=$(MAAS_WORKER_MEMORY_MB)' \
+  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)'
 
 setup-maas:
-	ansible-playbook playbooks/setup-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/setup-caas.yml \
+	  $(MAAS_EXTRA) \
+	  -e 'caas_disk_image_source_ref=$(MAAS_DISK_IMAGE_SOURCE_REF)' \
+	  $(ANSIBLE_EXTRA)
 
 deploy-maas:
-	ansible-playbook playbooks/deploy-caas.yml $(MAAS_EXTRA) -e '{"caas_cluster_params":$(MAAS_PARAMS_JSON)}' $(ANSIBLE_EXTRA)
+	scripts/with-osac-tenant.sh $(OSAC_TEST_TENANT_NAME) ansible-playbook playbooks/deploy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
 
 destroy-maas:
 	ansible-playbook playbooks/destroy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
