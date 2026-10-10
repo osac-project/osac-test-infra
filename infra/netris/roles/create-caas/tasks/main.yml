@@ -63,7 +63,8 @@
 # MaaS uses explicit credential file flags, whose SSH reader already trims whitespace.
 - name: Create cluster (CaaS template field params)
   ansible.builtin.command:
-    expand_argument_vars: false
+    # This option was added in ansible-core 2.16; older CI runners reject it.
+    expand_argument_vars: "{{ false if ansible_version.full is version('2.16', '>=') else omit }}"
     argv:
       - osac
       - create
