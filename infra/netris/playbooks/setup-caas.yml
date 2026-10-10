@@ -1,7 +1,9 @@
 ---
-- name: Set up CaaS — discover hosts, label agents, register host type
+- name: Set up CaaS cluster prerequisites
   hosts: all
   gather_facts: false
   roles:
-    - discover-caas
+    - tenant-onboard
+    - prepare-caas-network
+    - prepare-caas-bmaas
     - setup-caas

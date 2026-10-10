@@ -170,6 +170,7 @@
       when: _provisioning_vnet_create is skipped
 
     - name: Ensure provisioning V-Net has fabric ports attached
+      no_log: false
       ansible.builtin.uri:
         url: "{{ netris_controller_url }}/api/v2/vnet/{{ _provisioning_vnet_id }}"
         method: PUT
@@ -271,7 +272,10 @@
 
 - name: Set BMH setup needed flag
   ansible.builtin.set_fact:
-    _bmh_setup_needed: "{{ _existing_bmh_states.stdout_lines | select('equalto', 'available') | list | length < bmaas_vm_patterns | length }}"
+    _bmh_setup_needed: >-
+      {{ (bmaas_reconfigure_vm_names | length > 0) if bmaas_reconfigure_vm_names is defined
+         else (_existing_bmh_states.stdout_lines | select('equalto', 'available') | list | length
+               < bmaas_vm_patterns | length) }}
 
 - name: Find BMaaS VMs
   ansible.builtin.shell:
@@ -286,13 +290,15 @@
 
 - name: Prepare BMH VMs
   when: _bmh_setup_needed | bool
+  vars:
+    _bmaas_prepare_vms: "{{ bmaas_vms | intersect(bmaas_reconfigure_vm_names | default(bmaas_vms)) }}"
   block:
     - name: Get VM states
       ansible.builtin.shell:
         cmd: virsh domstate {{ item }}
       register: _vm_states
       changed_when: false
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
 
     - name: Shut down running VMs
       ansible.builtin.command:
@@ -306,7 +312,7 @@
     - name: Remove UEFI firmware and set BIOS boot order
       ansible.builtin.shell:
         cmd: |
-          virsh dumpxml {{ item }} > /tmp/{{ item }}.xml
+          virsh dumpxml {{ item }} --inactive > /tmp/{{ item }}.xml
           changed=false
           if grep -q '<loader' /tmp/{{ item }}.xml; then
             sed -i '/<loader/d; /<nvram/d' /tmp/{{ item }}.xml
@@ -327,7 +333,7 @@
           else
             echo "no change"
           fi
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
       register: _uefi_cleanup
       changed_when: "'cleaned' in _uefi_cleanup.stdout"
 
@@ -336,7 +342,16 @@
         cmd: virsh vcpucount {{ item }} --config --maximum
       register: _current_vcpus
       changed_when: false
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
+
+    - name: Lower configured vCPUs before reducing their maximum
+      ansible.builtin.command:
+        cmd: virsh setvcpus {{ item.item }} {{ bmaas_vm_vcpu }} --config
+      when: item.stdout | int > bmaas_vm_vcpu | int
+      loop: "{{ _current_vcpus.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      changed_when: true
 
     - name: Set maximum vCPUs
       ansible.builtin.command:
@@ -350,7 +365,6 @@
     - name: Set vCPUs
       ansible.builtin.command:
         cmd: virsh setvcpus {{ item.item }} {{ bmaas_vm_vcpu }} --config
-      when: item.stdout | int != bmaas_vm_vcpu | int
       loop: "{{ _current_vcpus.results }}"
       loop_control:
         label: "{{ item.item }}"
@@ -361,7 +375,7 @@
         cmd: virsh dommemstat {{ item }} | awk '/actual/{print int($2/1024)}'
       register: _current_memory
       changed_when: false
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
 
     - name: Set maximum memory
       ansible.builtin.command:
@@ -384,22 +398,22 @@
     - name: Detach all existing disks
       ansible.builtin.shell:
         cmd: |
-          for target in $(virsh domblklist {{ item }} | awk 'NR>2 && NF>1 {print $1}'); do
+          for target in $(virsh domblklist {{ item }} --inactive | awk 'NR>2 && NF>1 {print $1}'); do
             virsh detach-disk {{ item }} "$target" --config 2>/dev/null || true
           done
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
       changed_when: true
 
     - name: Remove old BMaaS disk if present
       ansible.builtin.file:
         path: "{{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2"
         state: absent
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
 
     - name: Create empty boot disk for each VM
       ansible.builtin.command:
         cmd: qemu-img create -f qcow2 {{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2 {{ bmaas_vm_disk_gb }}G
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
       changed_when: true
 
     - name: Attach boot disk
@@ -408,20 +422,20 @@
           virsh attach-disk {{ item }}
           {{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2
           vda --persistent --subdriver qcow2
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
       changed_when: true
 
     - name: Attach bmc-net NIC to BMH VMs
       ansible.builtin.shell:
         cmd: |
-          existing=$(virsh domiflist {{ item }} | grep {{ bmc_net_name }} | awk '{print $5}')
+          existing=$(virsh domiflist {{ item }} --inactive | grep {{ bmc_net_name }} | awk '{print $5}')
           if [ -z "$existing" ]; then
             virsh attach-interface {{ item }} network {{ bmc_net_name }} --model virtio --config
             echo "attached"
           else
             echo "already attached"
           fi
-      loop: "{{ bmaas_vms }}"
+      loop: "{{ _bmaas_prepare_vms }}"
       register: _bmc_nic
       changed_when: "'attached' in _bmc_nic.stdout and 'already' not in _bmc_nic.stdout"
 
@@ -672,6 +686,7 @@
 
 - name: Wait for BMI template to be published by AAP
   no_log: true
+  when: bmaas_create_catalog_items | default(true) | bool
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}"
     method: GET
@@ -689,6 +704,7 @@
 # tenant's network-attachment interface is validated against the interfaces list.
 - name: Link BMI template to host type
   no_log: true
+  when: bmaas_create_catalog_items | default(true) | bool
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=host_type"
     method: PATCH
@@ -704,6 +720,7 @@
 
 - name: Create BMI catalog item
   no_log: true
+  when: bmaas_create_catalog_items | default(true) | bool
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items"
     method: POST
@@ -729,6 +746,7 @@
 
 - name: Create BMI catalog item with auto ExternalIP
   no_log: true
+  when: bmaas_create_catalog_items | default(true) | bool
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items"
     method: POST
@@ -760,12 +778,17 @@
   register: _catalog_check
   changed_when: false
   until: bmaas_catalog_item in _catalog_check.stdout and bmaas_auto_eip_catalog_item in _catalog_check.stdout
+  when: bmaas_create_catalog_items | default(true) | bool
   retries: 10
   delay: 5
 
 - name: Report BMaaS setup complete
   ansible.builtin.debug:
     msg: >-
-      BMaaS setup complete. {{ bmaas_vms | length }} virtual BMHs available in namespace {{ bmaas_bmh_namespace }}.
+      BMaaS host setup complete. {{ bmaas_vms | length }} virtual BMHs available in namespace {{ bmaas_bmh_namespace }}.
+      {% if bmaas_create_catalog_items | default(true) | bool %}
       Catalog items '{{ bmaas_catalog_item }}' and '{{ bmaas_auto_eip_catalog_item }}' ready.
       Create a BMI with: osac create baremetalinstance --catalog-item {{ bmaas_catalog_item }}
+      {% else %}
+      Standalone BMaaS catalog setup was skipped; this run prepared CaaS/MaaS cluster workers.
+      {% endif %}

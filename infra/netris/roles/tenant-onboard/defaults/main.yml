@@ -1,0 +1,8 @@
+---
+tenant_onboard_admin_user: test-infra-tenant-admin
+tenant_onboard_user: test-infra-tenant-user
+tenant_onboard_admin_password: "ChangeMe-Admin-123!"
+tenant_onboard_user_password: "ChangeMe-User-123!"
+tenant_onboard_project: default
+tenant_onboard_keycloak_namespace: keycloak
+tenant_onboard_realm: osac

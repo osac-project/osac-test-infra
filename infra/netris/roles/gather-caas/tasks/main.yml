@@ -106,10 +106,10 @@
   when: _gather_fulfillment_host.stdout | default('') | length > 0
 
 # ── CaaS hosting cluster inspect ──
-- name: Run oc adm inspect on CaaS-related namespaces
+- name: Run oc adm inspect on CaaS BMaaS worker namespace
   ansible.builtin.shell: |
     oc adm inspect \
-      ns/{{ caas_discovery_infraenv_namespace }} \
+      ns/{{ bmaas_bmh_namespace }} \
       --dest-dir={{ _gather_dir }}/caas/inspect/hosting \
       2>&1 || echo "inspect failed or cluster unreachable"
   environment:

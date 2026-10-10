@@ -1,177 +1,21 @@
 ---
-# Step 1: Wait for all agents to register from the discovery ISO boot
-- name: Wait for expected number of agents
-  ansible.builtin.shell:
-    cmd: oc get agent -n {{ caas_agent_namespace }} --no-headers 2>/dev/null | wc -l
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _agent_count
-  until: _agent_count.stdout | int >= caas_agents | length
-  retries: 120
-  delay: 15
-  changed_when: false
+- name: Require a configured BMaaS worker profile
+  ansible.builtin.assert:
+    that:
+      - caas_baremetal_instance_type in (caas_baremetal_instance_type_profiles | map(attribute="name") | list)
+    fail_msg: "No worker profile is configured for '{{ caas_baremetal_instance_type }}'."
 
-- name: Get agent names
-  ansible.builtin.shell:
-    cmd: oc get agent -n {{ caas_agent_namespace }} -o jsonpath='{.items[*].metadata.name}'
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _agent_names
-  changed_when: false
-  until: _agent_names.rc == 0 and _agent_names.stdout | length > 0
-  retries: 10
-  delay: 15
+- name: Validate requested worker count against the configured BMaaS worker pool
+  ansible.builtin.assert:
+    that:
+      - caas_worker_count | int > 0
+      - caas_worker_count | int <= caas_worker_vm_patterns | length
+    fail_msg: >-
+      caas_worker_count={{ caas_worker_count }} must be between 1 and
+      {{ caas_worker_vm_patterns | length }}, the configured BMaaS worker count.
 
-- name: Set agent name list
-  ansible.builtin.set_fact:
-    caas_agent_names: "{{ _agent_names.stdout.split() }}"
-
-# Step 2: Label agents with resource class and netris server name
-# Agent CRs appear before status.inventory is populated; wait until every
-# expected agent has a hostname before building the label map.
-- name: Get agent hostnames
-  ansible.builtin.shell:
-    cmd: |
-      oc get agent -n {{ caas_agent_namespace }} -o json | python3 -c '
-      import json, sys
-      agents = json.load(sys.stdin).get("items") or []
-      expected = {{ caas_agents | length }}
-      if len(agents) < expected:
-          raise SystemExit(f"only {len(agents)}/{expected} agents present")
-      missing = [
-          a["metadata"]["name"]
-          for a in agents
-          if not ((a.get("status") or {}).get("inventory") or {}).get("hostname")
-      ]
-      if missing:
-          raise SystemExit("inventory hostname missing for: " + ",".join(missing))
-      print(json.dumps({
-          a["metadata"]["name"]: a["status"]["inventory"]["hostname"]
-          for a in agents
-      }))
-      '
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _agent_hostnames_raw
-  until: _agent_hostnames_raw.rc == 0
-  retries: 40
-  delay: 15
-  changed_when: false
-
-- name: Build agent-to-hostname map
-  ansible.builtin.set_fact:
-    _agent_hostname_map: "{{ _agent_hostnames_raw.stdout | from_json }}"
-
-# caas_resource_class_hostnames empty → all agents (CaaS). Non-empty → only those
-# inventory hostnames get resource_class (MaaS defaults to h02+h03).
-- name: Build resource_class agent allow-list by hostname
-  ansible.builtin.set_fact:
-    _agents_for_resource_class: >-
-      {{
-        caas_agent_names
-        if (caas_resource_class_hostnames | default([]) | length) == 0 else
-        (
-          _agent_hostname_map
-          | dict2items
-          | selectattr('value', 'in', caas_resource_class_hostnames)
-          | map(attribute='key')
-          | list
-        )
-      }}
-
-- name: Show resource_class labeling plan
-  ansible.builtin.debug:
-    msg: >-
-      resource_class={{ caas_host_type_id }} on
-      {{ _agents_for_resource_class | length }}/{{ caas_agent_names | length }} agents
-      (filter={{ caas_resource_class_hostnames | default([]) }})
-
-- name: Fail if resource_class hostname filter matched no agents
-  ansible.builtin.fail:
-    msg: >-
-      caas_resource_class_hostnames={{ caas_resource_class_hostnames }} matched 0 agents.
-      Known hostnames: {{ _agent_hostname_map.values() | list }}
-  when:
-    - (caas_resource_class_hostnames | default([]) | length) > 0
-    - (_agents_for_resource_class | length) == 0
-
-- name: Label agent with resource class
-  ansible.builtin.command:
-    cmd: >-
-      oc label agent/{{ item }} -n {{ caas_agent_namespace }}
-      osac.openshift.io/resource_class={{ caas_host_type_id }}
-      --overwrite
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop: "{{ _agents_for_resource_class }}"
-  register: _label_rc
-  changed_when: "'labeled' in _label_rc.stdout and 'not labeled' not in _label_rc.stdout"
-  until: _label_rc.rc == 0
-  retries: 5
-  delay: 10
-
-- name: Remove resource_class from agents outside the allow-list
-  ansible.builtin.command:
-    cmd: >-
-      oc label agent/{{ item }} -n {{ caas_agent_namespace }}
-      osac.openshift.io/resource_class- --overwrite
-  environment:
-    KUBECONFIG: /root/.kube/config
-  when:
-    - (caas_resource_class_hostnames | default([]) | length) > 0
-    - item not in _agents_for_resource_class
-  loop: "{{ caas_agent_names }}"
-  register: _unlabel_rc
-  changed_when: "'labeled' in _unlabel_rc.stdout or 'unlabeled' in _unlabel_rc.stdout"
-  failed_when: false
-
-- name: Label agent with netris server name
-  ansible.builtin.command:
-    cmd: >-
-      oc label agent/{{ item.key }} -n {{ caas_agent_namespace }}
-      netris.server/name={{ (caas_agents | selectattr('vm_pattern', 'search', item.value) | first).netris_server_name }}
-      --overwrite
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop: "{{ _agent_hostname_map | dict2items }}"
-  loop_control:
-    label: "{{ item.value }}"
-  register: _label_ns
-  changed_when: "'labeled' in _label_ns.stdout and 'not labeled' not in _label_ns.stdout"
-  until: _label_ns.rc == 0
-  retries: 5
-  delay: 10
-
-- name: Check agent approval status
-  ansible.builtin.shell:
-    cmd: oc get agent/{{ item }} -n {{ caas_agent_namespace }} -o jsonpath='{.spec.approved}'
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _agent_approved
-  changed_when: false
-  until: _agent_approved.rc == 0
-  retries: 5
-  delay: 10
-  loop: "{{ _agents_for_resource_class }}"
-
-- name: Approve agents
-  ansible.builtin.command:
-    cmd: >-
-      oc patch agent/{{ item.item }} -n {{ caas_agent_namespace }}
-      --type=merge -p '{"spec":{"approved":true}}'
-  environment:
-    KUBECONFIG: /root/.kube/config
-  when: item.stdout != 'true'
-  loop: "{{ _agent_approved.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  register: _approve_result
-  until: _approve_result.rc == 0
-  retries: 5
-  delay: 10
-  changed_when: true
-
-# Step 3: Register host type in fulfillment service
+# Register OSAC host types, BareMetalInstanceTypes, DiskImage and cluster catalog.
+# Step 1: Register host types and BareMetalInstanceTypes in fulfillment service
 - name: Get fulfillment internal API URL
   ansible.builtin.shell:
     cmd: oc get route fulfillment-internal-api -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.status.ingress[0].host}'
@@ -219,7 +63,134 @@
   retries: 10
   delay: 15
 
-- name: Create host type
+# Register the RHCOS OCI artifact and attach it to the ClusterVersion selected by deploy-caas.
+- name: List OSAC DiskImages
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/disk_images"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _caas_disk_images
+
+- name: Find configured OSAC DiskImage
+  ansible.builtin.set_fact:
+    _caas_disk_image_matches: >-
+      {{ _caas_disk_images.json.get('items', [])
+         | selectattr('metadata.name', 'equalto', caas_disk_image_name)
+         | selectattr('metadata.tenant', 'equalto', 'shared') | list }}
+
+- name: Validate existing OSAC DiskImage source
+  ansible.builtin.assert:
+    that:
+      - _caas_disk_image_matches | length <= 1
+      - >-
+        (_caas_disk_image_matches | length == 0) or
+        ((_caas_disk_image_matches | first).get('spec', {}).get('source_ref', '') == caas_disk_image_source_ref)
+    fail_msg: >-
+      DiskImage '{{ caas_disk_image_name }}' already exists with a different source_ref;
+      choose a new name because DiskImage source references are immutable.
+
+- name: Create OSAC DiskImage when missing
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/disk_images"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      metadata:
+        name: "{{ caas_disk_image_name }}"
+        tenant: shared
+      spec:
+        source_type: SOURCE_TYPE_REGISTRY
+        source_ref: "{{ caas_disk_image_source_ref }}"
+        guest_os_family: GUEST_OS_FAMILY_LINUX
+        architecture:
+          - ARCHITECTURE_AMD64
+    validate_certs: false
+    status_code: [200, 201]
+  register: _caas_disk_image_create
+  when: _caas_disk_image_matches | length == 0
+
+- name: Resolve configured OSAC DiskImage
+  ansible.builtin.set_fact:
+    _caas_disk_image_resource: >-
+      {{ (_caas_disk_image_matches | first)
+         if (_caas_disk_image_matches | length > 0)
+         else _caas_disk_image_create.json }}
+
+- name: List OSAC ClusterVersions
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _caas_cluster_versions
+
+- name: Find configured OSAC ClusterVersion
+  ansible.builtin.set_fact:
+    _caas_cluster_version_matches: >-
+      {{ _caas_cluster_versions.json.get('items', [])
+         | selectattr('spec.version', 'equalto', caas_cluster_version) | list }}
+
+- name: Require exactly one configured OSAC ClusterVersion
+  ansible.builtin.assert:
+    that:
+      - _caas_cluster_version_matches | length == 1
+    fail_msg: "Expected one OSAC ClusterVersion for {{ caas_cluster_version }}."
+
+- name: Set OSAC ClusterVersion resource
+  ansible.builtin.set_fact:
+    _caas_cluster_version_resource: "{{ _caas_cluster_version_matches | first }}"
+
+- name: Attach configured DiskImage to OSAC ClusterVersion
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions/{{ _caas_cluster_version_resource.id }}?update_mask=spec.disk_image"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ _caas_cluster_version_resource.id }}"
+      spec:
+        disk_image:
+          id: "{{ _caas_disk_image_resource.id }}"
+          name: "{{ caas_disk_image_name }}"
+    validate_certs: false
+    status_code: [200]
+  when: >-
+    ((_caas_cluster_version_resource.get('spec', {}).get('disk_image') or {}).get('name', ''))
+    != caas_disk_image_name
+
+- name: Verify OSAC ClusterVersion DiskImage attachment
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions/{{ _caas_cluster_version_resource.id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _caas_cluster_version_disk_image_check
+
+- name: Require configured DiskImage on OSAC ClusterVersion
+  ansible.builtin.assert:
+    that:
+      - _caas_cluster_version_disk_image_check.json.get('spec', {}).get('disk_image', {}).get('name', '') == caas_disk_image_name
+    fail_msg: >-
+      ClusterVersion {{ caas_cluster_version }} is not linked to DiskImage {{ caas_disk_image_name }}.
+
+- name: Ensure OSAC host types exist for both worker profiles
   no_log: true
   ansible.builtin.uri:
     url: "{{ caas_fulfillment_api }}/api/private/v1/host_types"
@@ -230,16 +201,176 @@
     body_format: json
     body:
       metadata:
-        name: "{{ caas_host_type_id }}"
-      title: "{{ caas_host_type_title }}"
-      description: "{{ caas_host_type_description }}"
+        name: "{{ item.name }}"
+      title: "{{ item.title }}"
+      description: "{{ item.description }}"
+      interfaces: "{{ bmaas_host_type_interfaces }}"
     validate_certs: false
     status_code: [200, 201, 409]
+  loop: "{{ caas_baremetal_instance_type_profiles }}"
 
-# AAP netris.steps.cluster_infra looks up netris_resource_class_map[resourceClass]
-# from env NETRIS_RESOURCE_CLASS_MAP (cluster-fulfillment-ig). Install only seeds
-# the then-current caas_host_type_id (e.g. ci-worker); setup-maas needs g5 too.
-# Append only when the key is missing — never overwrite an existing entry.
+- name: List OSAC host types
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/host_types"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _caas_host_types
+
+- name: Ensure worker HostTypes have BMaaS interfaces
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/host_types/{{ item.id }}?update_mask=interfaces"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ item.id }}"
+      interfaces: "{{ bmaas_host_type_interfaces }}"
+    validate_certs: false
+    status_code: [200]
+  loop: "{{ _caas_host_types.json.get('items', []) }}"
+  when:
+    - item.metadata.name in (caas_baremetal_instance_type_profiles | map(attribute='name') | list)
+    - item.interfaces | default([]) != bmaas_host_type_interfaces
+
+- name: Build OSAC host type ID map
+  ansible.builtin.set_fact:
+    _caas_host_type_ids: >-
+      {{
+        _caas_host_type_ids | default({})
+        | combine({item.name: (
+            _caas_host_types.json.get('items', [])
+            | selectattr('metadata.name', 'equalto', item.name)
+            | map(attribute='id') | list | first | default('')
+          )})
+      }}
+  loop: "{{ caas_baremetal_instance_type_profiles }}"
+
+- name: Require both OSAC host type IDs for the worker profiles
+  ansible.builtin.assert:
+    that:
+      - _caas_host_type_ids[item.name] | default('') | length > 0
+    fail_msg: "Could not resolve OSAC host type '{{ item.name }}'."
+  loop: "{{ caas_baremetal_instance_type_profiles }}"
+
+- name: List OSAC BareMetalInstanceTypes
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/bare_metal_instance_types"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _caas_baremetal_instance_types
+
+- name: Update existing BareMetalInstanceType host selectors
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/bare_metal_instance_types/{{ _existing_type.id }}?update_mask=spec.host_label_selector"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ _existing_type.id }}"
+      spec:
+        host_label_selector:
+          match_labels:
+            osac.openshift.io/host-type: "{{ _caas_host_type_ids[item.name] }}"
+    validate_certs: false
+    status_code: [200]
+  loop: "{{ caas_baremetal_instance_type_profiles }}"
+  vars:
+    _existing_type: >-
+      {{ _caas_baremetal_instance_types.json.get('items', [])
+         | selectattr('metadata.name', 'equalto', item.name) | list | first | default({}) }}
+    _wanted_selector:
+      match_labels:
+        osac.openshift.io/host-type: "{{ _caas_host_type_ids[item.name] }}"
+  when:
+    - _existing_type | length > 0
+    - _existing_type.spec.host_label_selector | default({}) != _wanted_selector
+
+- name: Create OSAC BareMetalInstanceTypes when missing
+  no_log: true
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/bare_metal_instance_types"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ item.name }}"
+      metadata:
+        name: "{{ item.name }}"
+      spec:
+        description: "{{ item.description }}"
+        hardware:
+          cpu:
+            cores: "{{ item.cpu_cores | int }}"
+            architecture: "x86_64"
+            threads_per_core: 1
+          memory:
+            total_gb: "{{ item.memory_total_gb | int }}"
+          network_ports:
+            - name: "{{ caas_baremetal_instance_type_fabric_port.name }}"
+              role: "fabric"
+              type: "{{ caas_baremetal_instance_type_fabric_port.type }}"
+              speed: "{{ caas_baremetal_instance_type_fabric_port.speed }}"
+        host_label_selector:
+          match_labels:
+            osac.openshift.io/host-type: "{{ _caas_host_type_ids[item.name] }}"
+    validate_certs: false
+    status_code: [200, 201]
+  loop: "{{ caas_baremetal_instance_type_profiles }}"
+  when: >-
+    (_caas_baremetal_instance_types.json.get('items', [])
+    | selectattr('metadata.name', 'equalto', item.name) | list | length) == 0
+
+- name: Get available BMaaS worker hosts for the selected profile
+  ansible.builtin.command:
+    cmd: >-
+      oc get bmh -n {{ bmaas_bmh_namespace }}
+      -l osac.openshift.io/host-type={{ _caas_host_type_ids[caas_baremetal_instance_type] }}
+      -o json
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_worker_bmhs
+  changed_when: false
+
+- name: Set available BMaaS worker names
+  ansible.builtin.set_fact:
+    _caas_available_worker_names: >-
+      {{ (_caas_worker_bmhs.stdout | from_json).get('items', [])
+         | selectattr('metadata.name', 'in', caas_worker_vm_patterns)
+         | rejectattr('metadata.deletionTimestamp', 'defined')
+         | rejectattr('spec.consumerRef', 'defined')
+         | selectattr('spec.online', 'equalto', true)
+         | selectattr('status.provisioning.state', 'defined')
+         | selectattr('status.provisioning.state', 'equalto', 'available')
+         | map(attribute='metadata.name') | list }}
+
+- name: Require enough available BMaaS workers for the requested cluster
+  ansible.builtin.assert:
+    that:
+      - caas_worker_count | int <= _caas_available_worker_names | length
+    fail_msg: >-
+      Requested {{ caas_worker_count }} {{ caas_baremetal_instance_type }} workers,
+      but only {{ _caas_available_worker_names | length }} configured workers are
+      online, available, and labeled for that BMaaS profile:
+      {{ _caas_available_worker_names }}.
+
+# AAP netris.steps.cluster_network resolves the selected instance type through
+# NETRIS_RESOURCE_CLASS_MAP. Keep both profile names available.
 - name: Read NETRIS_RESOURCE_CLASS_MAP from cluster-fulfillment-ig
   ansible.builtin.shell:
     cmd: >-
@@ -250,33 +381,39 @@
     KUBECONFIG: /root/.kube/config
   register: _netris_rc_map_raw
   changed_when: false
-  failed_when: false
 
-- name: Ensure host type is present in NETRIS_RESOURCE_CLASS_MAP
+- name: Ensure host types are present in NETRIS_RESOURCE_CLASS_MAP
   ansible.builtin.shell: |
     set -euo pipefail
     python3 <<'PY'
     import json, os, subprocess, sys
 
-    raw = os.environ.get("NETRIS_RC_MAP_RAW") or "{}"
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        data = {}
-    if not isinstance(data, dict):
+    raw = os.environ.get("NETRIS_RC_MAP_RAW", "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"NETRIS_RESOURCE_CLASS_MAP is not valid JSON: {exc}")
+        if not isinstance(data, dict):
+            raise SystemExit("NETRIS_RESOURCE_CLASS_MAP must be a JSON object")
+    else:
         data = {}
 
-    name = os.environ["NETRIS_RC_NAME"]
-    if name in data and isinstance(data[name], dict) and data[name]:
-        print(f"unchanged {name} already in NETRIS_RESOURCE_CLASS_MAP")
-        sys.exit(0)
-
+    names = json.loads(os.environ["NETRIS_RC_NAMES"])
     entry = {
         "server_cluster_template_id": int(os.environ["NETRIS_RC_TEMPLATE_ID"]),
         "mgmt_interface": os.environ["NETRIS_RC_MGMT_IF"],
         "vpc_interfaces": json.loads(os.environ["NETRIS_RC_VPC_IFS"]),
     }
-    data[name] = entry
+    added = []
+    for name in names:
+        if name in data and isinstance(data[name], dict) and data[name]:
+            continue
+        data[name] = entry
+        added.append(name)
+    if not added:
+        print("unchanged resource classes already in NETRIS_RESOURCE_CLASS_MAP")
+        sys.exit(0)
     new_json = json.dumps(data, separators=(",", ":"))
     patch = json.dumps({"data": {"NETRIS_RESOURCE_CLASS_MAP": new_json}})
     subprocess.run(
@@ -287,13 +424,13 @@
         ],
         check=True,
     )
-    print(f"patched added {name}={json.dumps(entry)}")
+    print(f"patched added {','.join(added)}={json.dumps(entry)}")
     PY
   environment:
     KUBECONFIG: /root/.kube/config
     NETRIS_RC_NS: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
-    NETRIS_RC_MAP_RAW: "{{ _netris_rc_map_raw.stdout | default('') }}"
-    NETRIS_RC_NAME: "{{ caas_host_type_id }}"
+    NETRIS_RC_MAP_RAW: "{{ _netris_rc_map_raw.stdout | default('{}', true) | from_json | to_json }}"
+    NETRIS_RC_NAMES: "{{ caas_baremetal_instance_type_profiles | map(attribute='name') | list | to_json }}"
     NETRIS_RC_TEMPLATE_ID: "{{ caas_netris_server_cluster_template_id | default(2) }}"
     NETRIS_RC_MGMT_IF: "{{ caas_netris_mgmt_interface | default('ens4') }}"
     NETRIS_RC_VPC_IFS: "{{ caas_netris_vpc_interfaces | default(['ens6']) | to_json }}"
@@ -349,6 +486,10 @@
   retries: 20
   delay: 10
   no_log: true
+
+# Resolve the tenant VPC and reserve ingress before a cluster can be created.
+- name: Configure CaaS tenant ingress networking
+  ansible.builtin.include_tasks: netris-ingress.yml
 
 - name: Launch publish-templates job
   no_log: true
@@ -411,15 +552,5 @@
       template:
         id: "{{ caas_cluster_template }}"
       published: true
-      field_definitions:
-        - path: "release_image"
-          display_name: "Release Image"
-          editable: true
-        - path: "pull_secret"
-          display_name: "Pull Secret"
-          editable: true
-        - path: "ssh_public_key"
-          display_name: "SSH Public Key"
-          editable: true
     validate_certs: false
     status_code: [200, 201, 409]
