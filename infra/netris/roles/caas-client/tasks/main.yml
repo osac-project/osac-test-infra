@@ -1,0 +1,53 @@
+---
+- name: Require a workload tenant for CaaS
+  ansible.builtin.assert:
+    that:
+      - caas_cluster_tenant is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+      - caas_cluster_tenant not in ['shared', 'system']
+      - caas_cli_config_dir | length > 0
+    fail_msg: >-
+      caas_cluster_tenant must be a non-reserved tenant name. Worker
+      BareMetalInstances cannot be created in shared or system.
+
+- name: Resolve OSAC namespace for CaaS client
+  ansible.builtin.set_fact:
+    _caas_osac_namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+
+- name: Get fulfillment internal API host for CaaS client
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - route
+      - fulfillment-internal-api
+      - -n
+      - "{{ _caas_osac_namespace }}"
+      - -o
+      - "jsonpath={.status.ingress[0].host}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_fulfillment_host
+  changed_when: false
+  failed_when: _caas_fulfillment_host.rc != 0 or (_caas_fulfillment_host.stdout | trim | length) == 0
+
+- name: Ensure CaaS CLI config directory exists
+  ansible.builtin.file:
+    path: "{{ caas_cli_config_dir }}"
+    state: directory
+    mode: "0700"
+
+# The typed create-cluster command reads settings.Tenant(), so a global
+# --tenant flag alone does not set metadata.tenant in the deployed CLI.
+# Keep this configuration separate from the admin catalog setup configuration.
+- name: Save CaaS CLI tenant and authentication settings
+  ansible.builtin.copy:
+    content: "{{ _caas_cli_settings | to_nice_json }}\n"
+    dest: "{{ caas_cli_config_dir }}/config.json"
+    mode: "0600"
+  vars:
+    _caas_cli_settings:
+      token_script: "oc create token -n {{ _caas_osac_namespace | quote }} admin --duration 1h"
+      insecure: true
+      private: true
+      address: "{{ _caas_fulfillment_host.stdout | trim }}:443"
+      tenant: "{{ caas_cluster_tenant }}"

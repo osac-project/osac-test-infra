@@ -1,0 +1,42 @@
+---
+# A failed API request must not be interpreted as an absent cluster. Filter
+# server-side and verify both fields locally before reusing or deleting an ID.
+- name: Find CaaS cluster by tenant and name
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      osac --config {{ caas_cli_config_dir | quote }} get clusters \
+        --filter {{ _caas_cluster_filter | quote }} -o json | python3 -c '
+      import json, sys
+      raw = json.load(sys.stdin)
+      if isinstance(raw, list):
+          clusters = raw
+      elif isinstance(raw, dict) and "items" in raw:
+          clusters = raw["items"]
+      elif isinstance(raw, dict) and "id" in raw:
+          clusters = [raw]
+      else:
+          sys.exit("Unexpected cluster list response")
+      name, tenant = sys.argv[1:]
+      matches = [c for c in clusters
+                 if c.get("metadata", {}).get("name") == name
+                 and c.get("metadata", {}).get("tenant") == tenant]
+      if len(matches) > 1:
+          sys.exit("Multiple clusters match the requested tenant and name")
+      if matches and not matches[0].get("id"):
+          sys.exit("Matching cluster has no ID")
+      print(matches[0]["id"] if matches else "")
+      ' {{ caas_cluster_name | quote }} {{ caas_cluster_tenant | quote }}
+    executable: /bin/bash
+  vars:
+    _caas_cluster_filter: >-
+      this.metadata.name == {{ caas_cluster_name | to_json }} &&
+      this.metadata.tenant == {{ caas_cluster_tenant | to_json }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_cluster_lookup
+  changed_when: false
+
+- name: Record existing CaaS cluster ID
+  ansible.builtin.set_fact:
+    _caas_existing_cluster_id: "{{ _caas_cluster_lookup.stdout | trim }}"

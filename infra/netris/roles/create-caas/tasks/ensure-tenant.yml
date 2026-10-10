@@ -1,0 +1,91 @@
+---
+- name: Get admin token for CaaS tenant bootstrap
+  ansible.builtin.command:
+    argv: [oc, create, token, -n, "{{ _caas_osac_namespace }}", admin, --duration, 1h]
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_tenant_token
+  changed_when: false
+  no_log: true
+
+- name: Get CaaS workload tenant
+  ansible.builtin.uri:
+    url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/private/v1/tenants/{{ caas_cluster_tenant }}"
+    headers:
+      Authorization: "Bearer {{ _caas_tenant_token.stdout }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: _caas_tenant_lookup
+  no_log: true
+
+# Tenant creation can return break-glass credentials. Never log that response.
+- name: Create CaaS workload tenant when absent
+  ansible.builtin.uri:
+    url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/private/v1/tenants"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _caas_tenant_token.stdout }}"
+    body_format: json
+    body:
+      metadata:
+        name: "{{ caas_cluster_tenant }}"
+        tenant: "{{ caas_cluster_tenant }}"
+    validate_certs: false
+    status_code: [200, 201, 409]
+  register: _caas_tenant_create
+  when: _caas_tenant_lookup.status == 404
+  changed_when: _caas_tenant_create.status in [200, 201]
+  no_log: true
+
+- name: Require CaaS tenant onboarding to finish
+  block:
+    - name: Wait for CaaS tenant synchronization and default networking
+      ansible.builtin.uri:
+        url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/private/v1/tenants/{{ caas_cluster_tenant }}"
+        headers:
+          Authorization: "Bearer {{ _caas_tenant_token.stdout }}"
+        validate_certs: false
+      register: _caas_tenant_ready
+      vars:
+        _caas_tenant_status: "{{ (_caas_tenant_ready.json | default({})).get('status', {}) }}"
+        _caas_network_conditions: >-
+          {{ _caas_tenant_status.get('conditions', [])
+             | selectattr('type', 'equalto', 'TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY') | list }}
+      until: >-
+        (_caas_tenant_ready.status == 200) and (
+          _caas_tenant_status.get('state', '') == 'TENANT_STATE_FAILED' or
+          (_caas_network_conditions | selectattr('reason', 'defined')
+           | selectattr('reason', 'equalto', 'ResourceFailed') | list | length > 0) or (
+            _caas_tenant_status.get('state', '') == 'TENANT_STATE_SYNCED' and
+            (_caas_network_conditions | selectattr('status', 'equalto', 'CONDITION_STATUS_TRUE') | list | length > 0)
+          )
+        )
+      retries: 60
+      delay: 10
+      no_log: true
+
+    - name: Verify CaaS tenant is ready for workloads
+      ansible.builtin.assert:
+        that:
+          - _caas_tenant_ready.json.id == caas_cluster_tenant
+          - _caas_tenant_ready.json.metadata.tenant == caas_cluster_tenant
+          - _caas_tenant_ready.json.status.state == 'TENANT_STATE_SYNCED'
+          - >-
+            _caas_tenant_ready.json.status.conditions
+            | selectattr('type', 'equalto', 'TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY')
+            | selectattr('status', 'equalto', 'CONDITION_STATUS_TRUE') | list | length > 0
+  rescue:
+    - name: Report CaaS tenant onboarding failure
+      ansible.builtin.fail:
+        msg: >-
+          Tenant '{{ caas_cluster_tenant }}' did not finish onboarding.
+          HTTP status: {{ _caas_tenant_ready.status | default('unknown') }}.
+          State: {{ _caas_tenant_status.get('state', 'unknown') }}.
+          Message: {{ _caas_tenant_status.get('message', '') }}.
+          Default networking: {{ _caas_network_conditions }}.
+          Check fulfillment-controller and networking provisioning logs before retrying.
+      vars:
+        _caas_tenant_status: "{{ (_caas_tenant_ready.json | default({})).get('status', {}) }}"
+        _caas_network_conditions: >-
+          {{ _caas_tenant_status.get('conditions', [])
+             | selectattr('type', 'equalto', 'TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY') | list }}

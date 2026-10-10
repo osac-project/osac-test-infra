@@ -166,6 +166,10 @@ caas_catalog_item: "ci-ocp-small"
 caas_catalog_item_title: "CI OCP Small"
 caas_catalog_item_description: "Small OCP cluster for CI testing"
 caas_cluster_name: "caas-ci-cluster"
+# Workload tenant for deploy/destroy-caas and the MaaS wrappers. Admin requests
+# without a saved tenant default to shared, where worker BMIs are forbidden.
+caas_cluster_tenant: "osac-e2e-ci"
+caas_cli_config_dir: "/root/.config/osac-caas"
 # CaaS creates a hosted control plane plus this many bare-metal worker nodes.
 caas_cluster_node_set_name: "workers"
 caas_cluster_node_set_size: 3

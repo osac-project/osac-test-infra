@@ -450,6 +450,8 @@ dns_server: "10.0.0.1"
 | Variable | Default | Description | Tested |
 |----------|---------|-------------|--------|
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name | yes (custom) |
+| `caas_cluster_tenant` | `osac-e2e-ci` | Workload tenant ensured by `deploy-caas`; also scopes CaaS/MaaS cluster lookup and deletion | no |
+| `caas_cli_config_dir` | `/root/.config/osac-caas` | Dedicated CLI configuration with the saved workload tenant | no |
 | `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS | defaults only |
 | `caas_cluster_version` | `4.22.0-rhcos` | DiskImage-backed ClusterVersion selected for CaaS workers | defaults only |
 | `caas_cluster_release_version` | `4.22.0` | OCP release version used to build the ClusterVersion release image and RHCOS DiskImage source | defaults only |
@@ -466,6 +468,26 @@ dns_server: "10.0.0.1"
 | `caas_discovery_memory_mb_overrides` | `{}` | Per-VM memory map (VM name → MB); empty = use `caas_discovery_memory_mb` | defaults only |
 | `caas_discovery_disk_gb` | `100` | Discovery VM disk in GB | yes (150) |
 | `caas_discovery_vm_patterns` | `[hgx-pod00-su0-h01..03]` | VM names for CaaS discovery | defaults only |
+
+`deploy-caas` creates the Fulfillment tenant if absent and waits up to roughly
+10 minutes for tenant synchronization and default networking readiness before
+creating the cluster. A failed tenant or default networking resource stops
+the wait early. The existing OSAC `admin` service account authenticates these
+requests; no additional credentials are needed.
+
+Cluster commands use a separate saved CLI tenant configuration because some
+CLI versions read `metadata.tenant` from that configuration during creation.
+Without it, admin requests default to `shared`, where worker BareMetalInstances
+cannot be created. Catalog resources such as BareMetalInstanceType and DiskImage
+remain shared. After creation or reuse, deployment checks the cluster's actual
+tenant before waiting for cluster readiness.
+
+Cluster lookup and the API delete in `destroy-caas` match both
+`caas_cluster_name` and `caas_cluster_tenant`. Pass the same tenant override to
+deployment and teardown. A same-name cluster in another tenant, including one
+left in `shared` by an earlier run, is not reused or deleted by this lookup.
+The discovery-agent/VM cleanup and `force-destroy-caas` still operate on the
+configured lab resources; they are not general tenant-scoped cleanup tools.
 
 ## Testing OSAC Components
 

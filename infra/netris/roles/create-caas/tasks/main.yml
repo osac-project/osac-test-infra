@@ -1,19 +1,15 @@
 ---
-- name: Check if cluster already exists
-  ansible.builtin.shell:
-    cmd: >-
-      osac get clusters -o json | python3 -c "
-      import sys, json
-      raw = json.load(sys.stdin)
-      clusters = raw if isinstance(raw, list) else (raw.get('items') or [raw])
-      def n(c):
-          meta = c.get('metadata') if isinstance(c.get('metadata'), dict) else {}
-          return meta.get('name') or c.get('name') or ''
-      print('exists' if any(n(c)=='{{ caas_cluster_name }}' for c in clusters if isinstance(c, dict)) else 'absent')
-      "
-  register: _cluster_exists
-  changed_when: false
-  failed_when: false
+- name: Configure CaaS CLI with explicit workload tenant
+  ansible.builtin.import_role:
+    name: caas-client
+
+- name: Ensure CaaS workload tenant exists and is ready
+  ansible.builtin.import_tasks: ensure-tenant.yml
+
+- name: Look up existing CaaS cluster in the workload tenant
+  ansible.builtin.import_role:
+    name: caas-client
+    tasks_from: find-cluster.yml
 
 - name: Validate CaaS worker node set
   ansible.builtin.assert:
@@ -40,14 +36,14 @@
     src: "{{ ssh_public_key_path }}"
   register: _caas_ssh_public_key_file
   when:
-    - _cluster_exists.stdout | default('') != 'exists'
+    - _caas_existing_cluster_id | length == 0
     - (caas_cluster_params | default([]) | length) == 0
 
 - name: Normalize CaaS SSH public key
   ansible.builtin.set_fact:
     _caas_ssh_public_key: "{{ _caas_ssh_public_key_file.content | b64decode | trim }}"
   when:
-    - _cluster_exists.stdout | default('') != 'exists'
+    - _caas_existing_cluster_id | length == 0
     - (caas_cluster_params | default([]) | length) == 0
 
 - name: Require a non-empty CaaS SSH public key
@@ -56,7 +52,7 @@
       - _caas_ssh_public_key | length > 0
     fail_msg: "SSH public key file '{{ ssh_public_key_path }}' is empty after trimming whitespace."
   when:
-    - _cluster_exists.stdout | default('') != 'exists'
+    - _caas_existing_cluster_id | length == 0
     - (caas_cluster_params | default([]) | length) == 0
 
 # Default CaaS path: pull secret from a file, normalized SSH key in both fields.
@@ -67,6 +63,8 @@
     expand_argument_vars: "{{ false if ansible_version.full is version('2.16', '>=') else omit }}"
     argv:
       - osac
+      - --config
+      - "{{ caas_cli_config_dir }}"
       - create
       - cluster
       - --template
@@ -83,9 +81,11 @@
       - "{{ caas_cluster_name }}"
       - --node-set
       - "{{ _caas_worker_node_set_arg }}"
+  environment:
+    KUBECONFIG: /root/.kube/config
   register: _cluster_create_fields
   when:
-    - _cluster_exists.stdout | default('') != 'exists'
+    - _caas_existing_cluster_id | length == 0
     - (caas_cluster_params | default([]) | length) == 0
   changed_when: true
 
@@ -93,7 +93,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     args=(
-      osac create cluster
+      osac --config {{ caas_cli_config_dir | quote }} create cluster
       --template "{{ caas_cluster_template }}"
       --pull-secret-file "{{ pull_secret_path }}"
       --ssh-public-key-file "{{ ssh_public_key_path }}"
@@ -109,40 +109,65 @@
     "${args[@]}"
   args:
     executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
   register: _cluster_create_params
   when:
-    - _cluster_exists.stdout | default('') != 'exists'
+    - _caas_existing_cluster_id | length == 0
     - (caas_cluster_params | default([]) | length) > 0
   changed_when: true
 
 - name: Select create result
   ansible.builtin.set_fact:
     _cluster_create: "{{ _cluster_create_params if (caas_cluster_params | default([]) | length) > 0 else _cluster_create_fields }}"
-  when: _cluster_exists.stdout | default('') != 'exists'
-
-- name: Get existing cluster ID
-  ansible.builtin.shell:
-    cmd: >-
-      osac get clusters -o json | python3 -c "
-      import sys, json
-      raw = json.load(sys.stdin)
-      clusters = raw if isinstance(raw, list) else (raw.get('items') or [raw])
-      def n(c):
-          meta = c.get('metadata') if isinstance(c.get('metadata'), dict) else {}
-          return meta.get('name') or c.get('name') or ''
-      print(next(c['id'] for c in clusters if isinstance(c, dict) and n(c)=='{{ caas_cluster_name }}'))
-      "
-  register: _existing_cluster_id
-  when: _cluster_exists.stdout | default('') == 'exists'
-  changed_when: false
+  when: _caas_existing_cluster_id | length == 0
 
 - name: Extract cluster ID
   ansible.builtin.set_fact:
-    caas_cluster_id: "{{ _existing_cluster_id.stdout if (_cluster_exists.stdout | default('')) == 'exists' else (_cluster_create.stdout | regex_search('[0-9a-f-]{36}')) }}"
+    caas_cluster_id: "{{ _caas_existing_cluster_id if _caas_existing_cluster_id | length > 0 else (_cluster_create.stdout | regex_search('[0-9a-f-]{36}')) }}"
+
+- name: Require a cluster ID before checking ownership
+  ansible.builtin.assert:
+    that:
+      - caas_cluster_id is string
+      - caas_cluster_id | length > 0
+    fail_msg: "The CaaS cluster command did not return a cluster ID."
+
+- name: Read CaaS cluster ownership from the API
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      osac --config {{ caas_cli_config_dir | quote }} get clusters {{ caas_cluster_id | quote }} -o json \
+        | python3 -c '
+      import json, sys
+      cluster = json.load(sys.stdin)
+      metadata = cluster.get("metadata", {})
+      print(json.dumps({"id": cluster.get("id"), "name": metadata.get("name"), "tenant": metadata.get("tenant")}))
+      '
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_cluster_ownership
+  changed_when: false
+
+- name: Verify CaaS cluster belongs to the workload tenant
+  ansible.builtin.assert:
+    that:
+      - _caas_owner.id == caas_cluster_id
+      - _caas_owner.name == caas_cluster_name
+      - _caas_owner.tenant == caas_cluster_tenant
+    fail_msg: >-
+      Cluster '{{ caas_cluster_name }}' ({{ caas_cluster_id }}) has unexpected ownership:
+      {{ _caas_owner }}. Expected tenant '{{ caas_cluster_tenant }}'.
+      Worker BMIs inherit the cluster tenant; stop before waiting for provisioning.
+  vars:
+    _caas_owner: "{{ _caas_cluster_ownership.stdout | from_json }}"
 
 - name: Report cluster creation started
   ansible.builtin.debug:
-    msg: "Cluster '{{ caas_cluster_name }}' {{ 'already exists' if (_cluster_exists.stdout | default('')) == 'exists' else 'created' }} with ID {{ caas_cluster_id }}"
+    msg: >-
+      Cluster '{{ caas_cluster_name }}' {{ 'already exists' if _caas_existing_cluster_id | length > 0 else 'created' }}
+      with ID {{ caas_cluster_id }} in tenant '{{ caas_cluster_tenant }}'.
 
 # The HyperShift operator creates the hosted control plane namespace with
 # PodSecurity enforce=restricted, which blocks ALL CP pods (etcd, apiserver,
@@ -195,9 +220,11 @@
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
-          osac get clusters {{ caas_cluster_id | quote }} -o json \
+          osac --config {{ caas_cli_config_dir | quote }} get clusters {{ caas_cluster_id | quote }} -o json \
             | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('state',''))"
         executable: /bin/bash
+      environment:
+        KUBECONFIG: /root/.kube/config
       register: _cluster_state
       until:
         - _cluster_state.rc == 0
