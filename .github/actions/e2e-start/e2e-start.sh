@@ -22,10 +22,32 @@
 #   WORKFLOWS          comma-separated workflow filenames
 #   SKIP_LABEL_CHECK   true skips label/actor checks (CodeRabbit start);
 #                      still revalidates CR APPROVED on HEAD and no human CR
+#   DECIDED            true when the caller has already decided, for the head
+#                      commit EVENT_HEAD_SHA, that the e2e should start (osac-ci
+#                      e2e-decide: an approval by someone with write access or
+#                      CodeRabbit, cheap checks green). Implies SKIP_LABEL_CHECK;
+#                      the CodeRabbit-only approval check is skipped, nothing
+#                      else: the PR must still be open, its head still the
+#                      decided commit, and no human may have requested changes.
+#                      EVENT_HEAD_SHA is required, so the decision is bound to a
+#                      commit.
 
 set -euo pipefail
 TRIGGER_LABEL="${TRIGGER_LABEL:-e2e-ready}"
 SKIP_LABEL_CHECK="${SKIP_LABEL_CHECK:-false}"
+DECIDED="${DECIDED:-false}"
+EVENT_HEAD_SHA="${EVENT_HEAD_SHA:-}"
+APPROVAL_TITLE="CodeRabbit approval"
+APPROVAL_SOURCE="CodeRabbit"
+if [[ "${DECIDED}" == "true" ]]; then
+  if [[ -z "${EVENT_HEAD_SHA}" ]]; then
+    echo "decided=true needs event-head-sha: a decision is only valid for the commit it was made on."
+    exit 1
+  fi
+  SKIP_LABEL_CHECK=true
+  APPROVAL_TITLE="approval"
+  APPROVAL_SOURCE="Reviewer"
+fi
 WORKFLOWS="${WORKFLOWS:-e2e-vmaas-full-install-caller.yml,e2e-bmaas-full-install-caller.yml,e2e-caas-full-install-caller.yml}"
 
 if [[ "${SKIP_LABEL_CHECK}" != "true" ]]; then
@@ -113,6 +135,11 @@ approval_still_valid() {
   ' <<<"${reviews_json}" >/dev/null 2>&1; then
     return 1
   fi
+  # The caller already decided that an approval of this commit exists (osac-ci e2e-decide);
+  # only the CodeRabbit-specific proof below is skipped, never the human CHANGES_REQUESTED check above.
+  if [[ "${DECIDED}" == "true" ]]; then
+    return 0
+  fi
   jq -e --arg sha "${HEAD_SHA}" --arg who "coderabbitai[bot]" '
     ([.[]
       | select(.user.login == $who)
@@ -166,7 +193,7 @@ if all_merge_e2e_gates_green; then
   complete_stale_in_progress_merge_gates || true
   {
     if [[ "${SKIP_LABEL_CHECK}" == "true" ]]; then
-      echo "### E2E on CodeRabbit approval"
+      echo "### E2E on ${APPROVAL_TITLE}"
       echo ""
       echo "All merge-required e2e gates already success on HEAD — skipping replay."
     else
@@ -599,12 +626,12 @@ fi
 
 if [[ "${SKIP_LABEL_CHECK}" == "true" ]]; then
   {
-    echo "### E2E on CodeRabbit approval"
+    echo "### E2E on ${APPROVAL_TITLE}"
     echo ""
     if [[ ${STARTED} -gt 0 ]]; then
-      echo "CodeRabbit APPROVED — starting expensive e2e (PR run replay)."
+      echo "${APPROVAL_SOURCE} APPROVED — starting expensive e2e (PR run replay)."
     else
-      echo "CodeRabbit APPROVED — not starting a new full-install run."
+      echo "${APPROVAL_SOURCE} APPROVED — not starting a new full-install run."
     fi
   } > /tmp/e2e-on-label.md
 else

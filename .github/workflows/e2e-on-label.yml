@@ -57,6 +57,13 @@ on:
         required: false
         type: boolean
         default: false
+      decided:
+        description: >-
+          The caller already decided (osac-ci e2e-decide) that the e2e should start for event_head_sha. Skips the
+          label and CodeRabbit-only approval checks; needs event_head_sha.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -101,3 +108,4 @@ jobs:
           event-head-sha: ${{ github.event.pull_request.head.sha || inputs.event_head_sha }}
           workflows: ${{ inputs.workflows }}
           skip-label-check: ${{ inputs.skip_label_check }}
+          decided: ${{ inputs.decided }}

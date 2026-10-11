@@ -28,4 +28,5 @@ Run readiness and e2e-gate helper unit tests:
 ```bash
 bash .github/actions/check-e2e-readiness/check-e2e-readiness-test.sh
 bash .github/actions/invalidate-e2e-gates/e2e-gates-lib-test.sh
+bash .github/actions/e2e-start/e2e-start-decided-test.sh
 ```

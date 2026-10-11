@@ -24,6 +24,13 @@ inputs:
     description: Skip label presence/actor checks (CodeRabbit approval start)
     required: false
     default: "false"
+  decided:
+    description: >-
+      "true" when the caller has already decided (osac-ci e2e-decide) that the e2e should start for event-head-sha.
+      Skips the label checks and the CodeRabbit-only approval check; the pull request must still be open with that
+      head and no human may have requested changes. Requires event-head-sha.
+    required: false
+    default: "false"
   github-token:
     description: Token with actions:write and pull-requests:write
     required: false
@@ -42,4 +49,5 @@ runs:
         TRIGGER_LABEL: ${{ inputs.trigger-label }}
         WORKFLOWS: ${{ inputs.workflows }}
         SKIP_LABEL_CHECK: ${{ inputs.skip-label-check }}
+        DECIDED: ${{ inputs.decided }}
       run: bash "${GITHUB_ACTION_PATH}/e2e-start.sh"
