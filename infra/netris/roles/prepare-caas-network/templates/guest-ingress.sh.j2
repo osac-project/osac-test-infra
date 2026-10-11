@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+client={{ caas_ingress_return_cidr | quote }}
+gateway={{ caas_ingress_return_gateway | quote }}
+tenant_prefix={{ (caas_netris_ingress_ip.rsplit('.', 1)[0] ~ '.') | quote }}
+comment=osac-managed-ingress-mss
+
+for _ in {1..60}; do
+  fabric=$(ip -o -4 addr show scope global | awk -v prefix="$tenant_prefix" 'index($4, prefix) == 1 { print $2; exit }')
+  if [[ -z "$fabric" || "$fabric" == br-ex ]]; then
+    sleep 2
+    continue
+  fi
+  profile=$(nmcli -g GENERAL.CONNECTION device show "$fabric" 2>/dev/null || true)
+  if [[ -n "$profile" && "$profile" != -- ]]; then
+    break
+  fi
+  sleep 2
+done
+[[ -n "${profile:-}" && "$profile" != -- ]] || { echo "No active tenant connection" >&2; exit 1; }
+
+nmcli connection modify "$profile" ipv4.forwarding 1 ipv4.never-default yes
+if ! nmcli -g ipv4.routes connection show "$profile" | grep -Fq "$client"; then
+  nmcli connection modify "$profile" +ipv4.routes "$client $gateway"
+fi
+nmcli device reapply "$fabric"
+
+for direction in -i -o; do
+  rule=(FORWARD "$direction" "$fabric" -p tcp --tcp-flags SYN,RST SYN
+        -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu)
+  iptables -t mangle -C "${rule[@]}" 2>/dev/null ||
+    iptables -t mangle -I "${rule[@]}"
+done

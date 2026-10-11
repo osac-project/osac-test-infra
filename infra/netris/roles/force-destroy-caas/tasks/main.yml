@@ -1,14 +1,14 @@
 ---
-# Force-clean leftovers after destroy-caas (no graceful wait — equivalent to
-# destroy-caas.sh --now). Strips stuck HostedCluster / ClusterOrder / ManagedCluster
-# and related namespaces (incl. HCP ns + ghost ns with Terminating pods/deploys),
-# deletes leftover order-* apps LB services, detaches/wipes discovery worker VMs,
-# sweeps orphan Netris order-* server clusters and VPCs.
+# Run after destroy-caas has requested cluster deletion. This role does not
+# submit another cluster deletion request. It strips stuck HostedCluster / ClusterOrder / ManagedCluster and
+# related namespaces (incl. HCP ns + ghost ns with Terminating pods/deploys),
+# deletes CaaS worker BMIs through Fulfillment before removing their BMHs,
+# deletes the per-worker BMaaS BareMetalHosts while their VMs are still running,
+# wipes worker VMs, and sweeps orphan Netris order-* server clusters and VPCs.
 
 - name: Resolve OSAC namespace for force destroy
   ansible.builtin.set_fact:
     _force_osac_ns: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
-    _force_agent_ns: "{{ caas_agent_namespace }}"
 
 - name: Collect leftover order names
   ansible.builtin.shell: |
@@ -65,7 +65,108 @@
   ansible.builtin.debug:
     msg: >-
       Force-destroy orders={{ force_destroy_orders | default([]) }}
-      worker_vms={{ caas_discovery_vm_patterns }}
+      worker_vms={{ caas_worker_vm_patterns }}
+
+# The worker disks are discarded below. Set this before BMI deletion can
+# trigger BMH deprovisioning, while retaining BMO's Ironic deregistration.
+- name: Disable automated cleaning for CaaS worker force cleanup
+  ansible.builtin.shell: |
+    set -euo pipefail
+    bmh=$(oc get bmh {{ item | quote }} -n {{ bmaas_bmh_namespace | quote }} \
+      --ignore-not-found -o name)
+    if [[ -n "$bmh" ]]; then
+      oc patch bmh {{ item | quote }} -n {{ bmaas_bmh_namespace | quote }} \
+        --type=merge -p '{"spec":{"automatedCleaningMode":"disabled"}}'
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ caas_worker_vm_patterns }}"
+  register: _force_bmh_cleaning
+  changed_when: >-
+    'patched' in (_force_bmh_cleaning.stdout | default('')) and
+    '(no change)' not in (_force_bmh_cleaning.stdout | default(''))
+
+# A deleted AgentMachine can leave this CAPI hook behind after the order has
+# entered deletion. Only release hooks on deleting Machines for these orders.
+- name: Release stale AgentMachine pre-terminate hooks on deleting orders
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ns="{{ _force_osac_ns }}-{{ item }}-{{ item }}"
+    if [[ -z "$(oc get namespace "$ns" --ignore-not-found -o name)" ]]; then
+      exit 0
+    fi
+    machines=$(oc get machines.cluster.x-k8s.io -n "$ns" -o json | python3 -c '
+    import json, sys
+    hook = "pre-terminate.delete.hook.machine.cluster.x-k8s.io/agentmachine"
+    for machine in json.load(sys.stdin)["items"]:
+        meta = machine["metadata"]
+        if meta.get("deletionTimestamp") and hook in meta.get("annotations", {}):
+            print(meta["name"])
+    ')
+    while IFS= read -r machine; do
+      [[ -z "$machine" ]] && continue
+      oc annotate machines.cluster.x-k8s.io "$machine" -n "$ns" \
+        pre-terminate.delete.hook.machine.cluster.x-k8s.io/agentmachine-
+      echo "Released stale AgentMachine hook on $ns/$machine"
+    done <<< "$machines"
+  args:
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ force_destroy_orders }}"
+  changed_when: "'Released stale AgentMachine hook' in (_force_machine_hooks.stdout | default(''))"
+  register: _force_machine_hooks
+
+- name: Delete CaaS worker BMIs before removing their BMHs
+  block:
+    - name: Create temporary OSAC CLI config for worker BMI cleanup
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: osac-force-bmi-delete-
+      register: _force_bmi_osac_config
+
+    - name: Get Fulfillment API host for worker BMI cleanup
+      ansible.builtin.command:
+        cmd: >-
+          oc get route fulfillment-internal-api -n {{ _force_osac_ns }}
+          -o jsonpath='{.status.ingress[0].host}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _force_bmi_ful_host
+      changed_when: false
+      failed_when: _force_bmi_ful_host.rc != 0 or (_force_bmi_ful_host.stdout | trim | length) == 0
+
+    - name: Log in OSAC CLI for worker BMI cleanup
+      ansible.builtin.shell: |
+        set -euo pipefail
+        osac login --insecure --private \
+          --token-script "oc create token -n {{ _force_osac_ns }} admin --duration 1h" \
+          --address "https://{{ _force_bmi_ful_host.stdout | trim }}"
+      environment:
+        KUBECONFIG: /root/.kube/config
+        OSAC_CONFIG: "{{ _force_bmi_osac_config.path }}"
+      changed_when: true
+
+    - name: Delete worker BMIs through OSAC and wait for controller cleanup
+      ansible.builtin.command:
+        cmd: python3 {{ role_path }}/files/delete_worker_bmis.py
+      environment:
+        KUBECONFIG: /root/.kube/config
+        OSAC_CONFIG: "{{ _force_bmi_osac_config.path }}"
+        OSAC_TENANT: "{{ osac_test_tenant_name }}"
+        OSAC_CLUSTER_NAME: "{{ caas_cluster_name }}"
+        BMH_NAMESPACE: "{{ bmaas_bmh_namespace }}"
+        WORKERS: "{{ caas_worker_vm_patterns | to_json }}"
+      register: _force_bmi_delete
+      changed_when: "'Requesting OSAC deletion' in (_force_bmi_delete.stdout | default(''))"
+  always:
+    - name: Remove temporary OSAC CLI config for worker BMI cleanup
+      ansible.builtin.file:
+        path: "{{ _force_bmi_osac_config.path }}"
+        state: absent
+      when: _force_bmi_osac_config.path is defined
 
 - name: Force-clean each leftover order
   ansible.builtin.shell: |
@@ -206,7 +307,124 @@
   failed_when: false
   changed_when: true
 
-- name: Wipe discovery worker VMs (detach disks/ISO + remove qcow2)
+# The order cleanup also deletes the NodePool and osac-managed-ingress
+# ConfigMap. Do not report success while an order namespace still exists.
+- name: Verify force-cleaned order resources are gone
+  ansible.builtin.shell: |
+    set -euo pipefail
+    order="{{ item }}"
+    ns="{{ _force_osac_ns }}"
+    remaining=()
+    if [[ -n "$(oc get clusterorder "$order" -n "$ns" --ignore-not-found -o name)" ]]; then
+      remaining+=("clusterorder/$order")
+    fi
+    for name in "$ns-$order" "$ns-$order-$order" "$order" "klusterlet-$order"; do
+      if [[ -n "$(oc get namespace "$name" --ignore-not-found -o name)" ]]; then
+        remaining+=("namespace/$name")
+      fi
+    done
+    if [[ -n "${remaining[*]}" ]]; then
+      printf 'Still deleting order %s: %s\n' "$order" "${remaining[*]}"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ force_destroy_orders }}"
+  register: _force_order_verify
+  until: _force_order_verify.rc == 0
+  retries: 12
+  delay: 5
+  changed_when: false
+
+# BMaaS setup creates one BareMetalHost per CaaS worker in host-inventory.
+# Delete only those worker hosts, leaving the shared namespace, BMC secrets,
+# Provisioning CR, provisioning V-Net, BareMetalInstanceTypes and DiskImages.
+# Preserve BMO finalizers so Ironic deregistration still completes.
+
+- name: Delete CaaS worker BareMetalHosts through Metal3
+  block:
+    - name: Wait for BMO to deregister worker hosts and remove their finalizers
+      ansible.builtin.command:
+        cmd: >-
+          oc delete bmh {{ caas_worker_vm_patterns | map('quote') | join(' ') }}
+          -n {{ bmaas_bmh_namespace }} --ignore-not-found --wait=true --timeout=600s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _force_bmh_delete
+      changed_when: "'deleted' in (_force_bmh_delete.stdout | default(''))"
+  rescue:
+    - name: Read worker host cleanup state
+      ansible.builtin.command:
+        cmd: >-
+          oc get bmh {{ caas_worker_vm_patterns | map('quote') | join(' ') }}
+          -n {{ bmaas_bmh_namespace }} --ignore-not-found
+          -o custom-columns=NAME:.metadata.name,STATE:.status.provisioning.state,IRONIC_ID:.status.provisioning.ID,ERROR:.status.errorMessage
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _force_bmh_remaining
+      changed_when: false
+      failed_when: false
+
+    - name: Stop force cleanup when Metal3 has not released the worker hosts
+      ansible.builtin.fail:
+        msg: >-
+          Metal3 host deletion did not complete; worker VM disks and media were left intact.
+          Do not strip BMH finalizers: that leaves stale Ironic nodes.
+          {{ _force_bmh_delete.stderr | default('') }}
+          {{ _force_bmh_remaining.stdout | default('') }}
+          Check the metal3-baremetal-operator and metal3-ironic logs in openshift-machine-api.
+
+- name: Release orphan inspection images after worker BMH deletion
+  ansible.builtin.shell: |
+    python3 <<'PY'
+    import json, os, subprocess
+
+    ns = os.environ['BMH_NAMESPACE']
+    for name in json.loads(os.environ['WORKERS']):
+        def oc(*args):
+            return subprocess.check_output(['oc', '-n', ns, *args], text=True)
+
+        if oc('get', 'bmh', name, '--ignore-not-found', '-o', 'name').strip():
+            raise SystemExit('BMH reappeared during cleanup: ' + name)
+        raw = oc('get', 'preprovisioningimage', name, '--ignore-not-found', '-o', 'json')
+        if not raw.strip():
+            continue
+        meta = json.loads(raw)['metadata']
+        image_uid = meta['uid']
+        owners = meta.get('ownerReferences', [])
+        if len(owners) != 1 or owners[0].get('kind') != 'BareMetalHost' or owners[0].get('name') != name:
+            raise SystemExit('Refusing to remove an inspection image with an unexpected owner: ' + name)
+        if not meta.get('deletionTimestamp'):
+            oc('delete', 'preprovisioningimage', name, '--ignore-not-found', '--wait=false')
+            raw = oc('get', 'preprovisioningimage', name, '--ignore-not-found', '-o', 'json')
+            if not raw.strip():
+                print('removed ' + name)
+                continue
+            meta = json.loads(raw)['metadata']
+            if meta['uid'] != image_uid:
+                raise SystemExit('Inspection image was replaced during cleanup: ' + name)
+        # Earlier forced BMH deletion left this BMO reference behind. Keep
+        # the image builder finalizers so it can clean its own resources.
+        finalizers = meta.get('finalizers', [])
+        stale = 'baremetalhost.metal3.io/preprovisioningImage'
+        if stale in finalizers:
+            patch = {'metadata': {'resourceVersion': meta['resourceVersion'],
+                                  'finalizers': [f for f in finalizers if f != stale]}}
+            oc('patch', 'preprovisioningimage', name, '--type=merge', '-p', json.dumps(patch))
+            print('released ' + name)
+        oc('delete', 'preprovisioningimage', name, '--ignore-not-found', '--wait=true', '--timeout=120s')
+        print('removed ' + name)
+    PY
+  environment:
+    KUBECONFIG: /root/.kube/config
+    BMH_NAMESPACE: "{{ bmaas_bmh_namespace }}"
+    WORKERS: "{{ caas_worker_vm_patterns | to_json }}"
+  register: _force_inspection_images
+  changed_when: "'released ' in _force_inspection_images.stdout or 'removed ' in _force_inspection_images.stdout"
+
+- name: Wipe CaaS worker VMs (detach disks/ISO + remove qcow2)
   ansible.builtin.shell: |
     set -euo pipefail
     vm="{{ item }}"
@@ -215,42 +433,19 @@
       exit 0
     fi
     if virsh list --name 2>/dev/null | grep -qx "$vm"; then
-      virsh destroy "$vm" 2>/dev/null || true
+      virsh destroy "$vm"
     fi
+    [[ "$(LC_ALL=C virsh domstate "$vm")" == "shut off" ]]
     while read -r target; do
       [[ -z "$target" ]] && continue
       virsh change-media "$vm" "$target" --eject --config 2>/dev/null || true
       virsh detach-disk "$vm" "$target" --config 2>/dev/null || true
-    done < <(virsh domblklist "$vm" 2>/dev/null | awk 'NR>2 && NF>=1 {print $1}')
-    rm -f "/var/lib/libvirt/images/${vm}-disk.qcow2"
+    done < <(virsh domblklist "$vm" --inactive 2>/dev/null | awk 'NR>2 && NF>=1 {print $1}')
+    rm -f "{{ sushy_tools_disk_dir }}/${vm}-disk.qcow2"
     echo "$vm powered off; disks/ISO detached; qcow2 removed"
-  loop: "{{ caas_discovery_vm_patterns }}"
-  failed_when: false
-  changed_when: true
-
-- name: Delete any remaining Agent CRs for wiped VMs
-  ansible.builtin.shell: |
-    set -euo pipefail
-    vm="{{ item }}"
-    agent_ns="{{ _force_agent_ns }}"
-    agent=$(oc get agent -n "$agent_ns" -o json 2>/dev/null | python3 -c '
-    import json, sys
-    vm = sys.argv[1]
-    data = json.load(sys.stdin)
-    for a in data.get("items") or []:
-        host = ((a.get("status") or {}).get("inventory") or {}).get("hostname") or ""
-        if host == vm:
-            print(a["metadata"]["name"])
-            break
-    ' "$vm" || true)
-    if [[ -n "$agent" ]]; then
-      oc delete agent "$agent" -n "$agent_ns" --wait=false 2>/dev/null || true
-      echo "deleted agent $agent ($vm)"
-    fi
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop: "{{ caas_discovery_vm_patterns }}"
-  failed_when: false
+  args:
+    executable: /bin/bash
+  loop: "{{ caas_worker_vm_patterns }}"
   changed_when: true
 
 - name: Resolve Netris controller URL
@@ -285,13 +480,6 @@
   failed_when: false
   no_log: true
 
-- name: Write live-orders file for Netris sweep
-  ansible.builtin.copy:
-    dest: /tmp/force-destroy-live-orders.txt
-    mode: "0600"
-    content: ""
-  when: (_netris_url.stdout | trim | length) > 0
-
 - name: Sweep orphan Netris order resources
   ansible.builtin.shell: |
     set -euo pipefail
@@ -302,10 +490,11 @@
       "$NETRIS_PASS" \
       {{ force_destroy_orders | map('quote') | join(' ') }}
   environment:
-    NETRIS_LIVE_ORDERS_FILE: /tmp/force-destroy-live-orders.txt
     NETRIS_PASS: "{{ _netris_pass.stdout }}"
   register: _netris_cleanup
-  when: (_netris_url.stdout | trim | length) > 0
+  when:
+    - (_netris_url.stdout | trim | length) > 0
+    - force_destroy_orders | length > 0
   failed_when: false
   changed_when: "'deletes' in (_netris_cleanup.stdout | default(''))"
   no_log: true
@@ -319,3 +508,176 @@
   ansible.builtin.debug:
     msg: "{{ _netris_cleanup.stdout_lines | default([]) }}"
   when: _netris_cleanup is not skipped
+
+
+- name: Finalize the force-destroyed OSAC cluster record
+  block:
+    - name: Create temporary OSAC CLI config for force cleanup
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: osac-force-destroy-
+      register: _force_osac_config
+
+    - name: Get Fulfillment API host for force cleanup
+      ansible.builtin.shell:
+        cmd: >-
+          oc get route fulfillment-internal-api -n {{ _force_osac_ns }}
+          -o jsonpath='{.status.ingress[0].host}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _force_ful_host
+      changed_when: false
+      failed_when: _force_ful_host.rc != 0 or (_force_ful_host.stdout | trim | length) == 0
+
+    - name: Log in OSAC CLI for force cleanup finalizer handling
+      ansible.builtin.shell: |
+        set -euo pipefail
+        osac login --insecure --private \
+          --token-script "oc create token -n {{ _force_osac_ns }} admin --duration 1h" \
+          --address "https://{{ _force_ful_host.stdout | trim }}"
+      environment:
+        KUBECONFIG: /root/.kube/config
+        OSAC_CONFIG: "{{ _force_osac_config.path }}"
+      changed_when: true
+
+    - name: Find the configured OSAC cluster if deletion is still pending
+      ansible.builtin.shell: |
+        set -euo pipefail
+        osac --tenant "{{ osac_test_tenant_name }}" get clusters -o json | python3 -c '
+        import json, sys
+        raw = json.load(sys.stdin)
+        clusters = raw if isinstance(raw, list) else (raw.get("items") or [raw])
+        target = sys.argv[1]
+        for cluster in clusters:
+            if not isinstance(cluster, dict):
+                continue
+            metadata = cluster.get("metadata") or {}
+            if metadata.get("name") != target:
+                continue
+            finalizers = metadata.get("finalizers") or []
+            if not metadata.get("deletion_timestamp"):
+                print("active")
+            elif finalizers and cluster.get("id"):
+                print("pending:" + cluster["id"])
+            elif finalizers:
+                print("invalid-pending-id")
+            else:
+                print("deleting-no-finalizer")
+            break
+        else:
+            print("absent")
+        ' "{{ caas_cluster_name }}"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /root/.kube/config
+        OSAC_CONFIG: "{{ _force_osac_config.path }}"
+        NO_COLOR: "1"
+      register: _force_cluster_finalizer_target
+      changed_when: false
+
+    - name: Refuse to clear finalizers on an active OSAC cluster
+      ansible.builtin.fail:
+        msg: >-
+          OSAC cluster '{{ caas_cluster_name }}' still exists without a deletion
+          timestamp. Run destroy-maas/destroy-caas first; force cleanup will not
+          remove finalizers from an active cluster.
+      when: (_force_cluster_finalizer_target.stdout | trim) == 'active'
+
+    - name: Fail if the deleting cluster has no identifier
+      ansible.builtin.fail:
+        msg: "OSAC cluster '{{ caas_cluster_name }}' is deleting with finalizers but has no ID."
+      when: (_force_cluster_finalizer_target.stdout | trim) == 'invalid-pending-id'
+
+    - name: Create short-lived token for the Fulfillment API finalizer patch
+      ansible.builtin.command:
+        cmd: oc create token -n {{ _force_osac_ns }} admin --duration=10m
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _force_finalizer_api_token
+      changed_when: false
+      no_log: true
+      when: (_force_cluster_finalizer_target.stdout | trim).startswith('pending:')
+
+    - name: Remove finalizers from the deleting OSAC cluster record
+      ansible.builtin.uri:
+        url: >-
+          https://{{ _force_ful_host.stdout | trim }}/api/private/v1/clusters/{{ (_force_cluster_finalizer_target.stdout | trim).split(':', 1)[1] }}?update_mask=metadata.finalizers
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ _force_finalizer_api_token.stdout | trim }}"
+        body_format: json
+        body:
+          metadata:
+            finalizers: []
+        status_code: 200
+        validate_certs: false
+        return_content: false
+      register: _force_finalizer_patch
+      failed_when: false
+      changed_when: (_force_finalizer_patch.status | default(0) | int) == 200
+      no_log: true
+      when: (_force_cluster_finalizer_target.stdout | trim).startswith('pending:')
+
+    - name: Fail if the Fulfillment API rejected the finalizer patch
+      ansible.builtin.fail:
+        msg: >-
+          Fulfillment API rejected the metadata-only finalizer patch
+          (HTTP {{ _force_finalizer_patch.status | default('no response') }}).
+      when:
+        - (_force_cluster_finalizer_target.stdout | trim).startswith('pending:')
+        - (_force_finalizer_patch.status | default(0) | int) != 200
+
+    - name: Wait for the force-destroyed OSAC cluster record to disappear
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for attempt in $(seq 1 15); do
+          clusters=$(osac --tenant "{{ osac_test_tenant_name }}" get clusters -o json) || {
+            echo "Could not query OSAC clusters while verifying deletion" >&2
+            exit 1
+          }
+          state=$(printf '%s' "$clusters" | python3 -c '
+        import json, sys
+        raw = json.load(sys.stdin)
+        clusters = raw if isinstance(raw, list) else (raw.get("items") or [raw])
+        target = sys.argv[1]
+        print("present" if any(
+            isinstance(c, dict) and
+            (c.get("metadata") or {}).get("name") == target
+            for c in clusters
+        ) else "absent")
+        ' "{{ caas_cluster_name }}") || {
+            echo "Could not parse OSAC cluster list while verifying deletion" >&2
+            exit 1
+          }
+          if [[ "$state" == absent ]]; then
+            echo "OSAC cluster record removed"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "OSAC cluster '{{ caas_cluster_name }}' still exists after finalizer removal" >&2
+        exit 1
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /root/.kube/config
+        OSAC_CONFIG: "{{ _force_osac_config.path }}"
+        NO_COLOR: "1"
+      register: _force_cluster_finalizer_wait
+      when: >-
+        (_force_cluster_finalizer_target.stdout | trim).startswith('pending:') or
+        (_force_cluster_finalizer_target.stdout | trim) == 'deleting-no-finalizer'
+      changed_when: false
+
+    - name: Report OSAC cluster finalizer state
+      ansible.builtin.debug:
+        msg: >-
+          OSAC cluster '{{ caas_cluster_name }}' finalizer state:
+          {{ _force_cluster_finalizer_target.stdout | trim }}.
+  always:
+    - name: Remove temporary OSAC CLI config
+      ansible.builtin.file:
+        path: "{{ _force_osac_config.path }}"
+        state: absent
+      when: _force_osac_config.path is defined

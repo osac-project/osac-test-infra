@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Remove orphan Netris order-* server clusters / VPCs / NAT / vnets.
 
-Args: <netris_url> <cookie_jar> <user> <password> [force_order ...]
-Env:  NETRIS_LIVE_ORDERS_FILE — newline-separated live ClusterOrder/HC names
+Args: <netris_url> <cookie_jar> <user> <password> <order> [order ...]
 """
 import json
 import os
@@ -11,6 +10,9 @@ import sys
 
 url, jar, user, password = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 force = [x for x in sys.argv[5:] if x]
+
+if not force:
+    raise SystemExit("Refusing unscoped Netris cleanup: provide at least one order name")
 
 
 def curl(method, path, body=None, fail_ok=False):
@@ -53,12 +55,6 @@ def get_list(path):
         return []
 
 
-live = set()
-live_file = os.environ.get("NETRIS_LIVE_ORDERS_FILE", "")
-if live_file and os.path.isfile(live_file):
-    with open(live_file) as f:
-        live = {ln.strip() for ln in f if ln.strip()}
-
 scs = get_list("/api/v2/server-cluster")
 vpcs = get_list("/api/v2/vpc")
 nats = get_list("/api/v2/nat")
@@ -69,11 +65,7 @@ def is_order_name(name):
 
 
 def should_delete(name):
-    if not is_order_name(name):
-        return False
-    if force:
-        return name in force
-    return name not in live
+    return is_order_name(name) and name in force
 
 
 targets_sc = [c for c in scs if should_delete(c.get("name"))]
@@ -85,9 +77,7 @@ targets_vpc = [
     and v.get("name") not in ("Default", "ocp-sno")
 ]
 
-print(f"  · live OSAC orders: {sorted(live) or '(none)'}")
-if force:
-    print(f"  · forced: {force}")
+print(f"  · targeted orders: {force}")
 print(f"  · server clusters to delete: {[c.get('name') for c in targets_sc] or '(none)'}")
 print(f"  · VPCs to delete: {[v.get('name') for v in targets_vpc] or '(none)'}")
 

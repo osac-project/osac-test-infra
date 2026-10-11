@@ -107,7 +107,13 @@
 - name: Build resource class map
   ansible.builtin.set_fact:
     _netris_resource_class_map: >-
-      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ _netris_sct_id }},"mgmt_interface":"ens4","vpc_interfaces":["ens6"]}}
+      {{ dict(caas_baremetal_instance_type_profiles | map(attribute='name')
+              | zip([_netris_profile_network] * (caas_baremetal_instance_type_profiles | length))) }}
+  vars:
+    _netris_profile_network: >-
+      {{ {'server_cluster_template_id': _netris_sct_id | int,
+          'mgmt_interface': caas_netris_mgmt_interface,
+          'vpc_interfaces': caas_netris_vpc_interfaces} }}
 
 # --- Read SSH private key for instance group secrets ---
 
@@ -140,16 +146,21 @@
 # profile and installed CNV on BMaaS, whose golden-image DataVolumes filled the LVMS
 # pool and starved the AAP postgres PVC. lvms/bundledPostgres stay overridden because
 # every profile needs them.
-# Shared Netris settings use the chart's global.networking facade. The BM
-# provisioning V-Net stays only on networkFulfillment, where move-attachment runs;
-# clusterFulfillment.config rejects keys outside its declared schema.
+# Let the networking facade derive AAP settings even when the source profile
+# opts out. Otherwise caas-ci retains NETWORK_CLASS=ci despite fabricManager=netris.
+# The BM provisioning V-Net stays only on networkFulfillment.
 - name: Build values overrides
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ {'cliImage': _ocp_cli_image.stdout | trim,
           'bundledPostgres': {'enabled': true},
           'lvms': {'enabled': true},
-          'global': {'networking': {'fabricManager': 'netris', 'k8sManager': '', 'netris': {
+          'global': {'expertOverrides': {'aap': false, 'networkClass': false},
+                     'networking': {'fabricManager': 'netris', 'k8sManager': '',
+                       'networkClass': {'defaults': {
+                         'virtualNetworkIPv4CIDR': netris_tenant_network_cidr,
+                         'subnetIPv4CIDR': netris_tenant_subnet_cidr}},
+                       'netris': {
               'controllerUrl': _netris_ctl_url,
               'credentials': {'username': netris_username, 'externalSecret': true},
               'siteId': _netris_site_id | string,
@@ -163,6 +174,11 @@
                        'controllers': {'networkingProvisioning': true}},
           'bmf': {'env': {'enableNetworkingProvisioning': 'true'}},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
+              'NETRIS_CONTROLLER_URL': _netris_ctl_url,
+              'NETRIS_USERNAME': netris_username,
+              'NETRIS_SITE_ID': _netris_site_id | string,
+              'NETRIS_TENANT_ID': '1',
+              'NETRIS_TENANT_NAME': 'Admin',
               'EXTERNAL_ACCESS_BASE_DOMAIN': ocp_base_domain,
               'EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS': ocp_base_domain,
               'EXTERNAL_ACCESS_API_INTERNAL_NETWORK': 'hypershift',
@@ -183,6 +199,11 @@
               'SERVER_SSH_BASTION_KEY': _ssh_private_key.content | b64decode
             }},
             'networkFulfillment': {'enabled': true, 'config': {
+              'NETRIS_CONTROLLER_URL': _netris_ctl_url,
+              'NETRIS_USERNAME': netris_username,
+              'NETRIS_SITE_ID': _netris_site_id | string,
+              'NETRIS_TENANT_ID': '1',
+              'NETRIS_TENANT_NAME': 'Admin',
               'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name
             }}
           }}

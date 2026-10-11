@@ -1,0 +1,6 @@
+---
+- name: Onboard the OSAC test tenant
+  hosts: all
+  gather_facts: false
+  roles:
+    - tenant-onboard

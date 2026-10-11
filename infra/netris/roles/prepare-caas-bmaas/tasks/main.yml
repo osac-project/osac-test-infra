@@ -1,0 +1,167 @@
+---
+- name: Prepare BMaaS hosts for CaaS workers
+  block:
+    - name: Require bare-metal services for BMaaS-backed cluster workers
+      ansible.builtin.assert:
+        that:
+          - bare_metal_services | default(false) | bool
+        fail_msg: >-
+          BMaaS-backed CaaS workers require OSAC to be installed with
+          bare_metal_services=true. The Makefile enables it for CaaS-based suites.
+
+    - name: Require a configured BareMetalInstanceType profile
+      ansible.builtin.assert:
+        that:
+          - caas_baremetal_instance_type in
+            (caas_baremetal_instance_type_profiles | map(attribute='name') | list)
+        fail_msg: >-
+          No worker profile is configured for '{{ caas_baremetal_instance_type }}'.
+
+    - name: Set up BMC infrastructure
+      ansible.builtin.include_role:
+        name: setup-bmc
+        apply:
+          become: true
+
+    - name: Inspect existing BMaaS worker hosts
+      ansible.builtin.command:
+        cmd: oc get bmh -n {{ bmaas_bmh_namespace }} -o json
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _caas_existing_bmhs
+      changed_when: false
+
+    - name: Inspect persistent worker VM configuration
+      ansible.builtin.shell: |
+        python3 <<'PYCODE'
+        import json, os, pathlib, subprocess, xml.etree.ElementTree as ET
+        dirty, identities = [], {}
+        for name in json.loads(os.environ['WORKERS']):
+            xml = ET.fromstring(subprocess.check_output(['virsh', 'dumpxml', name, '--inactive']))
+            smbios = xml.find('./os/smbios')
+            mode = '' if smbios is None else smbios.get('mode', '')
+            if mode == 'host':
+                raise SystemExit('Worker ' + name + ' uses host SMBIOS; a unique guest UUID is required')
+            hardware_uuid = xml.findtext("./sysinfo/system/entry[@name='uuid']") if mode == 'sysinfo' else None
+            uuid = (hardware_uuid or xml.findtext('uuid')).strip().lower()
+            if uuid in identities:
+                raise SystemExit('Duplicate worker VM UUID')
+            identities[uuid] = name
+            disk = str(pathlib.Path(os.environ['DISK_DIR']) / (name + '-disk.qcow2'))
+            vda = xml.find("./devices/disk/target[@dev='vda']/..")
+            source = None if vda is None else vda.find('source')
+            memory = xml.find('memory')
+            unit = memory.get('unit', 'KiB').lower()
+            multiplier = {'kib': 1, 'kb': 1, 'mib': 1024, 'mb': 1024, 'gib': 1048576, 'gb': 1048576}.get(unit)
+            if multiplier is None:
+                raise SystemExit('Unsupported libvirt memory unit: ' + unit)
+            current_memory = xml.find('currentMemory')
+            current_kib = int(memory.text) * multiplier
+            if current_memory is not None:
+                current_unit = current_memory.get('unit', 'KiB').lower()
+                current_multiplier = {'kib': 1, 'kb': 1, 'mib': 1024, 'mb': 1024, 'gib': 1048576, 'gb': 1048576}[current_unit]
+                current_kib = int(current_memory.text) * current_multiplier
+            vcpu = xml.find('vcpu')
+            valid = (int(vcpu.text) == int(os.environ['VCPU'])
+                     and int(vcpu.get('current', vcpu.text)) == int(os.environ['VCPU'])
+                     and int(memory.text) * multiplier == int(os.environ['MEMORY_MB']) * 1024
+                     and current_kib == int(os.environ['MEMORY_MB']) * 1024
+                     and source is not None and source.get('file') == disk
+                     and pathlib.Path(disk).is_file()
+                     and any(n.get('network') == os.environ['BMC_NET']
+                             for n in xml.findall('./devices/interface/source')))
+            if valid:
+                image = json.loads(subprocess.check_output(['qemu-img', 'info', '--force-share', '--output=json', disk]))
+                valid = image['virtual-size'] == int(os.environ['DISK_GB']) * 1024 ** 3
+            if not valid:
+                dirty.append(name)
+        print(json.dumps({'reconfigure': dirty, 'identities': identities}))
+        PYCODE
+      environment:
+        WORKERS: "{{ caas_worker_vm_patterns | to_json }}"
+        VCPU: "{{ caas_worker_vcpu }}"
+        MEMORY_MB: "{{ caas_worker_memory_mb }}"
+        DISK_GB: "{{ caas_worker_disk_gb }}"
+        DISK_DIR: "{{ sushy_tools_disk_dir }}"
+        BMC_NET: "{{ bmc_net_name }}"
+      register: _caas_vm_config
+      changed_when: false
+
+    - name: Set worker reconfiguration and identity maps
+      ansible.builtin.set_fact:
+        _caas_reconfigure_vms: "{{ (_caas_vm_config.stdout | from_json).reconfigure }}"
+        _caas_agent_server_names: "{{ (_caas_vm_config.stdout | from_json).identities }}"
+
+    - name: Set existing CaaS BMaaS host states
+      ansible.builtin.set_fact:
+        _caas_existing_bmh_names: >-
+          {{ (_caas_existing_bmhs.stdout | from_json).get('items', [])
+             | selectattr('metadata.name', 'in', caas_worker_vm_patterns)
+             | map(attribute='metadata.name') | list }}
+    - name: Require available, unclaimed CaaS BMaaS hosts
+      ansible.builtin.assert:
+        that:
+          - item.get('status', {}).get('provisioning', {}).get('state') == 'available'
+          - not item.get('spec', {}).get('consumerRef')
+          - not item.metadata.get('deletionTimestamp')
+        fail_msg: "BMH {{ item.metadata.name }} is not available, is claimed, or is deleting; finish cluster teardown first."
+      loop: "{{ (_caas_existing_bmhs.stdout | from_json).get('items', []) | selectattr('metadata.name', 'in', caas_worker_vm_patterns) | list }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Power off available BMaaS hosts before changing their VMs
+      ansible.builtin.command:
+        cmd: >-
+          oc patch bmh {{ item }} -n {{ bmaas_bmh_namespace }}
+          --type=merge -p '{"spec":{"online":false}}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      loop: "{{ _caas_existing_bmh_names | intersect(_caas_reconfigure_vms) }}"
+      register: _caas_bmh_offline
+      changed_when: true
+
+    - name: Wait for BMaaS host power-off before changing its VM
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for attempt in $(seq 1 60); do
+          powered_on=$(oc get bmh {{ item }} -n {{ bmaas_bmh_namespace }} \
+            -o jsonpath='{.status.poweredOn}')
+          if [[ "$powered_on" == "false" ]] && [[ "$(LC_ALL=C virsh domstate {{ item | quote }})" == "shut off" ]]; then
+            echo powered-off
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "BMH {{ item }} did not report poweredOn=false; refusing VM reconfiguration" >&2
+        exit 1
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /root/.kube/config
+      loop: "{{ _caas_existing_bmh_names | intersect(_caas_reconfigure_vms) }}"
+      changed_when: false
+
+    - name: Set up BMaaS worker hosts
+      ansible.builtin.include_role:
+        name: setup-bmaas
+        apply:
+          become: true
+      vars:
+        bmaas_vm_patterns: "{{ caas_worker_vm_patterns }}"
+        bmaas_host_type: "{{ caas_baremetal_instance_type }}"
+        bmaas_host_type_title: >-
+          {{ (caas_baremetal_instance_type_profiles
+              | selectattr('name', 'equalto', caas_baremetal_instance_type)
+              | map(attribute='title') | first) }}
+        bmaas_host_type_description: >-
+          {{ (caas_baremetal_instance_type_profiles
+              | selectattr('name', 'equalto', caas_baremetal_instance_type)
+              | map(attribute='description') | first) }}
+        bmaas_vm_vcpu: "{{ caas_worker_vcpu }}"
+        bmaas_vm_memory_mb: "{{ caas_worker_memory_mb }}"
+        bmaas_vm_disk_gb: "{{ caas_worker_disk_gb }}"
+        bmaas_create_catalog_items: false
+        bmaas_reconfigure_vm_names: "{{ _caas_reconfigure_vms }}"
+
+    - name: Configure Netris identity labels for BMaaS-created Agents
+      ansible.builtin.include_tasks: agent-labels.yml

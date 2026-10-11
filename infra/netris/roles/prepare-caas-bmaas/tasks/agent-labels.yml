@@ -1,0 +1,111 @@
+---
+# BMaaS creates Agents after setup. Keep their VM UUID -> Netris name mapping
+# active for initial creation and subsequent scale-out, without booting an ISO.
+- name: Find oc for the Agent label synchronizer
+  ansible.builtin.shell: command -v oc
+  register: _caas_label_oc
+  changed_when: false
+
+- name: Install Netris Agent label synchronizer
+  ansible.builtin.copy:
+    src: label-netris-agents.py
+    dest: /usr/local/bin/test-infra-label-netris-agents.py
+    mode: "0755"
+  register: _caas_label_script
+
+- name: Write worker UUID to Netris server mapping
+  ansible.builtin.copy:
+    content: "{{ _caas_label_config | to_nice_json }}\n"
+    dest: /etc/test-infra-netris-agents.json
+    mode: "0600"
+  vars:
+    _caas_label_config:
+      oc: "{{ _caas_label_oc.stdout }}"
+      namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+      servers: "{{ _caas_agent_server_names }}"
+  register: _caas_label_config_file
+
+- name: Verify Agent API access and synchronize existing worker labels
+  ansible.builtin.command:
+    cmd: >-
+      /usr/bin/python3 /usr/local/bin/test-infra-label-netris-agents.py
+      /etc/test-infra-netris-agents.json --once
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_label_initial_sync
+  changed_when: _caas_label_initial_sync.stdout | length > 0
+
+- name: Install persistent Netris Agent label service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/test-infra-netris-agents.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Map BMaaS lab Agents to Netris servers
+      After=network-online.target
+      Wants=network-online.target
+      StartLimitIntervalSec=0
+      [Service]
+      Environment=KUBECONFIG=/root/.kube/config
+      ExecStart=/usr/bin/python3 -u /usr/local/bin/test-infra-label-netris-agents.py /etc/test-infra-netris-agents.json
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+  register: _caas_label_unit
+
+- name: Start Netris Agent label service
+  ansible.builtin.systemd:
+    name: test-infra-netris-agents
+    enabled: true
+    daemon_reload: "{{ _caas_label_unit is changed }}"
+    state: >-
+      {{ 'restarted' if (_caas_label_script is changed or _caas_label_config_file is changed
+                         or _caas_label_unit is changed) else 'started' }}
+
+# A polling labeler alone races the controller/AAP networking job. Deny binding
+# only these lab Agents until their identity label is correct; OSAC retries it.
+- name: Require Netris identity before binding configured lab Agents
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      - apiVersion: admissionregistration.k8s.io/v1
+        kind: ValidatingAdmissionPolicy
+        metadata:
+          name: test-infra-netris-agent-identity
+        spec:
+          failurePolicy: Fail
+          matchConstraints:
+            resourceRules:
+              - apiGroups: [agent-install.openshift.io]
+                apiVersions: [v1beta1]
+                operations: [CREATE, UPDATE]
+                resources: [agents]
+          matchConditions:
+            - name: configured-lab-workers
+              expression: >-
+                request.namespace == {{ snapshot_osac_namespace | default(osac_namespace) | to_json }}
+                && object.metadata.name in {{ _caas_agent_server_names | list | to_json }}
+          variables:
+            - name: servers
+              expression: "{{ _caas_agent_server_names | to_json }}"
+          validations:
+            - expression: >-
+                (has(object.metadata.deletionTimestamp) && object.metadata.deletionTimestamp != null)
+                || !has(object.spec.clusterDeploymentName)
+                || object.spec.clusterDeploymentName == null
+                || !has(object.spec.clusterDeploymentName.name)
+                || object.spec.clusterDeploymentName.name == ''
+                || (has(object.metadata.labels)
+                    && 'netris.server/name' in object.metadata.labels
+                    && object.metadata.labels['netris.server/name'] == variables.servers[object.metadata.name])
+              message: "Waiting for test-infra-netris-agents to set the VM's netris.server/name label before binding"
+      - apiVersion: admissionregistration.k8s.io/v1
+        kind: ValidatingAdmissionPolicyBinding
+        metadata:
+          name: test-infra-netris-agent-identity
+        spec:
+          policyName: test-infra-netris-agent-identity
+          validationActions: [Deny]
+  environment:
+    KUBECONFIG: /root/.kube/config
