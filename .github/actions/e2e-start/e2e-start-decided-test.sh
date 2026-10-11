@@ -89,6 +89,7 @@ check "decided: a human who requested changes since the decision stops the start
 
 run_case open "${SHA}" "${human_ok}" "" false true
 check "decided without a head commit is an error and calls nothing" "$([[ ${RC} -eq 1 && -z ${CALLS} ]] && echo yes || echo no)"
+check "decided without a head commit says what is missing" "$(grep -q 'decided=true needs event-head-sha' <<<"${OUT}" && echo yes || echo no)"
 
 run_case open "${OTHER}" "${human_ok}" "${SHA}" false true
 check "decided: a head that moved after the decision starts nothing" "$([[ ${RC} -eq 0 ]] && not_reran || echo no)"

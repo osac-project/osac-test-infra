@@ -101,11 +101,18 @@ jobs:
           sparse-checkout: |
             .github/actions/e2e-start
             .github/actions/invalidate-e2e-gates
+      - name: A decision needs the pull request and the commit it was made for
+        if: inputs.decided && (inputs.event_head_sha == '' || inputs.pr_number == '')
+        run: |
+          echo "::error::decided needs both pr_number and event_head_sha: a decision is only valid for the commit it was made on."
+          exit 1
+      # With decided the caller's inputs win over the caller's own event (github.event is the caller's in a reusable
+      # workflow), so the pull request head can never replace the commit the decision was made for.
       - uses: ./.github/actions/e2e-start
         with:
-          pr-number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+          pr-number: ${{ inputs.decided && inputs.pr_number || github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
           trigger-label: ${{ github.event_name == 'pull_request_target' && github.event.label.name || inputs.trigger_label || github.event.inputs.trigger_label || 'e2e-ready' }}
-          event-head-sha: ${{ github.event.pull_request.head.sha || inputs.event_head_sha }}
+          event-head-sha: ${{ inputs.decided && inputs.event_head_sha || github.event.pull_request.head.sha || inputs.event_head_sha }}
           workflows: ${{ inputs.workflows }}
           skip-label-check: ${{ inputs.skip_label_check }}
           decided: ${{ inputs.decided }}
