@@ -1,4 +1,8 @@
 ---
+# ── Steps 1–2: Agent wait + label (hot-pool only) ──────────────────
+# In cluster-namespace mode agents don't exist yet — they are created
+# by setup-caas-agents after ClusterOrder reveals the target namespace.
+
 # Step 1: Wait for all agents to register from the discovery ISO boot
 - name: Wait for expected number of agents
   ansible.builtin.shell:
@@ -10,6 +14,7 @@
   retries: 120
   delay: 15
   changed_when: false
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Get agent names
   ansible.builtin.shell:
@@ -21,10 +26,12 @@
   until: _agent_names.rc == 0 and _agent_names.stdout | length > 0
   retries: 10
   delay: 15
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Set agent name list
   ansible.builtin.set_fact:
     caas_agent_names: "{{ _agent_names.stdout.split() }}"
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 # Step 2: Label agents with resource class and netris server name
 # Agent CRs appear before status.inventory is populated; wait until every
@@ -57,10 +64,12 @@
   retries: 40
   delay: 15
   changed_when: false
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Build agent-to-hostname map
   ansible.builtin.set_fact:
     _agent_hostname_map: "{{ _agent_hostnames_raw.stdout | from_json }}"
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 # caas_resource_class_hostnames empty → all agents (CaaS). Non-empty → only those
 # inventory hostnames get resource_class (MaaS defaults to h02+h03).
@@ -78,6 +87,7 @@
           | list
         )
       }}
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Show resource_class labeling plan
   ansible.builtin.debug:
@@ -85,6 +95,7 @@
       resource_class={{ caas_host_type_id }} on
       {{ _agents_for_resource_class | length }}/{{ caas_agent_names | length }} agents
       (filter={{ caas_resource_class_hostnames | default([]) }})
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Fail if resource_class hostname filter matched no agents
   ansible.builtin.fail:
@@ -92,6 +103,7 @@
       caas_resource_class_hostnames={{ caas_resource_class_hostnames }} matched 0 agents.
       Known hostnames: {{ _agent_hostname_map.values() | list }}
   when:
+    - (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
     - (caas_resource_class_hostnames | default([]) | length) > 0
     - (_agents_for_resource_class | length) == 0
 
@@ -103,12 +115,13 @@
       --overwrite
   environment:
     KUBECONFIG: /root/.kube/config
-  loop: "{{ _agents_for_resource_class }}"
+  loop: "{{ _agents_for_resource_class | default([]) }}"
   register: _label_rc
   changed_when: "'labeled' in _label_rc.stdout and 'not labeled' not in _label_rc.stdout"
   until: _label_rc.rc == 0
   retries: 5
   delay: 10
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Remove resource_class from agents outside the allow-list
   ansible.builtin.command:
@@ -118,9 +131,10 @@
   environment:
     KUBECONFIG: /root/.kube/config
   when:
+    - (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
     - (caas_resource_class_hostnames | default([]) | length) > 0
     - item not in _agents_for_resource_class
-  loop: "{{ caas_agent_names }}"
+  loop: "{{ caas_agent_names | default([]) }}"
   register: _unlabel_rc
   changed_when: "'labeled' in _unlabel_rc.stdout or 'unlabeled' in _unlabel_rc.stdout"
   failed_when: false
@@ -133,7 +147,7 @@
       --overwrite
   environment:
     KUBECONFIG: /root/.kube/config
-  loop: "{{ _agent_hostname_map | dict2items }}"
+  loop: "{{ _agent_hostname_map | default({}) | dict2items }}"
   loop_control:
     label: "{{ item.value }}"
   register: _label_ns
@@ -141,7 +155,11 @@
   until: _label_ns.rc == 0
   retries: 5
   delay: 10
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
+# ── Agent approval (hot-pool only) ─────────────────────────────────
+# In cluster-namespace mode osac.service.cluster_infra ci_create owns
+# approval — test-infra must NOT approve.
 - name: Check agent approval status
   ansible.builtin.shell:
     cmd: oc get agent/{{ item }} -n {{ caas_agent_namespace }} -o jsonpath='{.spec.approved}'
@@ -152,7 +170,8 @@
   until: _agent_approved.rc == 0
   retries: 5
   delay: 10
-  loop: "{{ _agents_for_resource_class }}"
+  loop: "{{ _agents_for_resource_class | default([]) }}"
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Approve agents
   ansible.builtin.command:
@@ -161,10 +180,12 @@
       --type=merge -p '{"spec":{"approved":true}}'
   environment:
     KUBECONFIG: /root/.kube/config
-  when: item.stdout != 'true'
-  loop: "{{ _agent_approved.results }}"
+  when:
+    - (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
+    - item.stdout != 'true'
+  loop: "{{ _agent_approved.results | default([]) }}"
   loop_control:
-    label: "{{ item.item }}"
+    label: "{{ item.item | default('n/a') }}"
   register: _approve_result
   until: _approve_result.rc == 0
   retries: 5

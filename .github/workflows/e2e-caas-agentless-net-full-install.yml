@@ -48,6 +48,13 @@ on:
         required: false
         type: string
         default: ""
+      caas-agent-flow:
+        description: >-
+          CaaS agent flow mode: "hot-pool" (default, legacy) or "cluster-namespace"
+          (Option C — agents in ClusterOrder namespace, osac owns approval).
+        required: false
+        type: string
+        default: "hot-pool"
 
 concurrency:
   group: e2e-caas-agentless-net
@@ -220,6 +227,8 @@ jobs:
 
       - name: Setup CaaS hosts
         timeout-minutes: 45
+        env:
+          CAAS_AGENT_FLOW: ${{ inputs.caas-agent-flow || 'hot-pool' }}
         run: make -C infra/agentless-net setup-caas
 
       - name: Run e2e checks

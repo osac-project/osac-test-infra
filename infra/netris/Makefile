@@ -65,6 +65,11 @@ setup-caas:
 deploy-caas:
 	ansible-playbook playbooks/deploy-caas.yml $(ANSIBLE_EXTRA)
 
+# Post-ClusterOrder agent setup for cluster-namespace mode (Option C).
+# Expects caas_cluster_order_namespace in EXTRA_VARS.
+setup-caas-agents:
+	ansible-playbook playbooks/setup-caas-agents.yml $(ANSIBLE_EXTRA)
+
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
 	cd /opt/osac/osac-installer && make uninstall \
@@ -264,7 +269,7 @@ health-check:
 
 .PHONY: deploy deploy-fast \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
-        setup-caas deploy-caas \
+        setup-caas deploy-caas setup-caas-agents \
 		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
 		destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \

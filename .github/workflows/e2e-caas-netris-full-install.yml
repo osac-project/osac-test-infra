@@ -74,6 +74,13 @@ on:
         required: false
         type: string
         default: ""
+      caas-agent-flow:
+        description: >-
+          CaaS agent flow mode: "hot-pool" (default, legacy) or "cluster-namespace"
+          (Option C — agents in ClusterOrder namespace, osac owns approval).
+        required: false
+        type: string
+        default: "hot-pool"
       components:
         description: >-
           JSON array of components to build from source on the EC2 box and
@@ -428,6 +435,11 @@ jobs:
             sudo dnf install -y jq
           fi
           EXTRA_VARS="{}"
+          CAAS_AGENT_FLOW="${{ inputs.caas-agent-flow }}"
+          if [[ -n "${CAAS_AGENT_FLOW}" ]] && [[ "${CAAS_AGENT_FLOW}" != "hot-pool" ]]; then
+            EXTRA_VARS=$(echo "$EXTRA_VARS" | jq -c --arg v "$CAAS_AGENT_FLOW" '. + {"caas_agent_flow": $v}')
+            echo "CaaS agent flow: ${CAAS_AGENT_FLOW}"
+          fi
           declare -A OVERRIDES=(
             [osac_operator_image]="$OSAC_OPERATOR_IMAGE"
             [fulfillment_service_image]="$FULFILLMENT_SERVICE_IMAGE"

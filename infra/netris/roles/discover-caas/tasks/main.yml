@@ -97,6 +97,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
 
+# ── InfraEnv + ISO (hot-pool only) ──────────────────────────────────
+# In cluster-namespace mode these are deferred to setup-caas-agents,
+# which runs after ClusterOrder creation reveals the target namespace.
 - name: Create InfraEnv namespace
   ansible.builtin.command:
     cmd: oc create namespace {{ caas_discovery_infraenv_namespace }}
@@ -105,6 +108,7 @@
   register: _ns_create
   failed_when: false
   changed_when: _ns_create.rc == 0
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Ensure pull-secret exists in InfraEnv namespace
   ansible.builtin.shell:
@@ -121,12 +125,14 @@
   until: _pull_secret_result.rc == 0
   retries: 10
   delay: 15
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Create InfraEnv CR
   ansible.builtin.template:
     src: infraenv.yml.j2
     dest: /tmp/caas-infraenv.yml
     mode: "0600"
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Delete existing InfraEnv to regenerate ISO token
   ansible.builtin.command:
@@ -134,6 +140,7 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: true
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Apply InfraEnv CR
   ansible.builtin.command:
@@ -145,6 +152,7 @@
   until: _infraenv_apply.rc == 0
   retries: 10
   delay: 15
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Wait for discovery ISO URL
   ansible.builtin.shell:
@@ -154,6 +162,7 @@
   retries: 60
   delay: 10
   changed_when: false
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Download discovery ISO
   ansible.builtin.get_url:
@@ -165,6 +174,7 @@
   until: _iso_download is success
   retries: 30
   delay: 10
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Find discovery VMs
   ansible.builtin.shell:
@@ -285,6 +295,10 @@
     label: "{{ item.item }}"
   changed_when: true
 
+# ── ISO attach + VM boot (hot-pool only) ────────────────────────────
+# In cluster-namespace mode VMs are prepared (sized, disks attached) but
+# NOT booted — they have no discovery ISO yet. setup-caas-agents boots
+# them after InfraEnv is created in the ClusterOrder namespace.
 - name: Check if discovery ISO is attached
   ansible.builtin.shell:
     cmd: virsh domblklist {{ item }} | grep -q 'caas-discovery.iso'
@@ -292,14 +306,17 @@
   failed_when: false
   changed_when: false
   loop: "{{ caas_discovery_vms }}"
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Attach discovery ISO as cdrom
   ansible.builtin.command:
     cmd: virsh attach-disk {{ item.item }} /var/lib/libvirt/images/caas-discovery.iso sda --type cdrom --config
-  when: item.rc != 0
-  loop: "{{ _iso_attached.results }}"
+  when:
+    - (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
+    - item.rc != 0
+  loop: "{{ _iso_attached.results | default([]) }}"
   loop_control:
-    label: "{{ item.item }}"
+    label: "{{ item.item | default('n/a') }}"
   changed_when: true
 
 - name: Set boot order to disk then cdrom
@@ -308,6 +325,7 @@
   loop: "{{ caas_discovery_vms }}"
   register: _boot_order
   changed_when: "'--boot' not in _boot_order.stderr | default('')"
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Start discovery VMs
   ansible.builtin.command:
@@ -316,10 +334,19 @@
   register: _vm_start
   failed_when: _vm_start.rc != 0 and 'already active' not in _vm_start.stderr
   changed_when: _vm_start.rc == 0
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
-- name: Report CaaS discovery hosts started
+- name: Report CaaS discovery hosts started (hot-pool)
   ansible.builtin.debug:
     msg: >-
       CaaS discovery: {{ caas_discovery_vms | length }} VMs booted with discovery ISO
       ({{ caas_discovery_vcpu }} vCPU, {{ caas_discovery_memory_mb }}MB RAM,
       {{ caas_discovery_disk_gb }}GB disk, boot order: disk,cdrom)
+  when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
+
+- name: Report CaaS discovery hosts prepared (cluster-namespace)
+  ansible.builtin.debug:
+    msg: >-
+      CaaS discovery: {{ caas_discovery_vms | length }} VMs prepared (not booted).
+      Agents will be created in ClusterOrder namespace after order submission.
+  when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'

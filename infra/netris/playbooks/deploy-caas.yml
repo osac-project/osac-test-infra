@@ -4,3 +4,13 @@
   gather_facts: false
   roles:
     - create-caas
+
+# In cluster-namespace mode, create InfraEnv in the ClusterOrder namespace,
+# boot VMs, wait for agents, and label them (no approval — osac owns that).
+# Skipped in hot-pool mode (agents already exist from discover-caas/setup-caas).
+- name: Set up agents in ClusterOrder namespace (cluster-namespace mode)
+  hosts: all
+  gather_facts: false
+  roles:
+    - role: setup-caas-agents
+      when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'

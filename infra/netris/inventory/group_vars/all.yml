@@ -122,6 +122,14 @@ caas_discovery_disk_gb: 100
 caas_discovery_infraenv_name: "infraenv"
 caas_discovery_infraenv_namespace: "hardware-inventory"
 
+# CaaS agent flow: "hot-pool" (default, legacy) or "cluster-namespace" (Option C).
+# hot-pool: agents live in hardware-inventory, test-infra labels and approves them.
+# cluster-namespace: agents live in the ClusterOrder namespace (created by
+#   osac-operator after ClusterOrder submission), test-infra labels but does NOT
+#   approve agents — osac.service.cluster_infra ci_create owns approval.
+# Temporary compatibility bridge for osac PR #1264 rollout.
+caas_agent_flow: "hot-pool"
+
 # CaaS setup (resource-class label, agent annotations, cluster creation)
 caas_agent_namespace: "{{ caas_discovery_infraenv_namespace }}"
 caas_server_cluster_template_name: "ns-only"

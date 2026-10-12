@@ -69,6 +69,15 @@ on:
         required: false
         type: string
         default: ""
+      caas-agent-flow:
+        description: >-
+          CaaS agent flow mode: "hot-pool" (default, legacy) or "cluster-namespace"
+          (Option C — agents in ClusterOrder namespace, osac owns approval).
+          Only meaningful for Netris/agentless-net backends; the cluster-tool
+          path delegates agent setup to osac-installer/osac-operator.
+        required: false
+        type: string
+        default: "hot-pool"
       components:
         description: >-
           JSON array of components to build from source and load onto the cluster, e.g.
