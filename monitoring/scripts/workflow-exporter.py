@@ -46,12 +46,13 @@ TOKEN = os.getenv("PRIVATE_GITHUB_TOKEN")
 API_URL = os.getenv("API_URL", "https://api.github.com")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "90"))
 PORT = int(os.getenv("PORT", "9103"))
-# A run still "queued" after this many hours is treated as a zombie -- stuck
-# after a GitHub Actions outage rather than waiting for a runner. Zombies are
-# counted in github_actions_zombie_queued_runs* instead of the queued gauges,
-# so they don't keep the queue-depth alerts firing. GitHub itself only
-# auto-cancels queued runs after 24h.
-ZOMBIE_QUEUED_HOURS = float(os.getenv("ZOMBIE_QUEUED_HOURS", "3"))
+# A "queued" run with no jobs at all is a zombie: GitHub accepted the trigger
+# during an outage but never created its jobs, so it will never run (a real
+# backlog always has jobs waiting for a runner). Zombies are counted in
+# github_actions_zombie_queued_runs* instead of the queued gauges, so they
+# don't keep the queue-depth alerts firing. The grace period covers the
+# normal few seconds between a run being created and its jobs appearing.
+ZOMBIE_GRACE_MINUTES = float(os.getenv("ZOMBIE_GRACE_MINUTES", "15"))
 # Comma-separated list of repos to monitor. Empty = auto-discover active repos.
 REPOS_FILTER = [r.strip() for r in os.getenv("REPOS", "").split(",") if r.strip()]
 # How many days of job history to retain in the DB. A count cap alone (the
@@ -97,12 +98,12 @@ queued_total = Gauge(
 )
 zombie_runs = Gauge(
     "github_actions_zombie_queued_runs",
-    "Queued runs older than ZOMBIE_QUEUED_HOURS per repo (excluded from github_actions_queued_runs)",
+    "Queued runs with no jobs per repo (excluded from github_actions_queued_runs)",
     ["org", "repo"],
 )
 zombie_total = Gauge(
     "github_actions_zombie_queued_runs_org",
-    "Queued runs older than ZOMBIE_QUEUED_HOURS across all repos (excluded from github_actions_queued_runs_org)",
+    "Queued runs with no jobs across all repos (excluded from github_actions_queued_runs_org)",
     ["org"],
 )
 in_progress_total = Gauge(
@@ -388,6 +389,8 @@ class WorkflowExporter:
         # Current in-flight runs (queued + in_progress) — pure in-memory,
         # unrelated to the persisted job history below.
         self.active_runs = []
+        # Queued run ids already seen with >=1 job -- see _is_zombie_run.
+        self._runs_with_jobs = set()
         self._lock = threading.Lock()
         # Branch-to-PR mapping: {repo: {branch: (pr_num, pr_url)}}
         self._pr_map = {}
@@ -1386,13 +1389,17 @@ class WorkflowExporter:
             return 0
         return resp.json().get("total_count", 0)
 
-    @staticmethod
-    def _is_zombie_run(run):
-        """True for a queued run older than ZOMBIE_QUEUED_HOURS.
+    def _is_zombie_run(self, repo, run):
+        """True for a queued run that has no jobs after the grace period.
 
-        Uses run_started_at (reset on a re-run) over created_at, so a
-        freshly re-run old workflow isn't misclassified.
+        Uses run_started_at (reset on a re-run) over created_at. Runs seen
+        with jobs are cached (jobs never disappear), so a large real
+        backlog costs one jobs call per run, not one per cycle. A failed
+        jobs fetch is not a zombie -- unknown counts as queued.
         """
+        run_id = run.get("id")
+        if run_id in self._runs_with_jobs:
+            return False
         queued_at = run.get("run_started_at") or run.get("created_at")
         if not queued_at:
             return False
@@ -1400,7 +1407,17 @@ class WorkflowExporter:
             t0 = datetime.fromisoformat(queued_at.replace("Z", "+00:00"))
         except (ValueError, TypeError):
             return False
-        return datetime.now(timezone.utc) - t0 > timedelta(hours=ZOMBIE_QUEUED_HOURS)
+        if datetime.now(timezone.utc) - t0 < timedelta(minutes=ZOMBIE_GRACE_MINUTES):
+            return False
+        jobs = self._fetch_run_jobs(repo, run_id)
+        if jobs is None:
+            return False
+        if jobs:
+            if len(self._runs_with_jobs) > 5000:
+                self._runs_with_jobs.clear()
+            self._runs_with_jobs.add(run_id)
+            return False
+        return True
 
     def _fetch_active_runs(self, repo):
         """Fetch current queued and in_progress runs for the active list.
@@ -1446,7 +1463,7 @@ class WorkflowExporter:
                     if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
                         continue
                     record = self._make_job_record(run, repo)
-                    if status == "queued" and self._is_zombie_run(run):
+                    if status == "queued" and self._is_zombie_run(repo, run):
                         record["zombie"] = True
                     if status == "in_progress":
                         jobs = self._fetch_run_jobs(repo, run["id"])
