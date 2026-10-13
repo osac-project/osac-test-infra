@@ -46,6 +46,12 @@ TOKEN = os.getenv("PRIVATE_GITHUB_TOKEN")
 API_URL = os.getenv("API_URL", "https://api.github.com")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "90"))
 PORT = int(os.getenv("PORT", "9103"))
+# A run still "queued" after this many hours is treated as a zombie -- stuck
+# after a GitHub Actions outage rather than waiting for a runner. Zombies are
+# counted in github_actions_zombie_queued_runs* instead of the queued gauges,
+# so they don't keep the queue-depth alerts firing. GitHub itself only
+# auto-cancels queued runs after 24h.
+ZOMBIE_QUEUED_HOURS = float(os.getenv("ZOMBIE_QUEUED_HOURS", "3"))
 # Comma-separated list of repos to monitor. Empty = auto-discover active repos.
 REPOS_FILTER = [r.strip() for r in os.getenv("REPOS", "").split(",") if r.strip()]
 # How many days of job history to retain in the DB. A count cap alone (the
@@ -87,6 +93,16 @@ in_progress_runs = Gauge(
 queued_total = Gauge(
     "github_actions_queued_runs_org",
     "Total queued workflow runs across all repos",
+    ["org"],
+)
+zombie_runs = Gauge(
+    "github_actions_zombie_queued_runs",
+    "Queued runs older than ZOMBIE_QUEUED_HOURS per repo (excluded from github_actions_queued_runs)",
+    ["org", "repo"],
+)
+zombie_total = Gauge(
+    "github_actions_zombie_queued_runs_org",
+    "Queued runs older than ZOMBIE_QUEUED_HOURS across all repos (excluded from github_actions_queued_runs_org)",
     ["org"],
 )
 in_progress_total = Gauge(
@@ -1370,6 +1386,22 @@ class WorkflowExporter:
             return 0
         return resp.json().get("total_count", 0)
 
+    @staticmethod
+    def _is_zombie_run(run):
+        """True for a queued run older than ZOMBIE_QUEUED_HOURS.
+
+        Uses run_started_at (reset on a re-run) over created_at, so a
+        freshly re-run old workflow isn't misclassified.
+        """
+        queued_at = run.get("run_started_at") or run.get("created_at")
+        if not queued_at:
+            return False
+        try:
+            t0 = datetime.fromisoformat(queued_at.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return False
+        return datetime.now(timezone.utc) - t0 > timedelta(hours=ZOMBIE_QUEUED_HOURS)
+
     def _fetch_active_runs(self, repo):
         """Fetch current queued and in_progress runs for the active list.
 
@@ -1414,6 +1446,8 @@ class WorkflowExporter:
                     if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
                         continue
                     record = self._make_job_record(run, repo)
+                    if status == "queued" and self._is_zombie_run(run):
+                        record["zombie"] = True
                     if status == "in_progress":
                         jobs = self._fetch_run_jobs(repo, run["id"])
                         if jobs:
@@ -1882,6 +1916,7 @@ class WorkflowExporter:
             self._backfill_queue_data_if_needed()
             self._pr_backfill_done = True
         tot_queued = 0
+        tot_zombies = 0
         tot_in_progress = 0
         current_active = []
         # False if any repo's active-runs fetch was partial/failed this
@@ -1903,21 +1938,31 @@ class WorkflowExporter:
                 q = self._run_count(repo, "queued")
                 ip = self._run_count(repo, "in_progress")
 
-                queued_runs.labels(org=ORG, repo=repo).set(q)
-                in_progress_runs.labels(org=ORG, repo=repo).set(ip)
-                tot_queued += q
-                tot_in_progress += ip
-
                 # Collect active (queued/in_progress) runs for the active list
+                z = 0
                 if q > 0 or ip > 0:
                     try:
                         active_runs, was_complete = self._fetch_active_runs(repo)
                         current_active.extend(active_runs)
-                        if not was_complete:
+                        if was_complete:
+                            z = sum(1 for r in active_runs if r.get("zombie"))
+                        else:
                             active_runs_complete = False
                     except Exception:
                         logger.exception("Error fetching active runs for %s", repo)
                         active_runs_complete = False
+                # z stays 0 when the fetch was partial/failed, so an
+                # unknown age counts as queued (alerts) rather than hiding
+                # a real backlog. Clamped: total_count and the run list
+                # are separate API calls and can disagree by a run.
+                z = min(z, q)
+
+                queued_runs.labels(org=ORG, repo=repo).set(q - z)
+                zombie_runs.labels(org=ORG, repo=repo).set(z)
+                in_progress_runs.labels(org=ORG, repo=repo).set(ip)
+                tot_queued += q - z
+                tot_zombies += z
+                tot_in_progress += ip
 
                 # Track newly completed runs. _process_completed_run checks
                 # for an existing up-to-date row (cheaply) before spending
@@ -1933,6 +1978,7 @@ class WorkflowExporter:
                 logger.exception("Error collecting metrics for %s", repo)
 
         queued_total.labels(org=ORG).set(tot_queued)
+        zombie_total.labels(org=ORG).set(tot_zombies)
         in_progress_total.labels(org=ORG).set(tot_in_progress)
 
         # By-category breakdown of the same org-wide totals above -- e2e
@@ -1959,6 +2005,8 @@ class WorkflowExporter:
             for run in current_active:
                 cat = run.get("category", "ci")
                 if run.get("status") == "queued":
+                    if run.get("zombie"):
+                        continue
                     category_queued[cat] = category_queued.get(cat, 0) + 1
                 elif run.get("status") == "in_progress":
                     category_in_progress[cat] = category_in_progress.get(cat, 0) + 1
@@ -2044,9 +2092,10 @@ class WorkflowExporter:
             total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 
         logger.info(
-            "Collected: repos=%d queued=%d in_progress=%d history=%d",
+            "Collected: repos=%d queued=%d zombies=%d in_progress=%d history=%d",
             len(repos),
             tot_queued,
+            tot_zombies,
             tot_in_progress,
             total_jobs,
         )

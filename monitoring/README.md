@@ -253,6 +253,13 @@ firing critical alert inhibits warnings for the same `instance`.
 | `ExporterDown` | warning | Any scrape target down for 5m |
 | `ServiceDown` | critical | A textfile-collector-tracked service (haproxy, podman, libvirt, runner agent) inactive for 5m |
 
+Queue alerts ignore **zombie** runs: runs still `queued` after
+`ZOMBIE_QUEUED_HOURS` (default 3) are stuck from a GitHub Actions outage, not
+waiting for a runner. The workflow exporter reports them separately as
+`github_actions_zombie_queued_runs{repo}` / `github_actions_zombie_queued_runs_org`
+and subtracts them from `github_actions_queued_runs*`. No alert fires on them;
+cancel them manually (or let GitHub auto-cancel after 24h).
+
 ## Grafana access
 
 Direct HTTPS on the central machine, GitHub OAuth login restricted to the
