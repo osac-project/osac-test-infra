@@ -1,7 +1,7 @@
 ---
-# Post-ClusterOrder agent setup for cluster-namespace mode (Option C).
-# Creates InfraEnv in the ClusterOrder namespace, boots VMs, waits for
-# agents, and labels them. Does NOT approve — osac owns approval.
+# Standalone playbook for cluster-namespace agent setup (Option C).
+# Normally this role is included by create-caas during deploy-caas;
+# this playbook exists for manual/debugging invocation only.
 #
 # Requires caas_cluster_order_namespace to be passed as an extra var
 # (e.g. -e caas_cluster_order_namespace=<ns>).

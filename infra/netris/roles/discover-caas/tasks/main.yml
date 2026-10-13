@@ -162,6 +162,7 @@
   retries: 60
   delay: 10
   changed_when: false
+  no_log: true
   when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Download discovery ISO
@@ -174,6 +175,7 @@
   until: _iso_download is success
   retries: 30
   delay: 10
+  no_log: true
   when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
 - name: Find discovery VMs

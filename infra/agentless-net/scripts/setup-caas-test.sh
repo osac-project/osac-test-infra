@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Unit tests for setup-caas.sh agent flow switching logic.
-# Validates that CAAS_AGENT_FLOW correctly controls namespace selection
-# and that cluster-namespace mode requires CAAS_CLUSTER_ORDER_NAMESPACE.
+# Unit tests for CaaS agent flow functions (setup-caas-lib.sh).
+# Validates the shared functions used by setup-caas.sh rather than
+# duplicating the production branching logic inline.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=infra/agentless-net/scripts/setup-caas-lib.sh
+source "${SCRIPT_DIR}/setup-caas-lib.sh"
 
 pass=0
 fail=0
@@ -28,58 +32,44 @@ assert_rc() {
   assert_eq "${name}" "${expected_rc}" "${rc}"
 }
 
-# ── Test: default flow is hot-pool ─────────────────────────────────
-CAAS_AGENT_FLOW="${CAAS_AGENT_FLOW_DEFAULT:-}"
-unset CAAS_AGENT_FLOW 2>/dev/null || true
-RESOLVED="${CAAS_AGENT_FLOW:-hot-pool}"
-assert_eq "default flow is hot-pool" "hot-pool" "${RESOLVED}"
-
-# ── Test: hot-pool selects hardware-inventory ──────────────────────
+# ── validate_agent_flow ───────────────────────────────────────────
 CAAS_AGENT_FLOW="hot-pool"
-if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
-  AGENT_NAMESPACE="should-not-be-set"
-else
-  AGENT_NAMESPACE="hardware-inventory"
-fi
-assert_eq "hot-pool namespace is hardware-inventory" "hardware-inventory" "${AGENT_NAMESPACE}"
+assert_rc "validate_agent_flow accepts hot-pool" 0 validate_agent_flow
+CAAS_AGENT_FLOW="cluster-namespace"
+assert_rc "validate_agent_flow accepts cluster-namespace" 0 validate_agent_flow
+CAAS_AGENT_FLOW="bogus"
+assert_rc "validate_agent_flow rejects bogus" 1 validate_agent_flow
+unset CAAS_AGENT_FLOW 2>/dev/null || true
+assert_rc "validate_agent_flow defaults to hot-pool (valid)" 0 validate_agent_flow
 
-# ── Test: cluster-namespace uses CAAS_CLUSTER_ORDER_NAMESPACE ──────
+# ── resolve_agent_namespace ───────────────────────────────────────
+unset CAAS_AGENT_FLOW 2>/dev/null || true
+unset CAAS_CLUSTER_ORDER_NAMESPACE 2>/dev/null || true
+assert_eq "default flow resolves to hardware-inventory" \
+  "hardware-inventory" "$(resolve_agent_namespace)"
+
+CAAS_AGENT_FLOW="hot-pool"
+assert_eq "hot-pool resolves to hardware-inventory" \
+  "hardware-inventory" "$(resolve_agent_namespace)"
+
 CAAS_AGENT_FLOW="cluster-namespace"
 CAAS_CLUSTER_ORDER_NAMESPACE="osac-e2e-ci-test-cluster"
-if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
-  if [[ -z "${CAAS_CLUSTER_ORDER_NAMESPACE:-}" ]]; then
-    AGENT_NAMESPACE="ERROR"
-  else
-    AGENT_NAMESPACE="${CAAS_CLUSTER_ORDER_NAMESPACE}"
-  fi
-else
-  AGENT_NAMESPACE="hardware-inventory"
-fi
 assert_eq "cluster-namespace uses ClusterOrder namespace" \
-  "osac-e2e-ci-test-cluster" "${AGENT_NAMESPACE}"
+  "osac-e2e-ci-test-cluster" "$(resolve_agent_namespace)"
 
-# ── Test: cluster-namespace fails without namespace var ─────────────
 CAAS_AGENT_FLOW="cluster-namespace"
 unset CAAS_CLUSTER_ORDER_NAMESPACE 2>/dev/null || true
-check_missing_ns() {
-  if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
-    if [[ -z "${CAAS_CLUSTER_ORDER_NAMESPACE:-}" ]]; then
-      return 1
-    fi
-  fi
-  return 0
-}
-assert_rc "cluster-namespace rejects missing namespace" 1 check_missing_ns
+assert_rc "cluster-namespace rejects missing namespace" 1 resolve_agent_namespace
 
-# ── Test: approval gating ──────────────────────────────────────────
-should_approve() {
-  local flow="$1"
-  [[ "${flow}" != "cluster-namespace" ]]
-}
-assert_rc "hot-pool approves agents" 0 should_approve "hot-pool"
-assert_rc "cluster-namespace skips approval" 1 should_approve "cluster-namespace"
+# ── should_approve_agents ─────────────────────────────────────────
+CAAS_AGENT_FLOW="hot-pool"
+assert_rc "hot-pool approves agents" 0 should_approve_agents
+CAAS_AGENT_FLOW="cluster-namespace"
+assert_rc "cluster-namespace skips approval" 1 should_approve_agents
+unset CAAS_AGENT_FLOW 2>/dev/null || true
+assert_rc "default (hot-pool) approves agents" 0 should_approve_agents
 
-# ── Summary ────────────────────────────────────────────────────────
+# ── Summary ───────────────────────────────────────────────────────
 echo ""
 echo "${pass} passed, ${fail} failed"
 if [[ "${fail}" -gt 0 ]]; then

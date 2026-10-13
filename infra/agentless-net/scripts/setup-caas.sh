@@ -17,6 +17,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${SCRIPT_DIR}/.."
 
+# shellcheck source=infra/agentless-net/scripts/setup-caas-lib.sh
+source "${SCRIPT_DIR}/setup-caas-lib.sh"
+
 # shellcheck source=/dev/null
 source "${INFRA_DIR}/.mgmt-network"
 
@@ -27,19 +30,27 @@ PULL_SECRET="${OSAC_PULL_SECRET_PATH:-/root/pull-secret}"
 
 CAAS_AGENT_FLOW="${CAAS_AGENT_FLOW:-hot-pool}"
 
+if ! validate_agent_flow; then
+    echo "ERROR: invalid CAAS_AGENT_FLOW '${CAAS_AGENT_FLOW}' (expected hot-pool or cluster-namespace)"
+    exit 1
+fi
+
 LAB_NAME="agentless-net-lab"
 AGENT_RESOURCE_CLASS="ci-worker"
 INFRAENV_NAME="infraenv"
 SSH_PUB_KEY="$(cat ~/.ssh/id_rsa.pub 2>/dev/null || cat ~/.ssh/id_ed25519.pub 2>/dev/null || true)"
 
-# Resolve target namespace based on agent flow mode
+# Resolve target namespace based on agent flow mode.
+# In cluster-namespace mode without CAAS_CLUSTER_ORDER_NAMESPACE, only
+# register the host type (pre-order phase) — the full agent setup runs
+# later after ClusterOrder creation provides the namespace.
 if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
-    if [[ -z "${CAAS_CLUSTER_ORDER_NAMESPACE:-}" ]]; then
-        echo "ERROR: CAAS_AGENT_FLOW=cluster-namespace requires CAAS_CLUSTER_ORDER_NAMESPACE"
-        exit 1
-    fi
-    AGENT_NAMESPACE="${CAAS_CLUSTER_ORDER_NAMESPACE}"
     info() { echo "==> [cluster-namespace] $*"; }
+    if [[ -z "${CAAS_CLUSTER_ORDER_NAMESPACE:-}" ]]; then
+        AGENT_NAMESPACE=""
+    else
+        AGENT_NAMESPACE="${CAAS_CLUSTER_ORDER_NAMESPACE}"
+    fi
 else
     AGENT_NAMESPACE="hardware-inventory"
     info() { echo "==> $*"; }
@@ -77,6 +88,15 @@ else
     exit 1
 fi
 rm -f "${RESPONSE_BODY}"
+
+# In cluster-namespace mode without a namespace, host-type registration
+# is all we can do before the ClusterOrder exists.  Exit cleanly so the
+# workflow can create the order, discover the namespace, then re-run
+# this script with CAAS_CLUSTER_ORDER_NAMESPACE set.
+if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]] && [[ -z "${AGENT_NAMESPACE}" ]]; then
+    info "Pre-order phase complete. Re-run with CAAS_CLUSTER_ORDER_NAMESPACE after ClusterOrder creation."
+    exit 0
+fi
 
 # ---------- step 20: create agent namespace and InfraEnv ----------
 
@@ -130,6 +150,7 @@ while true; do
         exit 1
     fi
 done
+# Log readiness without exposing the signed URL.
 info "Discovery ISO URL ready"
 
 # ---------- step 21: create bridges and boot host VMs ----------
@@ -198,10 +219,10 @@ while true; do
 done
 info "All ${EXPECTED_AGENTS} agents registered"
 
-if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
-    info "Labeling and annotating agents (no approval — osac owns approval)..."
-else
+if should_approve_agents; then
     info "Approving, labeling, and annotating agents..."
+else
+    info "Labeling and annotating agents (no approval — osac owns approval)..."
 fi
 
 AGENT_MAC_MAP=$(KUBECONFIG="$KUBECONFIG" oc get agent -n "$AGENT_NAMESPACE" -o json | python3 -c "
@@ -218,7 +239,7 @@ ANNOTATED_COUNT=0
 for agent in $(KUBECONFIG="$KUBECONFIG" oc get agent -n "$AGENT_NAMESPACE" -o jsonpath='{.items[*].metadata.name}'); do
     # Approve agents only in hot-pool mode; cluster-namespace mode leaves
     # approval to osac.service.cluster_infra ci_create.
-    if [[ "${CAAS_AGENT_FLOW}" != "cluster-namespace" ]]; then
+    if should_approve_agents; then
         KUBECONFIG="$KUBECONFIG" oc patch agent/"$agent" -n "$AGENT_NAMESPACE" --type=merge \
             -p '{"spec":{"approved":true}}'
     fi
@@ -231,10 +252,10 @@ for agent in $(KUBECONFIG="$KUBECONFIG" oc get agent -n "$AGENT_NAMESPACE" -o js
         if [ "$AGENT_MAC" = "$VM_MAC" ]; then
             KUBECONFIG="$KUBECONFIG" oc annotate agent/"$agent" -n "$AGENT_NAMESPACE" \
                 "osac.openshift.io/host_uuid=$vm" --overwrite
-            if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
-                echo "  Labeled and annotated $agent → $vm (no approval)"
+            if should_approve_agents; then
+                echo "  Approved, labeled, and annotated agent $(( ANNOTATED_COUNT + 1 )) → ${vm}"
             else
-                echo "  Approved, labeled, and annotated $agent → $vm"
+                echo "  Labeled and annotated agent $(( ANNOTATED_COUNT + 1 )) → ${vm} (no approval)"
             fi
             ANNOTATED_COUNT=$((ANNOTATED_COUNT + 1))
             break

@@ -1,28 +1,46 @@
 ---
 # Post-ClusterOrder agent setup for cluster-namespace mode (Option C).
 #
-# Runs after create-caas has created the ClusterOrder and discovered
-# caas_cluster_order_namespace. Creates InfraEnv in that namespace,
-# downloads the discovery ISO, boots VMs, waits for agents, and labels
-# them. Does NOT approve agents — osac.service.cluster_infra ci_create
+# Included by create-caas (via include_role) immediately after
+# ClusterOrder namespace discovery and before the readiness wait.
+# Creates InfraEnv in that namespace, downloads the discovery ISO,
+# boots VMs, waits for agents, and labels them.
+# Does NOT approve agents — osac.service.cluster_infra ci_create
 # owns approval in Option C.
 #
 # Requires:
 #   caas_cluster_order_namespace  — set by create-caas
-#   caas_discovery_vms            — set by discover-caas (VM list)
-#   _pull_secret                  — read by discover-caas
-#   _ssh_pub_key                  — read by discover-caas
+#   caas_discovery_vm_patterns    — from group_vars (VM name globs)
+#   pull_secret_path              — credential path
+#   ssh_public_key_path           — SSH public key path
+
+# ── Rediscover VM names from patterns ─────────────────────────────
+# discover-caas sets caas_discovery_vms via set_fact, but that fact
+# does not survive across separate ansible-playbook invocations.
+# Reconstruct the list from the same patterns so this role is
+# self-contained.
+- name: Find discovery VMs by pattern
+  ansible.builtin.shell:
+    cmd: virsh list --all --name | grep "{{ item }}"
+  register: _setup_vm_lookup
+  changed_when: false
+  failed_when: _setup_vm_lookup.rc != 0 or _setup_vm_lookup.stdout_lines | length == 0
+  loop: "{{ caas_discovery_vm_patterns }}"
+
+- name: Build VM name list
+  ansible.builtin.set_fact:
+    caas_discovery_vms: "{{ _setup_vm_lookup.results | map(attribute='stdout_lines') | map('first') | list }}"
 
 - name: Validate required variables
   ansible.builtin.assert:
     that:
       - caas_cluster_order_namespace is defined
       - caas_cluster_order_namespace | length > 0
-      - caas_discovery_vms is defined
       - caas_discovery_vms | length > 0
     fail_msg: >-
-      setup-caas-agents requires caas_cluster_order_namespace (from create-caas)
-      and caas_discovery_vms (from discover-caas). Ensure both roles ran first.
+      setup-caas-agents requires caas_cluster_order_namespace (from
+      create-caas) and at least one VM matching caas_discovery_vm_patterns.
+      Found {{ caas_discovery_vms | default([]) | length }} VMs.
 
 # ── InfraEnv in ClusterOrder namespace ──────────────────────────────
 
@@ -104,6 +122,7 @@
   retries: 60
   delay: 10
   changed_when: false
+  no_log: true
 
 - name: Download discovery ISO
   ansible.builtin.get_url:
@@ -115,6 +134,7 @@
   until: _iso_download is success
   retries: 30
   delay: 10
+  no_log: true
 
 # ── Boot discovery VMs ──────────────────────────────────────────────
 # VMs were already prepared (sized, disks created) by discover-caas.
@@ -156,7 +176,7 @@
   ansible.builtin.debug:
     msg: >-
       {{ caas_discovery_vms | length }} VMs booted with discovery ISO
-      (agents will register in namespace {{ caas_cluster_order_namespace }})
+      for cluster-namespace agent registration
 
 # ── Wait for agents + label (no approval) ──────────────────────────
 
@@ -218,10 +238,12 @@
   retries: 40
   delay: 15
   changed_when: false
+  no_log: true
 
 - name: Build agent-to-hostname map
   ansible.builtin.set_fact:
     _agent_hostname_map: "{{ _agent_hostnames_raw.stdout | from_json }}"
+  no_log: true
 
 - name: Build resource_class agent allow-list by hostname
   ansible.builtin.set_fact:
@@ -263,7 +285,8 @@
     KUBECONFIG: /root/.kube/config
   loop: "{{ _agent_hostname_map | dict2items }}"
   loop_control:
-    label: "{{ item.value }}"
+    label: "agent {{ ansible_loop.index0 }}"
+    extended: true
   register: _label_ns
   changed_when: "'labeled' in _label_ns.stdout and 'not labeled' not in _label_ns.stdout"
   until: _label_ns.rc == 0
@@ -274,6 +297,6 @@
   ansible.builtin.debug:
     msg: >-
       {{ _agents_for_resource_class | length }} agents labeled with
-      resource_class={{ caas_host_type_id }} in namespace
-      {{ caas_cluster_order_namespace }}. Approval is owned by
-      osac.service.cluster_infra ci_create.
+      resource_class={{ caas_host_type_id }} in the ClusterOrder
+      namespace. Approval is owned by osac.service.cluster_infra
+      ci_create.

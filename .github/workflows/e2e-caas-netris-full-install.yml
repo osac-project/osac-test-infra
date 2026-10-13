@@ -430,14 +430,19 @@ jobs:
           OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_BRANCH: ${{ inputs.osac-branch }}
+          CAAS_AGENT_FLOW: ${{ inputs.caas-agent-flow }}
         run: |
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
           fi
           EXTRA_VARS="{}"
-          CAAS_AGENT_FLOW="${{ inputs.caas-agent-flow }}"
-          if [[ -n "${CAAS_AGENT_FLOW}" ]] && [[ "${CAAS_AGENT_FLOW}" != "hot-pool" ]]; then
-            EXTRA_VARS=$(echo "$EXTRA_VARS" | jq -c --arg v "$CAAS_AGENT_FLOW" '. + {"caas_agent_flow": $v}')
+          # Validate and default the agent flow via env (not template interpolation).
+          case "${CAAS_AGENT_FLOW:-hot-pool}" in
+            hot-pool|cluster-namespace) ;;
+            *) echo "::error::invalid caas-agent-flow value"; exit 1 ;;
+          esac
+          if [[ "${CAAS_AGENT_FLOW:-hot-pool}" != "hot-pool" ]]; then
+            EXTRA_VARS=$(echo "$EXTRA_VARS" | jq -c --arg v "${CAAS_AGENT_FLOW}" '. + {"caas_agent_flow": $v}')
             echo "CaaS agent flow: ${CAAS_AGENT_FLOW}"
           fi
           declare -A OVERRIDES=(

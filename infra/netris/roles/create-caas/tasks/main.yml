@@ -115,10 +115,19 @@
   ansible.builtin.set_fact:
     caas_cluster_order_namespace: "{{ _cluster_order_namespace.stdout }}"
   when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'
+  no_log: true
 
-- name: Report ClusterOrder namespace
+- name: Report ClusterOrder namespace discovered
   ansible.builtin.debug:
-    msg: "ClusterOrder namespace: {{ caas_cluster_order_namespace }}"
+    msg: "ClusterOrder namespace discovered ({{ caas_cluster_order_namespace | length }} chars)"
+  when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'
+
+# In cluster-namespace mode, agents must be booted and registered BEFORE
+# we wait for CLUSTER_STATE_READY — otherwise the cluster can never
+# become ready because no worker nodes exist.
+- name: Set up agents in ClusterOrder namespace
+  ansible.builtin.include_role:
+    name: setup-caas-agents
   when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'
 
 # The HyperShift operator creates the hosted control plane namespace with

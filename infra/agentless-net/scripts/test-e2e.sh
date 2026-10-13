@@ -17,8 +17,18 @@ export KUBECONFIG
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 PULL_SECRET="${OSAC_PULL_SECRET_PATH:-/root/pull-secret}"
 
+CAAS_AGENT_FLOW="${CAAS_AGENT_FLOW:-hot-pool}"
+
 CLUSTER_TEMPLATE="osac.templates.ocp_ci_small"
-CLUSTER_NAMES=("cluster-1" "cluster-2")
+
+# In cluster-namespace mode all VMs register in a single ClusterOrder
+# namespace, so only one cluster is created. Hot-pool mode keeps the
+# existing two-cluster isolation test.
+if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
+    CLUSTER_NAMES=("cluster-1")
+else
+    CLUSTER_NAMES=("cluster-1" "cluster-2")
+fi
 
 HOST_VMS=("host-1" "host-2")
 
@@ -50,13 +60,18 @@ if ! oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | gr
     exit 1
 fi
 
-AGENT_COUNT=$(oc get agent -n hardware-inventory --no-headers 2>/dev/null | wc -l)
-if [ "$AGENT_COUNT" -lt "${#CLUSTER_NAMES[@]}" ]; then
-    echo "ERROR: Need at least ${#CLUSTER_NAMES[@]} agents, found ${AGENT_COUNT}"
-    exit 1
+if [[ "${CAAS_AGENT_FLOW}" != "cluster-namespace" ]]; then
+    # Hot-pool: agents must already exist in hardware-inventory.
+    AGENT_COUNT=$(oc get agent -n hardware-inventory --no-headers 2>/dev/null | wc -l)
+    if [ "$AGENT_COUNT" -lt "${#CLUSTER_NAMES[@]}" ]; then
+        echo "ERROR: Need at least ${#CLUSTER_NAMES[@]} agents, found ${AGENT_COUNT}"
+        exit 1
+    fi
+    info "OSAC running, ${AGENT_COUNT} agents available"
+else
+    # Cluster-namespace: agents are created after ClusterOrder.
+    info "OSAC running (cluster-namespace: agents created after ClusterOrder)"
 fi
-
-info "OSAC running, ${AGENT_COUNT} agents available"
 
 # ---------- create clusters ----------
 
@@ -76,6 +91,35 @@ for name in "${CLUSTER_NAMES[@]}"; do
     fi
     CLUSTER_IDS+=("$CLUSTER_ID")
 done
+
+# ---------- cluster-namespace: discover NS and create agents ----------
+
+if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
+    for i in "${!CLUSTER_NAMES[@]}"; do
+        name="${CLUSTER_NAMES[$i]}"
+        info "Waiting for ClusterOrder namespace for ${name}..."
+        elapsed=0
+        CLUSTER_ORDER_NS=""
+        while true; do
+            CLUSTER_ORDER_NS=$(oc get ns \
+                -l "osac.openshift.io/clusterorder=${name}" \
+                --no-headers 2>/dev/null \
+                | awk '{print $1}' | head -1) || true
+            [[ -n "${CLUSTER_ORDER_NS}" ]] && break
+            sleep 10; elapsed=$((elapsed + 10))
+            if [[ "$elapsed" -ge 300 ]]; then
+                echo "ERROR: ClusterOrder namespace not found after ${elapsed}s"
+                exit 1
+            fi
+        done
+        info "ClusterOrder namespace: <discovered> (${#CLUSTER_ORDER_NS} chars)"
+
+        info "Running agent setup in ClusterOrder namespace..."
+        CAAS_AGENT_FLOW="cluster-namespace" \
+        CAAS_CLUSTER_ORDER_NAMESPACE="${CLUSTER_ORDER_NS}" \
+            "${SCRIPT_DIR}/setup-caas.sh"
+    done
+fi
 
 # ---------- wait for clusters ----------
 
@@ -218,24 +262,29 @@ for i in "${!CLUSTER_NAMES[@]}"; do
     fi
 done
 
-info "Testing cross-cluster isolation (should fail)..."
-ISOLATED=true
-for i in "${!CLUSTER_NAMES[@]}"; do
-    name="${CLUSTER_NAMES[$i]}"
-    KC="$KUBECONFIG_DIR/${name}.kubeconfig"
-    for j in "${!CLUSTER_NAMES[@]}"; do
-        [ "$i" = "$j" ] && continue
-        other="${CLUSTER_NAMES[$j]}"
-        other_ip="${POD_IPS[$j]}"
-        if KUBECONFIG="$KC" oc exec test-net -- \
-            curl -s --connect-timeout 3 "http://${other_ip}:8080" &>/dev/null; then
-            echo "  ERROR: $name can reach $other ($other_ip) — isolation BROKEN"
-            ISOLATED=false
-        else
-            echo "  $name cannot reach $other ($other_ip) — isolated OK"
-        fi
+if [[ "${#CLUSTER_NAMES[@]}" -ge 2 ]]; then
+    info "Testing cross-cluster isolation (should fail)..."
+    ISOLATED=true
+    for i in "${!CLUSTER_NAMES[@]}"; do
+        name="${CLUSTER_NAMES[$i]}"
+        KC="$KUBECONFIG_DIR/${name}.kubeconfig"
+        for j in "${!CLUSTER_NAMES[@]}"; do
+            [ "$i" = "$j" ] && continue
+            other="${CLUSTER_NAMES[$j]}"
+            other_ip="${POD_IPS[$j]}"
+            if KUBECONFIG="$KC" oc exec test-net -- \
+                curl -s --connect-timeout 3 "http://${other_ip}:8080" &>/dev/null; then
+                echo "  ERROR: $name can reach $other ($other_ip) — isolation BROKEN"
+                ISOLATED=false
+            else
+                echo "  $name cannot reach $other ($other_ip) — isolated OK"
+            fi
+        done
     done
-done
+else
+    info "Single cluster — cross-cluster isolation test skipped"
+    ISOLATED=true
+fi
 
 info "Cleaning up test pods..."
 for i in "${!CLUSTER_NAMES[@]}"; do
