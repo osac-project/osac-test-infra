@@ -22,6 +22,7 @@
 - name: Find discovery VMs by pattern
   ansible.builtin.shell:
     cmd: set -o pipefail && virsh list --all --name | grep "{{ item }}"
+    executable: /bin/bash
   register: _setup_vm_lookup
   changed_when: false
   failed_when: _setup_vm_lookup.rc != 0 or _setup_vm_lookup.stdout_lines | length == 0
@@ -152,6 +153,7 @@
 - name: Check if discovery ISO is attached
   ansible.builtin.shell:
     cmd: set -o pipefail && virsh domblklist {{ item }} | grep -q 'caas-discovery.iso'
+    executable: /bin/bash
   register: _iso_attached
   failed_when: false
   changed_when: false
@@ -209,6 +211,7 @@
       set -o pipefail &&
       oc get agent -n {{ caas_cluster_order_namespace }}
       --no-headers 2>/dev/null | wc -l
+    executable: /bin/bash
   environment:
     KUBECONFIG: /root/.kube/config
   register: _agent_count
@@ -256,6 +259,7 @@
           for a in agents
       }))
       '
+    executable: /bin/bash
   environment:
     KUBECONFIG: /root/.kube/config
   register: _agent_hostnames_raw
