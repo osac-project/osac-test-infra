@@ -10,7 +10,7 @@
       "id": 1,
       "title": "Success",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } },
@@ -31,7 +31,7 @@
       "id": 2,
       "title": "Failed",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } },
@@ -52,7 +52,7 @@
       "id": 3,
       "title": "Cancelled",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] } },
@@ -73,7 +73,7 @@
       "id": 4,
       "title": "Queued Now",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 9, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } },
@@ -91,10 +91,32 @@
       }]
     },
     {
+      "id": 12,
+      "title": "Zombie Queued",
+      "description": "Runs stuck in queued with no jobs (e.g. after a GitHub Actions outage). They will never run, are excluded from Queued Now and the queue alerts, and need manual cancelling.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 0 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
+      "fieldConfig": {
+        "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }, { "color": "orange", "value": 1 }] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{
+        "refId": "A",
+        "type": "json",
+        "source": "url",
+        "format": "table",
+        "url": "http://127.0.0.1:9103/api/counts?category=${category:text}&repo=${repo_filter}&workflow_name=${workflow_name}&runner=${machine}&job_type=${job_type}&failure_reason=${failure_reason}&search=${search:percentencode}",
+        "url_options": { "method": "GET", "data": "" },
+        "columns": [{ "selector": "zombie", "text": "Zombie", "type": "number" }]
+      }]
+    },
+    {
       "id": 5,
       "title": "In Progress Now",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 15, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } },
@@ -115,7 +137,7 @@
       "id": 6,
       "title": "Failure Rate",
       "type": "gauge",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {

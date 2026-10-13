@@ -2819,7 +2819,7 @@ class WorkflowExporter:
         """Return job counts by conclusion, with the same filters as get_jobs_json.
 
         Returns: {"success": N, "failure": N, "cancelled": N,
-                  "queued": N, "in_progress": N, "total": N,
+                  "queued": N, "zombie": N, "in_progress": N, "total": N,
                   "failure_rate": 0.xx, "success_rate": 0.xx,
                   "cache_oldest_at": "2026-..." | None}
         """
@@ -2828,6 +2828,10 @@ class WorkflowExporter:
         counts = {}
         for job in jobs:
             c = job.get("conclusion") or job.get("status", "unknown")
+            # Zombies (see _is_zombie_run) are counted apart from "queued",
+            # matching the github_actions_queued_runs* gauges.
+            if c == "queued" and job.get("zombie"):
+                c = "zombie"
             counts[c] = counts.get(c, 0) + 1
         total = len(jobs)
         success_count = counts.get("success", 0)
@@ -2839,6 +2843,7 @@ class WorkflowExporter:
             "failure": failure_count,
             "cancelled": counts.get("cancelled", 0),
             "queued": counts.get("queued", 0),
+            "zombie": counts.get("zombie", 0),
             "in_progress": counts.get("in_progress", 0),
             "total": total,
             "failure_rate": failure_rate,
