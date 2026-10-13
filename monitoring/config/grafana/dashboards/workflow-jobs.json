@@ -93,7 +93,7 @@
     {
       "id": 12,
       "title": "Zombie Queued",
-      "description": "Runs stuck in queued with no jobs (e.g. after a GitHub Actions outage). They will never run, are excluded from Queued Now and the queue alerts, and need manual cancelling.",
+      "description": "Runs stuck in queued with no jobs (e.g. after a GitHub Actions outage). They will never run, are excluded from Queued Now and the queue alerts, and cannot be cancelled through the API (they stay until deleted).",
       "type": "stat",
       "gridPos": { "h": 4, "w": 3, "x": 12, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
