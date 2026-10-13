@@ -69,6 +69,35 @@ assert_rc "cluster-namespace skips approval" 1 should_approve_agents
 unset CAAS_AGENT_FLOW 2>/dev/null || true
 assert_rc "default (hot-pool) approves agents" 0 should_approve_agents
 
+# ── Structural: setup-caas.sh does not log VM names ───────────────
+# VM creation/start messages must use index-only labels.
+SETUP_CAAS="${SCRIPT_DIR}/setup-caas.sh"
+if grep -qP 'echo.*\$vm\b' "${SETUP_CAAS}"; then
+    echo "FAIL: setup-caas.sh still logs \$vm by name"
+    fail=$((fail + 1))
+else
+    echo "PASS: setup-caas.sh uses index-only VM labels"
+    pass=$((pass + 1))
+fi
+
+# ── Structural: Ansible role no_log on VM loops ──────────────────
+ROLE_TASKS="${SCRIPT_DIR}/../../netris/roles/setup-caas-agents/tasks/main.yml"
+if [[ -f "${ROLE_TASKS}" ]]; then
+    # Every task that loops over caas_discovery_vms or _iso_attached.results
+    # must have no_log: true to prevent VM-name exposure.
+    vm_loop_count=$(grep -cP 'loop:.*caas_discovery_vms|loop:.*_iso_attached' "${ROLE_TASKS}")
+    nolog_count=$(grep -c 'no_log: true' "${ROLE_TASKS}")
+    if [[ "${nolog_count}" -lt "${vm_loop_count}" ]]; then
+        echo "FAIL: setup-caas-agents has ${vm_loop_count} VM loops but only ${nolog_count} no_log directives"
+        fail=$((fail + 1))
+    else
+        echo "PASS: setup-caas-agents VM loops have no_log coverage (${nolog_count} >= ${vm_loop_count})"
+        pass=$((pass + 1))
+    fi
+else
+    echo "SKIP: setup-caas-agents role not found at ${ROLE_TASKS}"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────
 echo ""
 echo "${pass} passed, ${fail} failed"

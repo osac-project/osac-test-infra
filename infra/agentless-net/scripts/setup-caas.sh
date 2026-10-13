@@ -168,7 +168,7 @@ for i in "${!HOST_VMS[@]}"; do
     veth="${HOST_VETHS[$i]}"
 
     if virsh domstate "$vm" 2>/dev/null | grep -q "running"; then
-        echo "  $vm already running — skipping"
+        echo "  vm $i already running — skipping"
         continue
     fi
 
@@ -194,10 +194,10 @@ for i in "${!HOST_VMS[@]}"; do
             --boot hd,cdrom \
             --noautoconsole >/dev/null 2>&1
 
-        echo "  Created and started $vm: ${VM_VCPUS} vCPU, ${VM_MEMORY}MB RAM, ${VM_DISK_SIZE}GB disk"
+        echo "  Created and started vm $i: ${VM_VCPUS} vCPU, ${VM_MEMORY}MB RAM, ${VM_DISK_SIZE}GB disk"
     else
         virsh start "$vm" 2>/dev/null || true
-        echo "  Started $vm"
+        echo "  Started vm $i"
     fi
 done
 
@@ -253,9 +253,9 @@ for agent in $(KUBECONFIG="$KUBECONFIG" oc get agent -n "$AGENT_NAMESPACE" -o js
             KUBECONFIG="$KUBECONFIG" oc annotate agent/"$agent" -n "$AGENT_NAMESPACE" \
                 "osac.openshift.io/host_uuid=$vm" --overwrite
             if should_approve_agents; then
-                echo "  Approved, labeled, and annotated agent $(( ANNOTATED_COUNT + 1 )) → ${vm}"
+                echo "  Approved, labeled, and annotated agent $(( ANNOTATED_COUNT + 1 ))"
             else
-                echo "  Labeled and annotated agent $(( ANNOTATED_COUNT + 1 )) → ${vm} (no approval)"
+                echo "  Labeled and annotated agent $(( ANNOTATED_COUNT + 1 )) (no approval)"
             fi
             ANNOTATED_COUNT=$((ANNOTATED_COUNT + 1))
             break

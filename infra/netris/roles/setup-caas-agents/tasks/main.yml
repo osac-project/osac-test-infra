@@ -21,11 +21,15 @@
 # self-contained.
 - name: Find discovery VMs by pattern
   ansible.builtin.shell:
-    cmd: virsh list --all --name | grep "{{ item }}"
+    cmd: set -o pipefail && virsh list --all --name | grep "{{ item }}"
   register: _setup_vm_lookup
   changed_when: false
   failed_when: _setup_vm_lookup.rc != 0 or _setup_vm_lookup.stdout_lines | length == 0
   loop: "{{ caas_discovery_vm_patterns }}"
+  loop_control:
+    label: "pattern {{ ansible_loop.index0 }}"
+    extended: true
+  no_log: true
 
 - name: Build VM name list
   ansible.builtin.set_fact:
@@ -124,6 +128,11 @@
   changed_when: false
   no_log: true
 
+# validate_certs: false — the ISO URL points to assisted-image-service
+# behind the OCP cluster's ingress route. The route certificate is signed
+# by the cluster's self-signed ingress CA, which is not in the Ansible
+# controller's trust store. This matches every other cluster-facing
+# get_url/uri call in infra/netris (see discover-caas, setup-caas, etc.).
 - name: Download discovery ISO
   ansible.builtin.get_url:
     url: "{{ _iso_url.stdout }}"
@@ -142,11 +151,15 @@
 
 - name: Check if discovery ISO is attached
   ansible.builtin.shell:
-    cmd: virsh domblklist {{ item }} | grep -q 'caas-discovery.iso'
+    cmd: set -o pipefail && virsh domblklist {{ item }} | grep -q 'caas-discovery.iso'
   register: _iso_attached
   failed_when: false
   changed_when: false
   loop: "{{ caas_discovery_vms }}"
+  loop_control:
+    label: "vm {{ ansible_loop.index0 }}"
+    extended: true
+  no_log: true
 
 - name: Attach discovery ISO as cdrom
   ansible.builtin.command:
@@ -154,23 +167,33 @@
   when: item.rc != 0
   loop: "{{ _iso_attached.results }}"
   loop_control:
-    label: "{{ item.item }}"
+    label: "vm {{ ansible_loop.index0 }}"
+    extended: true
   changed_when: true
+  no_log: true
 
 - name: Set boot order to disk then cdrom
   ansible.builtin.command:
     cmd: virt-xml {{ item }} --edit --boot hd,cdrom
   loop: "{{ caas_discovery_vms }}"
+  loop_control:
+    label: "vm {{ ansible_loop.index0 }}"
+    extended: true
   register: _boot_order
   changed_when: "'--boot' not in _boot_order.stderr | default('')"
+  no_log: true
 
 - name: Start discovery VMs
   ansible.builtin.command:
     cmd: virsh start {{ item }}
   loop: "{{ caas_discovery_vms }}"
+  loop_control:
+    label: "vm {{ ansible_loop.index0 }}"
+    extended: true
   register: _vm_start
   failed_when: _vm_start.rc != 0 and 'already active' not in _vm_start.stderr
   changed_when: _vm_start.rc == 0
+  no_log: true
 
 - name: Report VMs booted for cluster-namespace agent registration
   ansible.builtin.debug:
@@ -183,6 +206,7 @@
 - name: Wait for expected number of agents in ClusterOrder namespace
   ansible.builtin.shell:
     cmd: >-
+      set -o pipefail &&
       oc get agent -n {{ caas_cluster_order_namespace }}
       --no-headers 2>/dev/null | wc -l
   environment:
@@ -213,6 +237,7 @@
 - name: Get agent hostnames
   ansible.builtin.shell:
     cmd: |
+      set -o pipefail
       oc get agent -n {{ caas_cluster_order_namespace }} -o json | python3 -c '
       import json, sys
       agents = json.load(sys.stdin).get("items") or []
@@ -269,6 +294,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
   loop: "{{ _agents_for_resource_class }}"
+  loop_control:
+    label: "agent {{ ansible_loop.index0 }}"
+    extended: true
   register: _label_rc
   changed_when: "'labeled' in _label_rc.stdout and 'not labeled' not in _label_rc.stdout"
   until: _label_rc.rc == 0
