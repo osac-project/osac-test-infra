@@ -258,7 +258,8 @@ Queue alerts ignore **zombie** runs: runs still `queued` with no jobs after
 an Actions outage but never created jobs for, so they will never run. The
 workflow exporter reports them separately as
 `github_actions_zombie_queued_runs{repo}` / `github_actions_zombie_queued_runs_org`
-and subtracts them from `github_actions_queued_runs*`. No alert fires on them;
+and subtracts them from `github_actions_queued_runs*`. A confirmed zombie is
+re-checked for jobs every `ZOMBIE_RECHECK_MINUTES` (default 15). No alert fires on them;
 the cancel/force-cancel APIs reject them (409), and they do not expire on
 their own, so they stay until deleted.
 

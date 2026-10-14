@@ -10,7 +10,7 @@
       "id": 1,
       "title": "Success",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 0 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } },
@@ -31,7 +31,7 @@
       "id": 2,
       "title": "Failed",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 0 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } },
@@ -52,7 +52,7 @@
       "id": 3,
       "title": "Cancelled",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 0 },
+      "gridPos": { "h": 4, "w": 5, "x": 12, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] } },
@@ -73,7 +73,7 @@
       "id": 4,
       "title": "Queued Now",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 3, "x": 9, "y": 0 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 4 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } },
@@ -95,7 +95,7 @@
       "title": "Zombie Queued",
       "description": "Runs stuck in queued with no jobs (e.g. after a GitHub Actions outage). They will never run, are excluded from Queued Now and the queue alerts, and cannot be cancelled through the API (they stay until deleted).",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 0 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 4 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }, { "color": "orange", "value": 1 }] } },
@@ -116,7 +116,7 @@
       "id": 5,
       "title": "In Progress Now",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 3, "x": 15, "y": 0 },
+      "gridPos": { "h": 4, "w": 5, "x": 12, "y": 4 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } },
@@ -137,7 +137,7 @@
       "id": 6,
       "title": "Failure Rate",
       "type": "gauge",
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "gridPos": { "h": 8, "w": 7, "x": 17, "y": 0 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -164,7 +164,7 @@
       "title": "Queue Depth & In-Progress Runs",
       "description": "Unified queue saturation view. The all-category series stays visible for fleet capacity, while the second pair follows the Category filter (E2E by default).",
       "type": "timeseries",
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 4 },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "spanNulls": false } },
@@ -188,7 +188,7 @@
       "title": "▸ WORKFLOW RELIABILITY & SUCCESS RATE",
       "description": "Percentage of successful completed runs by repository and workflow. Merge Similar defaults to No so the source repository remains visible in each label.",
       "type": "bargauge",
-      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 11 },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 19 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -222,7 +222,7 @@
       "title": "▸ FAILING STEPS (TABLE)",
       "description": "Tabular view of failed steps returned by the exporter. The legacy Other bucket is excluded; failure counts use green, yellow, and orange severity colors.",
       "type": "table",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": { "defaults": {}, "overrides": [
         { "matcher": { "id": "byName", "options": "step" }, "properties": [{ "id": "displayName", "value": "Failed Step" }, { "id": "custom.width", "value": 380 }] },
@@ -245,7 +245,7 @@
       "title": "▸ EXECUTION DURATION ANALYSIS",
       "description": "Average run duration by job type; each bar is labeled with the job type. Values are shown in seconds and highlight durations over 10 minutes.",
       "type": "bargauge",
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 24 },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 32 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {
@@ -279,7 +279,7 @@
       "title": "Recent Runs — Active E2E Jobs",
       "description": "Recent E2E runs returned by the exporter; machine assignment and run status are shown when available.",
       "type": "table",
-      "gridPos": { "h": 19, "w": 16, "x": 0, "y": 11 },
+      "gridPos": { "h": 19, "w": 16, "x": 0, "y": 19 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "workflow-api" },
       "fieldConfig": {
         "defaults": {},

@@ -53,6 +53,9 @@ PORT = int(os.getenv("PORT", "9103"))
 # don't keep the queue-depth alerts firing. The grace period covers the
 # normal few seconds between a run being created and its jobs appearing.
 ZOMBIE_GRACE_MINUTES = float(os.getenv("ZOMBIE_GRACE_MINUTES", "15"))
+# How long a confirmed zombie is trusted before its jobs are fetched again,
+# so a batch of zombies doesn't cost one API call each per poll cycle.
+ZOMBIE_RECHECK_MINUTES = float(os.getenv("ZOMBIE_RECHECK_MINUTES", "15"))
 # Comma-separated list of repos to monitor. Empty = auto-discover active repos.
 REPOS_FILTER = [r.strip() for r in os.getenv("REPOS", "").split(",") if r.strip()]
 # How many days of job history to retain in the DB. A count cap alone (the
@@ -389,8 +392,12 @@ class WorkflowExporter:
         # Current in-flight runs (queued + in_progress) — pure in-memory,
         # unrelated to the persisted job history below.
         self.active_runs = []
-        # Queued run ids already seen with >=1 job -- see _is_zombie_run.
+        # Zombie detection caches, keyed by (run id, run_attempt) -- see
+        # _is_zombie_run. _runs_with_jobs: seen with >=1 job.
+        # _zombie_recheck_at: confirmed jobless -> time.monotonic() of the
+        # next jobs fetch.
         self._runs_with_jobs = set()
+        self._zombie_recheck_at = {}
         self._lock = threading.Lock()
         # Branch-to-PR mapping: {repo: {branch: (pr_num, pr_url)}}
         self._pr_map = {}
@@ -1394,12 +1401,19 @@ class WorkflowExporter:
 
         Uses run_started_at (reset on a re-run) over created_at. Runs seen
         with jobs are cached (jobs never disappear), so a large real
-        backlog costs one jobs call per run, not one per cycle. A failed
-        jobs fetch is not a zombie -- unknown counts as queued.
+        backlog costs one jobs call per run, not one per cycle. Confirmed
+        zombies are cached for ZOMBIE_RECHECK_MINUTES, then checked again
+        in case jobs appeared. Both caches are keyed per attempt: a re-run
+        keeps its run id, but the jobs fetch only sees the latest attempt.
+        A failed jobs fetch keeps the last known answer, and is not a
+        zombie when there is none -- unknown counts as queued.
         """
         run_id = run.get("id")
-        if run_id in self._runs_with_jobs:
+        key = (run_id, run.get("run_attempt"))
+        if key in self._runs_with_jobs:
             return False
+        if time.monotonic() < self._zombie_recheck_at.get(key, 0):
+            return True
         queued_at = run.get("run_started_at") or run.get("created_at")
         if not queued_at:
             return False
@@ -1411,12 +1425,16 @@ class WorkflowExporter:
             return False
         jobs = self._fetch_run_jobs(repo, run_id)
         if jobs is None:
-            return False
+            return key in self._zombie_recheck_at
         if jobs:
+            self._zombie_recheck_at.pop(key, None)
             if len(self._runs_with_jobs) > 5000:
                 self._runs_with_jobs.clear()
-            self._runs_with_jobs.add(run_id)
+            self._runs_with_jobs.add(key)
             return False
+        if len(self._zombie_recheck_at) > 5000:
+            self._zombie_recheck_at.clear()
+        self._zombie_recheck_at[key] = time.monotonic() + ZOMBIE_RECHECK_MINUTES * 60
         return True
 
     def _fetch_active_runs(self, repo):
