@@ -1,0 +1,149 @@
+---
+# Phase 3a of the CI-gating rollout plan: proves the Vertex AI/WIF pipeline
+# actually works synchronously from inside a merge_group job -- only just
+# made possible by widening the Vertex AI WIF pool's attribute condition to
+# also trust refs/heads/gh-readonly-queue/* (previously refs/heads/main
+# only, which merge_group's ref never matches). Deliberately, purely
+# INFORMATIONAL: this workflow's outputs are not consumed by anything that
+# gates a merge. See select-jobs.py's run_merge_queue_preview() for the
+# actual judgment logic and why it must never fail this job.
+#
+# Called ONLY from a merge_group-only job in each
+# e2e-{vmaas,caas,bmaas}-full-install.yml (never from pull_request -- a
+# fork PR's pull_request run gets a read-only token and no OIDC token at
+# all, regardless of this WIF change, same documented constraint as
+# vertex-ai-auth's own header). That caller job is a dead end: it is not a
+# `needs:` of e2e-<suite>-full-install, e2e-<suite>-gate, or anything else
+# in the required-check chain.
+#
+# Unlike jobs-selection-report.yml (the async, cross-repo, cross-run
+# informational path this mirrors in spirit), this workflow does not read a
+# CONTEXT_FILE artifact and does not run graphify -- it is intentionally
+# self-contained within one synchronous job, with no cross-run
+# coordination. See select-jobs.py's run_merge_queue_preview() docstring
+# for why: reproducing the full deterministic-classification pass here
+# would reintroduce exactly the cross-run coordination this mode exists to
+# avoid.
+name: E2E Suite Preview (Phase 3a)
+
+on:
+  workflow_call: {}
+
+jobs:
+  preview:
+    name: Compute E2E suite AI preview
+    # workflow_call'd jobs inherit the CALLER's own github.event/
+    # github.repository/token -- same as jobs-selection-report.yml's
+    # `judge` job -- so github.repository below correctly resolves to
+    # osac (the caller), not this repo, and the PR-diff fetch targets the
+    # right repository.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write  # Vertex AI WIF auth -- only this job needs it
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Pinned explicitly, same reasoning as jobs-selection-report.yml's
+          # own checkout: github.repository resolves to the CALLER (osac)
+          # in a workflow_call context, but the script/action this job
+          # needs live here (osac-test-infra). ref: job.workflow_sha pins
+          # to the exact commit of THIS reusable workflow file currently
+          # executing -- same pattern e2e-on-label.yml already uses --
+          # rather than whatever osac-test-infra's default branch tip
+          # happens to be by the time this step runs, which can have
+          # advanced past whatever `@main` resolved to when this workflow
+          # was invoked.
+          repository: osac-project/osac-test-infra
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts/select-jobs.py
+            .github/actions/vertex-ai-auth
+
+      # merge_group carries no PR number field directly -- extract it from
+      # the queue ref, same confirmed-live regex already used in osac's
+      # own jobs-selection.yml "Resolve PR number and head SHA" step and
+      # unit-tests.yml's "Compute stable per-PR concurrency key" step:
+      # merge_group's github.ref_name is gh-readonly-queue/<base>/pr-<N>-<sha>,
+      # and the pr-<N> segment stays constant across queue reshuffles even
+      # though the trailing sha changes. This workflow is only ever called
+      # from a merge_group-only caller job (see this file's own header), so
+      # there is no non-merge_group case to branch on here.
+      - name: Resolve PR number from merge_group ref
+        id: pr
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NUMBER=$(echo "${REF_NAME}" | grep -oE 'pr-[0-9]+' | tail -1 | grep -oE '[0-9]+' || true)
+          if [[ -z "${NUMBER}" ]]; then
+            echo "::warning::Could not extract a PR number from ref_name '${REF_NAME}'; preview unavailable for this run."
+          fi
+          echo "number=${NUMBER}" >> "${GITHUB_OUTPUT}"
+
+      # Same bounded-diff pattern as jobs-selection-report.yml's own "Fetch
+      # PR diff" step (MAX_DIFF_CHARS=8000, truncated in raw text before
+      # JSON-encoding, JSON-single-line-encoded so attacker-controlled diff
+      # content can't inject into GITHUB_OUTPUT via a heredoc delimiter
+      # collision). Skipped entirely when no PR number resolved above --
+      # select-jobs.py's PR_DIFF_AVAILABLE=false path already renders a
+      # clean "preview unavailable" for that case.
+      - name: Fetch PR diff
+        id: pr-diff
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          MAX_DIFF_CHARS=8000
+          if raw_diff=$(gh api -H "Accept: application/vnd.github.v3.diff" "repos/${REPO}/pulls/${PR_NUMBER}" 2>/dev/null); then
+            diff_available=true
+          else
+            raw_diff=""
+            diff_available=false
+          fi
+          diff_text="${raw_diff:0:${MAX_DIFF_CHARS}}"
+          if [[ "${#raw_diff}" -gt "${MAX_DIFF_CHARS}" ]]; then
+            diff_text=$(printf '%s\n... (truncated, diff exceeds %s chars)' "${diff_text}" "${MAX_DIFF_CHARS}")
+          fi
+          echo "diff=$(jq -Rs . <<<"${diff_text}")" >> "${GITHUB_OUTPUT}"
+          echo "diff-available=${diff_available}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate for AI judgment
+        id: vertex-auth
+        if: steps.pr.outputs.number != ''
+        uses: ./.github/actions/vertex-ai-auth
+
+      # select-jobs.py's run_merge_queue_preview() is documented to never
+      # raise/exit non-zero -- this step has no continue-on-error/if:
+      # failure() handling because there is nothing here for it to guard
+      # against; a bug that somehow did make it exit non-zero should fail
+      # loudly in this dead-end job's own logs rather than being masked,
+      # since (per this file's header) it can never affect a merge either way.
+      #
+      # Always runs, even when steps.pr.outputs.number is empty: skipping
+      # this step outright left NO job summary at all for that case (just
+      # an easy-to-miss ::warning:: on the earlier "Resolve PR number"
+      # step), instead of the clean "preview unavailable" every other
+      # failure mode gets. Safe unconditionally -- GitHub Actions exports
+      # env: values even from a skipped step's outputs (as an empty
+      # string, not unset), so PR_DIFF_AVAILABLE below correctly becomes
+      # "" (falsy) when "Fetch PR diff" didn't run, and
+      # run_merge_queue_preview()'s own `if not PR_DIFF_AVAILABLE:`
+      # branch already renders that "preview unavailable" cleanly before
+      # ever touching GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION (also
+      # empty in that case).
+      - name: Run E2E suite AI preview
+        env:
+          MODE: merge-queue-preview
+          PR_DIFF: ${{ steps.pr-diff.outputs.diff }}
+          PR_DIFF_AVAILABLE: ${{ steps.pr-diff.outputs.diff-available }}
+          GOOGLE_CLOUD_PROJECT: ${{ steps.vertex-auth.outputs.gcp-project }}
+          GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
+        run: python3 .github/scripts/select-jobs.py
