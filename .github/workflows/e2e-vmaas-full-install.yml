@@ -200,7 +200,7 @@ jobs:
             SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
                     "refs/tags/${TEST_REF}" | awk '{print $1}')
           fi
-          if [[ -z "${SHA}" ]] && [[ "${TEST_REF}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+          if [[ -z "${SHA}" ]] && [[ "${TEST_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             SHA="${TEST_REF}"
           fi
           if [[ -z "${SHA}" ]]; then
@@ -537,10 +537,12 @@ jobs:
       # and the CLI used by tests (OSAC-5356).  Builds from source
       # rather than pulling a pre-built registry image so there is no
       # dependency on publish-image CI timing.
-      - name: Build CLI from osac source
+      - name: Build and deploy CLI from osac source
         if: steps.resolve-sha.outputs.sha != ''
         env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
           TEST_REPOSITORY: ${{ inputs.test-repository }}
+          TEST_REF: ${{ inputs.test-ref }}
         run: |
           echo "::group::Build fulfillment-service for CLI extraction"
           FS_SRC="$RUNNER_TEMP/osac-cli-build-src"
@@ -561,6 +563,20 @@ jobs:
           chmod +x "$RUNNER_TEMP/osac-cli-bin"
           echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
           echo "Extracted CLI from locally-built image at ${PINNED_OSAC_SHA}"
+
+          # Load the image onto the cluster node and register it in
+          # COMPONENT_BUILD_RESULTS so the installer step deploys this
+          # exact image via Helm override — keeps the deployed service
+          # and CLI at the same revision (OSAC-5356).
+          NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
+          echo "Loading fulfillment-service image onto cluster node..."
+          podman save "${FS_TAG}" | \
+            oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+          {
+            echo "COMPONENT_BUILD_RESULTS<<EOF_COMPONENT_BUILD_RESULTS"
+            echo "[{\"image\":\"${FS_TAG}\",\"imageKey\":\"service.images.service.repository\",\"repo\":\"${TEST_REPOSITORY}\",\"ref\":\"${TEST_REF}\",\"sha\":\"${PINNED_OSAC_SHA}\",\"containerfile\":\"fulfillment-service/Containerfile\",\"crdsDir\":\"\"}]"
+            echo "EOF_COMPONENT_BUILD_RESULTS"
+          } >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       - name: Build test image
