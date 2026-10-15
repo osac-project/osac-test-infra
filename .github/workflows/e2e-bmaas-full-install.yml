@@ -178,13 +178,31 @@ jobs:
       # and test failures (OSAC-5356).
       - name: Resolve osac SHA for version consistency
         id: resolve-sha
-        if: inputs.components == '[]' && inputs.osac-cli-version == ''
+        if: inputs.osac-cli-version == ''
         env:
           TEST_REF: ${{ inputs.test-ref }}
           TEST_REPOSITORY: ${{ inputs.test-repository }}
+          COMPONENTS_JSON: ${{ inputs.components }}
         run: |
+          # Skip when the caller supplied a non-empty components array.
+          # jq handles whitespace variants ('[]', '[ ]', etc.).
+          comp_len=$(echo "${COMPONENTS_JSON}" | jq -r \
+            'if type == "array" then length else 0 end' 2>/dev/null || echo 0)
+          if [[ "${comp_len}" -gt 0 ]]; then
+            echo "Components specified; skipping SHA resolution"
+            exit 0
+          fi
+
+          # Resolve TEST_REF — may be a branch, tag, or commit SHA.
           SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
                   "refs/heads/${TEST_REF}" | awk '{print $1}')
+          if [[ -z "${SHA}" ]]; then
+            SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
+                    "refs/tags/${TEST_REF}" | awk '{print $1}')
+          fi
+          if [[ -z "${SHA}" ]] && [[ "${TEST_REF}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            SHA="${TEST_REF}"
+          fi
           if [[ -z "${SHA}" ]]; then
             echo "::error::Failed to resolve SHA for ${TEST_REPOSITORY}@${TEST_REF}"
             exit 1
@@ -549,6 +567,7 @@ jobs:
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
           INSTALLER_REF: ${{ inputs.installer-ref }}
           INSTALLER_REPO: ${{ inputs.installer-repo }}
+          TEST_REPOSITORY: ${{ inputs.test-repository }}
         run: |
           set -o pipefail
           if ! command -v helm &>/dev/null; then
@@ -573,8 +592,10 @@ jobs:
           # clone, and a second git-clone at the branch name would race.
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
           PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
-          # Fall back to the no-build-path SHA resolved earlier (OSAC-5356)
-          if [[ -z "${PINNED_SHA}" ]]; then
+          # Fall back to the no-build-path SHA resolved earlier (OSAC-5356).
+          # Guard: only when installer-repo is the same repo the SHA came
+          # from — it may not exist in a different repository.
+          if [[ -z "${PINNED_SHA}" ]] && [[ "${INSTALLER_REPO}" == "${TEST_REPOSITORY}" ]]; then
             PINNED_SHA="${PINNED_OSAC_SHA:-}"
           fi
 

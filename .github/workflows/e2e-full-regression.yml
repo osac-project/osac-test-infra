@@ -194,13 +194,31 @@ jobs:
       # and test failures (OSAC-5356).
       - name: Resolve osac SHA for version consistency
         id: resolve-sha
-        if: inputs.components == '[]' && inputs.osac-cli-version == ''
+        if: inputs.osac-cli-version == ''
         env:
           TEST_REF: ${{ inputs.test-ref }}
           TEST_REPOSITORY: ${{ inputs.test-repository }}
+          COMPONENTS_JSON: ${{ inputs.components }}
         run: |
+          # Skip when the caller supplied a non-empty components array.
+          # jq handles whitespace variants ('[]', '[ ]', etc.).
+          comp_len=$(echo "${COMPONENTS_JSON}" | jq -r \
+            'if type == "array" then length else 0 end' 2>/dev/null || echo 0)
+          if [[ "${comp_len}" -gt 0 ]]; then
+            echo "Components specified; skipping SHA resolution"
+            exit 0
+          fi
+
+          # Resolve TEST_REF — may be a branch, tag, or commit SHA.
           SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
                   "refs/heads/${TEST_REF}" | awk '{print $1}')
+          if [[ -z "${SHA}" ]]; then
+            SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
+                    "refs/tags/${TEST_REF}" | awk '{print $1}')
+          fi
+          if [[ -z "${SHA}" ]] && [[ "${TEST_REF}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            SHA="${TEST_REF}"
+          fi
           if [[ -z "${SHA}" ]]; then
             echo "::error::Failed to resolve SHA for ${TEST_REPOSITORY}@${TEST_REF}"
             exit 1
@@ -511,37 +529,11 @@ jobs:
             echo "::endgroup::"
           done
 
-      # When no components are built from source, build the
-      # fulfillment-service image at the pinned SHA to extract the CLI
-      # binary — guarantees version-matched parity between the service
-      # and the CLI used by tests (OSAC-5356).  Builds from source
-      # rather than pulling a pre-built registry image so there is no
-      # dependency on publish-image CI timing.
-      - name: Build CLI from osac source
-        if: steps.resolve-sha.outputs.sha != ''
-        env:
-          TEST_REPOSITORY: ${{ inputs.test-repository }}
-        run: |
-          echo "::group::Build fulfillment-service for CLI extraction"
-          FS_SRC="$RUNNER_TEMP/osac-cli-build-src"
-          git init "${FS_SRC}"
-          git -C "${FS_SRC}" fetch --depth 1 \
-            "https://github.com/${TEST_REPOSITORY}.git" "${PINNED_OSAC_SHA}"
-          git -C "${FS_SRC}" checkout FETCH_HEAD
-
-          FS_TAG="localhost/fulfillment-service-cli:${GITHUB_RUN_ID}"
-          podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG \
-            -t "${FS_TAG}" \
-            -f "${FS_SRC}/fulfillment-service/Containerfile" \
-            "${FS_SRC}"
-
-          cli_container=$(podman create "${FS_TAG}")
-          trap 'podman rm "${cli_container}" >/dev/null 2>&1 || true' EXIT
-          podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
-          chmod +x "$RUNNER_TEMP/osac-cli-bin"
-          echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
-          echo "Extracted CLI from locally-built image at ${PINNED_OSAC_SHA}"
-          echo "::endgroup::"
+      # In the regression workflow the CLI is extracted from the deployed
+      # fulfillment-service image (OSAC-5922) after OSAC is installed, so
+      # it always matches the running service.  No separate CLI build is
+      # needed here; SHA pinning still covers the test overlay and
+      # installer clone.
 
       - name: Prepare cluster prerequisites
         env:
@@ -568,6 +560,7 @@ jobs:
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
           INSTALLER_REF: ${{ inputs.installer-ref }}
           INSTALLER_REPO: ${{ inputs.installer-repo }}
+          TEST_REPOSITORY: ${{ inputs.test-repository }}
         run: |
           set -o pipefail
           if ! command -v helm &>/dev/null; then
@@ -592,8 +585,10 @@ jobs:
           # clone, and a second git-clone at the branch name would race.
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
           PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
-          # Fall back to the no-build-path SHA resolved earlier (OSAC-5356)
-          if [[ -z "${PINNED_SHA}" ]]; then
+          # Fall back to the no-build-path SHA resolved earlier (OSAC-5356).
+          # Guard: only when installer-repo is the same repo the SHA came
+          # from — it may not exist in a different repository.
+          if [[ -z "${PINNED_SHA}" ]] && [[ "${INSTALLER_REPO}" == "${TEST_REPOSITORY}" ]]; then
             PINNED_SHA="${PINNED_OSAC_SHA:-}"
           fi
 
