@@ -220,7 +220,7 @@ jobs:
             SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
                     "refs/tags/${TEST_REF}" | awk '{print $1}')
           fi
-          if [[ -z "${SHA}" ]] && [[ "${TEST_REF}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+          if [[ -z "${SHA}" ]] && [[ "${TEST_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             SHA="${TEST_REF}"
           fi
           if [[ -z "${SHA}" ]]; then
