@@ -576,7 +576,7 @@ jobs:
           echo "--- infra.yaml (keycloak) ---"
           yq '.keycloak' values/full-ci/infra.yaml
           echo "--- instance.yaml (networking, AAP groups, lvms, metering.echoAdapter) ---"
-          yq '.global.networking | pick(["fabricManager", "k8sManager", "netris"]) | .netris |= pick(["controllerUrl", "siteId", "tenantId", "tenantName"])' values/full-ci/instance.yaml
+          yq '.global.networking | pick(["fabricManager", "k8sManager", "netris"]) | .netris |= pick(["siteId", "tenantId", "tenantName"])' values/full-ci/instance.yaml
           yq '.aap.instanceGroups' values/full-ci/instance.yaml
           yq '.lvms' values/full-ci/instance.yaml
           yq '.metering.echoAdapter' values/full-ci/instance.yaml
