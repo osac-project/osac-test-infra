@@ -16,10 +16,11 @@
 |---|---|---|---|
 | CaaS caller and reusable selection | [DEV] Unit/Contract checks in osac | From the osac checkout: `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py` | Real caller YAML and path-selection Bash, temporary test directories; no deployed services or E2E execution. Tests remain in osac, not this repository. |
 
-Run readiness and e2e-gate helper unit tests:
+Run the script tests (CI runs the same commands as the `script-tests` job of `ci.yml`):
 
 ```bash
-bash .github/actions/check-e2e-readiness/check-e2e-readiness-test.sh
-bash .github/actions/invalidate-e2e-gates/e2e-gates-lib-test.sh
-bash .github/actions/e2e-start/e2e-start-decided-test.sh
+python3 -I .github/scripts/redact_test.py
+python3 -I .github/scripts/test_ai_diagnose_failure.py
+python3 -I .github/scripts/test_upsert_pr_comment.py
+bash .github/scripts/discover-audit-runs-test.sh
 ```

@@ -161,9 +161,8 @@ jobs:
           # whatever's on the default branch AT CHECKOUT TIME) pin to the
           # exact repo/commit that defines THIS running reusable workflow,
           # for both native (workflow_run) and cross-repo (workflow_call
-          # from osac's wrapper) invocation alike -- see e2e-on-label.yml's
-          # identical use, and e2e-reserve-comment-on-start.yml's own
-          # matching fix, for the same reasoning: a bare default-branch
+          # from osac's wrapper) invocation alike -- see
+          # e2e-reserve-comment-on-start.yml's matching fix, for the same reasoning: a bare default-branch
           # checkout could pull a NEWER commit than the one `uses:
           # ...@main` actually pinned this run to if main moved in
           # between, silently running this workflow's logic (in this job,

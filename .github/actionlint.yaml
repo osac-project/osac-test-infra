@@ -29,11 +29,6 @@ paths:
       # severity keeps real warning/error-level shellcheck findings (and
       # everything else actionlint checks) failing the build.
       - 'shellcheck reported issue in this script: SC[0-9]+:(info|style):'
-  .github/workflows/e2e-on-label.yml:
-    ignore:
-      # v1.7.12 schema has no job.workflow_* (added to GitHub 2026). Runtime
-      # values are documented; drop this when actionlint is bumped to v1.18+.
-      - 'property "workflow_(repository|sha)" is not defined'
   .github/workflows/ai-diagnostic-e2e.yml:
     ignore:
       # v1.7.12 (released 2026-03-30) predates concurrency.queue, added to
@@ -42,8 +37,8 @@ paths:
       # Confirmed real and working at runtime; drop this once actionlint's
       # schema catches up.
       - 'unexpected key "queue" for "concurrency" section'
-      # Same job.workflow_repository/job.workflow_sha gap as
-      # e2e-on-label.yml above, same reasoning -- see that entry.
+      # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_*
+      # (added to GitHub 2026); drop this when actionlint is bumped to v1.18+.
       - 'property "workflow_(repository|sha)" is not defined'
   .github/workflows/e2e-reserve-comment-on-start.yml:
     ignore:
@@ -51,6 +46,6 @@ paths:
       # ai-diagnostic-e2e.yml's own concurrency.group deliberately (see
       # that key's comment there), so it needs the identical ignore.
       - 'unexpected key "queue" for "concurrency" section'
-      # Same job.workflow_repository/job.workflow_sha gap as
-      # e2e-on-label.yml above, same reasoning -- see that entry.
+      # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_*
+      # (added to GitHub 2026); drop this when actionlint is bumped to v1.18+.
       - 'property "workflow_(repository|sha)" is not defined'
