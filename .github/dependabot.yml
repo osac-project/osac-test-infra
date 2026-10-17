@@ -14,3 +14,5 @@ updates:
       osac-ci:
         patterns:
           - "osac-project/osac-ci"
+
+# Canary: comment-only change that starts the suites without changing behavior.
