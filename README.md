@@ -85,6 +85,7 @@ netris_password = <your-netris-password>
 
 - `lab_name` — unique identifier for your lab to avoid DNS collisions in Route 53
 - AWS credentials — used for Route 53 DNS record management
+- The OCP pull secret must include Quay authentication for `quay.io/osac-project/cluster-flavors` when using the snapshot fast path
 
 Additionally, an OCP pull secret must be present at `/root/pull-secret` on the host.
 

@@ -179,6 +179,12 @@ caas_cluster_name: "caas-ci-cluster"
 # Workload tenant for deploy/destroy-caas and the MaaS wrappers. Admin requests
 # without a saved tenant default to shared, where worker BMIs are forbidden.
 caas_cluster_tenant: "osac-e2e-ci"
+# The hosted API VIP is reachable from the management node, but not from the
+# isolated tenant VNet. Proxy the API through h00 until Netris routing exposes
+# the VIP to tenant workers.
+caas_hosted_api_proxy_enabled: true
+caas_hosted_api_proxy_host: "192.168.16.2"
+caas_hosted_api_proxy_port: 16443
 caas_cli_config_dir: "/root/.config/osac-caas"
 # CaaS creates a hosted control plane plus this many bare-metal worker nodes.
 caas_cluster_node_set_name: "workers"

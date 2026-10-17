@@ -24,7 +24,7 @@
 # ── Fulfillment API ──
 - name: Get fulfillment API URL for gather
   ansible.builtin.shell:
-    cmd: oc get route fulfillment-internal-api -n {{ _osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
+    cmd: oc --request-timeout=15s get route fulfillment-internal-api -n {{ _osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
   environment:
     KUBECONFIG: /root/.kube/config
   register: _gather_fulfillment_host
@@ -33,7 +33,7 @@
 
 - name: Get service account token for gather
   ansible.builtin.shell:
-    cmd: oc create token -n {{ _osac_namespace }} admin
+    cmd: oc --request-timeout=15s create token -n {{ _osac_namespace }} admin
   environment:
     KUBECONFIG: /root/.kube/config
   register: _gather_sa_token
@@ -121,7 +121,7 @@
 - name: Get hosted cluster namespace
   ansible.builtin.shell:
     cmd: >-
-      oc get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].metadata.namespace}'
+      oc --request-timeout=15s get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].metadata.namespace}'
   environment:
     KUBECONFIG: /root/.kube/config
   register: _hc_ns
@@ -131,7 +131,7 @@
 - name: Get hosted cluster name
   ansible.builtin.shell:
     cmd: >-
-      oc get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].metadata.name}'
+      oc --request-timeout=15s get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].metadata.name}'
   environment:
     KUBECONFIG: /root/.kube/config
   register: _hc_name
@@ -141,18 +141,78 @@
 
 - name: Extract hosted cluster kubeconfig
   ansible.builtin.shell: |
-    SECRET_NAME=$(oc get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].status.kubeconfig.name}' 2>/dev/null)
-    if [ -z "${SECRET_NAME}" ]; then
-      echo "kubeconfig secret not available yet"
+    SECRET_NAME=$(oc --request-timeout=15s get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].status.kubeconfig.name}' 2>/dev/null)
+    if [ -n "${SECRET_NAME}" ] && \
+      oc --request-timeout=15s get secret "${SECRET_NAME}" -n "{{ _hc_ns.stdout }}" -o jsonpath='{.data.kubeconfig}' 2>/dev/null \
+        | base64 -d > /tmp/caas-hosted-kubeconfig 2>/dev/null && [ -s /tmp/caas-hosted-kubeconfig ]; then
       exit 0
     fi
-    oc get secret "${SECRET_NAME}" -n "{{ _hc_ns.stdout }}" -o jsonpath='{.data.kubeconfig}' 2>/dev/null \
-      | base64 -d > /tmp/caas-hosted-kubeconfig 2>&1
+    echo "hosted cluster kubeconfig unavailable"
+    rm -f /tmp/caas-hosted-kubeconfig
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
   failed_when: false
   no_log: true
+  when: _hc_ns.stdout | default('') | length > 0
+
+- name: Gather redaction-friendly hosted cluster diagnostics
+  ansible.builtin.shell: |
+    set +e
+    out="{{ _gather_dir }}/caas/hosted-cluster"
+    mkdir -p "$out/pods"
+    kubeconfig=/tmp/caas-hosted-kubeconfig
+    if [ ! -s "$kubeconfig" ]; then
+      echo "Hosted cluster kubeconfig unavailable" > "$out/collection-status.txt"
+      exit 0
+    fi
+
+    export KUBECONFIG="$kubeconfig"
+    capture_oc() {
+      local output="$1"
+      shift
+      oc --request-timeout=15s "$@" > "$output" 2>&1
+    }
+
+    capture_oc "$out/nodes.txt" get nodes -o wide || true
+    capture_oc "$out/clusteroperators.txt" get clusteroperators -o wide || true
+    capture_oc "$out/clusterversion.txt" get clusterversion -o wide || true
+    capture_oc "$out/pods-all.txt" get pods -A -o wide || true
+    capture_oc "$out/workloads.txt" get deployments,statefulsets,daemonsets,jobs -A -o wide || true
+    capture_oc "$out/events.txt" get events -A --sort-by=.metadata.creationTimestamp || true
+
+    pod_data=$(mktemp)
+    capture_oc "$pod_data" get pods -A -o json || true
+    pods=$(jq -r '
+      .items[]
+      | select(.status.phase != "Succeeded")
+      | select(
+          .status.phase != "Running"
+          or any((.status.containerStatuses // [])[]; (.ready != true) or ((.restartCount // 0) > 0))
+          or any((.status.initContainerStatuses // [])[];
+            ((.restartCount // 0) > 0)
+            or (.state.waiting != null)
+            or ((.state.terminated.exitCode // 0) != 0)
+          )
+        )
+      | [.metadata.namespace, .metadata.name]
+      | @tsv
+    ' "$pod_data" 2>/dev/null || true)
+    rm -f "$pod_data"
+    while IFS=$'\t' read -r namespace pod; do
+      [ -n "$namespace" ] && [ -n "$pod" ] || continue
+      safe_name=$(printf '%s-%s' "$namespace" "$pod" | tr -c 'A-Za-z0-9._-' '_')
+      capture_oc "$out/pods/${safe_name}.log" logs "$pod" -n "$namespace" --all-containers --timestamps --tail=2000 || true
+      capture_oc "$out/pods/${safe_name}-previous.log" logs "$pod" -n "$namespace" --all-containers --previous --timestamps --tail=2000 || true
+    done <<< "$pods"
+
+    echo "Collected hosted-cluster status and unhealthy-pod logs; raw must-gather and inspect archives are excluded from the upload."
+  environment:
+    KUBECONFIG: /root/.kube/config
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
   when: _hc_ns.stdout | default('') | length > 0
 
 - name: Run oc adm must-gather on hosted cluster

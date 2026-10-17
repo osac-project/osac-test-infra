@@ -42,7 +42,7 @@ Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softga
 - **Netris license key** — place at repo root as `license.key`
 - **OSAC/AAP license** — place at repo root as `license.zip`
 - **OpenShift pull secret** — place at `/root/pull-secret` (or set `pull_secret_path`; download from [console.redhat.com](https://console.redhat.com/openshift/downloads))
-- **Config file** — place a `config` file at the repo root (INI format, gitignored) with lab name and AWS credentials. Credentials can be obtained from the [CI vault](https://vault.ci.openshift.org/ui/vault/secrets/kv/kv/selfservice%2Fosac%2Fpacket-osac). See Quick Start below. The IAM user needs `route53:ChangeResourceRecordSets`, `route53:ListHostedZones`, and `route53:GetChange` permissions on the hosted zone.
+- **Config file** — place `infra/netris/config` (INI format, gitignored) with your lab name and AWS credentials. AWS credentials can be obtained from the [CI vault](https://vault.ci.openshift.org/ui/vault/secrets/kv/kv/selfservice%2Fosac%2Fpacket-osac). See Quick Start below. The IAM user needs `route53:ChangeResourceRecordSets`, `route53:ListHostedZones`, and `route53:GetChange` permissions on the hosted zone.
 
 All system packages, tools, and SSH keys are installed automatically by `make setup-infra`. A pre-flight check validates all required files, KVM support, and minimum memory before deploying.
 
@@ -57,9 +57,9 @@ cp /path/to/license.key ./license.key
 cp /path/to/license.zip ./license.zip
 cp /path/to/pull-secret /root/pull-secret
 
-# Create config file (unique lab name + AWS credentials for Route 53 DNS)
+# Create infra/netris/config (unique lab name and AWS credentials)
 # lab_name becomes a subdomain under the shared hosted zone (e.g., jsmith.ecoeng-osac-ci.devcluster.openshift.com)
-cat > config << EOF
+cat > infra/netris/config << EOF
 [default]
 lab_name = <unique-lab-name>
 aws_access_key_id = <your-key>
@@ -505,6 +505,9 @@ make deploy-infra EXTRA_VARS="k3s_dns_server=172.31.0.2"
 | `aap_project_git_branch` | `""` | AAP config-as-code project git branch override (test PR playbooks/collections) | no |
 
 #### Snapshot Deployment (fast path)
+
+The pull secret must include authentication for `quay.io/osac-project/cluster-flavors`; setup passes
+that pull secret to Skopeo when it downloads the flavor image.
 
 | Variable | Default | Description | Tested |
 |----------|---------|-------------|--------|

@@ -28,6 +28,10 @@ inputs:
     description: "Collect only the related AAP job output"
     required: false
     default: "false"
+  preserve-artifact-dir:
+    description: "Keep files already present in the artifact directory"
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -41,9 +45,12 @@ runs:
         JUNIT_PATH: ${{ inputs.junit-path }}
         AAP_JOB_IDS_FILE: ${{ inputs.aap-job-ids-file }}
         AAP_JOBS_ONLY: ${{ inputs.aap-jobs-only }}
+        PRESERVE_ARTIFACT_DIR: ${{ inputs.preserve-artifact-dir }}
       run: |
         ARTIFACT_DIR="${RUNNER_TEMP}/osac-artifacts"
-        rm -rf -- "${ARTIFACT_DIR}"
+        if [[ "${PRESERVE_ARTIFACT_DIR}" != "true" ]]; then
+          rm -rf -- "${ARTIFACT_DIR}"
+        fi
         mkdir -p "${ARTIFACT_DIR}"
         rm -f "${RUNNER_TEMP}/osac-artifacts-redaction-complete"
         if timeout 900 "$GITHUB_WORKSPACE/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}"; then

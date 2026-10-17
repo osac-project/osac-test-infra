@@ -24,6 +24,7 @@
         cmd: >-
           skopeo copy
           --retry-times 5
+          --src-authfile {{ pull_secret_path }}
           docker://{{ snapshot_flavor_image }}
           oci:{{ _oci_tmp.path }}/oci:latest
       register: _skopeo_pull

@@ -136,11 +136,11 @@
 
 # Older revisions use a string plus images.pullPolicy; newer charts put
 # repository, tag and pullPolicy under images.service. Read the selected
-# revision's chart so local images work with either representation.
-- name: Read fulfillment chart image settings
+# revision's schema so local images work with either representation.
+- name: Read OSAC chart image schema
   ansible.builtin.slurp:
-    src: "{{ osac_dir }}/fulfillment-service/charts/service/values.yaml"
-  register: _fulfillment_chart_values
+    src: "{{ osac_installer_dir }}/charts/osac/values.schema.json"
+  register: _osac_chart_schema
   when: fulfillment_service_image | default('') | length > 0
 
 - name: Validate metering service image digest override
@@ -157,7 +157,7 @@
             'repository': fulfillment_service_image | regex_replace(':([^/]+)$', ''),
             'tag': (fulfillment_service_image | regex_search(':([^/]+)$', '\1') | first | default('latest')),
             'pullPolicy': _fulfillment_pull_policy
-          }} if (_fulfillment_chart_values.content | b64decode | from_yaml).images.service is mapping
+          }} if (_osac_chart_schema.content | b64decode | from_json).properties.service.properties.images.properties.service.type == 'object'
           else {'service': fulfillment_service_image, 'pullPolicy': _fulfillment_pull_policy} }}
   vars:
     _fulfillment_pull_policy: "{{ 'IfNotPresent' if fulfillment_service_image.startswith('localhost/') else 'Always' }}"

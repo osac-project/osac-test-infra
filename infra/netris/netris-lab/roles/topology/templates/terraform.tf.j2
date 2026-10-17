@@ -3,9 +3,9 @@ terraform {
     netris = {
       source  = "netrisai/netris"
       # Netris controller versions deployed by this backend require the tenant
-      # in allocation requests. Provider 3.6.23 removed it, so stay on 3.6.22
-      # until the controller and provider API are aligned.
-      version = ">= 3.6.3, < 3.6.23"
+      # in allocation requests. Provider 3.6.23 removed it, so pin the
+      # controller-compatible 3.6.22 release.
+      version = "=3.6.22"
     }
   }
 }

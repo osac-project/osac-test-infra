@@ -1,0 +1,287 @@
+---
+- name: Resolve the CaaS HostedCluster name from the ClusterOrder
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      oc get clusterorder -n "${CAAS_NAMESPACE}" \
+        -l "osac.openshift.io/clusterorder-uuid=${CAAS_CLUSTER_ID}" -o json |
+        python3 -c '
+      import json
+      import os
+      import sys
+
+      items = json.load(sys.stdin).get("items", [])
+      if len(items) != 1:
+          raise SystemExit(f"expected one ClusterOrder for {os.environ['CAAS_CLUSTER_ID']}, found {len(items)}")
+      hosted_cluster_name = items[0].get("status", {}).get("clusterReference", {}).get("hostedClusterName")
+      if not hosted_cluster_name:
+          raise SystemExit("ClusterOrder has no status.clusterReference.hostedClusterName")
+      print(hosted_cluster_name)
+      '
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+    CAAS_NAMESPACE: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    CAAS_CLUSTER_ID: "{{ caas_cluster_id }}"
+  register: _caas_hosted_cluster_name_raw
+  until:
+    - _caas_hosted_cluster_name_raw.rc == 0
+    - _caas_hosted_cluster_name_raw.stdout | trim | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Set the CaaS HostedCluster name
+  ansible.builtin.set_fact:
+    _caas_hosted_cluster_name: "{{ _caas_hosted_cluster_name_raw.stdout | trim }}"
+
+- name: Find the CaaS HostedCluster namespace
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      oc get hostedcluster -A -o json | python3 -c '
+      import json
+      import os
+      import sys
+
+      expected = os.environ["CAAS_HOSTED_CLUSTER_NAME"]
+      items = json.load(sys.stdin).get("items", [])
+      matches = [item for item in items if item.get("metadata", {}).get("name") == expected]
+      if len(matches) != 1:
+          raise SystemExit(f"expected one HostedCluster named {expected}, found {len(matches)}")
+      print(matches[0]["metadata"]["namespace"])
+      '
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+    CAAS_HOSTED_CLUSTER_NAME: "{{ _caas_hosted_cluster_name }}"
+  register: _caas_hosted_namespace_raw
+  until:
+    - _caas_hosted_namespace_raw.rc == 0
+    - _caas_hosted_namespace_raw.stdout | trim | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Set the CaaS HostedCluster namespace
+  ansible.builtin.set_fact:
+    _caas_hosted_namespace: "{{ _caas_hosted_namespace_raw.stdout | trim }}"
+
+- name: Read the CaaS hosted API hostname
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      oc get secret "${CAAS_HOSTED_CLUSTER_NAME}-admin-kubeconfig" -n "${CAAS_HOSTED_NAMESPACE}" \
+        -o jsonpath='{.data.kubeconfig}' | base64 -d | python3 -c '
+      import re
+      import sys
+
+      match = re.search(r"server: https://([^:/\s]+):\d+", sys.stdin.read())
+      if not match:
+          raise SystemExit("admin kubeconfig has no HTTPS API server URL")
+      print(match.group(1))
+      '
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+    CAAS_HOSTED_CLUSTER_NAME: "{{ _caas_hosted_cluster_name }}"
+    CAAS_HOSTED_NAMESPACE: "{{ _caas_hosted_namespace }}"
+  register: _caas_hosted_api_host_raw
+  until:
+    - _caas_hosted_api_host_raw.rc == 0
+    - _caas_hosted_api_host_raw.stdout | trim | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for the CaaS hosted control plane
+  ansible.builtin.command:
+    argv:
+      - oc
+      - wait
+      - hostedcluster/{{ _caas_hosted_cluster_name }}
+      - -n
+      - "{{ _caas_hosted_namespace }}"
+      - --for=condition=Available
+      - --timeout={{ caas_hosted_control_plane_timeout | default('30m') }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Read the CaaS hosted API Service IP
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      oc get service kube-apiserver \
+        -n "${CAAS_CONTROL_PLANE_NAMESPACE}" \
+        -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+    CAAS_CONTROL_PLANE_NAMESPACE: "{{ _caas_hosted_namespace }}-{{ _caas_hosted_cluster_name }}"
+  register: _caas_hosted_api_vip_raw
+  until:
+    - _caas_hosted_api_vip_raw.rc == 0
+    - _caas_hosted_api_vip_raw.stdout | trim | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Store the CaaS hosted API endpoint
+  ansible.builtin.set_fact:
+    _caas_hosted_api_host: "{{ _caas_hosted_api_host_raw.stdout | trim }}"
+    _caas_hosted_api_vip: "{{ _caas_hosted_api_vip_raw.stdout | trim }}"
+
+- name: Validate the CaaS hosted API endpoint
+  ansible.builtin.assert:
+    that:
+      - _caas_hosted_api_host | length > 0
+      - _caas_hosted_api_vip | length > 0
+      - _caas_hosted_api_vip not in ['0.0.0.0', '127.0.0.1']
+    fail_msg: >-
+      The hosted API endpoint could not be resolved safely
+      (host={{ _caas_hosted_api_host }}, VIP={{ _caas_hosted_api_vip }}).
+
+- name: Start the CaaS hosted API proxy on the management node
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
+        -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+        core@{{ caas_hosted_api_proxy_host }} 'bash -s' <<'REMOTE'
+      set -euo pipefail
+      vip="{{ _caas_hosted_api_vip }}"
+      port="{{ caas_hosted_api_proxy_port }}"
+      socat_path="$(command -v socat)" || {
+        echo "socat is required on the management node" >&2
+        exit 1
+      }
+      unit=/etc/systemd/system/osac-hosted-api-proxy.service
+      if sudo test -f "$unit" && sudo grep -q "TCP:${vip}:6443" "$unit" &&
+         sudo systemctl is-active --quiet osac-hosted-api-proxy; then
+        echo false
+        exit 0
+      fi
+      sudo tee "$unit" >/dev/null <<EOF
+      [Unit]
+      Description=OSAC hosted cluster API proxy
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStart=${socat_path} TCP-LISTEN:${port},bind=0.0.0.0,fork,reuseaddr TCP:${vip}:6443
+      Restart=always
+      RestartSec=2s
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now osac-hosted-api-proxy.service
+      sudo systemctl restart osac-hosted-api-proxy.service
+      echo true
+      REMOTE
+    executable: /bin/bash
+  register: _caas_hosted_api_proxy_start
+  changed_when: "'true' in _caas_hosted_api_proxy_start.stdout"
+
+- name: Wait for the CaaS hosted API proxy
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      status="$(curl -k --resolve "${CAAS_API_HOST}:${CAAS_PROXY_PORT}:${CAAS_PROXY_HOST}" \
+        -sS --connect-timeout 5 -o /dev/null -w '%{http_code}' \
+        "https://${CAAS_API_HOST}:${CAAS_PROXY_PORT}/readyz")"
+      test "$status" = 200
+    executable: /bin/bash
+  environment:
+    CAAS_API_HOST: "{{ _caas_hosted_api_host }}"
+    CAAS_PROXY_HOST: "{{ caas_hosted_api_proxy_host }}"
+    CAAS_PROXY_PORT: "{{ caas_hosted_api_proxy_port }}"
+  register: _caas_hosted_api_proxy_check
+  until: _caas_hosted_api_proxy_check.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Require management addresses for CaaS workers
+  ansible.builtin.assert:
+    that:
+      - bmaas_ssh_hosts[item] is defined
+      - bmaas_ssh_hosts[item] | length > 0
+    fail_msg: "No stable management address is configured for CaaS worker {{ item }}."
+  loop: "{{ caas_discovery_vm_patterns }}"
+
+- name: Wait for the CaaS worker API proxy configuration
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      {% for worker in caas_discovery_vm_patterns %}
+      ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
+        -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+        core@{{ bmaas_ssh_hosts[worker] }} \
+        'test -f /etc/kubernetes/apiserver-proxy-config/haproxy.cfg &&
+         sudo grep -q "^[[:space:]]*server controlplane " /etc/kubernetes/apiserver-proxy-config/haproxy.cfg'
+      {% endfor %}
+    executable: /bin/bash
+  register: _caas_worker_proxy_config_ready
+  until: _caas_worker_proxy_config_ready.rc == 0
+  retries: 240
+  delay: 15
+  changed_when: false
+
+- name: Configure the CaaS worker hosted API path
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
+        -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+        core@{{ bmaas_ssh_hosts[item] }} 'bash -s' <<'REMOTE'
+      set -euo pipefail
+      api_host="{{ _caas_hosted_api_host }}"
+      proxy_host="{{ caas_hosted_api_proxy_host }}"
+      proxy_port="{{ caas_hosted_api_proxy_port }}"
+      config=/etc/kubernetes/apiserver-proxy-config/haproxy.cfg
+      if ! sudo grep -Eq '^[[:space:]]*server controlplane ' "$config"; then
+        echo "HAProxy control-plane backend is missing on $(hostname)" >&2
+        exit 1
+      fi
+      if ! sudo grep -q "server controlplane ${proxy_host}:${proxy_port}" "$config"; then
+        sudo sed -i -E \
+          "s#^[[:space:]]*server controlplane .*#  server controlplane ${proxy_host}:${proxy_port}#" \
+          "$config"
+      fi
+      loopback_vip="$(ip -4 -o addr show dev lo |
+        awk '$4 !~ /^127\./ { print $4; exit }' | cut -d/ -f1)"
+      if [ -z "$loopback_vip" ]; then
+        echo "No non-loopback API VIP is assigned to lo on $(hostname)" >&2
+        exit 1
+      fi
+      current_vip="$(awk -v host="$api_host" '$2 == host { print $1; exit }' /etc/hosts)"
+      if [ "$current_vip" != "$loopback_vip" ]; then
+        sudo sed -i "/[[:space:]]${api_host}$/d" /etc/hosts
+        echo "${loopback_vip} ${api_host}" | sudo tee -a /etc/hosts >/dev/null
+      fi
+      pod="$(sudo crictl pods -q --name kube-apiserver-proxy | head -1 || true)"
+      if [ -n "$pod" ]; then
+        sudo crictl stopp "$pod" >/dev/null 2>&1 || true
+      fi
+      sudo systemctl restart kubelet
+      for attempt in $(seq 1 30); do
+        status="$(curl -k -sS --connect-timeout 5 -o /dev/null -w '%{http_code}' \
+          "https://${api_host}:6443/readyz" || true)"
+        if [ "$status" = 200 ]; then
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "CaaS worker $(hostname) could not reach the hosted API" >&2
+      exit 1
+      REMOTE
+    executable: /bin/bash
+  loop: "{{ caas_discovery_vm_patterns }}"
+  loop_control:
+    label: "{{ item }}"
+  register: _caas_worker_api_path
+  changed_when: true

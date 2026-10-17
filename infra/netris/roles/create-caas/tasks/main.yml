@@ -214,6 +214,12 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Configure CaaS worker hosted API access
+  ansible.builtin.include_tasks: configure-hosted-api-access.yml
+  when:
+    - caas_hosted_api_proxy_enabled | default(true) | bool
+    - caas_use_order_infraenv_for_worker_boot | default(true) | bool
+
 - name: Require a ready CaaS cluster
   block:
     - name: Wait for cluster to reach READY or FAILED
