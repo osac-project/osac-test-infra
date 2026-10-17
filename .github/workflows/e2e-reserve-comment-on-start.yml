@@ -77,8 +77,7 @@ jobs:
           # CHECKOUT TIME) -- these resolve to the exact repo/commit that
           # defines THIS running reusable workflow, for both native
           # (workflow_run) and cross-repo (workflow_call from osac's
-          # wrapper) invocation alike (see e2e-on-label.yml's identical
-          # use for the same reasoning). A bare default-branch checkout
+          # wrapper) invocation alike. A bare default-branch checkout
           # could pull a NEWER commit than the one `uses: ...@main`
           # actually pinned this run to if main moved in between, silently
           # running this workflow's logic against a mismatched version of

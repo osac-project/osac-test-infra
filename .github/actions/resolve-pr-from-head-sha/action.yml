@@ -115,8 +115,7 @@ runs:
           exit 0
         fi
 
-        # commits/{sha}/pulls is empty for unmerged fork SHAs (same gap
-        # e2e-on-approval-fork.yml works around). List open PRs targeting
+        # commits/{sha}/pulls is empty for unmerged fork SHAs (a known GitHub gap). List open PRs targeting
         # main and match head.sha; require a unique match rather than
         # trusting github.event.workflow_run.pull_requests[], which is
         # unreliable/empty for genuine cross-fork PRs.
