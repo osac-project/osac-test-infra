@@ -204,3 +204,5 @@ data narrows down how tight it can safely be.
 
 To test it without risking a real termination, dispatch it manually with
 `dry-run: true`.
+
+Canary: docs-only change to check the native flow.
