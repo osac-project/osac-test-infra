@@ -8,3 +8,9 @@ updates:
     schedule:
       # Check for updates to GitHub Actions every week
       interval: weekly
+    groups:
+      # The shared workflows of osac-ci are pinned by commit with the release tag in a comment; one pull request per
+      # release moves all of them together, reviewed by wg-infra (CODEOWNERS).
+      osac-ci:
+        patterns:
+          - "osac-project/osac-ci"

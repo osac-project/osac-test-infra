@@ -1,0 +1,88 @@
+---
+# The merge queue's E2E: plans the suites for the queue entry (docs-only entries need none), runs them on the entry's
+# speculative commit - which contains the merged workflow files, so a change to the suite workflows is exercised here
+# for real - and writes the required check `E2E` of that commit. The shared workflows are osac-ci's; the suite jobs are
+# this repository's.
+name: E2E for the merge queue
+
+on:
+  merge_group:
+
+permissions: {}
+
+jobs:
+  plan:
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-plan.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
+    permissions:
+      contents: read
+      actions: write
+
+  vmaas:
+    needs: plan
+    if: contains(needs.plan.outputs.suites, '"vmaas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    with:
+      test-suite: vmaas
+      test-marker: not requires_caas and not requires_bmaas
+      installer-ref: main
+      installer-repo: osac-project/osac
+      components: '[{"repo":"osac-project/osac","ref":"main","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}]'
+      test-infra-repository: ${{ github.repository }}
+      test-infra-ref: ${{ github.event.merge_group.head_sha }}
+      runner-label: osac-ci
+      notify-on-failure: false
+      enable-ai-diagnostic: false
+
+  caas:
+    needs: plan
+    if: contains(needs.plan.outputs.suites, '"caas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-caas-full-install.yml
+    with:
+      test-suite: caas/sanity
+      test-marker: sanity
+      caas-agent-flow: hot-pool
+      installer-ref: main
+      installer-repo: osac-project/osac
+      components: '[{"repo":"osac-project/osac","ref":"main","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}]'
+      test-infra-repository: ${{ github.repository }}
+      test-infra-ref: ${{ github.event.merge_group.head_sha }}
+      runner-label: osac-ci
+      notify-on-failure: false
+      enable-ai-diagnostic: false
+
+  bmaas:
+    needs: plan
+    if: contains(needs.plan.outputs.suites, '"bmaas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-bmaas-full-install.yml
+    with:
+      test-suite: bmaas/sanity
+      test-filter: not TestBmaasNetworking
+      installer-ref: main
+      installer-repo: osac-project/osac
+      components: '[{"repo":"osac-project/osac","ref":"main","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}]'
+      test-infra-repository: ${{ github.repository }}
+      test-infra-ref: ${{ github.event.merge_group.head_sha }}
+      runner-label: osac-ci
+      notify-on-failure: false
+      enable-ai-diagnostic: false
+
+  finish:
+    needs: [plan, vmaas, caas, bmaas]
+    if: always()
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-finish.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
+    permissions:
+      contents: read
+    with:
+      sha: ${{ github.event.merge_group.head_sha }}
+      results: ${{ toJSON(needs) }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

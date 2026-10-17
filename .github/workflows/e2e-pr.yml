@@ -1,0 +1,134 @@
+---
+# Starts the full-install E2E suites for a pull request once a person (or, for a branch of this repository, CodeRabbit)
+# has approved it, and reports the required check `E2E`. The decision, the check lines and the housekeeping are the shared
+# workflows of osac-ci (see docs/CALLERS.md there); this file keeps only what belongs to this repository: the triggers
+# and the suite jobs. Which suites a change needs is .github/e2e-policy.yml, read from the default branch.
+#
+# The suite workflow files come from the default branch (this run is started by workflow_run), while the code under
+# test - scripts, actions, Containerfile - is the pull request's own commit (test-infra-ref). A pull request that edits
+# the suite workflow files themselves is first exercised in the merge queue; CODEOWNERS makes wg-infra review them.
+name: E2E for pull requests
+# The decision cancels the E2E of older commits by reading run titles: keep this exact format.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && format('E2E #{0} (started by hand)', inputs.number) ||
+  format('E2E {0}:{1} @ {2}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch,
+  github.event.workflow_run.head_sha) }}
+
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out here; the suites run the approved commit
+  workflow_run:
+    workflows: ["CI", "E2E review relay"]
+    types: [requested, completed]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Pull request number
+        required: true
+
+permissions: {}
+
+jobs:
+  decide:
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: write
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
+  track:
+    needs: decide
+    if: needs.decide.outputs.start == 'true'
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
+    permissions:
+      contents: read
+    with:
+      sha: ${{ needs.decide.outputs.sha }}
+      suite-checks: ${{ needs.decide.outputs.suite-checks }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
+  # One job per suite, named after the suite id of .github/e2e-policy.yml. id-token: write is only declared because
+  # GitHub validates a called workflow's permissions statically; the AI diagnosis that uses it stays off here
+  # (enable-ai-diagnostic: false), because this run is on the default branch even when the code is a fork's.
+  vmaas:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"vmaas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    with:
+      test-suite: vmaas
+      test-marker: not requires_caas and not requires_bmaas
+      installer-ref: main
+      installer-repo: osac-project/osac
+      components: '[{"repo":"osac-project/osac","ref":"main","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}]'
+      test-infra-repository: ${{ needs.decide.outputs.head-repo }}
+      test-infra-ref: ${{ needs.decide.outputs.sha }}
+      runner-label: osac-ci
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      notify-on-failure: false
+      enable-ai-diagnostic: false
+
+  caas:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"caas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-caas-full-install.yml
+    with:
+      test-suite: caas/sanity
+      test-marker: sanity
+      caas-agent-flow: hot-pool
+      installer-ref: main
+      installer-repo: osac-project/osac
+      components: '[{"repo":"osac-project/osac","ref":"main","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}]'
+      test-infra-repository: ${{ needs.decide.outputs.head-repo }}
+      test-infra-ref: ${{ needs.decide.outputs.sha }}
+      runner-label: osac-ci
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      notify-on-failure: false
+      enable-ai-diagnostic: false
+
+  bmaas:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"bmaas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-bmaas-full-install.yml
+    with:
+      test-suite: bmaas/sanity
+      test-filter: not TestBmaasNetworking
+      installer-ref: main
+      installer-repo: osac-project/osac
+      components: '[{"repo":"osac-project/osac","ref":"main","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}]'
+      test-infra-repository: ${{ needs.decide.outputs.head-repo }}
+      test-infra-ref: ${{ needs.decide.outputs.sha }}
+      runner-label: osac-ci
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      notify-on-failure: false
+      enable-ai-diagnostic: false
+
+  finish:
+    needs: [decide, track, vmaas, caas, bmaas]
+    if: always() && needs.decide.outputs.start == 'true'
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
+    permissions:
+      contents: read
+    with:
+      sha: ${{ needs.decide.outputs.sha }}
+      suites: ${{ needs.decide.outputs.suites }}
+      suite-checks: ${{ needs.decide.outputs.suite-checks }}
+      results: ${{ toJSON(needs) }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

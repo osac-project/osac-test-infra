@@ -1,0 +1,20 @@
+# CODEOWNERS
+#
+# Patterns are evaluated top-to-bottom (last matching pattern takes precedence). A team that wants to own a folder adds
+# a line here in a pull request that wg-infra approves (see the self-protection rule below). Leave a folder out and any
+# maintainer's approval is enough.
+
+# CODEOWNERS Self-Protection
+/CODEOWNERS @osac-project/wg-infra
+
+# CI pipeline definition
+# A pull request can change the workflows and scripts that produce the checks it is judged by, and then a passing check
+# proves little. A change to them needs review from the infrastructure team. The E2E starts from the default branch's
+# copy of the suite workflows (a pull request's change to them is first exercised in the merge queue), so these files
+# need a person who reads them.
+/.github/workflows/ @osac-project/wg-infra
+/.github/actions/ @osac-project/wg-infra
+/.github/scripts/ @osac-project/wg-infra
+/.github/filters/ @osac-project/wg-infra
+/.github/e2e-policy.yml @osac-project/wg-infra
+/.pre-commit-config.yaml @osac-project/wg-infra

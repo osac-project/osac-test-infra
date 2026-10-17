@@ -1,0 +1,25 @@
+---
+name: Bot approval
+on:
+  schedule:
+    - cron: '3,18,33,48 * * * *'
+  workflow_dispatch:
+    inputs:
+      number:
+        description: One pull request number (empty means every open dependency update)
+        required: false
+        default: ""
+permissions: {}
+concurrency:
+  group: bot-approve
+  cancel-in-progress: false
+jobs:
+  sweep:
+    uses: osac-project/osac-ci/.github/workflows/bot-sweep.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      number: ${{ inputs.number }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
