@@ -50,6 +50,17 @@
       changed_when: false
       tags: [cudn_evpn]
 
+    - name: Wait for OpenShift ClusterVersion to become Available after restore
+      ansible.builtin.command:
+        argv:
+          - oc
+          - wait
+          - --for=condition=Available
+          - clusterversion/version
+          - --timeout=10m
+      changed_when: false
+      tags: [cudn_evpn]
+
     - name: Read OpenShift desired version
       ansible.builtin.command:
         argv:
