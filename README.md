@@ -62,7 +62,7 @@ Not every backend supports every test suite. Each backend declares its supported
 |---------|:-----:|:----:|:-------:|:-------:|:-----:|:----------------:|
 | netris  | no    | yes  | no      | no      | yes   | yes              |
 
-Running an unsupported combination fails immediately with a clear capability error. Netris currently does not advertise `vmaas`: the required OCP 4.22 bare-metal target and verified EVPN peer plus `172.27.0.0/16` return path are not available. The VMaaS invocation below is therefore gated and currently stops before provisioning.
+Running an unsupported combination fails immediately with a clear capability error. Netris currently does not advertise `vmaas` because the EVPN peer and `172.27.0.0/16` return path have not yet been verified for the VMaaS workload network. The VMaaS preflight requires OCP 4.22 with OVNKubernetes; it does not require the cluster platform type to be `BareMetal`.
 
 ### Backend Setup: Netris
 
@@ -128,9 +128,10 @@ When you run `make e2e INFRA=netris SUITE=caas` with `EXTRA_VARS` exported as de
 1. **Validate** — checks that the `netris` backend exists and supports the `caas` suite
 2. **`setup-infra`** — installs prerequisites, caches images (`ansible-playbook playbooks/setup-infra.yml`)
 3. **`deploy-infra`** — deploys the Netris lab (`ansible-playbook playbooks/deploy-infra.yml`)
-4. **`deploy-osac`** — refreshes OSAC on the restored cluster, writes `.env.infra` with cluster access credentials
-5. **`setup-suite`** — runs CaaS-specific infrastructure setup (creates InfraEnv, boots discovery VMs, registers agents)
-6. **`run-tests`** — checks the backend's suite contract when one is defined, sources `.env.infra`, then runs the selected suite target. The VMaaS target runs `uv run pytest tests/e2e/vmaas/` from the OSAC mono-repo.
+4. **`deploy-ocp`** — restores the OCP snapshot into the lab and waits for the cluster to become healthy. With `SUITE=vmaas`, it also runs the `configure-cudn-evpn` role, which derives the Netris peer settings and configures the OCP CUDN/EVPN prerequisites. This path requires OCP 4.22 with OVNKubernetes, but does not require `platformStatus.type: BareMetal`.
+5. **`deploy-osac`** — installs or refreshes OSAC on the cluster and writes `.env.infra` with cluster access credentials.
+6. **`setup-suite`** — runs suite-specific infrastructure setup; for CaaS this creates the InfraEnv, boots discovery VMs, and registers agents. The Netris backend's `setup-vmaas` target is a read-only prerequisite check.
+7. **`run-tests`** — checks the backend's suite contract when one is defined, sources `.env.infra`, then runs the selected suite target. The VMaaS target runs `uv run pytest tests/e2e/vmaas/` from the OSAC mono-repo.
 
 Each step can be run independently — you don't have to run the full pipeline every time.
 
@@ -167,11 +168,13 @@ make e2e INFRA=netris SUITE=vmaas OSAC_DEPLOY_MODE=fresh \
 # Or step by step
 make setup-infra INFRA=netris
 make deploy-infra INFRA=netris
-make deploy-ocp INFRA=netris
+make deploy-ocp INFRA=netris SUITE=caas
 make deploy-osac INFRA=netris
 make setup-suite INFRA=netris SUITE=caas
 make run-tests INFRA=netris SUITE=caas
 ```
+
+For a manual VMaaS network setup, `deploy-ocp` must receive `SUITE=vmaas` so it runs the CUDN/EVPN role. After OSAC is deployed, run `make -C infra/netris setup-vmaas` to check the cluster prerequisites. The top-level `e2e` target still rejects VMaaS until the backend advertises that suite.
 
 ### Iterate on OSAC
 
@@ -187,6 +190,7 @@ make run-tests INFRA=netris SUITE=caas
 
 ```bash
 make destroy-osac INFRA=netris       # OSAC only, keep the lab
+make destroy-ocp INFRA=netris        # Reset OCP, keep the Netris lab
 make destroy-infra INFRA=netris      # Everything
 ```
 
