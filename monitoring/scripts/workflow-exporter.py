@@ -967,10 +967,11 @@ class WorkflowExporter:
         return approvals[0]["submitted_at"]
 
     def _count_e2e_retests(self, repo, pr_number):
-        """Number of e2e runs for this PR beyond the first -- each
-        a /test comment, or new push, triggers another
-        full e2e run, so this counts
-        purely from already-stored job history, no extra API calls.
+        """Number of stored e2e job rows of this PR's `pull_request` runs beyond the first. Each new push or re-run of
+        those runs adds rows (one per suite job, so this is a count of rows, not of whole suite-matrix executions: a
+        run that started only some suites adds only their rows). Runs of the shared osac-ci flow (`workflow_run`, and
+        the `issue_comment` runs of a `/test` comment) are stored without a PR number and are not counted here.
+        Computed purely from already-stored job history, no extra API calls.
         """
         with self._db() as conn:
             row = conn.execute(
