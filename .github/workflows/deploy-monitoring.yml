@@ -14,7 +14,9 @@ name: Deploy monitoring stack
 on:
   push:
     branches: [main]
-    paths: ["monitoring/**"]
+    # monitoring/tests is never deployed (see monitoring-unit-tests.yml),
+    # so a change to it alone should not restart the live stack.
+    paths: ["monitoring/**", "!monitoring/tests/**"]
   workflow_dispatch: {}
 
 jobs:

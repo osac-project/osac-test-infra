@@ -321,6 +321,7 @@ Unrelated to the pytest E2E suites — these validate/deploy the `monitoring/` s
 files for the same per-file-trigger reason as the E2E workflows above (so the deploy job never
 shows up, even as "skipped", on a PR that only touches monitoring config):
 - `.github/workflows/validate-monitoring.yml` — runs on PRs touching `monitoring/**`; config/rules/dashboard sanity checks, no secrets needed
+- `.github/workflows/monitoring-unit-tests.yml` — runs on PRs touching `monitoring/scripts/**` or `monitoring/tests/**`; the `monitoring/tests/` unit tests for the exporter and digest scripts, with an 80% coverage floor
 - `.github/workflows/deploy-monitoring.yml` — runs on push to `main` (or manual dispatch) on the dedicated `monitoring-central` self-hosted runner; refreshes the live stack and fans out to registered remote runners
 
 ### Slack On-Call Rotation

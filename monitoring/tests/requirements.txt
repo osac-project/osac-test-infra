@@ -1,0 +1,12 @@
+# Dependencies of the monitoring/scripts unit tests: the test tools plus
+# what the scripts import (Containerfile.workflow-exporter installs
+# prometheus_client and requests; ci-daily-digest.yml installs requests,
+# matplotlib and numpy).
+pytest==8.3.5
+pytest-cov==6.1.1
+prometheus_client==0.21.1
+requests==2.32.3
+matplotlib==3.10.3
+numpy==2.2.4
+# pyparsing 3.3 deprecates names matplotlib still calls.
+pyparsing==3.2.3

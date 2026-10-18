@@ -216,6 +216,23 @@ It has no `pull_request` trigger and therefore never shows up, even as
 check, dashboard JSON validation) lives in the separate
 `.github/workflows/validate-monitoring.yml` instead.
 
+### Unit tests
+
+`monitoring/tests/` holds the unit tests for the Python scripts in
+`monitoring/scripts/` (`workflow-exporter.py` and `post-ci-digest.py`).
+They fake the GitHub, exporter, and Slack APIs, so they need no network
+access and no secrets. `.github/workflows/monitoring-unit-tests.yml` runs
+them on pull requests that change `monitoring/scripts/**` or
+`monitoring/tests/**`, and fails when coverage of `monitoring/scripts/`
+drops below 80%. To run them locally (from `monitoring/tests`, since the
+coverage path in `pytest.ini` is relative to it):
+
+```bash
+cd monitoring/tests
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/pytest
+```
+
 Steps: fetch secrets from Vault (see below), write them into
 `~/.monitoring-server/.env` and `.env.grafana`, run
 `monitoring-setup.sh --update-central` on the runner itself, then fan out to
