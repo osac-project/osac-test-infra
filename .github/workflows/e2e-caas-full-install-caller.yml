@@ -34,6 +34,22 @@ on:
         description: "GitHub repo (owner/name) of the OSAC monorepo"
         required: false
         default: "osac-project/osac"
+      test-infra-repository:
+        description: "GitHub repo (owner/name) of the test infrastructure repository"
+        required: false
+        default: ""
+      test-infra-ref:
+        description: "Branch/ref of the test infrastructure repository"
+        required: false
+        default: ""
+      test-repository:
+        description: "GitHub repo (owner/name) to checkout for e2e tests"
+        required: false
+        default: "osac-project/osac"
+      test-ref:
+        description: "Git ref for the osac mono-repo test checkout"
+        required: false
+        default: "main"
       image-overrides:
         description: "JSON mapping Helm value paths to image refs"
         required: false
@@ -111,6 +127,10 @@ jobs:
       test-filter: ${{ inputs.test-filter || '' }}
       installer-ref: ${{ inputs.installer-ref || 'main' }}
       installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}
+      test-infra-repository: ${{ inputs.test-infra-repository || '' }}
+      test-infra-ref: ${{ inputs.test-infra-ref || '' }}
+      test-repository: ${{ inputs.test-repository || 'osac-project/osac' }}
+      test-ref: ${{ inputs.test-ref || 'main' }}
       image-overrides: ${{ inputs.image-overrides || '{}' }}
       components: >-
         ${{ format('[{{"repo":"osac-project/osac","ref":"{0}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}}]',
