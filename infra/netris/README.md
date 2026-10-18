@@ -312,7 +312,7 @@ The flow runs three Ansible roles in sequence:
 
 1. **`configure-netris`** — creates VPC, VNet (DHCP disabled), subnet, SNAT/DNAT rules via Netris API
 2. **`configure-dns`** — creates Route 53 DNS records and local dnsmasq config for the cluster domain
-3. **`restore-ocp`** — creates copy-on-write disk overlays backed by the cached flavor, mounts the OS disk via qemu-nbd to write pre-boot config (hostname, nodeip hint, dnsmasq overrides, nmstate config for static IP, OVN/OVS cleanup), runs recert (via JSON config file, matching LCA's approach) to regenerate all TLS certificates and cluster identity, then waits for cluster health. When `suite=maas` (via `SUITE=maas`), also grows the h00 OS disk to `ocp_snapshot_disk_gb` before pre-boot config.
+3. **`restore-ocp`** — creates copy-on-write disk overlays backed by the cached flavor, grows the OS and LVM disks to their configured sizes, expands the OS root partition and XFS filesystem, then mounts the OS disk via qemu-nbd to write pre-boot config (hostname, nodeip hint, dnsmasq overrides, nmstate config for static IP, OVN/OVS cleanup). It runs recert (via JSON config file, matching LCA's approach) to regenerate all TLS certificates and cluster identity, then waits for cluster health.
 
 The snapshot flavor is pulled and cached during `make setup-infra` (one-time ~60GB download). Subsequent deploys use copy-on-write overlays, so only changed blocks are written.
 
@@ -392,8 +392,9 @@ make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
 | `ocp_cluster_name` | `ocp-sno` | OCP cluster name | defaults only |
 | `ocp_server_vcpu` | `20` | OCP VM vCPUs | yes (16) |
 | `ocp_server_memory_gb` | `64` | OCP VM RAM in GB | yes (48) |
-| `ocp_install_disk_gb` | `100` | OCP install disk size in GB | defaults only |
-| `ocp_lvm_disk_gb` | `200` | LVM storage disk size in GB | defaults only |
+| `ocp_install_disk_gb` | `300` | OCP install disk size in GB | defaults only |
+| `ocp_lvm_disk_gb` | `300` | LVM storage disk size in GB | defaults only |
+| `ocp_snapshot_disk_gb` | `300` | OCP snapshot OS disk size in GB | defaults only |
 
 #### Netris Networking
 

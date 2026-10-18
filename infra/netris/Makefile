@@ -5,9 +5,10 @@ EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
-# Suite selects CaaS vs MaaS for restore disk grow + redeploy-server.sh flow.
+# Suite selects CaaS vs MaaS for redeploy-server.sh flow.
 # SUITE=caas (default) — setup-caas / deploy-caas.
-# SUITE=maas — grow h00 to ocp_snapshot_disk_gb; setup-maas / deploy-maas.
+# OCP snapshot restores grow both h00 disks to their configured sizes for every suite.
+# SUITE=maas — setup-maas / deploy-maas.
 SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci

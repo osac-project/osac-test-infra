@@ -19,8 +19,8 @@ vm_root_password: "netris"
 ocp_vm_name_pattern: "hgx-pod00-su0-h00"
 ocp_server_vcpu: 20
 ocp_server_memory_gb: 64
-ocp_install_disk_gb: 200
-ocp_lvm_disk_gb: 200
+ocp_install_disk_gb: 300
+ocp_lvm_disk_gb: 300
 
 # Netris Networking for OCP
 ocp_vpc_name: "ocp-sno"
@@ -135,8 +135,8 @@ snapshot_flavor_dir: >-
 snapshot_recert_image: "quay.io/osac-project/recert:latest"
 snapshot_osac_namespace: "osac-e2e-ci"
 snapshot_osac_values_file: "values/caas-ci/values.yaml"
-# Grow CoW OS overlay during restore-snapshot when SUITE=maas (flavor is ~100Gi).
-ocp_snapshot_disk_gb: 150
+# Target OS disk size for every snapshot restore.
+ocp_snapshot_disk_gb: 300
 
 # AWS configuration for Route 53 DNS (read from config file or environment)
 aws_access_key_id: "{{ lookup('ini', 'aws_access_key_id section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_ACCESS_KEY_ID'), true) }}"

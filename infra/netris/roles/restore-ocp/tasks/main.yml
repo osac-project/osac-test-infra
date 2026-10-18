@@ -59,11 +59,14 @@
       -F qcow2
       /var/lib/libvirt/images/hgx-00-lvm.qcow2
 
-# MaaS: grow CoW OS overlay before nbd mount (flavor root is ~100Gi).
-- name: Resize CoW OS overlay for MaaS
+# Grow both CoW overlays before attaching them to the VM.
+- name: Resize CoW OS overlay to configured disk size
   ansible.builtin.command:
     cmd: qemu-img resize /var/lib/libvirt/images/hgx-00-ocp.qcow2 {{ ocp_snapshot_disk_gb }}G
-  when: (suite | default('caas')) == 'maas'
+
+- name: Resize CoW LVM overlay to configured disk size
+  ansible.builtin.command:
+    cmd: qemu-img resize /var/lib/libvirt/images/hgx-00-lvm.qcow2 {{ ocp_lvm_disk_gb }}G
 
 - name: Set disk ownership
   ansible.builtin.file:
@@ -93,7 +96,7 @@
       ansible.builtin.pause:
         seconds: 2
 
-    - name: Grow GPT and root partition to fill overlay (MaaS)
+    - name: Grow GPT and root partition to fill overlay
       ansible.builtin.shell: |
         set -euo pipefail
         sgdisk -e /dev/nbd0
@@ -102,7 +105,6 @@
         parted -s /dev/nbd0 resizepart 4 100%
         partprobe /dev/nbd0 || true
         sleep 1
-      when: (suite | default('caas')) == 'maas'
 
     - name: Create mount point
       ansible.builtin.file:
@@ -116,10 +118,9 @@
         fstype: xfs
         state: mounted
 
-    - name: Grow root XFS filesystem (MaaS)
+    - name: Grow root XFS filesystem
       ansible.builtin.command:
         cmd: xfs_growfs /tmp/flavor-mount
-      when: (suite | default('caas')) == 'maas'
 
     - name: Find ostree deploy directory
       ansible.builtin.shell:
