@@ -62,11 +62,11 @@ class JobKindTests(unittest.TestCase):
         for name in ("decide / Decide", "track / Suite checks", "finish / Record the result", "caas", "plan"):
             self.assertFalse(Exporter._is_suite_job({"name": name}), name)
 
-    def test_orchestration_jobs_are_plumbing_but_a_plain_plan_job_is_not(self):
-        for name in ("decide / Decide", "track / Suite checks", "finish / Record the result", "plan / Plan"):
-            self.assertTrue(Exporter._is_gate_job(name), name)
-        self.assertFalse(Exporter._is_gate_job("plan"))
-        self.assertFalse(Exporter._is_gate_job(SUITE))
+    def test_gate_detection_by_name_is_unchanged(self):
+        for name in ("decide / Decide", "track / Suite checks", "finish / Record the result", "plan / Plan", "plan"):
+            self.assertFalse(Exporter._is_gate_job(name), name)
+        self.assertTrue(Exporter._is_gate_job("e2e-caas-gate"))
+        self.assertTrue(Exporter._is_gate_job("e2e-readiness"))
 
 
 class CategoryTests(unittest.TestCase):
@@ -107,8 +107,31 @@ class CategoryTests(unittest.TestCase):
 
     def test_orchestration_failure_is_not_counted_as_an_e2e_failure(self):
         jobs = [job("decide / Decide", "failure"), job(SUITE, "skipped")]
+        Exporter._refine_pipeline_category(record(), jobs)
         self.assertTrue(Exporter._is_gate_only_failure(jobs))
         self.assertEqual(Exporter._extract_failed_steps(Exporter, jobs), [])
+        self.assertEqual(Exporter._extract_step_durations(Exporter, jobs), [])
+
+    def test_a_failed_suite_next_to_a_failed_orchestration_job_is_still_a_failure(self):
+        jobs = [job("finish / Record the result", "failure"), job(SUITE, "failure")]
+        Exporter._refine_pipeline_category(record(), jobs)
+        self.assertFalse(Exporter._is_gate_only_failure(jobs))
+        self.assertEqual(len(Exporter._extract_failed_steps(Exporter, jobs)), 1)
+
+    def test_other_workflows_keep_every_job_even_when_it_is_named_like_ours(self):
+        # A job called "plan / x" or "track / x" in any other workflow is a real job there.
+        jobs = [job("plan / Plan", "failure"), job("track / Build", "failure")]
+        Exporter._refine_pipeline_category({"workflow": "CI", "category": "ci"}, jobs)
+        self.assertFalse(Exporter._is_gate_only_failure(jobs))
+        self.assertEqual(len(Exporter._extract_failed_steps(Exporter, jobs)), 2)
+        timed = job("plan / Plan")
+        timed["steps"] = [
+            {"name": "Run plan", "status": "completed", "started_at": "2026-10-18T00:00:00Z",
+             "completed_at": "2026-10-18T00:00:30Z"}
+        ]
+        self.assertEqual(
+            Exporter._extract_step_durations(Exporter, [timed]), [{"name": "Run plan", "duration_s": 30}]
+        )
 
 
 class StoredRowsTests(unittest.TestCase):
@@ -144,6 +167,10 @@ class StoredRowsTests(unittest.TestCase):
             (2, "osac", "E2E #12 (suites checked in the comment)", "osac / y", "e2e", "osac-1-runner-04", ""),
             (3, "osac", "E2E review relay", "osac / E2E review relay", "e2e", "", ""),
             (4, "osac", "E2E CaaS Full Install", "osac / E2E CaaS Full Install", "e2e", "", ""),
+            (5, "osac", "E2E CaaS Netris Full Install / PR #1748 @ " + "b" * 40, "osac / n", "e2e", "", ""),
+            (6, "osac", "E2E on CodeRabbit approval", "osac / o", "automation", "", ""),
+            (7, "osac", "CI", "osac / CI", "ci", "", ""),
+            (8, "osac", "E2E vmaas:nightly @ not-a-sha", "osac / v", "e2e", "", ""),
         ]
         exporter, conn = self.exporter_with_rows(rows)
         exporter._normalize_pipeline_rows_if_needed()
@@ -152,6 +179,11 @@ class StoredRowsTests(unittest.TestCase):
         self.assertEqual(got[2], ("E2E for pull requests", "e2e", ""))
         self.assertEqual(got[3], ("E2E review relay", "automation", "n/a"))
         self.assertEqual(got[4], ("E2E CaaS Full Install", "e2e", ""))  # a real suite workflow stays
+        # Nothing else is touched: other E2E workflows, bot workflows, CI, odd names.
+        self.assertEqual(got[5], ("E2E CaaS Netris Full Install / PR #1748 @ " + "b" * 40, "e2e", ""))
+        self.assertEqual(got[6], ("E2E on CodeRabbit approval", "automation", ""))
+        self.assertEqual(got[7], ("CI", "ci", ""))
+        self.assertEqual(got[8], ("E2E vmaas:nightly @ not-a-sha", "e2e", ""))
 
     def test_running_it_twice_changes_nothing_more(self):
         rows = [(1, "osac", "E2E #12 (suites checked in the comment)", "osac / y", "e2e", "", "")]
