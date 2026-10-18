@@ -142,9 +142,9 @@
           - _ocp_evpn_current_release_major_minor == ocp_evpn_required_version
           - _ocp_evpn_current_version == _ocp_evpn_desired_version
           - _ocp_evpn_current_history_state == "Completed"
-          - _ocp_evpn_cv_available == "True"
-          - _ocp_evpn_cv_progressing == "False"
-          - _ocp_evpn_cv_failing == "False"
+          - (_ocp_evpn_cv_available | string) == "True"
+          - (_ocp_evpn_cv_progressing | string) == "False"
+          - (_ocp_evpn_cv_failing | string) == "False"
           - _ocp_evpn_cv_observed_generation == _ocp_evpn_cv_metadata_generation
         fail_msg: >-
           OCP CUDN EVPN requires a converged {{ ocp_evpn_required_version }} cluster.

@@ -94,9 +94,9 @@
           - _vmaas_current_version.split('.')[:2] | join('.') == ocp_evpn_required_version
           - _vmaas_current_version == _vmaas_desired_version
           - _vmaas_current_state == 'Completed'
-          - _vmaas_cv_available == 'True'
-          - _vmaas_cv_progressing == 'False'
-          - _vmaas_cv_failing == 'False'
+          - (_vmaas_cv_available | string) == 'True'
+          - (_vmaas_cv_progressing | string) == 'False'
+          - (_vmaas_cv_failing | string) == 'False'
           - _vmaas_cv_observed_generation == _vmaas_cv_metadata_generation
           - _vmaas_network.spec.defaultNetwork.type == 'OVNKubernetes'
         fail_msg: >-
