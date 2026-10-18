@@ -1403,13 +1403,17 @@ class WorkflowExporter:
         with jobs are cached (jobs never disappear), so a large real
         backlog costs one jobs call per run, not one per cycle. Confirmed
         zombies are cached for ZOMBIE_RECHECK_MINUTES, then checked again
-        in case jobs appeared. Both caches are keyed per attempt: a re-run
-        keeps its run id, but the jobs fetch only sees the latest attempt.
-        A failed jobs fetch keeps the last known answer, and is not a
-        zombie when there is none -- unknown counts as queued.
+        in case jobs appeared. Both caches are keyed per attempt (a re-run
+        keeps its run id), and the jobs fetch asks for the listed attempt,
+        so a re-run between the list and the fetch cannot file the new
+        attempt's jobs under the old key. A failed jobs fetch keeps the
+        last known answer and waits ZOMBIE_RECHECK_MINUTES before trying
+        again; it is not a zombie when there is no answer -- unknown
+        counts as queued.
         """
         run_id = run.get("id")
-        key = (run_id, run.get("run_attempt"))
+        run_attempt = run.get("run_attempt")
+        key = (run_id, run_attempt)
         if key in self._runs_with_jobs:
             return False
         if time.monotonic() < self._zombie_recheck_at.get(key, 0):
@@ -1423,9 +1427,12 @@ class WorkflowExporter:
             return False
         if datetime.now(timezone.utc) - t0 < timedelta(minutes=ZOMBIE_GRACE_MINUTES):
             return False
-        jobs = self._fetch_run_jobs(repo, run_id)
+        jobs = self._fetch_run_jobs(repo, run_id, run_attempt)
         if jobs is None:
-            return key in self._zombie_recheck_at
+            if key not in self._zombie_recheck_at:
+                return False
+            self._zombie_recheck_at[key] = time.monotonic() + ZOMBIE_RECHECK_MINUTES * 60
+            return True
         if jobs:
             self._zombie_recheck_at.pop(key, None)
             if len(self._runs_with_jobs) > 5000:
@@ -1536,19 +1543,28 @@ class WorkflowExporter:
             return []
         return resp.json().get("workflow_runs", [])
 
-    def _fetch_run_jobs(self, repo, run_id):
+    def _fetch_run_jobs(self, repo, run_id, run_attempt=None):
         """Fetch job-level details for a run.
 
-        Returns the raw jobs list from the GitHub API, [] if the run
-        genuinely has no jobs, or None if the fetch itself failed. Callers
-        must treat None as "try again later" -- persisting a record built
-        from a failed fetch would look like a complete, jobless run
-        forever, since a run already stored looks "seen" to _needs_upsert.
+        With run_attempt, fetches that attempt's jobs; without it, the
+        latest attempt's. Returns the raw jobs list from the GitHub API,
+        [] if the run genuinely has no jobs, or None if the fetch itself
+        failed. Callers must treat None as "try again later" -- persisting
+        a record built from a failed fetch would look like a complete,
+        jobless run forever, since a run already stored looks "seen" to
+        _needs_upsert.
         """
-        resp = self._get(
-            f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}/jobs"
-            f"?filter=latest&per_page=30"
-        )
+        if run_attempt is None:
+            url = (
+                f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}/jobs"
+                f"?filter=latest&per_page=30"
+            )
+        else:
+            url = (
+                f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}"
+                f"/attempts/{run_attempt}/jobs?per_page=30"
+            )
+        resp = self._get(url)
         if not resp.ok:
             return None
         return resp.json().get("jobs", [])
