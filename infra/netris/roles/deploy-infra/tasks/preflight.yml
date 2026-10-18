@@ -64,8 +64,8 @@
 
 - name: Validate optional OCP underlay CIDR syntax
   ansible.builtin.set_fact:
-    _ocp_underlay_p2p_valid: "{{ ocp_underlay_p2p_cidr | ansible.utils.ipv4('net') | bool }}"
-    _ocp_underlay_vmaas_pool_valid: "{{ osac_vmaas_external_ip_pool_cidr | ansible.utils.ipv4('net') | bool }}"
+    _ocp_underlay_p2p_valid: "{{ (ocp_underlay_p2p_cidr | ansible.utils.ipv4('net') | length) > 0 }}"
+    _ocp_underlay_vmaas_pool_valid: "{{ (osac_vmaas_external_ip_pool_cidr | ansible.utils.ipv4('net') | length) > 0 }}"
     _ocp_underlay_p2p_prefix: "{{ ocp_underlay_p2p_cidr | ansible.utils.ipaddr('prefix') | int }}"
     _ocp_underlay_leaf_asn: "{{ (ns_fabric.asn_start | int) + (ocp_underlay_leaf_index | int) }}"
   when: ocp_underlay_enabled | bool

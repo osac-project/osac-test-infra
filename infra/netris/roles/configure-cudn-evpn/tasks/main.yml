@@ -247,7 +247,7 @@
     - name: Validate the OCP-to-Netris point-to-point network
       ansible.builtin.assert:
         that:
-          - ocp_underlay_p2p_cidr | ansible.utils.ipv4('net') | bool
+          - ocp_underlay_p2p_cidr | ansible.utils.ipv4('net') | length > 0
           - ocp_underlay_p2p_cidr | ansible.utils.ipaddr('prefix') | int == 31
         fail_msg: >-
           ocp_underlay_p2p_cidr must be a valid IPv4 /31 point-to-point network;
@@ -258,7 +258,7 @@
       ansible.builtin.assert:
         that:
           - ocp_evpn_vtep_cidr | length > 0
-          - ocp_evpn_vtep_cidr | ansible.utils.ipv4('net') | bool
+          - ocp_evpn_vtep_cidr | ansible.utils.ipv4('net') | length > 0
         fail_msg: >-
           Set ocp_evpn_vtep_cidr to the explicitly reserved IPv4 VTEP range.
           Observed {{ ocp_evpn_vtep_cidr }}. The design does not reserve an address
@@ -269,7 +269,7 @@
       ansible.builtin.assert:
         that:
           - ocp_evpn_vtep_node_ip_cidr | length > 0
-          - ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipv4('net') | bool
+          - ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipv4('net') | length > 0
           - ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipaddr('prefix') | int == 32
           - ocp_evpn_vtep_cidr | ansible.utils.network_in_network(ocp_evpn_vtep_node_ip_cidr)
         fail_msg: >-
