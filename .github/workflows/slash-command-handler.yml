@@ -22,8 +22,10 @@ jobs:
       - name: Checkout slash-command registry helper
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: osac-project/osac-test-infra
-          ref: main
+          # The helper scripts of the revision of this very workflow file: a caller that pins the handler by commit gets
+          # the scripts of the same commit, not of main.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .slash-command-tools
           sparse-checkout: |
             .github/scripts/optional-workflows.sh
