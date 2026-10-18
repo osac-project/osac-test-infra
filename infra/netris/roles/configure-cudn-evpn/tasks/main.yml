@@ -97,7 +97,7 @@
         _ocp_evpn_default_network_type: >-
           {{ (_ocp_evpn_network_raw.stdout | from_json).spec.defaultNetwork.type | default('Unknown', true) }}
         _ocp_evpn_node_names: >-
-          {{ (_ocp_evpn_nodes_raw.stdout | from_json).items | map(attribute='metadata.name') | list }}
+          {{ (_ocp_evpn_nodes_raw.stdout | from_json)['items'] | map(attribute='metadata.name') | list }}
         _ocp_evpn_release_major_minor: >-
           {{ ((_ocp_evpn_cluster_version_raw.stdout | from_json).status.desired.version | default('Unknown', true)).split('.')[:2] | join('.') }}
       changed_when: false
@@ -453,7 +453,7 @@
       failed_when: false
       until: >-
         _ocp_evpn_frr_pods.rc == 0 and
-        ((_ocp_evpn_frr_pods.stdout | from_json).items
+        ((_ocp_evpn_frr_pods.stdout | from_json)['items']
           | map(attribute='status.containerStatuses')
           | select('defined') | flatten
           | selectattr('ready', 'equalto', true) | list | length) > 0
@@ -490,7 +490,7 @@
       failed_when: false
       until: >-
         _ocp_evpn_nmstate_csvs.rc == 0 and
-        ((_ocp_evpn_nmstate_csvs.stdout | from_json).items
+        ((_ocp_evpn_nmstate_csvs.stdout | from_json)['items']
           | selectattr('metadata.name', 'match', '^kubernetes-nmstate-operator')
           | selectattr('status.phase', 'equalto', 'Succeeded')
           | list | length) > 0
@@ -670,7 +670,7 @@
       failed_when: false
       until: >-
         _ocp_evpn_bgp_sessions.rc == 0 and
-        ((_ocp_evpn_bgp_sessions.stdout | from_json).items
+        ((_ocp_evpn_bgp_sessions.stdout | from_json)['items']
           | selectattr('status.bgpStatus', 'equalto', 'Established')
           | list | length) > 0
       retries: 90
