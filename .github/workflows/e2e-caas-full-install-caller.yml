@@ -133,7 +133,7 @@ jobs:
       test-ref: ${{ inputs.test-ref || 'main' }}
       image-overrides: ${{ inputs.image-overrides || '{}' }}
       components: >-
-        ${{ format('[{{"repo":"{1}","ref":"{0}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}},{{"repo":"{1}","ref":"{0}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"}},{{"repo":"{1}","ref":"{0}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"}}]',
+        ${{ format('[{{"repo":"{1}","ref":"{0}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}},{{"repo":"{1}","ref":"{0}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository","context":"."}},{{"repo":"{1}","ref":"{0}","containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository","context":"."}},{{"repo":"{1}","ref":"{0}","containerfile":"osac-metering/metering-service/Containerfile","imageKey":"metering.image.repository","context":"."}},{{"repo":"{1}","ref":"{0}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"}},{{"repo":"{1}","ref":"{0}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"}}]',
         inputs.installer-ref || 'main',
         inputs.installer-repo || 'osac-project/osac') }}
       osac-cli-version: ${{ inputs.osac-cli-version || '' }}
