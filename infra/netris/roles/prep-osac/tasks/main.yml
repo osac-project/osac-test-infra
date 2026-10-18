@@ -236,6 +236,23 @@
                     if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
       }}
 
+- name: Configure the Metal3 test backend for bare-metal services
+  when:
+    - bare_metal_services | bool
+    - (_values_raw.content | b64decode | from_yaml).global.services.bmaas.enabled | default(false) | bool
+  ansible.builtin.set_fact:
+    _values_overrides: >-
+      {{ _values_overrides | combine({
+           'bmf': {
+             'secrets': {
+               'inventoryConfig': 'osac-inventory-config-metal3-test',
+               'managementConfig': 'osac-management-config-metal3-test'
+             },
+             'metal3': {'enabled': true},
+             'testBackend': {'metal3': {'enabled': true}}
+           }
+         }, recursive=true) }}
+
 - name: Write patched values file
   ansible.builtin.copy:
     dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
