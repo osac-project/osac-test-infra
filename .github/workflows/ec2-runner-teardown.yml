@@ -71,8 +71,10 @@ jobs:
         if: always()
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: ${{ inputs.test-infra-repository || github.repository }}
-          ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || github.ref }}
+          # Default to the revision of this very workflow file (see the suites that call it), not to the repository and
+          # ref of the workflow run, which belong to a caller in another repository.
+          repository: ${{ inputs.test-infra-repository || job.workflow_repository }}
+          ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
           persist-credentials: false
 
       - name: Validate and bootstrap

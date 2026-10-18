@@ -54,6 +54,16 @@ paths:
       # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_* (added to GitHub 2026);
       # drop this when actionlint is bumped to v1.18+. The suite checks out the revision of its own workflow file by default.
       - 'property "workflow_(repository|sha)" is not defined'
+  .github/workflows/ec2-runner-provision.yml:
+    ignore:
+      # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_* (added to GitHub 2026);
+      # drop this when actionlint is bumped to v1.18+.
+      - 'property "workflow_(repository|sha)" is not defined'
+  .github/workflows/ec2-runner-teardown.yml:
+    ignore:
+      # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_* (added to GitHub 2026);
+      # drop this when actionlint is bumped to v1.18+.
+      - 'property "workflow_(repository|sha)" is not defined'
   .github/workflows/ai-diagnostic-e2e.yml:
     ignore:
       # v1.7.12 (released 2026-03-30) predates concurrency.queue, added to
