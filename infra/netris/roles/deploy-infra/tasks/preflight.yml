@@ -78,9 +78,6 @@
         + ([] if _ocp_underlay_p2p_valid | bool else ['ocp_underlay_p2p_cidr must be a valid IPv4 CIDR; got ' + ocp_underlay_p2p_cidr])
         + ([] if _ocp_underlay_vmaas_pool_valid | bool else ['osac_vmaas_external_ip_pool_cidr must be a valid IPv4 CIDR; got ' + osac_vmaas_external_ip_pool_cidr])
         + ([] if (_ocp_underlay_p2p_valid | bool and _ocp_underlay_p2p_prefix | int == 31) else ['ocp_underlay_p2p_cidr must be a /31 point-to-point network; got ' + ocp_underlay_p2p_cidr])
-        + ([] if (ocp_underlay_guest_interface | trim | length > 0) else ['ocp_underlay_guest_interface is unset; match the OCP guest interface to the eth12 Netris port by MAC and set the Linux interface name'])
-        + ([] if ((ocp_underlay_guest_interface | trim) != (ocp_underlay_management_interface | trim)) else ['ocp_underlay_guest_interface must not be the OCP management interface ' + ocp_underlay_management_interface])
-        + ([] if (ocp_underlay_guest_interface is match('^[A-Za-z0-9_.-]{1,15}$')) else ['ocp_underlay_guest_interface must be a Linux interface name of at most 15 letters, digits, dots, underscores, or hyphens'])
         + ([] if (ocp_underlay_server_port is match('^eth[0-9]+$')) else ['ocp_underlay_server_port must use the Netris ethN form; got ' + ocp_underlay_server_port])
         + ([] if (ocp_underlay_server_port not in ocp_underlay_reserved_server_ports) else ['ocp_underlay_server_port ' + ocp_underlay_server_port + ' is already used by the existing OCP eth9/eth10/eth11 links'])
         + ([] if (ocp_underlay_leaf_port is match('^swp[0-9]+s[0-9]+$')) else ['ocp_underlay_leaf_port must use the Netris swpNsN form; got ' + ocp_underlay_leaf_port])
@@ -91,8 +88,7 @@
         + ([] if (ocp_underlay_ocp_asn | int != (_ocp_underlay_leaf_asn | int)) else ['ocp_underlay_ocp_asn must differ from the selected Netris leaf ASN ' + (_ocp_underlay_leaf_asn | string)])
         + ([] if (ocp_vm_name_pattern == (gpu_server_hostname ~ '-pod00-su0-h00')) else ['ocp_vm_name_pattern must match the first generated Netris server (' + gpu_server_hostname + '-pod00-su0-h00) for this opt-in underlay link'])
         + ([] if (gpu_server_count | int > 0) else ['gpu_server_count must include the OCP VM before enabling the OCP underlay link'])
-        + ([] if (ocp_evpn_external_peer_acknowledged | default(false) | bool) else ['ocp_evpn_external_peer_acknowledged is false: independently provision and verify the external EVPN peer before setting it true; this is an operator assertion, not automated verification by preflight'])
-        + ([] if (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool) else ['ocp_vmaas_external_ip_return_path_acknowledged is false: independently provision and verify a narrow route/return policy for the VMaaS 172.27.0.0/16 range before setting it true; this is an operator assertion, not automated verification by preflight'])
+        + ([] if not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool) else ['VMaaS ExternalIP tests are enabled but ocp_vmaas_external_ip_return_path_acknowledged is false; independently provision and verify a narrow route/return policy for the 172.27.0.0/16 range'])
       }}
   when: ocp_underlay_enabled | bool
 

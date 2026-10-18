@@ -66,11 +66,7 @@ _validate-backend:
 	fi
 	@. $(INFRA_DIR)/capabilities && \
 		echo "$$SUPPORTED_SUITES" | tr ' ' '\n' | grep -qx "$(SUITE)" || \
-		{ if [ "$(INFRA)" = "netris" ] && [ "$(SUITE)" = "vmaas" ]; then \
-		    echo "ERROR: backend 'netris' cannot run suite 'vmaas': it has no supported OCP 4.22 BareMetal target and no verified external EVPN peer or 172.27.0.0/16 return path."; \
-		  else \
-		    echo "ERROR: backend '$(INFRA)' does not support suite '$(SUITE)'"; \
-		  fi; \
+		{ echo "ERROR: backend '$(INFRA)' does not support suite '$(SUITE)'"; \
 		  echo "Supported: $$(. $(INFRA_DIR)/capabilities && echo $$SUPPORTED_SUITES)"; \
 		  exit 1; }
 

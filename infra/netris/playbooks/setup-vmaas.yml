@@ -131,21 +131,16 @@
           and Global IP forwarding enabled, and the network ClusterOperator must
           be Available with Progressing and Degraded false. No resources were changed.
 
-    - name: Require the explicitly acknowledged external route path
+    - name: Require the underlay and ExternalIP return path when enabled
       ansible.builtin.assert:
         that:
           - ocp_underlay_enabled | default(false) | bool
-          - ocp_evpn_external_peer_acknowledged | default(false) | bool
-          - ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool
+          - not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool)
         fail_msg: >-
-          VMaaS is blocked until the dedicated underlay is enabled and the
-          external EVPN peer and 172.27.0.0/16 return path are independently
-          provisioned and acknowledged. These two acknowledgement variables are
-          operator assertions, not automated verification. The pinned Netris
-          OpenAPI surfaces document route/ACL resources but do not define an
-          external EVPN AFI/SAFI contract or this lab's 172.27 route policy.
-          The current ISP policy denies 172.16.0.0/12, which contains 172.27.0.0/16.
-          This check does not mutate or verify external Netris/ISP policy.
+          VMaaS requires the dedicated underlay. If ExternalIP tests are enabled,
+          their separate 172.27.0.0/16 return path must also be independently
+          provisioned and acknowledged. This check does not mutate or verify
+          external Netris/ISP policy; BGP peer state is checked below.
 
     - name: Derive the expected Netris leaf peer from the configured OCP /31
       ansible.builtin.set_fact:

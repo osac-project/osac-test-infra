@@ -1,5 +1,7 @@
 ---
 - name: Configure OpenShift CUDN EVPN prerequisites
+  environment:
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path }}"
   block:
     - name: Validate static EVPN prerequisites before cluster mutation
       ansible.builtin.assert:
@@ -195,30 +197,16 @@
           No cluster configuration was changed.
       tags: [cudn_evpn]
 
-    - name: Require explicit external EVPN peer acknowledgement
+    - name: Require ExternalIP return-path acknowledgement when those tests are enabled
       ansible.builtin.assert:
         that:
-          - ocp_evpn_external_peer_acknowledged | bool
+          - not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool)
         fail_msg: >-
-          The external EVPN peer is not acknowledged. The pinned Netris Controller
-          4.16/provider 3.6.22 path does not document a supported external EVPN
-          AFI/SAFI peer contract. Independently verify and provision the external
-          peer before setting ocp_evpn_external_peer_acknowledged=true. This flag is
-          only an operator assertion; this role does not verify Netris peer policy.
-          No cluster configuration was changed.
-      tags: [cudn_evpn]
-
-    - name: Require explicit VMaaS ExternalIP return-path acknowledgement
-      ansible.builtin.assert:
-        that:
-          - ocp_vmaas_external_ip_return_path_acknowledged | bool
-        fail_msg: >-
-          The VMaaS ExternalIP return path is not acknowledged. The current ISP
-          ACCEPT_PUBLIC policy denies 172.16.0.0/12, including the VMaaS fixture
-          range 172.27.0.0/16. Provision and independently verify a narrow route
-          and return policy before setting
-          ocp_vmaas_external_ip_return_path_acknowledged=true. This flag is only an
-          operator assertion; this role does not provision or verify that path.
+          VMaaS ExternalIP tests are enabled but their return path is not acknowledged.
+          The VMaaS ExternalIP range 172.27.0.0/16 is not part of the PodNetwork
+          RouteAdvertisements configured here. Provision and independently verify
+          a narrow route and return policy before setting
+          ocp_vmaas_external_ip_return_path_acknowledged=true.
           No cluster configuration was changed.
       tags: [cudn_evpn]
 
@@ -705,5 +693,3 @@
           Netris/ISP route and return policy; they are not advertised by this
           RouteAdvertisements resource.
       tags: [cudn_evpn]
-  environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path }}"

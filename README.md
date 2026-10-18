@@ -60,9 +60,9 @@ Not every backend supports every test suite. Each backend declares its supported
 
 | Backend | vmaas | caas | catalog | storage | bmaas | bmaas_networking |
 |---------|:-----:|:----:|:-------:|:-------:|:-----:|:----------------:|
-| netris  | no    | yes  | no      | no      | yes   | yes              |
+| netris  | yes   | yes  | no      | no      | yes   | yes              |
 
-Running an unsupported combination fails immediately with a clear capability error. Netris currently does not advertise `vmaas` because the EVPN peer and `172.27.0.0/16` return path have not yet been verified for the VMaaS workload network. The VMaaS preflight requires OCP 4.22 with OVNKubernetes; it does not require the cluster platform type to be `BareMetal`.
+The Netris VMaaS profile registers both VMaaS and BMaaS with the `cudn_evpn` Kubernetes manager and Netris fabric manager, so VM and bare-metal instances can share a subnet. The OCP target must be converged OCP 4.22 with OVNKubernetes; its platform type may be `None`. ExternalIP tests additionally require a separately provisioned and acknowledged return path for `172.27.0.0/16`.
 
 ### Backend Setup: Netris
 
@@ -158,7 +158,7 @@ export EXTRA_VARS="bare_metal_services=true"
 
 make e2e INFRA=netris SUITE=caas
 
-# Intended VMaaS invocation (currently rejected by Netris capability validation)
+# VMaaS + BMaaS CUDN EVPN pipeline
 make e2e INFRA=netris SUITE=vmaas OSAC_DEPLOY_MODE=fresh
 
 # Explicitly select the VMaaS profile; the backend chooses it by default for SUITE=vmaas
@@ -174,7 +174,7 @@ make setup-suite INFRA=netris SUITE=caas
 make run-tests INFRA=netris SUITE=caas
 ```
 
-For a manual VMaaS network setup, `deploy-ocp` must receive `SUITE=vmaas` so it runs the CUDN/EVPN role. After OSAC is deployed, run `make -C infra/netris setup-vmaas` to check the cluster prerequisites. The top-level `e2e` target still rejects VMaaS until the backend advertises that suite.
+For a manual VMaaS/BMaaS shared-subnet setup, `deploy-ocp` must receive `SUITE=vmaas` so it configures the CUDN/EVPN peer, VTEP, and route advertisements. The `cudn-evpn-netris-test` profile enables both services and selects Netris plus CUDN EVPN. After OSAC is deployed, `setup-vmaas` verifies the underlay, BGP session, and PodNetwork advertisements. ExternalIP and EgressIP dataplane tests need their separate route policy enabled and acknowledged.
 
 ### Iterate on OSAC
 

@@ -1,2 +1,1 @@
-# VMaaS stays excluded until a supported OCP 4.22 BareMetal target, external EVPN peer contract, and verified 172.27.0.0/16 return path are available.
-SUPPORTED_SUITES="caas bmaas bmaas_networking"
+SUPPORTED_SUITES="caas bmaas bmaas_networking vmaas"
