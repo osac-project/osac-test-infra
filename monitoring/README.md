@@ -56,6 +56,33 @@ built-in collectors can't see in this rootless setup: `haproxy.service`,
 both are socket-activated), and any `actions.runner.*` GitHub runner agent
 units on that host.
 
+## What counts as an "e2e" run
+
+The `workflow-exporter` puts every run in a category (`e2e`, `ci`, `lint`,
+`automation`, ...), mostly by the workflow name. The pull-request flow
+(`e2e-pr.yml`, `e2e-queue.yml`, `e2e-review-relay.yml`, shared from `osac-ci`) is
+the exception: one run of it holds a few seconds of orchestration jobs
+(`decide`, `track`, `finish`, `plan`) and, only when the change needs them,
+the real suite jobs (`<suite> / e2e-<suite>-full-install / e2e`, hours on our
+own runners). Most runs hold no suite at all (docs only, waiting for an
+approval), so they are not counted as `e2e`:
+
+- a run is `e2e` only when a suite job really ran in it (finished, or started and
+  then failed or was cancelled); a skipped suite, or one cancelled before it got a
+  runner, does not count;
+- every other run of those workflows is `automation`;
+- an active run counts as `e2e` while a suite job is queued or running, so the
+  "E2E Queue Depth" panel still shows the suites waiting for a runner;
+- they are listed under the workflow's own name (`E2E for pull requests`, `E2E for the
+  merge queue`, `E2E review relay`), not under one name per commit;
+- a failure of an orchestration job is never an e2e failure (it is skipped in the
+  failed-step and infra/test breakdown, like the `*-gate` jobs).
+
+Runs stored before this rule are moved on the next start: the self-hosted machine
+a run used (`runner_name`) tells whether a suite ran. Every panel and the daily
+digest filter on `category=e2e`, so they need no change. Tests:
+`python3 -I monitoring/scripts/test_workflow_exporter_pipeline.py`.
+
 ## Components
 
 | Component | Runs on | Port | Purpose |

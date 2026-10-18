@@ -269,7 +269,85 @@ class WorkflowExporter:
         suffix match (e.g. "e2e-caas-gate") or one of GATE_JOB_NAMES.
         """
         lname = (name or "").lower()
-        return lname.endswith(WorkflowExporter.GATE_NAME_SUFFIX) or lname in WorkflowExporter.GATE_JOB_NAMES
+        return (
+            lname.endswith(WorkflowExporter.GATE_NAME_SUFFIX)
+            or lname in WorkflowExporter.GATE_JOB_NAMES
+            or WorkflowExporter._is_orchestration_job(lname)
+        )
+
+    # The pull-request flow's own workflows (osac-ci's shared flow, called from
+    # each repo's e2e-pr.yml / e2e-queue.yml / e2e-review-relay.yml). One run of
+    # them holds the orchestration jobs (decide, track, finish, plan: seconds on
+    # a GitHub-hosted runner) and, when the change needs them, the real suite
+    # jobs (hours on the self-hosted fleet). Most runs hold no suite at all
+    # (docs only, waiting for an approval, a request answered by the comment),
+    # so the workflow name alone cannot say "this ran an e2e": counting them all
+    # as e2e fills the pass rate with runs that tested nothing and the queue
+    # panels with runs that never wait for a runner. They are "automation"
+    # unless a suite job really ran (see _refine_pipeline_category). The
+    # workflow file is the stable identity: the run name changes with every
+    # event ("E2E <fork>:<branch> @ <sha>", "E2E #12 (suites checked ...)").
+    PIPELINE_WORKFLOW_FILES: ClassVar[dict[str, str]] = {
+        "e2e-pr.yml": "E2E for pull requests",
+        "e2e-queue.yml": "E2E for the merge queue",
+        "e2e-review-relay.yml": "E2E review relay",
+    }
+    PIPELINE_WORKFLOW_NAMES = frozenset(PIPELINE_WORKFLOW_FILES.values())
+
+    # Jobs of those workflows that only decide, report or record. They are
+    # always jobs of a called workflow, so they carry the "<caller job> / <job>"
+    # prefix (e.g. "decide / Remove the relay run"); requiring it keeps an
+    # ordinary job that happens to be called "plan" (osac's ci.yml has one)
+    # out of the plumbing list.
+    ORCHESTRATION_JOB_RE = re.compile(r"^(decide|track|finish|plan) / ")
+
+    # The job that really runs a suite: "<caller job> / e2e-<suite>-full-install
+    # / <job>" (e.g. "caas / e2e-caas-full-install / e2e").
+    SUITE_JOB_RE = re.compile(r"(^| / )e2e-[a-z0-9-]*full-install( / |$)")
+    ACTIVE_JOB_STATUSES = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
+
+    @staticmethod
+    def _pipeline_workflow_name(run):
+        """The stable name of a pull-request-flow workflow run, or "" when the
+        run belongs to any other workflow. Keyed by the workflow file
+        (".github/workflows/e2e-pr.yml"), because the run name varies."""
+        path = (run.get("path") or "").split("@", 1)[0]
+        return WorkflowExporter.PIPELINE_WORKFLOW_FILES.get(path.rsplit("/", 1)[-1], "")
+
+    @staticmethod
+    def _is_orchestration_job(name):
+        return bool(WorkflowExporter.ORCHESTRATION_JOB_RE.match((name or "").strip()))
+
+    @staticmethod
+    def _is_suite_job(job):
+        return bool(WorkflowExporter.SUITE_JOB_RE.search((job.get("name") or "").strip()))
+
+    @staticmethod
+    def _suite_job_ran(job, active=False):
+        """A suite job that did its work (or is doing it now): not skipped, and
+        not cancelled before a single step started. A suite that never got a
+        runner tested nothing, so it is no e2e signal either."""
+        if not WorkflowExporter._is_suite_job(job):
+            return False
+        conclusion = job.get("conclusion")
+        if conclusion is None:
+            return active and job.get("status") in WorkflowExporter.ACTIVE_JOB_STATUSES
+        if conclusion in ("success", "failure", "timed_out"):
+            return True
+        if conclusion == "cancelled":
+            return any(step.get("started_at") for step in job.get("steps") or [])
+        return False
+
+    @staticmethod
+    def _refine_pipeline_category(record, jobs, active=False):
+        """The pull-request flow's workflows count as "e2e" only when a suite
+        job really ran in the run, otherwise they stay "automation". Called
+        wherever the run's jobs are known, before the failure is classified
+        (which only looks at "e2e" records). No-op for any other workflow."""
+        if record.get("workflow") not in WorkflowExporter.PIPELINE_WORKFLOW_NAMES:
+            return
+        ran = any(WorkflowExporter._suite_job_ran(j, active) for j in jobs or [])
+        record["category"] = "e2e" if ran else "automation"
 
     @staticmethod
     def _is_gate_only_failure(jobs):
@@ -469,6 +547,7 @@ class WorkflowExporter:
         self._reclassify_failure_reasons_if_needed()
         self._reclassify_ai_status_if_needed()
         self._clean_hosted_runner_noise_if_needed()
+        self._normalize_pipeline_rows_if_needed()
 
     def _purge_ignored_events_if_needed(self):
         """One-time cleanup of already-stored jobs whose event is now in
@@ -504,6 +583,9 @@ class WorkflowExporter:
             rows = conn.execute("SELECT id, workflow, category FROM jobs").fetchall()
             updated = 0
             for row in rows:
+                if row["workflow"] in self.PIPELINE_WORKFLOW_NAMES:
+                    # Decided by the run's jobs when it was stored, not by its name.
+                    continue
                 correct = self._categorize_workflow(row["workflow"])
                 if correct != row["category"]:
                     conn.execute(
@@ -674,6 +756,57 @@ class WorkflowExporter:
             if updated:
                 logger.info(
                     "Cleaned GitHub-hosted-runner noise from %d already-stored job(s)", updated
+                )
+
+    # Run names the pull-request flow gave its runs before they were stored
+    # under the workflow's own name (see PIPELINE_WORKFLOW_FILES).
+    PIPELINE_RUN_NAME_RE = re.compile(
+        r"^E2E (#\d+ \(.*\)|\S+:\S+ @ [0-9a-f]{7,40})$"
+    )
+
+    def _normalize_pipeline_rows_if_needed(self):
+        """Move already-stored pull-request-flow runs to the stable workflow
+        name and to the category their jobs justify.
+
+        Rows stored before the flow had its own handling carry the run name
+        ("E2E <repo>:<branch> @ <sha>") and the "e2e" category the name gave
+        them (also "E2E for the merge queue" and "E2E review relay", which
+        were always "e2e" by name). The jobs are not stored, but runner_name is: it holds the
+        self-hosted machines the run used, which only a real suite job
+        has (the orchestration jobs run on GitHub-hosted runners, which are
+        cleaned out of that column). A run that used one of our machines
+        is "e2e", any other is "automation". Safe to re-run: a row already
+        under its stable name is left alone.
+        """
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT id, repo, workflow, runner_name, category FROM jobs "
+                "WHERE workflow LIKE 'E2E %'"
+            ).fetchall()
+            updated = 0
+            for row in rows:
+                name = row["workflow"]
+                if name in self.PIPELINE_WORKFLOW_NAMES:
+                    label = name
+                elif self.PIPELINE_RUN_NAME_RE.match(name):
+                    # Every run named after its commit or its comment is a
+                    # decision run of e2e-pr.yml (also on a merge queue branch).
+                    label = self.PIPELINE_WORKFLOW_FILES["e2e-pr.yml"]
+                else:
+                    continue
+                category = "e2e" if row["runner_name"] else "automation"
+                if label == name and category == row["category"]:
+                    continue
+                conn.execute(
+                    "UPDATE jobs SET workflow = ?, display_name = ?, category = ?, "
+                    "failure_reason = CASE WHEN ? = 'automation' THEN 'n/a' ELSE failure_reason END "
+                    "WHERE id = ?",
+                    (label, f"{row['repo']} / {label}", category, category, row["id"]),
+                )
+                updated += 1
+            if updated:
+                logger.info(
+                    "Moved %d stored pull-request-flow run(s) to their stable workflow name", updated
                 )
 
     def _migrate_json_cache_if_needed(self):
@@ -1341,13 +1474,16 @@ class WorkflowExporter:
                 pr_url = f"https://github.com/{ORG}/{repo}/pull/{pr_num}"
                 pr_display = f"#{pr_num}"
 
-        workflow_name = run.get("name", "unknown")
+        # A pull-request-flow run is named by its workflow, not by its run name,
+        # and is "automation" until its jobs show a suite really ran.
+        pipeline_name = WorkflowExporter._pipeline_workflow_name(run)
+        workflow_name = pipeline_name or run.get("name", "unknown")
         return {
             "id": run.get("id"),
             "repo": repo,
             "workflow": workflow_name,
             "display_name": f"{repo} / {workflow_name}",
-            "category": WorkflowExporter._categorize_workflow(workflow_name),
+            "category": "automation" if pipeline_name else WorkflowExporter._categorize_workflow(workflow_name),
             "branch": branch,
             "pr_url": pr_url,
             "pr_display": pr_display,
@@ -1469,6 +1605,7 @@ class WorkflowExporter:
                         jobs = self._fetch_run_jobs(repo, run["id"])
                         if jobs:
                             record["runner_name"] = self._extract_runner_names(jobs)
+                            self._refine_pipeline_category(record, jobs, active=True)
                     runs.append(record)
                 url = resp.links.get("next", {}).get("url")
         return runs, complete
@@ -1663,6 +1800,7 @@ class WorkflowExporter:
                 if jobs:
                     record["runner_name"] = self._extract_runner_names(jobs)
                     record["steps"] = self._extract_step_durations(jobs)
+                self._refine_pipeline_category(record, jobs)
                 self._apply_ai_status(record, jobs)
                 if conclusion == "failure":
                     # jobs may be [] (fetch succeeded, zero job entries) --
@@ -1738,6 +1876,7 @@ class WorkflowExporter:
             if jobs:
                 record["runner_name"] = self._extract_runner_names(jobs)
                 record["steps"] = self._extract_step_durations(jobs)
+            self._refine_pipeline_category(record, jobs)
             self._apply_ai_status(record, jobs)
             if conclusion == "failure":
                 # jobs may be [] (fetch succeeded, zero job entries) --
@@ -1828,6 +1967,7 @@ class WorkflowExporter:
                     if jobs:
                         record["runner_name"] = self._extract_runner_names(jobs)
                         record["steps"] = self._extract_step_durations(jobs)
+                    self._refine_pipeline_category(record, jobs)
                     self._apply_ai_status(record, jobs)
                     if conclusion == "failure":
                         # jobs may be [] (fetch succeeded, zero job entries)
@@ -1882,6 +2022,7 @@ class WorkflowExporter:
         if jobs:
             record["runner_name"] = self._extract_runner_names(jobs)
             record["steps"] = self._extract_step_durations(jobs)
+        self._refine_pipeline_category(record, jobs)
         self._apply_ai_status(record, jobs)
         if conclusion == "failure":
             # jobs may be [] (fetch succeeded, zero job entries)
