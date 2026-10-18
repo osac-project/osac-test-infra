@@ -534,19 +534,20 @@ jobs:
           NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
 
           declare -A REPO_PINNED_SHA
+          declare -a COMPONENT_SHA
 
+          # Resolve every source first and validate all Containerfile contexts
+          # before starting any expensive image build. This also keeps every
+          # later build on the exact commit that was inspected here.
           for i in $(seq 0 $((COUNT - 1))); do
             repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo")
             ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref")
             file=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].containerfile // \"Containerfile\"")
-            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey")
             build_type=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildType // \"containerfile\"")
             context=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].context // empty")
-
-            tag="localhost/component-${i}:${GITHUB_RUN_ID}"
             src="$RUNNER_TEMP/component-${i}-src"
 
-            echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
+            echo "::group::Validate component[$i]: ${repo}@${ref} (${file})"
             if [[ -n "${REPO_PINNED_SHA[$repo]:-}" ]]; then
               sha="${REPO_PINNED_SHA[$repo]}"
               echo "Cloning ${repo} at pinned SHA ${sha} (first clone resolved this from ref '${ref}')."
@@ -561,7 +562,32 @@ jobs:
               REPO_PINNED_SHA[$repo]="${sha}"
               echo "Pinned ${repo} to SHA ${sha} (resolved from ref '${ref}')."
             fi
+            COMPONENT_SHA[$i]="${sha}"
 
+            if [[ "${build_type}" != "ansible-builder" ]]; then
+              effective_context="${context:-$(dirname "${file}")}"
+              python3 .github/scripts/validate_containerfile_context.py \
+                --label "components[$i]" \
+                --repo-root "${src}" \
+                --containerfile "${file}" \
+                --context "${effective_context}"
+            fi
+            echo "::endgroup::"
+          done
+
+          for i in $(seq 0 $((COUNT - 1))); do
+            repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo")
+            ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref")
+            file=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].containerfile // \"Containerfile\"")
+            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey")
+            build_type=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildType // \"containerfile\"")
+            context=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].context // empty")
+
+            tag="localhost/component-${i}:${GITHUB_RUN_ID}"
+            src="$RUNNER_TEMP/component-${i}-src"
+            sha="${COMPONENT_SHA[$i]}"
+
+            echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
             # Derive component_dir (for CLI build, CRD discovery) from
             # the containerfile path, and build_context (for podman build)
             # from the optional context field.  When context is omitted,
