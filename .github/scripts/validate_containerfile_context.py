@@ -56,8 +56,11 @@ def _strip_options(arguments: str) -> tuple[list[str], str]:
 def local_sources(containerfile: Path) -> list[LocalSource]:
     sources: list[LocalSource] = []
     for line_number, instruction in logical_instructions(containerfile):
-        command, separator, arguments = instruction.partition(" ")
-        if not separator or command.upper() not in {"COPY", "ADD"}:
+        fields = instruction.split(maxsplit=1)
+        if len(fields) != 2:
+            continue
+        command, arguments = fields
+        if command.upper() not in {"COPY", "ADD"}:
             continue
 
         options, remainder = _strip_options(arguments)
@@ -80,7 +83,7 @@ def local_sources(containerfile: Path) -> list[LocalSource]:
         if len(paths) < 2:
             raise ValueError(f"line {line_number}: {command.upper()} requires at least one source and a destination")
         for path in paths[:-1]:
-            if path.startswith("<<") or (command.upper() == "ADD" and "://" in path):
+            if path.startswith("<<") or (command.upper() == "ADD" and ("://" in path or path.startswith("git@"))):
                 continue
             sources.append(LocalSource(path=path, line=line_number))
     return sources
