@@ -113,14 +113,14 @@
 
 - name: Check if sushy-emulator is already running
   ansible.builtin.shell:
-    cmd: pgrep -f sushy-emulator
+    cmd: pgrep -x sushy-emulator
   register: _sushy_running
   failed_when: false
   changed_when: false
 
 - name: Stop existing sushy-emulator if config changed
   ansible.builtin.shell:
-    cmd: pkill -f sushy-emulator || true
+    cmd: pkill -x sushy-emulator || true
   when: _sushy_config is changed and _sushy_running.rc == 0
 
 - name: Start sushy-emulator
