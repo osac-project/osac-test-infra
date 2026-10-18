@@ -236,6 +236,8 @@
                     if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
       }}
 
+# Keep bmf.metal3.enabled false here: it enables the BMF subchart's own Secret
+# templates. The OSAC chart's testBackend templates provide those configs instead.
 - name: Configure the Metal3 test backend for bare-metal services
   when:
     - bare_metal_services | bool
@@ -248,7 +250,6 @@
                'inventoryConfig': 'osac-inventory-config-metal3-test',
                'managementConfig': 'osac-management-config-metal3-test'
              },
-             'metal3': {'enabled': true, 'namespace': osac_namespace},
              'testBackend': {'metal3': {'enabled': true, 'namespace': osac_namespace}}
            }
          }, recursive=true) }}
