@@ -152,6 +152,7 @@
       - dnsmasq
       - zstd
       - pigz
+      - gdisk
     state: present
 
 - name: Check AWS CLI Python package import
