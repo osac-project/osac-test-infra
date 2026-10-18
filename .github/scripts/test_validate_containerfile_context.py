@@ -106,23 +106,65 @@ class ContainerfileContextTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_accepts_glob_matching_hidden_file(self) -> None:
+        (self.repo / ".settings.cfg").write_text("setting=true\n")
+        containerfile = self.repo / "Containerfile.hidden-glob"
+        containerfile.write_text("FROM scratch\nCOPY *.cfg /settings/\n")
+
+        result = subprocess.run(
+            [
+                "python3",
+                "-I",
+                str(VALIDATOR),
+                "--repo-root",
+                str(self.repo),
+                "--containerfile",
+                containerfile.name,
+                "--context",
+                ".",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_workflows_validate_every_context_before_first_image_build(self) -> None:
         invocation = "python3 .github/scripts/validate_containerfile_context.py"
+        loop = "for i in $(seq 0 $((COUNT - 1))); do"
         for workflow in PIPELINES:
             with self.subTest(workflow=workflow):
                 content = (WORKFLOWS / workflow).read_text()
                 step = content.split("- name: Build and load component images", 1)[1]
                 self.assertIn(invocation, step)
-                self.assertLess(step.index(invocation), step.index("podman build"))
+                validation_loop = step.index(loop)
+                validator = step.index(invocation, validation_loop)
+                validation_loop_end = step.index("\n          done", validator)
+                build_loop = step.index(loop, validation_loop_end)
+                self.assertLess(validation_loop, validator)
+                self.assertLess(validator, validation_loop_end)
+                self.assertLess(validation_loop_end, build_loop)
+                self.assertLess(build_loop, step.index("podman build"))
                 self.assertIn('sha="${COMPONENT_SHA[$i]}"', step)
 
     def test_shared_builder_validates_every_context_before_first_image_build(self) -> None:
         content = BUILD_COMPONENTS.read_text()
         invocation = "python3 .github/scripts/validate_containerfile_context.py"
+        loop = "for i in $(seq 0 $((count - 1))); do"
 
         self.assertIn(invocation, content)
-        self.assertLess(content.index(invocation), content.index("podman build"))
-        self.assertIn('sha="${component_sha[$i]}"', content)
+        validation_loop = content.index(loop)
+        validator = content.index(invocation, validation_loop)
+        validation_loop_end = content.index("\n  done", validator)
+        build_loop = content.index(loop, validation_loop_end)
+        pinned_sha = content.index('sha="${component_sha[$i]}"', build_loop)
+        first_build = content.index("podman build", build_loop)
+        self.assertLess(validation_loop, validator)
+        self.assertLess(validator, validation_loop_end)
+        self.assertLess(validation_loop_end, build_loop)
+        self.assertLess(build_loop, pinned_sha)
+        self.assertLess(pinned_sha, first_build)
 
 
 if __name__ == "__main__":

@@ -99,7 +99,7 @@ def _context_relative(source: str) -> Path:
 def _source_exists(context: Path, source: str) -> bool:
     candidate = context / _context_relative(source)
     if glob.has_magic(source):
-        return bool(glob.glob(str(candidate), recursive=True))
+        return bool(glob.glob(str(candidate), recursive=True, include_hidden=True))
     return candidate.exists()
 
 
