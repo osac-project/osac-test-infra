@@ -21,4 +21,4 @@ jobs:
             --remove-label "ok-to-test"
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body "Removed \`ok-to-test\` label due to new commits. An org member must re-approve with \`/ok-to-test\`."
+            --body "Removed \`ok-to-test\` label due to new commits. A person with triage access must add the label again after reading the new commits."

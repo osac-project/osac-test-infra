@@ -7,11 +7,14 @@
 # The suite workflow files come from the default branch (this run is started by workflow_run), while the code under
 # test - scripts, actions, Containerfile - is the pull request's own commit (test-infra-ref). A pull request that edits
 # the suite workflow files themselves is first exercised in the merge queue; CODEOWNERS makes wg-infra review them.
+#
+# A member of the organization can start suites by hand with a comment on the pull request: `/test` (the suites the change
+# needs) or `/test vmaas caas` (those suites), or with the checkboxes of the comment the decision keeps there.
 name: E2E for pull requests
 # The decision cancels the E2E of older commits by reading run titles: keep this exact format.
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('E2E #{0} (started by hand)', inputs.number) ||
-  github.event_name == 'issue_comment' && format('E2E #{0} (suites checked in the comment)', github.event.issue.number) ||
+  github.event_name == 'issue_comment' && format('E2E #{0} (suites asked for in a comment)', github.event.issue.number) ||
   format('E2E {0}:{1} @ {2}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch,
   github.event.workflow_run.head_sha) }}
 
@@ -20,7 +23,7 @@ on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out
     workflows: ["CI", "E2E review relay"]
     types: [requested, completed]
   issue_comment:
-    types: [edited]  # the checkboxes of the comment that starts suites by hand (an edit of any other comment is skipped)
+    types: [edited, created]  # the checkboxes of the control comment, and a /test comment (any other comment is skipped)
   workflow_dispatch:
     inputs:
       number:
@@ -31,7 +34,7 @@ permissions: {}
 
 jobs:
   decide:
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@ec980b4ab20ad5882d661684dc1060512634e787  # v1.1.0
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@a6096f7d6b664d6480412892eebe1a2309984154  # v1.2.2
     permissions:
       contents: read
       pull-requests: read
@@ -43,7 +46,7 @@ jobs:
   track:
     needs: decide
     if: needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@ec980b4ab20ad5882d661684dc1060512634e787  # v1.1.0
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@a6096f7d6b664d6480412892eebe1a2309984154  # v1.2.2
     permissions:
       contents: read
     with:
@@ -125,7 +128,7 @@ jobs:
   finish:
     needs: [decide, track, vmaas, caas, bmaas]
     if: always() && needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@ec980b4ab20ad5882d661684dc1060512634e787  # v1.1.0
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@a6096f7d6b664d6480412892eebe1a2309984154  # v1.2.2
     permissions:
       contents: read
     with:

@@ -96,6 +96,6 @@ runs:
         fi
 
         echo "::error::Fork PR blocked: '${PR_AUTHOR}' is not an osac-project org member."
-        echo "::error::An org member can approve this PR for testing by commenting /ok-to-test"
+        echo "::error::A person with triage access can approve this PR for testing by adding the ok-to-test label"
         echo "::endgroup::"
         exit 1

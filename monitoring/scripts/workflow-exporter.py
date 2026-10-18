@@ -968,8 +968,8 @@ class WorkflowExporter:
 
     def _count_e2e_retests(self, repo, pr_number):
         """Number of e2e runs for this PR beyond the first -- each
-        /retest (or /test) slash command, or new push, triggers another
-        full e2e run (see AGENTS.md's slash-command.yml), so this counts
+        a /test comment, or new push, triggers another
+        full e2e run, so this counts
         purely from already-stored job history, no extra API calls.
         """
         with self._db() as conn:

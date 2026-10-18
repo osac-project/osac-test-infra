@@ -62,7 +62,7 @@ jobs:
       id-token: write
     uses: ./.github/workflows/e2e-caas-full-install.yml
     with:
-      # PR/merge_group and slash-command PR dispatches are sanity-only,
+      # PR/merge_group runs are sanity-only,
       # regardless of tier labels or inputs. Periodics include the full suite.
       test-suite: >-
         ${{

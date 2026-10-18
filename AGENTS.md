@@ -70,7 +70,7 @@ osac-test-infra/
 ├── Makefile            # Build targets: test, lint, format, test-<suite>, plus infra orchestration
 ├── Containerfile       # UBI9 + oc/kubectl/grpcurl/osac CLI
 ├── pyproject.toml      # Python dependencies, ruff/basedpyright config
-└── .github/workflows/  # CI: pre-commit, E2E runs, slash commands
+└── .github/workflows/  # CI: pre-commit, E2E runs
 ```
 
 ## Test Framework Architecture
@@ -299,7 +299,7 @@ pre-commit run --all-files  # yamllint, ansible-lint, standard hooks
 
 Each E2E flavor is split into a reusable `workflow_call` file plus a separate "caller" file that
 owns the triggers — GitHub Actions triggers are per-file, so this keeps unrelated trigger types
-(schedule, `workflow_dispatch`, slash-command) out of the reusable workflow's own history:
+(schedule, `workflow_dispatch`) out of the reusable workflow's own history:
 
 - `.github/workflows/e2e-vmaas.yml` — reusable (`workflow_call`), cluster-tool snapshot restoration
   - `.github/workflows/e2e-vmaas-caller.yml` — `workflow_dispatch` entry point, calls `e2e-vmaas.yml`
@@ -310,9 +310,8 @@ owns the triggers — GitHub Actions triggers are per-file, so this keeps unrela
 Both flavors accept `test-suite`/`test-filter` inputs and output JUnit XML to `reports/`.
 
 **Fork PR workflow**:
-- `.github/workflows/slash-command.yml` — Listens for `/test`, `/retest`, `/cancel`, and `/ok-to-test` PR comments
-- `.github/workflows/slash-command-handler.yml` — Triggers E2E workflow after slash command approval
-- `.github/workflows/ok-to-test-label-cleanup.yml` — Removes the `ok-to-test` label whenever new commits are pushed, requiring an org member to re-approve
+- `.github/workflows/e2e-pr.yml` — the shared osac-ci decision; a member of the organization starts suites with the comment `/test` or `/test vmaas caas`
+- `.github/workflows/ok-to-test-label-cleanup.yml` — Removes the `ok-to-test` label whenever new commits are pushed, requiring a person with triage access to add it again
 - Tests run in container with Vault secrets injection
 
 
