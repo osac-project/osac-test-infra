@@ -107,14 +107,46 @@ class ContainerfileContextTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_accepts_glob_matching_hidden_file(self) -> None:
+        (self.repo / ".settings.cfg").write_text("setting=true\n")
+        containerfile = self.repo / "Containerfile.hidden-glob"
+        containerfile.write_text("FROM scratch\nCOPY *.cfg /settings/\n")
+
+        result = subprocess.run(
+            [
+                "python3",
+                "-I",
+                str(VALIDATOR),
+                "--repo-root",
+                str(self.repo),
+                "--containerfile",
+                containerfile.name,
+                "--context",
+                ".",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_workflows_validate_every_context_before_first_image_build(self) -> None:
         invocation = "python3 .github/scripts/validate_containerfile_context.py"
+        loop = "for i in $(seq 0 $((COUNT - 1))); do"
         for workflow in PIPELINES:
             with self.subTest(workflow=workflow):
                 content = (WORKFLOWS / workflow).read_text()
                 step = content.split("- name: Build and load component images", 1)[1]
                 self.assertIn(invocation, step)
-                self.assertLess(step.index(invocation), step.index("podman build"))
+                validation_loop = step.index(loop)
+                validator = step.index(invocation, validation_loop)
+                validation_loop_end = step.index("\n          done", validator)
+                build_loop = step.index(loop, validation_loop_end)
+                self.assertLess(validation_loop, validator)
+                self.assertLess(validator, validation_loop_end)
+                self.assertLess(validation_loop_end, build_loop)
+                self.assertLess(build_loop, step.index("podman build"))
                 self.assertIn('sha="${COMPONENT_SHA[$i]}"', step)
 
 
