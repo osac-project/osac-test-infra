@@ -87,10 +87,9 @@
         _vmaas_cv_metadata_generation: >-
           {{ (_vmaas_cluster_version_raw.stdout | from_json).metadata.generation | default(-2, true) | int }}
 
-    - name: Require a converged OCP 4.22 BareMetal OVNKubernetes cluster
+    - name: Require a converged OCP 4.22 OVNKubernetes cluster
       ansible.builtin.assert:
         that:
-          - _vmaas_infrastructure.status.platformStatus.type | default('Unknown') == 'BareMetal'
           - _vmaas_desired_version.split('.')[:2] | join('.') == ocp_evpn_required_version
           - _vmaas_current_version.split('.')[:2] | join('.') == ocp_evpn_required_version
           - _vmaas_current_version == _vmaas_desired_version
@@ -102,7 +101,7 @@
           - _vmaas_network.spec.defaultNetwork.type == 'OVNKubernetes'
         fail_msg: >-
           VMaaS CUDN EVPN requires a converged OCP {{ ocp_evpn_required_version }}
-          BareMetal cluster using OVNKubernetes. Observed platform={{
+          cluster using OVNKubernetes. Observed platform={{
           _vmaas_infrastructure.status.platformStatus.type | default('Unknown') }},
           desired={{ _vmaas_desired_version }}, current={{ _vmaas_current_version }},
           history.state={{ _vmaas_current_state }}, Available={{ _vmaas_cv_available }},

@@ -135,7 +135,7 @@
       changed_when: false
       tags: [cudn_evpn]
 
-    - name: Require the supported converged OCP version and bare-metal platform
+    - name: Require the supported converged OCP version
       ansible.builtin.assert:
         that:
           - _ocp_evpn_release_major_minor == ocp_evpn_required_version
@@ -146,11 +146,9 @@
           - _ocp_evpn_cv_progressing == "False"
           - _ocp_evpn_cv_failing == "False"
           - _ocp_evpn_cv_observed_generation == _ocp_evpn_cv_metadata_generation
-          - _ocp_evpn_platform_type == "BareMetal"
         fail_msg: >-
-          OCP CUDN EVPN requires a converged {{ ocp_evpn_required_version }} cluster on
-          Infrastructure/cluster.status.platformStatus.type=BareMetal. ClusterVersion
-          requires status.desired.version to match the newest status.history entry in
+          OCP CUDN EVPN requires a converged {{ ocp_evpn_required_version }} cluster.
+          ClusterVersion requires status.desired.version to match the newest status.history entry in
           state Completed, Available=True, Progressing=False, Failing=False, and
           status.observedGeneration=metadata.generation. Observed
           desired.version={{ _ocp_evpn_desired_version }}, current.version={{ _ocp_evpn_current_version }},
