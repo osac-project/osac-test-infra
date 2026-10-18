@@ -11,6 +11,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 VALIDATOR = SCRIPTS / "validate_containerfile_context.py"
 WORKFLOWS = SCRIPTS.parent / "workflows"
+BUILD_COMPONENTS = SCRIPTS.parents[1] / "scripts" / "ec2-runner" / "build-components.sh"
 PIPELINES = (
     "e2e-caas-full-install.yml",
     "e2e-bmaas-full-install.yml",
@@ -35,6 +36,9 @@ class ContainerfileContextTests(unittest.TestCase):
             "FROM scratch\n"
             "COPY --from=builder /output /output\n"
         )
+        assets = self.repo / "assets"
+        assets.mkdir()
+        (assets / "one.txt").write_text("one\n")
 
     def run_validator(self, context: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -71,6 +75,37 @@ class ContainerfileContextTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Validated components[6]", result.stdout)
 
+    def test_accepts_remote_stage_options_json_tabs_and_globs(self) -> None:
+        containerfile = self.repo / "Containerfile.semantics"
+        containerfile.write_text(
+            "FROM scratch AS generated\n"
+            "ADD --checksum=sha256:deadbeef https://example.invalid/archive.tar /archive.tar\n"
+            "ADD git@example.invalid:team/repository.git /repository\n"
+            "COPY --from=generated /generated /generated\n"
+            "COPY --chown=1000:1000 --chmod=0644 assets/*.txt /assets/\n"
+            'COPY ["assets/one.txt", "/one.txt"]\n'
+            "COPY\tassets/one.txt /tabbed.txt\n"
+        )
+
+        result = subprocess.run(
+            [
+                "python3",
+                "-I",
+                str(VALIDATOR),
+                "--repo-root",
+                str(self.repo),
+                "--containerfile",
+                containerfile.name,
+                "--context",
+                ".",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_workflows_validate_every_context_before_first_image_build(self) -> None:
         invocation = "python3 .github/scripts/validate_containerfile_context.py"
         for workflow in PIPELINES:
@@ -80,6 +115,14 @@ class ContainerfileContextTests(unittest.TestCase):
                 self.assertIn(invocation, step)
                 self.assertLess(step.index(invocation), step.index("podman build"))
                 self.assertIn('sha="${COMPONENT_SHA[$i]}"', step)
+
+    def test_shared_builder_validates_every_context_before_first_image_build(self) -> None:
+        content = BUILD_COMPONENTS.read_text()
+        invocation = "python3 .github/scripts/validate_containerfile_context.py"
+
+        self.assertIn(invocation, content)
+        self.assertLess(content.index(invocation), content.index("podman build"))
+        self.assertIn('sha="${component_sha[$i]}"', content)
 
 
 if __name__ == "__main__":
