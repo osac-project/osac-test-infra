@@ -125,8 +125,25 @@ jobs:
       notify-on-failure: false
       enable-ai-diagnostic: false
 
+  bmaas-netris:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"bmaas-netris"')
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
+    with:
+      test-infra-repository: ${{ needs.decide.outputs.head-repo }}
+      test-infra-ref: ${{ needs.decide.outputs.sha }}
+      test-infra-sha: ${{ needs.decide.outputs.sha }}
+      pr-repository: ${{ needs.decide.outputs.head-repo }}
+      pr-sha: ${{ needs.decide.outputs.sha }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      pr-number: ${{ needs.decide.outputs.number }}
+
   finish:
-    needs: [decide, track, vmaas, caas, bmaas]
+    needs: [decide, track, vmaas, caas, bmaas, bmaas-netris]
     if: always() && needs.decide.outputs.start == 'true'
     uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
     permissions:
