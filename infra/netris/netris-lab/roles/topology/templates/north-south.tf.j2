@@ -189,6 +189,28 @@ resource "netris_link" "north-south-leaf-to-gpu-server" {
   ]
 }
 
+{% if ocp_underlay_enabled | default(false) | bool %}
+# Dedicated OCP CUDN EVPN underlay link. Keep the OCP management V-Net on eth9
+# and its existing eth10/eth11 links unchanged. The OCP-facing Linux interface
+# is separately operator-configured; its name must be established by matching
+# the guest interface MAC to this Netris port, not inferred from eth12.
+resource "netris_link" "north-south-leaf-to-ocp" {
+  ports                           = [
+                                      "{{ ocp_underlay_leaf_port }}@${netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name}",
+                                      "{{ ocp_underlay_server_port }}@${netris_server.hgx[0].name}"
+  ]
+  ipv4                            = [
+                                      format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 1)),
+                                      format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 0))
+  ]
+  underlay                        = "enabled"
+  depends_on                      = [
+                                      netris_server.hgx,
+                                      netris_switch.north-south-leaf
+  ]
+}
+{% endif %}
+
 
 #Leaf to Spine links
 resource "netris_link" "north-south-leaf-to-spine" {

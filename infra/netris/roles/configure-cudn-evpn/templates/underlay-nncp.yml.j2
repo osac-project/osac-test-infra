@@ -1,0 +1,31 @@
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: tenant-evpn-underlay
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: "{{ _ocp_evpn_node_name }}"
+  desiredState:
+    interfaces:
+      - name: "{{ ocp_underlay_guest_interface }}"
+        type: ethernet
+        state: up
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: "{{ _ocp_evpn_ocp_ip }}"
+              prefix-length: 31
+        ipv6:
+          enabled: false
+      - name: "{{ ocp_evpn_vtep_dummy_interface }}"
+        type: dummy
+        state: up
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: "{{ _ocp_evpn_vtep_node_ip }}"
+              prefix-length: 32
+        ipv6:
+          enabled: false

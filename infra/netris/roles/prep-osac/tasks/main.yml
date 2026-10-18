@@ -1,7 +1,7 @@
 ---
 - name: Verify kubeconfig exists
   ansible.builtin.stat:
-    path: /root/.kube/config
+    path: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _kubeconfig
   failed_when: not _kubeconfig.stat.exists
 
@@ -123,7 +123,7 @@
   ansible.builtin.command:
     cmd: oc adm release info --image-for=cli
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _ocp_cli_image
   changed_when: false
 
@@ -133,6 +133,27 @@
   ansible.builtin.slurp:
     src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
   register: _values_raw
+
+- name: Validate the CUDN EVPN VMaaS profile contract
+  ansible.builtin.assert:
+    that:
+      - _selected_profile_values.global.services.vmaas.enabled | bool
+      - _selected_profile_values.operator.networkManagers.enabled | bool
+      - _selected_profile_values.operator.networkManagers.fabricManagers.netris.enabled | bool
+      - _selected_profile_values.operator.networkManagers.k8sManagers.cudn_evpn.enabled | bool
+      - _selected_profile_values.global.expertOverrides.networkClass | bool
+      - _selected_profile_values.networkClass.enabled | bool
+      - _selected_profile_values.networkClass.k8sManager == 'cudn_evpn'
+      - _selected_profile_values.networkClass.fabricManager == 'netris'
+      - _selected_profile_values.networkClass.isDefault | bool
+    fail_msg: >-
+      Profile {{ osac_profile }} must enable VMaaS, register Netris and cudn_evpn,
+      and explicitly select the default NetworkClass pair (netris, cudn_evpn).
+      prep-osac preserves this source profile selection; it does not synthesize or
+      overwrite NetworkClass settings.
+  vars:
+    _selected_profile_values: "{{ _values_raw.content | b64decode | from_yaml }}"
+  when: osac_profile == 'cudn-evpn-netris-test'
 
 # Operator enablement (cnv, mce, metallb) is intentionally NOT overridden here:
 # each values profile declares what it needs (e.g. bmaas-ci disables cnv/mce/metallb,
@@ -290,7 +311,7 @@
           - {{ bmc_net_ocp_ip }}
       EOF
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _prov_cr
   changed_when: "'created' in _prov_cr.stdout or 'configured' in _prov_cr.stdout"
 

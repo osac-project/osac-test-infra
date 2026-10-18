@@ -8,7 +8,7 @@
 > backend contract and a placeholder; new tests added here will not be
 > maintained.
 
-Unified repo for OSAC end-to-end testing. Provisions infrastructure via pluggable backends and runs pytest test suites against it.
+Unified repository for OSAC end-to-end infrastructure and test orchestration. Pluggable backends provision clusters; active pytest suites run from the OSAC mono-repo.
 
 **AI coding agents**: see [AGENTS.md](AGENTS.md) for test framework architecture, fixtures, and conventions. Claude Code additionally reads [CLAUDE.md](CLAUDE.md) for pytest configuration and environment variables.
 
@@ -17,15 +17,15 @@ Unified repo for OSAC end-to-end testing. Provisions infrastructure via pluggabl
 The repo has two layers:
 
 - **`infra/`** — infrastructure backends that provision a cluster and deploy OSAC. Each backend lives in its own directory and can use any technology (Ansible, shell, Go, etc.).
-- **`tests/`** — pytest E2E test suites that validate OSAC functionality. Tests are infrastructure-agnostic — they consume environment variables and don't know which backend provisioned the cluster.
+- **OSAC mono-repo** — the active pytest E2E suites live in the [osac mono-repo](https://github.com/osac-project/osac), under `tests/e2e/`. They are infrastructure-agnostic and consume environment variables rather than knowing which backend provisioned the cluster. This repository's `tests/` directory is legacy scaffolding; do not add or change E2E tests here.
 
-A **contract** connects the two layers. Each backend implements a standard set of Makefile targets (`setup-infra`, `deploy-infra`, `deploy-osac`, etc.) and produces a `.env.infra` file with the configuration tests need. The top-level Makefile orchestrates the full flow.
+A **contract** connects the layers. Each backend implements standard Makefile targets (`setup-infra`, `deploy-infra`, `deploy-osac`, etc.) and writes `.env.infra` with the configuration its suites need. Optional shell-sourceable suite contracts live at `infra/<backend>/contracts/<suite>` and list required environment variables. The top-level Makefile orchestrates the full flow.
 
 ```
-infra/<backend>/                    tests/<suite>/
+infra/<backend>/                    osac/tests/e2e/<suite>/
 ┌──────────────────────┐            ┌──────────────────────┐
 │ setup-infra          │            │                      │
-│ deploy-infra         │            │ pytest test_*.py     │
+│ deploy-infra         │            │ uv run pytest        │
 │ deploy-osac ──────────── .env.infra ──▶                │
 │ setup-<suite>        │            │                      │
 │ destroy-osac         │            │                      │
@@ -42,6 +42,8 @@ infra/<backend>/                    tests/<suite>/
 | **netris** | Ansible | Simulated Netris Spectrum-X GPU cluster with OCP and OSAC on KVM/libvirt | ~25 min (snapshot) / ~2h (full) |
 
 ### Test Suites
+
+The table describes active suites in the OSAC mono-repo. Their test code is not maintained in this repository.
 
 | Suite | Description |
 |-------|-------------|
@@ -60,7 +62,7 @@ Not every backend supports every test suite. Each backend declares its supported
 |---------|:-----:|:----:|:-------:|:-------:|:-----:|:----------------:|
 | netris  | no    | yes  | no      | no      | yes   | yes              |
 
-Running an unsupported combination (e.g., `make e2e INFRA=netris SUITE=storage`) fails immediately with a clear error message — no time wasted on provisioning.
+Running an unsupported combination fails immediately with a clear capability error. Netris currently does not advertise `vmaas`: the required OCP 4.22 bare-metal target and verified EVPN peer plus `172.27.0.0/16` return path are not available. The VMaaS invocation below is therefore gated and currently stops before provisioning.
 
 ### Backend Setup: Netris
 
@@ -128,7 +130,7 @@ When you run `make e2e INFRA=netris SUITE=caas` with `EXTRA_VARS` exported as de
 3. **`deploy-infra`** — deploys the Netris lab (`ansible-playbook playbooks/deploy-infra.yml`)
 4. **`deploy-osac`** — refreshes OSAC on the restored cluster, writes `.env.infra` with cluster access credentials
 5. **`setup-suite`** — runs CaaS-specific infrastructure setup (creates InfraEnv, boots discovery VMs, registers agents)
-6. **`run-tests`** — validates `.env.infra` has the required variables, sources it, runs `pytest tests/caas/`
+6. **`run-tests`** — checks the backend's suite contract when one is defined, sources `.env.infra`, then runs the selected suite target. The VMaaS target runs `uv run pytest tests/e2e/vmaas/` from the OSAC mono-repo.
 
 Each step can be run independently — you don't have to run the full pipeline every time.
 
@@ -137,9 +139,10 @@ Each step can be run independently — you don't have to run the full pipeline e
 ### Run tests against an existing cluster
 
 ```bash
-uv sync
+(cd /opt/osac && uv sync)
 
-OSAC_NAMESPACE=osac-devel OSAC_VM_KUBECONFIG=~/.kube/config make test-vmaas
+OSAC_NAMESPACE=osac-devel KUBECONFIG=~/.kube/config \
+  OSAC_VM_KUBECONFIG=~/.kube/config make test-vmaas
 
 TEST=test_cluster_order_lifecycle make test-caas
 ```
@@ -153,6 +156,13 @@ export EXTRA_VARS="bare_metal_services=true"
 # If 8.8.8.8 is blocked too, replace the export with the combined value shown above.
 
 make e2e INFRA=netris SUITE=caas
+
+# Intended VMaaS invocation (currently rejected by Netris capability validation)
+make e2e INFRA=netris SUITE=vmaas OSAC_DEPLOY_MODE=fresh
+
+# Explicitly select the VMaaS profile; the backend chooses it by default for SUITE=vmaas
+make e2e INFRA=netris SUITE=vmaas OSAC_DEPLOY_MODE=fresh \
+  OSAC_PROFILE=cudn-evpn-netris-test
 
 # Or step by step
 make setup-infra INFRA=netris
@@ -213,5 +223,6 @@ See [AGENTS.md](AGENTS.md) for the fuller env var reference used by the pytest f
 Create `infra/<name>/` with:
 - `Makefile` — Makefile implementing the contract targets (see `infra/contract.md`)
 - `capabilities` — shell-sourceable file declaring `SUPPORTED_SUITES="suite1 suite2"`
+- Optional `contracts/<suite>` files — shell-sourceable `REQUIRED_VARS` lists for suite environment validation
 
-No changes to test code or the top-level Makefile are needed.
+Test code belongs in the OSAC mono-repo. Add backend capability and suite contract files as needed; the root Makefile needs a runner target when introducing a suite.

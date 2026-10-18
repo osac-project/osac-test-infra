@@ -29,7 +29,7 @@
         state: absent
       loop:
         - /root/kubeconfig.{{ ocp_cluster_name }}
-        - /root/.kube/config
+        - "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
 
     - name: Recreate blank install disk
       ansible.builtin.command:

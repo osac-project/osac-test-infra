@@ -155,6 +155,10 @@
   changed_when: false
   failed_when: false
 
+# OpenShift/Netris CUDN EVPN diagnostics are read-only and tolerate absent APIs.
+- name: Gather OpenShift CUDN EVPN and Netris peer diagnostics
+  ansible.builtin.include_tasks: cudn-evpn-diagnostics.yml
+
 # ── OpenVPN ──
 - name: Gather tun0 interface
   ansible.builtin.shell: ip addr show tun0 > {{ _gather_dir }}/lab/openvpn/tun0 2>&1 || echo "tun0 not found" > {{ _gather_dir }}/lab/openvpn/tun0

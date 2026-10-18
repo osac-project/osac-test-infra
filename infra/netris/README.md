@@ -1,6 +1,6 @@
 # netris-test-infra
 
-Ansible automation to deploy OCP SNO on a [Netris Spectrum-X simulated lab](https://github.com/danmanor/netris-lab) and run OSAC VMaaS/CaaS/BMaaS end-to-end tests.
+Ansible automation to deploy OCP SNO on a [Netris Spectrum-X simulated lab](https://github.com/danmanor/netris-lab) and exercise the suites currently advertised by the backend.
 
 ## Architecture
 
@@ -106,6 +106,24 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make deploy-caas` | Create CaaS cluster using `ocp_ci_small` template | ~60 min |
 | `make setup-maas` | Same as setup-caas with MaaS resource-class / sizing; labels only `MAAS_LABEL_HOSTNAMES` (default h02+h03) with `g5` | ~30 min |
 | `make deploy-maas` | Create MaaS cluster (`ocp_4_20_ai_maas` + `-p` template params) | ~60 min |
+
+### VMaaS (gated)
+
+The Netris VMaaS flow is prepared but is not currently supported by the backend capability declaration. The restored `sno-4-22` target is a virtualized single-node cluster (`platformStatus.type: None`); CUDN EVPN requires a supported OpenShift 4.22 bare-metal cluster. The external EVPN peer and the return path for `172.27.0.0/16` also need to be verified before this suite can be enabled.
+
+The intended invocation is:
+
+```bash
+make e2e INFRA=netris SUITE=vmaas OSAC_DEPLOY_MODE=fresh
+```
+
+It currently stops at the capability check. Once the target is supported, `SUITE=vmaas` selects the `cudn-evpn-netris-test` OSAC profile by default; set `OSAC_PROFILE=cudn-evpn-netris-test` explicitly to pin it or provide another profile override. The profile selects the CUDN EVPN and Netris managers; it does not provision their cluster-side networking prerequisites.
+
+VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
+
+Suite fixtures create their own tenant `VirtualNetwork`, `Subnet`, `SecurityGroup`, and `ExternalIPPool` resources. Lab setup owns the cluster/fabric prerequisites and the approved route/return path for `172.27.0.0/16`; it must not pre-create fixture-owned tenant resources.
+
+To collect diagnostics from an existing deployment, run `make gather-suite INFRA=netris SUITE=vmaas`. The CUDN EVPN captures are written under `infra/netris/logs/cudn-evpn/`. Collection is read-only and best-effort; unavailable APIs or peers get an explicit marker in the output. Captured Kubernetes YAML, FRR logs, and Netris responses are scrubbed for credential-like values before they are written.
 
 ### Destroy
 

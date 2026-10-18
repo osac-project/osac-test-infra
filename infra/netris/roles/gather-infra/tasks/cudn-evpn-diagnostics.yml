@@ -1,0 +1,333 @@
+---
+- name: Create CUDN EVPN diagnostic directory
+  ansible.builtin.file:
+    path: "{{ _gather_dir }}/cudn-evpn"
+    state: directory
+    mode: "0755"
+  changed_when: false
+  failed_when: false
+
+# `oc get -o yaml` includes resource status. Keep raw command output out of
+# Ansible logs and redact credential-like keys before writing the diagnostics.
+- name: Capture OpenShift platform, CNO, NMState, and EVPN resources
+  ansible.builtin.command:
+    argv: "{{ item.argv }}"
+  environment:
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+  register: _gather_cudn_evpn_resources
+  changed_when: false
+  failed_when: false
+  no_log: true
+  loop:
+    - file: infrastructure.yaml
+      argv: [oc, --request-timeout=15s, get, infrastructure/cluster, -o, yaml]
+    - file: clusterversion.yaml
+      argv: [oc, --request-timeout=15s, get, clusterversion/version, -o, yaml]
+    - file: network-config.yaml
+      argv: [oc, --request-timeout=15s, get, network.config.openshift.io/cluster, -o, yaml]
+    - file: network-operator-config.yaml
+      argv: [oc, --request-timeout=15s, get, network.operator.openshift.io/cluster, -o, yaml]
+    - file: network-clusteroperator.yaml
+      argv: [oc, --request-timeout=15s, get, clusteroperator/network, -o, yaml]
+    - file: nodes.yaml
+      argv: [oc, --request-timeout=15s, get, nodes, -o, yaml]
+    - file: nmstate.yaml
+      argv: [oc, --request-timeout=15s, get, nmstate/nmstate, -o, yaml]
+    - file: node-network-configuration-policies.yaml
+      argv: [oc, --request-timeout=15s, get, nncp, -o, yaml]
+    - file: vteps.yaml
+      argv: [oc, --request-timeout=15s, get, vteps.k8s.ovn.org, -o, yaml]
+    - file: route-advertisements.yaml
+      argv: [oc, --request-timeout=15s, get, routeadvertisements.k8s.ovn.org, -o, yaml]
+    - file: frr-configurations.yaml
+      argv: [oc, --request-timeout=15s, get, frrconfigurations.frrk8s.metallb.io, -n, openshift-frr-k8s, -o, yaml]
+    - file: bgp-session-states.yaml
+      argv: [oc, --request-timeout=15s, get, bgpsessionstates.frrk8s.metallb.io, -n, openshift-frr-k8s, -o, yaml]
+
+- name: Redact credentials from OpenShift resource YAML
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import re
+        import sys
+
+        sensitive = re.compile(r"password|secret|token|authorization|cookie|connect\.sid|auth|private[_-]?key", re.I)
+        key_value = re.compile(r"^(\s*(?:[-{,]\s*)?([^:=\n]+?)\s*[:=]\s*)(.*)$")
+        block_indent = None
+        private_key = False
+        for raw in sys.stdin:
+            line = raw.rstrip("\r\n")
+            stripped = line.lstrip(" \t")
+            indent = len(line) - len(stripped)
+            if block_indent is not None:
+                if not stripped or indent > block_indent:
+                    continue
+                block_indent = None
+            if private_key:
+                if "-----END " in line and "PRIVATE KEY-----" in line:
+                    private_key = False
+                continue
+            if "-----BEGIN " in line and "PRIVATE KEY-----" in line:
+                print("<PRIVATE KEY REDACTED>")
+                private_key = "-----END " not in line
+                continue
+            match = key_value.match(line)
+            if match and sensitive.search(match.group(2)):
+                value = match.group(3).strip()
+                print(match.group(1) + "<REDACTED>")
+                if value.startswith(("|", ">")):
+                    block_indent = indent
+            else:
+                line = re.sub(r"(?i)(\bneighbor\s+\S+\s+password\s+).*$", r"\1<REDACTED>", line)
+                line = re.sub(r"(?i)(\bauthorization\b[\"']?\s*[:=]\s*).*$", r"\1<REDACTED>", line)
+                line = re.sub(r"(?i)\bBearer\s+\S+", "Bearer <REDACTED>", line)
+                line = re.sub(r"(?i)(\b(?:password|passwd|secret|token|authorization|cookie|connect\.sid|auth(?:entication)?(?:key|password)?|private[_-]?key)\b[\"\']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^,\s}\]]+)", r"\1<REDACTED>", line)
+                print(line)
+    stdin: "{{ (item.stdout | default('')) ~ '\n' ~ (item.stderr | default('')) }}"
+  register: _gather_cudn_evpn_resources_sanitized
+  changed_when: false
+  failed_when: false
+  no_log: true
+  loop: "{{ _gather_cudn_evpn_resources.results | default([]) }}"
+
+- name: Write sanitized OpenShift resource YAML
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/cudn-evpn/{{ item.item.item.file }}"
+    mode: "0644"
+    content: |
+      # Sanitized read-only capture; command exit code {{ item.item.rc | default(-1) }}
+      ---
+      {{ item.stdout | default('') }}
+  changed_when: false
+  failed_when: false
+  no_log: true
+  loop: "{{ _gather_cudn_evpn_resources_sanitized.results | default([]) }}"
+
+# The Netris controller returns full records, so recursively remove credential
+# fields before saving. All three endpoints are documented v2 GET endpoints.
+- name: Query Netris OCP hardware, BGP peers, and links
+  ansible.builtin.uri:
+    url: "{{ _gather_netris_url }}{{ item.path }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ _gather_netris_cookie.stdout | default('') | trim }}"
+    status_code: [200]
+    return_content: true
+    timeout: 20
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _gather_cudn_netris_records
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when:
+    - _gather_netris_url | default('') | trim | length > 0
+    - _gather_netris_cookie.stdout | default('') | trim | length > 0
+  loop:
+    - file: netris-ocp-hardware.json
+      path: "/api/v2/hw?filterName={{ ocp_vm_name_pattern | urlencode }}&limit=50&page=1"
+    - file: netris-ebgp-peers.json
+      path: /api/v2/ebgp
+    - file: netris-links.json
+      path: "/api/v2/link?limit=500&page=1"
+
+- name: Recursively redact Netris API credentials
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import json
+        import re
+        import sys
+
+        sensitive = re.compile(r"pass(?:word|wd)?|secret|token|authorization|cookie|connect\.sid|auth|private.?key|psk", re.I)
+        embedded_secret = re.compile(r"(?i)([\"']?\b(?:pass(?:word|wd)?|secret|token|authorization|cookie|connect\.sid|auth|private.?key|psk)\b[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^,\s}\]]+)")
+        private_key = re.compile(r"(?is)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----")
+
+        def redact(value):
+            if isinstance(value, dict):
+                return {key: ("<REDACTED>" if sensitive.search(str(key)) else redact(child)) for key, child in value.items()}
+            if isinstance(value, list):
+                return [redact(child) for child in value]
+            if isinstance(value, str):
+                value = embedded_secret.sub(r"\1<REDACTED>", value)
+                return private_key.sub("<PRIVATE KEY REDACTED>", value)
+            return value
+
+        try:
+            payload = json.load(sys.stdin)
+        except Exception:
+            payload = {"diagnostic": "unavailable or non-JSON response"}
+        json.dump(redact(payload), sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    stdin: "{{ item.content | default(item.json | default({'diagnostic': 'Netris API request unavailable', 'status': item.status | default('unavailable')}, true) | to_json, true) }}"
+  register: _gather_cudn_netris_records_sanitized
+  changed_when: false
+  failed_when: false
+  no_log: true
+  loop: "{{ _gather_cudn_netris_records.results | default([]) }}"
+  when: not (item.skipped | default(false))
+
+- name: Write sanitized Netris OCP peer and link records
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/cudn-evpn/{{ item.item.item.file }}"
+    mode: "0644"
+    content: "{{ item.stdout | default('{\"diagnostic\": \"unavailable\"}') }}"
+  changed_when: false
+  failed_when: false
+  no_log: true
+  loop: "{{ _gather_cudn_netris_records_sanitized.results | default([]) }}"
+
+- name: Capture FRR-K8s pod logs
+  ansible.builtin.shell:
+    cmd: |
+      pods=$(oc --request-timeout=15s get pods -n openshift-frr-k8s -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+      if [ -z "$pods" ]; then
+        echo "No FRR-K8s namespace pods found or the namespace is unavailable."
+      fi
+      for pod in $pods; do
+        echo "=== pod/$pod logs (all containers, last 500 lines) ==="
+        oc --request-timeout=15s logs -n openshift-frr-k8s "$pod" --all-containers=true --tail=500 2>&1 || true
+      done
+  environment:
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+  register: _gather_cudn_evpn_frr_logs
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Redact credentials from FRR-K8s logs
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import re
+        import sys
+
+        sensitive = re.compile(r"password|secret|token|authorization|cookie|connect\.sid|auth|private[_-]?key", re.I)
+        key_value = re.compile(r"^(\s*(?:[-{,]\s*)?([^:=\n]+?)\s*[:=]\s*)(.*)$")
+        block_indent = None
+        private_key = False
+        for raw in sys.stdin:
+            line = raw.rstrip("\r\n")
+            stripped = line.lstrip(" \t")
+            indent = len(line) - len(stripped)
+            if block_indent is not None:
+                if not stripped or indent > block_indent:
+                    continue
+                block_indent = None
+            if private_key:
+                if "-----END " in line and "PRIVATE KEY-----" in line:
+                    private_key = False
+                continue
+            if "-----BEGIN " in line and "PRIVATE KEY-----" in line:
+                print("<PRIVATE KEY REDACTED>")
+                private_key = "-----END " not in line
+                continue
+            match = key_value.match(line)
+            if match and sensitive.search(match.group(2)):
+                value = match.group(3).strip()
+                print(match.group(1) + "<REDACTED>")
+                if value.startswith(("|", ">")):
+                    block_indent = indent
+            else:
+                line = re.sub(r"(?i)(\bneighbor\s+\S+\s+password\s+).*$", r"\1<REDACTED>", line)
+                line = re.sub(r"(?i)(\bauthorization\b[\"']?\s*[:=]\s*).*$", r"\1<REDACTED>", line)
+                line = re.sub(r"(?i)\bBearer\s+\S+", "Bearer <REDACTED>", line)
+                line = re.sub(r"(?i)(\b(?:password|passwd|secret|token|authorization|cookie|connect\.sid|auth(?:entication)?(?:key|password)?|private[_-]?key)\b[\"\']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^,\s}\]]+)", r"\1<REDACTED>", line)
+                print(line)
+    stdin: "{{ (_gather_cudn_evpn_frr_logs.stdout | default('')) ~ '\n' ~ (_gather_cudn_evpn_frr_logs.stderr | default('')) }}"
+  register: _gather_cudn_evpn_frr_logs_sanitized
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Write sanitized FRR-K8s pod logs
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/cudn-evpn/frr-k8s-pod-logs.txt"
+    mode: "0644"
+    content: "{{ _gather_cudn_evpn_frr_logs_sanitized.stdout | default('unavailable') }}"
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Capture FRR BGP and EVPN operational summaries
+  ansible.builtin.shell:
+    cmd: |
+      pods=$(oc --request-timeout=15s get pods -n openshift-frr-k8s -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+      if [ -z "$pods" ]; then
+        echo "No FRR-K8s namespace pods found or the namespace is unavailable."
+      fi
+      for pod in $pods; do
+        echo "=== pod/$pod: show bgp summary ==="
+        oc --request-timeout=15s exec -n openshift-frr-k8s "$pod" -c frr -- vtysh -c 'show bgp summary' 2>&1 || true
+        echo
+        echo "=== pod/$pod: show bgp l2vpn evpn ==="
+        oc --request-timeout=15s exec -n openshift-frr-k8s "$pod" -c frr -- vtysh -c 'show bgp l2vpn evpn' 2>&1 || true
+        echo
+      done
+  environment:
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+  register: _gather_cudn_evpn_frr_bgp
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Redact credentials from FRR BGP summaries
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import re
+        import sys
+
+        sensitive = re.compile(r"password|secret|token|authorization|cookie|connect\.sid|auth|private[_-]?key", re.I)
+        key_value = re.compile(r"^(\s*(?:[-{,]\s*)?([^:=\n]+?)\s*[:=]\s*)(.*)$")
+        block_indent = None
+        private_key = False
+        for raw in sys.stdin:
+            line = raw.rstrip("\r\n")
+            stripped = line.lstrip(" \t")
+            indent = len(line) - len(stripped)
+            if block_indent is not None:
+                if not stripped or indent > block_indent:
+                    continue
+                block_indent = None
+            if private_key:
+                if "-----END " in line and "PRIVATE KEY-----" in line:
+                    private_key = False
+                continue
+            if "-----BEGIN " in line and "PRIVATE KEY-----" in line:
+                print("<PRIVATE KEY REDACTED>")
+                private_key = "-----END " not in line
+                continue
+            match = key_value.match(line)
+            if match and sensitive.search(match.group(2)):
+                value = match.group(3).strip()
+                print(match.group(1) + "<REDACTED>")
+                if value.startswith(("|", ">")):
+                    block_indent = indent
+            else:
+                line = re.sub(r"(?i)(\bneighbor\s+\S+\s+password\s+).*$", r"\1<REDACTED>", line)
+                line = re.sub(r"(?i)(\bauthorization\b[\"']?\s*[:=]\s*).*$", r"\1<REDACTED>", line)
+                line = re.sub(r"(?i)\bBearer\s+\S+", "Bearer <REDACTED>", line)
+                line = re.sub(r"(?i)(\b(?:password|passwd|secret|token|authorization|cookie|connect\.sid|auth(?:entication)?(?:key|password)?|private[_-]?key)\b[\"\']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^,\s}\]]+)", r"\1<REDACTED>", line)
+                print(line)
+    stdin: "{{ (_gather_cudn_evpn_frr_bgp.stdout | default('')) ~ '\n' ~ (_gather_cudn_evpn_frr_bgp.stderr | default('')) }}"
+  register: _gather_cudn_evpn_frr_bgp_sanitized
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Write sanitized FRR BGP and EVPN summaries
+  ansible.builtin.copy:
+    dest: "{{ _gather_dir }}/cudn-evpn/frr-bgp-evpn-summary.txt"
+    mode: "0644"
+    content: "{{ _gather_cudn_evpn_frr_bgp_sanitized.stdout | default('unavailable') }}"
+  changed_when: false
+  failed_when: false
+  no_log: true

@@ -11,8 +11,14 @@ ENV_INFRA := .env.infra
 SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci
-OSAC_PROFILE ?= caas-ci
+KUBECONFIG ?= /root/.kube/config
+OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
+OSAC_PROFILE ?= $(if $(filter vmaas,$(SUITE)),cudn-evpn-netris-test,caas-ci)
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
+
+# VMaaS can select a kubeconfig; legacy suites keep their established root path.
+OCP_KUBECONFIG = $(if $(filter vmaas,$(SUITE)),$(KUBECONFIG),/root/.kube/config)
+OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)'
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
@@ -44,7 +50,7 @@ deploy-infra:
 	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA)
 
 deploy-ocp:
-	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(OCP_ANSIBLE_EXTRA)
 
 deploy-osac:
 	@if [ "$(OSAC_DEPLOY_MODE)" = "snapshot" ]; then \
@@ -53,11 +59,23 @@ deploy-osac:
 		$(MAKE) install-osac; \
 	fi
 	@printf '%s\n' \
-		'KUBECONFIG=/root/.kube/config' \
+		'KUBECONFIG=$(OCP_KUBECONFIG)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=/root/.kube/config' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas,$(SUITE)),$(OSAC_VM_KUBECONFIG),$(OCP_KUBECONFIG))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
+
+# VMaaS setup/gather is read-only: tenant resources remain owned by the suite fixtures.
+setup-vmaas: SUITE = vmaas
+setup-vmaas:
+	ansible-playbook playbooks/setup-vmaas.yml $(OCP_ANSIBLE_EXTRA)
+
+gather-vmaas: SUITE = vmaas
+gather-vmaas:
+	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
+
+destroy-vmaas:
+	@echo "VMaaS setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
 
 setup-caas:
 	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
@@ -72,7 +90,7 @@ setup-caas-agents:
 
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
-	cd /opt/osac/osac-installer && make uninstall \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make uninstall \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE) 2>/dev/null || true
@@ -80,7 +98,7 @@ destroy-osac:
 	@rm -f $(ENV_INFRA)
 
 destroy-ocp:
-	ansible-playbook playbooks/destroy-ocp.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/destroy-ocp.yml $(OCP_ANSIBLE_EXTRA)
 
 destroy-infra:
 	ansible-playbook playbooks/destroy-infra.yml $(ANSIBLE_EXTRA)
@@ -96,7 +114,7 @@ force-destroy-caas:
 	ansible-playbook playbooks/force-destroy-caas.yml $(ANSIBLE_EXTRA)
 
 gather-infra:
-	ansible-playbook playbooks/gather-infra.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
 
 gather-mgmt-cluster:
 	ansible-playbook playbooks/gather-mgmt-cluster.yml $(ANSIBLE_EXTRA)
@@ -174,42 +192,42 @@ force-destroy-maas:
 install-osac: prep-osac run-osac-setup post-osac
 
 prep-osac:
-	ansible-playbook playbooks/prep-osac.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/prep-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 run-osac-setup:
 	@echo "=== Installing OSAC infrastructure via Helm (make install-infra) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install-infra \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-infra \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE)
 	@echo "=== Creating external Netris credentials ==="
-	ansible-playbook playbooks/create-netris-credentials.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/create-netris-credentials.yml $(OCP_ANSIBLE_EXTRA)
 	@echo "=== Installing OSAC application via Helm (make install-osac) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install-osac \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-osac \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE)
 
 post-osac:
-	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/post-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 # Snapshot refresh: clone mono-repo, patch values, run refresh-after-snapshot.py
 # post-refresh-osac → patch-osac-refresh (incl. AAP project pin sync + CaC)
 refresh-osac: prep-refresh-osac run-refresh-osac post-refresh-osac
 
 prep-refresh-osac:
-	ansible-playbook playbooks/prep-refresh-osac.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/prep-refresh-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 run-refresh-osac:
 	@echo "=== Running OSAC refresh ==="
 	cd /opt/osac/osac-installer && \
-		KUBECONFIG=/root/.kube/config \
+		KUBECONFIG=$(OCP_KUBECONFIG) \
 		VALUES_FILE=values/$(OSAC_PROFILE)/instance.yaml \
 		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
 		python3 -u scripts/refresh-after-snapshot.py
 
 post-refresh-osac:
-	ansible-playbook playbooks/post-refresh-osac.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/post-refresh-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 # ─── Utilities ─────────────────────────────────────────────────────
 
@@ -269,7 +287,7 @@ health-check:
 
 .PHONY: deploy deploy-fast \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
-        setup-caas deploy-caas setup-caas-agents \
+        setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
 		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
 		destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \

@@ -34,6 +34,46 @@ ocp_server_ports:
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 
+# Optional CUDN EVPN underlay link. The OCP VM's existing Netris data ports
+# eth9/eth10 and OOB port eth11 are already allocated; eth12 is the next free
+# server port in the generated topology. The VM's Linux interface name cannot
+# be inferred from the port index: set it only after checking that VM's MACs.
+# This remains disabled until the Netris peer and VMaaS route policy are ready.
+ocp_underlay_enabled: false
+ocp_underlay_server_port: "eth12"
+ocp_underlay_guest_interface: ""
+ocp_underlay_management_interface: "ens6"
+ocp_underlay_leaf_index: 0
+ocp_underlay_leaf_port: "swp52s0"
+ocp_underlay_p2p_cidr: "192.0.2.0/31"
+ocp_underlay_ocp_asn: 64512
+ocp_underlay_reserved_server_ports:
+  - "eth9"
+  - "eth10"
+  - "eth11"
+ocp_underlay_reserved_leaf_ports:
+  - "swp45s0"
+  - "swp45s1"
+  - "swp45s2"
+  - "swp45s3"
+  - "swp49s0"
+  - "swp49s1"
+  - "swp49s2"
+  - "swp49s3"
+  - "swp50s0"
+  - "swp50s1"
+  - "swp50s2"
+  - "swp50s3"
+  - "swp51s0"
+  - "swp51s1"
+  - "swp51s2"
+  - "swp51s3"
+
+# VMaaS's ExternalIP fixtures allocate from this separate test-only range.
+# The VMaaS route is deliberately not installed until the OCP/Netris/ISP path
+# has a narrow, verified policy for this RFC1918 prefix.
+osac_vmaas_external_ip_pool_cidr: "172.27.0.0/16"
+
 # OSAC tenant ExternalIPPool CIDR. The host routes this toward the softgate/ISP
 # (see deploy-infra) so tenant ExternalIPs are reachable. Must not overlap the
 # mgmt pools (nat_cidr 198.51.100.0/29, bgp_link 198.51.100.8/29,
@@ -256,3 +296,23 @@ bmaas_provisioning_snat_cidr: "198.51.100.32/29"
 # ocp_snat_ip), created in the Default (system) VPC — id 1 — where the other
 # NAT pools live.
 bmaas_provisioning_snat_vpc_id: 1
+
+# OpenShift CUDN EVPN prerequisites. The configure-cudn-evpn role is fail-closed:
+# it requires a supported OCP 4.22 BareMetal/OVNKubernetes cluster, the Task 2
+# single-node underlay link, and operator-confirmed network allocations.
+ocp_evpn_kubeconfig_path: "/root/.kube/config"
+ocp_evpn_required_version: "4.22"
+
+# These are explicit operator assertions, not discovery or verification. Keep
+# false until a supported external EVPN peer and narrow VMaaS return path are
+# independently provisioned and confirmed. Netris Controller 4.16/provider
+# 3.6.22 does not document the external EVPN AFI/SAFI contract. The ISP policy
+# denies 172.16.0.0/12, which contains the VMaaS fixture pool 172.27.0.0/16.
+ocp_evpn_external_peer_acknowledged: false
+ocp_vmaas_external_ip_return_path_acknowledged: false
+
+# Reserve these addresses from the network design before opt-in. No VTEP range
+# or per-node /32 is assigned by this lab inventory by default.
+ocp_evpn_vtep_cidr: ""
+ocp_evpn_vtep_node_ip_cidr: ""
+ocp_evpn_vtep_dummy_interface: "evpn-vtep0"
