@@ -34,43 +34,21 @@ ocp_server_ports:
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 
-# Optional CUDN EVPN underlay link. The OCP VM's existing Netris data ports
-# eth9/eth10 and OOB port eth11 are already allocated; eth12 is the next free
-# server port in the generated topology. After deploy-infra adds eth12, match
-# its MAC in the guest before setting ocp_underlay_guest_interface for deploy-ocp.
+# Optional CUDN EVPN underlay. Reuse h00's existing leaf-1 link: eth10 on the
+# server side and swp1s0 on ns-leaf-1. eth9 on leaf-0 remains the br-ex data link.
+# Match eth10's MAC to the guest NIC before setting ocp_underlay_guest_interface.
 ocp_underlay_enabled: false
-ocp_underlay_server_port: "eth12"
+ocp_underlay_server_port: "eth10"
 ocp_underlay_guest_interface: ""
-# The restored OCP node uses ens4 for management and ens6 for br-ex.
+# The restored OCP node uses ens4 for management; ens6 is br-ex and ens7 maps to eth10.
 ocp_underlay_management_interface: "ens4"
-ocp_underlay_leaf_index: 0
-ocp_underlay_leaf_port: "swp52s0"
+ocp_underlay_leaf_index: 1
+ocp_underlay_leaf_port: "swp1s0"
 ocp_underlay_p2p_cidr: "192.0.2.0/31"
 ocp_underlay_ocp_asn: 64512
 # BGP peers require a VLAN selection even for an untagged routed port. The
 # existing North-South SoftGate peers use VLANs 10-13.
 ocp_underlay_vlan_id: 14
-ocp_underlay_reserved_server_ports:
-  - "eth9"
-  - "eth10"
-  - "eth11"
-ocp_underlay_reserved_leaf_ports:
-  - "swp45s0"
-  - "swp45s1"
-  - "swp45s2"
-  - "swp45s3"
-  - "swp49s0"
-  - "swp49s1"
-  - "swp49s2"
-  - "swp49s3"
-  - "swp50s0"
-  - "swp50s1"
-  - "swp50s2"
-  - "swp50s3"
-  - "swp51s0"
-  - "swp51s1"
-  - "swp51s2"
-  - "swp51s3"
 
 # VMaaS's ExternalIP fixtures allocate from this separate test-only range.
 # The VMaaS route is deliberately not installed until the OCP/Netris/ISP path

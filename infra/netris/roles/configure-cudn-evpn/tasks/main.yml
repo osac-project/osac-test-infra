@@ -203,8 +203,8 @@
         that:
           - ocp_underlay_enabled | bool
         fail_msg: >-
-          ocp_underlay_enabled is false. Provision and verify the dedicated eth12
-          fabric link and its single-node /31 contract before configuring CUDN EVPN.
+          ocp_underlay_enabled is false. Enable and verify h00's existing eth10 to
+          ns-leaf-1 swp1s0 link and its single-node /31 contract before configuring CUDN EVPN.
           No cluster configuration was changed.
       tags: [cudn_evpn]
 

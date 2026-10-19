@@ -109,12 +109,12 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 
 ### VMaaS and BMaaS shared-subnet networking
 
-The VMaaS/BMaaS profile uses the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. `deploy-infra` provisions a dedicated Netris leaf-to-OCP `/31` link on the OCP VM's `eth12`; `deploy-ocp SUITE=vmaas` configures OVN route advertisements, an unmanaged VTEP, FRR, and the leaf peer. The OSAC `cudn-evpn-netris-test` profile enables both VMaaS and BMaaS and selects Netris plus CUDN EVPN, allowing both instance types to attach to one subnet.
+The VMaaS/BMaaS profile uses the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `SUITE=vmaas`, `deploy-infra` reuses h00's existing leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay; leaf-0's `eth9` link remains the `br-ex` data path. Set `ocp_underlay_guest_interface` to the guest NIC matching `eth10` (for this lab, `ens7`). `deploy-ocp` configures OVN route advertisements, an unmanaged VTEP, FRR, and the leaf peer. The OSAC `cudn-evpn-netris-test` profile enables both VMaaS and BMaaS and selects Netris plus CUDN EVPN, allowing both instance types to attach to one subnet.
 
 The full VMaaS E2E invocation is:
 
 ```bash
-make e2e INFRA=netris SUITE=vmaas OSAC_DEPLOY_MODE=fresh
+make e2e INFRA=netris SUITE=vmaas OSAC_DEPLOY_MODE=fresh EXTRA_VARS="ocp_underlay_guest_interface=ens7"
 ```
 
 `SUITE=vmaas` selects the `cudn-evpn-netris-test` OSAC profile by default. Set `OSAC_PROFILE=cudn-evpn-netris-test` explicitly to pin it. The profile selects the CUDN EVPN and Netris managers; `deploy-infra` and `deploy-ocp` provision the cluster-side networking prerequisites.

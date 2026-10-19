@@ -179,43 +179,31 @@ resource "netris_link" "north-south-leaf-to-gpu-server" {
                                       "eth${(count.index - (2*floor(count.index/2)) + local.gpu-server-first-ns-port)}@${netris_server.hgx[(floor(count.index/2))].name}"
   ]
   ipv4                            = [
+{% if ocp_underlay_enabled | default(false) | bool %}
+                                      count.index == {{ ocp_underlay_leaf_index | int }} ? format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 1)) : "${var.north-south-fabric.gpu-server-ns-nexthop}",
+                                      count.index == {{ ocp_underlay_leaf_index | int }} ? format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 0)) : "${cidrhost(var.north-south-fabric.gpu-server-ns-subnet, (floor(count.index/2) + 1) )}/${replace(var.north-south-fabric.gpu-server-ns-subnet, "/.*//", "")}"
+{% else %}
                                       "${var.north-south-fabric.gpu-server-ns-nexthop}",
                                       "${cidrhost(var.north-south-fabric.gpu-server-ns-subnet, (floor(count.index/2) + 1) )}/${replace(var.north-south-fabric.gpu-server-ns-subnet, "/.*//", "")}"
+{% endif %}
   ]
-  underlay                        = "disabled"
-  depends_on                      = [
-                                      netris_server.hgx,
-                                      netris_switch.north-south-leaf
-  ]
-}
-
 {% if ocp_underlay_enabled | default(false) | bool %}
-# Dedicated OCP CUDN EVPN underlay link. Keep the OCP management V-Net on eth9
-# and its existing eth10/eth11 links unchanged. The OCP-facing Linux interface
-# is separately operator-configured; its name must be established by matching
-# the guest interface MAC to this Netris port, not inferred from eth12.
-resource "netris_link" "north-south-leaf-to-ocp" {
-  ports                           = [
-                                      "{{ ocp_underlay_leaf_port }}@${netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name}",
-                                      "{{ ocp_underlay_server_port }}@${netris_server.hgx[0].name}"
-  ]
-  ipv4                            = [
-                                      format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 1)),
-                                      format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 0))
-  ]
-  underlay                        = "enabled"
+  underlay                        = count.index == {{ ocp_underlay_leaf_index | int }} ? "enabled" : "disabled"
+{% else %}
+  underlay                        = "disabled"
+{% endif %}
   depends_on                      = [
                                       netris_server.hgx,
                                       netris_switch.north-south-leaf
   ]
 }
 
-# Configure the Netris side of the direct OCP eBGP session. The link alone
-# allocates addresses and connects the virtual ports; it does not create a
-# BGP neighbor on the leaf.
+# Reuse h00's existing leaf-1 link (eth10 <-> swp1s0) for the direct OCP
+# underlay. The leaf-0 eth9 link remains attached to br-ex and carries OCP data.
+{% if ocp_underlay_enabled | default(false) | bool %}
 data "netris_network_interface" "ocp_underlay" {
   name                            = "{{ ocp_underlay_leaf_port }}@${netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name}"
-  depends_on                      = [netris_link.north-south-leaf-to-ocp]
+  depends_on                      = [netris_link.north-south-leaf-to-gpu-server]
 }
 
 resource "netris_bgp" "ocp_underlay" {
@@ -229,7 +217,7 @@ resource "netris_bgp" "ocp_underlay" {
   untagged                        = true
   localip                         = format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 1))
   remoteip                        = format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 0))
-  depends_on                      = [netris_link.north-south-leaf-to-ocp]
+  depends_on                      = [netris_link.north-south-leaf-to-gpu-server]
 }
 {% endif %}
 

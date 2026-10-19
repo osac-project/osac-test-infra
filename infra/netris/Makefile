@@ -19,7 +19,8 @@ OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 
 # VMaaS can select a kubeconfig; legacy suites keep their established root path.
 OCP_KUBECONFIG = $(if $(filter vmaas,$(SUITE)),$(KUBECONFIG),/root/.kube/config)
-OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)'
+VMAAS_UNDERLAY_EXTRA = $(if $(filter vmaas,$(SUITE)),-e ocp_underlay_enabled=true,)
+OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
@@ -48,7 +49,7 @@ deploy-setup:
 setup-infra: deploy-setup
 
 deploy-infra:
-	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA) $(VMAAS_UNDERLAY_EXTRA)
 
 deploy-ocp:
 	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(OCP_ANSIBLE_EXTRA)
