@@ -12,3 +12,6 @@ spec:
         neighbors:
           - address: "{{ _ocp_evpn_leaf_ip }}"
             asn: {{ _ocp_evpn_leaf_asn | int }}
+            ebgpMultiHop: true
+            port: 179
+            sourceaddress: "{{ _ocp_evpn_ocp_ip }}"
