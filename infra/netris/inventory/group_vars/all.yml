@@ -47,6 +47,9 @@ ocp_underlay_leaf_index: 0
 ocp_underlay_leaf_port: "swp52s0"
 ocp_underlay_p2p_cidr: "192.0.2.0/31"
 ocp_underlay_ocp_asn: 64512
+# BGP peers require a VLAN selection even for an untagged routed port. The
+# existing North-South SoftGate peers use VLANs 10-13.
+ocp_underlay_vlan_id: 14
 ocp_underlay_reserved_server_ports:
   - "eth9"
   - "eth10"

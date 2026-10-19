@@ -214,19 +214,21 @@ resource "netris_link" "north-south-leaf-to-ocp" {
 # allocates addresses and connects the virtual ports; it does not create a
 # BGP neighbor on the leaf.
 data "netris_network_interface" "ocp_underlay" {
-  name       = "{{ ocp_underlay_leaf_port }}@${netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name}"
-  depends_on = [netris_link.north-south-leaf-to-ocp]
+  name                            = "{{ ocp_underlay_leaf_port }}@${netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name}"
+  depends_on                      = [netris_link.north-south-leaf-to-ocp]
 }
 
 resource "netris_bgp" "ocp_underlay" {
-  name      = "ocp-evpn-underlay"
-  siteid    = netris_site.site1.id
-  hardware  = netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name
-  neighboras = {{ ocp_underlay_ocp_asn }}
-  portid    = data.netris_network_interface.ocp_underlay.id
-  localip   = format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 1))
-  remoteip  = format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 0))
-  depends_on = [netris_link.north-south-leaf-to-ocp]
+  name                            = "ocp-evpn-underlay"
+  siteid                          = netris_site.site1.id
+  hardware                        = netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name
+  neighboras                      = {{ ocp_underlay_ocp_asn }}
+  portid                          = data.netris_network_interface.ocp_underlay.id
+  vlanid                          = {{ ocp_underlay_vlan_id }}
+  untagged                        = true
+  localip                         = format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 1))
+  remoteip                        = format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 0))
+  depends_on                      = [netris_link.north-south-leaf-to-ocp]
 }
 {% endif %}
 
