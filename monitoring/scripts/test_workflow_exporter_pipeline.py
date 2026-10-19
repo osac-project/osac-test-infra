@@ -185,6 +185,21 @@ class StoredRowsTests(unittest.TestCase):
         self.assertEqual(got[7], ("CI", "ci", ""))
         self.assertEqual(got[8], ("E2E vmaas:nightly @ not-a-sha", "e2e", ""))
 
+    def test_a_category_the_ingestion_derived_is_not_overridden(self):
+        # Already under the stable name: a run cancelled before any step started has a runner but is
+        # "automation" by its jobs; a suite that ran has "e2e" and keeps it.
+        rows = [
+            (1, "osac", "E2E for pull requests", "osac / a", "automation", "osac-1-runner-04", "n/a"),
+            (2, "osac", "E2E for pull requests", "osac / b", "e2e", "osac-1-runner-04", ""),
+            (3, "osac", "E2E for the merge queue", "osac / c", "e2e", "", "infra"),
+        ]
+        exporter, conn = self.exporter_with_rows(rows)
+        exporter._normalize_pipeline_rows_if_needed()
+        got = {r["id"]: (r["category"], r["failure_reason"]) for r in conn.execute("SELECT * FROM jobs")}
+        self.assertEqual(got[1], ("automation", "n/a"))
+        self.assertEqual(got[2], ("e2e", ""))
+        self.assertEqual(got[3], ("automation", "n/a"))  # a legacy row that never used a machine
+
     def test_running_it_twice_changes_nothing_more(self):
         rows = [(1, "osac", "E2E #12 (suites checked in the comment)", "osac / y", "e2e", "", "")]
         exporter, conn = self.exporter_with_rows(rows)
@@ -198,6 +213,49 @@ class StoredRowsTests(unittest.TestCase):
         exporter, conn = self.exporter_with_rows(rows)
         exporter._recategorize_jobs_if_needed()
         self.assertEqual(conn.execute("SELECT category FROM jobs").fetchone()["category"], "automation")
+
+
+class ActiveRunsTests(unittest.TestCase):
+    def exporter(self, jobs):
+        exporter = Exporter.__new__(Exporter)
+        exporter._pr_map = {}
+        response = mock.Mock(ok=True, links={})
+        response.json.return_value = {
+            "workflow_runs": [
+                {"id": 1, "name": "E2E #12 (suites asked for in a comment)", "event": "issue_comment",
+                 "path": ".github/workflows/e2e-pr.yml"},
+                {"id": 2, "name": "CI", "event": "pull_request", "path": ".github/workflows/ci.yml"},
+            ]
+        }
+        exporter._get = lambda url: response
+        exporter._is_zombie_run = lambda repo, run: False
+        exporter._fetch_run_jobs = lambda repo, run_id: jobs
+        return exporter
+
+    def test_a_flow_run_whose_jobs_cannot_be_read_makes_the_fetch_incomplete(self):
+        runs, complete = self.exporter(None)._fetch_active_runs("osac")
+        self.assertFalse(complete)
+
+    def test_the_jobs_of_the_flow_run_decide_its_category(self):
+        runs, complete = self.exporter([job(SUITE)])._fetch_active_runs("osac")
+        self.assertTrue(complete)
+        self.assertIn("e2e", {r["category"] for r in runs if r["workflow"] == "E2E for pull requests"})
+
+
+class MetricLabelTests(unittest.TestCase):
+    def test_a_flow_run_is_counted_under_its_stable_workflow_name(self):
+        exporter = Exporter.__new__(Exporter)
+        exporter._pr_map = {}
+        exporter._needs_upsert = lambda run: True
+        exporter._fetch_run_jobs = lambda repo, run_id: [job("decide / Decide")]
+        exporter._apply_ai_status = lambda record, jobs: None
+        exporter._upsert_job = lambda record: True
+        run = {"id": 5, "name": "E2E #12 (suites asked for in a comment)", "event": "issue_comment",
+               "path": ".github/workflows/e2e-pr.yml", "conclusion": "success"}
+        with mock.patch.object(workflow_exporter, "completed_runs") as completed:
+            self.assertTrue(exporter._process_completed_run("osac", run))
+        completed.labels.assert_called_once()
+        self.assertEqual(completed.labels.call_args.kwargs["workflow"], "E2E for pull requests")
 
 
 if __name__ == "__main__":

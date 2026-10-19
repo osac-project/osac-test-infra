@@ -781,8 +781,10 @@ class WorkflowExporter:
         self-hosted machines the run used, which only a real suite job
         has (the orchestration jobs run on GitHub-hosted runners, which are
         cleaned out of that column). A run that used one of our machines
-        is "e2e", any other is "automation". Safe to re-run: a row already
-        under its stable name is left alone.
+        is "e2e", any other is "automation". Only a legacy "e2e" row can be
+        demoted: a category the ingestion already derived from the run's jobs
+        is never overridden by this heuristic. Safe to re-run: a row already
+        under its stable name with the right category is left alone.
         """
         with self._db() as conn:
             rows = conn.execute(
@@ -800,7 +802,12 @@ class WorkflowExporter:
                     label = self.PIPELINE_WORKFLOW_FILES["e2e-pr.yml"]
                 else:
                     continue
-                category = "e2e" if row["runner_name"] else "automation"
+                # Legacy rows were all "e2e" by name: demote those that never
+                # used one of our machines, never promote or override a
+                # category that ingestion derived from the jobs.
+                category = row["category"]
+                if category == "e2e" and not row["runner_name"]:
+                    category = "automation"
                 if label == name and category == row["category"]:
                     continue
                 conn.execute(
@@ -1587,7 +1594,9 @@ class WorkflowExporter:
         genuinely are only this many". Callers deriving counts from this
         list (e.g. the by-category queued/in-progress gauges) should skip
         publishing on an incomplete fetch rather than publish an
-        undercount that looks like a real drop.
+        undercount that looks like a real drop. The same holds when the
+        job details of an in-progress pull-request-flow run cannot be read:
+        its category comes from its jobs, so it would count as automation.
         """
         runs = []
         complete = True
@@ -1612,6 +1621,12 @@ class WorkflowExporter:
                         if jobs:
                             record["runner_name"] = self._extract_runner_names(jobs)
                             self._refine_pipeline_category(record, jobs, active=True)
+                        elif jobs is None and record["workflow"] in WorkflowExporter.PIPELINE_WORKFLOW_NAMES:
+                            # The category of a pull-request-flow run comes from
+                            # its jobs: without them the record stays
+                            # "automation" and the by-category gauges would
+                            # undercount e2e, so keep the previous values.
+                            complete = False
                     runs.append(record)
                 url = resp.links.get("next", {}).get("url")
         return runs, complete
@@ -2014,9 +2029,11 @@ class WorkflowExporter:
             return False
 
         conclusion = run.get("conclusion") or "unknown"
-        workflow_name = run.get("name", "unknown")
 
         record = self._make_job_record(run, repo)
+        # The stable name, not the run name: a flow run is named after its
+        # commit or comment, which would give every run its own label set.
+        workflow_name = record["workflow"]
         jobs = self._fetch_run_jobs(repo, run_id)
         if jobs is None:
             logger.warning(
