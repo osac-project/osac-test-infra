@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import requests
+
 
 class FakeResponse:
     """The subset of requests.Response the scripts use."""
@@ -19,7 +21,7 @@ class FakeResponse:
 
     def raise_for_status(self):
         if not self.ok:
-            raise RuntimeError(f"HTTP {self.status_code}")
+            raise requests.exceptions.HTTPError(f"HTTP {self.status_code}", response=self)
 
 
 class FakeGitHub:

@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+import requests
 
 from helpers import FakeResponse
 
@@ -106,7 +107,7 @@ def test_get_uses_session(digest, monkeypatch):
     assert digest._get("/api/counts", category="e2e") == {"ok": 1}
     assert calls == [(f"{digest.EXPORTER_URL}/api/counts", {"category": "e2e"})]
     monkeypatch.setattr(digest._SESSION, "get", lambda *a, **k: FakeResponse(500))
-    with pytest.raises(RuntimeError):
+    with pytest.raises(requests.exceptions.HTTPError):
         digest._get("/api/counts")
 
 

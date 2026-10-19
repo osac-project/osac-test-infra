@@ -41,7 +41,6 @@ jobs:
           python3 -I .github/scripts/redact_test.py
           python3 -I .github/scripts/test_ai_diagnose_failure.py
           python3 -I .github/scripts/test_upsert_pr_comment.py
-          python3 -I monitoring/scripts/test_workflow_exporter_pipeline.py
       - name: Shell script tests
         run: bash .github/scripts/discover-audit-runs-test.sh
 

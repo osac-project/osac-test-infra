@@ -81,7 +81,7 @@ approval), so they are not counted as `e2e`:
 Runs stored before this rule are moved on the next start: the self-hosted machine
 a run used (`runner_name`) tells whether a suite ran. Every panel and the daily
 digest filter on `category=e2e`, so they need no change. Tests:
-`python3 -I monitoring/scripts/test_workflow_exporter_pipeline.py`.
+`monitoring/tests/test_exporter_pipeline.py` (see [Unit tests](#unit-tests)).
 
 ## Components
 
@@ -204,7 +204,8 @@ at `--add-tunnel` time.
 ### Automated deploy on merge (CI)
 
 `.github/workflows/deploy-monitoring.yml` deploys every push to `main` that
-touches `monitoring/**` (or a manual `workflow_dispatch` against `main`).
+touches `monitoring/**` except a change limited to `monitoring/tests/**`,
+which is never deployed (or a manual `workflow_dispatch` against `main`).
 It runs on a dedicated self-hosted GitHub Actions runner labeled
 `monitoring-central`, which **must be the central machine itself** — see
 [`scripts/runners/README.md`](../scripts/runners/README.md#registering-a-dedicated-runner-different-labelspurpose)
@@ -215,23 +216,6 @@ It has no `pull_request` trigger and therefore never shows up, even as
 "skipped", on a PR's checks. PR-time validation (promtool config/rules
 check, dashboard JSON validation) lives in the separate
 `.github/workflows/validate-monitoring.yml` instead.
-
-### Unit tests
-
-`monitoring/tests/` holds the unit tests for the Python scripts in
-`monitoring/scripts/` (`workflow-exporter.py` and `post-ci-digest.py`).
-They fake the GitHub, exporter, and Slack APIs, so they need no network
-access and no secrets. `.github/workflows/monitoring-unit-tests.yml` runs
-them on pull requests that change `monitoring/scripts/**` or
-`monitoring/tests/**`, and fails when coverage of `monitoring/scripts/`
-drops below 80%. To run them locally (from `monitoring/tests`, since the
-coverage path in `pytest.ini` is relative to it):
-
-```bash
-cd monitoring/tests
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/pytest
-```
 
 Steps: fetch secrets from Vault (see below), write them into
 `~/.monitoring-server/.env` and `.env.grafana`, run
@@ -278,6 +262,23 @@ Each path is granted individually in the `osac-e2e` policy
 (`vault/scripts/vault-setup.sh`), not as a wildcard, so adding unrelated
 monitoring secrets later doesn't implicitly grant this AppRole access to
 them.
+
+### Unit tests
+
+`monitoring/tests/` holds the unit tests for the Python scripts in
+`monitoring/scripts/` (`workflow-exporter.py` and `post-ci-digest.py`).
+They fake the GitHub, exporter, and Slack APIs, so they need no network
+access and no secrets. `.github/workflows/monitoring-unit-tests.yml` runs
+them on pull requests that change `monitoring/scripts/**` or
+`monitoring/tests/**`, and fails when coverage of `monitoring/scripts/`
+drops below 80%. To run them locally (from `monitoring/tests`, since the
+coverage path in `pytest.ini` is relative to it):
+
+```bash
+cd monitoring/tests
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/pytest
+```
 
 ## Alerting
 
