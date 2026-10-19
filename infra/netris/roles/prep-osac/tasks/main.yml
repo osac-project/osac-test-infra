@@ -255,6 +255,13 @@
            }
          }, recursive=true) }}
 
+- name: Disable cluster version seeding when CaaS is disabled
+  # The seed hook calls the CaaS API, which returns 503 when CaaS is disabled.
+  when: not ((_values_raw.content | b64decode | from_yaml).global.services.caas.enabled | default(true) | bool)
+  ansible.builtin.set_fact:
+    _values_overrides: >-
+      {{ _values_overrides | combine({'clusterVersions': {'enabled': false}}, recursive=true) }}
+
 - name: Write patched values file
   ansible.builtin.copy:
     dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
