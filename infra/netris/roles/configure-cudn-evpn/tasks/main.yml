@@ -466,7 +466,7 @@
           - oc
           - apply
           - -f
-          - -
+          - "-"
         stdin: "{{ lookup('ansible.builtin.template', 'nmstate-operator.yml.j2') }}"
       register: _ocp_evpn_nmstate_operator_apply
       changed_when: >-
@@ -503,7 +503,7 @@
           - oc
           - apply
           - -f
-          - -
+          - "-"
         stdin: |
           apiVersion: nmstate.io/v1
           kind: NMState
@@ -561,7 +561,7 @@
           - oc
           - apply
           - -f
-          - -
+          - "-"
         stdin: "{{ lookup('ansible.builtin.template', 'underlay-nncp.yml.j2') }}"
       register: _ocp_evpn_nncp_apply
       changed_when: >-
@@ -595,7 +595,7 @@
           - oc
           - apply
           - -f
-          - -
+          - "-"
         stdin: "{{ lookup('ansible.builtin.template', 'tenant-vtep.yml.j2') }}"
       register: _ocp_evpn_vtep_apply
       changed_when: >-
@@ -631,7 +631,7 @@
           - oc
           - apply
           - -f
-          - -
+          - "-"
         stdin: "{{ lookup('ansible.builtin.template', 'tenant-evpn-frrconfiguration.yml.j2') }}"
       register: _ocp_evpn_frr_apply
       changed_when: >-
@@ -645,7 +645,7 @@
           - oc
           - apply
           - -f
-          - -
+          - "-"
         stdin: "{{ lookup('ansible.builtin.template', 'tenant-evpn-routeadvertisements.yml.j2') }}"
       register: _ocp_evpn_route_advertisements_apply
       changed_when: >-
