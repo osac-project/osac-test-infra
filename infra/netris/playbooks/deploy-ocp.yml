@@ -6,7 +6,6 @@
     - name: Load Netris fabric values for VMaaS peer derivation
       ansible.builtin.include_vars:
         file: "{{ netris_lab_dir }}/group_vars/all.yml"
-        name: netris_lab_topology_vars
       when: suite | default('') == 'vmaas'
   roles:
     - configure-netris
@@ -17,6 +16,6 @@
       ansible.builtin.include_role:
         name: configure-cudn-evpn
       vars:
-        ocp_evpn_netris_leaf_asn_start: "{{ netris_lab_topology_vars.ns_fabric.asn_start }}"
-        ocp_evpn_netris_leaf_count: "{{ netris_lab_topology_vars.ns_fabric.leaf_count }}"
+        ocp_evpn_netris_leaf_asn_start: "{{ ns_fabric.asn_start }}"
+        ocp_evpn_netris_leaf_count: "{{ ns_fabric.leaf_count }}"
       when: suite | default('') == 'vmaas'
