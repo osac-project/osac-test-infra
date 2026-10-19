@@ -18,4 +18,5 @@
       vars:
         ocp_evpn_netris_leaf_asn_start: "{{ ns_fabric.asn_start }}"
         ocp_evpn_netris_leaf_count: "{{ ns_fabric.leaf_count }}"
+        ocp_evpn_netris_loopback_cidr: "{{ ns_fabric.lo_subnet }}"
       when: suite | default('') == 'vmaas'
