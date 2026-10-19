@@ -223,6 +223,7 @@ resource "netris_bgp" "ocp_underlay" {
   siteid                          = netris_site.site1.id
   hardware                        = netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name
   neighboras                      = {{ ocp_underlay_ocp_asn }}
+  localasn                        = "{{ (ns_fabric.asn_start | int) + (ocp_underlay_leaf_index | int) }}"
   portid                          = data.netris_network_interface.ocp_underlay.id
   vlanid                          = {{ ocp_underlay_vlan_id }}
   untagged                        = true
