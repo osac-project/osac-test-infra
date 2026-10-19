@@ -280,7 +280,7 @@
       ansible.builtin.assert:
         that:
           - ocp_evpn_vtep_node_ip_cidr | length > 0
-          - ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipv4('net') | length > 0
+          - ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipv4('address') | length > 0
           - ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipaddr('prefix') | int == 32
           - ocp_evpn_vtep_cidr | ansible.utils.network_in_network(ocp_evpn_vtep_node_ip_cidr)
         fail_msg: >-
