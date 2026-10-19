@@ -125,9 +125,9 @@ jobs:
       notify-on-failure: false
       enable-ai-diagnostic: false
 
-  bmaas-netris:
+  netris:
     needs: decide
-    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"bmaas-netris"')
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"netris"')
     permissions:
       contents: read
       pull-requests: read
@@ -143,7 +143,7 @@ jobs:
       pr-number: ${{ needs.decide.outputs.number }}
 
   finish:
-    needs: [decide, track, vmaas, caas, bmaas, bmaas-netris]
+    needs: [decide, track, vmaas, caas, bmaas, netris]
     if: always() && needs.decide.outputs.start == 'true'
     uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
     permissions:
