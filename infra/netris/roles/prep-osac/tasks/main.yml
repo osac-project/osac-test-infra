@@ -246,6 +246,7 @@
     _values_overrides: >-
       {{ _values_overrides | combine({
            'bmf': {
+             'metal3': {'enabled': false},
              'secrets': {
                'inventoryConfig': 'osac-inventory-config-metal3-test',
                'managementConfig': 'osac-management-config-metal3-test'
