@@ -676,30 +676,12 @@
       delay: 10
       tags: [cudn_evpn]
 
-    - name: Wait for RouteAdvertisements to be accepted
-      ansible.builtin.command:
-        argv:
-          - oc
-          - get
-          - routeadvertisements.k8s.ovn.org/tenant-evpn
-          - -o
-          - json
-      register: _ocp_evpn_route_advertisements_status
-      changed_when: false
-      failed_when: false
-      until: >-
-        _ocp_evpn_route_advertisements_status.rc == 0 and
-        ((_ocp_evpn_route_advertisements_status.stdout | from_json).status.conditions | default([])
-          | selectattr('type', 'equalto', 'Accepted')
-          | selectattr('status', 'equalto', 'True') | list | length) > 0
-      retries: 90
-      delay: 10
-      tags: [cudn_evpn]
-
     - name: Explain the RouteAdvertisements scope
       ansible.builtin.debug:
         msg: >-
           CUDN EVPN RouteAdvertisements advertises PodNetwork routes only.
+          It can remain ConfigurationPending until OSAC creates a matching CUDN
+          labelled evpn=true.
           VMaaS ExternalIPs and EgressIPs require the separately acknowledged
           Netris/ISP route and return policy; they are not advertised by this
           RouteAdvertisements resource.

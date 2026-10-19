@@ -171,6 +171,19 @@
       register: _vmaas_route_advertisements_raw
       changed_when: false
 
+    - name: Read EVPN CUDNs selected by RouteAdvertisements
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - clusteruserdefinednetworks.k8s.ovn.org
+          - --selector
+          - evpn=true
+          - -o
+          - json
+      register: _vmaas_evpn_cudns_raw
+      changed_when: false
+
     - name: Read the selected BGP session state
       ansible.builtin.command:
         argv:
@@ -191,6 +204,7 @@
         _vmaas_vtep: "{{ _vmaas_vtep_raw.stdout | from_json }}"
         _vmaas_frr: "{{ _vmaas_frr_raw.stdout | from_json }}"
         _vmaas_route_advertisements: "{{ _vmaas_route_advertisements_raw.stdout | from_json }}"
+        _vmaas_evpn_cudns: "{{ _vmaas_evpn_cudns_raw.stdout | from_json }}"
         _vmaas_bgp_sessions: "{{ _vmaas_bgp_sessions_raw.stdout | from_json }}"
 
     - name: Require the underlay NNCP to be Available
@@ -233,7 +247,7 @@
         fail_msg: >-
           No BGPSessionState selected by peer {{ _vmaas_leaf_peer_ip }} is Established.
 
-    - name: Require accepted PodNetwork CUDN RouteAdvertisements
+    - name: Require accepted PodNetwork RouteAdvertisements when an EVPN CUDN exists
       ansible.builtin.assert:
         that:
           - _vmaas_route_advertisements.spec.targetVRF == 'auto'
@@ -242,13 +256,15 @@
           - _vmaas_route_advertisements.spec.networkSelectors[0].networkSelectionType == 'ClusterUserDefinedNetworks'
           - _vmaas_route_advertisements.spec.networkSelectors[0].clusterUserDefinedNetworkSelector.networkSelector.matchLabels.evpn == 'true'
           - >-
-            (_vmaas_route_advertisements.status.conditions | default([])
+            (_vmaas_evpn_cudns.items | default([]) | length == 0) or
+            ((_vmaas_route_advertisements.status.conditions | default([])
              | selectattr('type', 'equalto', 'Accepted')
-             | selectattr('status', 'equalto', 'True') | list | length) > 0
+             | selectattr('status', 'equalto', 'True') | list | length) > 0)
         fail_msg: >-
-          RouteAdvertisements tenant-evpn must be accepted and select the EVPN
-          FRRConfiguration for PodNetwork only. Service ExternalIPs and EgressIPs
-          require their separate fabric policy/route path.
+          RouteAdvertisements tenant-evpn must select the EVPN FRRConfiguration
+          and CUDNs for PodNetwork only, and must be accepted once an EVPN CUDN
+          exists. Service ExternalIPs and EgressIPs require their separate fabric
+          policy/route path.
 
     - name: Read the registered Netris fabric manager ConfigMap
       ansible.builtin.command:
