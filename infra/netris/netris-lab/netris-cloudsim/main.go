@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -228,6 +229,7 @@ func main() {
 					LocalPortIndex: getPortIndex(netrisInfo.PortIndexes, link.Local.ID, localInterface),
 					LocalID:        id,
 					Local:          localInterface,
+					MacAddress:     generateInterfaceMAC(localSwitch, localInterface),
 					Remote:         link.Remote.Name,
 					RemoteID:       id + 1,
 					LocalIP:        localIP,
@@ -252,6 +254,7 @@ func main() {
 					LocalPortIndex: getPortIndex(netrisInfo.PortIndexes, link.Remote.ID, remoteInterface),
 					LocalID:        id,
 					Local:          remoteInterface,
+					MacAddress:     generateInterfaceMAC(remoteSwitch, remoteInterface),
 					Remote:         link.Local.Name,
 					RemoteID:       id - 1,
 					LocalIP:        remoteIP,
@@ -276,7 +279,8 @@ func main() {
 					for eachInEmptyPortsSwPorts := range emptyPortsSwPorts {
 						if _, ok := hypervisorToLinks[emptyPortsSwName]; ok {
 							hypervisorToLinks[emptyPortsSwName] = append(hypervisorToLinks[emptyPortsSwName], LinkMapping{
-								Local: eachInEmptyPortsSwPorts,
+								Local:      eachInEmptyPortsSwPorts,
+								MacAddress: generateInterfaceMAC(emptyPortsSwName, eachInEmptyPortsSwPorts),
 							})
 						}
 					}
@@ -1331,6 +1335,13 @@ func generateMAC(counter int) string {
 
 	// Format the MAC address with the given prefix
 	return fmt.Sprintf("%s:%02x:%02x:%02x", prefix, mac[0], mac[1], mac[2])
+}
+
+func generateInterfaceMAC(hardware, iface string) string {
+	hash := sha256.Sum256([]byte(hardware + "/" + iface))
+	// Keep the address locally administered and unicast, then use 40 hash bits
+	// so the same simulated hardware port keeps its MAC across VM recreation.
+	return fmt.Sprintf("52:%02x:%02x:%02x:%02x:%02x", hash[0], hash[1], hash[2], hash[3], hash[4])
 }
 
 // incrementIPBy safely increments an IPv4 address by n

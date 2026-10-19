@@ -49,6 +49,7 @@ xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
 {{- end }}
 {{- if and (ne $value.RemoteIP "") (ne $value.LocalIP "") (ne $value.RemoteID 0) (ne $value.LocalID 0) }}
 <interface type="udp">
+  <mac address="{{ $value.MacAddress }}"/>
   <source address="{{ $value.RemoteIP }}" port="{{ $value.RemoteID }}">
     <local address="{{ $value.LocalIP }}" port="{{ $value.LocalID }}"/>
   </source>
@@ -56,6 +57,7 @@ xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
 </interface>
 {{- else if and (eq $value.RemoteID 0) (eq $value.LocalID 0) $dot.CreateEmptyPorts }}
 <interface type='bridge'>
+  <mac address='{{ $value.MacAddress }}'/>
   <source bridge='virbr0'/>
   <model type='virtio'/>
   <link state="down"/>
