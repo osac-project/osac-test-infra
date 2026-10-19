@@ -683,10 +683,6 @@ jobs:
             helm dependency update charts/osac/
           fi
 
-          if [[ -n "${VIRTUAL_BMH_GATEWAY:-}" ]]; then
-            SET_ARGS+=("--set-string" "operator.bareMetalWorker.additionalNTPSources[0]=${VIRTUAL_BMH_GATEWAY}")
-          fi
-
           make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=caas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           # helm --wait only confirms the *new* pod/ReplicaSet is Ready -- it

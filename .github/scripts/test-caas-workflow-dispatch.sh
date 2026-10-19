@@ -46,10 +46,9 @@ assert_contains "Setup step references CAAS_AGENT_FLOW" "${WF}" "CAAS_AGENT_FLOW
 assert_contains "Setup step calls setup-caas-agents.sh" "${WF}" "setup-caas-agents\\.sh"
 
 echo ""
-echo "── Worker network prerequisites ───────────────────────────────"
+echo "── Worker prerequisites ────────────────────────────────────────"
 SETUP_BMH=".github/scripts/setup-virtual-bmh.sh"
 assert_contains "Virtual BMH setup exports its gateway" "${SETUP_BMH}" "VIRTUAL_BMH_GATEWAY=.*\\$\\{GW_IP\\}"
-assert_contains "Install uses gateway as worker NTP source" "${WF}" "additionalNTPSources\\[0\\]=.*VIRTUAL_BMH_GATEWAY"
 assert_contains "Install selects the Route53 DNS driver" "${WF}" "DNS_CLASS.*dns\\.route53\\.dns"
 
 echo ""
