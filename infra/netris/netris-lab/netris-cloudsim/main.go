@@ -1046,8 +1046,10 @@ func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW strin
 
 	bgpPortsSeen := make(map[int]struct{})
 
-	for bgpcount, bgp := range bgps {
-		if bgp.Internal == 0 {
+	for _, bgp := range bgps {
+		// The OCP underlay peer uses the real server-facing link created by
+		// the topology. It must not also be wired to the simulated ISP.
+		if bgp.Internal == 0 && bgp.Name != "ocp-evpn-underlay" {
 			if _, alreadyProcessed := bgpPortsSeen[bgp.Port.ID]; alreadyProcessed {
 				fmt.Printf("Skipping duplicate BGP link for Port ID %d (already processed)\n", bgp.Port.ID)
 				continue
@@ -1061,7 +1063,7 @@ func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW strin
 						Ipv4: fmt.Sprintf("%s/%d", bgp.LocalIP, bgp.PrefixLength),
 					},
 					Remote: link.LinkIDName{
-						Name: fmt.Sprintf("ens%d@isp-server", bgpcount+6),
+						Name: fmt.Sprintf("ens%d@isp-server", len(bgpLinks)+6),
 						Ipv4: fmt.Sprintf("%s/%d", bgp.RemoteIP, bgp.PrefixLength),
 					},
 				}
