@@ -164,7 +164,9 @@ class WorkflowExporter:
     # API-trigger pattern as the CodeRabbit-approval workflow, just a
     # different label as the source event -- its only job is "start-e2e",
     # which calls the GitHub API and runs no test of its own), and
-    # "AI diagnostic (E2E fork PR failures)" (a post-hoc bot that inspects
+    # "Reserve E2E comment slot on start" (posts a placeholder PR comment when an
+    # e2e starts, on a GitHub-hosted runner -- skipped for most runs, never a
+    # test), "AI diagnostic (E2E fork PR failures)" (a post-hoc bot that inspects
     # an already-completed e2e run's logs and posts/updates a PR comment --
     # "Resolve PR"/"Mark Resolved"/"Diagnose" jobs, no test execution)
     # were all miscategorized "e2e" and polluting e2e pass-rate/infra-
@@ -179,7 +181,7 @@ class WorkflowExporter:
     WORKFLOW_CATEGORIES: ClassVar[dict[str, list[str]]] = {
         "automation": ["bump", "dependabot", "copilot", "slash", "ok-to-test",
                        "coderabbit approval", "e2e-ready label", "scan e2e logs",
-                       "e2e on unlock label"],
+                       "e2e on unlock label", "reserve e2e comment"],
         "ai":         ["ai diagnostic"],
         "e2e":        ["e2e"],
         "lint":       ["pre-commit", "lint", "checklist", "kustomize", "check image"],
@@ -464,6 +466,17 @@ class WorkflowExporter:
                     return category
         return "ci"
 
+    @staticmethod
+    def _category_of_run(name, conclusion):
+        """The category of a run: its workflow's, except that a run GitHub
+        skipped as a whole ran no job at all, so it is no e2e signal even when
+        the workflow's name says "E2E" (e.g. a Netris caller on pull_request_target
+        whose `if` was false). Such a run is "automation"."""
+        category = WorkflowExporter._categorize_workflow(name)
+        if category == "e2e" and conclusion == "skipped":
+            return "automation"
+        return category
+
     def __init__(self):
         self.headers = {
             "Authorization": f"token {TOKEN}",
@@ -583,23 +596,23 @@ class WorkflowExporter:
                 )
 
     def _recategorize_jobs_if_needed(self):
-        """Re-apply _categorize_workflow to already-stored jobs.
+        """Re-apply _category_of_run to already-stored jobs.
 
         Category is computed once at insert time and stored, so a
         WORKFLOW_CATEGORIES change (e.g. checking automation before the
         broad "ci" catch-all) only affects new rows unless existing ones
         are re-walked here. Safe to re-run every startup: no-op once every
-        row's stored category already matches what _categorize_workflow
-        would assign today.
+        row's stored category already matches what _category_of_run
+        would assign today (a skipped run of an "E2E ..." workflow is automation).
         """
         with self._db() as conn:
-            rows = conn.execute("SELECT id, workflow, category FROM jobs").fetchall()
+            rows = conn.execute("SELECT id, workflow, category, conclusion FROM jobs").fetchall()
             updated = 0
             for row in rows:
                 if row["workflow"] in self.PIPELINE_WORKFLOW_NAMES:
                     # Decided by the run's jobs when it was stored, not by its name.
                     continue
-                correct = self._categorize_workflow(row["workflow"])
+                correct = self._category_of_run(row["workflow"], row["conclusion"])
                 if correct != row["category"]:
                     conn.execute(
                         "UPDATE jobs SET category = ? WHERE id = ?", (correct, row["id"])
@@ -1504,7 +1517,7 @@ class WorkflowExporter:
             "repo": repo,
             "workflow": workflow_name,
             "display_name": f"{repo} / {workflow_name}",
-            "category": "automation" if pipeline_name else WorkflowExporter._categorize_workflow(workflow_name),
+            "category": "automation" if pipeline_name else WorkflowExporter._category_of_run(workflow_name, conclusion),
             "branch": branch,
             "pr_url": pr_url,
             "pr_display": pr_display,

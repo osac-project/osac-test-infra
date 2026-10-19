@@ -205,6 +205,47 @@ def test_startup_recategorize_leaves_the_flow_alone(exporter):
     assert rows(exporter, "SELECT category FROM jobs")[0]["category"] == "automation"
 
 
+# a run GitHub skipped as a whole ------------------------------------------------------------------------------------------
+
+
+def test_a_skipped_run_of_an_e2e_workflow_is_not_e2e(exporter):
+    # A Netris caller on pull_request_target whose `if` was false: no job ran, whatever its name says.
+    skipped = exporter._make_job_record(
+        make_run(name="E2E BMaaS Netris Full Install", event="pull_request_target", conclusion="skipped"),
+        "osac-test-infra",
+    )
+    ran = exporter._make_job_record(make_run(name="E2E BMaaS Netris Full Install"), "osac-test-infra")
+    cancelled = exporter._make_job_record(
+        make_run(name="E2E BMaaS Netris Full Install", conclusion="cancelled"), "osac-test-infra"
+    )
+    assert skipped["category"] == "automation"
+    assert ran["category"] == "e2e"
+    assert cancelled["category"] == "e2e"  # a cancelled run may have started a suite: the jobs decide, not this rule
+
+
+def test_the_comment_reservation_workflow_is_never_e2e(W):
+    # It posts a placeholder comment on a GitHub-hosted runner; its runs are skipped or succeed, without a test.
+    assert W._category_of_run("Reserve E2E comment slot on start", "success") == "automation"
+    assert W._category_of_run("Reserve E2E comment slot on start", "skipped") == "automation"
+    assert W._category_of_run("E2E VMaaS Full Install", "success") == "e2e"
+
+
+def test_a_skipped_run_of_any_other_category_keeps_it(exporter):
+    record = exporter._make_job_record(make_run(name="CI", conclusion="skipped"), "osac")
+    assert record["category"] == "ci"
+
+
+def test_startup_recategorize_demotes_stored_skipped_e2e_runs(exporter):
+    exporter._upsert_job(make_job(id=1, workflow="E2E BMaaS Netris Full Install", category="e2e", conclusion="skipped"))
+    exporter._upsert_job(make_job(id=2, workflow="E2E BMaaS Netris Full Install", category="e2e", conclusion="success"))
+    exporter._upsert_job(make_job(id=3, workflow=FLOW, category="e2e", conclusion="skipped"))
+    exporter._recategorize_jobs_if_needed()
+    got = {r["id"]: r["category"] for r in rows(exporter, "SELECT id, category FROM jobs")}
+    assert got == {1: "automation", 2: "e2e", 3: "e2e"}  # the flow's own rows are decided by their jobs
+    exporter._recategorize_jobs_if_needed()
+    assert {r["id"]: r["category"] for r in rows(exporter, "SELECT id, category FROM jobs")} == got
+
+
 # active and completed runs ----------------------------------------------------------------------------------------------
 
 
