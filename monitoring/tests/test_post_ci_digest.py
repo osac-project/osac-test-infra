@@ -169,7 +169,9 @@ class TestUploadFiles:
 
         def fake_post(url, **kwargs):
             calls.append((url, kwargs))
-            return replies.get(url, FakeResponse(payload={"ok": True}))
+            reply = replies.get(url, FakeResponse(payload={"ok": True}))
+            # A list is a series of answers, returned in turn.
+            return reply.pop(0) if isinstance(reply, list) else reply
 
         monkeypatch.setattr(digest.requests, "post", fake_post)
         monkeypatch.setattr(digest, "SLACK_BOT_TOKEN", "xoxb-test")
@@ -178,14 +180,16 @@ class TestUploadFiles:
 
     def test_uploads_all_files_in_one_message(self, digest, posts):
         calls, replies = posts
-        replies["https://slack.com/api/files.getUploadURLExternal"] = FakeResponse(
-            payload={"ok": True, "upload_url": "https://upload", "file_id": "F1"})
+        replies["https://slack.com/api/files.getUploadURLExternal"] = [
+            FakeResponse(payload={"ok": True, "upload_url": "https://upload", "file_id": "F1"}),
+            FakeResponse(payload={"ok": True, "upload_url": "https://upload", "file_id": "F2"}),
+        ]
         digest.upload_files([("a.png", b"png", "image/png", "A"), ("b.html", b"html", "text/html", "B")], "hi")
         urls = [c[0] for c in calls]
         assert urls.count("https://upload") == 2
         complete = calls[-1]
         assert complete[0] == "https://slack.com/api/files.completeUploadExternal"
-        assert complete[1]["json"] == {"files": [{"id": "F1", "title": "A"}, {"id": "F1", "title": "B"}],
+        assert complete[1]["json"] == {"files": [{"id": "F1", "title": "A"}, {"id": "F2", "title": "B"}],
                                        "channel_id": "C123", "initial_comment": "hi"}
         assert complete[1]["headers"]["Authorization"] == "Bearer xoxb-test"
 
@@ -224,9 +228,11 @@ class TestMain:
         assert (tmp_path / "ci-digest-preview.html").read_bytes() == b"html-bytes"
         assert uploads == []
 
-    def test_requires_slack_settings(self, digest, stubbed, monkeypatch):
+    @pytest.mark.parametrize(("token", "channel"), [(None, "C1"), ("xoxb", None)])
+    def test_requires_slack_settings(self, digest, stubbed, monkeypatch, token, channel):
         monkeypatch.setattr(digest, "DRY_RUN", False)
-        monkeypatch.setattr(digest, "SLACK_BOT_TOKEN", None)
+        monkeypatch.setattr(digest, "SLACK_BOT_TOKEN", token)
+        monkeypatch.setattr(digest, "SLACK_CHANNEL_ID", channel)
         with pytest.raises(SystemExit):
             digest.main()
 
