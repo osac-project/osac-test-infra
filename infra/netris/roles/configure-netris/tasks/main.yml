@@ -99,6 +99,9 @@
     vnet_dhcp_enabled: false
     vnet_ports: "{{ ocp_server_ports }}"
 
+- name: Ensure OCP VNet ports match inventory
+  ansible.builtin.include_tasks: ensure-ocp-vnet-ports.yml
+
 - name: Create SNAT rule for OCP VNet
   ansible.builtin.include_role:
     name: netris.controller.nat
