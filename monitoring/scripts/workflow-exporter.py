@@ -321,44 +321,132 @@ class WorkflowExporter:
 
     @staticmethod
     def _is_plumbing(job):
-        """A job that is not a test: a gate/precondition job (any workflow), or an
-        orchestration job of the pull-request flow (marked by
-        _refine_pipeline_category, only in that flow's own workflows)."""
-        return bool(job.get("pipeline_plumbing")) or WorkflowExporter._is_gate_job(job.get("name"))
+        """A job that is not a test of its own run row: a gate/precondition job
+        (any workflow), or a job of the pull-request flow's run (orchestration,
+        or a suite: marked by _refine_pipeline_category, only in that flow's own
+        workflows). A flow run's suites are stored as rows of their own (see
+        _suite_records), so the run's row holds none of their steps."""
+        return (
+            bool(job.get("pipeline_plumbing"))
+            or bool(job.get("pipeline_suite"))
+            or WorkflowExporter._is_gate_job(job.get("name"))
+        )
 
     @staticmethod
     def _is_suite_job(job):
         return bool(WorkflowExporter.SUITE_JOB_RE.search((job.get("name") or "").strip()))
 
     @staticmethod
-    def _suite_job_ran(job, active=False):
-        """A suite job that did its work (or is doing it now): not skipped, and
-        not cancelled before a single step started. A suite that never got a
-        runner tested nothing, so it is no e2e signal either."""
-        if not WorkflowExporter._is_suite_job(job):
-            return False
-        conclusion = job.get("conclusion")
-        if conclusion is None:
-            return active and job.get("status") in WorkflowExporter.ACTIVE_JOB_STATUSES
-        if conclusion in ("success", "failure", "timed_out"):
-            return True
-        if conclusion == "cancelled":
-            return any(step.get("started_at") for step in job.get("steps") or [])
-        return False
+    def _suite_of(job):
+        """The suite a job of a flow run belongs to: the caller job id before the
+        first " / " ("vmaas", "caas", "bmaas", "netris"), "" for any other job.
+        A suite can have several jobs (netris: authorize, provision, push-secrets,
+        e2e, teardown); they all carry that prefix."""
+        name = (job.get("name") or "").strip()
+        if " / " not in name or not WorkflowExporter._is_suite_job(job):
+            return ""
+        return name.split(" / ", 1)[0].strip()
+
+    @staticmethod
+    def _suite_result(group, active=False):
+        """What one suite's jobs say, as the status/conclusion of its row, or ""
+        when it produced no test result: "success" (its test job passed),
+        "failure" (a job failed or timed out), "in_progress" / "queued" (still
+        going or waiting for a runner, only while the run is active). A suite
+        that was skipped, never started or was cancelled is no e2e result and
+        gets no row: the run's own row (category automation) still shows it."""
+        if active and any(j.get("status") in WorkflowExporter.ACTIVE_JOB_STATUSES for j in group):
+            return "in_progress" if any(j.get("status") == "in_progress" for j in group) else "queued"
+        if any(j.get("conclusion") in ("failure", "timed_out") for j in group):
+            return "failure"
+        tests = [j for j in group if (j.get("name") or "").rstrip().endswith(" / e2e")] or group
+        if tests and all(j.get("conclusion") == "success" for j in tests):
+            return "success"
+        return ""
 
     @staticmethod
     def _refine_pipeline_category(record, jobs, active=False):
-        """The pull-request flow's workflows count as "e2e" only when a suite
-        job really ran in the run, otherwise they stay "automation". Called
-        wherever the run's jobs are known, before their steps and failures are
-        read (it also marks the orchestration jobs as plumbing). No-op for any other workflow."""
+        """Mark the jobs of a pull-request-flow run: orchestration jobs as
+        plumbing, suite jobs as stored elsewhere (see _suite_records). The run's
+        own row stays "automation": it is the flow's bookkeeping, not an e2e
+        test, and each suite that ran is a row of its own. Called wherever the
+        run's jobs are known, before their steps and failures are read. No-op
+        for any other workflow."""
         if record.get("workflow") not in WorkflowExporter.PIPELINE_WORKFLOW_NAMES:
             return
         for j in jobs or []:
             if WorkflowExporter._is_orchestration_job(j.get("name")):
                 j["pipeline_plumbing"] = True
-        ran = any(WorkflowExporter._suite_job_ran(j, active) for j in jobs or [])
-        record["category"] = "e2e" if ran else "automation"
+            elif WorkflowExporter._is_suite_job(j):
+                j["pipeline_suite"] = True
+
+    SUITE_ROW_KIND: ClassVar[dict[str, str]] = {
+        "E2E for pull requests": "pull requests",
+        "E2E for the merge queue": "merge queue",
+    }
+
+    def _suite_records(self, record, jobs, active=False):
+        """One "e2e" row per suite that produced a result in a pull-request-flow
+        run (vmaas, caas, bmaas, netris ...), each counted as one e2e test,
+        built from the run's row and the suite's own jobs. [] for any other
+        workflow. The row's id is the id of the suite's test job, its "suite"
+        and "run_id" keys tell it from a run (the active-run tracking is by run)."""
+        if record.get("workflow") not in WorkflowExporter.PIPELINE_WORKFLOW_NAMES or not jobs:
+            return []
+        groups = {}
+        for job in jobs:
+            suite = self._suite_of(job)
+            if suite:
+                groups.setdefault(suite, []).append({**job, "pipeline_suite": False})
+        kind = self.SUITE_ROW_KIND.get(record["workflow"], record["workflow"])
+        rows = []
+        for suite, group in groups.items():
+            result = self._suite_result(group, active)
+            if not result:
+                continue
+            main = next((j for j in group if (j.get("name") or "").rstrip().endswith(" / e2e")), group[0])
+            started = min((j["started_at"] for j in group if j.get("started_at")), default="")
+            ended = max((j["completed_at"] for j in group if j.get("completed_at")), default="")
+            duration_s = 0.0
+            if started:
+                try:
+                    t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                    t1 = (
+                        datetime.fromisoformat(ended.replace("Z", "+00:00"))
+                        if ended and result in ("success", "failure")
+                        else datetime.now(timezone.utc)
+                    )
+                    duration_s = max(0.0, (t1 - t0).total_seconds())
+                except (ValueError, TypeError):
+                    pass
+            workflow = f"E2E {suite} ({kind})"
+            row = {k: v for k, v in record.items() if k != "zombie"}
+            row.update({
+                "id": main["id"],
+                "workflow": workflow,
+                "display_name": f"{record['repo']} / {workflow}",
+                "category": "e2e",
+                "status": result,
+                "conclusion": "" if result in ("in_progress", "queued") else result,
+                "duration_s": round(duration_s),
+                "duration": self._fmt_duration(duration_s),
+                "updated_at": ended if result in ("success", "failure") else "",
+                "url": main.get("html_url") or record.get("url", ""),
+                "runner_name": self._extract_runner_names(group),
+                "steps": self._extract_step_durations(group),
+                "failure_reason": "",
+                "failed_step": "",
+                "suite": True,
+                "run_id": record["id"],
+            })
+            failed = self._extract_failed_steps(group) if result == "failure" else []
+            if result == "failure":
+                row["failure_reason"] = self._classify_failure_reason("e2e", failed, group)
+                if failed:
+                    row["failed_step"] = "; ".join(f["display"] for f in failed)
+            row["_failed"] = failed
+            rows.append(row)
+        return rows
 
     @staticmethod
     def _is_gate_only_failure(jobs):
@@ -792,19 +880,17 @@ class WorkflowExporter:
 
     def _normalize_pipeline_rows_if_needed(self):
         """Move already-stored pull-request-flow runs to the stable workflow
-        name and to the category their jobs justify.
+        name and file them under "automation".
 
         Rows stored before the flow had its own handling carry the run name
         ("E2E <repo>:<branch> @ <sha>") and the "e2e" category the name gave
         them (also "E2E for the merge queue" and "E2E review relay", which
-        were always "e2e" by name). The jobs are not stored, but runner_name is: it holds the
-        self-hosted machines the run used, which only a real suite job
-        has (the orchestration jobs run on GitHub-hosted runners, which are
-        cleaned out of that column). A run that used one of our machines
-        is "e2e", any other is "automation". Only a legacy "e2e" row can be
-        demoted: a category the ingestion already derived from the run's jobs
-        is never overridden by this heuristic. Safe to re-run: a row already
-        under its stable name with the right category is left alone.
+        were always "e2e" by name); rows stored since carry "e2e" when a suite
+        ran in them. A flow run is bookkeeping, not an e2e test: the tests are
+        the rows of its suites (see _suite_records), which the jobs of an
+        already-stored run can no longer give, so the run's row is always
+        "automation". Safe to re-run: a row already under its stable name as
+        "automation" is left alone.
         """
         with self._db() as conn:
             rows = conn.execute(
@@ -822,12 +908,7 @@ class WorkflowExporter:
                     label = self.PIPELINE_WORKFLOW_FILES["e2e-pr.yml"]
                 else:
                     continue
-                # Legacy rows were all "e2e" by name: demote those that never
-                # used one of our machines, never promote or override a
-                # category that ingestion derived from the jobs.
-                category = row["category"]
-                if category == "e2e" and not row["runner_name"]:
-                    category = "automation"
+                category = "automation"
                 if label == name and category == row["category"]:
                     continue
                 conn.execute(
@@ -946,6 +1027,16 @@ class WorkflowExporter:
                 row,
             )
             return cur.rowcount > 0
+
+    def _upsert_job_and_suites(self, record, jobs):
+        """Upsert a run's row and, for a pull-request-flow run, the row of each
+        suite that produced a result. Returns whether the run's row was
+        inserted or updated."""
+        stored = self._upsert_job(record)
+        if stored:
+            for suite in self._suite_records(record, jobs):
+                self._upsert_job(suite)
+        return stored
 
     def _prune_jobs(self):
         """Evict jobs older than JOBS_HISTORY_DAYS, then enforce the hard
@@ -1655,11 +1746,13 @@ class WorkflowExporter:
                     record = self._make_job_record(run, repo)
                     if status == "queued" and self._is_zombie_run(repo, run):
                         record["zombie"] = True
+                    suites = []
                     if status == "in_progress":
                         jobs = self._fetch_run_jobs(repo, run["id"])
                         if jobs:
                             record["runner_name"] = self._extract_runner_names(jobs)
                             self._refine_pipeline_category(record, jobs, active=True)
+                            suites = self._suite_records(record, jobs, active=True)
                         elif jobs is None and record["workflow"] in WorkflowExporter.PIPELINE_WORKFLOW_NAMES:
                             # The category of a pull-request-flow run comes from
                             # its jobs: without them the record stays
@@ -1667,6 +1760,7 @@ class WorkflowExporter:
                             # undercount e2e, so keep the previous values.
                             complete = False
                     runs.append(record)
+                    runs.extend(suites)
                 url = resp.links.get("next", {}).get("url")
         return runs, complete
 
@@ -1883,7 +1977,7 @@ class WorkflowExporter:
                             f["display"] for f in failed
                         )
 
-                if self._upsert_job(record):
+                if self._upsert_job_and_suites(record, jobs):
                     new += 1
 
             url = resp.links.get("next", {}).get("url")
@@ -1956,7 +2050,7 @@ class WorkflowExporter:
                 record["failure_reason"] = self._classify_failure_reason(record.get("category", ""), failed, jobs)
                 if failed:
                     record["failed_step"] = "; ".join(f["display"] for f in failed)
-            if self._upsert_job(record):
+            if self._upsert_job_and_suites(record, jobs):
                 new += 1
 
         next_url = probe.links.get("next", {}).get("url")
@@ -2051,7 +2145,7 @@ class WorkflowExporter:
                                 f["display"] for f in failed
                             )
 
-                    if self._upsert_job(record):
+                    if self._upsert_job_and_suites(record, jobs):
                         loaded += 1
             except Exception:
                 logger.exception("Error loading history for %s", repo)
@@ -2111,6 +2205,18 @@ class WorkflowExporter:
         if not self._upsert_job(record):
             return False  # stored row's run_attempt was already current
 
+        # Each suite that produced a result is one e2e test: its own row and its
+        # own counts, under a workflow name of its own ("E2E vmaas (pull requests)").
+        for suite in self._suite_records(record, jobs):
+            if self._upsert_job(suite):
+                completed_runs.labels(
+                    org=ORG, repo=repo, workflow=suite["workflow"], conclusion=suite["conclusion"]
+                ).inc()
+                for f in suite["_failed"]:
+                    failed_step_total.labels(
+                        org=ORG, workflow=suite["workflow"], step=f["step"]
+                    ).inc()
+
         completed_runs.labels(
             org=ORG, repo=repo, workflow=workflow_name, conclusion=conclusion
         ).inc()
@@ -2160,7 +2266,9 @@ class WorkflowExporter:
         # below for why. {run_id: repo}; a run id is globally unique
         # across repos so this can't collide.
         with self._lock:
-            previous_active_by_id = {r["id"]: r["repo"] for r in self.active_runs}
+            previous_active_by_id = {
+                r["id"]: r["repo"] for r in self.active_runs if not r.get("suite")
+            }
 
         for repo in repos:
             try:

@@ -63,24 +63,31 @@ The `workflow-exporter` puts every run in a category (`e2e`, `ci`, `lint`,
 (`e2e-pr.yml`, `e2e-queue.yml`, `e2e-review-relay.yml`, shared from `osac-ci`) is
 the exception: one run of it holds a few seconds of orchestration jobs
 (`decide`, `track`, `finish`, `plan`) and, only when the change needs them,
-the real suite jobs (`<suite> / e2e-<suite>-full-install / e2e`, hours on our
-own runners). Most runs hold no suite at all (docs only, waiting for an
-approval), so they are not counted as `e2e`:
+one or more suites, each a few jobs under its caller job id (`vmaas`, `caas`,
+`bmaas`, `netris`: `<suite> / e2e-<suite>-full-install / e2e`, hours on our own
+runners). The run itself is bookkeeping, not an e2e test, so each suite is its
+own row:
 
-- a run is `e2e` only when a suite job really ran in it (finished, or started and
-  then failed or was cancelled); a skipped suite, or one cancelled before it got a
-  runner, does not count;
-- every other run of those workflows is `automation`;
-- an active run counts as `e2e` while a suite job is queued or running, so the
+- the run is always `automation`, under the workflow's own name (`E2E for pull
+  requests`, `E2E for the merge queue`, `E2E review relay`), not under one name per
+  commit. It still shows when no category filter is applied, with the conclusion of
+  the whole run (for example `cancelled`);
+- each suite that produced a result is one `e2e` row and counts as one e2e test,
+  named `E2E <suite> (pull requests)` or `E2E <suite> (merge queue)`: `success` when
+  its test job passed, `failure` when any of its jobs failed or timed out (with the
+  failed step and the infra/test reason). A suite with several jobs (netris) is one
+  row;
+- a suite that was skipped, never started or cancelled (replaced by a newer push,
+  dropped from the queue) is no result: it has no row and is in no e2e count;
+- an active run has an `e2e` row for each suite that is queued or running, so the
   "E2E Queue Depth" panel still shows the suites waiting for a runner;
-- they are listed under the workflow's own name (`E2E for pull requests`, `E2E for the
-  merge queue`, `E2E review relay`), not under one name per commit;
 - a failure of an orchestration job is never an e2e failure (it is skipped in the
   failed-step and infra/test breakdown, like the `*-gate` jobs).
 
-Runs stored before this rule are moved on the next start: the self-hosted machine
-a run used (`runner_name`) tells whether a suite ran. Every panel and the daily
-digest filter on `category=e2e`, so they need no change. Tests:
+Runs stored before this rule are moved to `automation` on the next start; their
+suites cannot be rebuilt (the jobs are not stored), so the e2e history of the flow
+starts from that deploy. Every panel and the daily digest filter on
+`category=e2e`, so they need no change. Tests:
 `monitoring/tests/test_exporter_pipeline.py` (see [Unit tests](#unit-tests)).
 
 ## Components
