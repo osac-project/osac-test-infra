@@ -256,7 +256,7 @@
           - _vmaas_route_advertisements.spec.networkSelectors[0].networkSelectionType == 'ClusterUserDefinedNetworks'
           - _vmaas_route_advertisements.spec.networkSelectors[0].clusterUserDefinedNetworkSelector.networkSelector.matchLabels.evpn == 'true'
           - >-
-            (_vmaas_evpn_cudns.items | default([]) | length == 0) or
+            (_vmaas_evpn_cudns["items"] | default([]) | length == 0) or
             ((_vmaas_route_advertisements.status.conditions | default([])
              | selectattr('type', 'equalto', 'Accepted')
              | selectattr('status', 'equalto', 'True') | list | length) > 0)
