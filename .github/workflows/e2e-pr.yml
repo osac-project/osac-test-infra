@@ -20,7 +20,7 @@ run-name: >-
 
 on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out here; the suites run the approved commit
   workflow_run:
-    workflows: ["CI", "E2E review relay"]
+    workflows: ["CI", "E2E review relay", "E2E comment"]
     types: [requested, completed]
   issue_comment:
     types: [edited, created]  # the checkboxes of the control comment, and a /test comment (any other comment is skipped)
@@ -34,7 +34,7 @@ permissions: {}
 
 jobs:
   decide:
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@29a1dd080d965116a2aeb05db853bc99c0a433ed  # v1.2.5
     permissions:
       contents: read
       pull-requests: read
@@ -46,7 +46,7 @@ jobs:
   track:
     needs: decide
     if: needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@29a1dd080d965116a2aeb05db853bc99c0a433ed  # v1.2.5
     permissions:
       contents: read
     with:
@@ -128,7 +128,7 @@ jobs:
   finish:
     needs: [decide, track, vmaas, caas, bmaas]
     if: always() && needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@29a1dd080d965116a2aeb05db853bc99c0a433ed  # v1.2.5
     permissions:
       contents: read
     with:
