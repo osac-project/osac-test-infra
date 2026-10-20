@@ -42,7 +42,10 @@ jobs:
           python3 -I .github/scripts/test_ai_diagnose_failure.py
           python3 -I .github/scripts/test_upsert_pr_comment.py
       - name: Shell script tests
-        run: bash .github/scripts/discover-audit-runs-test.sh
+        run: |
+          set -euo pipefail
+          bash .github/scripts/discover-audit-runs-test.sh
+          bash .github/scripts/load-image-onto-node-test.sh
 
   CI:
     name: CI
