@@ -60,7 +60,7 @@ units on that host.
 
 The `workflow-exporter` puts every run in a category (`e2e`, `ci`, `lint`,
 `automation`, ...), mostly by the workflow name. The pull-request flow
-(`e2e-pr.yml`, `e2e-queue.yml`, `e2e-review-relay.yml`, shared from `osac-ci`) is
+(`e2e-pr.yml`, `e2e-queue.yml`, `e2e-review-relay.yml`, `e2e-comment.yml`, shared from `osac-ci`) is
 the exception: one run of it holds a few seconds of orchestration jobs
 (`decide`, `track`, `finish`, `plan`) and, only when the change needs them,
 one or more suites, each a few jobs under its caller job id (`vmaas`, `caas`,
@@ -69,7 +69,7 @@ runners). The run itself is bookkeeping, not an e2e test, so each suite is its
 own row:
 
 - the run is always `automation`, under the workflow's own name (`E2E for pull
-  requests`, `E2E for the merge queue`, `E2E review relay`), not under one name per
+  requests`, `E2E for the merge queue`, `E2E review relay`, `E2E comment`), not under one name per
   commit. It still shows when no category filter is applied, with the conclusion of
   the whole run (for example `cancelled`);
 - each suite that produced a result is one `e2e` row and counts as one e2e test,

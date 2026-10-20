@@ -277,7 +277,7 @@ class WorkflowExporter:
         return lname.endswith(WorkflowExporter.GATE_NAME_SUFFIX) or lname in WorkflowExporter.GATE_JOB_NAMES
 
     # The pull-request flow's own workflows (osac-ci's shared flow, called from
-    # each repo's e2e-pr.yml / e2e-queue.yml / e2e-review-relay.yml). One run of
+    # each repo's e2e-pr.yml / e2e-queue.yml / e2e-review-relay.yml / e2e-comment.yml). One run of
     # them holds the orchestration jobs (decide, track, finish, plan: seconds on
     # a GitHub-hosted runner) and, when the change needs them, the real suite
     # jobs (hours on the self-hosted fleet). Most runs hold no suite at all
@@ -292,6 +292,7 @@ class WorkflowExporter:
         "e2e-pr.yml": "E2E for pull requests",
         "e2e-queue.yml": "E2E for the merge queue",
         "e2e-review-relay.yml": "E2E review relay",
+        "e2e-comment.yml": "E2E comment",
     }
     PIPELINE_WORKFLOW_NAMES = frozenset(PIPELINE_WORKFLOW_FILES.values())
 

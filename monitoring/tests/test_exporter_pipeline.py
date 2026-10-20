@@ -70,6 +70,7 @@ def by_workflow(rows_):
     [
         ({"name": "E2E #12 (suites checked in the comment)", "path": ".github/workflows/e2e-pr.yml"}, FLOW),
         ({"path": ".github/workflows/e2e-queue.yml@refs/heads/main"}, QUEUE),
+        ({"name": "E2E comment", "path": ".github/workflows/e2e-comment.yml"}, "E2E comment"),
         ({"path": ".github/workflows/ci.yml"}, ""),
         ({}, ""),
     ],
@@ -242,6 +243,7 @@ def test_stored_flow_runs_get_the_stable_name_and_are_automation(exporter):
         ("E2E vmaas:nightly @ not-a-sha", "e2e", "", ""),
         (FLOW, "e2e", "osac-1-runner-04", ""),
         ("E2E vmaas (pull requests)", "e2e", "osac-1-runner-04", ""),
+        ("E2E comment", "e2e", "", ""),
     )
     exporter._normalize_pipeline_rows_if_needed()
     got = {r["id"]: (r["workflow"], r["category"], r["failure_reason"])
@@ -257,6 +259,7 @@ def test_stored_flow_runs_get_the_stable_name_and_are_automation(exporter):
     assert got[8] == ("E2E vmaas:nightly @ not-a-sha", "e2e", "")
     assert got[9] == (FLOW, "automation", "n/a")  # a run stored as e2e under its stable name
     assert got[10] == ("E2E vmaas (pull requests)", "e2e", "")  # a suite row is no flow run
+    assert got[11] == ("E2E comment", "automation", "n/a")  # the early comment run posts one comment
 
 
 def test_running_the_migration_twice_changes_nothing_more(exporter):
