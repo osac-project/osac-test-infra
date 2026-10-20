@@ -85,8 +85,6 @@
         + ([] if (ocp_underlay_ocp_asn | int > 0 and ocp_underlay_ocp_asn | int < 4294967295) else ['ocp_underlay_ocp_asn must be a valid 32-bit BGP ASN; got ' + (ocp_underlay_ocp_asn | string)])
         + ([] if (_ocp_underlay_leaf_asn | int > 0 and _ocp_underlay_leaf_asn | int < 4294967295) else ['selected Netris leaf ASN derived from ns_fabric.asn_start and ocp_underlay_leaf_index must be a valid 32-bit BGP ASN; got ' + (_ocp_underlay_leaf_asn | string)])
         + ([] if (ocp_underlay_ocp_asn | int != (_ocp_underlay_leaf_asn | int)) else ['ocp_underlay_ocp_asn must differ from the selected Netris leaf ASN ' + (_ocp_underlay_leaf_asn | string)])
-        + ([] if (ocp_underlay_vlan_id | int >= 1 and ocp_underlay_vlan_id | int <= 4094) else ['ocp_underlay_vlan_id must be between 1 and 4094; got ' + (ocp_underlay_vlan_id | string)])
-        + ([] if not ((ocp_underlay_vlan_id | int) in [10, 11, 12, 13]) else ['ocp_underlay_vlan_id must not reuse the North-South SoftGate BGP VLANs 10-13'])
         + ([] if (ocp_vm_name_pattern == (gpu_server_hostname ~ '-pod00-su0-h00')) else ['ocp_vm_name_pattern must match the first generated Netris server (' + gpu_server_hostname + '-pod00-su0-h00) for this underlay link'])
         + ([] if (gpu_server_count | int > 0) else ['gpu_server_count must include the OCP VM before enabling the OCP underlay link'])
         + ([] if not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool) else ['VMaaS ExternalIP tests are enabled but ocp_vmaas_external_ip_return_path_acknowledged is false; independently provision and verify a narrow route/return policy for the 172.27.0.0/16 range'])

@@ -198,28 +198,9 @@ resource "netris_link" "north-south-leaf-to-gpu-server" {
   ]
 }
 
-# Reuse h00's existing leaf-1 link (eth10 <-> swp1s0) for the direct OCP
-# underlay. The leaf-0 eth9 link remains attached to br-ex and carries OCP data.
-{% if ocp_underlay_enabled | default(false) | bool %}
-data "netris_network_interface" "ocp_underlay" {
-  name                            = "{{ ocp_underlay_leaf_port }}@${netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name}"
-  depends_on                      = [netris_link.north-south-leaf-to-gpu-server]
-}
-
-resource "netris_bgp" "ocp_underlay" {
-  name                            = "ocp-evpn-underlay"
-  siteid                          = netris_site.site1.id
-  hardware                        = netris_switch.north-south-leaf[{{ ocp_underlay_leaf_index }}].name
-  neighboras                      = {{ ocp_underlay_ocp_asn }}
-  localasn                        = "{{ (ns_fabric.asn_start | int) + (ocp_underlay_leaf_index | int) }}"
-  portid                          = data.netris_network_interface.ocp_underlay.id
-  vlanid                          = {{ ocp_underlay_vlan_id }}
-  untagged                        = true
-  localip                         = format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 1))
-  remoteip                        = format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 0))
-  depends_on                      = [netris_link.north-south-leaf-to-gpu-server]
-}
-{% endif %}
+# The underlay peer is generated from the Netris-managed eth10 <-> swp1s0
+# link (underlay = enabled) and the EVPN-VTEP server ASN above. Do not create
+# a separate VLAN-backed netris_bgp resource on this routed point-to-point link.
 
 
 #Leaf to Spine links
