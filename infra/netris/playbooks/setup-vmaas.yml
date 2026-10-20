@@ -242,7 +242,7 @@
       ansible.builtin.assert:
         that:
           - >-
-            (_vmaas_bgp_sessions.items | default([])
+            (_vmaas_bgp_sessions["items"] | default([])
              | selectattr('status.bgpStatus', 'equalto', 'Established') | list | length) > 0
         fail_msg: >-
           No BGPSessionState selected by peer {{ _vmaas_leaf_peer_ip }} is Established.
@@ -300,7 +300,7 @@
     - name: Locate the deployment that enables the VMaaS controller
       ansible.builtin.set_fact:
         _vmaas_compute_controller_deployment: "{{ item }}"
-      loop: "{{ _vmaas_deployments.items }}"
+      loop: "{{ _vmaas_deployments['items'] }}"
       when: >-
         (item.spec.template.spec.containers | default([])
          | map(attribute='env') | select('defined') | flatten
