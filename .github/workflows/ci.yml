@@ -54,6 +54,7 @@ jobs:
           set -euo pipefail
           bash .github/scripts/discover-audit-runs-test.sh
           bash .github/scripts/fabric-snapshot-test.sh
+          bash .github/scripts/load-image-onto-node-test.sh
 
   CI:
     name: CI
