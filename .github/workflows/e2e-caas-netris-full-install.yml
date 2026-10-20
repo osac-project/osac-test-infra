@@ -600,8 +600,7 @@ jobs:
               echo "OSAC_CLI_BIN=${RUNNER_TEMP}/osac-cli-bin" >> "$GITHUB_ENV"
             fi
 
-            echo "Loading ${tag} onto node ${NODE_NAME}..."
-            podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+            bash "${GITHUB_WORKSPACE}/.github/scripts/load-image-onto-node.sh" "${tag}" "${NODE_NAME}"
 
             # Map imageKey to ansible extra-var name
             case "${image_key}" in
