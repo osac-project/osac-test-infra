@@ -262,6 +262,59 @@ STUB
   fi
 }
 
+# ── Test 12: leading-zero max-attempts → validation error ────────────
+test_leading_zero_max_attempts() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" "08" 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "leading-zero-exit-code" "1" "${rc}"
+  assert_contains "leading-zero-error" "must be an integer between 1 and 10" "${out}"
+}
+
+# ── Test 13: oc debug output suppressed from helper stdout/stderr ────
+test_oc_output_suppressed() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  # oc stub that emits a node name, an API endpoint, and other
+  # infrastructure details on stdout and stderr — exactly the kind of
+  # output the helper must suppress from workflow logs.
+  cat > "${stub_dir}/oc" <<'STUB'
+#!/usr/bin/env bash
+echo "Starting pod/ip-10-0-141-72-debug ..."
+echo "Loaded image: localhost/component-0-pr:12345 on node ip-10-0-141-72.ec2.internal"
+echo "https://api.osac-ci-42.devcluster.openshift.com:6443/debug/pod" >&2
+exit 0
+STUB
+  chmod +x "${stub_dir}/oc"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "ip-10-0-141-72.ec2.internal" 3 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "oc-suppressed-exit-code" "0" "${rc}"
+  # None of the oc debug stdout/stderr content may appear in the
+  # helper's own output.
+  local leaked=0
+  if [[ "${out}" == *"ip-10-0-141-72"* ]]; then leaked=1; fi
+  if [[ "${out}" == *"devcluster.openshift.com"* ]]; then leaked=1; fi
+  if [[ "${out}" == *"Starting pod"* ]]; then leaked=1; fi
+
+  if [[ "${leaked}" -eq 1 ]]; then
+    echo "FAIL: oc-output-suppressed (oc debug output leaked into helper output)"
+    fail=$((fail + 1))
+  else
+    echo "PASS: oc-output-suppressed"
+    pass=$((pass + 1))
+  fi
+}
+
 # ── Run all tests ────────────────────────────────────────────────────
 test_success_first_attempt
 test_retry_then_success
@@ -274,6 +327,8 @@ test_non_integer_max_attempts
 test_negative_max_attempts
 test_out_of_range_max_attempts
 test_no_node_name_in_status_logs
+test_leading_zero_max_attempts
+test_oc_output_suppressed
 
 echo
 echo "${pass} passed, ${fail} failed"

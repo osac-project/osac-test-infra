@@ -24,13 +24,24 @@ readonly IMAGE_TAG="${1:?Usage: load-image-onto-node.sh <image-tag> <node-name> 
 readonly NODE_NAME="${2:?Usage: load-image-onto-node.sh <image-tag> <node-name> [max-attempts]}"
 readonly MAX_ATTEMPTS="${3:-3}"
 
-if ! [[ "${MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [[ "${MAX_ATTEMPTS}" -lt 1 || "${MAX_ATTEMPTS}" -gt 10 ]]; then
+# Accept only canonical decimal integers 1–10 (no leading zeros, no
+# octal ambiguity).  The regex rejects 00, 08, 011, etc. before any
+# arithmetic context can misinterpret them.
+if ! [[ "${MAX_ATTEMPTS}" =~ ^(10|[1-9])$ ]]; then
   echo "ERROR: max-attempts must be an integer between 1 and 10 (got '${MAX_ATTEMPTS}')." >&2
   exit 1
 fi
 
+# Temporary file for oc debug output; cleaned up on exit regardless of
+# success or failure.  Diagnostics stay local — nothing from oc debug
+# reaches workflow logs.
+_OC_LOG="$(mktemp)"
+trap 'rm -f "${_OC_LOG}"' EXIT
+
 _load_image() {
-  podman save "${IMAGE_TAG}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+  podman save "${IMAGE_TAG}" | \
+    oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load \
+    >"${_OC_LOG}" 2>&1
 }
 
 attempt=0
