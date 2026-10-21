@@ -24,6 +24,11 @@ readonly IMAGE_TAG="${1:?Usage: load-image-onto-node.sh <image-tag> <node-name> 
 readonly NODE_NAME="${2:?Usage: load-image-onto-node.sh <image-tag> <node-name> [max-attempts]}"
 readonly MAX_ATTEMPTS="${3:-3}"
 
+if ! [[ "${MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [[ "${MAX_ATTEMPTS}" -lt 1 || "${MAX_ATTEMPTS}" -gt 10 ]]; then
+  echo "ERROR: max-attempts must be an integer between 1 and 10 (got '${MAX_ATTEMPTS}')." >&2
+  exit 1
+fi
+
 _load_image() {
   podman save "${IMAGE_TAG}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
 }
@@ -32,7 +37,7 @@ attempt=0
 delay=10
 while true; do
   attempt=$((attempt + 1))
-  echo "Loading image onto node ${NODE_NAME} (attempt ${attempt}/${MAX_ATTEMPTS})..."
+  echo "Loading image onto cluster node (attempt ${attempt}/${MAX_ATTEMPTS})..."
 
   if _load_image; then
     echo "Image loaded successfully on attempt ${attempt}."
