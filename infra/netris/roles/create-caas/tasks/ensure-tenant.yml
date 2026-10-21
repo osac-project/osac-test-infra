@@ -10,7 +10,7 @@
 
 - name: Get CaaS workload tenant
   ansible.builtin.uri:
-    url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/fulfillment/v1/tenants/{{ caas_cluster_tenant }}"
+    url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/private/v1/tenants/{{ caas_cluster_tenant }}"
     headers:
       Authorization: "Bearer {{ _caas_tenant_token.stdout }}"
     validate_certs: false
@@ -21,7 +21,7 @@
 # Tenant creation can return break-glass credentials. Never log that response.
 - name: Create CaaS workload tenant when absent
   ansible.builtin.uri:
-    url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/fulfillment/v1/tenants"
+    url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/private/v1/tenants"
     method: POST
     headers:
       Authorization: "Bearer {{ _caas_tenant_token.stdout }}"
@@ -41,7 +41,7 @@
   block:
     - name: Wait for CaaS tenant synchronization and default networking
       ansible.builtin.uri:
-        url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/fulfillment/v1/tenants/{{ caas_cluster_tenant }}"
+        url: "https://{{ _caas_fulfillment_host.stdout | trim }}/api/private/v1/tenants/{{ caas_cluster_tenant }}"
         headers:
           Authorization: "Bearer {{ _caas_tenant_token.stdout }}"
         validate_certs: false
