@@ -36,50 +36,34 @@ assert_contains() {
 }
 
 # ── helpers ──────────────────────────────────────────────────────────
-# Create a temp dir with stub binaries; prepend it to PATH so the
-# script uses our stubs instead of real podman/oc/sleep.
-setup_stubs() {
-  STUB_DIR="$(mktemp -d)"
-  trap 'rm -rf "${STUB_DIR}"' RETURN
+# Write common stubs (podman, sleep) into the given directory.
+_write_common_stubs() {
+  local dir="$1"
 
-  # podman stub -- always succeeds (the save side is not the failure point)
-  cat > "${STUB_DIR}/podman" <<'STUB'
-#!/usr/bin/env bash
-echo "podman-stub: $*"
-exit 0
-STUB
-  chmod +x "${STUB_DIR}/podman"
-
-  # sleep stub -- no-op to keep tests fast
-  cat > "${STUB_DIR}/sleep" <<'STUB'
+  cat > "${dir}/podman" <<'STUB'
 #!/usr/bin/env bash
 exit 0
 STUB
-  chmod +x "${STUB_DIR}/sleep"
+  chmod +x "${dir}/podman"
+
+  cat > "${dir}/sleep" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+  chmod +x "${dir}/sleep"
 }
 
 # ── Test 1: succeeds on first attempt ────────────────────────────────
 test_success_first_attempt() {
   local stub_dir
   stub_dir="$(mktemp -d)"
-
-  cat > "${stub_dir}/podman" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/podman"
+  _write_common_stubs "${stub_dir}"
 
   cat > "${stub_dir}/oc" <<'STUB'
 #!/usr/bin/env bash
 exit 0
 STUB
   chmod +x "${stub_dir}/oc"
-
-  cat > "${stub_dir}/sleep" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/sleep"
 
   local out rc=0
   out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" 3 2>&1) || rc=$?
@@ -94,24 +78,22 @@ STUB
 test_retry_then_success() {
   local stub_dir
   stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
 
-  cat > "${stub_dir}/podman" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/podman"
+  # Counter file lives inside stub_dir — no global /tmp path.
+  local counter_file="${stub_dir}/oc-call-counter"
 
-  # oc fails twice, then succeeds
-  cat > "${stub_dir}/oc" <<'STUB'
+  # oc fails twice, then succeeds; counter is inside stub_dir.
+  cat > "${stub_dir}/oc" <<STUB
 #!/usr/bin/env bash
-COUNTER_FILE="/tmp/load-image-test-counter"
+COUNTER_FILE="${counter_file}"
 count=0
-if [[ -f "${COUNTER_FILE}" ]]; then
-  count=$(cat "${COUNTER_FILE}")
+if [[ -f "\${COUNTER_FILE}" ]]; then
+  count=\$(cat "\${COUNTER_FILE}")
 fi
-count=$((count + 1))
-echo "${count}" > "${COUNTER_FILE}"
-if [[ "${count}" -le 2 ]]; then
+count=\$((count + 1))
+echo "\${count}" > "\${COUNTER_FILE}"
+if [[ "\${count}" -le 2 ]]; then
   echo "Unable to connect to the server: EOF" >&2
   exit 1
 fi
@@ -119,16 +101,8 @@ exit 0
 STUB
   chmod +x "${stub_dir}/oc"
 
-  cat > "${stub_dir}/sleep" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/sleep"
-
-  rm -f /tmp/load-image-test-counter
   local out rc=0
   out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" 3 2>&1) || rc=$?
-  rm -f /tmp/load-image-test-counter
   rm -rf "${stub_dir}"
 
   assert_eq "retry-exit-code" "0" "${rc}"
@@ -140,12 +114,7 @@ STUB
 test_all_attempts_fail() {
   local stub_dir
   stub_dir="$(mktemp -d)"
-
-  cat > "${stub_dir}/podman" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/podman"
+  _write_common_stubs "${stub_dir}"
 
   cat > "${stub_dir}/oc" <<'STUB'
 #!/usr/bin/env bash
@@ -153,12 +122,6 @@ echo "Unable to connect to the server: EOF" >&2
 exit 1
 STUB
   chmod +x "${stub_dir}/oc"
-
-  cat > "${stub_dir}/sleep" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/sleep"
 
   local out rc=0
   out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" 3 2>&1) || rc=$?
@@ -179,24 +142,13 @@ test_missing_args() {
 test_single_attempt_fail() {
   local stub_dir
   stub_dir="$(mktemp -d)"
-
-  cat > "${stub_dir}/podman" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/podman"
+  _write_common_stubs "${stub_dir}"
 
   cat > "${stub_dir}/oc" <<'STUB'
 #!/usr/bin/env bash
 exit 1
 STUB
   chmod +x "${stub_dir}/oc"
-
-  cat > "${stub_dir}/sleep" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/sleep"
 
   local out rc=0
   out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" 1 2>&1) || rc=$?
@@ -210,24 +162,13 @@ STUB
 test_default_max_attempts() {
   local stub_dir
   stub_dir="$(mktemp -d)"
-
-  cat > "${stub_dir}/podman" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/podman"
+  _write_common_stubs "${stub_dir}"
 
   cat > "${stub_dir}/oc" <<'STUB'
 #!/usr/bin/env bash
 exit 1
 STUB
   chmod +x "${stub_dir}/oc"
-
-  cat > "${stub_dir}/sleep" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-  chmod +x "${stub_dir}/sleep"
 
   local out rc=0
   # Omit the third argument to use the default
@@ -238,6 +179,89 @@ STUB
   assert_contains "default-max-attempts" "attempt 3/3" "${out}"
 }
 
+# ── Test 7: zero max-attempts → validation error ────────────────────
+test_zero_max_attempts() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" 0 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "zero-max-exit-code" "1" "${rc}"
+  assert_contains "zero-max-error" "must be an integer between 1 and 10" "${out}"
+}
+
+# ── Test 8: non-integer max-attempts → validation error ─────────────
+test_non_integer_max_attempts() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" "abc" 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "non-integer-exit-code" "1" "${rc}"
+  assert_contains "non-integer-error" "must be an integer between 1 and 10" "${out}"
+}
+
+# ── Test 9: negative max-attempts → validation error ────────────────
+test_negative_max_attempts() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" "-1" 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "negative-max-exit-code" "1" "${rc}"
+  assert_contains "negative-max-error" "must be an integer between 1 and 10" "${out}"
+}
+
+# ── Test 10: out-of-range max-attempts → validation error ────────────
+test_out_of_range_max_attempts() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" 11 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "out-of-range-exit-code" "1" "${rc}"
+  assert_contains "out-of-range-error" "must be an integer between 1 and 10" "${out}"
+}
+
+# ── Test 11: status logs do not contain raw node name ────────────────
+test_no_node_name_in_status_logs() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  cat > "${stub_dir}/oc" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+  chmod +x "${stub_dir}/oc"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "secret-node-42" 3 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "no-node-name-exit-code" "0" "${rc}"
+  # The status/progress lines must not leak the raw node name.
+  if [[ "${out}" == *"secret-node-42"* ]]; then
+    echo "FAIL: no-node-name-in-logs (output contains raw node name)"
+    fail=$((fail + 1))
+  else
+    echo "PASS: no-node-name-in-logs"
+    pass=$((pass + 1))
+  fi
+}
+
 # ── Run all tests ────────────────────────────────────────────────────
 test_success_first_attempt
 test_retry_then_success
@@ -245,6 +269,11 @@ test_all_attempts_fail
 test_missing_args
 test_single_attempt_fail
 test_default_max_attempts
+test_zero_max_attempts
+test_non_integer_max_attempts
+test_negative_max_attempts
+test_out_of_range_max_attempts
+test_no_node_name_in_status_logs
 
 echo
 echo "${pass} passed, ${fail} failed"
