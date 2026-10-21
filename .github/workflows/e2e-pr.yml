@@ -138,7 +138,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
+    uses: ./.github/workflows/e2e-netris-full-install.yml
     with:
       test-infra-repository: ${{ needs.decide.outputs.head-repo }}
       test-infra-ref: ${{ needs.decide.outputs.sha }}
@@ -155,7 +155,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
+    uses: ./.github/workflows/e2e-netris-full-install.yml
     with:
       suite: vmaas
       osac-profile: cudn-evpn-netris-test
