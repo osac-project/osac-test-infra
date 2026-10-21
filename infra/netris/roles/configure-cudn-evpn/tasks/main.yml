@@ -748,7 +748,7 @@
     - name: Wait for the selected Netris EVPN address family to establish
       ansible.builtin.shell: |
         set -eu
-        frr_pod=$(oc get pods -n openshift-frr-k8s -o name | awk -F/ '$2 ~ /^frr-k8s-/ { print $2; exit }')
+        frr_pod=$(oc get pods -n openshift-frr-k8s -l component=frr-k8s -o name | awk -F/ '$2 ~ /^frr-k8s-/ { print $2; exit }')
         test -n "$frr_pod"
         summary=$(oc exec -n openshift-frr-k8s "$frr_pod" -c frr -- vtysh -c 'show bgp l2vpn evpn summary')
         printf '%s\n' "$summary" |
