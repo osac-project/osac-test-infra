@@ -129,6 +129,7 @@ STUB
 
   assert_eq "exhaust-exit-code" "1" "${rc}"
   assert_contains "exhaust-error-msg" "Failed to load image after 3 attempts" "${out}"
+  assert_contains "exhaust-eof-category" "reason: api-connection-eof" "${out}"
 }
 
 # ── Test 4: missing arguments → exit 1 ──────────────────────────────
@@ -315,6 +316,64 @@ STUB
   fi
 }
 
+# ── Test 14: EOF failure is classified as api-connection-eof ──────────
+test_classify_eof() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  cat > "${stub_dir}/oc" <<'STUB'
+#!/usr/bin/env bash
+echo "Unable to connect to the server: EOF" >&2
+exit 1
+STUB
+  chmod +x "${stub_dir}/oc"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" 1 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "classify-eof-exit-code" "1" "${rc}"
+  assert_contains "classify-eof-category" "reason: api-connection-eof" "${out}"
+}
+
+# ── Test 15: unknown failure with sensitive details does not leak ─────
+test_classify_unknown_no_leak() {
+  local stub_dir
+  stub_dir="$(mktemp -d)"
+  _write_common_stubs "${stub_dir}"
+
+  # oc stub emits sensitive-looking output that does not match any
+  # known category — the classifier must report "unknown" and the
+  # raw content must not appear in helper output.
+  cat > "${stub_dir}/oc" <<'STUB'
+#!/usr/bin/env bash
+echo "error: node ip-10-0-141-72.ec2.internal failed at https://api.osac-ci-42.devcluster.openshift.com:6443" >&2
+echo "pod/ip-10-0-141-72-debug exited with code 137" >&2
+exit 1
+STUB
+  chmod +x "${stub_dir}/oc"
+
+  local out rc=0
+  out=$(PATH="${stub_dir}:${PATH}" bash "${SCRIPT}" "test-image:latest" "test-node" 1 2>&1) || rc=$?
+  rm -rf "${stub_dir}"
+
+  assert_eq "classify-unknown-exit-code" "1" "${rc}"
+  assert_contains "classify-unknown-category" "reason: unknown" "${out}"
+  # Verify no raw sensitive details leaked.
+  local leaked=0
+  if [[ "${out}" == *"ip-10-0-141-72"* ]]; then leaked=1; fi
+  if [[ "${out}" == *"devcluster.openshift.com"* ]]; then leaked=1; fi
+  if [[ "${out}" == *"code 137"* ]]; then leaked=1; fi
+  if [[ "${leaked}" -eq 1 ]]; then
+    echo "FAIL: classify-unknown-no-leak (raw oc output leaked into helper output)"
+    fail=$((fail + 1))
+  else
+    echo "PASS: classify-unknown-no-leak"
+    pass=$((pass + 1))
+  fi
+}
+
 # ── Run all tests ────────────────────────────────────────────────────
 test_success_first_attempt
 test_retry_then_success
@@ -329,6 +388,8 @@ test_out_of_range_max_attempts
 test_no_node_name_in_status_logs
 test_leading_zero_max_attempts
 test_oc_output_suppressed
+test_classify_eof
+test_classify_unknown_no_leak
 
 echo
 echo "${pass} passed, ${fail} failed"
