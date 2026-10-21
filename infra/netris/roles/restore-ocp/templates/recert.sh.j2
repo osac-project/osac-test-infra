@@ -40,8 +40,8 @@ apply_nmstate() {
   mapfile -t management_interfaces < <(
     ip -o -4 addr show | awk -v address="${management_ip}/" 'index($4, address) == 1 { name = $2; sub(/@.*/, "", name); print name }' | sort -u
   )
-  if (( ${#management_interfaces[@]} != 1 )); then
-    log "Expected one interface with management IP ${management_ip}; found ${#management_interfaces[@]}"
+  if [[ -z ${management_interfaces[0]+x} || -n ${management_interfaces[1]+x} ]]; then
+    log "Expected one interface with management IP ${management_ip}; found ${management_interfaces[*]}"
     return 1
   fi
   management_iface=${management_interfaces[0]}
