@@ -238,6 +238,64 @@
   delay: 10
   no_log: true
 
+- name: Set AAP project id for publish-templates
+  ansible.builtin.set_fact:
+    _aap_project_id: "{{ _jt_check.json.results[0].project }}"
+
+- name: Wait for AAP project to reach a terminal state
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/projects/{{ _aap_project_id }}/"
+    method: GET
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _aap_project_status
+  until: _aap_project_status.json.status in ['successful', 'failed', 'error', 'canceled']
+  retries: 40
+  delay: 10
+  no_log: true
+
+- name: Trigger AAP project recovery update
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/projects/{{ _aap_project_id }}/update/"
+    method: POST
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [202]
+  register: _aap_project_update
+  retries: 5
+  delay: 15
+  until: _aap_project_update.status == 202
+  when: _aap_project_status.json.status != 'successful'
+  no_log: true
+
+- name: Wait for AAP project recovery update
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/projects/{{ _aap_project_id }}/"
+    method: GET
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _aap_project_recovery_status
+  until: _aap_project_recovery_status.json.status in ['successful', 'failed', 'error', 'canceled']
+  retries: 40
+  delay: 10
+  when: _aap_project_update is changed or _aap_project_update.status | default(0) == 202
+  no_log: true
+
+- name: Fail if AAP project is not usable
+  ansible.builtin.fail:
+    msg: >-
+      AAP project {{ _aap_project_id }} status is
+      {{ _aap_project_recovery_status.json.status | default(_aap_project_status.json.status) }}
+  when: >-
+    (_aap_project_recovery_status.json.status | default(_aap_project_status.json.status))
+    != 'successful'
+
 - name: Launch publish-templates job
   ansible.builtin.uri:
     url: "https://{{ _aap_route.stdout }}/api/controller/v2/job_templates/osac-publish-templates/launch/"
