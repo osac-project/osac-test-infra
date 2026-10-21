@@ -31,18 +31,13 @@ jobs:
     check: "E2E / BMaaS Full Install"
     suite: bmaas
     filters_any: [e2e-code]
-  e2e-netris:
+  e2e-bmaas-netris:
     kind: e2e
-    check: "E2E / BMaaS Netris Full Install"
-    suite: netris
+    check: "E2E / BMaaS Netris"
+    suite: bmaas-netris
     manual_only: true
   e2e-vmaas-netris:
     kind: e2e
-    check: "E2E / VMaaS Netris Full Install"
-    suite: vmaas_netris
-    manual_only: true
-  e2e-full-netris:
-    kind: e2e
-    check: "E2E / Full Netris Full Install"
-    suite: full_netris
+    check: "E2E / VMaaS Netris"
+    suite: vmaas-netris
     manual_only: true

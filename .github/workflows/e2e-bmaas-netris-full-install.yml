@@ -1,5 +1,5 @@
 ---
-name: E2E Netris Full Install
+name: E2E Netris
 
 permissions:
   contents: read
