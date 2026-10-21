@@ -34,13 +34,12 @@ ocp_server_ports:
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 
-# Optional CUDN EVPN underlay. Reuse h00's existing leaf-1 link: eth10 on the
-# server side and swp1s0 on ns-leaf-1. eth9 on leaf-0 remains the br-ex data link.
-# Match eth10's MAC to the guest NIC before setting ocp_underlay_guest_interface.
+# This snapshot maps ens5 to h00 eth9 (the Netris VNet data path) and ens7 to
+# eth10 (the dedicated leaf-1 underlay). The restored OCP br-ex must use ens5.
+ocp_data_guest_interface: "ens5"
 ocp_underlay_enabled: false
 ocp_underlay_server_port: "eth10"
-ocp_underlay_guest_interface: ""
-# The restored OCP node uses ens4 for management; ens6 is br-ex and ens7 maps to eth10.
+ocp_underlay_guest_interface: "ens7"
 ocp_underlay_management_interface: "ens4"
 ocp_underlay_leaf_index: 1
 ocp_underlay_leaf_port: "swp1s0"

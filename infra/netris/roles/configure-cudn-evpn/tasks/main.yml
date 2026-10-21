@@ -226,15 +226,17 @@
         that:
           - ocp_underlay_guest_interface | trim | length > 0
           - ocp_underlay_guest_interface | trim != ocp_underlay_management_interface | trim
+          - ocp_underlay_guest_interface | trim != ocp_data_guest_interface | trim
           - ocp_underlay_guest_interface is match('^[A-Za-z0-9_.-]{1,15}$')
           - ocp_underlay_guest_interface is not match('^(br-|ovn-|genev_)')
           - ocp_underlay_guest_interface not in ['lo', 'br-ex', 'br-int']
         fail_msg: >-
           Set ocp_underlay_guest_interface to the operator-confirmed Linux interface
           mapped to the dedicated Netris fabric port. It must be distinct from
-          management interface {{ ocp_underlay_management_interface }} and must not
-          be br-ex, br-int, an OVN interface, or a tunnel interface. Observed
-          interface={{ ocp_underlay_guest_interface }}. No cluster configuration
+          management interface {{ ocp_underlay_management_interface }} and the
+          OCP data interface {{ ocp_data_guest_interface }}. It must not be br-ex,
+          br-int, an OVN interface, or a tunnel interface. Observed interface={{
+          ocp_underlay_guest_interface }}. No cluster configuration
           was changed.
       tags: [cudn_evpn]
 
