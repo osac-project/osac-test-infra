@@ -340,6 +340,7 @@ jobs:
           done
 
       - name: Boot cluster clone
+        timeout-minutes: 15
         env:
           FLAVOR_NAME: ${{ inputs.flavor-name }}
         run: |
