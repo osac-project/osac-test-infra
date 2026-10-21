@@ -1,6 +1,6 @@
 REPORTS_DIR ?= reports
 
-.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-bmaas-networking test-metering test-references
+.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-bmaas-networking test-metering test-references test-full
 
 test:
 	mkdir -p $(REPORTS_DIR)
@@ -35,7 +35,13 @@ OSAC_MONO_DIR ?= /opt/osac
 
 test-bmaas-networking test-bmaas_networking:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/regression/networking/ -x -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/regression/networking/ -x -n 0 -v --tb=short -m "not requires_netris_full" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
+
+# full-ci enables all services; keep shared lab hardware serial and apply the known full-ci exclusions.
+FULL_TEST_FILTER = not TestBmaasNetworking and not TestCrossTenantBmaasNetworking and not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name and not test_disabled_services and not external_ip
+test-full:
+	mkdir -p $(REPORTS_DIR)
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -n 0 -v --tb=short -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
 
 test-metering:
 	mkdir -p $(REPORTS_DIR)

@@ -3,20 +3,20 @@
   hosts: all
   gather_facts: false
   pre_tasks:
-    - name: Load Netris fabric values for VMaaS peer derivation
+    - name: Load Netris fabric values for EVPN peer derivation
       ansible.builtin.include_vars:
         file: "{{ netris_lab_dir }}/group_vars/all.yml"
-      when: suite | default('') == 'vmaas'
+      when: suite | default('') in ['vmaas', 'full']
   roles:
     - configure-netris
     - configure-dns
     - restore-ocp
   post_tasks:
-    - name: Configure CUDN EVPN prerequisites for VMaaS
+    - name: Configure CUDN EVPN prerequisites for VMaaS and full-ci
       ansible.builtin.include_role:
         name: configure-cudn-evpn
       vars:
         ocp_evpn_netris_leaf_asn_start: "{{ ns_fabric.asn_start }}"
         ocp_evpn_netris_leaf_count: "{{ ns_fabric.leaf_count }}"
         ocp_evpn_netris_loopback_cidr: "{{ ns_fabric.lo_subnet }}"
-      when: suite | default('') == 'vmaas'
+      when: suite | default('') in ['vmaas', 'full']

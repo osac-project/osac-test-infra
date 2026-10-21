@@ -2,7 +2,7 @@
 
 OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
 # Suite selects CaaS vs MaaS for redeploy-server.sh flow.
@@ -14,12 +14,12 @@ SUITE ?= caas
 OSAC_NAMESPACE ?= osac-e2e-ci
 KUBECONFIG ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
-OSAC_PROFILE ?= $(if $(filter vmaas,$(SUITE)),cudn-evpn-netris-test,caas-ci)
+OSAC_PROFILE ?= $(if $(filter vmaas,$(SUITE)),cudn-evpn-netris-test,$(if $(filter full,$(SUITE)),full-ci,caas-ci))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 
-# VMaaS can select a kubeconfig; legacy suites keep their established root path.
-OCP_KUBECONFIG = $(if $(filter vmaas,$(SUITE)),$(KUBECONFIG),/root/.kube/config)
-VMAAS_UNDERLAY_EXTRA = $(if $(filter vmaas,$(SUITE)),-e ocp_underlay_enabled=true,)
+# VMaaS and full-ci configure the OCP host as an EVPN VTEP; legacy suites keep their established root path.
+OCP_KUBECONFIG = $(if $(filter vmaas full,$(SUITE)),$(KUBECONFIG),/root/.kube/config)
+VMAAS_UNDERLAY_EXTRA = $(if $(filter vmaas full,$(SUITE)),-e ocp_underlay_enabled=true,)
 OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
 
 # ─── Convenience targets ───────────────────────────────────────────
@@ -63,7 +63,7 @@ deploy-osac:
 	@printf '%s\n' \
 		'KUBECONFIG=$(OCP_KUBECONFIG)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas,$(SUITE)),$(OSAC_VM_KUBECONFIG),$(OCP_KUBECONFIG))' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas full,$(SUITE)),$(OSAC_VM_KUBECONFIG),$(OCP_KUBECONFIG))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
 
@@ -130,11 +130,23 @@ setup-bmc:
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
+# Full profile shares CaaS and BMaaS setup and verifies the EVPN prerequisites.
+setup-full:
+	$(MAKE) setup-caas
+	$(MAKE) setup-bmaas
+	$(MAKE) setup-vmaas SUITE=vmaas OSAC_PROFILE=$(OSAC_PROFILE)
+
 destroy-bmaas:
 	ansible-playbook playbooks/destroy-bmaas.yml $(ANSIBLE_EXTRA)
 
 gather-bmaas:
 	ansible-playbook playbooks/gather-bmaas.yml $(ANSIBLE_EXTRA)
+
+# Collect diagnostics for each service configured by the full-ci profile.
+gather-full:
+	$(MAKE) gather-caas
+	$(MAKE) gather-bmaas
+	$(MAKE) gather-infra
 
 # bmaas_networking shares infra with bmaas (same BMHs, same sushy-tools)
 setup-bmaas_networking: setup-bmaas

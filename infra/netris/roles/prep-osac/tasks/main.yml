@@ -134,6 +134,12 @@
     src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
   register: _values_raw
 
+- name: Read full-ci infrastructure values
+  when: suite | default('') == 'full'
+  ansible.builtin.slurp:
+    src: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
+  register: _full_ci_infra_values_raw
+
 - name: Validate the CUDN EVPN VMaaS profile contract
   ansible.builtin.assert:
     that:
@@ -236,6 +242,67 @@
                     if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
       }}
 
+
+- name: Add Netris CUDN EVPN manager settings to full-ci
+  when: suite | default('') == 'full'
+  ansible.builtin.set_fact:
+    _values_overrides: >-
+      {{ _values_overrides | combine({
+           'global': {'expertOverrides': {'networkClass': true}},
+           'operator': {'networkManagers': {
+             'enabled': true,
+             'fabricManagers': {'netris': {
+               'enabled': true,
+               'description': 'Netris SDN fabric manager',
+               'capabilities': ['ipv4']
+             }},
+             'k8sManagers': {'cudn_evpn': {
+               'enabled': true,
+               'description': 'OVN EVPN Kubernetes network manager for VM-to-fabric connectivity',
+               'capabilities': ['ipv4']
+             }}
+           }},
+           'networkClass': {
+             'enabled': true,
+             'title': 'CUDN EVPN with Netris',
+             'description': 'Provisions IPv4 networking through the CUDN EVPN k8s manager and the Netris physical fabric manager.',
+             'k8sManager': 'cudn_evpn',
+             'fabricManager': 'netris',
+             'isDefault': true
+           },
+           'aap': {'instanceGroups': {'storageFulfillment': {'enabled': true}}},
+           'metering': {'echoAdapter': {'enabled': true, 'image': {
+             'repository': 'ghcr.io/osac-project/metering-echo-adapter',
+             'tag': 'latest',
+             'pullPolicy': 'Always'
+           }}}
+         }, recursive=true) }}
+
+- name: Validate full-ci services and Netris EVPN overlay
+  when: suite | default('') == 'full'
+  ansible.builtin.assert:
+    that:
+      - _full_ci_values.global.services.caas.enabled | bool
+      - _full_ci_values.global.services.vmaas.enabled | bool
+      - _full_ci_values.global.services.bmaas.enabled | bool
+      - _full_ci_values.global.services.maas.enabled | bool
+      - _full_ci_values.operator.networkManagers.enabled | bool
+      - _full_ci_values.operator.networkManagers.fabricManagers.netris.enabled | bool
+      - _full_ci_values.operator.networkManagers.k8sManagers.cudn_evpn.enabled | bool
+      - _full_ci_values.global.expertOverrides.networkClass | bool
+      - _full_ci_values.networkClass.enabled | bool
+      - _full_ci_values.networkClass.k8sManager == 'cudn_evpn'
+      - _full_ci_values.networkClass.fabricManager == 'netris'
+      - _full_ci_values.networkClass.isDefault | bool
+      - _full_ci_values.aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION == 'ci.steps'
+      - _full_ci_values.aap.instanceGroups.storageFulfillment.enabled | bool
+      - _full_ci_values.metering.echoAdapter.enabled | bool
+    fail_msg: >-
+      SUITE=full requires the full-ci profile services plus the default NetworkClass
+      pair (netris, cudn_evpn). The full-ci EVPN overlay was not applied correctly.
+  vars:
+    _full_ci_values: "{{ (_values_raw.content | b64decode | from_yaml) | combine(_values_overrides, recursive=true) }}"
+
 # Keep bmf.metal3.enabled false here: it enables the BMF subchart's own Secret
 # templates. The OSAC chart's testBackend templates provide those configs instead.
 - name: Configure the Metal3 test backend for bare-metal services
@@ -266,6 +333,17 @@
   ansible.builtin.copy:
     dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
     content: "{{ _values_raw.content | b64decode | from_yaml | combine(_values_overrides, recursive=true) | to_nice_yaml(indent=2) }}"
+    mode: "0600"
+  no_log: true
+
+- name: Enable full-ci Keycloak test fixtures before the infrastructure install
+  when: suite | default('') == 'full'
+  ansible.builtin.copy:
+    dest: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
+    content: >-
+      {{ (_full_ci_infra_values_raw.content | b64decode | from_yaml)
+         | combine({'keycloak': {'devFixtures': {'enabled': true}}}, recursive=true)
+         | to_nice_yaml(indent=2) }}
     mode: "0600"
   no_log: true
 

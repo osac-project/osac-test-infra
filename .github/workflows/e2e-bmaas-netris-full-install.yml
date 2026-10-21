@@ -8,12 +8,12 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: "Netris suite to run (bmaas_networking or vmaas)"
+        description: "Netris suite to run (bmaas_networking, vmaas, or full)"
         required: false
         type: string
         default: "bmaas_networking"
       osac-profile:
-        description: "OSAC profile for the selected Netris suite"
+        description: "OSAC profile for the selected Netris suite (full uses full-ci)"
         required: false
         type: string
         default: "bmaas-ci"
@@ -370,13 +370,13 @@ jobs:
           OSAC_PROFILE: ${{ inputs['osac-profile'] }}
         run: |
           case "${TEST_SUITE}:${OSAC_PROFILE}" in
-            bmaas_networking:bmaas-ci|vmaas:cudn-evpn-netris-test) ;;
+            bmaas_networking:bmaas-ci|vmaas:cudn-evpn-netris-test|full:full-ci) ;;
             *) echo "::error::Unsupported Netris suite/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
           fi
-          EXTRA_VARS='{"bare_metal_services":true}'
+          EXTRA_VARS='{"dns_server":"10.11.5.160","bare_metal_services":true}'
           declare -A OVERRIDES=(
             [osac_repo]="$OSAC_REPO"
             [osac_branch]="$OSAC_BRANCH"
@@ -570,7 +570,7 @@ jobs:
 
       - name: Setup Netris suite
         shell: bash
-        timeout-minutes: 30
+        timeout-minutes: 60
         env:
           TEST_SUITE: ${{ inputs.suite }}
           OSAC_PROFILE: ${{ inputs['osac-profile'] }}
@@ -579,7 +579,7 @@ jobs:
 
       - name: Run Netris suite tests
         id: test
-        timeout-minutes: 60
+        timeout-minutes: ${{ inputs.suite == 'full' && 240 || 60 }}
         shell: bash
         env:
           TEST_SUITE: ${{ inputs.suite }}

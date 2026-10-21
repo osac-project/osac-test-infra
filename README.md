@@ -53,16 +53,17 @@ The table describes active suites in the OSAC mono-repo. Their test code is not 
 | **storage** | Tenant storage lifecycle |
 | **bmaas** | BareMetalInstance lifecycle |
 | **bmaas_networking** | BMaaS networking E2E |
+| **full** | All OSAC E2E services on the Netris `full-ci` profile, including the shared-Subnet BMI/ComputeInstance EVPN test |
 
 ### Compatibility Matrix
 
 Not every backend supports every test suite. Each backend declares its supported suites in a `capabilities` file. The system validates this before any deployment starts.
 
-| Backend | vmaas | caas | catalog | storage | bmaas | bmaas_networking |
-|---------|:-----:|:----:|:-------:|:-------:|:-----:|:----------------:|
-| netris  | yes   | yes  | no      | no      | yes   | yes              |
+| Backend | vmaas | caas | catalog | storage | bmaas | bmaas_networking | full |
+|---------|:-----:|:----:|:-------:|:-------:|:-----:|:----------------:|:----:|
+| netris  | yes   | yes  | yes     | yes     | yes   | yes              | yes  |
 
-The Netris VMaaS profile registers both VMaaS and BMaaS with the `cudn_evpn` Kubernetes manager and Netris fabric manager, so VM and bare-metal instances can share a subnet. The OCP target must be converged OCP 4.22 with OVNKubernetes; its platform type may be `None`. ExternalIP tests additionally require a separately provisioned and acknowledged return path for `172.27.0.0/16`.
+The Netris `vmaas` and `full` profiles register the `cudn_evpn` Kubernetes manager and Netris fabric manager, so VM and bare-metal instances can share a subnet. `vmaas` uses the focused `cudn-evpn-netris-test` OSAC profile; `full` keeps all `full-ci` services enabled and overlays the same Netris EVPN NetworkClass. The OCP target must be converged OCP 4.22 with OVNKubernetes; its platform type may be `None`. ExternalIP tests additionally require a separately provisioned and acknowledged return path for `172.27.0.0/16`.
 
 ### Backend Setup: Netris
 
