@@ -44,6 +44,22 @@ _load_image() {
     >"${_OC_LOG}" 2>&1
 }
 
+# Classify the captured oc debug output into a fixed, non-sensitive
+# category.  Only allowlisted literal strings are emitted — no raw
+# log content, node names, endpoints, or image tags.
+_classify_failure() {
+  local log
+  log=$(cat "${_OC_LOG}" 2>/dev/null) || log=""
+  case "${log}" in
+    *"EOF"*)                          echo "api-connection-eof" ;;
+    *"TLS handshake timeout"*)        echo "tls-timeout" ;;
+    *"connection refused"*)           echo "connection-refused" ;;
+    *"timeout"*|*"deadline"*)         echo "timeout" ;;
+    *"Unauthorized"*|*"Forbidden"*)   echo "auth-error" ;;
+    *)                                echo "unknown" ;;
+  esac
+}
+
 attempt=0
 delay=10
 while true; do
@@ -56,7 +72,7 @@ while true; do
   fi
 
   if [[ "${attempt}" -ge "${MAX_ATTEMPTS}" ]]; then
-    echo "ERROR: Failed to load image after ${MAX_ATTEMPTS} attempts." >&2
+    echo "ERROR: Failed to load image after ${MAX_ATTEMPTS} attempts (reason: $(_classify_failure))." >&2
     exit 1
   fi
 
