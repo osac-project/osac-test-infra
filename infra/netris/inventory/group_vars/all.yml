@@ -28,19 +28,14 @@ ocp_vnet_name: "ocp-sno-vnet"
 ocp_subnet_cidr: "192.168.40.0/24"
 ocp_gateway: "192.168.40.1/24"
 ocp_node_ip: "192.168.40.2"
-ocp_server_ports:
-  - name: "eth9@hgx-pod00-su0-h00"
-    accessMode: true
+# Optional when Cloudsim's generated SSH aliases are unavailable.
+ocp_vm_mgmt_ip: ""
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 
-# This snapshot maps ens5 to h00 eth9 (the Netris VNet data path) and ens7 to
-# eth10 (the dedicated leaf-1 underlay). The restored OCP br-ex must use ens5.
-ocp_data_guest_interface: "ens5"
+# Netris port identity is stable; h00 Linux interface names are resolved by MAC at runtime.
 ocp_underlay_enabled: false
 ocp_underlay_server_port: "eth10"
-ocp_underlay_guest_interface: "ens7"
-ocp_underlay_management_interface: "ens4"
 ocp_underlay_leaf_index: 1
 ocp_underlay_leaf_port: "swp1s0"
 ocp_underlay_p2p_cidr: "192.0.2.0/31"

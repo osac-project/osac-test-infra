@@ -1,13 +1,12 @@
 ---
-- name: Find OCP server VM
-  ansible.builtin.shell:
-    cmd: virsh list --all --name | grep "{{ ocp_vm_name_pattern }}"
-  register: _vm_lookup
-  changed_when: false
-
-- name: Set VM name
-  ansible.builtin.set_fact:
-    ocp_vm_name: "{{ _vm_lookup.stdout_lines[0] }}"
+- name: Require the resolved OCP uplink before touching the snapshot disks
+  ansible.builtin.assert:
+    that:
+      - ocp_vm_name is defined
+      - ocp_uplink_mac is defined
+      - ocp_vm_mgmt_ip_resolved is defined
+      - ocp_server_port is defined
+    fail_msg: The configure-netris role must resolve and verify the OCP uplink first.
 
 - name: Check if VM is running
   ansible.builtin.shell:
@@ -261,7 +260,7 @@
       ansible.builtin.copy:
         content: |
           interfaces:
-          - name: {{ ocp_data_guest_interface }}
+          - name: __OCP_UPLINK_INTERFACE__
             type: ethernet
             state: up
             ipv4:
@@ -277,7 +276,7 @@
           routes:
             config:
             - destination: 0.0.0.0/0
-              next-hop-interface: {{ ocp_data_guest_interface }}
+              next-hop-interface: __OCP_UPLINK_INTERFACE__
               next-hop-address: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
               metric: 48
               table-id: 254
@@ -287,6 +286,18 @@
               - 192.168.16.1
               - {{ dns_server }}
         dest: "{{ _var }}lib/snapshot-recert/nmstate.yaml"
+        mode: "0644"
+
+    - name: Write the verified OCP uplink MAC to the snapshot
+      ansible.builtin.copy:
+        content: "{{ ocp_uplink_mac }}\n"
+        dest: "{{ _var }}lib/snapshot-recert/uplink.mac"
+        mode: "0644"
+
+    - name: Write the verified management IP to the snapshot
+      ansible.builtin.copy:
+        content: "{{ ocp_vm_mgmt_ip_resolved }}\n"
+        dest: "{{ _var }}lib/snapshot-recert/management.ip"
         mode: "0644"
 
     - name: Template recert script to disk
@@ -323,13 +334,6 @@
           chown -R 1000:1000 {{ _var }}home/core/.ssh
       changed_when: true
 
-    - name: Disable reverse path filter on ens4 for management access
-      ansible.builtin.copy:
-        content: |
-          net.ipv4.conf.ens4.rp_filter=0
-        dest: "{{ _deploy }}etc/sysctl.d/99-snapshot-rp-filter.conf"
-        mode: "0644"
-
     - name: Fix SELinux labels on written files
       ansible.builtin.shell:
         cmd: |
@@ -337,7 +341,6 @@
           chcon system_u:object_r:systemd_unit_file_t:s0 {{ _deploy }}etc/systemd/system/snapshot-recert.service
           chcon -h system_u:object_r:systemd_unit_file_t:s0 {{ _deploy }}etc/systemd/system/multi-user.target.wants/snapshot-recert.service
           chcon system_u:object_r:etc_t:s0 {{ _deploy }}etc/default/sno_dnsmasq_configuration_overrides
-          chcon system_u:object_r:system_conf_t:s0 {{ _deploy }}etc/sysctl.d/99-snapshot-rp-filter.conf
       changed_when: true
 
     # --- Delete OVN/OVS state ---
@@ -422,7 +425,92 @@
   ansible.builtin.command:
     cmd: virsh start {{ ocp_vm_name }}
 
-# Use DNAT IP to reach the restored node through its Netris VNet data path.
+- name: Wait for SNO SSH through its management interface
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+      - "core@{{ ocp_vm_mgmt_ip_resolved }}"
+      - hostname
+  register: _mgmt_ssh_check
+  until: _mgmt_ssh_check.rc == 0
+  retries: 60
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Stop if SNO management SSH is unavailable
+  ansible.builtin.fail:
+    msg: >-
+      SNO {{ ocp_vm_name }} did not accept management SSH at
+      {{ ocp_vm_mgmt_ip_resolved }} after boot; cannot check its OCP gateway.
+      Last SSH error: {{ _mgmt_ssh_check.stderr | default('') | trim }}
+  when: _mgmt_ssh_check.rc != 0
+
+- name: Wait for the OCP address and gateway to become reachable
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+      - "core@{{ ocp_vm_mgmt_ip_resolved }}"
+      - >-
+        test -f /var/lib/snapshot-recert/markers/nmstate.done &&
+        ip -4 addr show | grep -Fq '{{ ocp_node_ip }}/' &&
+        ping -n -c 2 -W 2 -I {{ ocp_node_ip }} {{ ocp_gateway | ansible.utils.ipaddr('address') }}
+  register: _ocp_gateway_check
+  until: _ocp_gateway_check.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Gather SNO network state if the OCP gateway is unreachable
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+      - "core@{{ ocp_vm_mgmt_ip_resolved }}"
+      - >-
+        ip -4 addr show;
+        ip route get {{ ocp_gateway | ansible.utils.ipaddr('address') }} from {{ ocp_node_ip }};
+        ip neigh show {{ ocp_gateway | ansible.utils.ipaddr('address') }};
+        systemctl is-active snapshot-recert.service
+  register: _ocp_gateway_diagnostics
+  changed_when: false
+  failed_when: false
+  when: _ocp_gateway_check.rc != 0
+
+- name: Stop if the SNO OCP uplink cannot reach its gateway
+  ansible.builtin.fail:
+    msg: >-
+      SNO {{ ocp_vm_name }} uplink MAC {{ ocp_uplink_mac }} on Netris
+      {{ ocp_server_port }} cannot reach gateway {{ ocp_gateway }} from
+      {{ ocp_node_ip }}. Guest network state:
+      {{ _ocp_gateway_diagnostics.stdout | default(_ocp_gateway_diagnostics.stderr, true) | default('unavailable', true) }}
+  when: _ocp_gateway_check.rc != 0
+
+# Use DNAT IP after verifying the management path and restored data uplink.
 - name: Set SSH target IP
   ansible.builtin.set_fact:
     _vm_ssh_ip: "{{ ocp_dnat_ip }}"

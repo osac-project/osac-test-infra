@@ -37,7 +37,7 @@
         item.name.split('@')[1] ~ ':' ~
         ((item.accessMode | default(false)) | bool | string)
       ] }}
-  loop: "{{ ocp_server_ports }}"
+  loop: "{{ _ocp_server_ports }}"
   no_log: true
 
 - name: Update OCP VNet ports when they differ from inventory
@@ -49,7 +49,7 @@
       Content-Type: "application/json"
     body_format: json
     body:
-      ports: "{{ ocp_server_ports }}"
+      ports: "{{ _ocp_server_ports }}"
     status_code: [200]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(false) }}"
@@ -77,7 +77,7 @@
      | list | length) == 1
   retries: 24
   delay: 5
-  loop: "{{ ocp_server_ports }}"
+  loop: "{{ _ocp_server_ports }}"
   loop_control:
     label: "{{ item.name }}"
   no_log: true

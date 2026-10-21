@@ -221,23 +221,76 @@
           No cluster configuration was changed.
       tags: [cudn_evpn]
 
-    - name: Require an operator-mapped secondary fabric interface
+    - name: Require verified SNO data and underlay adapter MACs
       ansible.builtin.assert:
         that:
-          - ocp_underlay_guest_interface | trim | length > 0
-          - ocp_underlay_guest_interface | trim != ocp_underlay_management_interface | trim
-          - ocp_underlay_guest_interface | trim != ocp_data_guest_interface | trim
-          - ocp_underlay_guest_interface is match('^[A-Za-z0-9_.-]{1,15}$')
-          - ocp_underlay_guest_interface is not match('^(br-|ovn-|genev_)')
-          - ocp_underlay_guest_interface not in ['lo', 'br-ex', 'br-int']
+          - ocp_uplink_mac is defined
+          - ocp_underlay_uplink_mac | default('') | length == 17
+          - (ocp_uplink_mac | lower) != (ocp_underlay_uplink_mac | lower)
+          - ocp_vm_mgmt_ip_resolved is defined
         fail_msg: >-
-          Set ocp_underlay_guest_interface to the operator-confirmed Linux interface
-          mapped to the dedicated Netris fabric port. It must be distinct from
-          management interface {{ ocp_underlay_management_interface }} and the
-          OCP data interface {{ ocp_data_guest_interface }}. It must not be br-ex,
-          br-int, an OVN interface, or a tunnel interface. Observed interface={{
-          ocp_underlay_guest_interface }}. No cluster configuration
-          was changed.
+          Netris data and underlay link MACs must be verified before resolving
+          Linux interfaces on h00. No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Resolve h00 data and underlay interfaces from their MAC addresses
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+          - "{{ playbook_dir }}/../scripts/ocp_uplink.py"
+          - interfaces
+          - --vm-mgmt-ip
+          - "{{ ocp_vm_mgmt_ip_resolved }}"
+          - --management-address
+          - "{{ ocp_vm_mgmt_ip_resolved }}"
+          - --host-key
+          - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+          - --mac
+          - "{{ ocp_uplink_mac }}"
+          - --mac
+          - "{{ ocp_underlay_uplink_mac }}"
+      register: _ocp_evpn_interfaces_raw
+      changed_when: false
+      failed_when: false
+      tags: [cudn_evpn]
+
+    - name: Require h00 interface discovery to succeed
+      ansible.builtin.assert:
+        that:
+          - _ocp_evpn_interfaces_raw.rc == 0
+        fail_msg: >-
+          Could not uniquely map Netris MACs to h00 Linux interfaces:
+          {{ _ocp_evpn_interfaces_raw.stderr | default('unknown interface discovery error', true) | trim }}
+      tags: [cudn_evpn]
+
+    - name: Record dynamically resolved h00 interfaces
+      ansible.builtin.set_fact:
+        _ocp_evpn_interfaces: "{{ _ocp_evpn_interfaces_raw.stdout | from_json }}"
+        ocp_data_guest_interface: >-
+          {{ (_ocp_evpn_interfaces_raw.stdout | from_json).interfaces[ocp_uplink_mac | lower] }}
+        ocp_underlay_guest_interface: >-
+          {{ (_ocp_evpn_interfaces_raw.stdout | from_json).interfaces[ocp_underlay_uplink_mac | lower] }}
+        ocp_underlay_management_interface: >-
+          {{ (_ocp_evpn_interfaces_raw.stdout | from_json).management_interface }}
+      tags: [cudn_evpn]
+
+    - name: Require distinct, valid data, underlay, and management interfaces
+      ansible.builtin.assert:
+        that:
+          - ocp_data_guest_interface is match('^[A-Za-z0-9_.:-]{1,15}$')
+          - ocp_underlay_guest_interface is match('^[A-Za-z0-9_.:-]{1,15}$')
+          - ocp_underlay_management_interface is match('^[A-Za-z0-9_.:-]{1,15}$')
+          - ocp_underlay_guest_interface != ocp_data_guest_interface
+          - ocp_underlay_guest_interface != ocp_underlay_management_interface
+          - ocp_data_guest_interface != ocp_underlay_management_interface
+          - ocp_underlay_guest_interface is not match('^(br-|ovn-|genev_)')
+          - ocp_data_guest_interface is not match('^(br-|ovn-|genev_)')
+          - ocp_underlay_guest_interface not in ['lo', 'br-ex', 'br-int']
+          - ocp_data_guest_interface not in ['lo', 'br-ex', 'br-int']
+        fail_msg: >-
+          Resolved data={{ ocp_data_guest_interface }}, underlay={{ ocp_underlay_guest_interface }},
+          management={{ ocp_underlay_management_interface }} interfaces must be distinct physical
+          guest interfaces. No cluster configuration was changed.
       tags: [cudn_evpn]
 
     - name: Require a unique dummy interface name for the node VTEP address
