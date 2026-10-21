@@ -165,6 +165,12 @@
       register: _vmaas_frr_raw
       changed_when: false
 
+    - name: Read the OCP host EVPN address-family configuration
+      ansible.builtin.command:
+        argv: [oc, get, frrconfigurations.frrk8s.metallb.io/tenant-evpn-advertise, -n, openshift-frr-k8s, -o, json]
+      register: _vmaas_evpn_frr_raw
+      changed_when: false
+
     - name: Read the OCP RouteAdvertisements resource
       ansible.builtin.command:
         argv: [oc, get, routeadvertisements.k8s.ovn.org/tenant-evpn, -o, json]
@@ -203,6 +209,7 @@
         _vmaas_nncp: "{{ _vmaas_nncp_raw.stdout | from_json }}"
         _vmaas_vtep: "{{ _vmaas_vtep_raw.stdout | from_json }}"
         _vmaas_frr: "{{ _vmaas_frr_raw.stdout | from_json }}"
+        _vmaas_evpn_frr: "{{ _vmaas_evpn_frr_raw.stdout | from_json }}"
         _vmaas_route_advertisements: "{{ _vmaas_route_advertisements_raw.stdout | from_json }}"
         _vmaas_evpn_cudns: "{{ _vmaas_evpn_cudns_raw.stdout | from_json }}"
         _vmaas_bgp_sessions: "{{ _vmaas_bgp_sessions_raw.stdout | from_json }}"
@@ -237,6 +244,20 @@
         fail_msg: >-
           FRRConfiguration tenant-evpn must have the evpn=true label and one
           default-VRF neighbor matching the leaf endpoint {{ _vmaas_leaf_peer_ip }}.
+
+    - name: Require the OCP host EVPN address family
+      ansible.builtin.assert:
+        that:
+          - _vmaas_evpn_frr.spec.raw.priority | int == 5
+          - _vmaas_evpn_frr.spec.nodeSelector.matchLabels['kubernetes.io/hostname'] | length > 0
+          - "'address-family l2vpn evpn' in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
+          - "('neighbor ' ~ _vmaas_leaf_peer_ip ~ ' activate') in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
+          - "'allowas-in origin' in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
+          - "'advertise-all-vni' in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
+        fail_msg: >-
+          FRRConfiguration tenant-evpn-advertise must configure the selected leaf
+          {{ _vmaas_leaf_peer_ip }} in the host L2VPN EVPN address family with
+          allowas-in origin and advertise-all-vni.
 
     - name: Require the OCP-to-Netris BGP session to be Established
       ansible.builtin.assert:

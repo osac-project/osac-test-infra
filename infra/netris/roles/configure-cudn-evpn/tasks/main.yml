@@ -694,6 +694,20 @@
         ' configured' in _ocp_evpn_frr_apply.stdout
       tags: [cudn_evpn]
 
+    - name: Apply the OCP host EVPN address family
+      ansible.builtin.command:
+        argv:
+          - oc
+          - apply
+          - -f
+          - "-"
+        stdin: "{{ lookup('ansible.builtin.template', 'tenant-evpn-advertise.yml.j2') }}"
+      register: _ocp_evpn_advertise_apply
+      changed_when: >-
+        ' created' in _ocp_evpn_advertise_apply.stdout or
+        ' configured' in _ocp_evpn_advertise_apply.stdout
+      tags: [cudn_evpn]
+
     - name: Apply PodNetwork-only CUDN RouteAdvertisements
       ansible.builtin.command:
         argv:
@@ -727,6 +741,28 @@
         ((_ocp_evpn_bgp_sessions.stdout | from_json)['items']
           | selectattr('status.bgpStatus', 'equalto', 'Established')
           | list | length) > 0
+      retries: 90
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Wait for the selected Netris EVPN address family to establish
+      ansible.builtin.shell: |
+        set -eu
+        frr_pod=$(oc get pods -n openshift-frr-k8s -o name | awk -F/ '$2 ~ /^frr-k8s-/ { print $2; exit }')
+        test -n "$frr_pod"
+        summary=$(oc exec -n openshift-frr-k8s "$frr_pod" -c frr -- vtysh -c 'show bgp l2vpn evpn summary')
+        printf '%s\n' "$summary" |
+          awk -v peer="{{ _ocp_evpn_leaf_ip }}" '
+            $1 == peer {
+              print
+              if ($10 ~ /^[0-9]+$/ && $11 ~ /^[0-9]+$/) established=1
+            }
+            END { exit !established }
+          '
+      register: _ocp_evpn_evpn_summary
+      changed_when: false
+      failed_when: false
+      until: _ocp_evpn_evpn_summary.rc == 0
       retries: 90
       delay: 10
       tags: [cudn_evpn]
