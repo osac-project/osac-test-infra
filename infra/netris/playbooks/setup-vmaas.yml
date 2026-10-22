@@ -53,10 +53,43 @@
       register: _vmaas_network_raw
       changed_when: false
 
+    - name: Wait for OVN EVPN API definitions to become Established
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - "crd/{{ item }}"
+          - -o
+          - json
+      register: _vmaas_evpn_crd_raw
+      until: >-
+        _vmaas_evpn_crd_raw.rc == 0 and
+        ((_vmaas_evpn_crd_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Established')
+         | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 60
+      delay: 10
+      changed_when: false
+      loop:
+        - clusteruserdefinednetworks.k8s.ovn.org
+        - vteps.k8s.ovn.org
+        - routeadvertisements.k8s.ovn.org
+        - bgpsessionstates.frrk8s.metallb.io
+      loop_control:
+        label: "{{ item }}"
+
     - name: Read the OCP network ClusterOperator
       ansible.builtin.command:
         argv: [oc, get, clusteroperator/network, -o, json]
       register: _vmaas_network_operator_raw
+      until: >-
+        _vmaas_network_operator_raw.rc == 0 and
+        ((_vmaas_network_operator_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Available') | map(attribute='status') | first | default('False')) == 'True' and
+        ((_vmaas_network_operator_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Progressing') | map(attribute='status') | first | default('True')) == 'False'
+      retries: 60
+      delay: 10
       changed_when: false
 
     - name: Parse OCP identity and convergence status
@@ -151,12 +184,27 @@
       ansible.builtin.command:
         argv: [oc, get, nncp/tenant-evpn-underlay, -o, json]
       register: _vmaas_nncp_raw
+      until: >-
+        _vmaas_nncp_raw.rc == 0 and
+        ((_vmaas_nncp_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Available')
+         | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 60
+      delay: 10
       changed_when: false
 
     - name: Read the OVN VTEP allocation
       ansible.builtin.command:
         argv: [oc, get, vteps.k8s.ovn.org/tenant-vtep, -o, json]
       register: _vmaas_vtep_raw
+      until: >-
+        _vmaas_vtep_raw.rc == 0 and
+        ((_vmaas_vtep_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Accepted')
+         | selectattr('status', 'equalto', 'True')
+         | selectattr('reason', 'equalto', 'Allocated') | list | length) > 0
+      retries: 60
+      delay: 10
       changed_when: false
 
     - name: Read the OCP FRR peer configuration
@@ -202,6 +250,12 @@
           - -o
           - json
       register: _vmaas_bgp_sessions_raw
+      until: >-
+        _vmaas_bgp_sessions_raw.rc == 0 and
+        ((_vmaas_bgp_sessions_raw.stdout | from_json).items | default([])
+         | selectattr('status.bgpStatus', 'equalto', 'Established') | list | length) > 0
+      retries: 60
+      delay: 10
       changed_when: false
 
     - name: Parse Task 3 EVPN readiness resources
@@ -317,11 +371,17 @@
         _vmaas_k8s_manager: "{{ _vmaas_k8s_manager_raw.stdout | from_json }}"
         _vmaas_compute_instance_crd: "{{ _vmaas_compute_instance_crd_raw.stdout | from_json }}"
         _vmaas_deployments: "{{ _vmaas_deployments_raw.stdout | from_json }}"
+      no_log: true
 
     - name: Locate the deployment that enables the VMaaS controller
       ansible.builtin.set_fact:
-        _vmaas_compute_controller_deployment: "{{ item }}"
+        _vmaas_compute_controller_deployment:
+          name: "{{ item.metadata.name }}"
+          replicas: "{{ item.spec.replicas | default(1) }}"
+          availableReplicas: "{{ item.status.availableReplicas | default(0) }}"
       loop: "{{ _vmaas_deployments['items'] }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
       when: >-
         (item.spec.template.spec.containers | default([])
          | map(attribute='env') | select('defined') | flatten
@@ -351,7 +411,7 @@
     - name: Require the VMaaS controller deployment to be available
       ansible.builtin.assert:
         that:
-          - (_vmaas_compute_controller_deployment.status.availableReplicas | default(0) | int) >= (_vmaas_compute_controller_deployment.spec.replicas | default(1) | int)
+          - (_vmaas_compute_controller_deployment.availableReplicas | int) >= (_vmaas_compute_controller_deployment.replicas | int)
         fail_msg: >-
           The deployment with OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER=true is not
           fully available in namespace {{ osac_namespace }}.

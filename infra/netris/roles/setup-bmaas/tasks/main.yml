@@ -717,6 +717,14 @@
     create: true
     mode: "0644"
 
+- name: Publish BMaaS network interface for E2E tests
+  ansible.builtin.lineinfile:
+    path: "{{ inventory_dir }}/../.env.infra"
+    regexp: '^OSAC_BMI_NETWORK_INTERFACE='
+    line: "OSAC_BMI_NETWORK_INTERFACE={{ bmaas_provisioning_fabric_iface }}"
+    create: true
+    mode: "0644"
+
 - name: Create BMI catalog item
   no_log: true
   ansible.builtin.uri:

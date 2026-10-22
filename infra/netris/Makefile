@@ -16,9 +16,11 @@ KUBECONFIG ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
 OSAC_PROFILE ?= $(if $(filter vmaas vmaas_networking,$(SUITE)),cudn-evpn-netris-test,$(if $(filter full stretched_networking,$(SUITE)),full-ci,caas-ci))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
+_KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
+_OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
 
 # VMaaS selectors and full-ci configure the OCP host as an EVPN VTEP; legacy suites keep their established root path.
-OCP_KUBECONFIG = $(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),$(KUBECONFIG),/root/.kube/config)
+OCP_KUBECONFIG = $(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
 VMAAS_UNDERLAY_EXTRA = $(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),-e ocp_underlay_enabled=true,)
 OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
 
@@ -63,7 +65,7 @@ deploy-osac:
 	@printf '%s\n' \
 		'KUBECONFIG=$(OCP_KUBECONFIG)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),$(OSAC_VM_KUBECONFIG),$(OCP_KUBECONFIG))' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),$(_OSAC_VM_KUBECONFIG_ABS),$(OCP_KUBECONFIG))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
 

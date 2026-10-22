@@ -41,7 +41,7 @@ A backend may define a shell-sourceable contract at `infra/<backend>/contracts/<
 REQUIRED_VARS="KUBECONFIG OSAC_NAMESPACE OSAC_VM_KUBECONFIG"
 ```
 
-Before `run-tests`, the top-level Makefile sources `.env.infra` and checks each variable listed by that backend contract. The Netris `full` contract also requires the BMaaS SSH host map and instance type published by `setup-full`. The contract is optional for suites that do not need this validation. Keeping contracts beside a backend lets each backend describe its own connection requirements without placing infrastructure contracts in the moved test suites.
+Before `run-tests`, the top-level Makefile sources `.env.infra` and checks each variable listed by that backend contract. The Netris `bmaas_networking`, `full`, and stretched-networking contracts also require the BMaaS SSH host map, instance type, and guest-visible interface name published by setup. The contract is optional for suites that do not need this validation. Keeping contracts beside a backend lets each backend describe its own connection requirements without placing infrastructure contracts in the moved test suites.
 
 ## Variables
 

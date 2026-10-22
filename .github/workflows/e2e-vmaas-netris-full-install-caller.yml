@@ -80,7 +80,7 @@ jobs:
       tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman' }}
       osac-repo: ${{ inputs.osac-repo || '' }}
       osac-branch: ${{ inputs.osac-branch || '' }}
-      suite: vmaas
+      suite: vmaas_networking
       osac-profile: cudn-evpn-netris-test
       test-infra-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}
       test-infra-ref: ${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref }}
