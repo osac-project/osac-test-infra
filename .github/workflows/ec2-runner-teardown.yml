@@ -6,7 +6,7 @@ name: EC2 Ephemeral Runner Teardown
 # GitHub runner if it's still registered. No trigger of its own --
 # workflow_call only, meant to be used as a job
 # (jobs.<id>.uses: ./.github/workflows/ec2-runner-teardown.yml) by a
-# suite-specific workflow (e.g. e2e-caas-netris.yml) with if: always(), so
+# suite-specific caller (e.g. e2e-vmaas-netris-full-install-caller.yml) with if: always(), so
 # it runs regardless of how the provision/test jobs concluded. See
 # docs/ec2-ephemeral-runner-setup.md.
 on:

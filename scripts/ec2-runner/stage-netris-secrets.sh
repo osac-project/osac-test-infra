@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# stage-caas-netris-secrets.sh -- Copy the CaaS/Netris secrets
-# push-caas-netris-secrets.sh already staged on this box (before the JIT
+# stage-netris-secrets.sh -- Copy the Netris secrets
+# push-netris-secrets.sh already staged on this box (before the JIT
 # runner even started, since no checkout existed yet at that point) into
 # infra/netris/ and /root/pull-secret, where the make targets expect them.
 # Runs on the ephemeral box itself, as part of the test job, after its own
@@ -12,7 +12,7 @@
 #                       infra/netris, relative to repo root)
 #
 # Optional env vars:
-#   REMOTE_STAGING_DIR   must match push-caas-netris-secrets.sh's value
+#   REMOTE_STAGING_DIR   must match push-netris-secrets.sh's value
 #                       (default: /root/caas-netris-secrets)
 
 set -euo pipefail
@@ -25,7 +25,7 @@ GREEN="\e[32m"
 
 REMOTE_STAGING_DIR="${REMOTE_STAGING_DIR:-/root/caas-netris-secrets}"
 
-echo -e "${BOLD}Staging CaaS/Netris secrets into place...${RESET}"
+echo -e "${BOLD}Staging Netris secrets into place...${RESET}"
 
 cp "${REMOTE_STAGING_DIR}/license.key" "${NETRIS_DIR}/license.key"
 cp "${REMOTE_STAGING_DIR}/license.zip" "${NETRIS_DIR}/license.zip"
@@ -41,4 +41,4 @@ chmod 600 /root/.config/containers/auth.json
 # unnecessary exposure on an otherwise single-tenant box.
 rm -rf "${REMOTE_STAGING_DIR}"
 
-echo -e "${GREEN}${BOLD}CaaS/Netris secrets in place.${RESET}"
+echo -e "${GREEN}${BOLD}Netris secrets in place.${RESET}"

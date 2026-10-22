@@ -1,5 +1,5 @@
 ---
-name: E2E Netris
+name: E2E VMaaS Netris Full Install
 
 permissions:
   contents: read
@@ -8,15 +8,15 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: "Netris suite to run (bmaas_networking, vmaas, or full)"
+        description: "VMaaS Netris suite to run"
         required: false
         type: string
-        default: "bmaas_networking"
+        default: "vmaas"
       osac-profile:
-        description: "OSAC profile for the selected Netris suite (full uses full-ci)"
+        description: "OSAC profile for the VMaaS Netris suite"
         required: false
         type: string
-        default: "bmaas-ci"
+        default: "cudn-evpn-netris-test"
       instance-type:
         description: "EC2 instance type"
         required: false
@@ -253,13 +253,11 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
-      # BMaaS still deploys an OCP SNO cluster (make deploy-ocp -> the
-      # configure-dns role), which needs Route53 access the same as
-      # CaaS/MaaS -- despite push-route53-secrets.sh's header comment
-      # suggesting otherwise, this isn't CaaS-only.
+      # The Netris lab's OCP SNO deploy runs the configure-dns role, which
+      # needs Route 53 credentials for the shared hosted zone.
       - name: Fetch Route 53 credentials
         id: route53-creds
-        uses: ./.github/actions/fetch-caas-route53-creds
+        uses: ./.github/actions/fetch-route53-creds
         with:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
@@ -370,7 +368,7 @@ jobs:
           OSAC_PROFILE: ${{ inputs['osac-profile'] }}
         run: |
           case "${TEST_SUITE}:${OSAC_PROFILE}" in
-            bmaas_networking:bmaas-ci|vmaas:cudn-evpn-netris-test|full:full-ci) ;;
+            vmaas:cudn-evpn-netris-test) ;;
             *) echo "::error::Unsupported Netris suite/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
@@ -394,7 +392,7 @@ jobs:
         shell: bash
         env:
           NETRIS_DIR: infra/netris
-        run: ./scripts/ec2-runner/stage-caas-netris-secrets.sh
+        run: ./scripts/ec2-runner/stage-netris-secrets.sh
 
       - name: Install prerequisites and cache images
         shell: bash
@@ -577,19 +575,13 @@ jobs:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make setup-suite INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
 
-      - name: Run Netris suite tests
+      - name: Run VMaaS Netris tests
         id: test
-        timeout-minutes: ${{ inputs.suite == 'full' && 240 || 60 }}
+        timeout-minutes: 60
         shell: bash
         env:
           TEST_SUITE: ${{ inputs.suite }}
-        run: |
-          if [[ "${TEST_SUITE}" == "bmaas_networking" ]]; then
-            # Keep the slow, flaky cross-tenant class out of this workflow.
-            make run-tests INFRA=netris SUITE="${TEST_SUITE}" TEST='not TestCrossTenantBmaasNetworking'
-          else
-            make run-tests INFRA=netris SUITE="${TEST_SUITE}"
-          fi
+        run: make run-tests INFRA=netris SUITE="${TEST_SUITE}"
 
       - name: Gather infra diagnostics
         if: always()
@@ -605,7 +597,7 @@ jobs:
         continue-on-error: true
         run: make -C infra/netris gather-mgmt-cluster
 
-      - name: Gather Netris suite diagnostics
+      - name: Gather VMaaS Netris diagnostics
         if: always()
         shell: bash
         timeout-minutes: 10

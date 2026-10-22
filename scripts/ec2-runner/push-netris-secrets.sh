@@ -8,8 +8,8 @@
 # these. Suite-specific secrets (e.g. Route53 for CaaS DNS) are pushed by
 # separate scripts that append to the config file this script creates.
 #
-# See push-caas-netris-secrets.sh's header for the full design rationale
-# (Vault access model, SCP vs SSH argv, staging directory lifecycle).
+# See docs/ec2-ephemeral-runner-setup.md for the runner and secret-staging
+# design rationale.
 #
 # Required env vars:
 #   SSH_KEY_PATH          path to the orchestrator's SSH private key
@@ -41,7 +41,7 @@
 #   QUAY_PASSWORD         password/token for QUAY_USERNAME
 #   REMOTE_STAGING_DIR    fixed path on the box to stage secrets at
 #                         (default: /root/caas-netris-secrets) -- must match
-#                         stage-caas-netris-secrets.sh's value
+#                         stage-netris-secrets.sh's value
 
 set -euo pipefail
 

@@ -197,7 +197,7 @@ class WorkflowExporter:
     # permanent single-occurrence entry bloating every workflow-grouped panel.
     IGNORED_EVENTS = {"dynamic"}
 
-    # Steps across e2e flavors (VMaaS, BMaaS, CaaS, CaaS Netris) that
+    # Steps across e2e flavors (VMaaS, BMaaS, CaaS, Netris) that
     # represent the product actually being installed/tested, as opposed to
     # CI plumbing (checkout, secret-fetching, cluster/infra provisioning,
     # teardown, notifications). Deliberately a *small*, stable allowlist

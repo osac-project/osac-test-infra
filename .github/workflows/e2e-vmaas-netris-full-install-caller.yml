@@ -1,6 +1,6 @@
 ---
-name: E2E VMaaS Netris
-run-name: "E2E VMaaS Netris${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
+name: E2E VMaaS Netris Full Install
+run-name: "E2E VMaaS Netris Full Install${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
 
 permissions:
   contents: read
@@ -73,7 +73,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request_target'
       || github.event.label.name == 'e2e-vmaas-netris'
-    uses: ./.github/workflows/e2e-netris-full-install.yml
+    uses: ./.github/workflows/e2e-vmaas-netris-full-install.yml
     with:
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}

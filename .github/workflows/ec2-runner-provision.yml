@@ -6,7 +6,7 @@ name: EC2 Ephemeral Runner Provision
 # calling workflow's own test job to target it via runs-on:. No trigger of
 # its own -- workflow_call only, meant to be used as a job
 # (jobs.<id>.uses: ./.github/workflows/ec2-runner-provision.yml) by a
-# suite-specific workflow (e.g. e2e-caas-netris.yml), paired with
+# suite-specific caller (e.g. e2e-bmaas-netris-full-install-caller.yml), paired with
 # ec2-runner-teardown.yml for cleanup. See docs/ec2-ephemeral-runner-setup.md.
 on:
   workflow_call:

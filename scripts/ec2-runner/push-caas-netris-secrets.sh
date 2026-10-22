@@ -24,7 +24,7 @@
 # Secrets land in a fixed staging directory rather than directly under
 # infra/netris/: at this point in the flow the JIT runner hasn't started
 # yet, so there's no git checkout on the box for infra/netris/ to exist
-# under. scripts/ec2-runner/stage-caas-netris-secrets.sh (run by the test
+# under. scripts/ec2-runner/stage-netris-secrets.sh (run by the test
 # job, after its own checkout) copies them into their final place.
 #
 # Required env vars:
@@ -53,7 +53,7 @@
 #                        (default: us-east-1)
 #   REMOTE_STAGING_DIR    fixed path on the box to stage secrets at
 #                        (default: /root/caas-netris-secrets) -- must match
-#                        stage-caas-netris-secrets.sh's value
+#                        stage-netris-secrets.sh's value
 
 set -euo pipefail
 

@@ -44,8 +44,8 @@ TOTAL_RUN_CAP=500
 LOCAL_CALLERS=(
   e2e-vmaas-caller.yml
   e2e-vmaas-full-install-caller.yml
-  e2e-caas-netris-caller.yml
-  e2e-caas-netris-full-install-caller.yml
+  e2e-bmaas-netris-full-install-caller.yml
+  e2e-vmaas-netris-full-install-caller.yml
   e2e-caas-full-install-caller.yml
   e2e-bmaas-full-install-caller.yml
 )
