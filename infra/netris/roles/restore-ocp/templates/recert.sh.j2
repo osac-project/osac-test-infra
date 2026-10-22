@@ -4,6 +4,8 @@ set -uo pipefail
 WORK_DIR=/var/lib/snapshot-recert
 CRYPTO_DIR=${WORK_DIR}/crypto
 NMSTATE_FILE=${WORK_DIR}/nmstate.yaml
+UPLINK_MAC_FILE=${WORK_DIR}/uplink.mac
+MANAGEMENT_IP_FILE=${WORK_DIR}/management.ip
 MARKER_DIR=${WORK_DIR}/markers
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') snapshot-recert: $*"; }
@@ -30,9 +32,51 @@ mkdir -p "${MARKER_DIR}"
 
 # --- Apply network configuration ---
 apply_nmstate() {
-  nmstatectl apply "${NMSTATE_FILE}"
+  local management_ip management_iface
+  local expected_mac address_file actual_mac iface device_path match_count=0
+  local -a management_interfaces=()
+
+  management_ip=$(<"${MANAGEMENT_IP_FILE}") || return 1
+  mapfile -t management_interfaces < <(
+    ip -o -4 addr show | awk -v address="${management_ip}/" 'index($4, address) == 1 { name = $2; sub(/@.*/, "", name); print name }' | sort -u
+  )
+  if [[ -z ${management_interfaces[0]+x} || -n ${management_interfaces[1]+x} ]]; then
+    log "Expected one interface with management IP ${management_ip}; found ${management_interfaces[*]}"
+    return 1
+  fi
+  management_iface=${management_interfaces[0]}
+  if [[ ! ${management_iface} =~ ^[a-zA-Z0-9_.:-]+$ ]]; then
+    log "Invalid management interface name: ${management_iface}"
+    return 1
+  fi
+  printf 'net.ipv4.conf.%s.rp_filter=0\n' "${management_iface}" > /etc/sysctl.d/99-snapshot-rp-filter.conf
+  sysctl -w "net.ipv4.conf.${management_iface}.rp_filter=0" >/dev/null
+  log "Disabled reverse path filtering on management interface ${management_iface} (${management_ip})"
+
+  expected_mac=$(<"${UPLINK_MAC_FILE}") || return 1
+  expected_mac=${expected_mac,,}
+  for address_file in /sys/class/net/*/address; do
+    actual_mac=$(<"${address_file}") || continue
+    if [[ ${actual_mac,,} == "${expected_mac}" ]]; then
+      device_path=${address_file%/address}
+      [[ -e ${device_path}/device ]] || continue
+      iface=${device_path##*/}
+      ((match_count += 1))
+    fi
+  done
+  if (( match_count != 1 )); then
+    log "Expected one guest interface with OCP uplink MAC ${expected_mac}; found ${match_count}"
+    return 1
+  fi
+  if [[ ! ${iface} =~ ^[a-zA-Z0-9_.:-]+$ ]]; then
+    log "Invalid guest interface name for OCP uplink: ${iface}"
+    return 1
+  fi
+  sed "s/__OCP_UPLINK_INTERFACE__/${iface}/g" "${NMSTATE_FILE}" > "${WORK_DIR}/nmstate.resolved.yaml"
+  log "Applying OCP network on ${iface} (MAC ${expected_mac})"
+  nmstatectl apply "${WORK_DIR}/nmstate.resolved.yaml"
 }
-run_once "nmstate" apply_nmstate
+run_once "nmstate" apply_nmstate || exit 1
 
 # --- Clean CRI-O pod state from snapshot ---
 clean_crio() {

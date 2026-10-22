@@ -1,13 +1,12 @@
 ---
-- name: Find OCP server VM
-  ansible.builtin.shell:
-    cmd: virsh list --all --name | grep "{{ ocp_vm_name_pattern }}"
-  register: _vm_lookup
-  changed_when: false
-
-- name: Set VM name
-  ansible.builtin.set_fact:
-    ocp_vm_name: "{{ _vm_lookup.stdout_lines[0] }}"
+- name: Require the resolved OCP uplink before touching the snapshot disks
+  ansible.builtin.assert:
+    that:
+      - ocp_vm_name is defined
+      - ocp_uplink_mac is defined
+      - ocp_vm_mgmt_ip_resolved is defined
+      - ocp_server_port is defined
+    fail_msg: The configure-netris role must resolve and verify the OCP uplink first.
 
 - name: Check if VM is running
   ansible.builtin.shell:
@@ -59,11 +58,14 @@
       -F qcow2
       /var/lib/libvirt/images/hgx-00-lvm.qcow2
 
-# MaaS: grow CoW OS overlay before nbd mount (flavor root is ~100Gi).
-- name: Resize CoW OS overlay for MaaS
+# Grow both CoW overlays before attaching them to the VM.
+- name: Resize CoW OS overlay to configured disk size
   ansible.builtin.command:
     cmd: qemu-img resize /var/lib/libvirt/images/hgx-00-ocp.qcow2 {{ ocp_snapshot_disk_gb }}G
-  when: (suite | default('caas')) == 'maas'
+
+- name: Resize CoW LVM overlay to configured disk size
+  ansible.builtin.command:
+    cmd: qemu-img resize /var/lib/libvirt/images/hgx-00-lvm.qcow2 {{ ocp_lvm_disk_gb }}G
 
 - name: Set disk ownership
   ansible.builtin.file:
@@ -93,7 +95,7 @@
       ansible.builtin.pause:
         seconds: 2
 
-    - name: Grow GPT and root partition to fill overlay (MaaS)
+    - name: Grow GPT and root partition to fill overlay
       ansible.builtin.shell: |
         set -euo pipefail
         sgdisk -e /dev/nbd0
@@ -102,7 +104,6 @@
         parted -s /dev/nbd0 resizepart 4 100%
         partprobe /dev/nbd0 || true
         sleep 1
-      when: (suite | default('caas')) == 'maas'
 
     - name: Create mount point
       ansible.builtin.file:
@@ -116,10 +117,9 @@
         fstype: xfs
         state: mounted
 
-    - name: Grow root XFS filesystem (MaaS)
+    - name: Grow root XFS filesystem
       ansible.builtin.command:
         cmd: xfs_growfs /tmp/flavor-mount
-      when: (suite | default('caas')) == 'maas'
 
     - name: Find ostree deploy directory
       ansible.builtin.shell:
@@ -260,7 +260,7 @@
       ansible.builtin.copy:
         content: |
           interfaces:
-          - name: ens6
+          - name: __OCP_UPLINK_INTERFACE__
             type: ethernet
             state: up
             ipv4:
@@ -276,7 +276,7 @@
           routes:
             config:
             - destination: 0.0.0.0/0
-              next-hop-interface: ens6
+              next-hop-interface: __OCP_UPLINK_INTERFACE__
               next-hop-address: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
               metric: 48
               table-id: 254
@@ -286,6 +286,18 @@
               - 192.168.16.1
               - {{ dns_server }}
         dest: "{{ _var }}lib/snapshot-recert/nmstate.yaml"
+        mode: "0644"
+
+    - name: Write the verified OCP uplink MAC to the snapshot
+      ansible.builtin.copy:
+        content: "{{ ocp_uplink_mac }}\n"
+        dest: "{{ _var }}lib/snapshot-recert/uplink.mac"
+        mode: "0644"
+
+    - name: Write the verified management IP to the snapshot
+      ansible.builtin.copy:
+        content: "{{ ocp_vm_mgmt_ip_resolved }}\n"
+        dest: "{{ _var }}lib/snapshot-recert/management.ip"
         mode: "0644"
 
     - name: Template recert script to disk
@@ -322,13 +334,6 @@
           chown -R 1000:1000 {{ _var }}home/core/.ssh
       changed_when: true
 
-    - name: Disable reverse path filter on ens4 for management access
-      ansible.builtin.copy:
-        content: |
-          net.ipv4.conf.ens4.rp_filter=0
-        dest: "{{ _deploy }}etc/sysctl.d/99-snapshot-rp-filter.conf"
-        mode: "0644"
-
     - name: Fix SELinux labels on written files
       ansible.builtin.shell:
         cmd: |
@@ -336,7 +341,6 @@
           chcon system_u:object_r:systemd_unit_file_t:s0 {{ _deploy }}etc/systemd/system/snapshot-recert.service
           chcon -h system_u:object_r:systemd_unit_file_t:s0 {{ _deploy }}etc/systemd/system/multi-user.target.wants/snapshot-recert.service
           chcon system_u:object_r:etc_t:s0 {{ _deploy }}etc/default/sno_dnsmasq_configuration_overrides
-          chcon system_u:object_r:system_conf_t:s0 {{ _deploy }}etc/sysctl.d/99-snapshot-rp-filter.conf
       changed_when: true
 
     # --- Delete OVN/OVS state ---
@@ -421,7 +425,92 @@
   ansible.builtin.command:
     cmd: virsh start {{ ocp_vm_name }}
 
-# Use DNAT IP since br-ex is on ens6, not management bridge
+- name: Wait for SNO SSH through its management interface
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+      - "core@{{ ocp_vm_mgmt_ip_resolved }}"
+      - hostname
+  register: _mgmt_ssh_check
+  until: _mgmt_ssh_check.rc == 0
+  retries: 60
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Stop if SNO management SSH is unavailable
+  ansible.builtin.fail:
+    msg: >-
+      SNO {{ ocp_vm_name }} did not accept management SSH at
+      {{ ocp_vm_mgmt_ip_resolved }} after boot; cannot check its OCP gateway.
+      Last SSH error: {{ _mgmt_ssh_check.stderr | default('') | trim }}
+  when: _mgmt_ssh_check.rc != 0
+
+- name: Wait for the OCP address and gateway to become reachable
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+      - "core@{{ ocp_vm_mgmt_ip_resolved }}"
+      - >-
+        test -f /var/lib/snapshot-recert/markers/nmstate.done &&
+        ip -4 addr show | grep -Fq '{{ ocp_node_ip }}/' &&
+        ping -n -c 2 -W 2 -I {{ ocp_node_ip }} {{ ocp_gateway | ansible.utils.ipaddr('address') }}
+  register: _ocp_gateway_check
+  until: _ocp_gateway_check.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Gather SNO network state if the OCP gateway is unreachable
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+      - "core@{{ ocp_vm_mgmt_ip_resolved }}"
+      - >-
+        ip -4 addr show;
+        ip route get {{ ocp_gateway | ansible.utils.ipaddr('address') }} from {{ ocp_node_ip }};
+        ip neigh show {{ ocp_gateway | ansible.utils.ipaddr('address') }};
+        systemctl is-active snapshot-recert.service
+  register: _ocp_gateway_diagnostics
+  changed_when: false
+  failed_when: false
+  when: _ocp_gateway_check.rc != 0
+
+- name: Stop if the SNO OCP uplink cannot reach its gateway
+  ansible.builtin.fail:
+    msg: >-
+      SNO {{ ocp_vm_name }} uplink MAC {{ ocp_uplink_mac }} on Netris
+      {{ ocp_server_port }} cannot reach gateway {{ ocp_gateway }} from
+      {{ ocp_node_ip }}. Guest network state:
+      {{ _ocp_gateway_diagnostics.stdout | default(_ocp_gateway_diagnostics.stderr, true) | default('unavailable', true) }}
+  when: _ocp_gateway_check.rc != 0
+
+# Use DNAT IP after verifying the management path and restored data uplink.
 - name: Set SSH target IP
   ansible.builtin.set_fact:
     _vm_ssh_ip: "{{ ocp_dnat_ip }}"
@@ -488,11 +577,17 @@
 
 # --- Extract kubeconfig ---
 
-- name: Ensure .kube directory exists
+- name: Check whether the selected kubeconfig parent directory exists
+  ansible.builtin.stat:
+    path: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') | dirname }}"
+  register: _ocp_kubeconfig_parent
+
+- name: Create the selected kubeconfig parent directory when missing
   ansible.builtin.file:
-    path: /root/.kube
+    path: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') | dirname }}"
     state: directory
     mode: "0700"
+  when: not _ocp_kubeconfig_parent.stat.exists
 
 - name: Extract kubeconfig from VM
   ansible.builtin.shell:
@@ -506,10 +601,10 @@
     dest: "/root/kubeconfig.{{ ocp_cluster_name }}"
     mode: "0600"
 
-- name: Copy kubeconfig to default location
+- name: Copy kubeconfig to the selected location
   ansible.builtin.copy:
     content: "{{ _kubeconfig_content.stdout }}"
-    dest: /root/.kube/config
+    dest: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
     mode: "0600"
 
 # --- Wait for cluster ready ---
@@ -519,7 +614,7 @@
     cmd: >-
       oc get nodes --no-headers 2>/dev/null | grep -q ' Ready'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _node_ready
   until: _node_ready.rc == 0
   retries: 60
@@ -543,7 +638,7 @@
       print(f'All {len(cos)} ClusterOperators healthy')
       "
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _co_health
   until: _co_health.rc == 0
   retries: 40
@@ -562,7 +657,7 @@
   ansible.builtin.command:
     cmd: oc get namespace multicluster-engine
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _mce_namespace_check
   until: _mce_namespace_check.rc == 0 or 'NotFound' in (_mce_namespace_check.stderr | default(''))
   retries: 90
@@ -591,7 +686,7 @@
           print('OK')
           "
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
       register: _cpam_crash_check
       until: _cpam_crash_check.stdout | default('') | trim in ['CRASHING', 'OK']
       retries: 9
@@ -606,13 +701,13 @@
           ansible.builtin.command:
             cmd: oc delete secret cluster-proxy-signer -n multicluster-engine
           environment:
-            KUBECONFIG: /root/.kube/config
+            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
 
         - name: Restart cluster-proxy-addon-manager deployment
           ansible.builtin.command:
             cmd: oc rollout restart deployment/cluster-proxy-addon-manager -n multicluster-engine
           environment:
-            KUBECONFIG: /root/.kube/config
+            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
 
         # Rollout can stall on a stale watch connection at "1 old replicas
         # pending termination" -- retry re-issues a fresh `oc rollout
@@ -621,7 +716,7 @@
           ansible.builtin.command:
             cmd: oc rollout status deployment/cluster-proxy-addon-manager -n multicluster-engine --timeout=300s
           environment:
-            KUBECONFIG: /root/.kube/config
+            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
           register: _cpam_rollout
           until: _cpam_rollout.rc == 0
           retries: 2
@@ -637,7 +732,7 @@
               oc wait --for=jsonpath='{.status.phase}'=Available
               multiclusterengine/multiclusterengine --timeout=120s
           environment:
-            KUBECONFIG: /root/.kube/config
+            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
           register: _mce_available
           until: _mce_available.rc == 0
           retries: 10
@@ -652,7 +747,7 @@
   ansible.builtin.command:
     cmd: oc get namespace cert-manager
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _certmgr_namespace_check
   changed_when: false
   failed_when: false
@@ -674,7 +769,7 @@
           print('OK')
           "
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
       register: _certmgr_webhook_check
       changed_when: false
       failed_when: false
@@ -686,19 +781,19 @@
           ansible.builtin.command:
             cmd: oc delete secret cert-manager-webhook-ca -n cert-manager
           environment:
-            KUBECONFIG: /root/.kube/config
+            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
 
         - name: Restart cert-manager-webhook deployment
           ansible.builtin.command:
             cmd: oc rollout restart deployment/cert-manager-webhook -n cert-manager
           environment:
-            KUBECONFIG: /root/.kube/config
+            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
 
         - name: Wait for cert-manager-webhook rollout
           ansible.builtin.command:
             cmd: oc rollout status deployment/cert-manager-webhook -n cert-manager --timeout=300s
           environment:
-            KUBECONFIG: /root/.kube/config
+            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
           register: _certmgr_rollout
           until: _certmgr_rollout.rc == 0
           retries: 2
@@ -718,7 +813,7 @@
       json.dump(obj, sys.stdout)
       " | oc replace -f -
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
 
 - name: Report cluster status
   ansible.builtin.debug:

@@ -1,8 +1,9 @@
 # On-Demand EC2 Ephemeral Runner: One-Time Setup
 
 Setup guide for the on-demand EC2 bare-metal e2e flow. This document covers
-only the one-time, human-driven setup steps needed before a suite-specific
-caller (e.g. `e2e-caas-netris-caller.yml`) can be dispatched -- everything
+only the one-time, human-driven setup steps needed before either suite-specific
+Netris caller (`e2e-bmaas-netris-full-install-caller.yml` or
+`e2e-vmaas-netris-full-install-caller.yml`) can be dispatched -- everything
 else happens automatically per run. The underlying provisioning
 (`ec2-runner-provision.yml`/`ec2-runner-teardown.yml`) is generic and shared
 across suites; only the suite-specific workflow (its `test` job) differs
@@ -162,22 +163,19 @@ You'll be prompted for the AMI id, subnet id, and security group id. Add
 To change any of these later (e.g. testing a new AMI), re-run the script with
 the new values and `vault-sync.sh` again.
 
-## Step 6: Dispatch the workflow
+## Step 6: Dispatch a Netris workflow
 
-From the GitHub UI (Actions → E2E CaaS Netris → Run workflow) or via
-`gh workflow run`. `instance-type` (default `c5n.metal`) and `aws-region`
-(default `us-east-1`) can optionally be overridden -- neither is sensitive.
-The workflow also runs OSAC's `tests/e2e/caas/` tests marked
-`requires_caas_fabric` by default. For a PR run, set `osac-repo` and
-`osac-branch` to the PR repository and immutable head SHA/ref so the workflow
-deploys and tests that source. Supply `components` JSON for the OSAC component
-images that should be built from that same ref. `test-filter` (`pytest -k`)
-and `test-marker` (`pytest -m`) can narrow the run. AWS credentials, GitHub
-PAT, AMI/subnet/security group, Netris license, pull secret, and AAP license
-are fetched from Vault automatically.
-
-The workflow is `workflow_dispatch`-only for now (an interim risk gate) --
-adding a PR trigger or schedule is a separate, deliberate follow-up.
+From the GitHub Actions UI, dispatch **E2E BMaaS Netris Full Install** to run
+`bmaas_networking` with the `bmaas-ci` OSAC profile, or **E2E VMaaS Networking Netris Full Install**
+to run `vmaas` with the `cudn-evpn-netris-test` profile. The same workflows
+can be triggered by their matching PR labels and nightly schedules.
+`instance-type` (default `c5n.metal`) and `aws-region` (default `us-east-1`)
+can optionally be overridden -- neither is sensitive. For a PR run, set
+`osac-repo` and `osac-branch` to the PR repository and immutable head SHA/ref
+so the workflow deploys and tests that source. Supply `components` JSON for
+the OSAC component images that should be built from that same ref. AWS
+credentials, GitHub PAT, AMI/subnet/security group, Netris license, pull
+secret, and AAP license are fetched from Vault automatically.
 
 ## Orphan-instance watchdog
 

@@ -1,8 +1,8 @@
 ---
-name: Fetch CaaS Route 53 credentials
+name: Fetch Route 53 credentials
 description: >-
-  Retrieve the AWS credentials the CaaS/Netris e2e flow uses for Route 53
-  DNS management (infra/netris's configure-dns role: ChangeResourceRecordSets/
+  Retrieve the AWS credentials the Netris lab uses for Route 53 DNS
+  management (infra/netris's configure-dns role: ChangeResourceRecordSets/
   ListHostedZones/GetChange on the shared hosted zone) from Vault. Separate
   from fetch-ec2-runner-aws-creds, which is scoped to EC2 lifecycle actions
   only and has no Route 53 permissions at all -- confirmed directly against
@@ -13,7 +13,8 @@ description: >-
   Does not include aws_region -- infra/netris's own Makefile/ansible
   defaults to us-east-1 if neither the config file nor AWS_DEFAULT_REGION
   is set (see inventory/group_vars/all.yml), so a consumer needing a
-  non-default region must supply it separately.
+  non-default region must supply it separately. The credentials remain stored
+  under the existing caas-route53-credentials Vault path.
 
 inputs:
   role-id:

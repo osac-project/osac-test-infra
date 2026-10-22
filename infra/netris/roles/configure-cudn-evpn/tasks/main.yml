@@ -1,0 +1,779 @@
+---
+- name: Configure OpenShift CUDN EVPN prerequisites
+  environment:
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path }}"
+  block:
+    - name: Validate static EVPN prerequisites before cluster mutation
+      ansible.builtin.assert:
+        that:
+          - ocp_evpn_kubeconfig_path | length > 0
+        fail_msg: "ocp_evpn_kubeconfig_path must name the existing OCP kubeconfig"
+      tags: [cudn_evpn]
+
+    - name: Wait for the OCP API to be ready
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - --raw=/readyz
+      register: _ocp_evpn_api_ready
+      changed_when: false
+      failed_when: false
+      until:
+        - _ocp_evpn_api_ready.rc == 0
+        - _ocp_evpn_api_ready.stdout | trim == "ok"
+      retries: 30
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Fail with API readiness details when the API is not ready
+      ansible.builtin.assert:
+        that:
+          - _ocp_evpn_api_ready.rc == 0
+          - _ocp_evpn_api_ready.stdout | trim == "ok"
+        fail_msg: >-
+          OCP API readiness check failed before any mutation:
+          rc={{ _ocp_evpn_api_ready.rc }},
+          stdout={{ _ocp_evpn_api_ready.stdout | default('') | trim }},
+          stderr={{ _ocp_evpn_api_ready.stderr | default('') | trim }}
+      tags: [cudn_evpn]
+
+    - name: Read OpenShift infrastructure identity
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - infrastructure/cluster
+          - -o
+          - json
+      register: _ocp_evpn_infrastructure_raw
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Wait for OpenShift ClusterVersion to become Available after restore
+      ansible.builtin.command:
+        argv:
+          - oc
+          - wait
+          - --for=condition=Available
+          - clusterversion/version
+          - --timeout=10m
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Read OpenShift desired version
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - clusterversion/version
+          - -o
+          - json
+      register: _ocp_evpn_cluster_version_raw
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Read the OpenShift network plugin
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - network.operator.openshift.io/cluster
+          - -o
+          - json
+      register: _ocp_evpn_network_raw
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Read OpenShift nodes
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - nodes
+          - -o
+          - json
+      register: _ocp_evpn_nodes_raw
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Record observed OpenShift identity
+      ansible.builtin.set_fact:
+        _ocp_evpn_infrastructure: "{{ _ocp_evpn_infrastructure_raw.stdout | from_json }}"
+        _ocp_evpn_cluster_version: "{{ _ocp_evpn_cluster_version_raw.stdout | from_json }}"
+        _ocp_evpn_network: "{{ _ocp_evpn_network_raw.stdout | from_json }}"
+        _ocp_evpn_nodes: "{{ _ocp_evpn_nodes_raw.stdout | from_json }}"
+        _ocp_evpn_platform_type: >-
+          {{ (_ocp_evpn_infrastructure_raw.stdout | from_json).status.platformStatus.type | default('Unknown', true) }}
+        _ocp_evpn_desired_version: >-
+          {{ (_ocp_evpn_cluster_version_raw.stdout | from_json).status.desired.version | default('Unknown', true) }}
+        _ocp_evpn_default_network_type: >-
+          {{ (_ocp_evpn_network_raw.stdout | from_json).spec.defaultNetwork.type | default('Unknown', true) }}
+        _ocp_evpn_node_names: >-
+          {{ (_ocp_evpn_nodes_raw.stdout | from_json)['items'] | map(attribute='metadata.name') | list }}
+        _ocp_evpn_release_major_minor: >-
+          {{ ((_ocp_evpn_cluster_version_raw.stdout | from_json).status.desired.version | default('Unknown', true)).split('.')[:2] | join('.') }}
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Record observed ClusterVersion convergence state
+      ansible.builtin.set_fact:
+        _ocp_evpn_current_history_entry: >-
+          {{ (_ocp_evpn_cluster_version.status.history | default([], true) | first) | default({}, true) }}
+        _ocp_evpn_cv_available: >-
+          {{ _ocp_evpn_cluster_version.status.conditions | default([])
+             | selectattr('type', 'equalto', 'Available') | map(attribute='status')
+             | first | default('Unknown', true) }}
+        _ocp_evpn_cv_progressing: >-
+          {{ _ocp_evpn_cluster_version.status.conditions | default([])
+             | selectattr('type', 'equalto', 'Progressing') | map(attribute='status')
+             | first | default('Unknown', true) }}
+        _ocp_evpn_cv_failing: >-
+          {{ _ocp_evpn_cluster_version.status.conditions | default([])
+             | selectattr('type', 'equalto', 'Failing') | map(attribute='status')
+             | first | default('Unknown', true) }}
+        _ocp_evpn_cv_observed_generation: >-
+          {{ _ocp_evpn_cluster_version.status.observedGeneration | default(-1, true) | int }}
+        _ocp_evpn_cv_metadata_generation: >-
+          {{ _ocp_evpn_cluster_version.metadata.generation | default(-2, true) | int }}
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Record current completed OpenShift release
+      ansible.builtin.set_fact:
+        _ocp_evpn_current_version: "{{ _ocp_evpn_current_history_entry.version | default('Unknown', true) }}"
+        _ocp_evpn_current_history_state: "{{ _ocp_evpn_current_history_entry.state | default('Unknown', true) }}"
+        _ocp_evpn_current_release_major_minor: >-
+          {{ (_ocp_evpn_current_history_entry.version | default('Unknown', true)).split('.')[:2] | join('.') }}
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Require the supported converged OCP version
+      ansible.builtin.assert:
+        that:
+          - _ocp_evpn_release_major_minor == ocp_evpn_required_version
+          - _ocp_evpn_current_release_major_minor == ocp_evpn_required_version
+          - _ocp_evpn_current_version == _ocp_evpn_desired_version
+          - _ocp_evpn_current_history_state == "Completed"
+          - (_ocp_evpn_cv_available | string) == "True"
+          - (_ocp_evpn_cv_progressing | string) == "False"
+          - (_ocp_evpn_cv_failing | string) == "False"
+          - _ocp_evpn_cv_observed_generation == _ocp_evpn_cv_metadata_generation
+        fail_msg: >-
+          OCP CUDN EVPN requires a converged {{ ocp_evpn_required_version }} cluster.
+          ClusterVersion requires status.desired.version to match the newest status.history entry in
+          state Completed, Available=True, Progressing=False, Failing=False, and
+          status.observedGeneration=metadata.generation. Observed
+          desired.version={{ _ocp_evpn_desired_version }}, current.version={{ _ocp_evpn_current_version }},
+          current.state={{ _ocp_evpn_current_history_state }},
+          Available={{ _ocp_evpn_cv_available }}, Progressing={{ _ocp_evpn_cv_progressing }},
+          Failing={{ _ocp_evpn_cv_failing }},
+          observedGeneration={{ _ocp_evpn_cv_observed_generation }},
+          metadata.generation={{ _ocp_evpn_cv_metadata_generation }},
+          platformStatus.type={{ _ocp_evpn_platform_type }},
+          Network/cluster.spec.defaultNetwork.type={{ _ocp_evpn_default_network_type }},
+          nodes={{ _ocp_evpn_node_names }}. No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Require OVN-Kubernetes
+      ansible.builtin.assert:
+        that:
+          - _ocp_evpn_default_network_type == "OVNKubernetes"
+        fail_msg: >-
+          CUDN EVPN requires Network/cluster.spec.defaultNetwork.type=OVNKubernetes.
+          Observed type={{ _ocp_evpn_default_network_type }},
+          desired.version={{ _ocp_evpn_desired_version }},
+          platformStatus.type={{ _ocp_evpn_platform_type }}.
+          No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Require exactly one node for the configured direct underlay peer
+      ansible.builtin.assert:
+        that:
+          - _ocp_evpn_node_names | length == 1
+        fail_msg: >-
+          This role configures one direct OCP-to-Netris /31 peer and one node-specific
+          VTEP address. It refuses multi-node clusters. Observed node count={{
+          _ocp_evpn_node_names | length }}, nodes={{ _ocp_evpn_node_names }}.
+          No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Require the Task 2 underlay link to be enabled
+      ansible.builtin.assert:
+        that:
+          - ocp_underlay_enabled | bool
+        fail_msg: >-
+          ocp_underlay_enabled is false. Enable and verify h00's existing eth10 to
+          ns-leaf-1 swp1s0 link and its single-node /31 contract before configuring CUDN EVPN.
+          No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Require ExternalIP return-path acknowledgement when those tests are enabled
+      ansible.builtin.assert:
+        that:
+          - not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool)
+        fail_msg: >-
+          VMaaS ExternalIP tests are enabled but their return path is not acknowledged.
+          The VMaaS ExternalIP range 172.27.0.0/16 is not part of the PodNetwork
+          RouteAdvertisements configured here. Provision and independently verify
+          a narrow route and return policy before setting
+          ocp_vmaas_external_ip_return_path_acknowledged=true.
+          No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Require verified SNO data and underlay adapter MACs
+      ansible.builtin.assert:
+        that:
+          - ocp_uplink_mac is defined
+          - ocp_underlay_uplink_mac | default('') | length == 17
+          - (ocp_uplink_mac | lower) != (ocp_underlay_uplink_mac | lower)
+          - ocp_vm_mgmt_ip_resolved is defined
+        fail_msg: >-
+          Netris data and underlay link MACs must be verified before resolving
+          Linux interfaces on h00. No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Resolve h00 data and underlay interfaces from their MAC addresses
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+          - "{{ playbook_dir }}/../scripts/ocp_uplink.py"
+          - interfaces
+          - --vm-mgmt-ip
+          - "{{ ocp_vm_mgmt_ip_resolved }}"
+          - --management-address
+          - "{{ ocp_vm_mgmt_ip_resolved }}"
+          - --host-key
+          - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+          - --mac
+          - "{{ ocp_uplink_mac }}"
+          - --mac
+          - "{{ ocp_underlay_uplink_mac }}"
+      register: _ocp_evpn_interfaces_raw
+      changed_when: false
+      failed_when: false
+      tags: [cudn_evpn]
+
+    - name: Require h00 interface discovery to succeed
+      ansible.builtin.assert:
+        that:
+          - _ocp_evpn_interfaces_raw.rc == 0
+        fail_msg: >-
+          Could not uniquely map Netris MACs to h00 Linux interfaces:
+          {{ _ocp_evpn_interfaces_raw.stderr | default('unknown interface discovery error', true) | trim }}
+      tags: [cudn_evpn]
+
+    - name: Record dynamically resolved h00 interfaces
+      ansible.builtin.set_fact:
+        _ocp_evpn_interfaces: "{{ _ocp_evpn_interfaces_raw.stdout | from_json }}"
+        ocp_data_guest_interface: >-
+          {{ (_ocp_evpn_interfaces_raw.stdout | from_json).interfaces[ocp_uplink_mac | lower] }}
+        ocp_underlay_guest_interface: >-
+          {{ (_ocp_evpn_interfaces_raw.stdout | from_json).interfaces[ocp_underlay_uplink_mac | lower] }}
+        ocp_underlay_management_interface: >-
+          {{ (_ocp_evpn_interfaces_raw.stdout | from_json).management_interface }}
+      tags: [cudn_evpn]
+
+    - name: Require distinct, valid data, underlay, and management interfaces
+      ansible.builtin.assert:
+        that:
+          - ocp_data_guest_interface is match('^[A-Za-z0-9_.:-]{1,15}$')
+          - ocp_underlay_guest_interface is match('^[A-Za-z0-9_.:-]{1,15}$')
+          - ocp_underlay_management_interface is match('^[A-Za-z0-9_.:-]{1,15}$')
+          - ocp_underlay_guest_interface != ocp_data_guest_interface
+          - ocp_underlay_guest_interface != ocp_underlay_management_interface
+          - ocp_data_guest_interface != ocp_underlay_management_interface
+          - ocp_underlay_guest_interface is not match('^(br-|ovn-|genev_)')
+          - ocp_data_guest_interface is not match('^(br-|ovn-|genev_)')
+          - ocp_underlay_guest_interface not in ['lo', 'br-ex', 'br-int']
+          - ocp_data_guest_interface not in ['lo', 'br-ex', 'br-int']
+        fail_msg: >-
+          Resolved data={{ ocp_data_guest_interface }}, underlay={{ ocp_underlay_guest_interface }},
+          management={{ ocp_underlay_management_interface }} interfaces must be distinct physical
+          guest interfaces. No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Require a unique dummy interface name for the node VTEP address
+      ansible.builtin.assert:
+        that:
+          - ocp_evpn_vtep_dummy_interface | trim | length > 0
+          - ocp_evpn_vtep_dummy_interface is match('^[A-Za-z0-9_.-]{1,15}$')
+          - ocp_evpn_vtep_dummy_interface | trim != ocp_underlay_guest_interface | trim
+          - ocp_evpn_vtep_dummy_interface | trim != ocp_underlay_management_interface | trim
+          - ocp_evpn_vtep_dummy_interface is not match('^(br-|ovn-|genev_)')
+        fail_msg: >-
+          ocp_evpn_vtep_dummy_interface must be a unique, valid Linux interface
+          name distinct from the confirmed fabric and management interfaces.
+          Observed dummy={{ ocp_evpn_vtep_dummy_interface }},
+          fabric={{ ocp_underlay_guest_interface }},
+          management={{ ocp_underlay_management_interface }}.
+          No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Validate the OCP-to-Netris point-to-point network
+      ansible.builtin.assert:
+        that:
+          - ocp_underlay_p2p_cidr | ansible.utils.ipv4('net') | default('', true) | length > 0
+          - ocp_underlay_p2p_cidr | ansible.utils.ipaddr('prefix') | int == 31
+        fail_msg: >-
+          ocp_underlay_p2p_cidr must be a valid IPv4 /31 point-to-point network;
+          observed {{ ocp_underlay_p2p_cidr }}. No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Validate the reserved VTEP range
+      ansible.builtin.assert:
+        that:
+          - ocp_evpn_vtep_cidr | length > 0
+          - ocp_evpn_vtep_cidr | ansible.utils.ipv4('net') | default('', true) | length > 0
+        fail_msg: >-
+          Set ocp_evpn_vtep_cidr to the explicitly reserved IPv4 VTEP range.
+          Observed {{ ocp_evpn_vtep_cidr }}. The design does not reserve an address
+          range by default. No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Validate the sole node VTEP address
+      ansible.builtin.assert:
+        that:
+          - ocp_evpn_vtep_node_ip_cidr | length > 0
+          - ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipv4('address') | length > 0
+          - ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipaddr('prefix') | int == 32
+          - ocp_evpn_vtep_cidr | ansible.utils.network_in_network(ocp_evpn_vtep_node_ip_cidr)
+        fail_msg: >-
+          ocp_evpn_vtep_node_ip_cidr must be one unique IPv4 /32 contained in the
+          explicitly reserved ocp_evpn_vtep_cidr. Observed node address
+          {{ ocp_evpn_vtep_node_ip_cidr }}, VTEP range {{ ocp_evpn_vtep_cidr }}.
+          No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Derive the single-node underlay endpoints and selected leaf ASN
+      ansible.builtin.set_fact:
+        _ocp_evpn_ocp_ip: "{{ ocp_underlay_p2p_cidr | ansible.utils.ipaddr('0') | ansible.utils.ipaddr('address') }}"
+        _ocp_evpn_leaf_ip: "{{ ocp_underlay_p2p_cidr | ansible.utils.ipaddr('1') | ansible.utils.ipaddr('address') }}"
+        _ocp_evpn_leaf_asn: "{{ (ocp_evpn_netris_leaf_asn_start | int) + (ocp_underlay_leaf_index | int) }}"
+        _ocp_evpn_vtep_node_ip: "{{ ocp_evpn_vtep_node_ip_cidr | ansible.utils.ipaddr('address') }}"
+        _ocp_evpn_node_name: "{{ _ocp_evpn_node_names | first }}"
+      changed_when: false
+      tags: [cudn_evpn]
+
+    - name: Validate distinct underlay endpoints and BGP ASNs
+      ansible.builtin.assert:
+        that:
+          - _ocp_evpn_ocp_ip != _ocp_evpn_leaf_ip
+          - ocp_underlay_leaf_index | int >= 0
+          - ocp_underlay_leaf_index | int < ocp_evpn_netris_leaf_count | int
+          - ocp_underlay_ocp_asn | int > 0
+          - ocp_underlay_ocp_asn | int < 4294967295
+          - _ocp_evpn_leaf_asn | int > 0
+          - _ocp_evpn_leaf_asn | int < 4294967295
+          - ocp_underlay_ocp_asn | int != _ocp_evpn_leaf_asn | int
+          - not (ocp_evpn_vtep_cidr | ansible.utils.network_in_network(ocp_underlay_p2p_cidr))
+          - not (ocp_underlay_p2p_cidr | ansible.utils.network_in_network(ocp_evpn_vtep_cidr))
+        fail_msg: >-
+          The /31 endpoints must be distinct, the selected leaf and OCP ASNs must be
+          distinct valid 32-bit values, and the reserved VTEP range must not overlap
+          the /31. Observed OCP IP={{ _ocp_evpn_ocp_ip }},
+          leaf IP={{ _ocp_evpn_leaf_ip }},
+          OCP ASN={{ ocp_underlay_ocp_asn }},
+          leaf ASN={{ _ocp_evpn_leaf_asn }},
+          /31={{ ocp_underlay_p2p_cidr }},
+          VTEP CIDR={{ ocp_evpn_vtep_cidr }}.
+          No cluster configuration was changed.
+      tags: [cudn_evpn]
+
+    - name: Apply CNO FRR and host-routing capabilities
+      ansible.builtin.command:
+        argv:
+          - oc
+          - patch
+          - network.operator.openshift.io/cluster
+          - --type=merge
+          - --patch
+          - "{{ _ocp_evpn_cno_patch | to_json }}"
+      vars:
+        _ocp_evpn_cno_patch:
+          spec:
+            additionalRoutingCapabilities:
+              providers:
+                - FRR
+            defaultNetwork:
+              ovnKubernetesConfig:
+                routeAdvertisements: Enabled
+                gatewayConfig:
+                  routingViaHost: true
+                  ipForwarding: Global
+      register: _ocp_evpn_cno_patch_result
+      changed_when: "'patched' in _ocp_evpn_cno_patch_result.stdout"
+      tags: [cudn_evpn]
+
+    - name: Wait for the CNO to persist the requested settings
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - network.operator.openshift.io/cluster
+          - -o
+          - json
+      register: _ocp_evpn_cno_config
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_cno_config.rc == 0 and
+        (_ocp_evpn_cno_config.stdout | from_json).spec.additionalRoutingCapabilities.providers | default([]) == ['FRR'] and
+        (_ocp_evpn_cno_config.stdout | from_json).spec.defaultNetwork.ovnKubernetesConfig.routeAdvertisements | default('') == 'Enabled' and
+        (_ocp_evpn_cno_config.stdout | from_json).spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.routingViaHost | default(false) | bool and
+        (_ocp_evpn_cno_config.stdout | from_json).spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.ipForwarding | default('') == 'Global'
+      retries: 60
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Wait for the network operator rollout
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - clusteroperator/network
+          - -o
+          - json
+      register: _ocp_evpn_network_operator
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_network_operator.rc == 0 and
+        ((_ocp_evpn_network_operator.stdout | from_json).status.conditions
+          | selectattr('type', 'equalto', 'Available')
+          | map(attribute='status') | first | default('False')) == 'True' and
+        ((_ocp_evpn_network_operator.stdout | from_json).status.conditions
+          | selectattr('type', 'equalto', 'Progressing')
+          | map(attribute='status') | first | default('True')) == 'False' and
+        ((_ocp_evpn_network_operator.stdout | from_json).status.conditions
+          | selectattr('type', 'equalto', 'Degraded')
+          | map(attribute='status') | first | default('True')) == 'False'
+      retries: 90
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Wait for the FRRConfiguration API
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - crd/frrconfigurations.frrk8s.metallb.io
+          - -o
+          - json
+      register: _ocp_evpn_frr_crd
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_frr_crd.rc == 0 and
+        ((_ocp_evpn_frr_crd.stdout | from_json).status.conditions
+          | selectattr('type', 'equalto', 'Established')
+          | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 60
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Wait for the BGPSessionState API
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - crd/bgpsessionstates.frrk8s.metallb.io
+          - -o
+          - json
+      register: _ocp_evpn_bgp_crd
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_bgp_crd.rc == 0 and
+        ((_ocp_evpn_bgp_crd.stdout | from_json).status.conditions
+          | selectattr('type', 'equalto', 'Established')
+          | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 60
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Wait for an FRR-K8s pod to become ready
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - pods
+          - -n
+          - openshift-frr-k8s
+          - -o
+          - json
+      register: _ocp_evpn_frr_pods
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_frr_pods.rc == 0 and
+        ((_ocp_evpn_frr_pods.stdout | from_json)['items']
+          | map(attribute='status.containerStatuses')
+          | select('defined') | flatten
+          | selectattr('ready', 'equalto', true) | list | length) > 0
+      retries: 60
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Apply Kubernetes NMState operator resources
+      ansible.builtin.command:
+        argv:
+          - oc
+          - apply
+          - -f
+          - "-"
+        stdin: "{{ lookup('ansible.builtin.template', 'nmstate-operator.yml.j2') }}"
+      register: _ocp_evpn_nmstate_operator_apply
+      changed_when: >-
+        ' created' in _ocp_evpn_nmstate_operator_apply.stdout or
+        ' configured' in _ocp_evpn_nmstate_operator_apply.stdout
+      tags: [cudn_evpn]
+
+    - name: Wait for the Kubernetes NMState CSV to succeed
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - csv
+          - -n
+          - openshift-nmstate
+          - -o
+          - json
+      register: _ocp_evpn_nmstate_csvs
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_nmstate_csvs.rc == 0 and
+        ((_ocp_evpn_nmstate_csvs.stdout | from_json)['items']
+          | selectattr('metadata.name', 'match', '^kubernetes-nmstate-operator')
+          | selectattr('status.phase', 'equalto', 'Succeeded')
+          | list | length) > 0
+      retries: 90
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Apply the Kubernetes NMState singleton
+      ansible.builtin.command:
+        argv:
+          - oc
+          - apply
+          - -f
+          - "-"
+        stdin: |
+          apiVersion: nmstate.io/v1
+          kind: NMState
+          metadata:
+            name: nmstate
+      register: _ocp_evpn_nmstate_apply
+      changed_when: >-
+        ' created' in _ocp_evpn_nmstate_apply.stdout or
+        ' configured' in _ocp_evpn_nmstate_apply.stdout
+      tags: [cudn_evpn]
+
+    - name: Wait for Kubernetes NMState to become Available
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - nmstate/nmstate
+          - -o
+          - json
+      register: _ocp_evpn_nmstate_status
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_nmstate_status.rc == 0 and
+        ((_ocp_evpn_nmstate_status.stdout | from_json).status.conditions | default([])
+          | selectattr('type', 'equalto', 'Available')
+          | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 90
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Wait for the NodeNetworkConfigurationPolicy API
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - crd/nodenetworkconfigurationpolicies.nmstate.io
+          - -o
+          - json
+      register: _ocp_evpn_nncp_crd
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_nncp_crd.rc == 0 and
+        ((_ocp_evpn_nncp_crd.stdout | from_json).status.conditions
+          | selectattr('type', 'equalto', 'Established')
+          | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 60
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Apply the single-node secondary-link and VTEP NNCP
+      ansible.builtin.command:
+        argv:
+          - oc
+          - apply
+          - -f
+          - "-"
+        stdin: "{{ lookup('ansible.builtin.template', 'underlay-nncp.yml.j2') }}"
+      register: _ocp_evpn_nncp_apply
+      changed_when: >-
+        ' created' in _ocp_evpn_nncp_apply.stdout or
+        ' configured' in _ocp_evpn_nncp_apply.stdout
+      tags: [cudn_evpn]
+
+    - name: Wait for the underlay NNCP to become Available
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - nncp/tenant-evpn-underlay
+          - -o
+          - json
+      register: _ocp_evpn_nncp_status
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_nncp_status.rc == 0 and
+        ((_ocp_evpn_nncp_status.stdout | from_json).status.conditions | default([])
+          | selectattr('type', 'equalto', 'Available')
+          | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 90
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Apply the unmanaged OVN VTEP resource
+      ansible.builtin.command:
+        argv:
+          - oc
+          - apply
+          - -f
+          - "-"
+        stdin: "{{ lookup('ansible.builtin.template', 'tenant-vtep.yml.j2') }}"
+      register: _ocp_evpn_vtep_apply
+      changed_when: >-
+        ' created' in _ocp_evpn_vtep_apply.stdout or
+        ' configured' in _ocp_evpn_vtep_apply.stdout
+      tags: [cudn_evpn]
+
+    - name: Wait for the VTEP to be accepted and allocated
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - vteps.k8s.ovn.org/tenant-vtep
+          - -o
+          - json
+      register: _ocp_evpn_vtep_status
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_vtep_status.rc == 0 and
+        ((_ocp_evpn_vtep_status.stdout | from_json).status.conditions | default([])
+          | selectattr('type', 'equalto', 'Accepted')
+          | selectattr('status', 'equalto', 'True')
+          | selectattr('reason', 'equalto', 'Allocated')
+          | list | length) > 0
+      retries: 90
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Apply the default-VRF OCP-to-Netris FRR peer
+      ansible.builtin.command:
+        argv:
+          - oc
+          - apply
+          - -f
+          - "-"
+        stdin: "{{ lookup('ansible.builtin.template', 'tenant-evpn-frrconfiguration.yml.j2') }}"
+      register: _ocp_evpn_frr_apply
+      changed_when: >-
+        ' created' in _ocp_evpn_frr_apply.stdout or
+        ' configured' in _ocp_evpn_frr_apply.stdout
+      tags: [cudn_evpn]
+
+    - name: Apply the OCP host EVPN address family
+      ansible.builtin.command:
+        argv:
+          - oc
+          - apply
+          - -f
+          - "-"
+        stdin: "{{ lookup('ansible.builtin.template', 'tenant-evpn-advertise.yml.j2') }}"
+      register: _ocp_evpn_advertise_apply
+      changed_when: >-
+        ' created' in _ocp_evpn_advertise_apply.stdout or
+        ' configured' in _ocp_evpn_advertise_apply.stdout
+      tags: [cudn_evpn]
+
+    - name: Apply PodNetwork-only CUDN RouteAdvertisements
+      ansible.builtin.command:
+        argv:
+          - oc
+          - apply
+          - -f
+          - "-"
+        stdin: "{{ lookup('ansible.builtin.template', 'tenant-evpn-routeadvertisements.yml.j2') }}"
+      register: _ocp_evpn_route_advertisements_apply
+      changed_when: >-
+        ' created' in _ocp_evpn_route_advertisements_apply.stdout or
+        ' configured' in _ocp_evpn_route_advertisements_apply.stdout
+      tags: [cudn_evpn]
+
+    - name: Wait for the selected Netris BGP peer to become Established
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - bgpsessionstates.frrk8s.metallb.io
+          - --all-namespaces
+          - --selector
+          - "frrk8s.metallb.io/peer={{ _ocp_evpn_leaf_ip }}"
+          - -o
+          - json
+      register: _ocp_evpn_bgp_sessions
+      changed_when: false
+      failed_when: false
+      until: >-
+        _ocp_evpn_bgp_sessions.rc == 0 and
+        ((_ocp_evpn_bgp_sessions.stdout | from_json)['items']
+          | selectattr('status.bgpStatus', 'equalto', 'Established')
+          | list | length) > 0
+      retries: 90
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Wait for the selected Netris EVPN address family to establish
+      ansible.builtin.shell: |
+        set -eu
+        frr_pod=$(oc get pods -n openshift-frr-k8s -l component=frr-k8s -o name | awk -F/ '$2 ~ /^frr-k8s-/ { print $2; exit }')
+        test -n "$frr_pod"
+        summary=$(oc exec -n openshift-frr-k8s "$frr_pod" -c frr -- vtysh -c 'show bgp l2vpn evpn summary')
+        printf '%s\n' "$summary" |
+          awk -v peer="{{ _ocp_evpn_leaf_ip }}" '
+            $1 == peer {
+              print
+              if ($10 ~ /^[0-9]+$/ && $11 ~ /^[0-9]+$/) established=1
+            }
+            END { exit !established }
+          '
+      register: _ocp_evpn_evpn_summary
+      changed_when: false
+      failed_when: false
+      until: _ocp_evpn_evpn_summary.rc == 0
+      retries: 90
+      delay: 10
+      tags: [cudn_evpn]
+
+    - name: Explain the RouteAdvertisements scope
+      ansible.builtin.debug:
+        msg: >-
+          CUDN EVPN RouteAdvertisements advertises PodNetwork routes only.
+          It can remain ConfigurationPending until OSAC creates a matching CUDN
+          labelled evpn=true.
+          VMaaS ExternalIPs and EgressIPs require the separately acknowledged
+          Netris/ISP route and return policy; they are not advertised by this
+          RouteAdvertisements resource.
+      tags: [cudn_evpn]

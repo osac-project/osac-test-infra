@@ -1,0 +1,33 @@
+---
+name: Remove VMaaS Networking Netris trigger on new push
+
+on:
+  pull_request_target:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # Use the same PR-scoped group as the label-triggered Netris workflow so a
+  # new commit requests cancellation of the previous Netris run immediately.
+  group: e2e-vmaas-netris-full-install-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  reset-trigger:
+    name: Reset VMaaS Networking Netris trigger
+    if: contains(github.event.pull_request.labels.*.name, 'e2e-vmaas-netris')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove stale Netris trigger label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "e2e-vmaas-netris"
+          gh pr comment "${PR_NUMBER}" --repo "${REPO}" \
+            --body "Removed \`e2e-vmaas-netris\` due to new commits. Re-run \`/test vmaas-netris\` for the new revision."

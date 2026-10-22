@@ -9,5 +9,5 @@
         --from-literal=NETRIS_PASSWORD={{ netris_password }} \
         -n {{ osac_namespace }} --dry-run=client -o yaml | oc apply -f -
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   no_log: true

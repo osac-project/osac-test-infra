@@ -101,6 +101,10 @@ resource "netris_server" "hgx" {
   tenantid                        = data.netris_tenant.admin.id
   siteid                          = netris_site.site1.id
   portcount                       = 16
+{% if ocp_underlay_enabled | default(false) | bool %}
+  asnumber                        = count.index == 0 ? "{{ ocp_underlay_ocp_asn }}" : null
+  role                            = count.index == 0 ? "evpn_vtep" : null
+{% endif %}
   depends_on                      = [netris_site.site1]
   customdata                      = <<EOF
 {

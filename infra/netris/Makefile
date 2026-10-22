@@ -2,17 +2,27 @@
 
 OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
-# Suite selects CaaS vs MaaS for restore disk grow + redeploy-server.sh flow.
+# Suite selects CaaS vs MaaS for redeploy-server.sh flow.
 # SUITE=caas (default) — setup-caas / deploy-caas.
-# SUITE=maas — grow h00 to ocp_snapshot_disk_gb; setup-maas / deploy-maas.
+# OCP snapshot restores grow both h00 disks to their configured sizes for every suite.
+# SUITE=maas — setup-maas / deploy-maas.
 SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci
-OSAC_PROFILE ?= caas-ci
+KUBECONFIG ?= /root/.kube/config
+OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
+OSAC_PROFILE ?= $(if $(filter vmaas vmaas_networking,$(SUITE)),cudn-evpn-netris-test,$(if $(filter full stretched_networking,$(SUITE)),full-ci,caas-ci))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
+_KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
+_OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
+
+# VMaaS selectors and full-ci configure the OCP host as an EVPN VTEP; legacy suites keep their established root path.
+OCP_KUBECONFIG = $(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
+VMAAS_UNDERLAY_EXTRA = $(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),-e ocp_underlay_enabled=true,)
+OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
@@ -41,10 +51,10 @@ deploy-setup:
 setup-infra: deploy-setup
 
 deploy-infra:
-	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA) $(VMAAS_UNDERLAY_EXTRA)
 
 deploy-ocp:
-	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(OCP_ANSIBLE_EXTRA)
 
 deploy-osac:
 	@if [ "$(OSAC_DEPLOY_MODE)" = "snapshot" ]; then \
@@ -53,11 +63,46 @@ deploy-osac:
 		$(MAKE) install-osac; \
 	fi
 	@printf '%s\n' \
-		'KUBECONFIG=/root/.kube/config' \
+		'KUBECONFIG=$(OCP_KUBECONFIG)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=/root/.kube/config' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),$(_OSAC_VM_KUBECONFIG_ABS),$(OCP_KUBECONFIG))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
+
+# VMaaS setup/gather is read-only: tenant resources remain owned by the suite fixtures.
+setup-vmaas: SUITE = vmaas
+setup-vmaas:
+	ansible-playbook playbooks/setup-vmaas.yml $(OCP_ANSIBLE_EXTRA)
+
+gather-vmaas: SUITE = vmaas
+gather-vmaas:
+	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
+
+destroy-vmaas:
+	@echo "VMaaS setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
+
+setup-vmaas_networking: SUITE = vmaas_networking
+setup-vmaas_networking:
+	ansible-playbook playbooks/setup-vmaas.yml $(OCP_ANSIBLE_EXTRA)
+
+# Stretched networking provisions the full profile and needs both BMaaS and VMaaS service prerequisites.
+setup-stretched_networking: SUITE = stretched_networking
+setup-stretched_networking:
+	$(MAKE) setup-full
+
+gather-vmaas_networking: SUITE = vmaas_networking
+gather-vmaas_networking:
+	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
+
+destroy-vmaas_networking:
+	@echo "VMaaS networking setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
+
+destroy-stretched_networking:
+	@echo "Stretched networking tests own and clean up their tenant resources; full-profile prerequisites are removed with destroy-ocp."
+
+gather-stretched_networking: SUITE = stretched_networking
+gather-stretched_networking:
+	$(MAKE) gather-full
 
 setup-caas:
 	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
@@ -72,7 +117,7 @@ setup-caas-agents:
 
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
-	cd /opt/osac/osac-installer && make uninstall \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make uninstall \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE) 2>/dev/null || true
@@ -80,7 +125,7 @@ destroy-osac:
 	@rm -f $(ENV_INFRA)
 
 destroy-ocp:
-	ansible-playbook playbooks/destroy-ocp.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/destroy-ocp.yml $(OCP_ANSIBLE_EXTRA)
 
 destroy-infra:
 	ansible-playbook playbooks/destroy-infra.yml $(ANSIBLE_EXTRA)
@@ -96,7 +141,7 @@ force-destroy-caas:
 	ansible-playbook playbooks/force-destroy-caas.yml $(ANSIBLE_EXTRA)
 
 gather-infra:
-	ansible-playbook playbooks/gather-infra.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
 
 gather-mgmt-cluster:
 	ansible-playbook playbooks/gather-mgmt-cluster.yml $(ANSIBLE_EXTRA)
@@ -110,11 +155,23 @@ setup-bmc:
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
+# Full profile shares CaaS and BMaaS setup and verifies the EVPN prerequisites.
+setup-full:
+	$(MAKE) setup-caas
+	$(MAKE) setup-bmaas
+	$(MAKE) setup-vmaas SUITE=vmaas OSAC_PROFILE=$(OSAC_PROFILE)
+
 destroy-bmaas:
 	ansible-playbook playbooks/destroy-bmaas.yml $(ANSIBLE_EXTRA)
 
 gather-bmaas:
 	ansible-playbook playbooks/gather-bmaas.yml $(ANSIBLE_EXTRA)
+
+# Collect diagnostics for each service configured by the full-ci profile.
+gather-full:
+	$(MAKE) gather-caas
+	$(MAKE) gather-bmaas
+	$(MAKE) gather-infra
 
 # bmaas_networking shares infra with bmaas (same BMHs, same sushy-tools)
 setup-bmaas_networking: setup-bmaas
@@ -174,42 +231,42 @@ force-destroy-maas:
 install-osac: prep-osac run-osac-setup post-osac
 
 prep-osac:
-	ansible-playbook playbooks/prep-osac.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/prep-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 run-osac-setup:
 	@echo "=== Installing OSAC infrastructure via Helm (make install-infra) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install-infra \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-infra \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE)
 	@echo "=== Creating external Netris credentials ==="
-	ansible-playbook playbooks/create-netris-credentials.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/create-netris-credentials.yml $(OCP_ANSIBLE_EXTRA)
 	@echo "=== Installing OSAC application via Helm (make install-osac) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install-osac \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-osac \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE)
 
 post-osac:
-	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/post-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 # Snapshot refresh: clone mono-repo, patch values, run refresh-after-snapshot.py
 # post-refresh-osac → patch-osac-refresh (incl. AAP project pin sync + CaC)
 refresh-osac: prep-refresh-osac run-refresh-osac post-refresh-osac
 
 prep-refresh-osac:
-	ansible-playbook playbooks/prep-refresh-osac.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/prep-refresh-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 run-refresh-osac:
 	@echo "=== Running OSAC refresh ==="
 	cd /opt/osac/osac-installer && \
-		KUBECONFIG=/root/.kube/config \
+		KUBECONFIG=$(OCP_KUBECONFIG) \
 		VALUES_FILE=values/$(OSAC_PROFILE)/instance.yaml \
 		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
 		python3 -u scripts/refresh-after-snapshot.py
 
 post-refresh-osac:
-	ansible-playbook playbooks/post-refresh-osac.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/post-refresh-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 # ─── Utilities ─────────────────────────────────────────────────────
 
@@ -269,7 +326,9 @@ health-check:
 
 .PHONY: deploy deploy-fast \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
-        setup-caas deploy-caas setup-caas-agents \
+        setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
+		setup-vmaas_networking gather-vmaas_networking destroy-vmaas_networking \
+		setup-stretched_networking gather-stretched_networking destroy-stretched_networking \
 		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
 		destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \

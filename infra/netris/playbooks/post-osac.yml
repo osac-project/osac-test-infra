@@ -20,7 +20,7 @@
       ansible.builtin.command:
         cmd: oc scale deployment {{ item }} -n multicluster-engine --replicas=0
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
       loop:
         - infrastructure-operator
         - multicluster-engine-operator
@@ -31,7 +31,7 @@
       ansible.builtin.shell:
         cmd: oc get pods -n multicluster-engine -l control-plane={{ item }} --no-headers 2>/dev/null | grep -v Terminating | wc -l
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
       register: _mce_pods
       until: _mce_pods.stdout | int == 0
       retries: 30
@@ -48,7 +48,7 @@
           python3 << 'PYEOF'
           import json, subprocess, os
 
-          os.environ["KUBECONFIG"] = "/root/.kube/config"
+          os.environ["KUBECONFIG"] = "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
 
           def run(cmd):
               r = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -80,7 +80,7 @@
               print("Deleted assisted-image-service pod")
           PYEOF
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
       changed_when: "'Patched' in _filter_result.stdout"
       register: _filter_result
 
@@ -92,14 +92,14 @@
       ansible.builtin.command:
         cmd: oc rollout status deployment/assisted-service -n multicluster-engine --timeout=120s
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
       changed_when: false
 
     - name: Wait for assisted-image-service pod ready
       ansible.builtin.shell:
         cmd: oc get pod assisted-image-service-0 -n multicluster-engine -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
       register: _ais_ready
       until: _ais_ready.stdout == 'True'
       retries: 60
@@ -128,5 +128,5 @@
           print('OK: only {{ ocp_version }} x86_64')
           "
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
       changed_when: false

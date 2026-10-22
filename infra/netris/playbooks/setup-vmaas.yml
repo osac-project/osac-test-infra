@@ -1,0 +1,429 @@
+---
+- name: Check VMaaS cluster and OSAC readiness (read-only)
+  hosts: all
+  gather_facts: false
+  environment:
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path }}"
+  tasks:
+    - name: Check the selected OCP kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ ocp_evpn_kubeconfig_path }}"
+      register: _vmaas_kubeconfig
+
+    - name: Require the selected OCP kubeconfig
+      ansible.builtin.assert:
+        that:
+          - _vmaas_kubeconfig.stat.exists
+          - _vmaas_kubeconfig.stat.isreg
+        fail_msg: "OCP kubeconfig is missing or is not a regular file: {{ ocp_evpn_kubeconfig_path }}"
+
+    - name: Check the OCP API is ready
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - --raw=/readyz
+      register: _vmaas_api_ready
+      changed_when: false
+
+    - name: Require the OCP API to be ready
+      ansible.builtin.assert:
+        that:
+          - _vmaas_api_ready.stdout | trim == 'ok'
+        fail_msg: >-
+          OCP API readiness check failed: rc={{ _vmaas_api_ready.rc }},
+          stdout={{ _vmaas_api_ready.stdout | default('') | trim }},
+          stderr={{ _vmaas_api_ready.stderr | default('') | trim }}.
+
+    - name: Read OCP infrastructure identity
+      ansible.builtin.command:
+        argv: [oc, get, infrastructure/cluster, -o, json]
+      register: _vmaas_infrastructure_raw
+      changed_when: false
+
+    - name: Read OCP ClusterVersion
+      ansible.builtin.command:
+        argv: [oc, get, clusterversion/version, -o, json]
+      register: _vmaas_cluster_version_raw
+      changed_when: false
+
+    - name: Read OCP network configuration
+      ansible.builtin.command:
+        argv: [oc, get, network.operator.openshift.io/cluster, -o, json]
+      register: _vmaas_network_raw
+      changed_when: false
+
+    - name: Wait for OVN EVPN API definitions to become Established
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - "crd/{{ item }}"
+          - -o
+          - json
+      register: _vmaas_evpn_crd_raw
+      until: >-
+        _vmaas_evpn_crd_raw.rc == 0 and
+        ((_vmaas_evpn_crd_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Established')
+         | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 60
+      delay: 10
+      changed_when: false
+      loop:
+        - clusteruserdefinednetworks.k8s.ovn.org
+        - vteps.k8s.ovn.org
+        - routeadvertisements.k8s.ovn.org
+        - bgpsessionstates.frrk8s.metallb.io
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Read the OCP network ClusterOperator
+      ansible.builtin.command:
+        argv: [oc, get, clusteroperator/network, -o, json]
+      register: _vmaas_network_operator_raw
+      until: >-
+        _vmaas_network_operator_raw.rc == 0 and
+        ((_vmaas_network_operator_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Available') | map(attribute='status') | first | default('False')) == 'True' and
+        ((_vmaas_network_operator_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Progressing') | map(attribute='status') | first | default('True')) == 'False'
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Parse OCP identity and convergence status
+      ansible.builtin.set_fact:
+        _vmaas_infrastructure: "{{ _vmaas_infrastructure_raw.stdout | from_json }}"
+        _vmaas_cluster_version: "{{ _vmaas_cluster_version_raw.stdout | from_json }}"
+        _vmaas_network: "{{ _vmaas_network_raw.stdout | from_json }}"
+        _vmaas_network_operator: "{{ _vmaas_network_operator_raw.stdout | from_json }}"
+        _vmaas_current_history: >-
+          {{ (_vmaas_cluster_version_raw.stdout | from_json).status.history | default([], true) | first | default({}, true) }}
+        _vmaas_desired_version: >-
+          {{ (_vmaas_cluster_version_raw.stdout | from_json).status.desired.version | default('Unknown', true) }}
+        _vmaas_current_version: >-
+          {{ (((_vmaas_cluster_version_raw.stdout | from_json).status.history | default([], true) | first | default({}, true)).version) | default('Unknown', true) }}
+        _vmaas_current_state: >-
+          {{ (((_vmaas_cluster_version_raw.stdout | from_json).status.history | default([], true) | first | default({}, true)).state) | default('Unknown', true) }}
+        _vmaas_cv_available: >-
+          {{ ((_vmaas_cluster_version_raw.stdout | from_json).status.conditions | default([])
+             | selectattr('type', 'equalto', 'Available') | map(attribute='status') | first) | default('Unknown', true) }}
+        _vmaas_cv_progressing: >-
+          {{ ((_vmaas_cluster_version_raw.stdout | from_json).status.conditions | default([])
+             | selectattr('type', 'equalto', 'Progressing') | map(attribute='status') | first) | default('Unknown', true) }}
+        _vmaas_cv_failing: >-
+          {{ ((_vmaas_cluster_version_raw.stdout | from_json).status.conditions | default([])
+             | selectattr('type', 'equalto', 'Failing') | map(attribute='status') | first) | default('Unknown', true) }}
+        _vmaas_cv_observed_generation: >-
+          {{ (_vmaas_cluster_version_raw.stdout | from_json).status.observedGeneration | default(-1, true) | int }}
+        _vmaas_cv_metadata_generation: >-
+          {{ (_vmaas_cluster_version_raw.stdout | from_json).metadata.generation | default(-2, true) | int }}
+
+    - name: Require a converged OCP 4.22 OVNKubernetes cluster
+      ansible.builtin.assert:
+        that:
+          - _vmaas_desired_version.split('.')[:2] | join('.') == ocp_evpn_required_version
+          - _vmaas_current_version.split('.')[:2] | join('.') == ocp_evpn_required_version
+          - _vmaas_current_version == _vmaas_desired_version
+          - _vmaas_current_state == 'Completed'
+          - (_vmaas_cv_available | string) == 'True'
+          - (_vmaas_cv_progressing | string) == 'False'
+          - (_vmaas_cv_failing | string) == 'False'
+          - _vmaas_cv_observed_generation == _vmaas_cv_metadata_generation
+          - _vmaas_network.spec.defaultNetwork.type == 'OVNKubernetes'
+        fail_msg: >-
+          VMaaS CUDN EVPN requires a converged OCP {{ ocp_evpn_required_version }}
+          cluster using OVNKubernetes. Observed platform={{
+          _vmaas_infrastructure.status.platformStatus.type | default('Unknown') }},
+          desired={{ _vmaas_desired_version }}, current={{ _vmaas_current_version }},
+          history.state={{ _vmaas_current_state }}, Available={{ _vmaas_cv_available }},
+          Progressing={{ _vmaas_cv_progressing }}, Failing={{ _vmaas_cv_failing }},
+          observedGeneration={{ _vmaas_cv_observed_generation }},
+          metadata.generation={{ _vmaas_cv_metadata_generation }},
+          networkType={{ _vmaas_network.spec.defaultNetwork.type | default('Unknown') }}.
+
+    - name: Require the CNO EVPN routing settings
+      ansible.builtin.assert:
+        that:
+          - _vmaas_network.spec.additionalRoutingCapabilities.providers | default([]) == ['FRR']
+          - _vmaas_network.spec.defaultNetwork.ovnKubernetesConfig.routeAdvertisements | default('') == 'Enabled'
+          - _vmaas_network.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.routingViaHost | default(false) | bool
+          - _vmaas_network.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.ipForwarding | default('') == 'Global'
+          - >-
+            ((_vmaas_network_operator.status.conditions | default([])
+              | selectattr('type', 'equalto', 'Available') | map(attribute='status') | first) | default('False')) == 'True'
+          - >-
+            ((_vmaas_network_operator.status.conditions | default([])
+              | selectattr('type', 'equalto', 'Progressing') | map(attribute='status') | first) | default('True')) == 'False'
+          - >-
+            ((_vmaas_network_operator.status.conditions | default([])
+              | selectattr('type', 'equalto', 'Degraded') | map(attribute='status') | first) | default('True')) == 'False'
+        fail_msg: >-
+          CNO must have FRR routing, OVN RouteAdvertisements, host-based routing,
+          and Global IP forwarding enabled, and the network ClusterOperator must
+          be Available with Progressing and Degraded false. No resources were changed.
+
+    - name: Require the underlay and ExternalIP return path when enabled
+      ansible.builtin.assert:
+        that:
+          - ocp_underlay_enabled | default(false) | bool
+          - not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool)
+        fail_msg: >-
+          VMaaS requires the dedicated underlay. If ExternalIP tests are enabled,
+          their separate 172.27.0.0/16 return path must also be independently
+          provisioned and acknowledged. This check does not mutate or verify
+          external Netris/ISP policy; BGP peer state is checked below.
+
+    - name: Derive the expected Netris leaf peer from the configured OCP /31
+      ansible.builtin.set_fact:
+        _vmaas_leaf_peer_ip: >-
+          {{ ocp_underlay_p2p_cidr | ansible.utils.ipaddr('1') | ansible.utils.ipaddr('address') }}
+
+    - name: Read the single-node underlay NNCP
+      ansible.builtin.command:
+        argv: [oc, get, nncp/tenant-evpn-underlay, -o, json]
+      register: _vmaas_nncp_raw
+      until: >-
+        _vmaas_nncp_raw.rc == 0 and
+        ((_vmaas_nncp_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Available')
+         | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Read the OVN VTEP allocation
+      ansible.builtin.command:
+        argv: [oc, get, vteps.k8s.ovn.org/tenant-vtep, -o, json]
+      register: _vmaas_vtep_raw
+      until: >-
+        _vmaas_vtep_raw.rc == 0 and
+        ((_vmaas_vtep_raw.stdout | from_json).status.conditions | default([])
+         | selectattr('type', 'equalto', 'Accepted')
+         | selectattr('status', 'equalto', 'True')
+         | selectattr('reason', 'equalto', 'Allocated') | list | length) > 0
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Read the OCP FRR peer configuration
+      ansible.builtin.command:
+        argv: [oc, get, frrconfigurations.frrk8s.metallb.io/tenant-evpn, -n, openshift-frr-k8s, -o, json]
+      register: _vmaas_frr_raw
+      changed_when: false
+
+    - name: Read the OCP host EVPN address-family configuration
+      ansible.builtin.command:
+        argv: [oc, get, frrconfigurations.frrk8s.metallb.io/tenant-evpn-advertise, -n, openshift-frr-k8s, -o, json]
+      register: _vmaas_evpn_frr_raw
+      changed_when: false
+
+    - name: Read the OCP RouteAdvertisements resource
+      ansible.builtin.command:
+        argv: [oc, get, routeadvertisements.k8s.ovn.org/tenant-evpn, -o, json]
+      register: _vmaas_route_advertisements_raw
+      changed_when: false
+
+    - name: Read EVPN CUDNs selected by RouteAdvertisements
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - clusteruserdefinednetworks.k8s.ovn.org
+          - --selector
+          - evpn=true
+          - -o
+          - json
+      register: _vmaas_evpn_cudns_raw
+      changed_when: false
+
+    - name: Read the selected BGP session state
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - bgpsessionstates.frrk8s.metallb.io
+          - --all-namespaces
+          - --selector
+          - "frrk8s.metallb.io/peer={{ _vmaas_leaf_peer_ip }}"
+          - -o
+          - json
+      register: _vmaas_bgp_sessions_raw
+      until: >-
+        _vmaas_bgp_sessions_raw.rc == 0 and
+        ((_vmaas_bgp_sessions_raw.stdout | from_json).items | default([])
+         | selectattr('status.bgpStatus', 'equalto', 'Established') | list | length) > 0
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Parse Task 3 EVPN readiness resources
+      ansible.builtin.set_fact:
+        _vmaas_nncp: "{{ _vmaas_nncp_raw.stdout | from_json }}"
+        _vmaas_vtep: "{{ _vmaas_vtep_raw.stdout | from_json }}"
+        _vmaas_frr: "{{ _vmaas_frr_raw.stdout | from_json }}"
+        _vmaas_evpn_frr: "{{ _vmaas_evpn_frr_raw.stdout | from_json }}"
+        _vmaas_route_advertisements: "{{ _vmaas_route_advertisements_raw.stdout | from_json }}"
+        _vmaas_evpn_cudns: "{{ _vmaas_evpn_cudns_raw.stdout | from_json }}"
+        _vmaas_bgp_sessions: "{{ _vmaas_bgp_sessions_raw.stdout | from_json }}"
+
+    - name: Require the underlay NNCP to be Available
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_vmaas_nncp.status.conditions | default([])
+             | selectattr('type', 'equalto', 'Available')
+             | selectattr('status', 'equalto', 'True') | list | length) > 0
+        fail_msg: "NNCP tenant-evpn-underlay is not Available=True."
+
+    - name: Require the VTEP to be allocated
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_vmaas_vtep.status.conditions | default([])
+             | selectattr('type', 'equalto', 'Accepted')
+             | selectattr('status', 'equalto', 'True')
+             | selectattr('reason', 'equalto', 'Allocated') | list | length) > 0
+        fail_msg: "VTEP tenant-vtep is not Accepted=True/Allocated."
+
+    - name: Require a default-VRF FRR peer for the selected leaf
+      ansible.builtin.assert:
+        that:
+          - _vmaas_frr.metadata.labels.evpn | default('') == 'true'
+          - _vmaas_frr.spec.bgp.routers | length == 1
+          - _vmaas_frr.spec.bgp.routers[0].vrf | default('') == ''
+          - _vmaas_frr.spec.bgp.routers[0].neighbors | length == 1
+          - _vmaas_frr.spec.bgp.routers[0].neighbors[0].address == _vmaas_leaf_peer_ip
+        fail_msg: >-
+          FRRConfiguration tenant-evpn must have the evpn=true label and one
+          default-VRF neighbor matching the leaf endpoint {{ _vmaas_leaf_peer_ip }}.
+
+    - name: Require the OCP host EVPN address family
+      ansible.builtin.assert:
+        that:
+          - _vmaas_evpn_frr.spec.raw.priority | int == 5
+          - _vmaas_evpn_frr.spec.nodeSelector.matchLabels['kubernetes.io/hostname'] | length > 0
+          - "'address-family l2vpn evpn' in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
+          - "('neighbor ' ~ _vmaas_leaf_peer_ip ~ ' activate') in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
+          - "'allowas-in origin' in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
+          - "'advertise-all-vni' in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
+        fail_msg: >-
+          FRRConfiguration tenant-evpn-advertise must configure the selected leaf
+          {{ _vmaas_leaf_peer_ip }} in the host L2VPN EVPN address family with
+          allowas-in origin and advertise-all-vni.
+
+    - name: Require the OCP-to-Netris BGP session to be Established
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_vmaas_bgp_sessions["items"] | default([])
+             | selectattr('status.bgpStatus', 'equalto', 'Established') | list | length) > 0
+        fail_msg: >-
+          No BGPSessionState selected by peer {{ _vmaas_leaf_peer_ip }} is Established.
+
+    - name: Require accepted PodNetwork RouteAdvertisements when an EVPN CUDN exists
+      ansible.builtin.assert:
+        that:
+          - _vmaas_route_advertisements.spec.targetVRF == 'auto'
+          - _vmaas_route_advertisements.spec.advertisements == ['PodNetwork']
+          - _vmaas_route_advertisements.spec.frrConfigurationSelector.matchLabels.evpn == 'true'
+          - _vmaas_route_advertisements.spec.networkSelectors[0].networkSelectionType == 'ClusterUserDefinedNetworks'
+          - _vmaas_route_advertisements.spec.networkSelectors[0].clusterUserDefinedNetworkSelector.networkSelector.matchLabels.evpn == 'true'
+          - >-
+            (_vmaas_evpn_cudns["items"] | default([]) | length == 0) or
+            ((_vmaas_route_advertisements.status.conditions | default([])
+             | selectattr('type', 'equalto', 'Accepted')
+             | selectattr('status', 'equalto', 'True') | list | length) > 0)
+        fail_msg: >-
+          RouteAdvertisements tenant-evpn must select the EVPN FRRConfiguration
+          and CUDNs for PodNetwork only, and must be accepted once an EVPN CUDN
+          exists. Service ExternalIPs and EgressIPs require their separate fabric
+          policy/route path.
+
+    - name: Read the registered Netris fabric manager ConfigMap
+      ansible.builtin.command:
+        argv: [oc, get, configmap/osac-network-fabric-manager-netris, -n, "{{ osac_namespace }}", -o, json]
+      register: _vmaas_fabric_manager_raw
+      changed_when: false
+
+    - name: Read the registered CUDN EVPN Kubernetes manager ConfigMap
+      ansible.builtin.command:
+        argv: [oc, get, configmap/osac-network-k8s-manager-cudn-evpn, -n, "{{ osac_namespace }}", -o, json]
+      register: _vmaas_k8s_manager_raw
+      changed_when: false
+
+    - name: Read the ComputeInstance CRD
+      ansible.builtin.command:
+        argv: [oc, get, crd/computeinstances.osac.openshift.io, -o, json]
+      register: _vmaas_compute_instance_crd_raw
+      changed_when: false
+
+    - name: Read namespace deployments
+      ansible.builtin.command:
+        argv: [oc, get, deployments, -n, "{{ osac_namespace }}", -o, json]
+      register: _vmaas_deployments_raw
+      changed_when: false
+
+    - name: Parse VMaaS API and manager registrations
+      ansible.builtin.set_fact:
+        _vmaas_fabric_manager: "{{ _vmaas_fabric_manager_raw.stdout | from_json }}"
+        _vmaas_k8s_manager: "{{ _vmaas_k8s_manager_raw.stdout | from_json }}"
+        _vmaas_compute_instance_crd: "{{ _vmaas_compute_instance_crd_raw.stdout | from_json }}"
+        _vmaas_deployments: "{{ _vmaas_deployments_raw.stdout | from_json }}"
+      no_log: true
+
+    - name: Locate the deployment that enables the VMaaS controller
+      ansible.builtin.set_fact:
+        _vmaas_compute_controller_deployment:
+          name: "{{ item.metadata.name }}"
+          replicas: "{{ item.spec.replicas | default(1) }}"
+          availableReplicas: "{{ item.status.availableReplicas | default(0) }}"
+      loop: "{{ _vmaas_deployments['items'] }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: >-
+        (item.spec.template.spec.containers | default([])
+         | map(attribute='env') | select('defined') | flatten
+         | selectattr('name', 'equalto', 'OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER')
+         | selectattr('value', 'equalto', 'true') | list | length) > 0
+
+    - name: Require the ComputeInstance API and manager registrations
+      ansible.builtin.assert:
+        that:
+          - _vmaas_compute_instance_crd.status.conditions | default([]) | selectattr('type', 'equalto', 'Established') | selectattr('status', 'equalto', 'True') | list | length > 0
+          - _vmaas_fabric_manager.metadata.labels['osac.openshift.io/network-fabric-manager'] == 'true'
+          - _vmaas_fabric_manager.data.name == 'netris'
+          - _vmaas_k8s_manager.metadata.labels['osac.openshift.io/network-k8s-manager'] == 'true'
+          - _vmaas_k8s_manager.data.name == 'cudn_evpn'
+        fail_msg: >-
+          VMaaS requires an Established ComputeInstance CRD and Netris/cudn_evpn
+          manager ConfigMaps in namespace {{ osac_namespace }}.
+
+    - name: Require a deployment with the VMaaS controller enabled
+      ansible.builtin.assert:
+        that:
+          - _vmaas_compute_controller_deployment is defined
+        fail_msg: >-
+          No deployment in namespace {{ osac_namespace }} enables
+          OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER=true.
+
+    - name: Require the VMaaS controller deployment to be available
+      ansible.builtin.assert:
+        that:
+          - (_vmaas_compute_controller_deployment.availableReplicas | int) >= (_vmaas_compute_controller_deployment.replicas | int)
+        fail_msg: >-
+          The deployment with OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER=true is not
+          fully available in namespace {{ osac_namespace }}.
+
+    - name: Report Fulfillment API checks not available through Kubernetes
+      ansible.builtin.debug:
+        msg: >-
+          Read-only Kubernetes readiness passed for the OSAC VMaaS controller,
+          ComputeInstance API, and Netris/cudn_evpn registrations. This checkout
+          exposes NetworkClass and ComputeInstanceTemplate through Fulfillment
+          APIs, not Kubernetes resources. The setup target does not query the
+          private NetworkClass API or guess a template endpoint/name; ensure the
+          installed default NetworkClass selects fabricManager=netris and
+          k8sManager=cudn_evpn, and that the VMaaS template configured for the
+          suite exists and is usable.

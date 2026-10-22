@@ -30,4 +30,4 @@ jobs:
           set -euo pipefail
           gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "e2e-bmaas-netris"
           gh pr comment "${PR_NUMBER}" --repo "${REPO}" \
-            --body "Removed \`e2e-bmaas-netris\` due to new commits. Re-run \`/test e2e-bmaas-netris-full-install\` for the new revision."
+            --body "Removed \`e2e-bmaas-netris\` due to new commits. Re-run \`/test bmaas-netris\` for the new revision."

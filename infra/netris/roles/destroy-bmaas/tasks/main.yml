@@ -131,6 +131,12 @@
     regexp: '^OSAC_BMI_INSTANCE_TYPE='
     state: absent
 
+- name: Remove BMaaS network interface from E2E environment
+  ansible.builtin.lineinfile:
+    path: "{{ inventory_dir }}/../.env.infra"
+    regexp: '^OSAC_BMI_NETWORK_INTERFACE='
+    state: absent
+
 # ── Discover the virtual BMH VMs (shared by the phases below) ──
 - name: Find BMaaS VMs
   ansible.builtin.shell:

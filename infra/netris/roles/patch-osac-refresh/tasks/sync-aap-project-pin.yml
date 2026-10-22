@@ -21,7 +21,7 @@
   ansible.builtin.shell:
     cmd: oc get route osac-aap -n {{ snapshot_osac_namespace }} -o jsonpath='{.spec.host}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _aap_pin_route
   changed_when: false
   until: _aap_pin_route.rc == 0 and _aap_pin_route.stdout | length > 0
@@ -35,7 +35,7 @@
       -n {{ snapshot_osac_namespace }}
       -o jsonpath='{.data.password}' | base64 -d
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _aap_pin_admin_pw
   changed_when: false
   no_log: true
@@ -47,7 +47,7 @@
       echo "uri=$(oc get secret config-as-code-ig -n {{ snapshot_osac_namespace }} -o jsonpath='{.data.AAP_PROJECT_GIT_URI}' | base64 -d)"
       echo "branch=$(oc get secret config-as-code-ig -n {{ snapshot_osac_namespace }} -o jsonpath='{.data.AAP_PROJECT_GIT_BRANCH}' | base64 -d)"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _aap_pin_secret
   changed_when: false
 

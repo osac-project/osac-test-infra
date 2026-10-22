@@ -625,7 +625,7 @@
         hardware:
           cpu:
             cores: "{{ bmaas_vm_vcpu | int }}"
-            architecture: x86_64
+            architecture: amd64
             threads_per_core: 1
           memory:
             total_gb: "{{ (bmaas_vm_memory_mb | int / 1024) | int }}"
@@ -714,6 +714,14 @@
     path: "{{ inventory_dir }}/../.env.infra"
     regexp: '^OSAC_BMI_INSTANCE_TYPE='
     line: "OSAC_BMI_INSTANCE_TYPE={{ bmaas_instance_type }}"
+    create: true
+    mode: "0644"
+
+- name: Publish BMaaS network interface for E2E tests
+  ansible.builtin.lineinfile:
+    path: "{{ inventory_dir }}/../.env.infra"
+    regexp: '^OSAC_BMI_NETWORK_INTERFACE='
+    line: "OSAC_BMI_NETWORK_INTERFACE={{ bmaas_provisioning_fabric_iface }}"
     create: true
     mode: "0644"
 

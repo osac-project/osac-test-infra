@@ -132,14 +132,54 @@ jobs:
       notify-on-failure: false
       enable-ai-diagnostic: false
 
-  netris:
+  bmaas-netris:
     needs: decide
-    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"netris"')
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"bmaas-netris"')
     permissions:
       contents: read
       pull-requests: read
     uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
     with:
+      suite: bmaas_networking
+      osac-profile: bmaas-ci
+      test-infra-repository: ${{ needs.decide.outputs.head-repo }}
+      test-infra-ref: ${{ needs.decide.outputs.sha }}
+      test-infra-sha: ${{ needs.decide.outputs.sha }}
+      pr-repository: ${{ needs.decide.outputs.head-repo }}
+      pr-sha: ${{ needs.decide.outputs.sha }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      pr-number: ${{ needs.decide.outputs.number }}
+
+  vmaas-netris:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"vmaas-netris"')
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/e2e-vmaas-netris-full-install.yml
+    with:
+      suite: vmaas_networking
+      osac-profile: cudn-evpn-netris-test
+      test-infra-repository: ${{ needs.decide.outputs.head-repo }}
+      test-infra-ref: ${{ needs.decide.outputs.sha }}
+      test-infra-sha: ${{ needs.decide.outputs.sha }}
+      pr-repository: ${{ needs.decide.outputs.head-repo }}
+      pr-sha: ${{ needs.decide.outputs.sha }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      pr-number: ${{ needs.decide.outputs.number }}
+
+  stretched-netris:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"stretched-netris"')
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/e2e-stretched-netris-full-install.yml
+    with:
+      suite: stretched_networking
+      osac-profile: full-ci
       test-infra-repository: ${{ needs.decide.outputs.head-repo }}
       test-infra-ref: ${{ needs.decide.outputs.sha }}
       test-infra-sha: ${{ needs.decide.outputs.sha }}
@@ -150,7 +190,7 @@ jobs:
       pr-number: ${{ needs.decide.outputs.number }}
 
   finish:
-    needs: [decide, track, vmaas, caas, bmaas, netris]
+    needs: [decide, track, vmaas, caas, bmaas, bmaas-netris, vmaas-netris, stretched-netris]
     if: always() && needs.decide.outputs.start == 'true'
     uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@21955730dc96e51e049968b25e9d3529f655f4af  # v1.2.12
     permissions:

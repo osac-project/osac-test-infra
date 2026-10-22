@@ -2,7 +2,21 @@
 - name: Deploy OCP from snapshot
   hosts: all
   gather_facts: false
+  pre_tasks:
+    - name: Load Netris fabric values for EVPN peer derivation
+      ansible.builtin.include_vars:
+        file: "{{ netris_lab_dir }}/group_vars/all.yml"
+      when: suite | default('') in ['vmaas', 'vmaas_networking', 'stretched_networking', 'full']
   roles:
     - configure-netris
     - configure-dns
     - restore-ocp
+  post_tasks:
+    - name: Configure CUDN EVPN prerequisites for VMaaS and full-ci
+      ansible.builtin.include_role:
+        name: configure-cudn-evpn
+      vars:
+        ocp_evpn_netris_leaf_asn_start: "{{ ns_fabric.asn_start }}"
+        ocp_evpn_netris_leaf_count: "{{ ns_fabric.leaf_count }}"
+        ocp_evpn_netris_loopback_cidr: "{{ ns_fabric.lo_subnet }}"
+      when: suite | default('') in ['vmaas', 'vmaas_networking', 'stretched_networking', 'full']

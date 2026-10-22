@@ -152,6 +152,7 @@
       - dnsmasq
       - zstd
       - pigz
+      - gdisk
     state: present
 
 - name: Check AWS CLI Python package import
@@ -196,7 +197,7 @@
     creates: /usr/local/go/bin/go
 
 # Job-scoped, non-root checkout: this role only ever runs on a freshly
-# provisioned, single-job EC2 instance (e2e-caas-netris.yml's "test" job),
+# provisioned, single-job EC2 instance (a Netris workflow's "e2e" job),
 # so there's no actual concurrent-job interference on /opt today -- but
 # root-owning the source tree contradicts the rest of this change (job-
 # scoped, non-root osac tooling), and a non-root build step reading from a

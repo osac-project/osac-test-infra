@@ -49,6 +49,11 @@ paths:
       # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_* (added to GitHub 2026);
       # drop this when actionlint is bumped to v1.18+. The suite checks out the revision of its own workflow file by default.
       - 'property "workflow_(repository|sha)" is not defined'
+  .github/workflows/e2e-vmaas-netris-full-install.yml:
+    ignore:
+      # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_* (added to GitHub 2026);
+      # drop this when actionlint is bumped to v1.18+. The suite checks out the revision of its own workflow file by default.
+      - 'property "workflow_(repository|sha)" is not defined'
   .github/workflows/e2e-full-regression.yml:
     ignore:
       # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_* (added to GitHub 2026);

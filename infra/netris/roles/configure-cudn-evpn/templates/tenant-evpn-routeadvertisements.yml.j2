@@ -1,0 +1,18 @@
+apiVersion: k8s.ovn.org/v1
+kind: RouteAdvertisements
+metadata:
+  name: tenant-evpn
+spec:
+  targetVRF: auto
+  advertisements:
+    - PodNetwork
+  nodeSelector: {}
+  frrConfigurationSelector:
+    matchLabels:
+      evpn: "true"
+  networkSelectors:
+    - networkSelectionType: ClusterUserDefinedNetworks
+      clusterUserDefinedNetworkSelector:
+        networkSelector:
+          matchLabels:
+            evpn: "true"
