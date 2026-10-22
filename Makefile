@@ -146,7 +146,7 @@ destroy-setup:
 
 destroy-suite:
 	@if [ "$(SUITE)" = "full" ]; then \
-		echo "ERROR: destroy-suite SUITE=full would run the full infrastructure teardown; use destroy-infra only when you intend to destroy the lab." >&2; \
+		echo "ERROR: destroy-suite SUITE=full is not supported; use 'make -C infra/netris destroy-full' only when you intend to destroy the entire lab." >&2; \
 		exit 2; \
 	fi
 	$(MAKE) -C $(INFRA_DIR) destroy-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)

@@ -568,7 +568,8 @@ jobs:
 
       - name: Setup Netris suite
         shell: bash
-        timeout-minutes: 60
+        # setup-vmaas can spend up to 80 minutes in sequential readiness polling.
+        timeout-minutes: 120
         env:
           TEST_SUITE: ${{ inputs.suite }}
           OSAC_PROFILE: ${{ inputs['osac-profile'] }}
