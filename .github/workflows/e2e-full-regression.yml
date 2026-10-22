@@ -188,6 +188,49 @@ jobs:
           ref: ${{ inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
           persist-credentials: false
 
+      # When no components are built from source and no CLI version is
+      # pinned explicitly, resolve the osac mono-repo HEAD SHA so every
+      # artifact — test overlay, CLI binary, installer charts — is
+      # drawn from the exact same commit.  Without this, each clone
+      # independently resolves "main" at whatever HEAD happens to be
+      # at that instant, and the CLI comes from the latest *published*
+      # release (which can lag main by days), causing flag mismatches
+      # and test failures (OSAC-5356).
+      - name: Resolve osac SHA for version consistency
+        id: resolve-sha
+        if: inputs.osac-cli-version == ''
+        env:
+          TEST_REF: ${{ inputs.test-ref }}
+          TEST_REPOSITORY: ${{ inputs.test-repository }}
+          COMPONENTS_JSON: ${{ inputs.components }}
+        run: |
+          # Skip when the caller supplied a non-empty components array.
+          # jq handles whitespace variants ('[]', '[ ]', etc.).
+          comp_len=$(echo "${COMPONENTS_JSON}" | jq -r \
+            'if type == "array" then length else 0 end' 2>/dev/null || echo 0)
+          if [[ "${comp_len}" -gt 0 ]]; then
+            echo "Components specified; skipping SHA resolution"
+            exit 0
+          fi
+
+          # Resolve TEST_REF — may be a branch, tag, or commit SHA.
+          SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
+                  "refs/heads/${TEST_REF}" | awk '{print $1}')
+          if [[ -z "${SHA}" ]]; then
+            SHA=$(git ls-remote "https://github.com/${TEST_REPOSITORY}.git" \
+                    "refs/tags/${TEST_REF}" | awk '{print $1}')
+          fi
+          if [[ -z "${SHA}" ]] && [[ "${TEST_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            SHA="${TEST_REF}"
+          fi
+          if [[ -z "${SHA}" ]]; then
+            echo "::error::Failed to resolve SHA for ${TEST_REPOSITORY}@${TEST_REF}"
+            exit 1
+          fi
+          echo "Pinned ${TEST_REPOSITORY}@${TEST_REF} → ${SHA}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "PINNED_OSAC_SHA=${SHA}" >> "$GITHUB_ENV"
+
       - name: Overlay tests from osac mono-repo
         env:
           TEST_REF: ${{ inputs.test-ref }}
@@ -201,8 +244,11 @@ jobs:
           git init "$OSAC_CLONE_DIR"
           git -C "$OSAC_CLONE_DIR" sparse-checkout init --cone
           git -C "$OSAC_CLONE_DIR" sparse-checkout set tests
+          # Use SHA-pinned ref when available (OSAC-5356: no-build path
+          # version consistency), otherwise fall back to the branch name.
+          EFFECTIVE_REF="${PINNED_OSAC_SHA:-${TEST_REF}}"
           git -C "$OSAC_CLONE_DIR" fetch --depth 1 \
-            "https://github.com/${TEST_REPOSITORY}.git" "${TEST_REF}"
+            "https://github.com/${TEST_REPOSITORY}.git" "${EFFECTIVE_REF}"
           git -C "$OSAC_CLONE_DIR" checkout FETCH_HEAD
           # Overlay tests/ only. Do not copy pyproject.toml: osac's is named
           # osac-e2e and has no uv.lock, which breaks uv sync --frozen.
@@ -487,6 +533,12 @@ jobs:
             echo "::endgroup::"
           done
 
+      # In the regression workflow the CLI is extracted from the deployed
+      # fulfillment-service image (OSAC-5922) after OSAC is installed, so
+      # it always matches the running service.  No separate CLI build is
+      # needed here; SHA pinning still covers the test overlay and
+      # installer clone.
+
       - name: Prepare cluster prerequisites
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
@@ -512,6 +564,7 @@ jobs:
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
           INSTALLER_REF: ${{ inputs.installer-ref }}
           INSTALLER_REPO: ${{ inputs.installer-repo }}
+          TEST_REPOSITORY: ${{ inputs.test-repository }}
         run: |
           set -o pipefail
           if ! command -v helm &>/dev/null; then
@@ -536,9 +589,15 @@ jobs:
           # clone, and a second git-clone at the branch name would race.
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
           PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
+          # Fall back to the no-build-path SHA resolved earlier (OSAC-5356).
+          # Guard: only when installer-repo is the same repo the SHA came
+          # from — it may not exist in a different repository.
+          if [[ -z "${PINNED_SHA}" ]] && [[ "${INSTALLER_REPO}" == "${TEST_REPOSITORY}" ]]; then
+            PINNED_SHA="${PINNED_OSAC_SHA:-}"
+          fi
 
           if [[ -n "${PINNED_SHA}" ]]; then
-            echo "Cloning installer at component-resolved commit (${PINNED_SHA})."
+            echo "Cloning installer at pinned commit (${PINNED_SHA})."
             git init "${INSTALLER_CLONE_DIR}"
             git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 \
               "https://github.com/${INSTALLER_REPO}.git" "${PINNED_SHA}"
