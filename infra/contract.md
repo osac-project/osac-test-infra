@@ -29,7 +29,7 @@ After `deploy-osac`, write `.env.infra` in the backend directory with the enviro
 ```
 KUBECONFIG=<path>
 OSAC_NAMESPACE=<namespace>
-OSAC_VM_KUBECONFIG=<path>          # required by the vmaas suite contract
+OSAC_VM_KUBECONFIG=<path>          # required by the vmaas and vmaas_networking suite contracts
 OSAC_PULL_SECRET_PATH=<path>       # commonly required by caas
 ```
 

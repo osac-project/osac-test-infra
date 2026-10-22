@@ -14,12 +14,12 @@ SUITE ?= caas
 OSAC_NAMESPACE ?= osac-e2e-ci
 KUBECONFIG ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
-OSAC_PROFILE ?= $(if $(filter vmaas,$(SUITE)),cudn-evpn-netris-test,$(if $(filter full,$(SUITE)),full-ci,caas-ci))
+OSAC_PROFILE ?= $(if $(filter vmaas vmaas_networking,$(SUITE)),cudn-evpn-netris-test,$(if $(filter full,$(SUITE)),full-ci,caas-ci))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 
-# VMaaS and full-ci configure the OCP host as an EVPN VTEP; legacy suites keep their established root path.
-OCP_KUBECONFIG = $(if $(filter vmaas full,$(SUITE)),$(KUBECONFIG),/root/.kube/config)
-VMAAS_UNDERLAY_EXTRA = $(if $(filter vmaas full,$(SUITE)),-e ocp_underlay_enabled=true,)
+# VMaaS selectors and full-ci configure the OCP host as an EVPN VTEP; legacy suites keep their established root path.
+OCP_KUBECONFIG = $(if $(filter vmaas vmaas_networking full,$(SUITE)),$(KUBECONFIG),/root/.kube/config)
+VMAAS_UNDERLAY_EXTRA = $(if $(filter vmaas vmaas_networking full,$(SUITE)),-e ocp_underlay_enabled=true,)
 OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
 
 # ─── Convenience targets ───────────────────────────────────────────
@@ -63,7 +63,7 @@ deploy-osac:
 	@printf '%s\n' \
 		'KUBECONFIG=$(OCP_KUBECONFIG)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas full,$(SUITE)),$(OSAC_VM_KUBECONFIG),$(OCP_KUBECONFIG))' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas vmaas_networking full,$(SUITE)),$(OSAC_VM_KUBECONFIG),$(OCP_KUBECONFIG))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
 
@@ -78,6 +78,17 @@ gather-vmaas:
 
 destroy-vmaas:
 	@echo "VMaaS setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
+
+setup-vmaas_networking: SUITE = vmaas_networking
+setup-vmaas_networking:
+	ansible-playbook playbooks/setup-vmaas.yml $(OCP_ANSIBLE_EXTRA)
+
+gather-vmaas_networking: SUITE = vmaas_networking
+gather-vmaas_networking:
+	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
+
+destroy-vmaas_networking:
+	@echo "VMaaS networking setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
 
 setup-caas:
 	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
@@ -302,6 +313,7 @@ health-check:
 .PHONY: deploy deploy-fast \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
         setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
+		setup-vmaas_networking gather-vmaas_networking destroy-vmaas_networking \
 		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
 		destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \
