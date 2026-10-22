@@ -117,7 +117,13 @@ The focused VMaaS Netris networking E2E invocation is:
 make e2e INFRA=netris SUITE=vmaas_networking OSAC_DEPLOY_MODE=fresh
 ```
 
-`SUITE=vmaas_networking` selects the `cudn-evpn-netris-test` OSAC profile by default and runs only the `requires_netris_vmaas` tests from the OSAC mono-repo. `SUITE=vmaas` uses the same profile and runs the VMaaS test tree while excluding that Netris-only marker. Set `OSAC_PROFILE=cudn-evpn-netris-test` explicitly to pin the profile. It selects the CUDN EVPN and Netris managers; `deploy-infra` and `deploy-ocp` provision the cluster-side networking prerequisites.
+`SUITE=vmaas_networking` selects the `cudn-evpn-netris-test` OSAC profile by default and runs only `tests/e2e/networking/vmaas` with the `requires_netris` and `requires_netris_vmaas` markers. `SUITE=vmaas` uses the same profile and runs the VMaaS test tree while excluding the common `requires_netris` marker. Set `OSAC_PROFILE=cudn-evpn-netris-test` explicitly to pin the profile. It selects the CUDN EVPN and Netris managers; `deploy-infra` and `deploy-ocp` provision the cluster-side networking prerequisites.
+
+The focused BMaaS Netris networking invocation is:
+
+`make e2e INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci OSAC_DEPLOY_MODE=fresh`
+
+`SUITE=bmaas_networking` runs only `tests/e2e/networking/bmaas` with the `requires_netris` and `requires_netris_bmaas` markers. The standard BMaaS suite excludes all Netris-marked tests.
 
 ### Full-profile E2E
 
@@ -125,7 +131,7 @@ make e2e INFRA=netris SUITE=vmaas_networking OSAC_DEPLOY_MODE=fresh
 make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
 ```
 
-`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` prepares CaaS and BMaaS resources, then runs the VMaaS prerequisite check. `test-full` runs the serial OSAC mono-repo E2E set with its configured exclusions; it includes the `requires_netris_full` BMI/ComputeInstance shared-subnet connectivity test and excludes the dedicated `requires_netris_vmaas` cases. The Netris PR workflow exposes focused `bmaas-netris` and `vmaas-netris` checks; `full` is a backend suite/profile selector, not a third Netris PR check.
+`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` prepares CaaS and BMaaS resources, then runs the VMaaS prerequisite check. `test-full` runs the serial OSAC mono-repo E2E set with its configured exclusions; it includes only the `requires_netris_stretched` BMI/ComputeInstance shared-subnet test and excludes the dedicated VMaaS and BMaaS Netris cases. The Netris PR workflow exposes focused `bmaas-netris` and `vmaas-netris` checks; `full` is a backend suite/profile selector, not a third Netris PR check.
 
 VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
 

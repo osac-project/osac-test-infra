@@ -15,11 +15,11 @@ format:
 
 test-vmaas:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/vmaas/ -v -m "not requires_netris_vmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/vmaas.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/vmaas/ -v -m "not requires_netris" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/vmaas.xml
 
 test-vmaas-networking test-vmaas_networking:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/vmaas/regression/networking/ -x -n 0 -v --tb=short -m "requires_netris_vmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/vmaas-networking.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/vmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_vmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/vmaas-networking.xml
 
 test-caas:
 	mkdir -p $(REPORTS_DIR)
@@ -39,13 +39,14 @@ OSAC_MONO_DIR ?= /opt/osac
 
 test-bmaas-networking test-bmaas_networking:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/regression/networking/ -x -n 0 -v --tb=short -m "not requires_netris_full" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/bmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_bmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
 
-# full-ci enables all services; keep shared lab hardware serial and apply the known full-ci exclusions.
-FULL_TEST_FILTER = not TestBmaasNetworking and not TestCrossTenantBmaasNetworking and not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name and not test_disabled_services and not external_ip and not requires_netris_vmaas
+# full-ci enables all services. Run regular E2E plus only the stretched Netris test; keep the full run serial.
+FULL_TEST_MARKER = not requires_netris or requires_netris_stretched
+FULL_TEST_FILTER = not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name and not test_disabled_services and not external_ip
 test-full:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -n 0 -v --tb=short -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -n 0 -v --tb=short -m "$(FULL_TEST_MARKER)" -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
 
 test-metering:
 	mkdir -p $(REPORTS_DIR)
