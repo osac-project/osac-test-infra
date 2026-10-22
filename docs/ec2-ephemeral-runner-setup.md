@@ -166,7 +166,7 @@ the new values and `vault-sync.sh` again.
 ## Step 6: Dispatch a Netris workflow
 
 From the GitHub Actions UI, dispatch **E2E BMaaS Netris Full Install** to run
-`bmaas_networking` with the `bmaas-ci` OSAC profile, or **E2E VMaaS Netris Full Install**
+`bmaas_networking` with the `bmaas-ci` OSAC profile, or **E2E VMaaS Networking Netris Full Install**
 to run `vmaas` with the `cudn-evpn-netris-test` profile. The same workflows
 can be triggered by their matching PR labels and nightly schedules.
 `instance-type` (default `c5n.metal`) and `aws-region` (default `us-east-1`)

@@ -38,6 +38,6 @@ jobs:
     manual_only: true
   e2e-vmaas-netris:
     kind: e2e
-    check: "E2E / VMaaS Netris Full Install"
+    check: "E2E / VMaaS Networking Netris Full Install"
     suite: vmaas-netris
     manual_only: true
