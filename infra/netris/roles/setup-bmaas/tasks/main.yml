@@ -625,7 +625,7 @@
         hardware:
           cpu:
             cores: "{{ bmaas_vm_vcpu | int }}"
-            architecture: x86_64
+            architecture: amd64
             threads_per_core: 1
           memory:
             total_gb: "{{ (bmaas_vm_memory_mb | int / 1024) | int }}"
