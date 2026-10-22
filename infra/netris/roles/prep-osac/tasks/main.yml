@@ -135,7 +135,7 @@
   register: _values_raw
 
 - name: Read full-ci infrastructure values
-  when: suite | default('') == 'full'
+  when: suite | default('') in ['full', 'stretched_networking']
   ansible.builtin.slurp:
     src: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
   register: _full_ci_infra_values_raw
@@ -244,7 +244,7 @@
 
 
 - name: Add Netris CUDN EVPN manager settings to full-ci
-  when: suite | default('') == 'full'
+  when: suite | default('') in ['full', 'stretched_networking']
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ _values_overrides | combine({
@@ -279,7 +279,7 @@
          }, recursive=true) }}
 
 - name: Validate full-ci services and Netris EVPN overlay
-  when: suite | default('') == 'full'
+  when: suite | default('') in ['full', 'stretched_networking']
   ansible.builtin.assert:
     that:
       - _full_ci_values.global.services.caas.enabled | bool
@@ -298,7 +298,7 @@
       - _full_ci_values.aap.instanceGroups.storageFulfillment.enabled | bool
       - _full_ci_values.metering.echoAdapter.enabled | bool
     fail_msg: >-
-      SUITE=full requires the full-ci profile services plus the default NetworkClass
+      SUITE=full or SUITE=stretched_networking requires the full-ci profile services plus the default NetworkClass
       pair (netris, cudn_evpn). The full-ci EVPN overlay was not applied correctly.
   vars:
     _full_ci_values: "{{ (_values_raw.content | b64decode | from_yaml) | combine(_values_overrides, recursive=true) }}"
@@ -337,7 +337,7 @@
   no_log: true
 
 - name: Enable full-ci Keycloak test fixtures before the infrastructure install
-  when: suite | default('') == 'full'
+  when: suite | default('') in ['full', 'stretched_networking']
   ansible.builtin.copy:
     dest: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
     content: >-

@@ -52,17 +52,18 @@ These are the Netris backend's supported `SUITE` selectors (see `infra/netris/ca
 | **caas** | Cluster lifecycle and discovery setup |
 | **bmaas** | BareMetalInstance setup and E2E |
 | **bmaas_networking** | BMaaS networking E2E |
+| **stretched_networking** | Shared-subnet connectivity between a ComputeInstance and BareMetalInstance |
 | **full** | Broad serial OSAC E2E run on `full-ci`, including the shared-subnet BMI/ComputeInstance EVPN test |
 
 ### Compatibility Matrix
 
 Each backend declares its supported `SUITE` selectors in a `capabilities` file. The system validates the selected value before deployment starts.
 
-| Backend | vmaas | vmaas_networking | caas | bmaas | bmaas_networking | full |
-|---------|:-----:|:----------------:|:----:|:-----:|:----------------:|:----:|
-| netris  | yes   | yes              | yes  | yes   | yes              | yes  |
+| Backend | vmaas | vmaas_networking | caas | bmaas | bmaas_networking | stretched_networking | full |
+|---------|:-----:|:----------------:|:----:|:-----:|:----------------:|:--------------------:|:----:|
+| netris  | yes   | yes              | yes  | yes   | yes              | yes                  | yes  |
 
-The Netris PR workflow exposes two checks: `vmaas-netris` (VMaaS Networking Netris) calls `e2e-vmaas-netris-full-install.yml` with `SUITE=vmaas_networking` and the focused `cudn-evpn-netris-test` profile; `bmaas-netris` calls `e2e-bmaas-netris-full-install.yml` with `SUITE=bmaas_networking` and `bmaas-ci`. `SUITE=full` is the backend's full-profile path, not a third Netris PR check. The generic `vmaas` and `full` selectors exclude the `requires_netris_vmaas` marker; only `vmaas_networking` selects those tests. The `vmaas`, `vmaas_networking`, and `full` paths register the `cudn_evpn` Kubernetes manager and Netris fabric manager, so VM and bare-metal instances can share a subnet. `full` keeps the `full-ci` services enabled and overlays the same Netris EVPN NetworkClass. The OCP target must be converged OCP 4.22 with OVNKubernetes; its platform type may be `None`. ExternalIP tests additionally require a separately provisioned and acknowledged return path for `172.27.0.0/16`.
+The Netris PR workflow exposes three manual checks: `/test vmaas-netris` calls `e2e-vmaas-netris-full-install.yml` with `SUITE=vmaas_networking` and the focused `cudn-evpn-netris-test` profile; `/test bmaas-netris` calls `e2e-bmaas-netris-full-install.yml` with `SUITE=bmaas_networking` and `bmaas-ci`; `/test stretched-netris` calls `e2e-stretched-netris-full-install.yml` with `SUITE=stretched_networking` and `full-ci` to test shared-subnet VM↔BM connectivity. `SUITE=full` still runs the broad full-profile suite and includes the stretched test, while `SUITE=stretched_networking` runs that test alone. The generic `vmaas` and `full` selectors exclude the `requires_netris_vmaas` marker; only `vmaas_networking` selects those tests. The `vmaas`, `vmaas_networking`, `stretched_networking`, and `full` paths register the `cudn_evpn` Kubernetes manager and Netris fabric manager, so VM and bare-metal instances can share a subnet. `full` and `stretched_networking` keep the `full-ci` services enabled and overlay the same Netris EVPN NetworkClass. The OCP target must be converged OCP 4.22 with OVNKubernetes; its platform type may be `None`. ExternalIP tests additionally require a separately provisioned and acknowledged return path for `172.27.0.0/16`.
 
 ### Backend Setup: Netris
 

@@ -109,7 +109,7 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 
 ### VMaaS and BMaaS shared-subnet networking
 
-The Netris VMaaS and full paths use the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `SUITE=vmaas`, `SUITE=vmaas_networking`, or `SUITE=full`, `deploy-infra` reuses h00's Netris-managed leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay and enables underlay on that link; leaf-0's `eth9` link remains the `br-ex` data path. h00's Linux interface names are resolved from the MAC addresses correlated across Netris, the leaf interface, and the libvirt tunnel, so the guest NIC enumeration may change without changing which path carries data or underlay. It sets h00's server ASN and EVPN-VTEP inventory role so Netris can generate the leaf-side peer from the managed link. `deploy-ocp` configures OVN route advertisements, an unmanaged VTEP, and OCP-side FRR; it does not install or rely on the Netris host agent. No standalone VLAN-backed BGP object is created for the routed `/31`. The OSAC `cudn-evpn-netris-test` profile enables both VMaaS and BMaaS and selects Netris plus CUDN EVPN, allowing both instance types to attach to one subnet. BMaaS continues to use the Netris server-port names and its separate per-BMH MAC mapping for `eth9`/`eth10`; assigning h00's `eth10` to the underlay does not change h01–h03 provisioning NIC selection.
+The Netris VMaaS and full paths use the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `SUITE=vmaas`, `SUITE=vmaas_networking`, `SUITE=stretched_networking`, or `SUITE=full`, `deploy-infra` reuses h00's Netris-managed leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay and enables underlay on that link; leaf-0's `eth9` link remains the `br-ex` data path. h00's Linux interface names are resolved from the MAC addresses correlated across Netris, the leaf interface, and the libvirt tunnel, so the guest NIC enumeration may change without changing which path carries data or underlay. It sets h00's server ASN and EVPN-VTEP inventory role so Netris can generate the leaf-side peer from the managed link. `deploy-ocp` configures OVN route advertisements, an unmanaged VTEP, and OCP-side FRR; it does not install or rely on the Netris host agent. No standalone VLAN-backed BGP object is created for the routed `/31`. The OSAC `cudn-evpn-netris-test` profile enables both VMaaS and BMaaS and selects Netris plus CUDN EVPN, allowing both instance types to attach to one subnet. BMaaS continues to use the Netris server-port names and its separate per-BMH MAC mapping for `eth9`/`eth10`; assigning h00's `eth10` to the underlay does not change h01–h03 provisioning NIC selection.
 
 The focused VMaaS Netris networking E2E invocation is:
 
@@ -125,13 +125,21 @@ The focused BMaaS Netris networking invocation is:
 
 `SUITE=bmaas_networking` runs only `tests/e2e/networking/bmaas` with the `requires_netris` and `requires_netris_bmaas` markers. The standard BMaaS suite excludes all Netris-marked tests.
 
+The stretched VMaaS↔BMaaS Netris invocation is:
+
+```bash
+make e2e INFRA=netris SUITE=stretched_networking OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
+```
+
+`SUITE=stretched_networking` uses the `full-ci` profile, prepares both CaaS and BMaaS prerequisites plus the CUDN EVPN underlay, and runs only `tests/e2e/networking/stretched` with the generic `requires_stretched_networking` marker. The same test is also included in `SUITE=full`.
+
 ### Full-profile E2E
 
 ```bash
 make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
 ```
 
-`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` prepares CaaS and BMaaS resources, then runs the VMaaS prerequisite check. `test-full` runs the serial OSAC mono-repo E2E set with its configured exclusions; it includes only the `requires_netris_stretched` BMI/ComputeInstance shared-subnet test and excludes the dedicated VMaaS and BMaaS Netris cases. The Netris PR workflow exposes focused `bmaas-netris` and `vmaas-netris` checks; `full` is a backend suite/profile selector, not a third Netris PR check.
+`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` prepares CaaS and BMaaS resources, then runs the VMaaS prerequisite check. `test-full` runs the serial OSAC mono-repo E2E set with its configured exclusions; it includes only the generic `requires_stretched_networking` shared-subnet test and excludes the dedicated VMaaS and BMaaS Netris cases. The Netris PR workflow exposes `bmaas-netris`, `vmaas-netris`, and `stretched-netris`; the stretched check runs only the shared-subnet BMI/ComputeInstance test.
 
 VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
 
