@@ -41,6 +41,9 @@
 - name: Initialize optional OCP underlay preflight state
   ansible.builtin.set_fact:
     _ocp_underlay_failures: []
+
+- name: Initialize optional OCP underlay conflict ranges
+  ansible.builtin.set_fact:
     _ocp_underlay_conflict_ranges: >-
       {{
         [
@@ -61,6 +64,7 @@
         ]
         + (ew_fabric_server_subnets if ew_fabric_enable | bool else [])
       }}
+  when: ocp_underlay_enabled | bool
 
 - name: Validate optional OCP underlay CIDR syntax
   ansible.builtin.set_fact:

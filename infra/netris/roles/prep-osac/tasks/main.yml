@@ -143,15 +143,15 @@
 - name: Validate the CUDN EVPN VMaaS profile contract
   ansible.builtin.assert:
     that:
-      - _selected_profile_values.global.services.vmaas.enabled | bool
-      - _selected_profile_values.operator.networkManagers.enabled | bool
-      - _selected_profile_values.operator.networkManagers.fabricManagers.netris.enabled | bool
-      - _selected_profile_values.operator.networkManagers.k8sManagers.cudn_evpn.enabled | bool
-      - _selected_profile_values.global.expertOverrides.networkClass | bool
-      - _selected_profile_values.networkClass.enabled | bool
-      - _selected_profile_values.networkClass.k8sManager == 'cudn_evpn'
-      - _selected_profile_values.networkClass.fabricManager == 'netris'
-      - _selected_profile_values.networkClass.isDefault | bool
+      - _selected_vmaas.enabled | default(false) | bool
+      - _selected_network_managers.enabled | default(false) | bool
+      - _selected_fabric_netris.enabled | default(false) | bool
+      - _selected_k8s_cudn_evpn.enabled | default(false) | bool
+      - _selected_expert_overrides.networkClass | default(false) | bool
+      - _selected_network_class.enabled | default(false) | bool
+      - _selected_network_class.k8sManager | default('') == 'cudn_evpn'
+      - _selected_network_class.fabricManager | default('') == 'netris'
+      - _selected_network_class.isDefault | default(false) | bool
     fail_msg: >-
       Profile {{ osac_profile }} must enable VMaaS, register Netris and cudn_evpn,
       and explicitly select the default NetworkClass pair (netris, cudn_evpn).
@@ -159,6 +159,17 @@
       overwrite NetworkClass settings.
   vars:
     _selected_profile_values: "{{ _values_raw.content | b64decode | from_yaml }}"
+    _selected_global: "{{ _selected_profile_values.global | default({}) }}"
+    _selected_services: "{{ _selected_global.services | default({}) }}"
+    _selected_vmaas: "{{ _selected_services.vmaas | default({}) }}"
+    _selected_profile_operator: "{{ _selected_profile_values.operator | default({}) }}"
+    _selected_network_managers: "{{ _selected_profile_operator.networkManagers | default({}) }}"
+    _selected_fabric_managers: "{{ _selected_network_managers.fabricManagers | default({}) }}"
+    _selected_fabric_netris: "{{ _selected_fabric_managers.netris | default({}) }}"
+    _selected_k8s_managers: "{{ _selected_network_managers.k8sManagers | default({}) }}"
+    _selected_k8s_cudn_evpn: "{{ _selected_k8s_managers.cudn_evpn | default({}) }}"
+    _selected_expert_overrides: "{{ _selected_global.expertOverrides | default({}) }}"
+    _selected_network_class: "{{ _selected_profile_values.networkClass | default({}) }}"
   when: osac_profile == 'cudn-evpn-netris-test'
 
 # Operator enablement (cnv, mce, metallb) is intentionally NOT overridden here:
