@@ -11,14 +11,33 @@ set -euo pipefail
 : "${CLONE_NAME:?CLONE_NAME is required}"
 : "${E2E_IMAGE:?E2E_IMAGE is required}"
 
-# --- Destroy agent VM (created by setup-caas-agents.sh) ---
+# --- Destroy legacy agent VM (created by old setup-caas-agents.sh) ---
 AGENT_VM_NAME="agent-${CLONE_NAME}"
 AGENT_VM_STORAGE_DIR="${AGENT_VM_STORAGE_DIR:-/data/osac-storage}"
 AGENT_VIRSH="virsh -c qemu:///system"
-echo "Destroying agent VM '${AGENT_VM_NAME}'..."
+echo "Destroying legacy agent VM '${AGENT_VM_NAME}'..."
 ${AGENT_VIRSH} destroy "${AGENT_VM_NAME}" 2>/dev/null || true
 ${AGENT_VIRSH} undefine "${AGENT_VM_NAME}" 2>/dev/null || true
 rm -f "${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}.qcow2" "${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}-discovery.iso"
+
+# --- Destroy CaaS agent VMs (created by .github/scripts/setup-caas-agents.sh) ---
+# NOTE: naming convention must match setup-caas-agents.sh's VM_PREFIX.
+CAAS_AGENT_VM_PREFIX="caas-agent-${CLONE_NAME}-"
+CAAS_AGENT_VM_NAMES=$(${AGENT_VIRSH} list --all --name 2>/dev/null | grep "^${CAAS_AGENT_VM_PREFIX}" || true)
+if [[ -n "${CAAS_AGENT_VM_NAMES}" ]]; then
+  echo "Cleaning up CaaS agent VMs..."
+  for VM_NAME in ${CAAS_AGENT_VM_NAMES}; do
+    ${AGENT_VIRSH} destroy "${VM_NAME}" 2>/dev/null || true
+    ${AGENT_VIRSH} undefine "${VM_NAME}" --nvram 2>/dev/null || true
+    echo "  Removed VM: ${VM_NAME}"
+  done
+fi
+
+CAAS_AGENT_DISK_DIR="/tmp/caas-agent-disks-${CLONE_NAME}"
+if [[ -d "${CAAS_AGENT_DISK_DIR}" ]]; then
+  echo "Removing CaaS agent disk directory ${CAAS_AGENT_DISK_DIR}..."
+  rm -rf "${CAAS_AGENT_DISK_DIR}"
+fi
 
 # --- Destroy cluster clone ---
 echo "Destroying clone '${CLONE_NAME}'..."
@@ -179,5 +198,21 @@ if [[ -d "${SUSHY_VMEDIA_TMP}" ]]; then
   BMH_LEAKED=true
 fi
 if [[ "${BMH_LEAKED}" == "true" ]]; then
+  exit 1
+fi
+
+# --- Verify CaaS agent cleanup ---
+CAAS_LEAKED=false
+REMAINING_CAAS_VMS=$(${VIRSH} list --all --name 2>/dev/null | grep "^${CAAS_AGENT_VM_PREFIX}" || true)
+if [[ -n "${REMAINING_CAAS_VMS}" ]]; then
+  echo "ERROR: CaaS agent VMs still present after cleanup:" >&2
+  echo "${REMAINING_CAAS_VMS}" >&2
+  CAAS_LEAKED=true
+fi
+if [[ -d "${CAAS_AGENT_DISK_DIR}" ]]; then
+  echo "ERROR: CaaS agent disk directory '${CAAS_AGENT_DISK_DIR}' still present after cleanup" >&2
+  CAAS_LEAKED=true
+fi
+if [[ "${CAAS_LEAKED}" == "true" ]]; then
   exit 1
 fi

@@ -73,8 +73,10 @@ on:
         description: >-
           CaaS agent flow mode: "hot-pool" (default, legacy) or "cluster-namespace"
           (Option C — agents in ClusterOrder namespace, osac owns approval).
-          Only meaningful for Netris/agentless-net backends; the cluster-tool
-          path delegates agent setup to osac-installer/osac-operator.
+          In hot-pool mode osac-operator manages agents. In cluster-namespace
+          mode the workflow boots agent VMs from the discovery ISO on the
+          cluster-tool libvirt network and creates them in the ClusterOrder
+          namespace.
         required: false
         type: string
         default: "hot-pool"
@@ -746,27 +748,76 @@ jobs:
                 \"AWS_SECRET_ACCESS_KEY\":\"${AWS_SECRET_ACCESS_KEY}\"
             }}"
 
-      - name: Setup CaaS agent
+      - name: Setup CaaS agents
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          CAAS_AGENT_FLOW: ${{ inputs.caas-agent-flow }}
+          OSAC_PULL_SECRET_PATH: ${{ runner.temp }}/pull-secret.json
         run: |
-          # INSTALLER_DIR is resolved and persisted by the earlier install step (via $GITHUB_ENV)
-
-          # OSAC-4134 removed this script from the installer: CaaS agent
-          # provisioning moved from CI to osac-operator. When the installer
-          # under test no longer ships the script, the install manages its
-          # own agents and this step is a no-op.
-          if [ ! -f "${INSTALLER_DIR}/scripts/setup-caas-agents.sh" ]; then
-            echo "setup-caas-agents.sh not found in ${INSTALLER_DIR}; agent setup owned by osac-operator -- skipping"
+          if [[ "${CAAS_AGENT_FLOW:-hot-pool}" == "hot-pool" ]]; then
+            echo "hot-pool agent flow: osac-operator manages agents — skipping CI agent setup"
             exit 0
           fi
 
-          LIBVIRT_NETWORK="test-infra-net-${CLONE_NAME}" \
-          INSTALLER_NAMESPACE="${INSTALLER_NAMESPACE}" \
-          AGENT_VM_NAME="agent-${CLONE_NAME}" \
-          AGENT_VM_STORAGE_DIR="/data/osac-storage" \
-              bash "${INSTALLER_DIR}/scripts/setup-caas-agents.sh"
+          # cluster-namespace flow: boot agent VMs from the discovery ISO
+          # on the cluster-tool libvirt network.  Pre-order phase registers
+          # the host type only; the full agent boot happens after the
+          # ClusterOrder namespace is discovered (see the "Boot agents in
+          # ClusterOrder namespace" step below).
+          bash .github/scripts/setup-caas-agents.sh
+
+      # cluster-namespace flow, second phase: start a background watcher
+      # that polls for a ClusterOrder namespace (created by the E2E test
+      # inside the container) and boots agent VMs from the discovery ISO
+      # as soon as the namespace appears.  The watcher runs on the HOST
+      # while the E2E tests run in their container — the tests create the
+      # ClusterOrder via the gRPC API, the controller creates the
+      # namespace, the watcher detects it and boots the agents, and the
+      # tests wait for the cluster to reach READY.  This mirrors the
+      # agentless-net test-e2e.sh flow (lines 97-122) adapted for the
+      # split host/container execution model.
+      - name: Start agent watcher for ClusterOrder namespace
+        if: inputs.caas-agent-flow == 'cluster-namespace'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          CAAS_AGENT_FLOW: cluster-namespace
+          OSAC_PULL_SECRET_PATH: ${{ runner.temp }}/pull-secret.json
+        run: |
+          WATCHER_LOG="${RUNNER_TEMP}/agent-watcher.log"
+          nohup bash -c '
+            set -euo pipefail
+            echo "==> Agent watcher started, polling for ClusterOrder namespace..."
+            elapsed=0
+            CLUSTER_ORDER_NS=""
+            while true; do
+                # Look for any namespace labelled with a ClusterOrder name.
+                CLUSTER_ORDER_NS=$(oc get ns \
+                    -l "osac.openshift.io/clusterorder" \
+                    --no-headers 2>/dev/null \
+                    | awk "{print \$1}" | head -1) || true
+                [[ -n "${CLUSTER_ORDER_NS}" ]] && break
+                sleep 10; elapsed=$((elapsed + 10))
+                if [[ "${elapsed}" -ge 1200 ]]; then
+                    echo "WARNING: Agent watcher timed out after ${elapsed}s without finding a ClusterOrder namespace"
+                    exit 0
+                fi
+                echo "  ${elapsed}s elapsed — waiting for ClusterOrder namespace..."
+            done
+            echo "==> ClusterOrder namespace discovered: ${CLUSTER_ORDER_NS}"
+
+            echo "==> Booting agents in ClusterOrder namespace..."
+            CAAS_AGENT_FLOW="cluster-namespace" \
+            CAAS_CLUSTER_ORDER_NAMESPACE="${CLUSTER_ORDER_NS}" \
+                bash .github/scripts/setup-caas-agents.sh
+            echo "==> Agent watcher: agent boot complete"
+          ' > "${WATCHER_LOG}" 2>&1 &
+
+          WATCHER_PID=$!
+          echo "AGENT_WATCHER_PID=${WATCHER_PID}" >> "$GITHUB_ENV"
+          echo "AGENT_WATCHER_LOG=${WATCHER_LOG}" >> "$GITHUB_ENV"
+          echo "Agent watcher started (PID ${WATCHER_PID}), log: ${WATCHER_LOG}"
 
       - name: Create test adapter route for metering tests
         id: metering-adapter
@@ -872,6 +923,23 @@ jobs:
             "${E2E_IMAGE}" \
             pytest ${TEST_ARGS} "${FILTER_ARGS[@]}" "${MARKER_ARGS[@]}" \
               --junitxml=/tmp/test-output/junit.xml -v
+
+      - name: Collect agent watcher results
+        if: always() && env.AGENT_WATCHER_PID != ''
+        run: |
+          echo "::group::Agent watcher log"
+          if [[ -f "${AGENT_WATCHER_LOG}" ]]; then
+            cat "${AGENT_WATCHER_LOG}"
+          else
+            echo "No agent watcher log file found."
+          fi
+          echo "::endgroup::"
+          # If the watcher is still running (test timed out before agents
+          # registered), kill it to avoid leaking the process.
+          if kill -0 "${AGENT_WATCHER_PID}" 2>/dev/null; then
+            echo "Stopping agent watcher (PID ${AGENT_WATCHER_PID})..."
+            kill "${AGENT_WATCHER_PID}" 2>/dev/null || true
+          fi
 
       - name: Gather artifacts
         if: always()
