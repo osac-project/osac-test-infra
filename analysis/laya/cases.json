@@ -1,0 +1,1286 @@
+[
+  {
+    "pr": 1221,
+    "run_id": 36036689098,
+    "url": "https://github.com/osac-project/osac/actions/runs/36036689098",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3468: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-8zvvs-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3468",
+      "pod-osac-aap-bootstrap-8zvvs-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1214,
+    "run_id": 36035665623,
+    "url": "https://github.com/osac-project/osac/actions/runs/36035665623",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3491: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-brb77-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3491",
+      "pod-osac-aap-bootstrap-brb77-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1215,
+    "run_id": 36016167519,
+    "url": "https://github.com/osac-project/osac/actions/runs/36016167519",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3476: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-7sc77-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3476",
+      "pod-osac-aap-bootstrap-7sc77-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1090,
+    "run_id": 36009034925,
+    "url": "https://github.com/osac-project/osac/actions/runs/36009034925",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4814: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-4bdmp-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4814",
+      "pod-osac-aap-bootstrap-4bdmp-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1120,
+    "run_id": 36025916120,
+    "url": "https://github.com/osac-project/osac/actions/runs/36025916120",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3310: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-7lbxh-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3310",
+      "pod-osac-aap-bootstrap-7lbxh-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1199,
+    "run_id": 36149287001,
+    "url": "https://github.com/osac-project/osac/actions/runs/36149287001",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3442: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-4w7cg-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3442",
+      "pod-osac-aap-bootstrap-4w7cg-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1202,
+    "run_id": 36022121003,
+    "url": "https://github.com/osac-project/osac/actions/runs/36022121003",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3469: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-4vcsh-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3469",
+      "pod-osac-aap-bootstrap-4vcsh-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1152,
+    "run_id": 36021863244,
+    "url": "https://github.com/osac-project/osac/actions/runs/36021863244",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3371: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-4mbfh-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3371",
+      "pod-osac-aap-bootstrap-4mbfh-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1204,
+    "run_id": 36020712543,
+    "url": "https://github.com/osac-project/osac/actions/runs/36020712543",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4716: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-6vqt2-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4716",
+      "pod-osac-aap-bootstrap-6vqt2-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1143,
+    "run_id": 36003966018,
+    "url": "https://github.com/osac-project/osac/actions/runs/36003966018",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3443: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-65cdc-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy\nevents.txt:266: Kubernetes FailedMount: non-existent secret key",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3443",
+      "pod-osac-aap-bootstrap-65cdc-bootstrap.log:221",
+      "events.txt:266"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1219,
+    "run_id": 36017843690,
+    "url": "https://github.com/osac-project/osac/actions/runs/36017843690",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3457: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-b7ftx-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3457",
+      "pod-osac-aap-bootstrap-b7ftx-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1191,
+    "run_id": 36014802243,
+    "url": "https://github.com/osac-project/osac/actions/runs/36014802243",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4734: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-26knl-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4734",
+      "pod-osac-aap-bootstrap-26knl-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 983,
+    "run_id": 36014299696,
+    "url": "https://github.com/osac-project/osac/actions/runs/36014299696",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4797: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-jvwfl-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4797",
+      "pod-osac-aap-bootstrap-jvwfl-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1198,
+    "run_id": 36013272859,
+    "url": "https://github.com/osac-project/osac/actions/runs/36013272859",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3411: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-g28mc-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3411",
+      "pod-osac-aap-bootstrap-g28mc-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 975,
+    "run_id": 36025780172,
+    "url": "https://github.com/osac-project/osac/actions/runs/36025780172",
+    "split": "development",
+    "label": "build_dependency",
+    "root_group": "go_version",
+    "label_basis": "go.work 1.26.3 conflicts with modules requiring Go >=1.27",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:701: Go module dependency resolution failed",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:701"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1222,
+    "run_id": 36023169923,
+    "url": "https://github.com/osac-project/osac/actions/runs/36023169923",
+    "split": "development",
+    "label": "ci_environment",
+    "root_group": "fork_authorization",
+    "label_basis": "fork PR blocked until /ok-to-test",
+    "artifact": false,
+    "state": {
+      "failed_step": "Authorize fork PR",
+      "job_error": "job.log:391: Fork PR blocked; /ok-to-test required",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:391"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1072,
+    "run_id": 35996210946,
+    "url": "https://github.com/osac-project/osac/actions/runs/35996210946",
+    "split": "development",
+    "label": "source_checkout",
+    "root_group": "aap_project_checkout",
+    "label_basis": "AAP project update git checkout cannot read requested tree",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4660: Install timed out",
+      "pod_error": "aap-jobs/project-update-1-failed.txt:5: AAP project update could not checkout Git source",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4660",
+      "aap-jobs/project-update-1-failed.txt:5"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 987,
+    "run_id": 35986632526,
+    "url": "https://github.com/osac-project/osac/actions/runs/35986632526",
+    "split": "development",
+    "label": "app_or_e2e",
+    "root_group": "metering_missing",
+    "label_basis": "E2E teardown times out waiting for resource.deleted metering event; underlying cause unresolved",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:5288: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:5288",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1049,
+    "run_id": 35136466248,
+    "url": "https://github.com/osac-project/osac/actions/runs/35136466248",
+    "split": "development",
+    "label": "ci_environment",
+    "root_group": "fork_authorization",
+    "label_basis": "fork PR blocked until /ok-to-test",
+    "artifact": false,
+    "state": {
+      "failed_step": "Authorize fork PR",
+      "job_error": "job.log:392: Fork PR blocked; /ok-to-test required",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:392"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1190,
+    "run_id": 35872305689,
+    "url": "https://github.com/osac-project/osac/actions/runs/35872305689",
+    "split": "development",
+    "label": "deployment_config",
+    "root_group": "kafka_secret_scc",
+    "label_basis": "Kafka copy job rejected by SCC; fulfillment Kafka secret then lacks brokers key, preventing gRPC pod start",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3446: Install timed out",
+      "pod_error": "events.txt:294: Kubernetes FailedCreate for Kafka copy job\nevents.txt:358: Kubernetes FailedMount: non-existent secret key",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3446",
+      "events.txt:294",
+      "events.txt:358"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1134,
+    "run_id": 36305732023,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305732023",
+    "split": "development",
+    "label": "build_compile",
+    "root_group": "typescript_errors",
+    "label_basis": "frontend TypeScript compilation errors",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:4037: TypeScript compiler error",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4037"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 992,
+    "run_id": 36305801003,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305801003",
+    "split": "development",
+    "label": "build_dependency",
+    "root_group": "ansible_core_conflict",
+    "label_basis": "ansible 13.4.0 requires ansible-core 2.20.x but build pins 2.21.4",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:1922: Python dependency resolution failed",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:1922"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 858,
+    "run_id": 34469803208,
+    "url": "https://github.com/osac-project/osac/actions/runs/34469803208",
+    "split": "development",
+    "label": "build_dependency",
+    "root_group": "missing_osac_cli_binary",
+    "label_basis": "container build cannot find /usr/local/bin/osac",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:725: Build context missing",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:725"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 849,
+    "run_id": 36305893836,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305893836",
+    "split": "development",
+    "label": "app_startup",
+    "root_group": "duplicate_migration_113",
+    "label_basis": "fulfillment gRPC server crashes on duplicate 113_create_add_on_operators_tables.up.sql migration",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:2743: Install timed out",
+      "pod_error": "pod-fulfillment-grpc-server-5fc886cdf-d8gbb-grpc-server-previous.log:13: gRPC startup failed: duplicate migration file\nevents.txt:220: Kubernetes FailedMount: non-existent secret key",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:2743",
+      "pod-fulfillment-grpc-server-5fc886cdf-d8gbb-grpc-server-previous.log:13",
+      "events.txt:220"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 851,
+    "run_id": 35869801011,
+    "url": "https://github.com/osac-project/osac/actions/runs/35869801011",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP controller rejects instance-group pod_spec_override secret mounts",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4674: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-8hd6m-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4674",
+      "pod-osac-aap-bootstrap-8hd6m-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1279,
+    "run_id": 36421728816,
+    "url": "https://github.com/osac-project/osac/actions/runs/36421728816",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "assignable_tenants",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:3704: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3704",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1261,
+    "run_id": 36407848432,
+    "url": "https://github.com/osac-project/osac/actions/runs/36407848432",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "caas_order_failed",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:5314: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:5314",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1253,
+    "run_id": 36348198897,
+    "url": "https://github.com/osac-project/osac/actions/runs/36348198897",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "bmaas_subnet_pending",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:5253: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:5253",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1217,
+    "run_id": 36321937411,
+    "url": "https://github.com/osac-project/osac/actions/runs/36321937411",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "bmaas_subnet_pending",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:3761: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3761",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1211,
+    "run_id": 36267916437,
+    "url": "https://github.com/osac-project/osac/actions/runs/36267916437",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "caas_delete_timeout",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:5273: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:5273",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 889,
+    "run_id": 36097121927,
+    "url": "https://github.com/osac-project/osac/actions/runs/36097121927",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "metering_schema",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:3816: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3816",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1218,
+    "run_id": 36330935679,
+    "url": "https://github.com/osac-project/osac/actions/runs/36330935679",
+    "split": "development",
+    "label": "app_or_e2e",
+    "root_group": "metering_missing",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:4051: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4051",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1262,
+    "run_id": 36327757641,
+    "url": "https://github.com/osac-project/osac/actions/runs/36327757641",
+    "split": "development",
+    "label": "app_or_e2e",
+    "root_group": "metering_missing",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:4069: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4069",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1247,
+    "run_id": 36310778101,
+    "url": "https://github.com/osac-project/osac/actions/runs/36310778101",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "vm_delete_visibility",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:4079: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4079",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 853,
+    "run_id": 36305881487,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305881487",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "external_ip_timeout",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:3890: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3890",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 974,
+    "run_id": 36305816318,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305816318",
+    "split": "development",
+    "label": "app_or_e2e",
+    "root_group": "metering_missing",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:4237: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4237",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1249,
+    "run_id": 36306162239,
+    "url": "https://github.com/osac-project/osac/actions/runs/36306162239",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "caas_order_failed",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:5212: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:5212",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1229,
+    "run_id": 36138426841,
+    "url": "https://github.com/osac-project/osac/actions/runs/36138426841",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "network_delete_timeout",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1064,
+    "run_id": 35702058837,
+    "url": "https://github.com/osac-project/osac/actions/runs/35702058837",
+    "split": "holdout",
+    "label": "app_or_e2e",
+    "root_group": "grpc_contract_assertion",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:5468: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:5468",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1066,
+    "run_id": 35901758870,
+    "url": "https://github.com/osac-project/osac/actions/runs/35901758870",
+    "split": "development",
+    "label": "app_or_e2e",
+    "root_group": "metering_missing",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Run E2E tests",
+      "job_error": "job.log:5240: E2E test error",
+      "pod_error": "",
+      "traceback": "junit.xml:1: JUnit test failure"
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:5240",
+      "junit.xml:1"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1269,
+    "run_id": 36361314336,
+    "url": "https://github.com/osac-project/osac/actions/runs/36361314336",
+    "split": "holdout",
+    "label": "build_dependency",
+    "root_group": "ovn_module_path",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:801: Go module path mismatch",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:801"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 865,
+    "run_id": 36305875896,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305875896",
+    "split": "holdout",
+    "label": "build_compile",
+    "root_group": "go_undefined_fmt",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:823: Go compiler undefined symbol",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:823"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 943,
+    "run_id": 36305831649,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305831649",
+    "split": "holdout",
+    "label": "build_dependency",
+    "root_group": "botocore_conflict",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:1922: Python dependency resolution failed",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:1922"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1018,
+    "run_id": 36305795881,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305795881",
+    "split": "holdout",
+    "label": "build_dependency",
+    "root_group": "stevedore_conflict",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:1930: Python dependency resolution failed",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:1930"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1125,
+    "run_id": 36305772180,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305772180",
+    "split": "development",
+    "label": "build_compile",
+    "root_group": "typescript_errors",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:2690: TypeScript compiler error",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:2690"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1126,
+    "run_id": 36305767053,
+    "url": "https://github.com/osac-project/osac/actions/runs/36305767053",
+    "split": "holdout",
+    "label": "build_dependency",
+    "root_group": "novnc_export",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:2713: Package export resolution failed",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:2713"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1093,
+    "run_id": 35757502813,
+    "url": "https://github.com/osac-project/osac/actions/runs/35757502813",
+    "split": "holdout",
+    "label": "source_checkout",
+    "root_group": "missing_osac_ui_context",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:3993: Build context missing",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3993"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1102,
+    "run_id": 35411079111,
+    "url": "https://github.com/osac-project/osac/actions/runs/35411079111",
+    "split": "holdout",
+    "label": "source_checkout",
+    "root_group": "missing_git_ref",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": false,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:865: Git ref unavailable",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:865"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 836,
+    "run_id": 35602675588,
+    "url": "https://github.com/osac-project/osac/actions/runs/35602675588",
+    "split": "holdout",
+    "label": "source_checkout",
+    "root_group": "missing_osac_ui_context",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Build and load component images",
+      "job_error": "job.log:4090: Build context missing",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4090"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1166,
+    "run_id": 36188200390,
+    "url": "https://github.com/osac-project/osac/actions/runs/36188200390",
+    "split": "holdout",
+    "label": "app_startup",
+    "root_group": "duplicate_migration_117",
+    "label_basis": "grpc-server pod log: duplicate migration file 117; install timeout and UI crash are downstream",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3461: Install timed out",
+      "pod_error": "pod-fulfillment-grpc-server-578695d799-mz5b8-grpc-server-previous.log:13: gRPC startup failed: duplicate migration file\nevents.txt:165: Kubernetes FailedMount: non-existent secret key",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3461",
+      "pod-fulfillment-grpc-server-578695d799-mz5b8-grpc-server-previous.log:13",
+      "events.txt:165"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1157,
+    "run_id": 36129345483,
+    "url": "https://github.com/osac-project/osac/actions/runs/36129345483",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP bootstrap log: controller rejects instance_group pod_spec_override secret mount; install timeout is downstream",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4881: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-5pz2v-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4881",
+      "pod-osac-aap-bootstrap-5pz2v-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1092,
+    "run_id": 36110464676,
+    "url": "https://github.com/osac-project/osac/actions/runs/36110464676",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP bootstrap log: controller rejects instance_group pod_spec_override secret mount; install timeout is downstream",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3398: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-58kwl-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3398",
+      "pod-osac-aap-bootstrap-58kwl-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1227,
+    "run_id": 36093374323,
+    "url": "https://github.com/osac-project/osac/actions/runs/36093374323",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP bootstrap log: controller rejects instance_group pod_spec_override secret mount; install timeout is downstream",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4643: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-9htzw-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4643",
+      "pod-osac-aap-bootstrap-9htzw-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1169,
+    "run_id": 36042626763,
+    "url": "https://github.com/osac-project/osac/actions/runs/36042626763",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP bootstrap log: controller rejects instance_group pod_spec_override secret mount; install timeout is downstream",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4885: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-2frlq-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4885",
+      "pod-osac-aap-bootstrap-2frlq-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1176,
+    "run_id": 36020912491,
+    "url": "https://github.com/osac-project/osac/actions/runs/36020912491",
+    "split": "development",
+    "label": "aap_policy",
+    "root_group": "aap_instance_group_policy",
+    "label_basis": "AAP bootstrap log: controller rejects instance_group pod_spec_override secret mount; install timeout is downstream",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4756: Install timed out",
+      "pod_error": "pod-osac-aap-bootstrap-5k5sq-bootstrap.log:221: AAP instance_group rejected pod_spec_override policy",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:4756",
+      "pod-osac-aap-bootstrap-5k5sq-bootstrap.log:221"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1240,
+    "run_id": 36208878598,
+    "url": "https://github.com/osac-project/osac/actions/runs/36208878598",
+    "split": "holdout",
+    "label": "deployment_config",
+    "root_group": "controller_auth_endpoint",
+    "label_basis": "Verified observed failure from failed job log and artifact; causal root may require investigation",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:3464: Install timed out",
+      "pod_error": "events.txt:209: Kubernetes FailedMount: non-existent secret key\npod-fulfillment-controller-598f7f978-wlz7p-controller-previous.log:26: Controller token form failed: unsupported protocol scheme",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:3464",
+      "events.txt:209",
+      "pod-fulfillment-controller-598f7f978-wlz7p-controller-previous.log:26"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1233,
+    "run_id": 36177191564,
+    "url": "https://github.com/osac-project/osac/actions/runs/36177191564",
+    "split": "holdout",
+    "label": "unknown",
+    "root_group": "operator_install_timeout",
+    "label_basis": "Install infrastructure operators step ended in post-install timeout; artifact has no direct upstream cause, so abstain on cause",
+    "artifact": true,
+    "state": {
+      "failed_step": "Install OSAC",
+      "job_error": "job.log:4676: Install timed out",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": false,
+    "evidence_refs": [
+      "job.log:4676"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1140,
+    "run_id": 36414291926,
+    "url": "https://github.com/osac-project/osac/actions/runs/36414291926",
+    "split": "development",
+    "label": "ci_environment",
+    "root_group": "fork_authorization",
+    "label_basis": "Authorize fork PR step: fork blocked pending /ok-to-test; later KUBECONFIG artifact-gather error is downstream",
+    "artifact": false,
+    "state": {
+      "failed_step": "Authorize fork PR",
+      "job_error": "job.log:391: Fork PR blocked; /ok-to-test required",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:391"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  },
+  {
+    "pr": 1225,
+    "run_id": 36057587469,
+    "url": "https://github.com/osac-project/osac/actions/runs/36057587469",
+    "split": "development",
+    "label": "ci_environment",
+    "root_group": "fork_authorization",
+    "label_basis": "Authorize fork PR step: fork blocked pending /ok-to-test; later KUBECONFIG artifact-gather error is downstream",
+    "artifact": false,
+    "state": {
+      "failed_step": "Authorize fork PR",
+      "job_error": "job.log:391: Fork PR blocked; /ok-to-test required",
+      "pod_error": "",
+      "traceback": ""
+    },
+    "evidence_available": true,
+    "evidence_refs": [
+      "job.log:391"
+    ],
+    "extractor_version": "osac-laya-evidence-v1"
+  }
+]
