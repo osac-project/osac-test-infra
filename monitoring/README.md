@@ -101,7 +101,7 @@ starts from that deploy. Every panel and the daily digest filter on
 | `node-exporter` | every machine | 127.0.0.1:9100 | Host-level metrics (CPU, memory, disk, filesystem) |
 | `haproxy-exporter` | every machine | 127.0.0.1:9104 | HAProxy request rate / backend health / error rate, via a Unix stats socket (no TCP stats port -- zero new network exposure) |
 | `org-runner-exporter` | central only | 127.0.0.1:9102 | GitHub Actions runner online/offline status (org-wide, via GitHub API) |
-| `workflow-exporter` | central only | 127.0.0.1:9103 | Workflow queue depth, run history/duration, failed-step counts (via GitHub API); SQLite-backed, 60-day retention |
+| `workflow-exporter` | central only | 127.0.0.1:9103 | Workflow queue depth, run history/duration, failed-step counts (via GitHub API); SQLite-backed, 60-day retention; `/api/*` capped at 4 concurrent requests (503 beyond), container limited to 8 GB |
 | `service-health-textfile.timer` | every machine | n/a | Writes `osac_service_active` textfile-collector metrics every 30s |
 | `monitoring-tunnel@<host>--<port>.service` | central only, one per agent | n/a | Persistent SSH tunnel forwarding an agent's `node_exporter:9100` and `haproxy_exporter:9104` to local ports `<port>`/`<port>+1` on the central machine |
 
