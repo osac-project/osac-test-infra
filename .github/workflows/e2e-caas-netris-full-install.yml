@@ -107,6 +107,11 @@ on:
         required: false
         type: string
         default: ""
+      test-infra-ref:
+        description: "Git ref of test infrastructure repository"
+        required: false
+        type: string
+        default: ""
       fork-pr-author-association:
         description: "PR author_association from the caller"
         required: false
@@ -145,6 +150,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ inputs.test-infra-repository || github.repository }}
+          ref: ${{ inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == github.repository) && github.sha || '') }}
           persist-credentials: false
 
       - name: Validate and bootstrap
@@ -174,6 +180,7 @@ jobs:
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
       tooling-check-cmds: ${{ inputs.tooling-check-cmds }}
       test-infra-repository: ${{ inputs.test-infra-repository }}
+      test-infra-ref: ${{ inputs.test-infra-ref }}
 
 
   # Fetches all 5 CaaS/Netris secrets and pushes them to the box, on the
@@ -196,6 +203,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ inputs.test-infra-repository || github.repository }}
+          ref: ${{ inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == github.repository) && github.sha || '') }}
           persist-credentials: false
 
       - name: Validate and bootstrap
@@ -324,6 +332,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ inputs.test-infra-repository || github.repository }}
+          ref: ${{ inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == github.repository) && github.sha || '') }}
           persist-credentials: false
 
       - name: Overlay tests from OSAC mono-repo
@@ -600,8 +609,7 @@ jobs:
               echo "OSAC_CLI_BIN=${RUNNER_TEMP}/osac-cli-bin" >> "$GITHUB_ENV"
             fi
 
-            echo "Loading ${tag} onto node ${NODE_NAME}..."
-            podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+            bash "${GITHUB_WORKSPACE}/.github/scripts/load-image-onto-node.sh" "${tag}" "${NODE_NAME}"
 
             # Map imageKey to ansible extra-var name
             case "${image_key}" in
@@ -815,3 +823,4 @@ jobs:
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
       aws-region: ${{ inputs.aws-region }}
       test-infra-repository: ${{ inputs.test-infra-repository }}
+      test-infra-ref: ${{ inputs.test-infra-ref }}
