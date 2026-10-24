@@ -4,6 +4,7 @@ set -uo pipefail
 WORK_DIR=/var/lib/snapshot-recert
 CRYPTO_DIR=${WORK_DIR}/crypto
 NMSTATE_FILE=${WORK_DIR}/nmstate.yaml
+UPLINK_MAC_FILE=${WORK_DIR}/uplink.mac
 MARKER_DIR=${WORK_DIR}/markers
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') snapshot-recert: $*"; }
@@ -30,9 +31,36 @@ mkdir -p "${MARKER_DIR}"
 
 # --- Apply network configuration ---
 apply_nmstate() {
-  nmstatectl apply "${NMSTATE_FILE}"
+  local expected_mac address_file actual_mac iface match_count=0 status
+  expected_mac=$(<"${UPLINK_MAC_FILE}") || return 1
+  expected_mac=${expected_mac,,}
+  for address_file in /sys/class/net/*/address; do
+    actual_mac=$(<"${address_file}") || continue
+    if [[ ${actual_mac,,} == "${expected_mac}" ]]; then
+      iface=${address_file%/address}
+      iface=${iface##*/}
+      ((match_count += 1))
+    fi
+  done
+  if (( match_count != 1 )); then
+    log "Could not identify exactly one guest interface for the OCP uplink"
+    return 1
+  fi
+  if [[ ! ${iface} =~ ^[a-zA-Z0-9_.:-]+$ ]]; then
+    log "The discovered OCP uplink interface name is invalid"
+    return 1
+  fi
+  sed "s/__OCP_UPLINK_INTERFACE__/${iface}/g" "${NMSTATE_FILE}" > "${WORK_DIR}/nmstate.resolved.yaml"
+  log "Applying OCP uplink network configuration"
+  if nmstatectl apply "${WORK_DIR}/nmstate.resolved.yaml" >/dev/null 2>&1; then
+    return 0
+  else
+    status=$?
+  fi
+  log "Failed to apply OCP uplink network configuration (exit status ${status})"
+  return "$status"
 }
-run_once "nmstate" apply_nmstate
+run_once "nmstate" apply_nmstate || exit 1
 
 # --- Clean CRI-O pod state from snapshot ---
 clean_crio() {
@@ -58,7 +86,7 @@ print([c['image'] for c in d['spec']['containers'] if c['name'] == 'etcd'][0])
   }
   trap cleanup_etcd RETURN
 
-  log "Starting standalone etcd (image: ${etcd_image})"
+  log "Starting standalone etcd container"
   podman run -d --name etcd-recert \
     --network host --privileged --replace \
     --pull=never \

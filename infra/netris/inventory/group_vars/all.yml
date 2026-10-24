@@ -28,9 +28,8 @@ ocp_vnet_name: "ocp-sno-vnet"
 ocp_subnet_cidr: "192.168.40.0/24"
 ocp_gateway: "192.168.40.1/24"
 ocp_node_ip: "192.168.40.2"
-ocp_server_ports:
-  - name: "eth9@hgx-pod00-su0-h00"
-    accessMode: true
+# Optional when Cloudsim's generated SSH aliases are unavailable.
+ocp_vm_mgmt_ip: ""
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 

@@ -292,9 +292,11 @@ Then browse to `https://osac-aap-osac-devel.apps.ocp-sno.osac.local:9444` (accep
 
 The flow runs three Ansible roles in sequence:
 
-1. **`configure-netris`** — creates VPC, VNet (DHCP disabled), subnet, SNAT/DNAT rules via Netris API
+1. **`configure-netris`** — finds the SNO's ports linked to `ns-leaf-*` switches in Netris. It reads each named leaf interface's MAC address and verifies the two ends of its libvirt tunnel to find the matching SNO card MAC. It preserves a previously attached, verified OCP VNet port; otherwise it chooses the lowest numbered verified port unused by other VNets. It then creates the VPC, VNet, subnet, and SNAT/DNAT rules and reports the chosen port and MAC.
 2. **`configure-dns`** — creates Route 53 DNS records and local dnsmasq config for the cluster domain
-3. **`restore-ocp`** — creates copy-on-write disk overlays backed by the cached flavor, mounts the OS disk via qemu-nbd to write pre-boot config (hostname, nodeip hint, dnsmasq overrides, nmstate config for static IP, OVN/OVS cleanup), runs recert (via JSON config file, matching LCA's approach) to regenerate all TLS certificates and cluster identity, then waits for cluster health. When `suite=maas` (via `SUITE=maas`), also grows the h00 OS disk to `ocp_snapshot_disk_gb` before pre-boot config.
+3. **`restore-ocp`** — creates copy-on-write disk overlays backed by the cached flavor, mounts the OS disk via qemu-nbd to write pre-boot config (hostname, nodeip hint, dnsmasq overrides, nmstate config for static IP, OVN/OVS cleanup), runs recert (via JSON config file, matching LCA's approach) to regenerate all TLS certificates and cluster identity, then waits for cluster health. At boot, it finds the guest interface by the discovered MAC address, applies the static IP and default route to that interface, and checks gateway reachability before waiting for SSH through DNAT. When `suite=maas` (via `SUITE=maas`), it also grows the h00 OS disk to `ocp_snapshot_disk_gb` before pre-boot config.
+
+The server's management IP normally comes from Cloudsim's `/root/.cloudsim_aliases`; set `ocp_vm_mgmt_ip` if those aliases are unavailable. Discovery stops before changing Netris or snapshot disks when a port or tunnel is ambiguous, all verified ports are occupied, or the existing OCP VNet has unrelated or multiple ports. Do not set a fixed `ocp_server_ports` value: the verified port can differ between labs. The `eth9` and `eth10` North-South links are expected to carry the OCP VNet when the matching SNO card is configured; confirm this on a live lab.
 
 The snapshot flavor is pulled and cached during `make setup-infra` (one-time ~60GB download). Subsequent deploys use copy-on-write overlays, so only changed blocks are written.
 

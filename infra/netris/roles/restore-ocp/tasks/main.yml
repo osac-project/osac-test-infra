@@ -1,13 +1,16 @@
 ---
-- name: Find OCP server VM
-  ansible.builtin.shell:
-    cmd: virsh list --all --name | grep "{{ ocp_vm_name_pattern }}"
-  register: _vm_lookup
-  changed_when: false
-
-- name: Set VM name
-  ansible.builtin.set_fact:
-    ocp_vm_name: "{{ _vm_lookup.stdout_lines[0] }}"
+- name: Require the resolved OCP uplink before touching the snapshot disks
+  ansible.builtin.assert:
+    that:
+      - ocp_vm_name is defined
+      - ocp_uplink_mac is defined
+      - ocp_vm_mgmt_ip_resolved is defined
+      - ocp_server_port is defined
+      - ocp_node_ip is defined
+      - ocp_gateway is defined
+      - (ocp_node_ip | ansible.utils.ipaddr('ipv4')) is string
+      - (ocp_gateway | ansible.utils.ipaddr('ipv4')) is string
+    fail_msg: The configure-netris role must resolve the uplink and provide valid OCP IPv4 addresses first.
 
 - name: Check if VM is running
   ansible.builtin.shell:
@@ -205,11 +208,7 @@
 
     - name: Report source identity
       ansible.builtin.debug:
-        msg: >-
-          Source identity: hostname={{ snapshot_source_hostname }},
-          cluster={{ snapshot_source_cluster }}.{{ snapshot_source_domain }},
-          ip={{ snapshot_source_ip }},
-          etcd_image={{ snapshot_etcd_image | default('not found') }}
+        msg: Snapshot source identity metadata loaded.
 
     # --- Write target config ---
 
@@ -260,7 +259,7 @@
       ansible.builtin.copy:
         content: |
           interfaces:
-          - name: ens6
+          - name: __OCP_UPLINK_INTERFACE__
             type: ethernet
             state: up
             ipv4:
@@ -276,7 +275,7 @@
           routes:
             config:
             - destination: 0.0.0.0/0
-              next-hop-interface: ens6
+              next-hop-interface: __OCP_UPLINK_INTERFACE__
               next-hop-address: {{ ocp_gateway | ansible.utils.ipaddr('address') }}
               metric: 48
               table-id: 254
@@ -286,6 +285,13 @@
               - 192.168.16.1
               - {{ dns_server }}
         dest: "{{ _var }}lib/snapshot-recert/nmstate.yaml"
+        mode: "0644"
+
+    - name: Write the verified OCP uplink MAC to the snapshot
+      no_log: true
+      ansible.builtin.copy:
+        content: "{{ ocp_uplink_mac }}\n"
+        dest: "{{ _var }}lib/snapshot-recert/uplink.mac"
         mode: "0644"
 
     - name: Template recert script to disk
@@ -421,7 +427,105 @@
   ansible.builtin.command:
     cmd: virsh start {{ ocp_vm_name }}
 
-# Use DNAT IP since br-ex is on ens6, not management bridge
+- name: Wait for SNO SSH through its management interface
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+      - "core@{{ ocp_vm_mgmt_ip_resolved }}"
+      - hostname
+  register: _mgmt_ssh_check
+  until: _mgmt_ssh_check.rc == 0
+  retries: 60
+  delay: 5
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Stop if SNO management SSH is unavailable
+  ansible.builtin.fail:
+    msg: The SNO did not accept management SSH after boot.
+  when: _mgmt_ssh_check.rc != 0
+
+- name: Wait for the OCP address and gateway to become reachable
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ snapshot_flavor_dir }}/crypto/cluster-tool.key"
+      - "core@{{ ocp_vm_mgmt_ip_resolved }}"
+      - python3 -
+    stdin: |
+      import ipaddress
+      import json
+      import subprocess
+      import sys
+      from pathlib import Path
+
+      node_ip = str(ipaddress.IPv4Address({{ ocp_node_ip | ansible.utils.ipaddr('address') | to_json }}))
+      gateway = str(ipaddress.IPv4Address({{ ocp_gateway | ansible.utils.ipaddr('address') | to_json }}))
+
+      def main():
+          if not Path("/var/lib/snapshot-recert/markers/nmstate.done").is_file():
+              return 1
+
+          try:
+              result = subprocess.run(
+                  ["ip", "-j", "-4", "addr", "show"],
+                  capture_output=True,
+                  check=True,
+                  text=True,
+                  timeout=10,
+              )
+              interfaces = json.loads(result.stdout)
+              has_node_ip = any(
+                  address.get("local") == node_ip
+                  for interface in interfaces
+                  for address in interface.get("addr_info", [])
+              )
+              if not has_node_ip:
+                  return 1
+
+              ping = subprocess.run(
+                  ["ping", "-n", "-c", "2", "-W", "2", "-I", node_ip, gateway],
+                  check=False,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  timeout=10,
+              )
+          except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+              return 1
+
+          return ping.returncode
+
+      sys.exit(main())
+  register: _ocp_gateway_check
+  until: _ocp_gateway_check.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Stop if the SNO OCP uplink cannot reach its gateway
+  ansible.builtin.fail:
+    msg: The SNO OCP network check failed. Confirm the guest network configuration and gateway availability.
+  when: _ocp_gateway_check.rc != 0
+
+# Use DNAT IP because the OCP uplink is separate from the management bridge.
 - name: Set SSH target IP
   ansible.builtin.set_fact:
     _vm_ssh_ip: "{{ ocp_dnat_ip }}"
@@ -437,10 +541,11 @@
   retries: 60
   delay: 5
   changed_when: false
+  no_log: true
 
 - name: Report VM booted
   ansible.builtin.debug:
-    msg: "VM {{ ocp_vm_name }} booted, SSH accessible at {{ _vm_ssh_ip }} (DNAT → {{ ocp_node_ip }})"
+    msg: VM booted and SSH is reachable.
 
 - name: Set SSH command prefix
   ansible.builtin.set_fact:
@@ -460,19 +565,11 @@
   retries: 120
   delay: 10
   changed_when: false
-
-- name: Fetch service logs on failure
-  ansible.builtin.shell:
-    cmd: >-
-      {{ _ssh_cmd }} "sudo journalctl -u snapshot-recert.service --no-pager -n 100"
-  register: _svc_logs
-  when: _svc_status.stdout | trim == 'failed'
+  no_log: true
 
 - name: Fail if recert service failed
   ansible.builtin.fail:
-    msg: |
-      snapshot-recert.service failed. Logs:
-      {{ _svc_logs.stdout | default('no logs available') }}
+    msg: snapshot-recert.service failed. Guest service logs are available on the VM to an authorized operator.
   when: _svc_status.stdout | trim == 'failed'
 
 # --- Wait for cluster health ---
