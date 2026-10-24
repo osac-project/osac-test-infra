@@ -5,9 +5,10 @@
 # again at once (GitHub's "Re-run" of this run, or `/test vmaas`) without waiting for the CaaS and BMaaS suites. It does
 # what the `vmaas` job of e2e-pr.yml did, with the same arguments; nothing else runs here.
 #
-# The inputs are given by the decision and checked by osac-ci; the name of the run is how its end is recognised again
-# (`E2E suite · <suite id> · #<pull request> · <commit>`, quoted because an unquoted ` #` starts a YAML comment), so it
-# must keep that exact format. The workflow runs from the default branch, while the code under test is the commit.
+# The inputs are given by the decision and checked here against the pull request (`verify`). The name of the run is how its
+# end is recognised again (`E2E suite · <suite id> · #<pull request> · <commit>`, quoted because an unquoted ` #` starts a
+# YAML comment), so it must keep that exact format. The workflow runs from the default branch, while the code under test
+# is the commit.
 name: E2E VMaaS PR suite
 run-name: "E2E suite · vmaas · #${{ inputs.pr-number }} · ${{ inputs.sha }}"
 
@@ -26,13 +27,15 @@ on:
         description: The pull request number
         required: true
         type: string
+      # The decision sends these two with every suite. They are not used: the author and association are read from the
+      # pull request (`verify`), so a dispatch cannot claim to be a member.
       fork-pr-author:
-        description: Login of the author of a fork pull request, empty for a commit of this repository
+        description: Ignored (read from the pull request)
         required: false
         type: string
         default: ""
       fork-pr-author-association:
-        description: Author association of a fork pull request, empty for a commit of this repository
+        description: Ignored (read from the pull request)
         required: false
         type: string
         default: ""
@@ -40,8 +43,50 @@ on:
 permissions: {}
 
 jobs:
+  # Anyone with write access can dispatch this workflow with any inputs, so none of them is believed: the commit and the
+  # repository are checked against the pull request, and the fork author and association are read from it (they decide
+  # whether the suite may run a fork's code with secrets: the suite authorizes a fork pull request from them).
+  verify:
+    name: Verify the inputs against the pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      fork-author: ${{ steps.pull.outputs.fork-author }}
+      fork-association: ${{ steps.pull.outputs.fork-association }}
+    steps:
+      - name: Read the pull request
+        id: pull
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ inputs.pr-number }}
+          SHA: ${{ inputs.sha }}
+          HEAD_REPO: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+          case "${NUMBER}" in "" | *[!0-9]*) echo "::error::The pull request number must be digits only."; exit 1 ;; esac
+          pull=$(gh api "repos/${REPO}/pulls/${NUMBER}")
+          if [[ "$(jq -r '.head.sha' <<<"${pull}")" != "${SHA}" ]]; then
+            echo "::error::The commit is not the head of pull request ${NUMBER} any more: nothing to test."
+            exit 1
+          fi
+          head_repo=$(jq -r '.head.repo.full_name // empty' <<<"${pull}")
+          if [[ -z "${head_repo}" || "${head_repo,,}" != "${HEAD_REPO,,}" ]]; then
+            echo "::error::The repository is not the one that holds the head of pull request ${NUMBER}."
+            exit 1
+          fi
+          # a commit of this repository needs no authorization; a fork's is authorized by the suite from these two
+          if [[ "${head_repo,,}" != "${REPO,,}" ]]; then
+            echo "fork-author=$(jq -r '.user.login' <<<"${pull}")" >> "$GITHUB_OUTPUT"
+            echo "fork-association=$(jq -r '.author_association' <<<"${pull}")" >> "$GITHUB_OUTPUT"
+          fi
+
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   vmaas:
+    needs: verify
     permissions:
       contents: read
       id-token: write  # only declared because GitHub validates a called workflow's permissions statically (as in e2e-pr.yml)
@@ -55,8 +100,8 @@ jobs:
       test-infra-repository: ${{ inputs.repo }}
       test-infra-ref: ${{ inputs.sha }}
       runner-label: osac-ci
-      fork-pr-author-association: ${{ inputs.fork-pr-author-association }}
-      fork-pr-author: ${{ inputs.fork-pr-author }}
+      fork-pr-author-association: ${{ needs.verify.outputs.fork-association }}
+      fork-pr-author: ${{ needs.verify.outputs.fork-author }}
       pr-number: ${{ inputs.pr-number }}
       notify-on-failure: false
       enable-ai-diagnostic: false
