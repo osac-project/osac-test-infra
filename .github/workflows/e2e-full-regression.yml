@@ -579,9 +579,9 @@ jobs:
           echo "::group::Merged full-ci values"
           echo "--- infra.yaml (keycloak) ---"
           yq '.keycloak' values/full-ci/infra.yaml
-          echo "--- instance.yaml (networking, AAP groups, lvms, metering.echoAdapter) ---"
-          yq '.global.networking | {fabricManager, k8sManager, netris: {controllerUrl, siteId, tenantId, tenantName}}' values/full-ci/instance.yaml
-          yq '.aap.instanceGroups' values/full-ci/instance.yaml
+          echo "--- instance.yaml (networking, AAP group enabled flags, lvms, metering.echoAdapter) ---"
+          yq '.global.networking | pick(["fabricManager", "k8sManager", "netris"]) | .netris |= pick(["siteId", "tenantId", "tenantName"])' values/full-ci/instance.yaml
+          yq '.aap.instanceGroups | pick(["clusterFulfillment", "networkFulfillment", "storageFulfillment"]) | with_entries(.value = (.value.enabled == true))' values/full-ci/instance.yaml
           yq '.lvms' values/full-ci/instance.yaml
           yq '.metering.echoAdapter' values/full-ci/instance.yaml
           echo "::endgroup::"
