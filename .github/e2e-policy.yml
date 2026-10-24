@@ -3,7 +3,8 @@
 # branch, never from the pull request, so a pull request cannot change which suites its own change needs.
 #
 # A suite is needed when ALL of its `filters` hold and at least ONE of its `filters_any` holds. `suite` is the id of the
-# suite's job in e2e-pr.yml; automatic suites also have a job in e2e-queue.yml. `check` is the name of the suite's line
+# suite's job in e2e-pr.yml, or of the suite's run when the job names a `workflow` (a run of its own, started by the
+# decision: see e2e-pr-vmaas.yml); automatic suites also have a job in e2e-queue.yml. `check` is the name of the suite's line
 # on the pull request. A `manual_only` suite appears in the pull-request checkbox comment, but is never selected
 # automatically or included in the required E2E total. Every automatic suite runs for every non-documentation change,
 # as the old per-suite workflows did; a team that wants a suite to run for a narrower set of paths adds a filter here
@@ -20,6 +21,7 @@ jobs:
     kind: e2e
     check: "E2E / VMaaS Full Install"
     suite: vmaas
+    workflow: e2e-pr-vmaas.yml  # a run of its own, started by the decision
     filters_any: [e2e-code]
   e2e-caas:
     kind: e2e
