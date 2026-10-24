@@ -38,3 +38,5 @@ jobs:
     check: "E2E / BMaaS Netris Full Install"
     suite: netris
     manual_only: true
+
+# trial of the dispatched vmaas suite (not to be merged)
