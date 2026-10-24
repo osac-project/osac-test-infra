@@ -29,3 +29,4 @@ aap:
         HOSTED_CLUSTER_BASE_DOMAIN: "ecoeng-osac-ci.devcluster.openshift.com"
         EXTERNAL_ACCESS_BASE_DOMAIN: "ecoeng-osac-ci.devcluster.openshift.com"
         EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "ecoeng-osac-ci.devcluster.openshift.com"
+        DNS_CLASS: "dns.route53.dns"

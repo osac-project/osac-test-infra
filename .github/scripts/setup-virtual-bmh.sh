@@ -11,9 +11,9 @@
 #   KUBECONFIG   — path to the cluster kubeconfig
 #
 # Optional env:
-#   BMH_NAMESPACE  — namespace for BMH resources (default: host-inventory)
-#   BMH_COUNT      — number of virtual BMHs to create (default: 2)
-#   SUSHY_PORT     — sushy-tools listen port (default: 8000)
+#   BMH_NAMESPACE       — namespace for BMH resources (default: host-inventory)
+#   BMH_COUNT           — number of virtual BMHs to create (default: 2)
+#   SUSHY_PORT          — sushy-tools listen port (default: 8000)
 #
 # Teardown derives all paths from CLONE_NAME — no GITHUB_ENV exports needed.
 set -euo pipefail
@@ -68,6 +68,9 @@ root = ET.parse(sys.stdin).getroot()
 print(root.find('.//ip').get('address'))
 ")
 echo "Gateway IP (host): ${GW_IP}"
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  echo "VIRTUAL_BMH_GATEWAY=${GW_IP}" >> "${GITHUB_ENV}"
+fi
 
 # --- Step 3: Create libvirt storage pool for sushy-tools ---
 echo "==> Creating libvirt storage pool '${POOL_NAME}'..."

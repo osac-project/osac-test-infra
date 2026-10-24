@@ -719,6 +719,10 @@ jobs:
             helm dependency update charts/osac/
           fi
 
+          if [[ -n "${VIRTUAL_BMH_GATEWAY:-}" ]]; then
+            SET_ARGS+=("--set-string" "operator.bareMetalWorker.additionalNTPSources[0]=${VIRTUAL_BMH_GATEWAY}")
+          fi
+
           make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=full-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           for tenant in "${INSTALLER_NAMESPACE}" shared; do
@@ -760,8 +764,8 @@ jobs:
           # helm --wait only confirms the *new* pod/ReplicaSet is Ready -- it
           # does not wait for the old pod to finish terminating or for the
           # Service/route's endpoint list to fully converge, so a caller
-          # right after this (e.g. setup-caas-agents.sh registering the
-          # ci-worker host type) can race a stale or not-yet-routable
+          # right after this (e.g. setup-caas-agents.sh preparing the
+          # ci-worker agent inventory) can race a stale or not-yet-routable
           # backend and get a transient 503 from the gateway. Same fix as
           # e2e-vmaas-full-install.yml's equivalent step (OSAC-2528) --
           # confirm every Deployment has actually finished rolling out,
@@ -801,6 +805,7 @@ jobs:
           # Configure CaaS domain (after image overrides so helm upgrade cannot overwrite)
           oc patch configmap cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
             -p "{\"data\":{
+                \"DNS_CLASS\":\"dns.route53.dns\",
                 \"DNS_ZONE\":\"${CAAS_DOMAIN}\",
                 \"EXTERNAL_ACCESS_BASE_DOMAIN\":\"${CAAS_DOMAIN}\",
                 \"EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS\":\"${CAAS_DOMAIN}\",
@@ -918,6 +923,22 @@ jobs:
           AGENT_VM_STORAGE_DIR="/data/osac-storage" \
               bash "${INSTALLER_DIR}/scripts/setup-caas-agents.sh"
 
+      - name: Start virtual BMH reboot watcher
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          CAAS_AGENT_WATCHER_SETUP_ENABLED: "false"
+        run: |
+          WATCHER_LOG="$RUNNER_TEMP/virtual-bmh-reboot-watcher.log"
+          WATCHER_STATUS="$RUNNER_TEMP/virtual-bmh-watcher.status"
+          export CAAS_AGENT_WATCHER_STATUS_FILE="$WATCHER_STATUS"
+          nohup bash .github/scripts/watch-caas-agent-namespaces.sh > "$WATCHER_LOG" 2>&1 &
+          WATCHER_PID=$!
+          echo "VIRTUAL_BMH_WATCHER_PID=$WATCHER_PID" >> "$GITHUB_ENV"
+          echo "VIRTUAL_BMH_WATCHER_LOG=$WATCHER_LOG" >> "$GITHUB_ENV"
+          echo "VIRTUAL_BMH_WATCHER_STATUS=$WATCHER_STATUS" >> "$GITHUB_ENV"
+          echo "Virtual BMH reboot watcher started (PID $WATCHER_PID)"
+
       - name: Create test adapter route for metering tests
         id: metering-adapter
         env:
@@ -961,8 +982,8 @@ jobs:
           # enables VMaaS+CaaS+BMaaS, so BMI gRPC/REST/reflection/controller
           # checks fail by design.
           #
-          # Cluster create via references/ needs a fabric NIC on host type
-          # ci-worker, which full-ci does not stamp. The name-based subnet
+          # Cluster create via references/ needs a fabric NIC on resource
+          # class ci-worker, which full-ci does not stamp. The name-based subnet
           # cleanup cases remain excluded until verified with the shared class.
           FILTER="not TestBmaasNetworking and not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name"
           if [ -n "${TEST_FILTER}" ]; then
@@ -1001,6 +1022,49 @@ jobs:
               -k "${FILTER}" \
               -n 0 \
               --junitxml=/tmp/test-output/junit.xml -v
+
+      - name: Collect virtual BMH reboot watcher
+        if: always() && env.VIRTUAL_BMH_WATCHER_PID != ''
+        run: |
+          if kill -0 "$VIRTUAL_BMH_WATCHER_PID" 2>/dev/null; then
+            echo "Stopping virtual BMH watcher (PID $VIRTUAL_BMH_WATCHER_PID)..."
+            kill -TERM "$VIRTUAL_BMH_WATCHER_PID" 2>/dev/null || true
+            for _ in $(seq 1 30); do
+              kill -0 "$VIRTUAL_BMH_WATCHER_PID" 2>/dev/null || break
+              sleep 1
+            done
+            if kill -0 "$VIRTUAL_BMH_WATCHER_PID" 2>/dev/null; then
+              echo "::error::Virtual BMH watcher did not stop after 30 seconds"
+              kill -KILL "$VIRTUAL_BMH_WATCHER_PID" 2>/dev/null || true
+            fi
+          fi
+
+          # Redact internal API/apps hostnames and IPs from published
+          # logs — this repo is public and CI output is visible to anyone.
+          redact_hostnames() {
+            sed -E \
+              -e 's/api(-int)?\.[A-Za-z0-9._-]+/api.REDACTED/g' \
+              -e 's/[a-z0-9-]+\.apps\.[A-Za-z0-9._-]+/REDACTED.apps.REDACTED/g' \
+              -e 's/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/x.x.x.x/g'
+          }
+
+          echo "::group::Virtual BMH reboot watcher log"
+          if [[ -f "$VIRTUAL_BMH_WATCHER_LOG" ]]; then
+            redact_hostnames < "$VIRTUAL_BMH_WATCHER_LOG"
+          else
+            echo "No virtual BMH watcher log file found."
+          fi
+          echo "::endgroup::"
+
+          if [[ ! -f "$VIRTUAL_BMH_WATCHER_STATUS" ]]; then
+            echo "::error::Virtual BMH watcher did not write a final status"
+            exit 1
+          fi
+          WATCHER_RESULT=$(cat "$VIRTUAL_BMH_WATCHER_STATUS")
+          if [[ "$WATCHER_RESULT" != "complete" ]]; then
+            echo "::error::Virtual BMH watcher status was $WATCHER_RESULT"
+            exit 1
+          fi
 
       - name: Gather artifacts
         if: always()

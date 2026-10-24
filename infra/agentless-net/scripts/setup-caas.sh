@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# Register host type, create InfraEnv, boot host VMs, wait for agents
-# to register, approve and label them.
+# Create InfraEnv, boot host VMs, wait for agents to register, approve,
+# and label them with the resource class used by CaaS BareMetalInstanceTypes.
 # Corresponds to setup-lab.sh steps 19-22.
 # Idempotent — safe to re-run.
 #
 # Agent flow modes (CAAS_AGENT_FLOW, default: hot-pool):
 #   hot-pool          — legacy: agents in hardware-inventory, this script
 #                       labels AND approves them.
-#   cluster-namespace — Option C: agents in the ClusterOrder namespace
+#   cluster-namespace — agents in the ClusterOrder namespace
 #                       (CAAS_CLUSTER_ORDER_NAMESPACE). This script labels
 #                       but does NOT approve — osac ci_create owns approval.
 #
@@ -41,16 +41,15 @@ INFRAENV_NAME="infraenv"
 SSH_PUB_KEY="$(cat ~/.ssh/id_rsa.pub 2>/dev/null || cat ~/.ssh/id_ed25519.pub 2>/dev/null || true)"
 
 # Resolve target namespace based on agent flow mode.
-# In cluster-namespace mode without CAAS_CLUSTER_ORDER_NAMESPACE, only
-# register the host type (pre-order phase) — the full agent setup runs
-# later after ClusterOrder creation provides the namespace.
+# In cluster-namespace mode without CAAS_CLUSTER_ORDER_NAMESPACE, the
+# watcher has not found an order namespace yet; defer agent setup.
 if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]]; then
     info() { echo "==> [cluster-namespace] $*"; }
     if [[ -z "${CAAS_CLUSTER_ORDER_NAMESPACE:-}" ]]; then
-        AGENT_NAMESPACE=""
-    else
-        AGENT_NAMESPACE="${CAAS_CLUSTER_ORDER_NAMESPACE}"
+        info "No ClusterOrder namespace yet; skipping pre-order agent setup."
+        exit 0
     fi
+    AGENT_NAMESPACE="${CAAS_CLUSTER_ORDER_NAMESPACE}"
 else
     AGENT_NAMESPACE="hardware-inventory"
     info() { echo "==> $*"; }
@@ -66,39 +65,7 @@ VM_VCPUS=4
 VM_MEMORY=16384
 VM_DISK_SIZE=100
 
-# ---------- step 19: register host type ----------
-
-INTERNAL_API="https://$(KUBECONFIG="$KUBECONFIG" oc get route fulfillment-internal-api -n "$OSAC_NAMESPACE" -o jsonpath='{.status.ingress[0].host}')"
-TOKEN=$(KUBECONFIG="$KUBECONFIG" oc create token -n "$OSAC_NAMESPACE" admin)
-
-RESPONSE_BODY=$(mktemp)
-HTTP_CODE=$(curl -sk -w "%{http_code}" -X POST "${INTERNAL_API}/api/private/v1/host_types" \
-    -H "Authorization: Bearer ${TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d "{\"id\": \"${AGENT_RESOURCE_CLASS}\", \"title\": \"CI Worker\", \"description\": \"Worker nodes for CI testing\"}" \
-    -o "${RESPONSE_BODY}") || true
-if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "201" ]]; then
-    info "Host type '${AGENT_RESOURCE_CLASS}' created"
-elif [[ "${HTTP_CODE}" == "409" ]]; then
-    info "Host type '${AGENT_RESOURCE_CLASS}' already exists — skipping"
-else
-    echo "ERROR: Failed to create host type (HTTP ${HTTP_CODE})"
-    cat "${RESPONSE_BODY}"
-    rm -f "${RESPONSE_BODY}"
-    exit 1
-fi
-rm -f "${RESPONSE_BODY}"
-
-# In cluster-namespace mode without a namespace, host-type registration
-# is all we can do before the ClusterOrder exists.  Exit cleanly so the
-# workflow can create the order, discover the namespace, then re-run
-# this script with CAAS_CLUSTER_ORDER_NAMESPACE set.
-if [[ "${CAAS_AGENT_FLOW}" == "cluster-namespace" ]] && [[ -z "${AGENT_NAMESPACE}" ]]; then
-    info "Pre-order phase complete. Re-run with CAAS_CLUSTER_ORDER_NAMESPACE after ClusterOrder creation."
-    exit 0
-fi
-
-# ---------- step 20: create agent namespace and InfraEnv ----------
+# ---------- create agent namespace and InfraEnv ----------
 
 info "Creating agent namespace '${AGENT_NAMESPACE}'..."
 KUBECONFIG="$KUBECONFIG" oc create namespace "$AGENT_NAMESPACE" --dry-run=client -o yaml | \

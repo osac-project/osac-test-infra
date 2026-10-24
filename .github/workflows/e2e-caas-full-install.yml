@@ -73,8 +73,10 @@ on:
         description: >-
           CaaS agent flow mode: "hot-pool" (default, legacy) or "cluster-namespace"
           (Option C — agents in ClusterOrder namespace, osac owns approval).
-          Only meaningful for Netris/agentless-net backends; the cluster-tool
-          path delegates agent setup to osac-installer/osac-operator.
+          In hot-pool mode osac-operator manages agents. In cluster-namespace
+          mode the workflow boots agent VMs from the discovery ISO on the
+          cluster-tool libvirt network and creates them in the ClusterOrder
+          namespace.
         required: false
         type: string
         default: "hot-pool"
@@ -685,13 +687,17 @@ jobs:
             helm dependency update charts/osac/
           fi
 
+          if [[ -n "${VIRTUAL_BMH_GATEWAY:-}" ]]; then
+            SET_ARGS+=("--set-string" "operator.bareMetalWorker.additionalNTPSources[0]=${VIRTUAL_BMH_GATEWAY}")
+          fi
+
           make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=caas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           # helm --wait only confirms the *new* pod/ReplicaSet is Ready -- it
           # does not wait for the old pod to finish terminating or for the
           # Service/route's endpoint list to fully converge, so a caller
-          # right after this (e.g. setup-caas-agents.sh registering the
-          # ci-worker host type) can race a stale or not-yet-routable
+          # right after this (e.g. setup-caas-agents.sh preparing the
+          # ci-worker agent inventory) can race a stale or not-yet-routable
           # backend and get a transient 503 from the gateway. Same fix as
           # e2e-vmaas-full-install.yml's equivalent step (OSAC-2528) --
           # confirm every Deployment has actually finished rolling out,
@@ -731,6 +737,7 @@ jobs:
           # Configure CaaS domain (after image overrides so helm upgrade cannot overwrite)
           oc patch configmap cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
             -p "{\"data\":{
+                \"DNS_CLASS\":\"dns.route53.dns\",
                 \"DNS_ZONE\":\"${CAAS_DOMAIN}\",
                 \"EXTERNAL_ACCESS_BASE_DOMAIN\":\"${CAAS_DOMAIN}\",
                 \"EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS\":\"${CAAS_DOMAIN}\",
@@ -746,27 +753,48 @@ jobs:
                 \"AWS_SECRET_ACCESS_KEY\":\"${AWS_SECRET_ACCESS_KEY}\"
             }}"
 
-      - name: Setup CaaS agent
+      - name: Setup CaaS agents
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          CAAS_AGENT_FLOW: ${{ inputs.caas-agent-flow }}
+          OSAC_PULL_SECRET_PATH: ${{ runner.temp }}/pull-secret.json
         run: |
-          # INSTALLER_DIR is resolved and persisted by the earlier install step (via $GITHUB_ENV)
-
-          # OSAC-4134 removed this script from the installer: CaaS agent
-          # provisioning moved from CI to osac-operator. When the installer
-          # under test no longer ships the script, the install manages its
-          # own agents and this step is a no-op.
-          if [ ! -f "${INSTALLER_DIR}/scripts/setup-caas-agents.sh" ]; then
-            echo "setup-caas-agents.sh not found in ${INSTALLER_DIR}; agent setup owned by osac-operator -- skipping"
+          if [[ "${CAAS_AGENT_FLOW:-hot-pool}" == "hot-pool" ]]; then
+            echo "hot-pool agent flow: osac-operator manages agents — skipping CI agent setup"
             exit 0
           fi
 
-          LIBVIRT_NETWORK="test-infra-net-${CLONE_NAME}" \
-          INSTALLER_NAMESPACE="${INSTALLER_NAMESPACE}" \
-          AGENT_VM_NAME="agent-${CLONE_NAME}" \
-          AGENT_VM_STORAGE_DIR="/data/osac-storage" \
-              bash "${INSTALLER_DIR}/scripts/setup-caas-agents.sh"
+          # cluster-namespace flow: this pre-order invocation exits without
+          # setup; the watcher sets CAAS_CLUSTER_ORDER_NAMESPACE and invokes
+          # bash .github/scripts/setup-caas-agents.sh for each active order.
+          bash .github/scripts/setup-caas-agents.sh
+
+      # Watch every active order namespace because pytest-xdist can create
+      # multiple ClusterOrders concurrently. Each order gets separate agent
+      # VMs, disks, and MAC addresses.
+      - name: Start CaaS agent and virtual BMH watcher
+        if: inputs.caas-agent-flow == 'cluster-namespace' || steps.install-infra.outputs.metal3-enabled == 'true'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          CAAS_AGENT_FLOW: cluster-namespace
+          CAAS_AGENT_WATCHER_SETUP_ENABLED: ${{ inputs.caas-agent-flow == 'cluster-namespace' }}
+          OSAC_PULL_SECRET_PATH: ${{ runner.temp }}/pull-secret.json
+        run: |
+          WATCHER_LOG="$RUNNER_TEMP/agent-watcher.log"
+          WATCHER_STATUS="$RUNNER_TEMP/agent-watcher.status"
+          ORDER_LOG_DIR="$RUNNER_TEMP/agent-order-logs"
+          export CAAS_AGENT_WATCHER_STATUS_FILE="$WATCHER_STATUS"
+          export CAAS_AGENT_WATCHER_ORDER_LOG_DIR="$ORDER_LOG_DIR"
+          echo "AGENT_WATCHER_STATUS_FILE=$WATCHER_STATUS" >> "$GITHUB_ENV"
+          echo "AGENT_WATCHER_ORDER_LOG_DIR=$ORDER_LOG_DIR" >> "$GITHUB_ENV"
+          nohup bash .github/scripts/watch-caas-agent-namespaces.sh > "$WATCHER_LOG" 2>&1 &
+
+          WATCHER_PID=$!
+          echo "AGENT_WATCHER_PID=$WATCHER_PID" >> "$GITHUB_ENV"
+          echo "AGENT_WATCHER_LOG=$WATCHER_LOG" >> "$GITHUB_ENV"
+          echo "Agent watcher started (PID $WATCHER_PID), log: $WATCHER_LOG"
 
       - name: Create test adapter route for metering tests
         id: metering-adapter
@@ -872,6 +900,59 @@ jobs:
             "${E2E_IMAGE}" \
             pytest ${TEST_ARGS} "${FILTER_ARGS[@]}" "${MARKER_ARGS[@]}" \
               --junitxml=/tmp/test-output/junit.xml -v
+
+      - name: Collect agent watcher results
+        if: always() && env.AGENT_WATCHER_PID != ''
+        run: |
+          # Stop the watcher after pytest has finished. Its TERM handler
+          # stops any remaining per-order bootstrap processes and records
+          # whether agent setup failed.
+          if kill -0 "$AGENT_WATCHER_PID" 2>/dev/null; then
+            echo "Stopping agent watcher (PID $AGENT_WATCHER_PID)..."
+            kill -TERM "$AGENT_WATCHER_PID" 2>/dev/null || true
+            for _ in $(seq 1 30); do
+              kill -0 "$AGENT_WATCHER_PID" 2>/dev/null || break
+              sleep 1
+            done
+            if kill -0 "$AGENT_WATCHER_PID" 2>/dev/null; then
+              echo "::error::Agent watcher did not stop after 30 seconds"
+              kill -KILL "$AGENT_WATCHER_PID" 2>/dev/null || true
+            fi
+          fi
+
+          # Redact internal API/apps hostnames and IPs from published
+          # logs — this repo is public and CI output is visible to anyone.
+          redact_hostnames() {
+            sed -E \
+              -e 's/api(-int)?\.[A-Za-z0-9._-]+/api.REDACTED/g' \
+              -e 's/[a-z0-9-]+\.apps\.[A-Za-z0-9._-]+/REDACTED.apps.REDACTED/g' \
+              -e 's/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/x.x.x.x/g'
+          }
+
+          echo "::group::Agent watcher log"
+          if [[ -f "$AGENT_WATCHER_LOG" ]]; then
+            redact_hostnames < "$AGENT_WATCHER_LOG"
+          else
+            echo "No agent watcher log file found."
+          fi
+          echo "::endgroup::"
+
+          shopt -s nullglob
+          for order_log in "$AGENT_WATCHER_ORDER_LOG_DIR"/*.log; do
+            echo "::group::Agent setup log: $(basename "$order_log")"
+            redact_hostnames < "$order_log"
+            echo "::endgroup::"
+          done
+
+          if [[ ! -f "$AGENT_WATCHER_STATUS_FILE" ]]; then
+            echo "::error::Agent watcher did not write a final status"
+            exit 1
+          fi
+          WATCHER_STATUS=$(cat "$AGENT_WATCHER_STATUS_FILE")
+          if [[ "$WATCHER_STATUS" != "complete" ]]; then
+            echo "::error::CaaS agent setup status was $WATCHER_STATUS"
+            exit 1
+          fi
 
       - name: Gather artifacts
         if: always()
