@@ -898,11 +898,11 @@ jobs:
           artifact-name: osac-logs-full-install-${{ github.run_id }}
 
       # Only a cancelled job is bounded: its always() steps get 5 minutes in
-      # total. A timeout elsewhere would turn a passing run red. Skipped when
-      # the step above ran: a cancel during it does not stop it, and a second
-      # upload would find no .redaction-complete and delete the logs.
+      # total. A timeout elsewhere would turn a passing run red. It runs when
+      # the step above did not finish (skipped, or cancelled by the runner
+      # because the job was cancelled while it ran), not after one that did.
       - name: Scan and upload artifacts (job cancelled)
-        if: cancelled() && steps.upload.outcome == 'skipped'
+        if: cancelled() && (steps.upload.outcome == 'skipped' || steps.upload.outcome == 'cancelled')
         timeout-minutes: 3
         uses: ./.github/actions/upload-artifacts
         with:

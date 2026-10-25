@@ -16,6 +16,11 @@ set -eo pipefail
 ARTIFACT_DIR="${RUNNER_TEMP}/osac-artifacts"
 COLLECT_TIMEOUT_SECONDS="${COLLECT_TIMEOUT_SECONDS:-900}"
 
+# The upload action keeps the marker, so one left by an earlier collection of
+# this job (a Netris job collects twice, a cancelled run collects again) must
+# not vouch for this one.
+rm -f "${ARTIFACT_DIR}/.redaction-complete"
+
 NETRIS_ARTIFACT_LAYOUT=false
 if [[ -d "${ARTIFACT_DIR}/netris-logs" \
   || -d "${GITHUB_WORKSPACE}/infra/netris/logs" \

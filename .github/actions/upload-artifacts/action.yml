@@ -26,7 +26,9 @@ runs:
           rm -rf "${ARTIFACT_DIR}"
           exit 1
         fi
-        rm -f "${ARTIFACT_DIR}/.redaction-complete" 2>/dev/null || true
+        # The marker stays: the cancelled variant of this step may run again
+        # after a cancel interrupted this one. A new collection removes it
+        # first (collect-artifacts.sh), and the upload leaves it out.
 
     - name: Scan artifacts with gitleaks
       if: always()
@@ -139,6 +141,8 @@ runs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ runner.temp }}/osac-artifacts/
+        path: |
+          ${{ runner.temp }}/osac-artifacts/
+          !${{ runner.temp }}/osac-artifacts/.redaction-complete
         retention-days: 7
         if-no-files-found: warn
