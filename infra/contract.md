@@ -24,16 +24,24 @@ Each backend lives in `infra/<name>/` and must provide:
 
 ## .env.infra
 
-After `deploy-osac`, write `.env.infra` in the backend directory:
+After `deploy-osac`, write `.env.infra` in the backend directory with the environment needed by its supported suites:
 
 ```
 KUBECONFIG=<path>
 OSAC_NAMESPACE=<namespace>
-OSAC_VM_KUBECONFIG=<path>          # if supporting vmaas
-OSAC_PULL_SECRET_PATH=<path>       # if supporting caas
+OSAC_VM_KUBECONFIG=<path>          # required by the vmaas and vmaas_networking suite contracts
+OSAC_PULL_SECRET_PATH=<path>       # commonly required by caas
 ```
 
-The top-level Makefile sources this file before running tests.
+`OSAC_VM_KUBECONFIG` is mandatory for VMaaS and full. For a single-cluster deployment it may point to the same kubeconfig as `KUBECONFIG`; set a separate path when the workload cluster has its own kubeconfig.
+
+A backend may define a shell-sourceable contract at `infra/<backend>/contracts/<suite>`. Set `REQUIRED_VARS` there to the `.env.infra` variables that suite needs, for example:
+
+```sh
+REQUIRED_VARS="KUBECONFIG OSAC_NAMESPACE OSAC_VM_KUBECONFIG"
+```
+
+Before `run-tests`, the top-level Makefile sources `.env.infra` and checks each variable listed by that backend contract. The Netris `bmaas_networking`, `full`, and stretched-networking contracts also require the BMaaS SSH host map, instance type, and guest-visible interface name published by setup. The contract is optional for suites that do not need this validation. Keeping contracts beside a backend lets each backend describe its own connection requirements without placing infrastructure contracts in the moved test suites.
 
 ## Variables
 

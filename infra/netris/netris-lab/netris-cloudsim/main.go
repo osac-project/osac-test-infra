@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -228,6 +229,7 @@ func main() {
 					LocalPortIndex: getPortIndex(netrisInfo.PortIndexes, link.Local.ID, localInterface),
 					LocalID:        id,
 					Local:          localInterface,
+					MacAddress:     generateInterfaceMAC(localSwitch, localInterface),
 					Remote:         link.Remote.Name,
 					RemoteID:       id + 1,
 					LocalIP:        localIP,
@@ -252,6 +254,7 @@ func main() {
 					LocalPortIndex: getPortIndex(netrisInfo.PortIndexes, link.Remote.ID, remoteInterface),
 					LocalID:        id,
 					Local:          remoteInterface,
+					MacAddress:     generateInterfaceMAC(remoteSwitch, remoteInterface),
 					Remote:         link.Local.Name,
 					RemoteID:       id - 1,
 					LocalIP:        remoteIP,
@@ -276,7 +279,8 @@ func main() {
 					for eachInEmptyPortsSwPorts := range emptyPortsSwPorts {
 						if _, ok := hypervisorToLinks[emptyPortsSwName]; ok {
 							hypervisorToLinks[emptyPortsSwName] = append(hypervisorToLinks[emptyPortsSwName], LinkMapping{
-								Local: eachInEmptyPortsSwPorts,
+								Local:      eachInEmptyPortsSwPorts,
+								MacAddress: generateInterfaceMAC(emptyPortsSwName, eachInEmptyPortsSwPorts),
 							})
 						}
 					}
@@ -1046,8 +1050,10 @@ func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW strin
 
 	bgpPortsSeen := make(map[int]struct{})
 
-	for bgpcount, bgp := range bgps {
-		if bgp.Internal == 0 {
+	for _, bgp := range bgps {
+		// The OCP underlay peer uses the real server-facing link created by
+		// the topology. It must not also be wired to the simulated ISP.
+		if bgp.Internal == 0 && bgp.Name != "ocp-evpn-underlay" {
 			if _, alreadyProcessed := bgpPortsSeen[bgp.Port.ID]; alreadyProcessed {
 				fmt.Printf("Skipping duplicate BGP link for Port ID %d (already processed)\n", bgp.Port.ID)
 				continue
@@ -1061,7 +1067,7 @@ func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW strin
 						Ipv4: fmt.Sprintf("%s/%d", bgp.LocalIP, bgp.PrefixLength),
 					},
 					Remote: link.LinkIDName{
-						Name: fmt.Sprintf("ens%d@isp-server", bgpcount+6),
+						Name: fmt.Sprintf("ens%d@isp-server", len(bgpLinks)+6),
 						Ipv4: fmt.Sprintf("%s/%d", bgp.RemoteIP, bgp.PrefixLength),
 					},
 				}
@@ -1329,6 +1335,13 @@ func generateMAC(counter int) string {
 
 	// Format the MAC address with the given prefix
 	return fmt.Sprintf("%s:%02x:%02x:%02x", prefix, mac[0], mac[1], mac[2])
+}
+
+func generateInterfaceMAC(hardware, iface string) string {
+	hash := sha256.Sum256([]byte(hardware + "/" + iface))
+	// Keep the address locally administered and unicast, then use 40 hash bits
+	// so the same simulated hardware port keeps its MAC across VM recreation.
+	return fmt.Sprintf("52:%02x:%02x:%02x:%02x:%02x", hash[0], hash[1], hash[2], hash[3], hash[4])
 }
 
 // incrementIPBy safely increments an IPv4 address by n

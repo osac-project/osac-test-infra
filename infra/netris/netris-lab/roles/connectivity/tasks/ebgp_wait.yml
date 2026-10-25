@@ -5,14 +5,42 @@
   vars:
     ebgp_state: read
 
+- name: Select E-BGP sessions required before OCP deployment
+  ansible.builtin.set_fact:
+    _ebgp_required_sessions: >-
+      {{
+        (
+          netris_ebgp_sessions
+          | rejectattr('name', 'equalto', 'ocp-evpn-underlay')
+          | list
+        )
+        if ocp_underlay_enabled | default(false) | bool
+        else netris_ebgp_sessions
+      }}
+
+- name: Count required E-BGP sessions
+  ansible.builtin.set_fact:
+    _ebgp_required_total: "{{ _ebgp_required_sessions | length }}"
+    _ebgp_required_established: >-
+      {{
+        _ebgp_required_sessions
+        | selectattr('bgp_state', 'defined')
+        | selectattr('bgp_state', 'equalto', 'Established')
+        | list
+        | length
+      }}
+    _ebgp_attempt: "{{ (_ebgp_attempt | default(0) | int) + 1 }}"
+
 - name: Check E-BGP sessions
   ansible.builtin.set_fact:
-    _ebgp_ready: "{{ netris_ebgp_established | int >= netris_ebgp_total | int }}"
-    _ebgp_attempt: "{{ (_ebgp_attempt | default(0) | int) + 1 }}"
+    _ebgp_ready: "{{ _ebgp_required_established | int >= _ebgp_required_total | int }}"
 
 - name: Report E-BGP progress
   ansible.builtin.debug:
-    msg: "E-BGP: {{ netris_ebgp_established }}/{{ netris_ebgp_total }} established (attempt {{ _ebgp_attempt }}/20)"
+    msg: >-
+      E-BGP: {{ netris_ebgp_established }}/{{ netris_ebgp_total }} established
+      ({{ _ebgp_required_established }}/{{ _ebgp_required_total }} required,
+      attempt {{ _ebgp_attempt }}/20)
   when: not _ebgp_ready | bool
 
 - name: Wait and retry
@@ -25,7 +53,10 @@
     - name: Retry E-BGP check
       ansible.builtin.include_tasks: ebgp_wait.yml
 
-- name: Fail if no E-BGP sessions established
+- name: Fail if required E-BGP sessions are not established
   ansible.builtin.fail:
-    msg: "E-BGP: {{ netris_ebgp_established }}/{{ netris_ebgp_total }} established after {{ _ebgp_attempt }} attempts (need all)"
+    msg: >-
+      E-BGP: {{ netris_ebgp_established }}/{{ netris_ebgp_total }} established;
+      required peers {{ _ebgp_required_established }}/{{ _ebgp_required_total }}
+      established after {{ _ebgp_attempt }} attempts
   when: not _ebgp_ready | bool and _ebgp_attempt | int >= 20

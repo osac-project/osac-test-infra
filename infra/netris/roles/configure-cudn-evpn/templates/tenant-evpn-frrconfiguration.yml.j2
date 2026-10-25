@@ -1,0 +1,29 @@
+apiVersion: frrk8s.metallb.io/v1beta1
+kind: FRRConfiguration
+metadata:
+  name: tenant-evpn
+  namespace: openshift-frr-k8s
+  labels:
+    evpn: "true"
+spec:
+  bgp:
+    routers:
+      - asn: {{ ocp_underlay_ocp_asn | int }}
+        prefixes:
+          - "{{ ocp_evpn_vtep_node_ip_cidr }}"
+        neighbors:
+          - address: "{{ _ocp_evpn_leaf_ip }}"
+            asn: {{ _ocp_evpn_leaf_asn | int }}
+            ebgpMultiHop: true
+            port: 179
+            sourceaddress: "{{ _ocp_evpn_ocp_ip }}"
+            toReceive:
+              allowed:
+                mode: filtered
+                prefixes:
+                  - prefix: "{{ ocp_evpn_netris_loopback_cidr }}"
+                    ge: 32
+                    le: 32
+            toAdvertise:
+              allowed:
+                mode: all

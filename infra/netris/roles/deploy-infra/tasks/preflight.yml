@@ -38,6 +38,115 @@
   ansible.builtin.set_fact:
     _aws_creds_ok: "{{ aws_access_key_id | length > 0 and aws_secret_access_key | length > 0 }}"
 
+- name: Initialize optional OCP underlay preflight state
+  ansible.builtin.set_fact:
+    _ocp_underlay_failures: []
+
+- name: Initialize optional OCP underlay conflict ranges
+  ansible.builtin.set_fact:
+    _ocp_underlay_conflict_ranges: >-
+      {{
+        [
+          {'name': 'host management bridge', 'cidr': mgmt_bridge_cidr},
+          {'name': 'Netris management IPAM', 'cidr': ipam_mgmt},
+          {'name': 'Netris private/fabric IPAM', 'cidr': ipam_private_allocation},
+          {'name': 'Netris switch loopbacks', 'cidr': ns_fabric.lo_subnet},
+          {'name': 'Netris North-South management', 'cidr': ns_fabric.mgmt_subnet},
+          {'name': 'North-South server data range', 'cidr': ns_fabric.gpu_server_ns_subnet},
+          {'name': 'North-South server IPMI range', 'cidr': ns_fabric.gpu_server_ipmi_subnet},
+          {'name': 'host-to-ISP BGP link', 'cidr': bgp_link_subnet},
+          {'name': 'NAT pool', 'cidr': nat_cidr},
+          {'name': 'L4LB pool', 'cidr': l4lb_cidr},
+          {'name': 'existing OSAC ExternalIP pool', 'cidr': osac_external_ip_pool_cidr},
+          {'name': 'BMaaS provisioning SNAT pool', 'cidr': bmaas_provisioning_snat_cidr},
+          {'name': 'OCP management subnet', 'cidr': ocp_subnet_cidr},
+          {'name': 'VMaaS fixture ExternalIP pool', 'cidr': osac_vmaas_external_ip_pool_cidr}
+        ]
+        + (ew_fabric_server_subnets if ew_fabric_enable | bool else [])
+      }}
+  when: ocp_underlay_enabled | bool
+
+- name: Validate optional OCP underlay CIDR syntax
+  ansible.builtin.set_fact:
+    _ocp_underlay_p2p_valid: "{{ (ocp_underlay_p2p_cidr | ansible.utils.ipv4('net') | default('', true) | length) > 0 }}"
+    _ocp_underlay_vmaas_pool_valid: "{{ (osac_vmaas_external_ip_pool_cidr | ansible.utils.ipv4('net') | default('', true) | length) > 0 }}"
+    _ocp_underlay_p2p_prefix: "{{ ocp_underlay_p2p_cidr | ansible.utils.ipaddr('prefix') | int }}"
+    _ocp_underlay_leaf_asn: "{{ (ns_fabric.asn_start | int) + (ocp_underlay_leaf_index | int) }}"
+  when: ocp_underlay_enabled | bool
+
+- name: Collect OCP underlay configuration failures
+  ansible.builtin.set_fact:
+    _ocp_underlay_failures: >-
+      {{
+        _ocp_underlay_failures
+        + ([] if _ocp_underlay_p2p_valid | bool else ['ocp_underlay_p2p_cidr must be a valid IPv4 CIDR; got ' + ocp_underlay_p2p_cidr])
+        + ([] if _ocp_underlay_vmaas_pool_valid | bool else ['osac_vmaas_external_ip_pool_cidr must be a valid IPv4 CIDR; got ' + osac_vmaas_external_ip_pool_cidr])
+        + ([] if (_ocp_underlay_p2p_valid | bool and _ocp_underlay_p2p_prefix | int == 31) else ['ocp_underlay_p2p_cidr must be a /31 point-to-point network; got ' + ocp_underlay_p2p_cidr])
+        + ([] if (ocp_underlay_server_port is match('^eth[0-9]+$')) else ['ocp_underlay_server_port must use the Netris ethN form; got ' + ocp_underlay_server_port])
+        + ([] if (ocp_underlay_leaf_port is match('^swp[0-9]+s[0-9]+$')) else ['ocp_underlay_leaf_port must use the Netris swpNsN form; got ' + ocp_underlay_leaf_port])
+        + ([] if (ocp_underlay_leaf_index | int >= 0 and ocp_underlay_leaf_index | int < ns_fabric.leaf_count | int) else ['ocp_underlay_leaf_index must be between 0 and ' + ((ns_fabric.leaf_count | int) - 1) | string + '; got ' + (ocp_underlay_leaf_index | string)])
+        + ([] if (ocp_underlay_server_port == 'eth10' and ocp_underlay_leaf_index | int == 1 and ocp_underlay_leaf_port == 'swp1s0') else ['CUDN EVPN underlay must reuse h00 eth10 connected to ns-leaf-1 swp1s0'])
+        + ([] if (ocp_underlay_ocp_asn | int > 0 and ocp_underlay_ocp_asn | int < 4294967295) else ['ocp_underlay_ocp_asn must be a valid 32-bit BGP ASN; got ' + (ocp_underlay_ocp_asn | string)])
+        + ([] if (_ocp_underlay_leaf_asn | int > 0 and _ocp_underlay_leaf_asn | int < 4294967295) else ['selected Netris leaf ASN derived from ns_fabric.asn_start and ocp_underlay_leaf_index must be a valid 32-bit BGP ASN; got ' + (_ocp_underlay_leaf_asn | string)])
+        + ([] if (ocp_underlay_ocp_asn | int != (_ocp_underlay_leaf_asn | int)) else ['ocp_underlay_ocp_asn must differ from the selected Netris leaf ASN ' + (_ocp_underlay_leaf_asn | string)])
+        + ([] if (ocp_vm_name_pattern == (gpu_server_hostname ~ '-pod00-su0-h00')) else ['ocp_vm_name_pattern must match the first generated Netris server (' + gpu_server_hostname + '-pod00-su0-h00) for this underlay link'])
+        + ([] if (gpu_server_count | int > 0) else ['gpu_server_count must include the OCP VM before enabling the OCP underlay link'])
+        + ([] if not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool) else ['VMaaS ExternalIP tests are enabled but ocp_vmaas_external_ip_return_path_acknowledged is false; independently provision and verify a narrow route/return policy for the 172.27.0.0/16 range'])
+      }}
+  when: ocp_underlay_enabled | bool
+
+- name: Derive OCP underlay endpoints from the configured /31
+  ansible.builtin.set_fact:
+    _ocp_underlay_ocp_ip: "{{ ocp_underlay_p2p_cidr | ansible.utils.ipaddr('0') | ansible.utils.ipaddr('address') }}"
+    _ocp_underlay_leaf_ip: "{{ ocp_underlay_p2p_cidr | ansible.utils.ipaddr('1') | ansible.utils.ipaddr('address') }}"
+  when:
+    - ocp_underlay_enabled | bool
+    - _ocp_underlay_p2p_valid | bool
+    - _ocp_underlay_p2p_prefix | int == 31
+
+- name: Check OCP underlay endpoints are distinct
+  ansible.builtin.set_fact:
+    _ocp_underlay_failures: "{{ _ocp_underlay_failures + (['the OCP and selected Netris leaf endpoints derived from ocp_underlay_p2p_cidr must be distinct'] if _ocp_underlay_ocp_ip == _ocp_underlay_leaf_ip else []) }}"
+  when:
+    - ocp_underlay_enabled | bool
+    - _ocp_underlay_p2p_valid | bool
+    - _ocp_underlay_p2p_prefix | int == 31
+
+- name: Reject OCP underlay /31 overlaps with existing lab ranges
+  ansible.builtin.set_fact:
+    _ocp_underlay_failures: >-
+      {{
+        _ocp_underlay_failures
+        + ([
+            'ocp_underlay_p2p_cidr ' + ocp_underlay_p2p_cidr + ' overlaps ' + item.name + ' ' + item.cidr
+          ] if (
+            (ocp_underlay_p2p_cidr | ansible.utils.network_in_network(item.cidr))
+            or (item.cidr | ansible.utils.network_in_network(ocp_underlay_p2p_cidr))
+          ) else [])
+      }}
+  loop: "{{ _ocp_underlay_conflict_ranges }}"
+  when:
+    - ocp_underlay_enabled | bool
+    - _ocp_underlay_p2p_valid | bool
+    - _ocp_underlay_p2p_prefix | int == 31
+
+- name: Reject VMaaS fixture pool overlaps with existing lab ranges
+  ansible.builtin.set_fact:
+    _ocp_underlay_failures: >-
+      {{
+        _ocp_underlay_failures
+        + ([
+            'osac_vmaas_external_ip_pool_cidr ' + osac_vmaas_external_ip_pool_cidr + ' overlaps ' + item.name + ' ' + item.cidr
+          ] if (
+            (osac_vmaas_external_ip_pool_cidr | ansible.utils.network_in_network(item.cidr))
+            or (item.cidr | ansible.utils.network_in_network(osac_vmaas_external_ip_pool_cidr))
+          ) else [])
+      }}
+  loop: "{{ _ocp_underlay_conflict_ranges | rejectattr('name', 'equalto', 'VMaaS fixture ExternalIP pool') | list }}"
+  when:
+    - ocp_underlay_enabled | bool
+    - _ocp_underlay_vmaas_pool_valid | bool
+
 - name: Collect preflight failures
   ansible.builtin.set_fact:
     _preflight_failures: >-
@@ -52,6 +161,7 @@
         + ([] if (_lab_name_ok | bool) else ['LAB_NAME not set — export LAB_NAME=<your-name> to avoid DNS collisions'])
         + ([] if (_aws_creds_ok | bool) else ['AWS credentials missing — export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for Route 53 DNS'])
         + ([] if (netris_password is defined and netris_password | length > 0) else ['netris_password not set — add it to your local config (e.g. netris-lab/group_vars/all.yml)'])
+        + _ocp_underlay_failures
       }}
 
 - name: Fail on preflight errors

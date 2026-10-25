@@ -7,6 +7,16 @@ permissions:
 on:
   workflow_call:
     inputs:
+      suite:
+        description: "BMaaS Netris suite to run"
+        required: false
+        type: string
+        default: "bmaas_networking"
+      osac-profile:
+        description: "OSAC profile for the BMaaS Netris suite"
+        required: false
+        type: string
+        default: "bmaas-ci"
       instance-type:
         description: "EC2 instance type"
         required: false
@@ -243,13 +253,11 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
-      # BMaaS still deploys an OCP SNO cluster (make deploy-ocp -> the
-      # configure-dns role), which needs Route53 access the same as
-      # CaaS/MaaS -- despite push-route53-secrets.sh's header comment
-      # suggesting otherwise, this isn't CaaS-only.
+      # The Netris lab's OCP SNO deploy runs the configure-dns role, which
+      # needs Route 53 credentials for the shared hosted zone.
       - name: Fetch Route 53 credentials
         id: route53-creds
-        uses: ./.github/actions/fetch-caas-route53-creds
+        uses: ./.github/actions/fetch-route53-creds
         with:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
@@ -356,11 +364,17 @@ jobs:
         env:
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_BRANCH: ${{ inputs.osac-branch }}
+          TEST_SUITE: ${{ inputs.suite }}
+          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
         run: |
+          case "${TEST_SUITE}:${OSAC_PROFILE}" in
+            bmaas_networking:bmaas-ci) ;;
+            *) echo "::error::Unsupported Netris suite/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
+          esac
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
           fi
-          EXTRA_VARS='{"bare_metal_services":true}'
+          EXTRA_VARS='{"dns_server":"10.11.5.160","bare_metal_services":true}'
           declare -A OVERRIDES=(
             [osac_repo]="$OSAC_REPO"
             [osac_branch]="$OSAC_BRANCH"
@@ -378,14 +392,16 @@ jobs:
         shell: bash
         env:
           NETRIS_DIR: infra/netris
-        run: ./scripts/ec2-runner/stage-caas-netris-secrets.sh
+        run: ./scripts/ec2-runner/stage-netris-secrets.sh
 
       - name: Install prerequisites and cache images
         shell: bash
         timeout-minutes: 30
         env:
+          TEST_SUITE: ${{ inputs.suite }}
+          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make setup-infra INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
+        run: make setup-infra INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Add osac CLI to PATH
         shell: bash
@@ -408,15 +424,19 @@ jobs:
         shell: bash
         timeout-minutes: 45
         env:
+          TEST_SUITE: ${{ inputs.suite }}
+          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make deploy-infra INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
+        run: make deploy-infra INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Deploy OCP from snapshot
         shell: bash
         timeout-minutes: 60
         env:
+          TEST_SUITE: ${{ inputs.suite }}
+          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make deploy-ocp INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
+        run: make deploy-ocp INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Build and load component images
         id: components
@@ -538,26 +558,32 @@ jobs:
         timeout-minutes: 90
         shell: bash
         env:
+          TEST_SUITE: ${{ inputs.suite }}
+          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
           COMPONENT_OVERRIDES: ${{ steps.components.outputs.overrides || '{}' }}
         run: |
           MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
-          make deploy-osac INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${MERGED}"
+          make deploy-osac INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${MERGED}"
 
-      - name: Setup BMaaS hosts and catalog
+      - name: Setup Netris suite
         shell: bash
-        timeout-minutes: 30
+        timeout-minutes: 60
         env:
+          TEST_SUITE: ${{ inputs.suite }}
+          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make setup-suite INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
+        run: make setup-suite INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Run BMaaS networking tests
         id: test
         timeout-minutes: 60
         shell: bash
-        # Keep the slow, flaky cross-tenant class out of this workflow. If
-        # needed, cross-tenant coverage can be folded into the existing test.
-        run: make run-tests INFRA=netris SUITE=bmaas_networking TEST='not TestCrossTenantBmaasNetworking'
+        env:
+          TEST_SUITE: ${{ inputs.suite }}
+        run: |
+          # Keep the slow, flaky cross-tenant class out of this workflow.
+          make run-tests INFRA=netris SUITE="${TEST_SUITE}" TEST='not TestCrossTenantBmaasNetworking'
 
       - name: Gather infra diagnostics
         if: always()
@@ -573,12 +599,14 @@ jobs:
         continue-on-error: true
         run: make -C infra/netris gather-mgmt-cluster
 
-      - name: Gather BMaaS diagnostics
+      - name: Gather BMaaS Netris diagnostics
         if: always()
         shell: bash
         timeout-minutes: 10
         continue-on-error: true
-        run: make gather-suite INFRA=netris SUITE=bmaas_networking
+        env:
+          TEST_SUITE: ${{ inputs.suite }}
+        run: make gather-suite INFRA=netris SUITE="${TEST_SUITE}"
 
       - name: Select kubeconfig for artifact collection
         id: artifact-kubeconfig
@@ -608,7 +636,7 @@ jobs:
         with:
           namespace: osac-e2e-ci
           kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
-          artifact-name: bmaas-netris-artifacts
+          artifact-name: ${{ inputs.suite }}-netris-artifacts
 
       - name: Gather EC2 runner artifacts
         if: always()

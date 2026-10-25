@@ -113,22 +113,41 @@
 
 - name: Check if sushy-emulator is already running
   ansible.builtin.shell:
-    cmd: pgrep -f sushy-emulator
+    cmd: |
+      pid_file={{ (sushy_tools_config_dir ~ '/sushy-emulator.pid') | quote }}
+      config_file={{ (sushy_tools_config_dir ~ '/sushy-emulator.conf') | quote }}
+      pid=""
+      if [ -r "$pid_file" ]; then
+        pid=$(cat "$pid_file")
+        case "$pid" in ''|*[!0-9]*) pid="" ;; esac
+        if [ -n "$pid" ] && { [ "$pid" -le 1 ] || [ ! -r "/proc/$pid/cmdline" ] || ! tr '\0' ' ' < "/proc/$pid/cmdline" | grep -F -- "$config_file" >/dev/null; }; then
+          pid=""
+        fi
+      fi
+      if [ -z "$pid" ]; then
+        pid=$(pgrep -f -- "sushy-emulator --config $config_file" | head -n 1)
+      fi
+      [ -n "$pid" ] || exit 1
+      [ -r "/proc/$pid/cmdline" ] || exit 1
+      tr '\0' ' ' < "/proc/$pid/cmdline" | grep -F -- "$config_file" >/dev/null || exit 1
+      echo "$pid"
   register: _sushy_running
   failed_when: false
   changed_when: false
 
 - name: Stop existing sushy-emulator if config changed
-  ansible.builtin.shell:
-    cmd: pkill -f sushy-emulator || true
+  ansible.builtin.command:
+    argv:
+      - kill
+      - "{{ _sushy_running.stdout | trim }}"
   when: _sushy_config is changed and _sushy_running.rc == 0
 
 - name: Start sushy-emulator
   ansible.builtin.shell:
     cmd: |
-      nohup sushy-emulator --config {{ sushy_tools_config_dir }}/sushy-emulator.conf \
-        > {{ sushy_tools_config_dir }}/sushy.log 2>&1 &
-      echo $!
+      nohup sushy-emulator --config {{ (sushy_tools_config_dir ~ '/sushy-emulator.conf') | quote }} \
+        > {{ (sushy_tools_config_dir ~ '/sushy.log') | quote }} 2>&1 &
+      echo $! > {{ (sushy_tools_config_dir ~ '/sushy-emulator.pid') | quote }}
   register: _sushy_start
   when: _sushy_running.rc != 0 or _sushy_config is changed
 

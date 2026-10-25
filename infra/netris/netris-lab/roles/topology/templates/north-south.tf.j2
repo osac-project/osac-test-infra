@@ -179,15 +179,28 @@ resource "netris_link" "north-south-leaf-to-gpu-server" {
                                       "eth${(count.index - (2*floor(count.index/2)) + local.gpu-server-first-ns-port)}@${netris_server.hgx[(floor(count.index/2))].name}"
   ]
   ipv4                            = [
+{% if ocp_underlay_enabled | default(false) | bool %}
+                                      count.index == {{ ocp_underlay_leaf_index | int }} ? format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 1)) : "${var.north-south-fabric.gpu-server-ns-nexthop}",
+                                      count.index == {{ ocp_underlay_leaf_index | int }} ? format("%s/31", cidrhost("{{ ocp_underlay_p2p_cidr }}", 0)) : "${cidrhost(var.north-south-fabric.gpu-server-ns-subnet, (floor(count.index/2) + 1) )}/${replace(var.north-south-fabric.gpu-server-ns-subnet, "/.*//", "")}"
+{% else %}
                                       "${var.north-south-fabric.gpu-server-ns-nexthop}",
                                       "${cidrhost(var.north-south-fabric.gpu-server-ns-subnet, (floor(count.index/2) + 1) )}/${replace(var.north-south-fabric.gpu-server-ns-subnet, "/.*//", "")}"
+{% endif %}
   ]
+{% if ocp_underlay_enabled | default(false) | bool %}
+  underlay                        = count.index == {{ ocp_underlay_leaf_index | int }} ? "enabled" : "disabled"
+{% else %}
   underlay                        = "disabled"
+{% endif %}
   depends_on                      = [
                                       netris_server.hgx,
                                       netris_switch.north-south-leaf
   ]
 }
+
+# The underlay peer is generated from the Netris-managed eth10 <-> swp1s0
+# link (underlay = enabled) and the EVPN-VTEP server ASN above. Do not create
+# a separate VLAN-backed netris_bgp resource on this routed point-to-point link.
 
 
 #Leaf to Spine links

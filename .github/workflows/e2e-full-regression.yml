@@ -964,7 +964,10 @@ jobs:
           # Cluster create via references/ needs a fabric NIC on host type
           # ci-worker, which full-ci does not stamp. The name-based subnet
           # cleanup cases remain excluded until verified with the shared class.
-          FILTER="not TestBmaasNetworking and not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name"
+          # This generic full-ci workflow has no Netris EVPN underlay setup. Keep
+          # both Netris-specific and stretched networking tests in the dedicated
+          # Netris backend targets.
+          FILTER="not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name"
           if [ -n "${TEST_FILTER}" ]; then
             FILTER="(${TEST_FILTER}) and ${FILTER}"
           fi
@@ -995,9 +998,9 @@ jobs:
               tests/e2e/references/ \
               tests/e2e/caas/ \
               tests/e2e/bmaas/ \
-              --ignore=tests/e2e/bmaas/regression/networking \
               --ignore=tests/e2e/vmaas/regression/external_ip \
               --ignore=tests/e2e/vmaas/test_disabled_services.py \
+              -m "not requires_netris and not requires_stretched_networking" \
               -k "${FILTER}" \
               -n 0 \
               --junitxml=/tmp/test-output/junit.xml -v

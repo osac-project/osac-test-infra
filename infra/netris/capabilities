@@ -1,1 +1,1 @@
-SUPPORTED_SUITES="caas bmaas bmaas_networking"
+SUPPORTED_SUITES="caas bmaas bmaas_networking vmaas vmaas_networking stretched_networking full"

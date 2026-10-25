@@ -1,6 +1,6 @@
 # netris-test-infra
 
-Ansible automation to deploy OCP SNO on a [Netris Spectrum-X simulated lab](https://github.com/danmanor/netris-lab) and run OSAC VMaaS/CaaS/BMaaS end-to-end tests.
+Ansible automation to deploy OCP SNO on a [Netris Spectrum-X simulated lab](https://github.com/danmanor/netris-lab) and exercise the suites currently advertised by the backend.
 
 ## Architecture
 
@@ -106,6 +106,46 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make deploy-caas` | Create CaaS cluster using `ocp_ci_small` template | ~60 min |
 | `make setup-maas` | Same as setup-caas with MaaS resource-class / sizing; labels only `MAAS_LABEL_HOSTNAMES` (default h02+h03) with `g5` | ~30 min |
 | `make deploy-maas` | Create MaaS cluster (`ocp_4_20_ai_maas` + `-p` template params) | ~60 min |
+
+### VMaaS and BMaaS shared-subnet networking
+
+The Netris VMaaS and full paths use the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `SUITE=vmaas`, `SUITE=vmaas_networking`, `SUITE=stretched_networking`, or `SUITE=full`, `deploy-infra` reuses h00's Netris-managed leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay and enables underlay on that link; leaf-0's `eth9` link remains the `br-ex` data path. h00's Linux interface names are resolved from the MAC addresses correlated across Netris, the leaf interface, and the libvirt tunnel, so the guest NIC enumeration may change without changing which path carries data or underlay. It sets h00's server ASN and EVPN-VTEP inventory role so Netris can generate the leaf-side peer from the managed link. `deploy-ocp` configures OVN route advertisements, an unmanaged VTEP, and OCP-side FRR; it does not install or rely on the Netris host agent. No standalone VLAN-backed BGP object is created for the routed `/31`. The OSAC `cudn-evpn-netris-test` profile enables both VMaaS and BMaaS and selects Netris plus CUDN EVPN, allowing both instance types to attach to one subnet. BMaaS continues to use the Netris server-port names and its separate per-BMH MAC mapping for `eth9`/`eth10`; assigning h00's `eth10` to the underlay does not change h01–h03 provisioning NIC selection. `setup-bmaas` publishes the configured BMI guest interface name as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched networking tests consume that value instead of embedding a server-port name in the test code.
+
+The focused VMaaS Netris networking E2E invocation is:
+
+```bash
+make e2e INFRA=netris SUITE=vmaas_networking OSAC_DEPLOY_MODE=fresh
+```
+
+`SUITE=vmaas_networking` selects the `cudn-evpn-netris-test` OSAC profile by default and runs only `tests/e2e/networking/vmaas` with the `requires_netris` and `requires_netris_vmaas` markers. `SUITE=vmaas` uses the same profile and runs the VMaaS test tree while excluding the common `requires_netris` marker. Set `OSAC_PROFILE=cudn-evpn-netris-test` explicitly to pin the profile. It selects the CUDN EVPN and Netris managers; `deploy-infra` and `deploy-ocp` provision the cluster-side networking prerequisites.
+
+The focused BMaaS Netris networking invocation is:
+
+`make e2e INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci OSAC_DEPLOY_MODE=fresh`
+
+`SUITE=bmaas_networking` runs only `tests/e2e/networking/bmaas` with the `requires_netris` and `requires_netris_bmaas` markers. The standard BMaaS suite excludes all Netris-marked tests.
+
+The stretched VMaaS↔BMaaS Netris invocation is:
+
+```bash
+make e2e INFRA=netris SUITE=stretched_networking OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
+```
+
+`SUITE=stretched_networking` uses the `full-ci` profile, prepares both CaaS and BMaaS prerequisites plus the CUDN EVPN underlay, and runs only `tests/e2e/networking/stretched` with the generic `requires_stretched_networking` marker. The same test is also included in `SUITE=full`. Both contracts require the BMI guest interface name published by BMaaS setup.
+
+### Full-profile E2E
+
+```bash
+make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
+```
+
+`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` prepares CaaS and BMaaS resources, then runs the VMaaS prerequisite check. `test-full` runs the serial OSAC mono-repo E2E set with its configured exclusions; it includes only the generic `requires_stretched_networking` shared-subnet test and excludes the dedicated VMaaS and BMaaS Netris cases. The Netris PR workflow exposes `bmaas-netris`, `vmaas-netris`, and `stretched-netris`; the stretched check runs only the shared-subnet BMI/ComputeInstance test.
+
+VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
+
+Suite fixtures create their own tenant `VirtualNetwork`, `Subnet`, `SecurityGroup`, and `ExternalIPPool` resources. Lab setup owns the cluster/fabric prerequisites and must not pre-create fixture-owned tenant resources. PodNetwork route advertisements support shared-subnet VMaaS/BMaaS traffic. ExternalIP and EgressIP dataplane tests require a separately provisioned and acknowledged route/return path for `172.27.0.0/16`; enable `ocp_vmaas_external_ip_tests_enabled` only after verifying that path.
+
+To collect diagnostics from an existing deployment, run `make gather-suite INFRA=netris SUITE=vmaas_networking`. The CUDN EVPN captures are written under `infra/netris/logs/cudn-evpn/`. Collection is read-only and best-effort; unavailable APIs or peers get an explicit marker in the output. Captured Kubernetes YAML, FRR logs, and Netris responses are scrubbed for credential-like values before they are written.
 
 ### Destroy
 
@@ -292,9 +332,11 @@ Then browse to `https://osac-aap-osac-devel.apps.ocp-sno.osac.local:9444` (accep
 
 The flow runs three Ansible roles in sequence:
 
-1. **`configure-netris`** — creates VPC, VNet (DHCP disabled), subnet, SNAT/DNAT rules via Netris API
+1. **`configure-netris`** — discovers h00's Netris server ports by correlating Netris links, leaf-interface MAC addresses, and libvirt tunnel endpoints. It preserves a verified OCP VNet attachment or chooses an unused verified data port, excluding underlay links. It then configures the VPC/VNet and SNAT/DNAT rules.
 2. **`configure-dns`** — creates Route 53 DNS records and local dnsmasq config for the cluster domain
-3. **`restore-ocp`** — creates copy-on-write disk overlays backed by the cached flavor, mounts the OS disk via qemu-nbd to write pre-boot config (hostname, nodeip hint, dnsmasq overrides, nmstate config for static IP, OVN/OVS cleanup), runs recert (via JSON config file, matching LCA's approach) to regenerate all TLS certificates and cluster identity, then waits for cluster health. When `suite=maas` (via `SUITE=maas`), also grows the h00 OS disk to `ocp_snapshot_disk_gb` before pre-boot config.
+3. **`restore-ocp`** — creates copy-on-write disk overlays, grows the OS and LVM disks, and writes pre-boot config. At boot, the recert service finds each guest NIC by its discovered MAC, applies the OCP address and default route to the data NIC, and verifies gateway reachability through the management path before continuing over DNAT SSH. It then waits for cluster health.
+
+The server-side Netris port names (for example, `eth9` for data and `eth10` for underlay) are not Linux interface names inside h00. The deployment discovers the guest MAC for each port from Netris, the leaf interface, and libvirt, then resolves the current guest interface name by MAC. It also resolves the management interface from its IP before applying reverse-path filtering. It fails closed if a port, tunnel, or guest MAC mapping is ambiguous. Cloudsim's `/root/.cloudsim_aliases` provides the management IP; set `ocp_vm_mgmt_ip` only if those aliases are unavailable.
 
 The snapshot flavor is pulled and cached during `make setup-infra` (one-time ~60GB download). Subsequent deploys use copy-on-write overlays, so only changed blocks are written.
 
@@ -374,8 +416,9 @@ make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
 | `ocp_cluster_name` | `ocp-sno` | OCP cluster name | defaults only |
 | `ocp_server_vcpu` | `20` | OCP VM vCPUs | yes (16) |
 | `ocp_server_memory_gb` | `64` | OCP VM RAM in GB | yes (48) |
-| `ocp_install_disk_gb` | `100` | OCP install disk size in GB | defaults only |
-| `ocp_lvm_disk_gb` | `200` | LVM storage disk size in GB | defaults only |
+| `ocp_install_disk_gb` | `300` | OCP install disk size in GB | defaults only |
+| `ocp_lvm_disk_gb` | `300` | LVM storage disk size in GB | defaults only |
+| `ocp_snapshot_disk_gb` | `300` | OCP snapshot OS disk size in GB | defaults only |
 
 #### Netris Networking
 

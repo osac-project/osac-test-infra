@@ -107,7 +107,7 @@
   ansible.builtin.shell:
     cmd: oc scale deployment/osac-ui --replicas=0 -n {{ snapshot_osac_namespace }} 2>/dev/null || true
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   changed_when: false
 
 - name: Build list of CI images to pre-pull
@@ -146,7 +146,7 @@
       fi
       oc delete eda osac-aap-eda -n {{ snapshot_osac_namespace }} --ignore-not-found 2>/dev/null || true
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   changed_when: false
 
 # On a cold SNO node just restored from a snapshot, CNI/CSI drivers and
@@ -160,7 +160,7 @@
   ansible.builtin.shell:
     cmd: oc rollout status deploy/keycloak-service -n keycloak --timeout=300s
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _keycloak_rollout
   until: _keycloak_rollout.rc == 0
   retries: 40
@@ -197,7 +197,7 @@
         echo "Resolved ${CLIENT_ID} secret from Keycloak"
       done
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
 
 - name: Compute Keycloak external URL for this cluster
   ansible.builtin.set_fact:
@@ -209,7 +209,7 @@
       oc set env deploy/keycloak-service -n keycloak
       KC_HOSTNAME=https://{{ _keycloak_external_host }}
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _kc_patch
   changed_when: "'updated' in _kc_patch.stdout"
 
@@ -227,7 +227,7 @@
         echo "SAN added and cert reissued"
       fi
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _cert_patch
   changed_when: "'reissued' in _cert_patch.stdout"
 
@@ -235,7 +235,7 @@
   ansible.builtin.shell:
     cmd: oc rollout status deploy/keycloak-service -n keycloak --timeout=300s
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   when: _kc_patch is changed
 
 - name: Patch values file with external Keycloak issuer URL

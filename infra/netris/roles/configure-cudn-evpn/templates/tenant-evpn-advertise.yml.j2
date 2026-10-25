@@ -1,0 +1,18 @@
+apiVersion: frrk8s.metallb.io/v1beta1
+kind: FRRConfiguration
+metadata:
+  name: tenant-evpn-advertise
+  namespace: openshift-frr-k8s
+spec:
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/hostname: "{{ _ocp_evpn_node_name }}"
+  raw:
+    priority: 5
+    rawConfig: |
+      router bgp {{ ocp_underlay_ocp_asn | int }}
+        address-family l2vpn evpn
+          neighbor {{ _ocp_evpn_leaf_ip }} activate
+          neighbor {{ _ocp_evpn_leaf_ip }} allowas-in origin
+          advertise-all-vni
+        exit-address-family

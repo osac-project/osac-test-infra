@@ -1,0 +1,93 @@
+---
+name: E2E VMaaS Networking Netris Full Install
+run-name: "E2E VMaaS Networking Netris Full Install${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+on:
+  pull_request_target:
+    types: [labeled]
+    branches: [main]
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "PR number being tested"
+        required: false
+        default: ""
+      pr-repository:
+        description: "Repository containing the PR head, including a fork"
+        required: false
+        default: ""
+      pr-ref:
+        description: "PR head branch/ref"
+        required: false
+        default: ""
+      pr-sha:
+        description: "Expected immutable PR head SHA"
+        required: false
+        default: ""
+      fork-pr-author-association:
+        description: "PR author association used by fork authorization"
+        required: false
+        default: ""
+      fork-pr-author:
+        description: "PR author login used by fork authorization"
+        required: false
+        default: ""
+      instance-type:
+        description: "EC2 instance type -- curated allow-list, not free text, so a dispatch can't accidentally launch an unexpectedly expensive type."
+        required: false
+        type: choice
+        options:
+          - "c5n.metal"
+        default: "c5n.metal"
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        default: "us-east-1"
+      tooling-check-cmds:
+        description: "Semicolon-separated commands to verify on the box before JIT registration."
+        required: false
+        default: "dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman"
+      osac-repo:
+        description: "Override osac mono-repo git URI -- empty means upstream"
+        required: false
+        default: ""
+      osac-branch:
+        description: "Branch, tag, or commit of the osac mono-repo to clone -- empty means main"
+        required: false
+        default: ""
+
+concurrency:
+  # PR dispatches for a new commit must cancel an older run for the same PR.
+  # Non-PR scheduled/manual runs keep independent groups.
+  group: e2e-vmaas-netris-full-install-${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}-${{ inputs.pr-number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ inputs.pr-number != '' || github.event_name == 'pull_request_target' }}
+
+jobs:
+  e2e-vmaas-netris:
+    if: >-
+      github.event_name != 'pull_request_target'
+      || github.event.label.name == 'e2e-vmaas-netris'
+    uses: ./.github/workflows/e2e-vmaas-netris-full-install.yml
+    with:
+      instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman' }}
+      osac-repo: ${{ inputs.osac-repo || '' }}
+      osac-branch: ${{ inputs.osac-branch || '' }}
+      suite: vmaas_networking
+      osac-profile: cudn-evpn-netris-test
+      test-infra-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}
+      test-infra-ref: ${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref }}
+      test-infra-sha: ${{ inputs.pr-sha || github.event.pull_request.head.sha || '' }}
+      pr-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || '' }}
+      pr-ref: ${{ inputs.pr-ref || github.event.pull_request.head.ref || '' }}
+      pr-sha: ${{ inputs.pr-sha || github.event.pull_request.head.sha || '' }}
+      fork-pr-author-association: ${{ inputs.fork-pr-author-association || (github.event.pull_request.head.repo.full_name != github.repository && github.event.pull_request.author_association) || '' }}
+      fork-pr-author: ${{ inputs.fork-pr-author || (github.event.pull_request.head.repo.full_name != github.repository && github.event.pull_request.user.login) || '' }}
+      pr-number: ${{ inputs.pr-number || github.event.pull_request.number || '' }}

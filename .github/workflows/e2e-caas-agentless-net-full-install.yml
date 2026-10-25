@@ -136,7 +136,7 @@ jobs:
 
       - name: Fetch CaaS Route 53 credentials
         id: route53-creds
-        uses: ./.github/actions/fetch-caas-route53-creds
+        uses: ./.github/actions/fetch-route53-creds
         with:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}

@@ -18,6 +18,68 @@
   ansible.builtin.include_role:
     name: netris.controller.auth
 
+# Verify the Netris North-South links against both ends of their libvirt tunnels
+# before changing any Netris resources or snapshot disks.
+- name: Build OCP uplink resolver arguments
+  ansible.builtin.set_fact:
+    _ocp_uplink_resolver_args: >-
+      {{
+        [
+          ansible_python_interpreter | default('/usr/bin/python3'),
+          playbook_dir ~ '/../scripts/ocp_uplink.py',
+          'resolve',
+          '--controller-url', netris_controller_url,
+          '--vm-name-pattern', ocp_vm_name_pattern,
+          '--vnet-name', ocp_vnet_name,
+          '--host-key', ssh_public_key_path | regex_replace('[.]pub$', ''),
+          '--vm-mgmt-ip', ocp_vm_mgmt_ip | default('')
+        ]
+        + (
+          ['--underlay-server-port', ocp_underlay_server_port]
+          if ocp_underlay_enabled | default(false) | bool else []
+        )
+      }}
+
+- name: Resolve OCP uplink from Netris links and libvirt tunnels
+  ansible.builtin.command:
+    argv: "{{ _ocp_uplink_resolver_args }}"
+  environment:
+    NETRIS_SESSION_COOKIE: "{{ netris_session_cookie }}"
+    NETRIS_VALIDATE_CERTS: "{{ (netris_validate_certs | default(false) | bool) | ternary('true', 'false') }}"
+  register: _ocp_uplink_resolve
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Stop if OCP uplink cannot be resolved
+  ansible.builtin.fail:
+    msg: "{{ _ocp_uplink_resolve.stderr | default('OCP uplink resolution failed', true) | trim }}"
+  when: _ocp_uplink_resolve.rc != 0
+
+- name: Record resolved OCP uplink
+  ansible.builtin.set_fact:
+    _ocp_uplink: "{{ _ocp_uplink_resolve.stdout | from_json }}"
+    ocp_vm_name: "{{ (_ocp_uplink_resolve.stdout | from_json).vm_name }}"
+    ocp_uplink_mac: "{{ (_ocp_uplink_resolve.stdout | from_json).guest_mac }}"
+    ocp_server_port: "{{ (_ocp_uplink_resolve.stdout | from_json).server_port }}"
+    ocp_vm_mgmt_ip_resolved: "{{ (_ocp_uplink_resolve.stdout | from_json).management_ip }}"
+    ocp_underlay_uplink_mac: "{{ (_ocp_uplink_resolve.stdout | from_json).underlay_guest_mac | default('') }}"
+    ocp_underlay_server_port_resolved: "{{ (_ocp_uplink_resolve.stdout | from_json).underlay_server_port | default('') }}"
+
+- name: Build the single OCP VNet port
+  ansible.builtin.set_fact:
+    _ocp_server_ports:
+      - name: "{{ ocp_server_port }}"
+        accessMode: true
+
+- name: Reject stale OCP server port override
+  ansible.builtin.assert:
+    that:
+      - ocp_server_ports is not defined or ocp_server_ports == _ocp_server_ports
+    fail_msg: >-
+      ocp_server_ports disagrees with the verified North-South connection
+      (SNO MAC {{ ocp_uplink_mac }} -> {{ ocp_server_port }}). Remove the override.
+
 # Point the Default DHCP option set at the lab's configurable DNS server. This
 # option set is what every V-Net DHCP hands out (the OCP mgmt-cluster V-Net and
 # the BMaaS provisioning V-Net included); Netris ships it with public resolvers
@@ -97,7 +159,37 @@
     vnet_tenant_id: 1
     vnet_gateway: "{{ ocp_gateway }}"
     vnet_dhcp_enabled: false
-    vnet_ports: "{{ ocp_server_ports }}"
+    vnet_ports: "{{ _ocp_server_ports }}"
+
+- name: Reconcile existing OCP VNet port with the resolved uplink
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - "{{ playbook_dir }}/../scripts/ocp_uplink.py"
+      - reconcile
+      - --controller-url
+      - "{{ netris_controller_url }}"
+      - --vnet-name
+      - "{{ ocp_vnet_name }}"
+      - --vpc-id
+      - "{{ vpc_id | string }}"
+      - --server-port
+      - "{{ ocp_server_port }}"
+  environment:
+    NETRIS_SESSION_COOKIE: "{{ netris_session_cookie }}"
+    NETRIS_VALIDATE_CERTS: "{{ (netris_validate_certs | default(false) | bool) | ternary('true', 'false') }}"
+  register: _ocp_vnet_reconcile
+  changed_when: _ocp_vnet_reconcile.rc == 0 and (_ocp_vnet_reconcile.stdout | from_json).changed | bool
+  failed_when: false
+  no_log: true
+
+- name: Stop if the live OCP VNet does not match the uplink
+  ansible.builtin.fail:
+    msg: "{{ _ocp_vnet_reconcile.stderr | default('OCP VNet reconciliation failed', true) | trim }}"
+  when: _ocp_vnet_reconcile.rc != 0
+
+- name: Ensure OCP VNet ports match inventory
+  ansible.builtin.include_tasks: ensure-ocp-vnet-ports.yml
 
 - name: Create SNAT rule for OCP VNet
   ansible.builtin.include_role:
@@ -174,4 +266,7 @@
 
 - name: Report Netris networking configuration
   ansible.builtin.debug:
-    msg: "Netris configured: VPC={{ ocp_vpc_name }}, VNet={{ ocp_vnet_name }}, Subnet={{ ocp_subnet_cidr }}, DNAT={{ ocp_dnat_ip }} → {{ ocp_node_ip }}"
+    msg: >-
+      Netris configured: VPC={{ ocp_vpc_name }}, VNet={{ ocp_vnet_name }}
+      port={{ ocp_server_port }} (SNO MAC {{ ocp_uplink_mac }}),
+      Subnet={{ ocp_subnet_cidr }}, DNAT={{ ocp_dnat_ip }} → {{ ocp_node_ip }}

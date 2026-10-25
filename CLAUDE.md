@@ -84,7 +84,7 @@ All configuration via environment variables. Works identically in local dev and 
 |----------|---------|-------------|
 | `OSAC_NAMESPACE` | `osac-devel` | Namespace where OSAC is deployed |
 | `KUBECONFIG` | `~/.kube/config` | Kubeconfig for the hub (management cluster) |
-| `OSAC_VM_KUBECONFIG` | *(required for vmaas tests)* | Kubeconfig for the VM cluster (where VirtualMachines run). In single-cluster setups, set this to the same value as `KUBECONFIG`. Only used by vmaas test suite. |
+| `OSAC_VM_KUBECONFIG` | *(required for vmaas tests)* | Kubeconfig for the VM cluster (where VirtualMachines run). In single-cluster setups, set this to the same value as `KUBECONFIG`. Used by both VMaaS selectors, `vmaas` and `vmaas_networking`. |
 | `OSAC_FULFILLMENT_ADDRESS` | auto-derived | Fulfillment API address (`host:port`) |
 | `OSAC_VM_TEMPLATE` | `ocp-virt-vm` | ComputeInstance template to use |
 | `OSAC_SERVICE_ACCOUNT` | `admin` | ServiceAccount for token generation |

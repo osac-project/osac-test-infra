@@ -1,6 +1,6 @@
 REPORTS_DIR ?= reports
 
-.PHONY: test lint format test-vmaas test-caas test-storage test-bmaas test-bmaas-networking test-metering test-references
+.PHONY: test lint format test-vmaas test-vmaas-networking test-vmaas_networking test-stretched-networking test-stretched_networking test-caas test-storage test-bmaas test-bmaas-networking test-metering test-references test-full
 
 test:
 	mkdir -p $(REPORTS_DIR)
@@ -15,7 +15,15 @@ format:
 
 test-vmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/vmaas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/vmaas.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/vmaas/ -v -m "not requires_netris" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/vmaas.xml
+
+test-vmaas-networking test-vmaas_networking:
+	mkdir -p $(REPORTS_DIR)
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/vmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_vmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/vmaas-networking.xml
+
+test-stretched-networking test-stretched_networking:
+	mkdir -p $(REPORTS_DIR)
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/stretched/ -x -n 0 -v --tb=short -m "requires_stretched_networking" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/stretched-networking.xml
 
 test-caas:
 	mkdir -p $(REPORTS_DIR)
@@ -35,7 +43,14 @@ OSAC_MONO_DIR ?= /opt/osac
 
 test-bmaas-networking test-bmaas_networking:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/regression/networking/ -x -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/bmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_bmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
+
+# full-ci enables all services. Run regular E2E plus only the stretched Netris test; keep the full run serial.
+FULL_TEST_MARKER = not requires_netris or requires_stretched_networking
+FULL_TEST_FILTER = not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name and not test_disabled_services and not external_ip
+test-full:
+	mkdir -p $(REPORTS_DIR)
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -n 0 -v --tb=short -m "$(FULL_TEST_MARKER)" -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
 
 test-metering:
 	mkdir -p $(REPORTS_DIR)
@@ -50,10 +65,15 @@ test-references:
 INFRA              ?= netris
 SUITE              ?= caas
 EXTRA_VARS         ?=
+KUBECONFIG         ?= /root/.kube/config
+OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
 OSAC_DEPLOY_MODE   ?= fresh
 OSAC_PROFILE       ?=
 INFRA_DIR           = infra/$(INFRA)
+_FWD_KUBECONFIG     = KUBECONFIG=$(abspath $(KUBECONFIG))
+_FWD_VM_KUBECONFIG = OSAC_VM_KUBECONFIG=$(abspath $(OSAC_VM_KUBECONFIG))
 _FWD_PROFILE        = $(if $(OSAC_PROFILE),OSAC_PROFILE=$(OSAC_PROFILE))
+_FWD_SUITE          = SUITE=$(SUITE)
 
 .PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
@@ -73,12 +93,13 @@ _validate-suite-contract:
 	@if [ ! -f $(INFRA_DIR)/.env.infra ]; then \
 		echo "ERROR: $(INFRA_DIR)/.env.infra not found. Run 'make deploy-osac' first."; exit 1; \
 	fi
-	@if [ -f tests/$(SUITE)/contract ]; then \
-		set -a && . $(INFRA_DIR)/.env.infra && set +a && \
-		. tests/$(SUITE)/contract && \
+	@suite_contract='$(INFRA_DIR)/contracts/$(SUITE)'; \
+	if [ -f "$$suite_contract" ]; then \
+		set -a && . "$(INFRA_DIR)/.env.infra" && set +a && \
+		. "$$suite_contract" && \
 		missing="" && \
 		for var in $$REQUIRED_VARS; do \
-			eval val="\$$$$var" && \
+			val=$$(printenv "$$var" || true); \
 			if [ -z "$$val" ]; then missing="$$missing $$var"; fi; \
 		done && \
 		if [ -n "$$missing" ]; then \
@@ -90,46 +111,50 @@ _validate-suite-contract:
 e2e: _validate-backend deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
 deploy-setup: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-setup EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) -C $(INFRA_DIR) deploy-setup EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 # Backward compatibility alias
 setup-infra: deploy-setup
 
 deploy-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-ocp: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-osac: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 setup-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 run-tests: _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
 		$(MAKE) test-$(SUITE)
 
 destroy-ocp:
-	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 destroy-osac:
-	$(MAKE) -C $(INFRA_DIR) destroy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PROFILE)
+	$(MAKE) -C $(INFRA_DIR) destroy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 destroy-infra:
-	$(MAKE) -C $(INFRA_DIR) destroy-infra EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) destroy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
 
 destroy-setup:
-	$(MAKE) -C $(INFRA_DIR) destroy-setup EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) destroy-setup EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
 
 destroy-suite:
-	$(MAKE) -C $(INFRA_DIR) destroy-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
+	@if [ "$(SUITE)" = "full" ]; then \
+		echo "ERROR: destroy-suite SUITE=full is not supported; use 'make -C infra/netris destroy-full' only when you intend to destroy the entire lab." >&2; \
+		exit 2; \
+	fi
+	$(MAKE) -C $(INFRA_DIR) destroy-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
 
 gather-infra:
-	$(MAKE) -C $(INFRA_DIR) gather-infra EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) gather-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 gather-suite:
-	$(MAKE) -C $(INFRA_DIR) gather-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) gather-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 redeploy-osac: destroy-osac deploy-osac

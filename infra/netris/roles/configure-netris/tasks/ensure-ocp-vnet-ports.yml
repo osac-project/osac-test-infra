@@ -1,0 +1,83 @@
+---
+- name: Read current OCP VNet configuration
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ vnet_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _ocp_vnet_current_response
+  no_log: true
+
+- name: Reset OCP VNet port comparison lists
+  ansible.builtin.set_fact:
+    _ocp_vnet_current_port_specs: []
+    _ocp_vnet_desired_port_specs: []
+  no_log: true
+
+- name: Build current OCP VNet port specifications
+  ansible.builtin.set_fact:
+    _ocp_vnet_current_port_specs: >-
+      {{ _ocp_vnet_current_port_specs + [
+        (item.port | default('')) ~ '@' ~
+        (item.switchName | default('')) ~ ':' ~
+        ((item.accessMode | default(false)) | bool | string)
+      ] }}
+  loop: "{{ _ocp_vnet_current_response.json.data.ports | default([]) }}"
+  no_log: true
+
+- name: Build desired OCP VNet port specifications
+  ansible.builtin.set_fact:
+    _ocp_vnet_desired_port_specs: >-
+      {{ _ocp_vnet_desired_port_specs + [
+        item.name.split('@')[0] ~ '@' ~
+        item.name.split('@')[1] ~ ':' ~
+        ((item.accessMode | default(false)) | bool | string)
+      ] }}
+  loop: "{{ _ocp_server_ports }}"
+  no_log: true
+
+- name: Update OCP VNet ports when they differ from inventory
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ vnet_id }}"
+    method: PUT
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      ports: "{{ _ocp_server_ports }}"
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  when: (_ocp_vnet_current_port_specs | sort) != (_ocp_vnet_desired_port_specs | sort)
+  no_log: true
+
+- name: Wait for OCP VNet port attachments to become active
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ vnet_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(false) }}"
+  register: _ocp_vnet_after_update_response
+  until: >-
+    (_ocp_vnet_after_update_response.json.data.status.label | default('') | lower) == 'active'
+    and
+    (_ocp_vnet_after_update_response.json.data.ports | default([])
+     | selectattr('port', 'equalto', item.name.split('@')[0])
+     | selectattr('switchName', 'equalto', item.name.split('@')[1])
+     | selectattr('accessMode', 'equalto', item.accessMode | default(false) | bool)
+     | list | length) == 1
+  retries: 24
+  delay: 5
+  loop: "{{ _ocp_server_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true

@@ -100,6 +100,7 @@ type LinkMapping struct {
 	LocalPortIndex int
 	LocalID        int
 	Local          string
+	MacAddress     string
 	Remote         string
 	RemoteID       int
 	LocalIP        string

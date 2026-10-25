@@ -1,7 +1,7 @@
 ---
 - name: Verify kubeconfig exists
   ansible.builtin.stat:
-    path: /root/.kube/config
+    path: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _kubeconfig
   failed_when: not _kubeconfig.stat.exists
 
@@ -123,7 +123,7 @@
   ansible.builtin.command:
     cmd: oc adm release info --image-for=cli
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _ocp_cli_image
   changed_when: false
 
@@ -133,6 +133,44 @@
   ansible.builtin.slurp:
     src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
   register: _values_raw
+
+- name: Read full-ci infrastructure values
+  when: suite | default('') in ['full', 'stretched_networking']
+  ansible.builtin.slurp:
+    src: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
+  register: _full_ci_infra_values_raw
+
+- name: Validate the CUDN EVPN VMaaS profile contract
+  ansible.builtin.assert:
+    that:
+      - _selected_vmaas.enabled | default(false) | bool
+      - _selected_network_managers.enabled | default(false) | bool
+      - _selected_fabric_netris.enabled | default(false) | bool
+      - _selected_k8s_cudn_evpn.enabled | default(false) | bool
+      - _selected_expert_overrides.networkClass | default(false) | bool
+      - _selected_network_class.enabled | default(false) | bool
+      - _selected_network_class.k8sManager | default('') == 'cudn_evpn'
+      - _selected_network_class.fabricManager | default('') == 'netris'
+      - _selected_network_class.isDefault | default(false) | bool
+    fail_msg: >-
+      Profile {{ osac_profile }} must enable VMaaS, register Netris and cudn_evpn,
+      and explicitly select the default NetworkClass pair (netris, cudn_evpn).
+      prep-osac preserves this source profile selection; it does not synthesize or
+      overwrite NetworkClass settings.
+  vars:
+    _selected_profile_values: "{{ _values_raw.content | b64decode | from_yaml }}"
+    _selected_global: "{{ _selected_profile_values.global | default({}) }}"
+    _selected_services: "{{ _selected_global.services | default({}) }}"
+    _selected_vmaas: "{{ _selected_services.vmaas | default({}) }}"
+    _selected_profile_operator: "{{ _selected_profile_values.operator | default({}) }}"
+    _selected_network_managers: "{{ _selected_profile_operator.networkManagers | default({}) }}"
+    _selected_fabric_managers: "{{ _selected_network_managers.fabricManagers | default({}) }}"
+    _selected_fabric_netris: "{{ _selected_fabric_managers.netris | default({}) }}"
+    _selected_k8s_managers: "{{ _selected_network_managers.k8sManagers | default({}) }}"
+    _selected_k8s_cudn_evpn: "{{ _selected_k8s_managers.cudn_evpn | default({}) }}"
+    _selected_expert_overrides: "{{ _selected_global.expertOverrides | default({}) }}"
+    _selected_network_class: "{{ _selected_profile_values.networkClass | default({}) }}"
+  when: osac_profile == 'cudn-evpn-netris-test'
 
 # Operator enablement (cnv, mce, metallb) is intentionally NOT overridden here:
 # each values profile declares what it needs (e.g. bmaas-ci disables cnv/mce/metallb,
@@ -215,10 +253,108 @@
                     if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
       }}
 
+
+- name: Add Netris CUDN EVPN manager settings to full-ci
+  when: suite | default('') in ['full', 'stretched_networking']
+  ansible.builtin.set_fact:
+    _values_overrides: >-
+      {{ _values_overrides | combine({
+           'global': {'expertOverrides': {'networkClass': true}},
+           'operator': {'networkManagers': {
+             'enabled': true,
+             'fabricManagers': {'netris': {
+               'enabled': true,
+               'description': 'Netris SDN fabric manager',
+               'capabilities': ['ipv4']
+             }},
+             'k8sManagers': {'cudn_evpn': {
+               'enabled': true,
+               'description': 'OVN EVPN Kubernetes network manager for VM-to-fabric connectivity',
+               'capabilities': ['ipv4']
+             }}
+           }},
+           'networkClass': {
+             'enabled': true,
+             'title': 'CUDN EVPN with Netris',
+             'description': 'Provisions IPv4 networking through the CUDN EVPN k8s manager and the Netris physical fabric manager.',
+             'k8sManager': 'cudn_evpn',
+             'fabricManager': 'netris',
+             'isDefault': true
+           },
+           'aap': {'instanceGroups': {'storageFulfillment': {'enabled': true}}},
+           'metering': {'echoAdapter': {'enabled': true, 'image': {
+             'repository': 'ghcr.io/osac-project/metering-echo-adapter',
+             'tag': 'latest',
+             'pullPolicy': 'Always'
+           }}}
+         }, recursive=true) }}
+
+- name: Validate full-ci services and Netris EVPN overlay
+  when: suite | default('') in ['full', 'stretched_networking']
+  ansible.builtin.assert:
+    that:
+      - _full_ci_values.global.services.caas.enabled | bool
+      - _full_ci_values.global.services.vmaas.enabled | bool
+      - _full_ci_values.global.services.bmaas.enabled | bool
+      - _full_ci_values.global.services.maas.enabled | bool
+      - _full_ci_values.operator.networkManagers.enabled | bool
+      - _full_ci_values.operator.networkManagers.fabricManagers.netris.enabled | bool
+      - _full_ci_values.operator.networkManagers.k8sManagers.cudn_evpn.enabled | bool
+      - _full_ci_values.global.expertOverrides.networkClass | bool
+      - _full_ci_values.networkClass.enabled | bool
+      - _full_ci_values.networkClass.k8sManager == 'cudn_evpn'
+      - _full_ci_values.networkClass.fabricManager == 'netris'
+      - _full_ci_values.networkClass.isDefault | bool
+      - _full_ci_values.aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION == 'ci.steps'
+      - _full_ci_values.aap.instanceGroups.storageFulfillment.enabled | bool
+      - _full_ci_values.metering.echoAdapter.enabled | bool
+    fail_msg: >-
+      SUITE=full or SUITE=stretched_networking requires the full-ci profile services plus the default NetworkClass
+      pair (netris, cudn_evpn). The full-ci EVPN overlay was not applied correctly.
+  vars:
+    _full_ci_values: "{{ (_values_raw.content | b64decode | from_yaml) | combine(_values_overrides, recursive=true) }}"
+
+# Keep bmf.metal3.enabled false here: it enables the BMF subchart's own Secret
+# templates. The OSAC chart's testBackend templates provide those configs instead.
+- name: Configure the Metal3 test backend for bare-metal services
+  when:
+    - bare_metal_services | bool
+    - (_values_raw.content | b64decode | from_yaml).global.services.bmaas.enabled | default(false) | bool
+  ansible.builtin.set_fact:
+    _values_overrides: >-
+      {{ _values_overrides | combine({
+           'bmf': {
+             'metal3': {'enabled': false},
+             'secrets': {
+               'inventoryConfig': 'osac-inventory-config-metal3-test',
+               'managementConfig': 'osac-management-config-metal3-test'
+             },
+             'testBackend': {'metal3': {'enabled': true, 'namespace': osac_namespace}}
+           }
+         }, recursive=true) }}
+
+- name: Disable cluster version seeding when CaaS is disabled
+  # The seed hook calls the CaaS API, which returns 503 when CaaS is disabled.
+  when: not ((_values_raw.content | b64decode | from_yaml).global.services.caas.enabled | default(true) | bool)
+  ansible.builtin.set_fact:
+    _values_overrides: >-
+      {{ _values_overrides | combine({'clusterVersions': {'enabled': false}}, recursive=true) }}
+
 - name: Write patched values file
   ansible.builtin.copy:
     dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
     content: "{{ _values_raw.content | b64decode | from_yaml | combine(_values_overrides, recursive=true) | to_nice_yaml(indent=2) }}"
+    mode: "0600"
+  no_log: true
+
+- name: Enable full-ci Keycloak test fixtures before the infrastructure install
+  when: suite | default('') in ['full', 'stretched_networking']
+  ansible.builtin.copy:
+    dest: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
+    content: >-
+      {{ (_full_ci_infra_values_raw.content | b64decode | from_yaml)
+         | combine({'keycloak': {'devFixtures': {'enabled': true}}}, recursive=true)
+         | to_nice_yaml(indent=2) }}
     mode: "0600"
   no_log: true
 
@@ -290,7 +426,7 @@
           - {{ bmc_net_ocp_ip }}
       EOF
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
   register: _prov_cr
   changed_when: "'created' in _prov_cr.stdout or 'configured' in _prov_cr.stdout"
 

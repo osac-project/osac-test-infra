@@ -1,7 +1,8 @@
 # Netris Lab
 netris_lab_dir: "{{ inventory_dir }}/../netris-lab"
 ew_fabric_enable: 0
-dns_server: "8.8.8.8"
+# RDU2 site resolver used by the runner and guest nodes.
+dns_server: "10.11.5.160"
 
 # Netris Controller (URL is discovered dynamically by configure-netris role)
 netris_username: "netris"
@@ -19,8 +20,8 @@ vm_root_password: "netris"
 ocp_vm_name_pattern: "hgx-pod00-su0-h00"
 ocp_server_vcpu: 20
 ocp_server_memory_gb: 64
-ocp_install_disk_gb: 200
-ocp_lvm_disk_gb: 200
+ocp_install_disk_gb: 300
+ocp_lvm_disk_gb: 300
 
 # Netris Networking for OCP
 ocp_vpc_name: "ocp-sno"
@@ -28,11 +29,23 @@ ocp_vnet_name: "ocp-sno-vnet"
 ocp_subnet_cidr: "192.168.40.0/24"
 ocp_gateway: "192.168.40.1/24"
 ocp_node_ip: "192.168.40.2"
-ocp_server_ports:
-  - name: "eth9@hgx-pod00-su0-h00"
-    accessMode: true
+# Optional when Cloudsim's generated SSH aliases are unavailable.
+ocp_vm_mgmt_ip: ""
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
+
+# Netris port identity is stable; h00 Linux interface names are resolved by MAC at runtime.
+ocp_underlay_enabled: false
+ocp_underlay_server_port: "eth10"
+ocp_underlay_leaf_index: 1
+ocp_underlay_leaf_port: "swp1s0"
+ocp_underlay_p2p_cidr: "192.0.2.0/31"
+ocp_underlay_ocp_asn: 4209999999
+
+# VMaaS's ExternalIP fixtures allocate from this separate test-only range.
+# The VMaaS route is deliberately not installed until the OCP/Netris/ISP path
+# has a narrow, verified policy for this RFC1918 prefix.
+osac_vmaas_external_ip_pool_cidr: "172.27.0.0/16"
 
 # OSAC tenant ExternalIPPool CIDR. The host routes this toward the softgate/ISP
 # (see deploy-infra) so tenant ExternalIPs are reachable. Must not overlap the
@@ -95,8 +108,8 @@ snapshot_flavor_dir: >-
 snapshot_recert_image: "quay.io/osac-project/recert:latest"
 snapshot_osac_namespace: "osac-e2e-ci"
 snapshot_osac_values_file: "values/caas-ci/values.yaml"
-# Grow CoW OS overlay during restore-snapshot when SUITE=maas (flavor is ~100Gi).
-ocp_snapshot_disk_gb: 150
+# Target OS disk size for every snapshot restore.
+ocp_snapshot_disk_gb: 300
 
 # AWS configuration for Route 53 DNS (read from config file or environment)
 aws_access_key_id: "{{ lookup('ini', 'aws_access_key_id section=default file=' + config_path, errors='ignore') | default(lookup('env', 'AWS_ACCESS_KEY_ID'), true) }}"
@@ -256,3 +269,22 @@ bmaas_provisioning_snat_cidr: "198.51.100.32/29"
 # ocp_snat_ip), created in the Default (system) VPC — id 1 — where the other
 # NAT pools live.
 bmaas_provisioning_snat_vpc_id: 1
+
+# OpenShift CUDN EVPN prerequisites. The role requires a converged OCP 4.22
+# OVNKubernetes cluster, the single-node underlay link, and operator-confirmed
+# network allocations. The OCP cluster may use the virtualized `None` platform.
+ocp_evpn_kubeconfig_path: "/root/.kube/config"
+ocp_evpn_required_version: "4.22"
+
+# The Netris underlay peer uses IPv4 unicast for PodNetwork advertisements;
+# setup-vmaas verifies the BGPSessionState after the FRR peer is configured.
+ocp_vmaas_external_ip_return_path_acknowledged: false
+# The shared-subnet VMaaS/BMaaS dataplane test only advertises PodNetwork.
+# Enable this only when the lab's separate ExternalIP route/return policy has
+# also been configured and verified.
+ocp_vmaas_external_ip_tests_enabled: false
+
+# Dedicated RFC 2544 test range for this isolated lab's VTEP interface.
+ocp_evpn_vtep_cidr: "198.18.0.0/24"
+ocp_evpn_vtep_node_ip_cidr: "198.18.0.1/32"
+ocp_evpn_vtep_dummy_interface: "evpn-vtep0"
