@@ -19,44 +19,22 @@ inputs:
     required: false
     default: ""
   timeout-seconds:
-    description: "Cap for the collection when the job is not cancelled"
+    description: >-
+      Cap for the collection. A workflow that wants a shorter cap for a
+      cancelled job calls this action a second time with a smaller value,
+      from a step with its own if: cancelled(): the status functions cannot
+      be used in a with: or an env:.
     required: false
     default: "900"
-  cancelled-timeout-seconds:
-    description: >-
-      Cap for the collection when the job is already cancelled. GitHub gives
-      the always() steps of a cancelled job 5 minutes in total, so the steps
-      that must still run (Teardown) need this one to end early.
-    required: false
-    default: "120"
 
 runs:
   using: composite
   steps:
-    # The cap is chosen by two steps with opposite conditions, because the
-    # status functions (cancelled()) can only be used in an if:, not in the
-    # env: or with: of a step. The second runs only when the first did not
-    # finish: it was skipped (the job was cancelled before it started) or
-    # cancelled (the runner cancels a running step whose condition turns false
-    # on a cancel, as this one does). After a first that finished, cancelled()
-    # is also true, and collecting again would only delay the Teardown.
     - name: Gather and redact
-      id: collect
-      if: always() && !cancelled()
       shell: bash
       env:
         KUBECONFIG: ${{ inputs.kubeconfig-path }}
         E2E_NAMESPACE: ${{ inputs.namespace }}
         JUNIT_PATH: ${{ inputs.junit-path }}
         COLLECT_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
-      run: bash "${GITHUB_WORKSPACE}/.github/scripts/collect-artifacts.sh"
-
-    - name: Gather and redact (job cancelled, short cap)
-      if: cancelled() && (steps.collect.outcome == 'skipped' || steps.collect.outcome == 'cancelled')
-      shell: bash
-      env:
-        KUBECONFIG: ${{ inputs.kubeconfig-path }}
-        E2E_NAMESPACE: ${{ inputs.namespace }}
-        JUNIT_PATH: ${{ inputs.junit-path }}
-        COLLECT_TIMEOUT_SECONDS: ${{ inputs.cancelled-timeout-seconds }}
       run: bash "${GITHUB_WORKSPACE}/.github/scripts/collect-artifacts.sh"

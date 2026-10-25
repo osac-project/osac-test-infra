@@ -33,8 +33,6 @@ runs:
         namespace: ${{ inputs.namespace }}
         kubeconfig-path: ${{ inputs.kubeconfig-path }}
         junit-path: ${{ inputs.junit-path }}
-        # Keep the cap of the callers of this action as it was.
-        cancelled-timeout-seconds: "900"
 
     - name: Scan and upload artifacts
       if: always()

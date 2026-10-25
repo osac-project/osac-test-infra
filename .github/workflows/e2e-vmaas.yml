@@ -497,13 +497,27 @@ jobs:
 
       # Teardown comes right after the collection, ahead of the slow scan and
       # upload: a cancelled job gets only 5 minutes for its always() steps.
+      # The collection and the upload each come as two steps with opposite
+      # conditions. A step with always() is not stopped by a cancel, but one
+      # with always() && !cancelled() is: the runner cancels it, and the
+      # cancelled variant, with a short cap, takes over.
       - name: Gather cluster logs
-        if: always()
+        id: gather
+        if: always() && !cancelled()
         uses: ./.github/actions/collect-artifacts
         with:
           namespace: ${{ inputs.namespace }}
           kubeconfig-path: ${{ runner.temp }}/kubeconfig
           junit-path: ${{ runner.temp }}/test-output/junit.xml
+
+      - name: Gather cluster logs (job cancelled, short cap)
+        if: cancelled() && (steps.gather.outcome == 'skipped' || steps.gather.outcome == 'cancelled')
+        uses: ./.github/actions/collect-artifacts
+        with:
+          namespace: ${{ inputs.namespace }}
+          kubeconfig-path: ${{ runner.temp }}/kubeconfig
+          junit-path: ${{ runner.temp }}/test-output/junit.xml
+          timeout-seconds: "120"
 
       - name: Teardown
         if: always()
@@ -522,10 +536,12 @@ jobs:
       # Only a cancelled job is bounded: its always() steps get 5 minutes in
       # total. A timeout elsewhere would turn a passing run red. It runs when
       # the step above did not finish (skipped, or cancelled by the runner
-      # because the job was cancelled while it ran), not after one that did.
+      # because the job was cancelled while it ran), not after one that did,
+      # and replaces an artifact that the interrupted upload may have created.
       - name: Scan and upload artifacts (job cancelled)
         if: cancelled() && (steps.upload.outcome == 'skipped' || steps.upload.outcome == 'cancelled')
         timeout-minutes: 3
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-${{ github.run_id }}
+          overwrite: "true"

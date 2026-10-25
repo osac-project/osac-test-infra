@@ -11,6 +11,13 @@ inputs:
     description: "Name for the uploaded artifact"
     required: false
     default: "osac-logs"
+  overwrite:
+    description: >-
+      Replace an artifact of the same name. The retry after an upload that a
+      cancel interrupted needs it, because the interrupted upload may already
+      have created the artifact.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -154,6 +161,7 @@ runs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}
+        overwrite: ${{ inputs.overwrite }}
         path: |
           ${{ runner.temp }}/osac-artifacts/
           !${{ runner.temp }}/osac-artifacts/.redaction-complete
