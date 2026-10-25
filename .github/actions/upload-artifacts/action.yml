@@ -65,6 +65,16 @@ runs:
         chmod 777 "${REPORT_DIR}"
         trap 'rm -rf -- "${REPORT_DIR}"' EXIT
 
+        # The upload step runs with if: always(), so a failure while findings
+        # are being handled must not leave unredacted files behind for it:
+        # remove them and fail.
+        fail_closed() {
+          echo "::endgroup::"
+          echo "::error::$1 — removing artifacts instead of uploading unredacted logs"
+          rm -rf "${ARTIFACT_DIR}"
+          exit 1
+        }
+
         MAX_PASSES=3
         for pass in $(seq 1 ${MAX_PASSES}); do
           echo "::group::Gitleaks pre-upload scan (pass ${pass}/${MAX_PASSES})"
@@ -90,11 +100,12 @@ runs:
             echo "[]" > "${REPORT}"
           fi
 
-          FINDING_COUNT=$(jq 'length' "${REPORT}")
+          FINDING_COUNT=$(jq 'length' "${REPORT}") \
+            || fail_closed "Could not read the gitleaks report of pass ${pass}"
           echo "Pass ${pass}: ${FINDING_COUNT} finding(s)"
           if [[ "${FINDING_COUNT}" -gt 0 ]]; then
             echo "Findings (sanitized):"
-            jq -r '.[] | "  \(.RuleID) \(.File):\(.StartLine)"' "${REPORT}"
+            jq -r '.[] | "  \(.RuleID) \(.File):\(.StartLine)"' "${REPORT}" || true
           fi
           echo "::endgroup::"
 
@@ -104,7 +115,8 @@ runs:
           fi
 
           echo "::group::Redacting ${FINDING_COUNT} finding(s) (pass ${pass})"
-          python3 "${{ github.workspace }}/.github/scripts/redact.py" "${REPORT}" "${ARTIFACT_DIR}"
+          python3 "${{ github.workspace }}/.github/scripts/redact.py" "${REPORT}" "${ARTIFACT_DIR}" \
+            || fail_closed "Redaction of pass ${pass} failed"
           echo "::endgroup::"
 
           if [[ "${pass}" -eq "${MAX_PASSES}" ]]; then
@@ -125,11 +137,12 @@ runs:
             if [[ ! -f "${FINAL_REPORT}" ]]; then
               echo "[]" > "${FINAL_REPORT}"
             fi
-            REMAINING=$(jq 'length' "${FINAL_REPORT}")
+            REMAINING=$(jq 'length' "${FINAL_REPORT}") \
+              || fail_closed "Could not read the final gitleaks report"
             if [[ "${REMAINING}" -gt 0 ]]; then
               echo "::warning::${REMAINING} finding(s) remain after ${MAX_PASSES} redaction passes — uploading anyway (post-upload scanner will cover)"
               echo "Remaining findings (sanitized):"
-              jq -r '.[] | "  \(.RuleID) \(.File):\(.StartLine)"' "${FINAL_REPORT}"
+              jq -r '.[] | "  \(.RuleID) \(.File):\(.StartLine)"' "${FINAL_REPORT}" || true
             fi
           fi
         done
