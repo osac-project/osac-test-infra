@@ -35,8 +35,12 @@ runs:
   steps:
     # The cap is chosen by two steps with opposite conditions, because the
     # status functions (cancelled()) can only be used in an if:, not in the
-    # env: or with: of a step.
+    # env: or with: of a step. The second runs only when the first was
+    # skipped: a cancel that arrives while the first is running does not stop
+    # it, and cancelled() is then true for the second as well, which would
+    # collect a second time and delay the Teardown.
     - name: Gather and redact
+      id: collect
       if: always() && !cancelled()
       shell: bash
       env:
@@ -47,7 +51,7 @@ runs:
       run: bash "${GITHUB_WORKSPACE}/.github/scripts/collect-artifacts.sh"
 
     - name: Gather and redact (job cancelled, short cap)
-      if: cancelled()
+      if: cancelled() && steps.collect.outcome == 'skipped'
       shell: bash
       env:
         KUBECONFIG: ${{ inputs.kubeconfig-path }}

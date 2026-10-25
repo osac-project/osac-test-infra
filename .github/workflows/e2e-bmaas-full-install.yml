@@ -792,15 +792,18 @@ jobs:
         run: bash .github/scripts/teardown.sh
 
       - name: Scan and upload artifacts
+        id: upload
         if: always() && !cancelled()
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
 
       # Only a cancelled job is bounded: its always() steps get 5 minutes in
-      # total. A timeout elsewhere would turn a passing run red.
+      # total. A timeout elsewhere would turn a passing run red. Skipped when
+      # the step above ran: a cancel during it does not stop it, and a second
+      # upload would find no .redaction-complete and delete the logs.
       - name: Scan and upload artifacts (job cancelled)
-        if: cancelled()
+        if: cancelled() && steps.upload.outcome == 'skipped'
         timeout-minutes: 3
         uses: ./.github/actions/upload-artifacts
         with:
