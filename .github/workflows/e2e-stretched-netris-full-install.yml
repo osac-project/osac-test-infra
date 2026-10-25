@@ -531,8 +531,7 @@ jobs:
               podman build --env GODEBUG=http2client=0 --unsetenv GODEBUG -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
             fi
 
-            echo "Loading ${tag} onto node ${NODE_NAME}..."
-            podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+            bash "${GITHUB_WORKSPACE}/.github/scripts/load-image-onto-node.sh" "${tag}" "${NODE_NAME}"
 
             case "${image_key}" in
               service.images.service)      var_names=(fulfillment_service_image) ;;

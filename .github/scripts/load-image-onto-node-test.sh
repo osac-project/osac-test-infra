@@ -374,6 +374,41 @@ STUB
   fi
 }
 
+# ── Test 16: every component-building workflow uses the helper ────────
+test_all_workflows_use_helper() {
+  local repo_root
+  repo_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+  local wf_dir="${repo_root}/.github/workflows"
+
+  # Workflows that build component images contain the "Build and load"
+  # step.  Every one of them must call the helper script instead of the
+  # raw podman-save pipeline.
+  local bare_count=0 helper_count=0
+  for f in "${wf_dir}"/e2e-*-full-install.yml "${wf_dir}"/e2e-*-full-install-*.yml "${wf_dir}"/e2e-full-regression.yml; do
+    [ -f "$f" ] || continue
+    # Only inspect workflows that have the "Build and load component
+    # images" step — others (callers, label-cleanup) are irrelevant.
+    grep -q 'Build and load component images' "$f" || continue
+
+    if grep -q 'podman save.*oc debug.*podman load' "$f"; then
+      bare_count=$((bare_count + 1))
+    fi
+    if grep -q 'load-image-onto-node\.sh' "$f"; then
+      helper_count=$((helper_count + 1))
+    fi
+  done
+
+  assert_eq "no-bare-podman-save-pipelines" "0" "${bare_count}"
+  # At least the 7 originally migrated workflows (5 original + 2 netris)
+  if [[ "${helper_count}" -ge 7 ]]; then
+    echo "PASS: all-workflows-use-helper (${helper_count} workflows)"
+    pass=$((pass + 1))
+  else
+    echo "FAIL: all-workflows-use-helper (only ${helper_count} workflows, expected >=7)"
+    fail=$((fail + 1))
+  fi
+}
+
 # ── Run all tests ────────────────────────────────────────────────────
 test_success_first_attempt
 test_retry_then_success
@@ -390,6 +425,7 @@ test_leading_zero_max_attempts
 test_oc_output_suppressed
 test_classify_eof
 test_classify_unknown_no_leak
+test_all_workflows_use_helper
 
 echo
 echo "${pass} passed, ${fail} failed"
