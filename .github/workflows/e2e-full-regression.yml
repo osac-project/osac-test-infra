@@ -580,7 +580,7 @@ jobs:
           echo "--- infra.yaml (keycloak) ---"
           yq '.keycloak' values/full-ci/infra.yaml
           echo "--- instance.yaml (networking, AAP group enabled flags, lvms, metering.echoAdapter) ---"
-          yq '.global.networking | pick(["fabricManager", "k8sManager", "netris"]) | .netris |= pick(["siteId", "tenantId", "tenantName"])' values/full-ci/instance.yaml
+          yq '.global.networking | pick(["provisioningEnabled", "fabricManager", "k8sManager"])' values/full-ci/instance.yaml
           yq '.aap.instanceGroups | pick(["clusterFulfillment", "networkFulfillment", "storageFulfillment"]) | with_entries(.value = (.value.enabled == true))' values/full-ci/instance.yaml
           yq '.lvms' values/full-ci/instance.yaml
           yq '.metering.echoAdapter' values/full-ci/instance.yaml
@@ -1000,7 +1000,7 @@ jobs:
               tests/e2e/bmaas/ \
               --ignore=tests/e2e/vmaas/regression/external_ip \
               --ignore=tests/e2e/vmaas/test_disabled_services.py \
-              -m "not requires_netris and not requires_stretched_networking" \
+              -m "not requires_netris and not requires_stretched_networking and not requires_provider_networking" \
               -k "${FILTER}" \
               -n 0 \
               --junitxml=/tmp/test-output/junit.xml -v

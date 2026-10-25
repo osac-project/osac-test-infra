@@ -20,7 +20,7 @@ on:
         required: false
         default: ""
       test-marker:
-        description: "pytest -m marker expression (e.g. sanity, regression). When empty, excludes tests marked requires_caas or requires_bmaas."
+        description: "pytest -m marker expression (e.g. sanity, regression). When empty, excludes tests marked requires_caas, requires_bmaas or requires_provider_networking."
         required: false
         default: ""
       installer-ref:
@@ -112,7 +112,7 @@ jobs:
       # services are disabled in the VMaaS profile, so exclude tests marked
       # with either dependency unless an explicit workflow-dispatch marker is
       # supplied. Matches osac-project/osac#805.
-      test-marker: ${{ inputs.test-marker || 'not requires_caas and not requires_bmaas' }}
+      test-marker: ${{ inputs.test-marker || 'not requires_caas and not requires_bmaas and not requires_provider_networking' }}
       installer-ref: ${{ inputs.installer-ref || 'main' }}
       installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}
       image-overrides: ${{ inputs.image-overrides || '{}' }}

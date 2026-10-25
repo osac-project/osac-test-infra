@@ -104,7 +104,7 @@ jobs:
         }}
       # Networking is Netris-lab only. Overlay of tests/e2e/bmaas would collect
       # it from regression/; deselect so GHA matches lifecycle+inventory.
-      test-filter: ${{ inputs.test-filter && format('({0}) and not TestBmaasNetworking', inputs.test-filter) || 'not TestBmaasNetworking' }}
+      test-filter: ${{ inputs.test-filter && format('({0}) and not TestBmaasNetworking and not TestCrossTenantBmaasNetworking', inputs.test-filter) || 'not TestBmaasNetworking and not TestCrossTenantBmaasNetworking' }}
       test-marker: ${{ inputs.test-marker || '' }}
       installer-ref: ${{ inputs.installer-ref || 'main' }}
       installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}

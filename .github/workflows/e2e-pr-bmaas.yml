@@ -63,7 +63,7 @@ jobs:
     uses: ./.github/workflows/e2e-bmaas-full-install.yml
     with:
       test-suite: bmaas/sanity
-      test-filter: not TestBmaasNetworking
+      test-filter: not TestBmaasNetworking and not TestCrossTenantBmaasNetworking
       installer-ref: main
       installer-repo: osac-project/osac
       components: '[{"repo":"osac-project/osac","ref":"main","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}]'
