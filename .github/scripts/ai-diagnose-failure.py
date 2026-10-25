@@ -6,7 +6,7 @@ logs/events from gather-osac-logs.sh, plus a bounded excerpt of the
 GitHub Actions job's own log around any ##[error] markers) and writes a
 short root-cause diagnosis to $GITHUB_STEP_SUMMARY. Never executes or
 reads anything from a PR's own source checkout -- only the artifact
-directory this same job's Gather artifacts step already produced, and the
+directory this same job's Gather cluster logs step already produced, and the
 CI-generated job log fetched via the GitHub API.
 
 Bounded by design: sends a fixed-size extract, not the full multi-file

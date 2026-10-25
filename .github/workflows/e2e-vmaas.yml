@@ -495,13 +495,14 @@ jobs:
             pytest ${TEST_ARGS} ${FILTER_ARGS} \
               --junitxml=/tmp/test-output/junit.xml -v
 
-      - name: Gather artifacts
+      # Teardown comes right after the collection, ahead of the slow scan and
+      # upload: a cancelled job gets only 5 minutes for its always() steps.
+      - name: Gather cluster logs
         if: always()
-        uses: ./.github/actions/gather-artifacts
+        uses: ./.github/actions/collect-artifacts
         with:
           namespace: ${{ inputs.namespace }}
           kubeconfig-path: ${{ runner.temp }}/kubeconfig
-          artifact-name: osac-logs-${{ github.run_id }}
           junit-path: ${{ runner.temp }}/test-output/junit.xml
 
       - name: Teardown
@@ -510,3 +511,10 @@ jobs:
           CLONE_NAME: ${{ steps.clone-name.outputs.clone-name }}
           E2E_IMAGE: "osac-e2e-tests:${{ github.run_id }}"
         run: bash .github/scripts/teardown.sh
+
+      - name: Scan and upload artifacts
+        if: always()
+        timeout-minutes: 3
+        uses: ./.github/actions/upload-artifacts
+        with:
+          artifact-name: osac-logs-${{ github.run_id }}
