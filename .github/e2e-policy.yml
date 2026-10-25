@@ -41,3 +41,5 @@ jobs:
     suite: netris
     workflow: e2e-pr-netris.yml  # a run of its own, started by the decision
     manual_only: true
+
+# second trial of the dispatched suites (not to be merged)
