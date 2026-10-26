@@ -47,6 +47,8 @@ metadata:
   name: provisioning-configuration
 spec:
   provisioningNetwork: "Disabled"
+  # The job-local nginx cache handles HTTP; publish ephemeral boot ISOs on 6180.
+  disableVirtualMediaTLS: true
   watchAllNamespaces: true
 EOF
 

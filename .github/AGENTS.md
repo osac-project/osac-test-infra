@@ -21,6 +21,7 @@ Run the script tests (CI runs the same commands as the `script-tests` job of `ci
 ```bash
 python3 -I .github/scripts/redact_test.py
 python3 -I .github/scripts/test_ai_diagnose_failure.py
+python3 -I .github/scripts/test_setup_virtual_bmh.py
 python3 -I .github/scripts/test_upsert_pr_comment.py
 bash .github/scripts/discover-audit-runs-test.sh
 ```
