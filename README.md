@@ -56,6 +56,13 @@ fixtures live in the OSAC mono-repo. Use underscores in `SUITE` values.
 also provides hyphenated aliases for direct commands, such as
 `make test-vmaas-networking`.
 
+Every selector below runs on the Netris backend. The `_networking` suffix
+describes the test coverage, not the lab: `vmaas` and `bmaas` run the general
+service E2E tests, while `vmaas_networking` and `bmaas_networking` run the
+separate Netris connectivity, isolation, and dataplane tests. Keeping them
+separate lets you rerun the network checks without rerunning the service
+lifecycle suites.
+
 | `SUITE` value | Default `OSAC_PROFILE` | `make setup-suite` selects | Internal test target from `make run-tests` | Tests run |
 |---|---|---|---|---|
 | `vmaas` | `cudn-evpn-netris-test` | `setup-vmaas` | `test-vmaas` | General VMaaS E2E; excludes tests marked `requires_netris`. |
