@@ -37,7 +37,7 @@ test-storage:
 # -n 0 for local full-suite runs so BMH-consuming tests do not race.
 test-bmaas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/bmaas/ --ignore=tests/bmaas/networking -n 0 -v --tb=short $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/bmaas.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/ -n 0 -v --tb=short $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas.xml
 
 OSAC_MONO_DIR ?= /opt/osac
 
