@@ -374,7 +374,7 @@ jobs:
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
           fi
-          EXTRA_VARS='{"dns_server":"10.11.5.160","bare_metal_services":true}'
+          EXTRA_VARS='{"dns_server":"8.8.8.8","bare_metal_services":true}'
           declare -A OVERRIDES=(
             [osac_repo]="$OSAC_REPO"
             [osac_branch]="$OSAC_BRANCH"
