@@ -113,6 +113,8 @@ fi
 
 SUSHY_CONFIG_DIR="${HOME}/sushy-${CLONE_NAME}"
 SUSHY_PID_FILE="${SUSHY_CONFIG_DIR}/sushy.pid"
+SUSHY_CACHE_CONTAINER="sushy-cache-${CLONE_NAME}"
+SUSHY_CACHE_VOLUME="sushy-cache-${CLONE_NAME}"
 # NOTE: must match setup-virtual-bmh.sh's SUSHY_VMEDIA_TMP exactly.
 SUSHY_VMEDIA_TMP="${HOME}/sushy-vmedia-tmp-${CLONE_NAME}"
 SUSHY_PID=""
@@ -131,6 +133,18 @@ if [[ -f "${SUSHY_PID_FILE}" ]]; then
     sleep 1
   done
   rm -f "${SUSHY_PID_FILE}"
+fi
+
+if podman container exists "${SUSHY_CACHE_CONTAINER}"; then
+  echo "Stopping nginx virtual-media cache ${SUSHY_CACHE_CONTAINER}..."
+  echo "nginx virtual-media cache log:"
+  podman logs "${SUSHY_CACHE_CONTAINER}" 2>&1 || true
+  podman stop --time 10 "${SUSHY_CACHE_CONTAINER}" >/dev/null 2>&1 || true
+  podman rm --force "${SUSHY_CACHE_CONTAINER}" >/dev/null 2>&1 || true
+fi
+if podman volume exists "${SUSHY_CACHE_VOLUME}"; then
+  echo "Removing nginx virtual-media cache volume ${SUSHY_CACHE_VOLUME}..."
+  podman volume rm --force "${SUSHY_CACHE_VOLUME}" >/dev/null 2>&1 || true
 fi
 
 # sushy-tools caches each Redfish virtual-media boot ISO it serves via
@@ -164,6 +178,14 @@ if ${VIRSH} pool-info "${BMH_POOL_NAME}" &>/dev/null; then
 fi
 if [[ -n "${SUSHY_PID}" ]] && kill -0 "${SUSHY_PID}" 2>/dev/null; then
   echo "ERROR: sushy-emulator process still running (PID ${SUSHY_PID})" >&2
+  BMH_LEAKED=true
+fi
+if podman container exists "${SUSHY_CACHE_CONTAINER}"; then
+  echo "ERROR: nginx virtual-media cache container '${SUSHY_CACHE_CONTAINER}' still present after cleanup" >&2
+  BMH_LEAKED=true
+fi
+if podman volume exists "${SUSHY_CACHE_VOLUME}"; then
+  echo "ERROR: nginx virtual-media cache volume '${SUSHY_CACHE_VOLUME}' still present after cleanup" >&2
   BMH_LEAKED=true
 fi
 if [[ -d "${BMH_DISK_DIR}" ]]; then

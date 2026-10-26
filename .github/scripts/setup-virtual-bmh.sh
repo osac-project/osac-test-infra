@@ -2,9 +2,10 @@
 # Provision virtual BareMetalHosts for BMaaS E2E tests.
 #
 # Creates libvirt VMs on the cluster-tool network, starts sushy-tools as
-# a Redfish BMC emulator, and creates BareMetalHost CRs that Ironic can
-# manage. The VMs are treated as virtual bare-metal servers — Ironic
-# inspects and provisions them exactly as it would physical hardware.
+# a Redfish BMC emulator with an nginx cache for virtual-media downloads,
+# and creates BareMetalHost CRs that Ironic can manage. The VMs are treated
+# as virtual bare-metal servers — Ironic inspects and provisions them exactly
+# as it would physical hardware.
 #
 # Required env:
 #   CLONE_NAME   — cluster-tool clone name (used to find the libvirt network)
@@ -14,6 +15,7 @@
 #   BMH_NAMESPACE  — namespace for BMH resources (default: host-inventory)
 #   BMH_COUNT      — number of virtual BMHs to create (default: 2)
 #   SUSHY_PORT     — sushy-tools listen port (default: 8000)
+#   SUSHY_CACHE_PORT — nginx ISO cache listen port (default: 8080)
 #
 # Teardown derives all paths from CLONE_NAME — no GITHUB_ENV exports needed.
 set -euo pipefail
@@ -24,8 +26,13 @@ set -euo pipefail
 BMH_NAMESPACE="${BMH_NAMESPACE:-host-inventory}"
 BMH_COUNT="${BMH_COUNT:-2}"
 SUSHY_PORT="${SUSHY_PORT:-8000}"
+SUSHY_CACHE_PORT="${SUSHY_CACHE_PORT:-8080}"
 SUSHY_CONFIG_DIR="${HOME}/sushy-${CLONE_NAME}"
 SUSHY_PID_FILE="${SUSHY_CONFIG_DIR}/sushy.pid"
+SUSHY_CACHE_CONTAINER="sushy-cache-${CLONE_NAME}"
+SUSHY_CACHE_VOLUME="sushy-cache-${CLONE_NAME}"
+SUSHY_CACHE_IMAGE="docker.io/library/nginx:1.29-alpine"
+SUSHY_CACHE_IMAGE+="@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"
 CT_NETWORK="test-infra-net-${CLONE_NAME}"
 VIRSH="virsh -c qemu:///system"
 VM_DISK_DIR="/tmp/virtual-bmh-disks-${CLONE_NAME}"
@@ -76,7 +83,7 @@ chmod 777 "${VM_DISK_DIR}"
 ${VIRSH} pool-define-as "${POOL_NAME}" dir --target "${VM_DISK_DIR}"
 ${VIRSH} pool-start "${POOL_NAME}"
 
-# --- Step 4: Install and start sushy-tools ---
+# --- Step 4: Install and start the virtual-media services ---
 echo "==> Installing sushy-tools..."
 pip install --quiet sushy-tools libvirt-python 2>&1
 
@@ -109,10 +116,107 @@ export SUSHY_VMEDIA_TMP="${HOME}/sushy-vmedia-tmp-${CLONE_NAME}"
 mkdir -p "${SUSHY_VMEDIA_TMP}"
 export TMPDIR="${SUSHY_VMEDIA_TMP}"
 
+echo "==> Starting nginx virtual-media cache on ${GW_IP}:${SUSHY_CACHE_PORT}..."
+cat > "${SUSHY_CONFIG_DIR}/nginx.conf" <<NGINX_EOF
+user root;
+worker_processes 1;
+pid /tmp/nginx.pid;
+
+events {}
+
+http {
+    proxy_cache_path /var/cache/nginx/iso levels=1:2 keys_zone=iso_cache:10m
+                     inactive=2h max_size=8g use_temp_path=off;
+
+    log_format iso_cache '\$remote_addr "\$request" \$status bytes=\$body_bytes_sent '
+                         'cache=\$upstream_cache_status upstream=\$upstream_response_time '
+                         'request=\$request_time';
+    access_log /dev/stdout iso_cache;
+    error_log /dev/stderr info;
+
+    server {
+        listen ${GW_IP}:${SUSHY_CACHE_PORT};
+
+        allow ${GW_IP};
+        deny all;
+
+        location = /healthz {
+            access_log off;
+            return 200 "ok\n";
+        }
+
+        location / {
+            proxy_pass http://\$http_host\$request_uri;
+            proxy_set_header Host \$http_host;
+            proxy_set_header Connection "";
+            proxy_http_version 1.1;
+
+            proxy_cache iso_cache;
+            proxy_cache_key "\$http_host\$request_uri";
+            proxy_cache_valid 200 2h;
+            proxy_cache_lock on;
+            proxy_cache_lock_age 30m;
+            proxy_cache_lock_timeout 30m;
+            proxy_ignore_client_abort on;
+            proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
+            proxy_connect_timeout 30s;
+            proxy_read_timeout 30m;
+            proxy_send_timeout 30m;
+
+            add_header X-Sushy-Cache \$upstream_cache_status always;
+        }
+    }
+}
+NGINX_EOF
+
+# setup can be re-run for the same clone after a partial failure. Remove only
+# this clone's stale cache resources before starting their replacements.
+podman rm --force "${SUSHY_CACHE_CONTAINER}" >/dev/null 2>&1 || true
+podman volume rm --force "${SUSHY_CACHE_VOLUME}" >/dev/null 2>&1 || true
+podman volume create "${SUSHY_CACHE_VOLUME}" >/dev/null
+podman run --detach \
+  --name "${SUSHY_CACHE_CONTAINER}" \
+  --network host \
+  --read-only \
+  --security-opt no-new-privileges \
+  --cap-drop all \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --volume "${SUSHY_CONFIG_DIR}/nginx.conf:/etc/nginx/nginx.conf:ro,Z" \
+  --volume "${SUSHY_CACHE_VOLUME}:/var/cache/nginx:Z" \
+  --entrypoint nginx \
+  "${SUSHY_CACHE_IMAGE}" -g 'daemon off;' >/dev/null
+
+SUSHY_CACHE_READY=false
+for _ in $(seq 1 15); do
+  if ! podman container exists "${SUSHY_CACHE_CONTAINER}" \
+    || [[ "$(podman inspect --format '{{.State.Running}}' "${SUSHY_CACHE_CONTAINER}")" != "true" ]]; then
+    echo "ERROR: nginx virtual-media cache stopped during startup." >&2
+    podman logs "${SUSHY_CACHE_CONTAINER}" >&2 || true
+    exit 1
+  fi
+  if curl -sf --connect-timeout 3 --max-time 5 \
+    "http://${GW_IP}:${SUSHY_CACHE_PORT}/healthz" >/dev/null; then
+    SUSHY_CACHE_READY=true
+    break
+  fi
+  sleep 2
+done
+if [[ "${SUSHY_CACHE_READY}" != "true" ]]; then
+  echo "ERROR: nginx virtual-media cache did not become ready." >&2
+  podman logs "${SUSHY_CACHE_CONTAINER}" >&2 || true
+  exit 1
+fi
+echo "nginx virtual-media cache is ready."
+
 echo "Starting sushy-emulator on ${GW_IP}:${SUSHY_PORT}..."
 SUSHY_MAX_ATTEMPTS=3
 for sushy_attempt in $(seq 1 "${SUSHY_MAX_ATTEMPTS}"); do
-  nohup sushy-emulator --config "${SUSHY_CONFIG_DIR}/sushy-emulator.conf" \
+  nohup env \
+    http_proxy="http://${GW_IP}:${SUSHY_CACHE_PORT}" \
+    HTTP_PROXY="http://${GW_IP}:${SUSHY_CACHE_PORT}" \
+    no_proxy="127.0.0.1,localhost" \
+    NO_PROXY="127.0.0.1,localhost" \
+    sushy-emulator --config "${SUSHY_CONFIG_DIR}/sushy-emulator.conf" \
     > "${SUSHY_CONFIG_DIR}/sushy.log" 2>&1 &
   echo $! > "${SUSHY_PID_FILE}"
 
