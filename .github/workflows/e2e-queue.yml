@@ -26,7 +26,7 @@ jobs:
     uses: ./.github/workflows/e2e-vmaas-full-install.yml
     with:
       test-suite: vmaas
-      test-marker: not requires_caas and not requires_bmaas
+      test-marker: not requires_caas and not requires_bmaas and not requires_provider_networking
       installer-ref: main
       installer-repo: osac-project/osac
       components: '[{"repo":"osac-project/osac","ref":"main","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service.repository","context":"."}]'

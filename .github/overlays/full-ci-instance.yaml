@@ -3,8 +3,8 @@
 #   - storageFulfillment: per-tenant StorageClasses (ClusterStorageReady)
 #   - lvms: register StorageBackend + StorageTier named "local" (VMaaS disk tests)
 #   - echoAdapter: metering tests and the workflow metering-adapter step
-# Keep full-ci's custom ci.steps cluster-fulfillment backend. Networking comes
-# from the full-ci profile's global.networking (provider networking disabled).
+# Networking is configured by the full-ci profile with provider provisioning
+# disabled.
 aap:
   instanceGroups:
     storageFulfillment:
