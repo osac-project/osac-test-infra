@@ -111,7 +111,16 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 
 The Netris VMaaS and full paths use the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `SUITE=vmaas`, `SUITE=vmaas_networking`, `SUITE=stretched_networking`, or `SUITE=full`, `deploy-infra` reuses h00's Netris-managed leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay and enables underlay on that link; leaf-0's `eth9` link remains the `br-ex` data path. h00's Linux interface names are resolved from the MAC addresses correlated across Netris, the leaf interface, and the libvirt tunnel, so the guest NIC enumeration may change without changing which path carries data or underlay. It sets h00's server ASN and EVPN-VTEP inventory role so Netris can generate the leaf-side peer from the managed link. `deploy-ocp` validates the OpenShift inputs and writes an ignored, site-specific `infra/netris/.evpn-values.yaml`; the fresh `deploy-osac` path passes those values to `osac-installer` `install-infra`, which configures OVN route advertisements, NMState, the unmanaged VTEP, node uplink addresses, and OCP-side FRR. The separate Netris deployment configures the fabric side; this flow does not install or rely on the Netris host agent. `make deploy-fast` uses a snapshot refresh and does not run the installer, so it does not exercise this configuration path; use a fresh install to test it. No standalone VLAN-backed BGP object is created for the routed `/31`. The OSAC `cudn-evpn-netris-test` profile enables both VMaaS and BMaaS and selects Netris plus CUDN EVPN, allowing both instance types to attach to one subnet. BMaaS continues to use the Netris server-port names and its separate per-BMH MAC mapping for `eth9`/`eth10`; assigning h00's `eth10` to the underlay does not change h01–h03 provisioning NIC selection. `setup-bmaas` publishes the configured BMI guest interface name as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched networking tests consume that value instead of embedding a server-port name in the test code.
 
-The focused VMaaS Netris networking E2E invocation is:
+| `SUITE` | Default `OSAC_PROFILE` | Target run by `make setup-suite` | Target run by `make run-tests` | Test selection |
+|---|---|---|---|---|
+| `vmaas` | `cudn-evpn-netris-test` | `setup-vmaas` | `test-vmaas` | General VMaaS tests; skips `requires_netris` tests |
+| `vmaas_networking` | `cudn-evpn-netris-test` | `setup-vmaas_networking` | `test-vmaas-networking` | Netris VMaaS networking tests (`requires_netris_vmaas`) |
+| `bmaas` | `bmaas-ci` | `setup-bmaas` | `test-bmaas` | General BMaaS lifecycle tests |
+| `bmaas_networking` | `bmaas-ci` | `setup-bmaas_networking` | `test-bmaas-networking` | Netris BMaaS networking tests (`requires_netris_bmaas`) |
+| `stretched_networking` | `full-ci` | `setup-stretched_networking` | `test-stretched-networking` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
+| `full` | `full-ci` | `setup-full` | `test-full` | Broad serial suite plus VMaaS, BMaaS, and stretched Netris networking; CaaS is skipped |
+
+Run the focused VMaaS networking flow with:
 
 ```bash
 make e2e INFRA=netris SUITE=vmaas_networking OSAC_DEPLOY_MODE=fresh
