@@ -1,5 +1,5 @@
 ---
-name: Remove VMaaS Networking Netris trigger on new push
+name: Remove VMaaS Netris trigger on new push
 
 on:
   pull_request_target:
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   reset-trigger:
-    name: Reset VMaaS Networking Netris trigger
+    name: Reset VMaaS Netris trigger
     if: contains(github.event.pull_request.labels.*.name, 'e2e-vmaas-netris')
     runs-on: ubuntu-latest
     steps:

@@ -1,5 +1,5 @@
 ---
-name: E2E Stretched Networking Netris Full Install
+name: E2E Stretched Netris Full Install
 
 permissions:
   contents: read

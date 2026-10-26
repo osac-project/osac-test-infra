@@ -726,7 +726,7 @@
         "label": "Workflow",
         "description": "Static allowlist snapshotted from live workflow names across all tracked repos -- it will go stale as workflows are added/renamed. Regenerate via: curl -s 'http://127.0.0.1:9103/api/workflows' | jq -r '.[].workflow' | sort -u -f",
         "type": "custom",
-        "query": "All,.github/workflows/e2e-test.yml,Ansible Lint,Audit workflow logs,Build container image,Build execution environment,Bump submodules,Bump submodules and pinned refs,CI,CI daily digest,Check AuthConfig Rego matches base,Check Floating Image Tags,Check image tags match submodules,Check pull request,Cleanup nightly branches,Container image,Deploy monitoring stack,E2E BMaaS Full Install,E2E BMaaS Netris Full Install,E2E CaaS,E2E CaaS Full Install,E2E CaaS Full Install (EC2),E2E EC2 Ephemeral Runner,E2E Full Install Tests,E2E Tests,E2E VMaaS,E2E VMaaS Full Install,E2E VMaaS Full Install Tests,E2E VMaaS Networking Netris Full Install,E2E VMaaS Tests,EC2 Ephemeral Runner Orphan Watchdog,Helm Integration Test,Helm Lint,Integration Tests,Kustomize Build,Mirror Envoy Image,Nightly Build,Publish Helm Charts,Publish OpenAPI,Publish binaries,Publish charts,Publish proto,Remove ok-to-test on new push,Scan E2E logs,Secret scanning,Slash Command,Unit Tests,Validate monitoring stack,check-generated-code,e2e,integration,pre-commit",
+        "query": "All,.github/workflows/e2e-test.yml,Ansible Lint,Audit workflow logs,Build container image,Build execution environment,Bump submodules,Bump submodules and pinned refs,CI,CI daily digest,Check AuthConfig Rego matches base,Check Floating Image Tags,Check image tags match submodules,Check pull request,Cleanup nightly branches,Container image,Deploy monitoring stack,E2E BMaaS Full Install,E2E BMaaS Netris Full Install,E2E CaaS,E2E CaaS Full Install,E2E CaaS Full Install (EC2),E2E EC2 Ephemeral Runner,E2E Full Install Tests,E2E Tests,E2E VMaaS,E2E VMaaS Full Install,E2E VMaaS Full Install Tests,E2E VMaaS Netris Full Install,E2E VMaaS Tests,EC2 Ephemeral Runner Orphan Watchdog,Helm Integration Test,Helm Lint,Integration Tests,Kustomize Build,Mirror Envoy Image,Nightly Build,Publish Helm Charts,Publish OpenAPI,Publish binaries,Publish charts,Publish proto,Remove ok-to-test on new push,Scan E2E logs,Secret scanning,Slash Command,Unit Tests,Validate monitoring stack,check-generated-code,e2e,integration,pre-commit",
         "current": { "text": "All", "value": "All", "selected": true },
         "options": [
           { "text": "All", "value": "All", "selected": true },
@@ -757,7 +757,7 @@
           { "text": "E2E VMaaS", "value": "E2E VMaaS", "selected": false },
           { "text": "E2E VMaaS Full Install", "value": "E2E VMaaS Full Install", "selected": false },
           { "text": "E2E VMaaS Full Install Tests", "value": "E2E VMaaS Full Install Tests", "selected": false },
-          { "text": "E2E VMaaS Networking Netris Full Install", "value": "E2E VMaaS Networking Netris Full Install", "selected": false },
+          { "text": "E2E VMaaS Netris Full Install", "value": "E2E VMaaS Netris Full Install", "selected": false },
           { "text": "E2E VMaaS Tests", "value": "E2E VMaaS Tests", "selected": false },
           { "text": "EC2 Ephemeral Runner Orphan Watchdog", "value": "EC2 Ephemeral Runner Orphan Watchdog", "selected": false },
           { "text": "Helm Integration Test", "value": "Helm Integration Test", "selected": false },
