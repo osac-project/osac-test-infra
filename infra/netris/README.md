@@ -1,6 +1,16 @@
 # netris-test-infra
 
-Ansible automation to deploy OCP SNO on a [Netris Spectrum-X simulated lab](https://github.com/danmanor/netris-lab) and exercise the suites currently advertised by the backend.
+Ansible automation to deploy OCP SNO on a [Netris Spectrum-X simulated lab](https://github.com/danmanor/netris-lab) and exercise the deployment scenarios advertised by the backend.
+
+> **Using this backend from `osac-test-infra`:** run a complete suite from the
+> repository root with `make e2e INFRA=netris SUITE=<suite>`. `SUITE` chooses
+> the deployment scenario and matching Make test target; for VMaaS/BMaaS,
+> `TEST_SCOPE` selects service tests, networking tests, or both. `OSAC_PROFILE`
+> chooses OSAC's Helm values preset. See the root README's [deployment scenario
+> and target table](../../README.md#netris-deployment-scenarios-test-targets-and-profiles)
+> for supported scenarios, test targets, and profile defaults. The `make deploy*`
+> commands in this backend guide are provisioning building blocks; they do not
+> run the OSAC pytest suite.
 
 ## Architecture
 
@@ -45,6 +55,13 @@ Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softga
 All system packages, tools, and SSH keys are installed automatically by `make setup-infra`. A pre-flight check validates all required files, KVM support, and minimum memory before deploying.
 
 ## Quick Start
+
+This section describes the standalone Netris backend workflow: it deploys the
+lab and OSAC, but does not run the OSAC mono-repo test suites. From the
+`osac-test-infra` repository, use the root command
+`make e2e INFRA=netris SUITE=<suite>` to deploy and test in one pipeline. In particular,
+`make deploy` is a backend deployment target; `make e2e` is the target that
+also prepares and runs tests for the selected deployment scenario.
 
 ```bash
 git clone --recurse-submodules https://github.com/danmanor/netris-test-infra.git
@@ -107,13 +124,16 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make setup-maas` | Same as setup-caas with MaaS resource-class / sizing; labels only `MAAS_LABEL_HOSTNAMES` (default h02+h03) with `g5` | ~30 min |
 | `make deploy-maas` | Create MaaS cluster (`ocp_4_20_ai_maas` + `-p` template params) | ~60 min |
 
-### VMaaS and BMaaS shared-subnet networking
+### Netris deployment scenarios, test targets, and profiles
 
-The Netris VMaaS and full paths use the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `SUITE=vmaas`, `SUITE=vmaas_networking`, `SUITE=stretched_networking`, or `SUITE=full`, `deploy-infra` reuses h00's Netris-managed leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay and enables underlay on that link; leaf-0's `eth9` link remains the `br-ex` data path. h00's Linux interface names are resolved from the MAC addresses correlated across Netris, the leaf interface, and the libvirt tunnel, so the guest NIC enumeration may change without changing which path carries data or underlay. It sets h00's server ASN and EVPN-VTEP inventory role so Netris can generate the leaf-side peer from the managed link. `deploy-ocp` validates the OpenShift inputs and writes an ignored, site-specific `infra/netris/.evpn-values.yaml`; the fresh `deploy-osac` path passes those values to `osac-installer` `install-infra`, which configures OVN route advertisements, NMState, the unmanaged VTEP, node uplink addresses, and OCP-side FRR. The separate Netris deployment configures the fabric side; this flow does not install or rely on the Netris host agent. `make deploy-fast` uses a snapshot refresh and does not run the installer, so it does not exercise this configuration path; use a fresh install to test it. No standalone VLAN-backed BGP object is created for the routed `/31`. The OSAC `cudn-evpn-netris-test` profile enables both VMaaS and BMaaS and selects Netris plus CUDN EVPN, allowing both instance types to attach to one subnet. BMaaS continues to use the Netris server-port names and its separate per-BMH MAC mapping for `eth9`/`eth10`; assigning h00's `eth10` to the underlay does not change h01–h03 provisioning NIC selection. `setup-bmaas` publishes the configured BMI guest interface name as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched networking tests consume that value instead of embedding a server-port name in the test code.
+The following commands are run from the `osac-test-infra` repository root.
+`make e2e` performs provisioning, deployment, test prerequisite setup, and tests. A
+`make test-*` target skips provisioning and runs tests against an already
+prepared cluster.
 
 `SUITE` names the deployment scenario. It drives the Netris setup path,
-Ansible behavior, default OSAC profile, and service test target. `TEST_SCOPE`
-narrows VMaaS or BMaaS tests without changing the deployment.
+Ansible behavior, default OSAC profile, and corresponding Make test target.
+`TEST_SCOPE` narrows VMaaS or BMaaS tests without changing the deployment.
 
 | `SUITE` | Default `OSAC_PROFILE` | Target run by `make setup-suite` | Target run by `make run-tests` | Test selection |
 |---|---|---|---|---|
@@ -128,21 +148,14 @@ For VMaaS and BMaaS, `TEST_SCOPE=service` runs general lifecycle/API tests,
 `/test bmaas-netris` use the networking scope. The `stretched` deployment is a
 separate shared-subnet scenario and needs no extra scope value.
 
-Run a focused networking flow with:
+Run the whole pipeline with one command:
 
 ```bash
-make e2e INFRA=netris SUITE=vmaas_networking OSAC_DEPLOY_MODE=fresh
+make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci \
+  OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
 ```
 
-`SUITE=vmaas_networking` selects the `cudn-evpn-netris-test` OSAC profile by default and runs only `tests/e2e/networking/vmaas` with the `requires_netris` and `requires_netris_vmaas` markers. `SUITE=vmaas` uses the same profile and runs the VMaaS test tree while excluding the common `requires_netris` marker. Set `OSAC_PROFILE=cudn-evpn-netris-test` explicitly to pin the profile. It selects the CUDN EVPN and Netris managers; `deploy-infra` provisions the fabric side, `deploy-ocp` validates inputs and generates the installer values, and a fresh `deploy-osac` run configures the OpenShift side through `install-infra`.
-
-The focused BMaaS Netris networking invocation is:
-
-`make e2e INFRA=netris SUITE=bmaas_networking OSAC_DEPLOY_MODE=fresh`
-
-`SUITE=bmaas_networking` defaults to `bmaas-ci` and runs only `tests/e2e/networking/bmaas` with the `requires_netris` and `requires_netris_bmaas` markers. The standard BMaaS suite excludes all Netris-marked tests.
-
-The stretched VMaaS↔BMaaS Netris invocation is:
+Or choose a focused networking flow:
 
 ```bash
 make e2e INFRA=netris SUITE=vmaas TEST_SCOPE=networking
@@ -150,7 +163,7 @@ make e2e INFRA=netris SUITE=bmaas TEST_SCOPE=networking EXTRA_VARS="bare_metal_s
 make e2e INFRA=netris SUITE=stretched EXTRA_VARS="bare_metal_services=true"
 ```
 
-`SUITE=stretched_networking` uses the `full-ci` profile, prepares BMaaS prerequisites plus the CUDN EVPN underlay, and runs only `tests/e2e/networking/stretched` with the generic `requires_stretched_networking` marker. The same test is also included in `SUITE=full`. Both contracts require the BMI guest interface name published by BMaaS setup.
+The variables select different parts of the run:
 
 - `INFRA=netris` selects this backend.
 - `SUITE=...` selects the deployment scenario and therefore backend setup,
@@ -175,13 +188,25 @@ make run-tests INFRA=netris SUITE=vmaas TEST_SCOPE=networking
 
 This loads the environment saved by `deploy-osac` and invokes the same target.
 
-### Full-profile E2E
+The VMaaS Netris profile configures CUDN EVPN on single-node OCP 4.22 with
+OVNKubernetes and platform type `None`. It reuses h00's Netris-managed leaf-1
+link (`eth10` ↔ `swp1s0`) for the `/31` underlay; leaf-0's `eth9` remains the
+`br-ex` data path. The deployment correlates interface MAC addresses across
+Netris, the leaf, and libvirt, configures the EVPN peer, and advertises routes
+from OCP. It does not install or rely on the Netris host agent.
 
-```bash
-make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
-```
+The `cudn-evpn-netris-test` profile enables VMaaS and BMaaS with the Netris and
+CUDN EVPN managers, so both instance types can attach to one subnet. BMaaS
+retains its per-BMH MAC mapping. `setup-bmaas` publishes the BMI guest interface
+as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched tests consume that value
+instead of hardcoding a server-port name.
 
-`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` skips CaaS setup, prepares BMaaS resources, then runs the VMaaS EVPN prerequisite check. `test-full` excludes CaaS tests, runs the VMaaS and BMaaS Netris networking suites, and includes the stretched shared-subnet test; it excludes the slower cross-tenant BMaaS networking test and external-IP cases that need a separately provisioned return path. The Netris PR workflow exposes `bmaas-netris`, `vmaas-netris`, and `stretched-netris`; the stretched check runs only the shared-subnet BMI/ComputeInstance test.
+`SUITE=full` is not every Netris selector: it excludes CaaS, the slow
+cross-tenant BMaaS networking class, and ExternalIP tests that require a
+separately provisioned return path. The stretched test is included in both
+`full` and `stretched`; the latter runs only that test. The PR E2E
+comment offers dedicated `vmaas-netris`, `bmaas-netris`, and `stretched-netris`
+checks. The full suite currently has no dedicated `/test full-netris` command.
 
 VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
 

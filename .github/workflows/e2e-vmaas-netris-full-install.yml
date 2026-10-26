@@ -18,7 +18,7 @@ on:
         type: string
         default: "networking"
       osac-profile:
-        description: "OSAC profile for the Netris suite"
+        description: "OSAC profile for the VMaaS deployment"
         required: false
         type: string
         default: "cudn-evpn-netris-test"
@@ -572,7 +572,7 @@ jobs:
           MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
           make deploy-osac INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${MERGED}"
 
-      - name: Setup Netris suite
+      - name: Set up Netris test prerequisites
         shell: bash
         # setup-vmaas can spend up to 80 minutes in sequential readiness polling.
         timeout-minutes: 120

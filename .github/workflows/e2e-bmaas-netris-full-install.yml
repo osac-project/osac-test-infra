@@ -18,7 +18,7 @@ on:
         type: string
         default: "networking"
       osac-profile:
-        description: "OSAC profile for the BMaaS Netris suite"
+        description: "OSAC profile for the BMaaS deployment"
         required: false
         type: string
         default: "bmaas-ci"
@@ -572,7 +572,7 @@ jobs:
           MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
           make deploy-osac INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${MERGED}"
 
-      - name: Setup Netris suite
+      - name: Set up Netris test prerequisites
         shell: bash
         timeout-minutes: 60
         env:
@@ -606,7 +606,7 @@ jobs:
         continue-on-error: true
         run: make -C infra/netris gather-mgmt-cluster
 
-      - name: Gather BMaaS Netris diagnostics
+      - name: Gather BMaaS diagnostics
         if: always()
         shell: bash
         timeout-minutes: 10

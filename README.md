@@ -41,20 +41,19 @@ infra/<backend>/                    osac/tests/e2e/<suite>/
 |---------|-----------|-------------|-------------|
 | **netris** | Ansible | Simulated Netris Spectrum-X GPU cluster with OCP and OSAC on KVM/libvirt | ~25 min (snapshot) / ~2h (full) |
 
-### Netris suites, test targets, and profiles
+### Netris deployment scenarios, test targets, and profiles
 
-Run the commands below from the repository root. There are two ways to use a
-suite:
+Run these commands from the repository root. Use either of these paths:
 
 - `make test-...` runs pytest against an OSAC deployment that already exists.
 - `make e2e INFRA=netris SUITE=...` provisions the Netris lab, deploys OCP and
-  OSAC, prepares the selected suite, and runs its tests.
+  OSAC, prepares the deployment scenario, and runs its selected tests.
 
 `SUITE` names the deployment scenario. It selects the Netris setup path,
-Ansible behavior, default OSAC profile, and service test target. `TEST_SCOPE`
-chooses which VMaaS or BMaaS tests to run on that deployment. This keeps the
-deployment name stable while allowing a networking-only rerun. Test code and
-fixtures live in the OSAC mono-repo.
+Ansible behavior, default OSAC profile, and corresponding Make test target.
+`TEST_SCOPE` chooses service tests, Netris networking tests, or both for
+VMaaS/BMaaS. For a networking-only rerun, keep `SUITE=vmaas` and set
+`TEST_SCOPE=networking`. Test code and fixtures live in the OSAC mono-repo.
 
 | `SUITE` | Default `OSAC_PROFILE` | `make setup-suite` selects | Test target | Deployment and test behavior |
 |---|---|---|---|---|
@@ -72,9 +71,9 @@ For `SUITE=vmaas` or `SUITE=bmaas`, `TEST_SCOPE` accepts:
 | `networking` | Netris-specific connectivity, isolation, and dataplane tests only. |
 | `all` | Both service and networking tests. |
 
-The Netris backend lists supported selectors in
+The Netris backend lists supported deployment scenarios in
 [`infra/netris/capabilities`](infra/netris/capabilities); the top-level Makefile
-checks that list before deployment. `full` does not mean every selector: its
+checks that list before deployment. `full` does not include every scenario: its
 setup deliberately skips CaaS, and its test target excludes CaaS tests.
 
 For example, these two commands run only the preparation and test stages after
@@ -316,7 +315,8 @@ All configuration via environment variables.
 | `OSAC_CLI_PATH` | `osac` | Path to the CLI binary |
 | `TEST` | (none) | pytest `-k` filter |
 | `INFRA` | `netris` | Infrastructure backend |
-| `SUITE` | `caas` | Test suite |
+| `SUITE` | `caas` | Deployment scenario; also selects the matching Make test target |
+| `TEST_SCOPE` | `service` | For VMaaS/BMaaS: `service`, `networking`, or `all` |
 | `EXTRA_VARS` | (none) | Extra variables passed to the backend |
 
 For E2E fixture and test guidance, see [the OSAC mono-repo E2E documentation](https://github.com/osac-project/osac/tree/main/tests/e2e).
@@ -325,7 +325,7 @@ For E2E fixture and test guidance, see [the OSAC mono-repo E2E documentation](ht
 
 Create `infra/<name>/` with:
 - `Makefile` — Makefile implementing the contract targets (see `infra/contract.md`)
-- `capabilities` — shell-sourceable file declaring `SUPPORTED_SUITES="suite1 suite2"`
+- `capabilities` — shell-sourceable file declaring supported deployment scenarios
 - Optional `contracts/<suite>` files — shell-sourceable `REQUIRED_VARS` lists for suite environment validation
 
-Test code belongs in the OSAC mono-repo. Add backend capability and suite contract files as needed; the root Makefile needs a runner target when introducing a suite.
+Test code belongs in the OSAC mono-repo. Add backend capabilities and contracts as needed; the root Makefile needs a test target when introducing a deployment scenario.

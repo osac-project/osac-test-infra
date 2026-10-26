@@ -13,7 +13,7 @@ on:
         type: string
         default: "stretched"
       osac-profile:
-        description: "OSAC profile for the stretched networking Netris suite"
+        description: "OSAC profile for the stretched deployment"
         required: false
         type: string
         default: "full-ci"
@@ -369,7 +369,7 @@ jobs:
         run: |
           case "${TEST_SUITE}:${OSAC_PROFILE}" in
             stretched:full-ci) ;;
-            *) echo "::error::Unsupported Netris suite/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
+            *) echo "::error::Unsupported Netris deployment/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
@@ -566,7 +566,7 @@ jobs:
           MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
           make deploy-osac INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${MERGED}"
 
-      - name: Setup Netris suite
+      - name: Set up Netris test prerequisites
         shell: bash
         timeout-minutes: 60
         env:
