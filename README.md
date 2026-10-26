@@ -53,7 +53,7 @@ These are the Netris backend's supported `SUITE` selectors (see `infra/netris/ca
 | **bmaas** | BareMetalInstance setup and E2E |
 | **bmaas_networking** | BMaaS networking E2E |
 | **stretched_networking** | Shared-subnet connectivity between a ComputeInstance and BareMetalInstance |
-| **full** | Broad serial OSAC E2E run on `full-ci`, including the shared-subnet BMI/ComputeInstance EVPN test |
+| **full** | Broad serial OSAC E2E run on `full-ci`, excluding CaaS and including VMaaS, BMaaS, and stretched Netris networking |
 
 ### Compatibility Matrix
 
@@ -63,7 +63,7 @@ Each backend declares its supported `SUITE` selectors in a `capabilities` file. 
 |---------|:-----:|:----------------:|:----:|:-----:|:----------------:|:--------------------:|:----:|
 | netris  | yes   | yes              | yes  | yes   | yes              | yes                  | yes  |
 
-The Netris PR workflow exposes three manual checks: `/test vmaas-netris` calls `e2e-vmaas-netris-full-install.yml` with `SUITE=vmaas_networking` and the focused `cudn-evpn-netris-test` profile; `/test bmaas-netris` calls `e2e-bmaas-netris-full-install.yml` with `SUITE=bmaas_networking` and `bmaas-ci`; `/test stretched-netris` calls `e2e-stretched-netris-full-install.yml` with `SUITE=stretched_networking` and `full-ci` to test shared-subnet VM↔BM connectivity. `SUITE=full` still runs the broad full-profile suite and includes the stretched test, while `SUITE=stretched_networking` runs that test alone. The generic `vmaas` and `full` selectors exclude the `requires_netris_vmaas` marker; only `vmaas_networking` selects those tests. The `vmaas`, `vmaas_networking`, `stretched_networking`, and `full` paths register the `cudn_evpn` Kubernetes manager and Netris fabric manager, so VM and bare-metal instances can share a subnet. `full` and `stretched_networking` keep the `full-ci` services enabled and overlay the same Netris EVPN NetworkClass. The OCP target must be converged OCP 4.22 with OVNKubernetes; its platform type may be `None`. ExternalIP tests additionally require a separately provisioned and acknowledged return path for `172.27.0.0/16`.
+The Netris PR workflow exposes three manual checks: `/test vmaas-netris` calls `e2e-vmaas-netris-full-install.yml` with `SUITE=vmaas_networking` and the focused `cudn-evpn-netris-test` profile; `/test bmaas-netris` calls `e2e-bmaas-netris-full-install.yml` with `SUITE=bmaas_networking` and `bmaas-ci`; `/test stretched-netris` calls `e2e-stretched-netris-full-install.yml` with `SUITE=stretched_networking` and `full-ci` to test shared-subnet VM↔BM connectivity. `SUITE=full` runs the broad full-profile suite, excludes CaaS tests, and includes the VMaaS and BMaaS Netris networking suites plus stretched connectivity; the slow cross-tenant BMaaS networking test remains in its dedicated workflow. `SUITE=stretched_networking` runs only the shared-subnet test. The generic `vmaas` selector excludes the `requires_netris_vmaas` marker; `vmaas_networking` selects those tests on their own. The `vmaas`, `vmaas_networking`, `stretched_networking`, and `full` paths register the `cudn_evpn` Kubernetes manager and Netris fabric manager, so VM and bare-metal instances can share a subnet. `full` and `stretched_networking` keep the `full-ci` services enabled and overlay the same Netris EVPN NetworkClass. The OCP target must be converged OCP 4.22 with OVNKubernetes; its platform type may be `None`. ExternalIP tests additionally require a separately provisioned and acknowledged return path for `172.27.0.0/16`.
 
 ### Backend Setup: Netris
 
@@ -98,7 +98,7 @@ The Netris backend's `dns_server` defaults to `8.8.8.8`. Some environments block
 export EXTRA_VARS="dns_server=<reachable-dns-server>"
 ```
 
-`OSAC_PROFILE` selects the OSAC Helm values preset; it is separate from `SUITE`, which selects test setup and tests. Netris defaults `OSAC_PROFILE` to `caas-ci`. Both `caas-ci` and `bmaas-ci` enable Metal3, the OSAC component for bare-metal provisioning. Its installer check requires a cluster-scoped Kubernetes `Provisioning` resource with `watchAllNamespaces: true`. Netris defaults `bare_metal_services` to `false`, so `prep-osac` skips creating or updating that resource unless the flag is true. If the resource already exists with the required setting, the flag is not needed just for the installer check.
+`OSAC_PROFILE` selects the OSAC Helm values preset; it is separate from `SUITE`, which selects test setup and tests. Netris defaults to `cudn-evpn-netris-test` for VMaaS, `bmaas-ci` for BMaaS, `full-ci` for full and stretched, and `caas-ci` otherwise. Both `caas-ci` and `bmaas-ci` enable Metal3, the OSAC component for bare-metal provisioning. Its installer check requires a cluster-scoped Kubernetes `Provisioning` resource with `watchAllNamespaces: true`. Netris defaults `bare_metal_services` to `false`, so `prep-osac` skips creating or updating that resource unless the flag is true. If the resource already exists with the required setting, the flag is not needed just for the installer check.
 
 The same flag enables Netris's BMC (Baseboard Management Controller) support: `deploy-infra` starts `sushy-tools`, which emulates a server's management interface, and `deploy-ocp` reserves the OCP VM's BMC address. Without the flag those conditional setup tasks are skipped, even though the commands can still succeed. Use the flag when you need these bare-metal services as well as the Metal3 prerequisite.
 
@@ -131,7 +131,7 @@ When you run `make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci` with the re
 3. **`deploy-infra`** — deploys the Netris lab (`ansible-playbook playbooks/deploy-infra.yml`)
 4. **`deploy-ocp`** — restores the OCP snapshot into the lab and waits for the cluster to become healthy. With `SUITE=vmaas`, `SUITE=vmaas_networking`, or `SUITE=full`, it also runs the `configure-cudn-evpn` role, which derives the Netris peer settings and configures the OCP CUDN/EVPN prerequisites. This path requires OCP 4.22 with OVNKubernetes, but does not require `platformStatus.type: BareMetal`.
 5. **`deploy-osac`** — installs or refreshes OSAC on the cluster and writes `.env.infra` with cluster access credentials.
-6. **`setup-suite`** — `setup-full` prepares CaaS and BMaaS resources, then runs the read-only VMaaS EVPN prerequisite check.
+6. **`setup-suite`** — `setup-full` skips CaaS setup, prepares BMaaS resources, then runs the read-only VMaaS EVPN prerequisite check.
 7. **`run-tests`** — checks the backend's suite contract when one is defined, sources `.env.infra`, then runs `test-full`: the serial OSAC mono-repo E2E run with its configured exclusions.
 
 Each step can be run independently — you don't have to run the full pipeline every time.

@@ -27,7 +27,7 @@ test-stretched-networking test-stretched_networking:
 
 test-caas:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/caas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/caas.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/caas/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/caas.xml
 
 test-storage:
 	mkdir -p $(REPORTS_DIR)
@@ -45,12 +45,14 @@ test-bmaas-networking test-bmaas_networking:
 	mkdir -p $(REPORTS_DIR)
 	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/bmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_bmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
 
-# full-ci enables all services. Run regular E2E plus only the stretched Netris test; keep the full run serial.
-FULL_TEST_MARKER = not requires_netris or requires_stretched_networking
-FULL_TEST_FILTER = not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name and not test_disabled_services and not external_ip
+# CaaS is not provisioned by setup-full. Include the implemented VMaaS and BMaaS
+# Netris networking suites, plus stretched connectivity; keep the slow cross-tenant
+# BMaaS networking test in its dedicated workflow.
+FULL_TEST_MARKER = not requires_caas and (not requires_netris or requires_stretched_networking or requires_netris_vmaas or requires_netris_bmaas)
+FULL_TEST_FILTER = not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference and not test_create_subnet_with_virtual_network_by_name and not test_disabled_services and not external_ip and not TestCrossTenantBmaasNetworking
 test-full:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -n 0 -v --tb=short -m "$(FULL_TEST_MARKER)" -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ --ignore=tests/e2e/caas -n 0 -v --tb=short -m "$(FULL_TEST_MARKER)" -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
 
 test-metering:
 	mkdir -p $(REPORTS_DIR)

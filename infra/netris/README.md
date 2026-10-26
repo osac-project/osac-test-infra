@@ -121,9 +121,9 @@ make e2e INFRA=netris SUITE=vmaas_networking OSAC_DEPLOY_MODE=fresh
 
 The focused BMaaS Netris networking invocation is:
 
-`make e2e INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci OSAC_DEPLOY_MODE=fresh`
+`make e2e INFRA=netris SUITE=bmaas_networking OSAC_DEPLOY_MODE=fresh`
 
-`SUITE=bmaas_networking` runs only `tests/e2e/networking/bmaas` with the `requires_netris` and `requires_netris_bmaas` markers. The standard BMaaS suite excludes all Netris-marked tests.
+`SUITE=bmaas_networking` defaults to `bmaas-ci` and runs only `tests/e2e/networking/bmaas` with the `requires_netris` and `requires_netris_bmaas` markers. The standard BMaaS suite excludes all Netris-marked tests.
 
 The stretched VMaaS↔BMaaS Netris invocation is:
 
@@ -131,7 +131,7 @@ The stretched VMaaS↔BMaaS Netris invocation is:
 make e2e INFRA=netris SUITE=stretched_networking OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
 ```
 
-`SUITE=stretched_networking` uses the `full-ci` profile, prepares both CaaS and BMaaS prerequisites plus the CUDN EVPN underlay, and runs only `tests/e2e/networking/stretched` with the generic `requires_stretched_networking` marker. The same test is also included in `SUITE=full`. Both contracts require the BMI guest interface name published by BMaaS setup.
+`SUITE=stretched_networking` uses the `full-ci` profile, prepares BMaaS prerequisites plus the CUDN EVPN underlay, and runs only `tests/e2e/networking/stretched` with the generic `requires_stretched_networking` marker. The same test is also included in `SUITE=full`. Both contracts require the BMI guest interface name published by BMaaS setup.
 
 ### Full-profile E2E
 
@@ -139,7 +139,7 @@ make e2e INFRA=netris SUITE=stretched_networking OSAC_PROFILE=full-ci OSAC_DEPLO
 make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
 ```
 
-`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` currently skips CaaS setup, prepares BMaaS resources, then runs the VMaaS EVPN prerequisite check. `test-full` runs the serial OSAC mono-repo E2E set with its configured exclusions; it includes only the generic `requires_stretched_networking` shared-subnet test and excludes the dedicated VMaaS and BMaaS Netris cases. The Netris PR workflow exposes `bmaas-netris`, `vmaas-netris`, and `stretched-netris`; the stretched check runs only the shared-subnet BMI/ComputeInstance test.
+`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` skips CaaS setup, prepares BMaaS resources, then runs the VMaaS EVPN prerequisite check. `test-full` excludes CaaS tests, runs the VMaaS and BMaaS Netris networking suites, and includes the stretched shared-subnet test; it excludes the slower cross-tenant BMaaS networking test and external-IP cases that need a separately provisioned return path. The Netris PR workflow exposes `bmaas-netris`, `vmaas-netris`, and `stretched-netris`; the stretched check runs only the shared-subnet BMI/ComputeInstance test.
 
 VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
 
