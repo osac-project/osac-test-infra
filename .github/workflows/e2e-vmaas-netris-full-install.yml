@@ -368,7 +368,7 @@ jobs:
           OSAC_PROFILE: ${{ inputs['osac-profile'] }}
         run: |
           case "${TEST_SUITE}:${OSAC_PROFILE}" in
-            vmaas:cudn-evpn-netris-test|vmaas_networking:cudn-evpn-netris-test) ;;
+            vmaas:cudn-evpn-netris-test|vmaas_networking:cudn-evpn-netris-test|full:full-ci) ;;
             *) echo "::error::Unsupported Netris suite/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
