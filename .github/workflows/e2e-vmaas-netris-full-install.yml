@@ -8,12 +8,12 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: "VMaaS Networking Netris suite to run"
+        description: "Netris suite to run"
         required: false
         type: string
         default: "vmaas_networking"
       osac-profile:
-        description: "OSAC profile for the VMaaS Networking Netris suite"
+        description: "OSAC profile for the Netris suite"
         required: false
         type: string
         default: "cudn-evpn-netris-test"
@@ -576,7 +576,7 @@ jobs:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make setup-suite INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
 
-      - name: Run VMaaS Networking tests
+      - name: Run Netris E2E tests
         id: test
         timeout-minutes: 60
         shell: bash
@@ -598,7 +598,7 @@ jobs:
         continue-on-error: true
         run: make -C infra/netris gather-mgmt-cluster
 
-      - name: Gather VMaaS Networking diagnostics
+      - name: Gather Netris diagnostics
         if: always()
         shell: bash
         timeout-minutes: 10
