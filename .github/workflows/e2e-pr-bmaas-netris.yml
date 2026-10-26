@@ -51,7 +51,8 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
     with:
-      suite: bmaas_networking
+      suite: bmaas
+      test-scope: networking
       osac-profile: bmaas-ci
       test-infra-repository: ${{ inputs.repo }}
       test-infra-ref: ${{ inputs.sha }}

@@ -34,8 +34,10 @@ and [README.md](README.md) for the human-facing overview):
   OSAC. Each backend implements `Makefile` (targets `setup-infra`, `deploy-infra`, `deploy-osac`,
   `setup-<suite>`, `destroy-osac`, `destroy-infra`, `gather-infra`, `gather-<suite>`) and a
   `capabilities` file declaring `SUPPORTED_SUITES`. `deploy-osac` writes `.env.infra` with the
-  cluster config tests need. Currently only `infra/netris/` is implemented (`SUPPORTED_SUITES="caas bmaas bmaas_networking"`
-  per `infra/netris/capabilities`).
+  cluster config tests need. Currently only `infra/netris/` is implemented; its
+  `SUPPORTED_SUITES` are deployment scenarios (`caas`, `vmaas`, `bmaas`,
+  `stretched`, and `full`). VMaaS/BMaaS test coverage is selected separately
+  with `TEST_SCOPE=service|networking|all`.
 - **`tests/<suite>/`** — the pytest suites documented throughout this file. They are
   infrastructure-agnostic: they only consume environment variables, never which backend provisioned
   the cluster. **This layer is unaffected by the infra-backend layer** — the "run tests against an
@@ -59,14 +61,7 @@ osac-test-infra/
 │   ├── contract.md     # Backend contract spec (targets, capabilities, .env.infra)
 │   └── netris/         # Ansible-based backend (Makefile, capabilities, vendored netris-lab/)
 ├── tests/
-│   ├── vmaas/          # ComputeInstance lifecycle, console, security, subnets
-│   ├── caas/           # ClusterOrder lifecycle, credentials, templates
-│   ├── storage/        # Tenant storage lifecycle
-│   ├── catalog/        # CatalogItem lifecycle
-│   ├── bmaas/              # BareMetalInstance lifecycle
-│   ├── bmaas_networking/   # BMaaS networking E2E
-│   │                       # Cross-cutting concern fixtures live in tests/conftest.py
-│   └── core/               # Client wrappers, helpers, runner primitives
+│   └── test_moved_to_monorepo.py  # E2E suites now live in osac/tests/e2e/
 ├── Makefile            # Build targets: test, lint, format, test-<suite>, plus infra orchestration
 ├── Containerfile       # UBI9 + oc/kubectl/grpcurl/osac CLI
 ├── pyproject.toml      # Python dependencies, ruff/basedpyright config
@@ -109,7 +104,7 @@ Place tests in the appropriate suite directory:
 - `tests/storage/` — Tenant storage
 - `tests/catalog/` — CatalogItem features
 - `tests/bmaas/` — BareMetalInstance features
-- `tests/bmaas_networking/` — BMaaS networking E2E
+- `tests/e2e/networking/bmaas/` in the OSAC mono-repo — BMaaS networking E2E
 
 ### Naming Convention
 

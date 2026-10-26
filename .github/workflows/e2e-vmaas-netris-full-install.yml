@@ -8,10 +8,15 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: "Netris suite to run"
+        description: "Deployment scenario to provision"
         required: false
         type: string
-        default: "vmaas_networking"
+        default: "vmaas"
+      test-scope:
+        description: "Which VMaaS tests to run: service, networking, or all"
+        required: false
+        type: string
+        default: "networking"
       osac-profile:
         description: "OSAC profile for the Netris suite"
         required: false
@@ -365,11 +370,12 @@ jobs:
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_BRANCH: ${{ inputs.osac-branch }}
           TEST_SUITE: ${{ inputs.suite }}
+          TEST_SCOPE: ${{ inputs.test-scope }}
           OSAC_PROFILE: ${{ inputs['osac-profile'] }}
         run: |
-          case "${TEST_SUITE}:${OSAC_PROFILE}" in
-            vmaas:cudn-evpn-netris-test|vmaas_networking:cudn-evpn-netris-test|full:full-ci) ;;
-            *) echo "::error::Unsupported Netris suite/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
+          case "${TEST_SUITE}:${OSAC_PROFILE}:${TEST_SCOPE}" in
+            vmaas:cudn-evpn-netris-test:service|vmaas:cudn-evpn-netris-test:networking|vmaas:cudn-evpn-netris-test:all|full:full-ci:all) ;;
+            *) echo "::error::Unsupported Netris deployment/profile/test-scope: ${TEST_SUITE}/${OSAC_PROFILE}/${TEST_SCOPE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
@@ -582,7 +588,8 @@ jobs:
         shell: bash
         env:
           TEST_SUITE: ${{ inputs.suite }}
-        run: make run-tests INFRA=netris SUITE="${TEST_SUITE}"
+          TEST_SCOPE: ${{ inputs.test-scope }}
+        run: make run-tests INFRA=netris SUITE="${TEST_SUITE}" TEST_SCOPE="${TEST_SCOPE}"
 
       - name: Gather infra diagnostics
         if: always()

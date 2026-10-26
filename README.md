@@ -50,28 +50,27 @@ suite:
 - `make e2e INFRA=netris SUITE=...` provisions the Netris lab, deploys OCP and
   OSAC, prepares the selected suite, and runs its tests.
 
-`SUITE` selects both the Netris setup path and the test target. Test code and
-fixtures live in the OSAC mono-repo. Use underscores in `SUITE` values.
-`make run-tests` builds the internal target as `test-$(SUITE)`; the Makefile
-also provides hyphenated aliases for direct commands, such as
-`make test-vmaas-networking`.
+`SUITE` names the deployment scenario. It selects the Netris setup path,
+Ansible behavior, default OSAC profile, and service test target. `TEST_SCOPE`
+chooses which VMaaS or BMaaS tests to run on that deployment. This keeps the
+deployment name stable while allowing a networking-only rerun. Test code and
+fixtures live in the OSAC mono-repo.
 
-Every selector below runs on the Netris backend. The `_networking` suffix
-describes the test coverage, not the lab: `vmaas` and `bmaas` run the general
-service E2E tests, while `vmaas_networking` and `bmaas_networking` run the
-separate Netris connectivity, isolation, and dataplane tests. Keeping them
-separate lets you rerun the network checks without rerunning the service
-lifecycle suites.
-
-| `SUITE` value | Default `OSAC_PROFILE` | `make setup-suite` selects | Internal test target from `make run-tests` | Tests run |
+| `SUITE` | Default `OSAC_PROFILE` | `make setup-suite` selects | Test target | Deployment and test behavior |
 |---|---|---|---|---|
-| `vmaas` | `cudn-evpn-netris-test` | `setup-vmaas` | `test-vmaas` | General VMaaS E2E; excludes tests marked `requires_netris`. |
-| `vmaas_networking` | `cudn-evpn-netris-test` | `setup-vmaas_networking` | `test-vmaas_networking` | Netris VMaaS networking tests, including same-subnet traffic and isolation. |
-| `caas` | `caas-ci` | `setup-caas` | `test-caas` | CaaS lifecycle E2E. It is a separate selector and is not included in `full`. |
-| `bmaas` | `bmaas-ci` | `setup-bmaas` | `test-bmaas` | General BMaaS lifecycle E2E from `tests/e2e/bmaas/`. |
-| `bmaas_networking` | `bmaas-ci` | `setup-bmaas_networking` | `test-bmaas_networking` | Netris BMaaS networking tests. The pull-request workflow skips the slow cross-tenant class. |
-| `stretched_networking` | `full-ci` | `setup-stretched_networking` | `test-stretched_networking` | Prepares BMaaS and VMaaS networking prerequisites, skips CaaS, and runs the shared-subnet VM↔BM test. |
+| `vmaas` | `cudn-evpn-netris-test` | `setup-vmaas` | `test-vmaas` | VMaaS with the CUDN/EVPN underlay. `TEST_SCOPE` selects service, networking, or both. |
+| `caas` | `caas-ci` | `setup-caas` | `test-caas` | CaaS lifecycle E2E. It is not included in `full`. |
+| `bmaas` | `bmaas-ci` | `setup-bmaas` | `test-bmaas` | BMaaS lifecycle and Netris tests. `TEST_SCOPE` selects service, networking, or both. |
+| `stretched` | `full-ci` | `setup-stretched` | `test-stretched` | Prepares BMaaS and VMaaS, skips CaaS, and tests a shared-subnet VM↔BM flow. |
 | `full` | `full-ci` | `setup-full` | `test-full` | Broad serial E2E plus VMaaS, BMaaS, and stretched Netris networking. Skips CaaS, slow cross-tenant BMaaS, and external-IP cases. |
+
+For `SUITE=vmaas` or `SUITE=bmaas`, `TEST_SCOPE` accepts:
+
+| `TEST_SCOPE` | Tests run |
+|---|---|
+| `service` (default) | Service lifecycle and API tests; Netris-specific networking tests are skipped. |
+| `networking` | Netris-specific connectivity, isolation, and dataplane tests only. |
+| `all` | Both service and networking tests. |
 
 The Netris backend lists supported selectors in
 [`infra/netris/capabilities`](infra/netris/capabilities); the top-level Makefile
@@ -86,16 +85,19 @@ make setup-suite INFRA=netris SUITE=full OSAC_PROFILE=full-ci
 make run-tests INFRA=netris SUITE=full
 ```
 
-`SUITE` and `OSAC_PROFILE` answer different questions:
+`SUITE`, `TEST_SCOPE`, and `OSAC_PROFILE` answer different questions:
 
-- `SUITE` chooses infrastructure setup and which tests run.
+- `SUITE` chooses the deployment scenario, including infrastructure setup,
+  Ansible behavior, and the default OSAC profile.
+- `TEST_SCOPE` chooses service tests, Netris networking tests, or both for
+  VMaaS and BMaaS. It does not change the deployment.
 - `OSAC_PROFILE` chooses the OSAC Helm values preset and enabled services. The
   Netris backend supplies the defaults shown in the table; set
   `OSAC_PROFILE=...` only when you intentionally want a different preset.
 - `OSAC_DEPLOY_MODE` chooses a fresh install (`fresh`, the default) or the
   snapshot-based OSAC refresh (`snapshot`).
 - `TEST=name` adds a pytest `-k` filter to an existing-cluster test target.
-  `MARKER=regression` adds a pytest `-m` filter to `make test-bmaas`.
+  `MARKER=regression` adds a pytest `-m` filter to the BMaaS service test scope.
 
 The direct `make test-*` targets do not take a `SUITE` argument: the target
 name already selects the tests. For example, run `make test-full` against an
@@ -103,20 +105,20 @@ existing deployment; use `make run-tests INFRA=netris SUITE=full` when you
 want the orchestrator to load `.env.infra` first.
 
 The PR E2E comment currently offers these dedicated Netris checks. The check
-title is a workflow display name; the `SUITE` column shows what it actually
-runs.
+title is a workflow display name; `SUITE` selects the deployment and
+`TEST_SCOPE` narrows the tests.
 
-| PR command | `SUITE` | `OSAC_PROFILE` | Coverage |
-|---|---|---|---|
-| `/test vmaas-netris` | `vmaas_networking` | `cudn-evpn-netris-test` | VMaaS Netris networking |
-| `/test bmaas-netris` | `bmaas_networking` | `bmaas-ci` | BMaaS Netris networking; the slow cross-tenant class is omitted |
-| `/test stretched-netris` | `stretched_networking` | `full-ci` | Shared-subnet VMaaS↔BMaaS connectivity |
+| PR command | `SUITE` | `TEST_SCOPE` | `OSAC_PROFILE` | Coverage |
+|---|---|---|---|---|
+| `/test vmaas-netris` | `vmaas` | `networking` | `cudn-evpn-netris-test` | VMaaS Netris networking |
+| `/test bmaas-netris` | `bmaas` | `networking` | `bmaas-ci` | BMaaS Netris networking; the slow cross-tenant class is omitted |
+| `/test stretched-netris` | `stretched` | — | `full-ci` | Shared-subnet VMaaS↔BMaaS connectivity |
 
 There is no dedicated `/test full-netris` command today. Run `SUITE=full` with
 the Make pipeline below when you want the broad suite.
 
-The VMaaS EVPN flows (`vmaas`, `vmaas_networking`, `stretched_networking`, and
-`full`) require converged OCP 4.22 with OVNKubernetes and configure CUDN EVPN
+The VMaaS EVPN flows (`vmaas`, `stretched`, and `full`) require converged OCP
+4.22 with OVNKubernetes and configure CUDN EVPN
 with the Netris fabric manager. External-IP dataplane coverage needs a
 separately provisioned and acknowledged return path for `172.27.0.0/16`;
 `full` filters those cases out.
@@ -195,10 +197,12 @@ Makefile then:
 1. Checks that Netris supports the requested `SUITE`.
 2. Installs prerequisites and caches images (`setup-infra`).
 3. Deploys the Netris lab and restores OCP (`deploy-infra`, `deploy-ocp`). For
-   `vmaas`, `vmaas_networking`, `stretched_networking`, and `full`, this also
+   `vmaas`, `stretched`, and `full`, this also
    configures the CUDN/EVPN underlay on converged OCP 4.22 with OVNKubernetes.
 4. Installs OSAC using `OSAC_PROFILE` and writes `.env.infra`.
-5. Maps `SUITE=full` to Netris `setup-full` and the root `test-full` target.
+5. Maps each `SUITE` to its Netris setup target and root test target. For
+   VMaaS and BMaaS, `TEST_SCOPE` selects service tests, Netris networking tests,
+   or both.
    `setup-full` prepares BMaaS and VMaaS networking prerequisites, but skips
    CaaS. `test-full` runs serially and applies the exclusions in the suite
    table above.
@@ -225,17 +229,20 @@ export OSAC_VM_KUBECONFIG=~/.kube/config
 make test-vmaas
 
 # Netris-only networking tests against an already prepared lab
-make test-vmaas-networking
-make test-bmaas-networking
-make test-stretched-networking
+make test-vmaas TEST_SCOPE=networking
+make test-bmaas TEST_SCOPE=networking
+make test-stretched
+
+# Run both the service and networking tests
+make test-vmaas TEST_SCOPE=all
 
 # Optional pytest filters
 TEST=test_name make test-vmaas
 MARKER=regression make test-bmaas
 ```
 
-`TEST` becomes pytest's `-k` filter. `MARKER` becomes `-m` for
-`test-bmaas`. For the environment variables required by a particular suite,
+`TEST` becomes pytest's `-k` filter. `MARKER` becomes `-m` for the BMaaS
+service test scope. For the environment variables required by a particular suite,
 see the OSAC mono-repo's [E2E guide](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md).
 
 ### Provision Netris and run an E2E suite
@@ -251,15 +258,15 @@ the Netris defaults in the table above.
 make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci \
   OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
 
-# Run just the VMaaS Netris networking suite
-make e2e INFRA=netris SUITE=vmaas_networking
+# Provision the VMaaS deployment and run only its Netris networking tests
+make e2e INFRA=netris SUITE=vmaas TEST_SCOPE=networking
 
-# Run just the BMaaS Netris networking suite
-make e2e INFRA=netris SUITE=bmaas_networking \
+# Provision the BMaaS deployment and run only its Netris networking tests
+make e2e INFRA=netris SUITE=bmaas TEST_SCOPE=networking \
   EXTRA_VARS="bare_metal_services=true"
 
 # Run only the shared-subnet VMaaS↔BMaaS test
-make e2e INFRA=netris SUITE=stretched_networking \
+make e2e INFRA=netris SUITE=stretched \
   EXTRA_VARS="bare_metal_services=true"
 ```
 

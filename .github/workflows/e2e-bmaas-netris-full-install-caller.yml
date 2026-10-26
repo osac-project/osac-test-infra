@@ -75,7 +75,8 @@ jobs:
       || github.event.label.name == 'e2e-bmaas-netris'
     uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
     with:
-      suite: bmaas_networking
+      suite: bmaas
+      test-scope: networking
       osac-profile: bmaas-ci
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}

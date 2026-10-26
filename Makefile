@@ -1,6 +1,8 @@
 REPORTS_DIR ?= reports
 
-.PHONY: test lint format test-vmaas test-vmaas-networking test-vmaas_networking test-stretched-networking test-stretched_networking test-caas test-storage test-bmaas test-bmaas-networking test-metering test-references test-full
+# SUITE selects the deployment scenario; TEST_SCOPE narrows VMaaS/BMaaS tests.
+# Supported scopes are service (default), networking, and all.
+.PHONY: test lint format test-vmaas test-stretched test-caas test-storage test-bmaas test-metering test-references test-full
 
 test:
 	mkdir -p $(REPORTS_DIR)
@@ -15,15 +17,20 @@ format:
 
 test-vmaas:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/vmaas/ -v -m "not requires_netris" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/vmaas.xml
+	@if [ "$(TEST_SCOPE)" = "service" ]; then \
+	  cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/vmaas/ -v -m "not requires_netris" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/vmaas-service.xml; \
+	elif [ "$(TEST_SCOPE)" = "networking" ]; then \
+	  cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/vmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_vmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/vmaas-networking.xml; \
+	elif [ "$(TEST_SCOPE)" = "all" ]; then \
+	  cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/vmaas/ -v -m "not requires_netris" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/vmaas-service.xml && \
+	  uv run pytest tests/e2e/networking/vmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_vmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/vmaas-networking.xml; \
+	else \
+	  echo "ERROR: TEST_SCOPE must be service, networking, or all (got '$(TEST_SCOPE)')" >&2; exit 2; \
+	fi
 
-test-vmaas-networking test-vmaas_networking:
+test-stretched:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/vmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_vmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/vmaas-networking.xml
-
-test-stretched-networking test-stretched_networking:
-	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/stretched/ -x -n 0 -v --tb=short -m "requires_stretched_networking" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/stretched-networking.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/stretched/ -x -n 0 -v --tb=short -m "requires_stretched_networking" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/stretched.xml
 
 test-caas:
 	mkdir -p $(REPORTS_DIR)
@@ -37,13 +44,18 @@ test-storage:
 # -n 0 for local full-suite runs so BMH-consuming tests do not race.
 test-bmaas:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/ -n 0 -v --tb=short $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/bmaas.xml
+	@if [ "$(TEST_SCOPE)" = "service" ]; then \
+	  cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/ -n 0 -v --tb=short $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/bmaas-service.xml; \
+	elif [ "$(TEST_SCOPE)" = "networking" ]; then \
+	  cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/bmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_bmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/bmaas-networking.xml; \
+	elif [ "$(TEST_SCOPE)" = "all" ]; then \
+	  cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/ -n 0 -v --tb=short $(if $(MARKER),-m "$(MARKER)") $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/bmaas-service.xml && \
+	  uv run pytest tests/e2e/networking/bmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_bmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/bmaas-networking.xml; \
+	else \
+	  echo "ERROR: TEST_SCOPE must be service, networking, or all (got '$(TEST_SCOPE)')" >&2; exit 2; \
+	fi
 
 OSAC_MONO_DIR ?= /opt/osac
-
-test-bmaas-networking test-bmaas_networking:
-	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/bmaas/ -x -n 0 -v --tb=short -m "requires_netris and requires_netris_bmaas" $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/bmaas-networking.xml
 
 # CaaS is not provisioned by setup-full. Include the implemented VMaaS and BMaaS
 # Netris networking suites, plus stretched connectivity; keep the slow cross-tenant
@@ -66,6 +78,7 @@ test-references:
 
 INFRA              ?= netris
 SUITE              ?= caas
+TEST_SCOPE         ?= service
 EXTRA_VARS         ?=
 KUBECONFIG         ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
@@ -79,7 +92,14 @@ _FWD_SUITE          = SUITE=$(SUITE)
 
 .PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
-        redeploy-osac _validate-backend _validate-suite-contract
+        redeploy-osac _validate-backend _validate-suite-contract _validate-test-scope
+
+_validate-test-scope:
+	@if [ "$(SUITE)" = "vmaas" ] || [ "$(SUITE)" = "bmaas" ]; then \
+	  case "$(TEST_SCOPE)" in service|networking|all) ;; \
+	    *) echo "ERROR: TEST_SCOPE for SUITE=$(SUITE) must be service, networking, or all"; exit 1 ;; \
+	  esac; \
+	fi
 
 _validate-backend:
 	@if [ ! -f $(INFRA_DIR)/Makefile ]; then \
@@ -95,22 +115,30 @@ _validate-suite-contract:
 	@if [ ! -f $(INFRA_DIR)/.env.infra ]; then \
 		echo "ERROR: $(INFRA_DIR)/.env.infra not found. Run 'make deploy-osac' first."; exit 1; \
 	fi
-	@suite_contract='$(INFRA_DIR)/contracts/$(SUITE)'; \
-	if [ -f "$$suite_contract" ]; then \
-		set -a && . "$(INFRA_DIR)/.env.infra" && set +a && \
-		. "$$suite_contract" && \
-		missing="" && \
-		for var in $$REQUIRED_VARS; do \
-			val=$$(printenv "$$var" || true); \
-			if [ -z "$$val" ]; then missing="$$missing $$var"; fi; \
-		done && \
-		if [ -n "$$missing" ]; then \
-			echo "ERROR: backend '$(INFRA)' missing required vars for suite '$(SUITE)':$$missing"; \
-			exit 1; \
+	@set -e; \
+	suite_contracts='$(INFRA_DIR)/contracts/$(SUITE)'; \
+	if { [ "$(TEST_SCOPE)" = "networking" ] || [ "$(TEST_SCOPE)" = "all" ]; } && { [ "$(SUITE)" = "vmaas" ] || [ "$(SUITE)" = "bmaas" ]; }; then \
+	  networking_contract='$(INFRA_DIR)/contracts/$(SUITE)-networking'; \
+	  if [ "$(TEST_SCOPE)" = "networking" ]; then suite_contracts="$$networking_contract"; \
+	  else suite_contracts="$$suite_contracts $$networking_contract"; fi; \
+	fi; \
+	set -a; . "$(INFRA_DIR)/.env.infra"; set +a; \
+	for suite_contract in $$suite_contracts; do \
+		if [ -f "$$suite_contract" ]; then \
+			. "$$suite_contract"; \
+			missing=""; \
+			for var in $$REQUIRED_VARS; do \
+				val=$$(printenv "$$var" || true); \
+				if [ -z "$$val" ]; then missing="$$missing $$var"; fi; \
+			done; \
+			if [ -n "$$missing" ]; then \
+				echo "ERROR: backend '$(INFRA)' missing required vars for suite '$(SUITE)' (TEST_SCOPE=$(TEST_SCOPE)):$$missing"; \
+				exit 1; \
+			fi; \
 		fi; \
-	fi
+	done
 
-e2e: _validate-backend deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
+e2e: _validate-backend _validate-test-scope deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
 deploy-setup: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) deploy-setup EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
@@ -130,9 +158,9 @@ deploy-osac: _validate-backend
 setup-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
-run-tests: _validate-suite-contract
+run-tests: _validate-test-scope _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
-		$(MAKE) test-$(SUITE)
+		$(MAKE) test-$(SUITE) TEST_SCOPE=$(TEST_SCOPE)
 
 destroy-ocp:
 	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)

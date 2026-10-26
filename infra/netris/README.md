@@ -111,20 +111,24 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 
 The Netris VMaaS and full paths use the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `SUITE=vmaas`, `SUITE=vmaas_networking`, `SUITE=stretched_networking`, or `SUITE=full`, `deploy-infra` reuses h00's Netris-managed leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay and enables underlay on that link; leaf-0's `eth9` link remains the `br-ex` data path. h00's Linux interface names are resolved from the MAC addresses correlated across Netris, the leaf interface, and the libvirt tunnel, so the guest NIC enumeration may change without changing which path carries data or underlay. It sets h00's server ASN and EVPN-VTEP inventory role so Netris can generate the leaf-side peer from the managed link. `deploy-ocp` validates the OpenShift inputs and writes an ignored, site-specific `infra/netris/.evpn-values.yaml`; the fresh `deploy-osac` path passes those values to `osac-installer` `install-infra`, which configures OVN route advertisements, NMState, the unmanaged VTEP, node uplink addresses, and OCP-side FRR. The separate Netris deployment configures the fabric side; this flow does not install or rely on the Netris host agent. `make deploy-fast` uses a snapshot refresh and does not run the installer, so it does not exercise this configuration path; use a fresh install to test it. No standalone VLAN-backed BGP object is created for the routed `/31`. The OSAC `cudn-evpn-netris-test` profile enables both VMaaS and BMaaS and selects Netris plus CUDN EVPN, allowing both instance types to attach to one subnet. BMaaS continues to use the Netris server-port names and its separate per-BMH MAC mapping for `eth9`/`eth10`; assigning h00's `eth10` to the underlay does not change h01–h03 provisioning NIC selection. `setup-bmaas` publishes the configured BMI guest interface name as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched networking tests consume that value instead of embedding a server-port name in the test code.
 
-All selectors use the Netris backend. The `_networking` suffix identifies a
-separate test scope for connectivity, isolation, and dataplane behavior; the
-unsuffixed `vmaas` and `bmaas` selectors run general service E2E coverage.
+`SUITE` names the deployment scenario. It drives the Netris setup path,
+Ansible behavior, default OSAC profile, and service test target. `TEST_SCOPE`
+narrows VMaaS or BMaaS tests without changing the deployment.
 
-| `SUITE` | Default `OSAC_PROFILE` | Target run by `make setup-suite` | Internal target from `make run-tests` | Test selection |
+| `SUITE` | Default `OSAC_PROFILE` | Target run by `make setup-suite` | Target run by `make run-tests` | Test selection |
 |---|---|---|---|---|
-| `vmaas` | `cudn-evpn-netris-test` | `setup-vmaas` | `test-vmaas` | General VMaaS tests; skips `requires_netris` tests |
-| `vmaas_networking` | `cudn-evpn-netris-test` | `setup-vmaas_networking` | `test-vmaas_networking` | Netris VMaaS networking tests (`requires_netris_vmaas`) |
-| `bmaas` | `bmaas-ci` | `setup-bmaas` | `test-bmaas` | General BMaaS lifecycle tests |
-| `bmaas_networking` | `bmaas-ci` | `setup-bmaas_networking` | `test-bmaas_networking` | Netris BMaaS networking tests (`requires_netris_bmaas`) |
-| `stretched_networking` | `full-ci` | `setup-stretched_networking` | `test-stretched_networking` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
+| `vmaas` | `cudn-evpn-netris-test` | `setup-vmaas` | `test-vmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
+| `bmaas` | `bmaas-ci` | `setup-bmaas` | `test-bmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
+| `stretched` | `full-ci` | `setup-stretched` | `test-stretched` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
 | `full` | `full-ci` | `setup-full` | `test-full` | Broad serial suite plus VMaaS, BMaaS, and stretched Netris networking; CaaS is skipped |
 
-Run the focused VMaaS networking flow with:
+For VMaaS and BMaaS, `TEST_SCOPE=service` runs general lifecycle/API tests,
+`TEST_SCOPE=networking` runs only Netris connectivity tests, and
+`TEST_SCOPE=all` runs both. PR commands `/test vmaas-netris` and
+`/test bmaas-netris` use the networking scope. The `stretched` deployment is a
+separate shared-subnet scenario and needs no extra scope value.
+
+Run a focused networking flow with:
 
 ```bash
 make e2e INFRA=netris SUITE=vmaas_networking OSAC_DEPLOY_MODE=fresh
@@ -141,10 +145,35 @@ The focused BMaaS Netris networking invocation is:
 The stretched VMaaS↔BMaaS Netris invocation is:
 
 ```bash
-make e2e INFRA=netris SUITE=stretched_networking OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
+make e2e INFRA=netris SUITE=vmaas TEST_SCOPE=networking
+make e2e INFRA=netris SUITE=bmaas TEST_SCOPE=networking EXTRA_VARS="bare_metal_services=true"
+make e2e INFRA=netris SUITE=stretched EXTRA_VARS="bare_metal_services=true"
 ```
 
 `SUITE=stretched_networking` uses the `full-ci` profile, prepares BMaaS prerequisites plus the CUDN EVPN underlay, and runs only `tests/e2e/networking/stretched` with the generic `requires_stretched_networking` marker. The same test is also included in `SUITE=full`. Both contracts require the BMI guest interface name published by BMaaS setup.
+
+- `INFRA=netris` selects this backend.
+- `SUITE=...` selects the deployment scenario and therefore backend setup,
+  Ansible behavior, and the default profile.
+- `TEST_SCOPE=service|networking|all` selects VMaaS/BMaaS test coverage without
+  changing deployment. It defaults to `service`.
+- `OSAC_PROFILE=...` selects OSAC Helm values and enabled services. The Netris
+  backend supplies the defaults in the table; override only when needed.
+- `OSAC_DEPLOY_MODE=fresh|snapshot` chooses a fresh install or a snapshot-based
+  OSAC refresh. `fresh` is the default.
+- `EXTRA_VARS=...` passes Ansible variables, such as enabling BMaaS BMC
+  services. Combine DNS and other overrides in the same value.
+
+To run only tests after the cluster and OSAC are ready, use the target mapped
+from `SUITE` and set `TEST_SCOPE` when needed. For example,
+`make test-vmaas TEST_SCOPE=networking` selects Netris VMaaS connectivity tests.
+In the pipeline, use:
+
+```bash
+make run-tests INFRA=netris SUITE=vmaas TEST_SCOPE=networking
+```
+
+This loads the environment saved by `deploy-osac` and invokes the same target.
 
 ### Full-profile E2E
 
@@ -158,7 +187,7 @@ VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env
 
 Suite fixtures create their own tenant `VirtualNetwork`, `Subnet`, `SecurityGroup`, and `ExternalIPPool` resources. Lab setup owns the cluster/fabric prerequisites and must not pre-create fixture-owned tenant resources. PodNetwork route advertisements support shared-subnet VMaaS/BMaaS traffic. ExternalIP and EgressIP dataplane tests require a separately provisioned and acknowledged route/return path for `172.27.0.0/16`; enable `ocp_vmaas_external_ip_tests_enabled` only after verifying that path.
 
-To collect diagnostics from an existing deployment, run `make gather-suite INFRA=netris SUITE=vmaas_networking`. The CUDN EVPN captures are written under `infra/netris/logs/cudn-evpn/`. Collection is read-only and best-effort; unavailable APIs or peers get an explicit marker in the output. Captured Kubernetes YAML, FRR logs, and Netris responses are scrubbed for credential-like values before they are written.
+To collect diagnostics from an existing deployment, run `make gather-suite INFRA=netris SUITE=vmaas`. The CUDN EVPN captures are written under `infra/netris/logs/cudn-evpn/`. Collection is read-only and best-effort; unavailable APIs or peers get an explicit marker in the output. Captured Kubernetes YAML, FRR logs, and Netris responses are scrubbed for credential-like values before they are written.
 
 ### Destroy
 

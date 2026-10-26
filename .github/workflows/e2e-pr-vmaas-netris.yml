@@ -51,7 +51,8 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/e2e-vmaas-netris-full-install.yml
     with:
-      suite: vmaas_networking
+      suite: vmaas
+      test-scope: networking
       osac-profile: cudn-evpn-netris-test
       test-infra-repository: ${{ inputs.repo }}
       test-infra-ref: ${{ inputs.sha }}

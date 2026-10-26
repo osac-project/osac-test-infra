@@ -8,10 +8,10 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: "Stretched networking Netris suite to run"
+        description: "Deployment scenario to provision"
         required: false
         type: string
-        default: "stretched_networking"
+        default: "stretched"
       osac-profile:
         description: "OSAC profile for the stretched networking Netris suite"
         required: false
@@ -368,7 +368,7 @@ jobs:
           OSAC_PROFILE: ${{ inputs['osac-profile'] }}
         run: |
           case "${TEST_SUITE}:${OSAC_PROFILE}" in
-            stretched_networking:full-ci) ;;
+            stretched:full-ci) ;;
             *) echo "::error::Unsupported Netris suite/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
@@ -575,7 +575,7 @@ jobs:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make setup-suite INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
 
-      - name: Run stretched networking tests
+      - name: Run Netris E2E tests
         id: test
         timeout-minutes: 60
         shell: bash
