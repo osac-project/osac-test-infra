@@ -160,9 +160,9 @@ setup-bmc:
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
-# Full profile shares CaaS and BMaaS setup and verifies the EVPN prerequisites.
+# Full profile setup currently skips CaaS, prepares BMaaS, and runs the
+# VMaaS EVPN prerequisite check.
 setup-full:
-	$(MAKE) setup-caas
 	$(MAKE) setup-bmaas
 	$(MAKE) setup-vmaas SUITE=vmaas OSAC_PROFILE=$(OSAC_PROFILE)
 
