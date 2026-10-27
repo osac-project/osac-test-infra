@@ -209,10 +209,11 @@
               'resourceClassMap': _netris_resource_class_map | to_json
             }}},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}},
-                       'controllers': {'networkingProvisioning': true}},
+                       'controllers': {'networkingProvisioning': true},
+                       'networkManagers': {'fabricManagers': {'netris': {
+                         'externalIPContractVersion': netris_external_ip_contract_version}}}},
           'bmf': {'env': {'enableNetworkingProvisioning': 'true'}},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
-              'NETRIS_CONTROLLER_URL': _netris_ctl_url,
               'NETRIS_USERNAME': netris_username,
               'NETRIS_SITE_ID': _netris_site_id | string,
               'NETRIS_TENANT_ID': '1',
@@ -237,11 +238,12 @@
               'SERVER_SSH_BASTION_KEY': _ssh_private_key.content | b64decode
             }},
             'networkFulfillment': {'enabled': true, 'config': {
-              'NETRIS_CONTROLLER_URL': _netris_ctl_url,
               'NETRIS_USERNAME': netris_username,
               'NETRIS_SITE_ID': _netris_site_id | string,
               'NETRIS_TENANT_ID': '1',
               'NETRIS_TENANT_NAME': 'Admin',
+              'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
+              'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
               'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name
             }}
           }}

@@ -307,8 +307,8 @@
   failed_when: false
   changed_when: true
 
-# The order cleanup also deletes the NodePool and osac-managed-ingress
-# ConfigMap. Do not report success while an order namespace still exists.
+# The order cleanup also removes legacy NodePool/guest-ingress resources.
+# Do not report success while an order namespace still exists.
 - name: Verify force-cleaned order resources are gone
   ansible.builtin.shell: |
     set -euo pipefail
@@ -466,19 +466,13 @@
   changed_when: false
   failed_when: false
 
-- name: Resolve Netris password
-  ansible.builtin.shell: |
-    set -euo pipefail
-    ns="{{ _force_osac_ns }}"
-    pass=$(oc get secret cluster-fulfillment-ig -n "$ns" \
-      -o jsonpath='{.data.NETRIS_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || true)
-    printf '%s' "${pass:-netris}"
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _netris_pass
-  changed_when: false
-  failed_when: false
-  no_log: true
+- name: Require Netris access for orphan cleanup
+  ansible.builtin.assert:
+    that:
+      - (_netris_url.stdout | trim | length) > 0
+      - (netris_password | length) > 0
+    fail_msg: Netris URL and configured password are required to clean orphan order resources.
+  when: (force_destroy_orders | length > 0) or (force_destroy_orphan_nat_order | default('') | length > 0)
 
 - name: Sweep orphan Netris order resources
   ansible.builtin.shell: |
@@ -488,15 +482,16 @@
       /tmp/force-destroy-netris.ck \
       "{{ force_destroy_netris_user | default('netris') }}" \
       "$NETRIS_PASS" \
-      {{ force_destroy_orders | map('quote') | join(' ') }}
+      {{ force_destroy_orders | map('quote') | join(' ') }} \
+      --orphan-nat-order {{ (force_destroy_orphan_nat_order | default('')) | quote }}
   environment:
-    NETRIS_PASS: "{{ _netris_pass.stdout }}"
+    NETRIS_PASS: "{{ netris_password }}"
+    KUBECONFIG: /root/.kube/config
   register: _netris_cleanup
   when:
     - (_netris_url.stdout | trim | length) > 0
-    - force_destroy_orders | length > 0
-  failed_when: false
-  changed_when: "'deletes' in (_netris_cleanup.stdout | default(''))"
+    - (force_destroy_orders | length > 0) or (force_destroy_orphan_nat_order | default('') | length > 0)
+  changed_when: "'Netris orphan cleanup done (0 deletes)' not in (_netris_cleanup.stdout | default(''))"
   no_log: true
 
 - name: Warn if Netris URL undiscoverable

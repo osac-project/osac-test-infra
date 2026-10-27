@@ -16,6 +16,8 @@ Each backend lives in `infra/<name>/` and must provide:
 | `deploy-ocp` | Deploy an OpenShift cluster |
 | `deploy-osac` | Deploy OSAC on the cluster, write `.env.infra` |
 | `setup-<suite>` | Suite-specific infra prep (can be no-op) |
+| `prepare-suite` | Suite-specific setup before pytest; tests create their own tenant prerequisites |
+| `deploy-suite` | Prepare the suite, then create persistent tenants, suite networking, and workloads |
 | `destroy-ocp` | Tear down the OpenShift cluster |
 | `destroy-osac` | Tear down OSAC only |
 | `destroy-infra` | Tear down everything |

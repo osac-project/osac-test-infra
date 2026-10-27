@@ -488,7 +488,7 @@
 # which appear as the "udp"-type interfaces in domiflist, in order. This is a
 # DIFFERENT MAC than bootMACAddress (the bmc-net NIC) — the DHCP lease the
 # operator's IP-discovery matches against is on the fabric NIC, not the boot
-# NIC. Order matches bmaas_instance_type_network_ports' non-lifecycle entries:
+# NIC. Order matches bmaas_vm_interfaces' non-lifecycle entries:
 # 1st udp NIC = eth9, 2nd = eth10, ...
 - name: Get VM tenant fabric NIC MACs (Netris udp NICs, ordered)
   ansible.builtin.shell:
@@ -497,10 +497,10 @@
   changed_when: false
   loop: "{{ bmaas_vms }}"
 
-- name: Compute tenant (non-lifecycle) instance type port names
+- name: Compute tenant fabric interface names
   ansible.builtin.set_fact:
     _tenant_iface_names: >-
-      {{ bmaas_instance_type_network_ports
+      {{ bmaas_vm_interfaces
          | rejectattr('role', 'equalto', 'lifecycle')
          | map(attribute='name') | list }}
 
@@ -534,11 +534,13 @@
       metadata:
         name: {{ item }}
         namespace: {{ bmaas_bmh_namespace }}
+        labels:
+          osac.openshift.io/host-type: "{{ bmaas_bmit_name }}"
         annotations:
           # Map each tenant data interface (eth9, eth10, role: fabric) to its
           # Netris fabric NIC MAC so the operator's IP-discovery job matches the
           # DHCP lease by MAC. These are the "udp"-type NICs (not bootMACAddress,
-          # which is the bmc-net NIC). Names come from the instance type ports.
+          # which is the bmc-net NIC). Names come from bmaas_vm_interfaces.
           osac.openshift.io/interface-macs: '{{ dict(_tenant_iface_names | zip(_vm_fabric_macs.results[idx].stdout_lines)) | to_json }}'
       spec:
         online: true
@@ -622,74 +624,6 @@
     dest: /root/.config/osac/config.json
     mode: "0600"
 
-- name: Create BareMetalInstanceType
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ _fulfillment_api }}/api/private/v1/bare_metal_instance_types"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      metadata:
-        name: "{{ bmaas_instance_type }}"
-        tenant: shared
-      spec:
-        hardware:
-          cpu:
-            cores: "{{ bmaas_vm_vcpu | int }}"
-            architecture: amd64
-            threads_per_core: 1
-          memory:
-            total_gb: "{{ (bmaas_vm_memory_mb | int / 1024) | int }}"
-          network_ports: "{{ bmaas_instance_type_network_ports }}"
-        description: "{{ bmaas_instance_type_description }}"
-        host_label_selector:
-          match_labels:
-            osac.openshift.io/host-type: "{{ bmaas_instance_type }}"
-    validate_certs: false
-    status_code: [200, 201, 409]
-
-# Resolve the shared instance type ID for the template reference.
-- name: List BareMetalInstanceTypes
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ _fulfillment_api }}/api/private/v1/bare_metal_instance_types"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-    validate_certs: false
-    status_code: [200]
-  register: _instance_types
-
-- name: Resolve BareMetalInstanceType id
-  ansible.builtin.set_fact:
-    _instance_type_id: >-
-      {{ (_instance_types.json.get('items', [])
-          | selectattr('metadata.name', 'equalto', bmaas_instance_type)
-          | map(attribute='id') | list | first) }}
-
-- name: Require the BMaaS instance type ID to be resolved
-  ansible.builtin.assert:
-    that:
-      - (_instance_type_id | default('', true) | string | length) > 0
-    fail_msg: >-
-      Could not resolve BareMetalInstanceType '{{ bmaas_instance_type }}' to an
-      ID from the fulfillment service.
-
-# The instance type selector matches this stable host-type label on each BMH.
-- name: Label BMHs for the BMaaS instance type
-  ansible.builtin.command:
-    cmd: >-
-      oc label bmh {{ item }} -n {{ bmaas_bmh_namespace }}
-      osac.openshift.io/host-type={{ bmaas_instance_type }}
-      --overwrite
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop: "{{ bmaas_vms }}"
-  changed_when: true
-
 - name: Wait for BMI template to be published by AAP
   no_log: true
   when: bmaas_create_catalog_items | default(true) | bool
@@ -704,42 +638,6 @@
   until: _bmi_template.status == 200
   retries: 40
   delay: 15
-
-# Link the shared instance type as the template default for placements that do
-# not explicitly select one.
-- name: Link BMI template to BareMetalInstanceType
-  no_log: true
-  when: bmaas_create_catalog_items | default(true) | bool
-  ansible.builtin.uri:
-    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=instance_type"
-    method: PATCH
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      id: "{{ bmaas_bmi_template }}"
-      instance_type:
-        id: "{{ _instance_type_id }}"
-        shared: true
-    validate_certs: false
-    status_code: [200]
-
-- name: Publish BMaaS instance type for E2E tests
-  ansible.builtin.lineinfile:
-    path: "{{ inventory_dir }}/../.env.infra"
-    regexp: '^OSAC_BMI_INSTANCE_TYPE='
-    line: "OSAC_BMI_INSTANCE_TYPE={{ bmaas_instance_type }}"
-    create: true
-    mode: "0644"
-
-- name: Publish BMaaS network interface for E2E tests
-  ansible.builtin.lineinfile:
-    path: "{{ inventory_dir }}/../.env.infra"
-    regexp: '^OSAC_BMI_NETWORK_INTERFACE='
-    line: "OSAC_BMI_NETWORK_INTERFACE={{ bmaas_provisioning_fabric_iface }}"
-    create: true
-    mode: "0644"
 
 - name: Create BMI catalog item
   no_log: true
@@ -812,6 +710,27 @@
   when: bmaas_create_catalog_items | default(true) | bool
   retries: 10
   delay: 5
+
+# Keep reusable prerequisites with BMaaS setup; deploy-bmaas only creates BMIs.
+- name: Prepare reusable BMaaS image and instance type
+  ansible.builtin.include_tasks: persistent-image-type.yml
+  when: bmaas_create_catalog_items | default(true) | bool
+
+- name: Publish BMaaS instance type for E2E tests
+  ansible.builtin.lineinfile:
+    path: "{{ inventory_dir }}/../.env.infra"
+    regexp: '^OSAC_BMI_INSTANCE_TYPE='
+    line: "OSAC_BMI_INSTANCE_TYPE={{ bmaas_bmit_name }}"
+    create: true
+    mode: "0644"
+
+- name: Publish BMaaS network interface for E2E tests
+  ansible.builtin.lineinfile:
+    path: "{{ inventory_dir }}/../.env.infra"
+    regexp: '^OSAC_BMI_NETWORK_INTERFACE='
+    line: "OSAC_BMI_NETWORK_INTERFACE={{ bmaas_provisioning_fabric_iface }}"
+    create: true
+    mode: "0644"
 
 - name: Report BMaaS setup complete
   ansible.builtin.debug:

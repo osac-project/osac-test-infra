@@ -50,6 +50,24 @@
     netris_controller_url: "{{ _netris_ctl_url }}"
     vpc_state: read
 
+- name: Read refresh Helm values
+  ansible.builtin.slurp:
+    src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+  register: _refresh_values
+  no_log: true
+
+- name: Persist management VPC for networking operations
+  ansible.builtin.copy:
+    dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+    content: >-
+      {{ (_refresh_values.content | b64decode | from_yaml)
+         | combine({'aap': {'instanceGroups': {'networkFulfillment': {'config': {
+             'NETRIS_MGMT_VPC_ID': netris_vpc_by_name[ocp_vpc_name].id | string,
+             'NETRIS_MGMT_VPC_NAME': ocp_vpc_name}}}}}, recursive=true)
+         | to_nice_yaml }}
+    mode: "0600"
+  no_log: true
+
 - name: Get server cluster templates
   ansible.builtin.include_role:
     name: netris.controller.server_cluster_template
@@ -98,6 +116,17 @@
         --dry-run=client -o yaml | oc apply -f -
   environment:
     KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+
+- name: Update networking operations with the management VPC
+  ansible.builtin.command: >-
+    oc -n {{ snapshot_osac_namespace | quote }} patch configmap network-fulfillment-ig
+    --type merge -p {{ {'data': {
+      'NETRIS_MGMT_VPC_ID': netris_vpc_by_name[ocp_vpc_name].id | string,
+      'NETRIS_MGMT_VPC_NAME': ocp_vpc_name }} | to_json | quote }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _network_vpc_patch
+  changed_when: "'no change' not in _network_vpc_patch.stdout"
 
 - name: Update cluster-fulfillment-ig secret with lab credentials and SSH keys
   ansible.builtin.shell:

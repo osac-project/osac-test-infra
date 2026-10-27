@@ -89,6 +89,12 @@
     state: directory
     mode: "0755"
 
+- name: Create persistent sushy-tools state directory
+  ansible.builtin.file:
+    path: /var/lib/sushy-tools
+    state: directory
+    mode: "0700"
+
 - name: Write sushy-tools config
   ansible.builtin.copy:
     content: |
@@ -99,6 +105,7 @@
       SUSHY_EMULATOR_LIBVIRT_URI = "qemu:///system"
       SUSHY_EMULATOR_IGNORE_BOOT_DEVICE = False
       SUSHY_EMULATOR_STORAGE_POOL = "{{ sushy_tools_storage_pool }}"
+      SUSHY_EMULATOR_STATE_DIR = "/var/lib/sushy-tools"
       SUSHY_EMULATOR_BOOT_LOADER_MAP = {
           "UEFI": {
               "x86_64": None
@@ -197,6 +204,20 @@
   until: _sushy_health.status == 200
   retries: 15
   delay: 2
+
+- name: List sushy-emulator systems
+  ansible.builtin.uri:
+    url: "http://{{ sushy_tools_ip }}:{{ sushy_tools_port }}/redfish/v1/Systems"
+    method: GET
+    status_code: 200
+  register: _sushy_systems
+
+- name: Check sushy-emulator virtual media
+  ansible.builtin.uri:
+    url: "http://{{ sushy_tools_ip }}:{{ sushy_tools_port }}{{ (_sushy_systems.json.Members | first)['@odata.id'] }}/VirtualMedia/Cd"
+    method: GET
+    status_code: 200
+  when: _sushy_systems.json.Members | default([]) | length > 0
 
 - name: Report setup-bmc status
   ansible.builtin.debug:

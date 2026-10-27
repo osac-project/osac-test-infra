@@ -148,15 +148,7 @@
           become: true
       vars:
         bmaas_vm_patterns: "{{ caas_worker_vm_patterns }}"
-        bmaas_host_type: "{{ caas_baremetal_instance_type }}"
-        bmaas_host_type_title: >-
-          {{ (caas_baremetal_instance_type_profiles
-              | selectattr('name', 'equalto', caas_baremetal_instance_type)
-              | map(attribute='title') | first) }}
-        bmaas_host_type_description: >-
-          {{ (caas_baremetal_instance_type_profiles
-              | selectattr('name', 'equalto', caas_baremetal_instance_type)
-              | map(attribute='description') | first) }}
+        bmaas_bmit_name: "{{ caas_baremetal_instance_type }}"
         bmaas_vm_vcpu: "{{ caas_worker_vcpu }}"
         bmaas_vm_memory_mb: "{{ caas_worker_memory_mb }}"
         bmaas_vm_disk_gb: "{{ caas_worker_disk_gb }}"

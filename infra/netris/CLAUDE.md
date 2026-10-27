@@ -17,7 +17,7 @@ roles/                          # Ansible roles (each has tasks/main.yml)
   prep-osac/                    # Clone mono-repo, patch Helm values (fresh install)
   prep-refresh-osac/            # Clone mono-repo, patch values, rebuild CLI (snapshot refresh)
   patch-osac-refresh/           # Post-refresh: Netris/SSH + AAP project pin sync + CaC
-  prepare-caas-network/         # DNS and DHCP gateway prep for BMaaS worker VMs
+  prepare-caas-network/         # remove legacy CaaS DNS overrides; guest network readiness
   prepare-caas-bmaas/           # Reuse BMaaS roles to register CaaS/MaaS worker BMHs
   setup-caas/                   # Register worker profiles, DiskImage, and catalog
   create-caas/                  # Create CaaS/MaaS cluster via fulfillment API
@@ -53,7 +53,7 @@ make destroy-infra          # Teardown netris-lab
 make destroy-caas           # Delete the CaaS/MaaS cluster; retain reusable BMaaS hosts
 make force-destroy-caas     # Force-clean stuck orders, worker BMHs/VMs, and Netris orphans
 make destroy-maas           # Delete the MaaS cluster; retain reusable BMaaS hosts
-make setup-bmaas            # BMaaS setup: sushy-tools, BMHs, host type, catalog items
+make setup-bmaas            # BMaaS setup: sushy-tools, BMHs, default BMIT, catalog items
 make destroy-bmaas          # Teardown BMaaS (BMHs, sushy-tools, BMC network)
 make setup-bmc              # BMC network + sushy-tools only (subset of setup-bmaas)
 make destroy-setup          # Revert setup-infra (caches, bridges, tools)

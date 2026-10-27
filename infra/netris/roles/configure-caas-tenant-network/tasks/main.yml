@@ -1,5 +1,22 @@
 ---
-# The lab uses one tenant/default subnet. Resolve its VPC, never the management
+- name: Require a tenant created by OSAC E2E fixtures
+  ansible.builtin.assert:
+    that:
+      - osac_test_tenant_name in ['tenant1', 'tenant2']
+    fail_msg: "The shared OSAC E2E fixtures only create tenant1 and tenant2."
+
+- name: Check OSAC CLI configuration from setup-caas
+  ansible.builtin.stat:
+    path: /root/.config/osac/config.json
+  register: _caas_tenant_cli_config
+
+- name: Require OSAC CLI configuration from setup-caas
+  ansible.builtin.assert:
+    that:
+      - _caas_tenant_cli_config.stat.exists
+    fail_msg: "Run setup-caas before configuring the tenant network."
+
+# CaaS/MaaS select one of the shared test tenants. Resolve its VPC, never the management
 # or provisioning VPC, so DHCP is configured on the correct tenant V-Net.
 - name: Validate CaaS ingress and DHCP addresses
   ansible.builtin.command:
@@ -25,27 +42,30 @@
   changed_when: false
 
 - name: Wait for the configured tenant default subnet
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/subnets?filter={{ _tenant_subnet_filter | urlencode }}"
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-    validate_certs: false
-    status_code: 200
-  vars:
-    _tenant_subnet_filter: >-
-      this.metadata.tenant == {{ osac_test_tenant_name | to_json }} && this.metadata.name == "default-ipv4"
+  ansible.builtin.command: "osac --tenant {{ osac_test_tenant_name | quote }} get subnets -o json"
   register: _caas_tenant_subnets
-  until: ((_caas_tenant_subnets.json | default({})).get('items', []) | length) > 0
+  changed_when: false
+  until:
+    - _caas_tenant_subnets.rc == 0
+    - "'default-ipv4' in (_caas_tenant_subnets.stdout | default(''))"
   retries: 40
   delay: 15
-  no_log: true
+
+- name: Resolve the configured tenant subnet
+  vars:
+    _subnets: "{{ _caas_tenant_subnets.stdout | from_json }}"
+  ansible.builtin.set_fact:
+    _caas_tenant_subnet_items: >-
+      {{ (_subnets.get('items', [_subnets]) if _subnets is mapping else _subnets)
+         | selectattr('metadata.name', 'equalto', 'default-ipv4')
+         | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name) | list }}
 
 - name: Require the configured tenant subnet before changing Netris
   ansible.builtin.assert:
     that:
-      - _caas_tenant_subnets.json.get('items', []) | length == 1
-      - _caas_tenant_subnets.json['items'][0].spec.ipv4_cidr == netris_tenant_subnet_cidr
-      - not _caas_tenant_subnets.json['items'][0].metadata.get('deletion_timestamp')
+      - _caas_tenant_subnet_items | length == 1
+      - _caas_tenant_subnet_items[0].spec.ipv4_cidr == netris_tenant_subnet_cidr
+      - not _caas_tenant_subnet_items[0].metadata.get('deletion_timestamp')
     fail_msg: >-
       Tenant '{{ osac_test_tenant_name }}' must have one default-ipv4 subnet using
       {{ netris_tenant_subnet_cidr }}. Updated NetworkClass defaults do not migrate
@@ -59,7 +79,7 @@
     kind: Subnet
     namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
     label_selectors:
-      - "osac.openshift.io/subnet-uuid={{ _caas_tenant_subnets.json['items'][0].id }}"
+      - "osac.openshift.io/subnet-uuid={{ _caas_tenant_subnet_items[0].id }}"
   register: _caas_subnet_cr
   until:
     - _caas_subnet_cr.resources | length == 1
@@ -86,7 +106,22 @@
       - _caas_subnet_cr.resources[0].spec.ipv4Cidr == netris_tenant_subnet_cidr
     fail_msg: "The tenant subnet must refer to one active VirtualNetwork."
 
-# setup-bmaas discovers this URL. Renew auth after the potentially long BMH wait.
+# This role runs in a separate playbook, so setup-bmaas's set_fact is gone.
+- name: Discover Netris controller URL for tenant ingress
+  ansible.builtin.command:
+    cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _caas_traefik_nodeport
+  changed_when: false
+  until: _caas_traefik_nodeport.rc == 0 and _caas_traefik_nodeport.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Set Netris controller URL for tenant ingress
+  ansible.builtin.set_fact:
+    netris_controller_url: "http://localhost:{{ _caas_traefik_nodeport.stdout }}"
+
 - name: Authenticate to Netris for tenant ingress configuration
   ansible.builtin.include_role:
     name: netris.controller.auth

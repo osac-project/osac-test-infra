@@ -2,7 +2,10 @@
 - name: Create CaaS cluster
   hosts: all
   gather_facts: false
+  become: true
   roles:
+    - prepare-osac-e2e-tenant
+    - configure-caas-tenant-network
     - create-caas
   # In cluster-namespace mode, create-caas includes setup-caas-agents
   # immediately after namespace discovery — before the readiness wait —

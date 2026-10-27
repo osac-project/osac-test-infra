@@ -14,8 +14,8 @@
       caas_worker_count={{ caas_worker_count }} must be between 1 and
       {{ caas_worker_vm_patterns | length }}, the configured BMaaS worker count.
 
-# Register OSAC host types, BareMetalInstanceTypes, DiskImage and cluster catalog.
-# Step 1: Register host types and BareMetalInstanceTypes in fulfillment service
+# Register BareMetalInstanceTypes, DiskImage and cluster catalog.
+# Step 1: Register BareMetalInstanceTypes with selectors matching BMH profile labels
 - name: Get fulfillment internal API URL
   ansible.builtin.shell:
     cmd: oc get route fulfillment-internal-api -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.status.ingress[0].host}'
@@ -63,22 +63,123 @@
   retries: 10
   delay: 15
 
-# Register the RHCOS OCI artifact and attach it to the ClusterVersion selected by deploy-caas.
-- name: List OSAC DiskImages
-  no_log: true
+# OSAC creates the Netris IPAM allocation when the shared pool is reconciled.
+# Tenant egress uses this shared pool; cluster API and ingress use the existing
+# Netris external-access flow.
+- name: List OSAC ExternalIPPools for tenant egress
   ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/disk_images"
+    url: "{{ caas_fulfillment_api }}/api/private/v1/external_ip_pools"
     method: GET
     headers:
       Authorization: "Bearer {{ _sa_token.stdout }}"
     validate_certs: false
     status_code: [200]
+  register: _caas_external_ip_pools
+  no_log: true
+
+- name: Find the lab ExternalIPPool
+  ansible.builtin.set_fact:
+    _caas_external_pool_by_cidr: >-
+      {{ _caas_external_ip_pools.json.get('items', [])
+         | selectattr('spec.cidrs', 'equalto', [osac_external_ip_pool_cidr]) | list }}
+    _caas_external_pool_by_name: >-
+      {{ _caas_external_ip_pools.json.get('items', [])
+         | selectattr('metadata.name', 'equalto', osac_external_ip_pool_name) | list }}
+
+- name: Reject conflicting ExternalIPPool definitions
+  ansible.builtin.assert:
+    that:
+      - _caas_external_pool_by_cidr | length <= 1
+      - _caas_external_pool_by_name | length <= 1
+      - >-
+        (_caas_external_pool_by_name | length == 0) or
+        ((_caas_external_pool_by_name | first).get('spec', {}).get('cidrs', []) == [osac_external_ip_pool_cidr])
+      - >-
+        (_caas_external_pool_by_cidr | length == 0) or
+        ((_caas_external_pool_by_cidr | first).get('spec', {}).get('implementation_strategy', 'netris') == 'netris')
+    fail_msg: >-
+      ExternalIPPool name/CIDR conflicts with the Netris lab configuration.
+
+- name: Create the Netris lab ExternalIPPool when missing
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/external_ip_pools"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      metadata:
+        name: "{{ osac_external_ip_pool_name }}"
+      spec:
+        cidrs: ["{{ osac_external_ip_pool_cidr }}"]
+        ip_family: IP_FAMILY_IPV4
+        implementation_strategy: netris
+    validate_certs: false
+    status_code: [200, 201]
+  register: _caas_external_pool_created
+  when: _caas_external_pool_by_cidr | length == 0
+  no_log: true
+
+- name: Select the Netris lab ExternalIPPool ID
+  ansible.builtin.set_fact:
+    _caas_external_pool_id: >-
+      {{ (_caas_external_pool_by_cidr | first).id if _caas_external_pool_by_cidr | length > 0
+         else (_caas_external_pool_created.json.get('object', _caas_external_pool_created.json)).id }}
+
+- name: Wait for the Netris lab ExternalIPPool to be ready
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/external_ip_pools/{{ _caas_external_pool_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _caas_external_pool_status
+  until: >-
+    (_caas_external_pool_status.json.get('object', _caas_external_pool_status.json)
+      .get('status', {}).get('state', '')) in
+    ['EXTERNAL_IP_POOL_STATE_READY', 'Ready']
+  retries: 60
+  delay: 10
+  no_log: true
+
+# OSAC auto-selects the ready pool with the most addresses. A second ready
+# IPv4 pool could silently put cluster endpoints on an unrouted lab CIDR.
+- name: List ready ExternalIPPools before CaaS cluster creation
+  ansible.builtin.uri:
+    url: "{{ caas_fulfillment_api }}/api/private/v1/external_ip_pools"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _caas_external_pool_selection
+  no_log: true
+
+- name: Require the lab ExternalIPPool to be the only ready pool
+  ansible.builtin.assert:
+    that:
+      - >-
+        (_caas_external_pool_selection.json.get('items', [])
+         | selectattr('status.state', 'in', ['EXTERNAL_IP_POOL_STATE_READY', 'Ready'])
+         | rejectattr('id', 'equalto', _caas_external_pool_id) | list | length) == 0
+    fail_msg: >-
+      OSAC auto-selects an ExternalIPPool. Another ready pool could receive
+      the cluster API and ingress addresses instead of {{ osac_external_ip_pool_cidr }}.
+
+# Register the RHCOS OCI artifact and attach it to the ClusterVersion selected by deploy-caas.
+- name: List OSAC DiskImages
+  ansible.builtin.command: "osac --tenant shared get diskimages -o json"
   register: _caas_disk_images
+  changed_when: false
 
 - name: Find configured OSAC DiskImage
+  vars:
+    _disk_images: "{{ _caas_disk_images.stdout | from_json }}"
   ansible.builtin.set_fact:
     _caas_disk_image_matches: >-
-      {{ _caas_disk_images.json.get('items', [])
+      {{ (_disk_images.get('items', [_disk_images]) if _disk_images is mapping else _disk_images)
          | selectattr('metadata.name', 'equalto', caas_disk_image_name)
          | selectattr('metadata.tenant', 'equalto', 'shared') | list }}
 
@@ -94,51 +195,33 @@
       choose a new name because DiskImage source references are immutable.
 
 - name: Create OSAC DiskImage when missing
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/disk_images"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      metadata:
-        name: "{{ caas_disk_image_name }}"
-        tenant: shared
-      spec:
-        source_type: SOURCE_TYPE_REGISTRY
-        source_ref: "{{ caas_disk_image_source_ref }}"
-        guest_os_family: GUEST_OS_FAMILY_LINUX
-        architecture:
-          - ARCHITECTURE_AMD64
-    validate_certs: false
-    status_code: [200, 201]
-  register: _caas_disk_image_create
+  ansible.builtin.command: >-
+    osac --tenant shared create diskimage
+    --name {{ caas_disk_image_name | quote }}
+    --source-ref {{ caas_disk_image_source_ref | quote }}
+    --source-type registry --guest-os-family linux --architecture amd64
   when: _caas_disk_image_matches | length == 0
+
+- name: Get configured OSAC DiskImage
+  ansible.builtin.command: "osac --tenant shared get diskimage {{ caas_disk_image_name | quote }} -o json"
+  register: _caas_disk_image
+  changed_when: false
 
 - name: Resolve configured OSAC DiskImage
   ansible.builtin.set_fact:
-    _caas_disk_image_resource: >-
-      {{ (_caas_disk_image_matches | first)
-         if (_caas_disk_image_matches | length > 0)
-         else _caas_disk_image_create.json }}
+    _caas_disk_image_resource: "{{ _caas_disk_image.stdout | from_json }}"
 
 - name: List OSAC ClusterVersions
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-    validate_certs: false
-    status_code: [200]
+  ansible.builtin.command: "osac --tenant shared get clusterversions -o json"
   register: _caas_cluster_versions
+  changed_when: false
 
 - name: Find configured OSAC ClusterVersion
+  vars:
+    _cluster_versions: "{{ _caas_cluster_versions.stdout | from_json }}"
   ansible.builtin.set_fact:
     _caas_cluster_version_matches: >-
-      {{ _caas_cluster_versions.json.get('items', [])
+      {{ (_cluster_versions.get('items', [_cluster_versions]) if _cluster_versions is mapping else _cluster_versions)
          | selectattr('spec.version', 'equalto', caas_cluster_version) | list }}
 
 - name: Require exactly one configured OSAC ClusterVersion
@@ -173,91 +256,16 @@
     != caas_disk_image_name
 
 - name: Verify OSAC ClusterVersion DiskImage attachment
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_versions/{{ _caas_cluster_version_resource.id }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-    validate_certs: false
-    status_code: [200]
+  ansible.builtin.command: "osac --tenant shared get clusterversion {{ _caas_cluster_version_resource.id | quote }} -o json"
   register: _caas_cluster_version_disk_image_check
+  changed_when: false
 
 - name: Require configured DiskImage on OSAC ClusterVersion
   ansible.builtin.assert:
     that:
-      - _caas_cluster_version_disk_image_check.json.get('spec', {}).get('disk_image', {}).get('name', '') == caas_disk_image_name
+      - (_caas_cluster_version_disk_image_check.stdout | from_json).get('spec', {}).get('disk_image', {}).get('name', '') == caas_disk_image_name
     fail_msg: >-
       ClusterVersion {{ caas_cluster_version }} is not linked to DiskImage {{ caas_disk_image_name }}.
-
-- name: Ensure OSAC host types exist for both worker profiles
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/host_types"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      metadata:
-        name: "{{ item.name }}"
-      title: "{{ item.title }}"
-      description: "{{ item.description }}"
-      interfaces: "{{ bmaas_host_type_interfaces }}"
-    validate_certs: false
-    status_code: [200, 201, 409]
-  loop: "{{ caas_baremetal_instance_type_profiles }}"
-
-- name: List OSAC host types
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/host_types"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-    validate_certs: false
-    status_code: [200]
-  register: _caas_host_types
-
-- name: Ensure worker HostTypes have BMaaS interfaces
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/host_types/{{ item.id }}?update_mask=interfaces"
-    method: PATCH
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      id: "{{ item.id }}"
-      interfaces: "{{ bmaas_host_type_interfaces }}"
-    validate_certs: false
-    status_code: [200]
-  loop: "{{ _caas_host_types.json.get('items', []) }}"
-  when:
-    - item.metadata.name in (caas_baremetal_instance_type_profiles | map(attribute='name') | list)
-    - item.interfaces | default([]) != bmaas_host_type_interfaces
-
-- name: Build OSAC host type ID map
-  ansible.builtin.set_fact:
-    _caas_host_type_ids: >-
-      {{
-        _caas_host_type_ids | default({})
-        | combine({item.name: (
-            _caas_host_types.json.get('items', [])
-            | selectattr('metadata.name', 'equalto', item.name)
-            | map(attribute='id') | list | first | default('')
-          )})
-      }}
-  loop: "{{ caas_baremetal_instance_type_profiles }}"
-
-- name: Require both OSAC host type IDs for the worker profiles
-  ansible.builtin.assert:
-    that:
-      - _caas_host_type_ids[item.name] | default('') | length > 0
-    fail_msg: "Could not resolve OSAC host type '{{ item.name }}'."
-  loop: "{{ caas_baremetal_instance_type_profiles }}"
 
 - name: List OSAC BareMetalInstanceTypes
   no_log: true
@@ -284,7 +292,7 @@
       spec:
         host_label_selector:
           match_labels:
-            osac.openshift.io/host-type: "{{ _caas_host_type_ids[item.name] }}"
+            osac.openshift.io/host-type: "{{ item.name }}"
     validate_certs: false
     status_code: [200]
   loop: "{{ caas_baremetal_instance_type_profiles }}"
@@ -294,43 +302,24 @@
          | selectattr('metadata.name', 'equalto', item.name) | list | first | default({}) }}
     _wanted_selector:
       match_labels:
-        osac.openshift.io/host-type: "{{ _caas_host_type_ids[item.name] }}"
+        osac.openshift.io/host-type: "{{ item.name }}"
   when:
     - _existing_type | length > 0
     - _existing_type.spec.host_label_selector | default({}) != _wanted_selector
 
 - name: Create OSAC BareMetalInstanceTypes when missing
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/bare_metal_instance_types"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      id: "{{ item.name }}"
-      metadata:
-        name: "{{ item.name }}"
-      spec:
-        description: "{{ item.description }}"
-        hardware:
-          cpu:
-            cores: "{{ item.cpu_cores | int }}"
-            architecture: "x86_64"
-            threads_per_core: 1
-          memory:
-            total_gb: "{{ item.memory_total_gb | int }}"
-          network_ports:
-            - name: "{{ caas_baremetal_instance_type_fabric_port.name }}"
-              role: "fabric"
-              type: "{{ caas_baremetal_instance_type_fabric_port.type }}"
-              speed: "{{ caas_baremetal_instance_type_fabric_port.speed }}"
-        host_label_selector:
-          match_labels:
-            osac.openshift.io/host-type: "{{ _caas_host_type_ids[item.name] }}"
-    validate_certs: false
-    status_code: [200, 201]
+  ansible.builtin.command: >-
+    osac --tenant shared create baremetalinstancetype
+    --name {{ item.name | quote }}
+    --description {{ item.description | quote }}
+    --cpu-cores {{ item.cpu_cores | int }}
+    --cpu-architecture amd64 --cpu-threads-per-core 1
+    --memory-total-gb {{ item.memory_total_gb | int }}
+    --network-port {{ _caas_bmit_network_port | quote }}
+    --host-label {{ _caas_bmit_host_label | quote }}
+  vars:
+    _caas_bmit_network_port: "{{ caas_baremetal_instance_type_fabric_port.name }}:fabric:{{ caas_baremetal_instance_type_fabric_port.type }}:{{ caas_baremetal_instance_type_fabric_port.speed }}"
+    _caas_bmit_host_label: "osac.openshift.io/host-type={{ item.name }}"
   loop: "{{ caas_baremetal_instance_type_profiles }}"
   when: >-
     (_caas_baremetal_instance_types.json.get('items', [])
@@ -340,7 +329,7 @@
   ansible.builtin.command:
     cmd: >-
       oc get bmh -n {{ bmaas_bmh_namespace }}
-      -l osac.openshift.io/host-type={{ _caas_host_type_ids[caas_baremetal_instance_type] }}
+      -l osac.openshift.io/host-type={{ caas_baremetal_instance_type }}
       -o json
   environment:
     KUBECONFIG: /root/.kube/config
@@ -382,7 +371,7 @@
   register: _netris_rc_map_raw
   changed_when: false
 
-- name: Ensure host types are present in NETRIS_RESOURCE_CLASS_MAP
+- name: Ensure worker profiles are present in NETRIS_RESOURCE_CLASS_MAP
   ansible.builtin.shell: |
     set -euo pipefail
     python3 <<'PY'
@@ -487,10 +476,6 @@
   delay: 10
   no_log: true
 
-# Resolve the tenant VPC and reserve ingress before a cluster can be created.
-- name: Configure CaaS tenant ingress networking
-  ansible.builtin.include_tasks: netris-ingress.yml
-
 - name: Launch publish-templates job
   no_log: true
   ansible.builtin.uri:
@@ -535,22 +520,36 @@
   changed_when: false
 
 # Step 5: Create catalog item from template
-- name: Create cluster catalog item
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/cluster_catalog_items"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      metadata:
-        name: "{{ caas_catalog_item }}"
-      title: "{{ caas_catalog_item_title }}"
-      description: "{{ caas_catalog_item_description }}"
-      template:
-        id: "{{ caas_cluster_template }}"
-      published: true
-    validate_certs: false
-    status_code: [200, 201, 409]
+- name: List OSAC cluster catalog items
+  ansible.builtin.command: "osac --tenant shared get clustercatalogitems -o json"
+  register: _caas_catalog_items
+  changed_when: false
+
+- name: Find configured OSAC cluster catalog item
+  vars:
+    _catalog_items: "{{ _caas_catalog_items.stdout | from_json }}"
+  ansible.builtin.set_fact:
+    _caas_catalog_item_matches: >-
+      {{ (_catalog_items.get('items', [_catalog_items]) if _catalog_items is mapping else _catalog_items)
+         | selectattr('metadata.name', 'equalto', caas_catalog_item) | list }}
+
+- name: Validate existing OSAC cluster catalog item
+  ansible.builtin.assert:
+    that:
+      - _caas_catalog_item_matches | length == 1
+      - _caas_catalog_item_matches[0].template.id == caas_cluster_template
+      - _caas_catalog_item_matches[0].published | default(false) | bool
+    fail_msg: >-
+      Cluster catalog item '{{ caas_catalog_item }}' already exists but does not
+      reference the configured template as a published item.
+  when: _caas_catalog_item_matches | length > 0
+
+- name: Create cluster catalog item when missing
+  ansible.builtin.command: >-
+    osac --tenant shared create clustercatalogitem
+    --name {{ caas_catalog_item | quote }}
+    --title {{ caas_catalog_item_title | quote }}
+    --description {{ caas_catalog_item_description | quote }}
+    --template {{ caas_cluster_template | quote }}
+    --published=true
+  when: _caas_catalog_item_matches | length == 0

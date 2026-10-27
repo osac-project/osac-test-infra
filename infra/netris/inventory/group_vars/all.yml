@@ -56,6 +56,12 @@ osac_vmaas_external_ip_pool_cidr: "172.27.0.0/16"
 # l4lb 198.51.100.16/29). OSAC creates the Netris allocation itself when a
 # tenant ExternalIP is requested; the lab only prepares host routing/masquerade.
 osac_external_ip_pool_cidr: "198.51.100.24/29"
+osac_external_ip_pool_name: "netris-lab-public"
+
+# Empty selects OSAC's legacy Netris ExternalIP allocation until the v1
+# client sends its session cookie correctly (OSAC PR #1843).
+# OSAC PR #2009 proposes the cookie fix; restore v1 after it is merged, deployed, and verified.
+netris_external_ip_contract_version: ""
 
 # Configuration file (INI format, optional — values fall back to env vars)
 config_path: "{{ inventory_dir }}/../config"
@@ -77,7 +83,7 @@ osac_branch: "main"
 osac_dir: "/opt/osac"
 osac_installer_dir: "{{ osac_dir }}/osac-installer"
 osac_namespace: "osac-e2e-ci"
-osac_test_tenant_name: "test-infra-tenant"
+osac_test_tenant_name: "tenant1"
 osac_values_file: "values/caas-ci/values.yaml"
 osac_license_path: "{{ inventory_dir }}/../license.zip"
 
@@ -154,11 +160,6 @@ netris_tenant_subnet_cidr: "192.168.101.0/24"
 caas_netris_ingress_ip: "192.168.101.28"
 caas_tenant_dhcp_start: "192.168.101.100"
 caas_tenant_dhcp_end: "192.168.101.254"
-# Lab-local ingress probes arrive from the first address on the public BGP
-# link. Derive it from the same subnet used to configure br-public.
-# This /32 does not cover clients entering the lab with other source IPs.
-caas_ingress_return_cidr: "{{ (lookup('file', netris_lab_dir ~ '/group_vars/all.yml') | from_yaml).bgp_link_subnet | ansible.utils.ipaddr('network') | ansible.utils.ipmath(1) }}/32"
-caas_ingress_return_gateway: "192.168.101.1"
 caas_baremetal_instance_type: "ci-worker"
 caas_baremetal_instance_type_profiles:
   - name: "ci-worker"
@@ -181,10 +182,10 @@ caas_netris_server_cluster_template_id: 2
 caas_netris_mgmt_interface: "ens4"
 caas_netris_vpc_interfaces:
   - "ens6"
-caas_cluster_template: "osac.templates.ocp_ci_small"
-caas_catalog_item: "ci-ocp-small"
-caas_catalog_item_title: "CI OCP Small"
-caas_catalog_item_description: "Small OCP cluster for CI testing"
+caas_cluster_template: "osac.templates.ocp_small"
+caas_catalog_item: "netris-ocp-small"
+caas_catalog_item_title: "Netris OpenShift Small"
+caas_catalog_item_description: "OpenShift cluster for CaaS testing on Netris"
 caas_cluster_name: "caas-ci-cluster"
 caas_worker_count: 1
 
@@ -229,14 +230,15 @@ bmaas_vm_vcpu: 4
 bmaas_vm_memory_mb: 8192
 bmaas_vm_disk_gb: 50
 bmaas_bmh_namespace: "host-inventory"
-bmaas_instance_type: "default"
-bmaas_instance_type_description: "CI bare metal instance type for BMaaS testing"
-# Hardware ports advertised by the shared BareMetalInstanceType. Tenants select
-# fabric ports by name in network attachments. eth9 is the tenant data NIC on
-# the sim-lab BMH VMs (see the Netris V-Net port); eth0 is reserved for
-# lifecycle traffic.
-bmaas_instance_type_network_ports:
+# Stable BMH profile label; the default BMIT selects hosts with this value.
+bmaas_bmit_name: "default"
+# Standalone BMaaS setup keeps creating its own BMI template catalog by default.
 bmaas_create_catalog_items: true
+# Physical network interfaces of each simulated BM host. Tenants select a
+# fabric interface by name in the BMI network attachment. Roles: fabric =
+# tenant east-west data, lifecycle = PXE/BMC (not tenant-attachable). eth9 is
+# the tenant data NIC on the sim-lab BMH VMs (see the Netris V-Net port).
+bmaas_vm_interfaces:
   - name: eth9
     role: fabric
     type: Ethernet
@@ -256,6 +258,13 @@ bmaas_catalog_item_description: "Bare metal instance for CI testing"
 bmaas_auto_eip_catalog_item: "ci-bm-auto-eip"
 bmaas_auto_eip_catalog_item_title: "CI Bare Metal Instance with Auto External IP"
 bmaas_auto_eip_catalog_item_description: "Bare metal instance with automatic ExternalIP attachment for CI testing"
+# Persistent deploy-bmaas uses the same Fedora image as the BMaaS E2E tests.
+bmaas_deploy_disk_image_name: "test-infra-fedora-bmi-44"
+bmaas_deploy_disk_image_source_ref: "oci://quay.io/osac-project/fedora-cloud-bmi:44"
+bmaas_deploy_tenants:
+  - tenant1
+  - tenant2
+bmaas_deploy_bmi_name_prefix: "test-infra-bmi"
 
 # ── BM provisioning V-Net ────────────────────────────────────────────
 # Unassigned BM servers' fabric NIC (eth9) sits on this Netris V-Net, which has
@@ -273,7 +282,7 @@ bmaas_provisioning_dhcp_start: "10.98.0.2"
 # per-host 1:1 DNATs (sequential from dhcp_start) always match. A wider range
 # lets stale leases push new VMs past the DNAT targets after destroy/recreate.
 bmaas_provisioning_dhcp_end: "10.98.0.4"
-bmaas_provisioning_fabric_iface: "eth9"   # must match bmaas_instance_type_network_ports fabric NIC
+bmaas_provisioning_fabric_iface: "eth9"   # must match bmaas_vm_interfaces fabric NIC
 # External IP the provisioning SNAT maps egress to. Must be host-routed to the
 # ISP (see deploy-infra) and not overlap the other 198.51.100.0/24 pools
 # (nat .0/29, bgp .8/29, l4lb .16/29, tenant .24/29, ocp .1/.2, assisted .9).

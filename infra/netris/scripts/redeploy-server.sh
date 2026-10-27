@@ -11,7 +11,7 @@
 #
 # Steps:
 #   setup-infra → deploy-infra → deploy-ocp → deploy-osac
-#     → post-install → setup-caas|setup-maas → deploy-caas|deploy-maas → access-doc
+#     → post-install → deploy-suite stages (setup, workload) → access-doc
 #
 # OSAC_DEPLOY_MODE (fresh|snapshot) is passed through to make for deploy-ocp /
 # deploy-osac (same meaning as make deploy vs make deploy-fast):
@@ -44,16 +44,12 @@ SUITE="${SUITE:-caas}"
 OSAC_DEPLOY_MODE="${OSAC_DEPLOY_MODE:-fresh}"
 
 case "$SUITE" in
-    caas)
-        SETUP_FLOW=setup-caas
-        DEPLOY_FLOW=deploy-caas
-        ;;
-    maas)
-        SETUP_FLOW=setup-maas
-        DEPLOY_FLOW=deploy-maas
+    caas|maas|bmaas)
+        SETUP_FLOW="setup-$SUITE"
+        DEPLOY_FLOW="deploy-$SUITE"
         ;;
     *)
-        echo "ERROR: SUITE must be 'caas' or 'maas' (got: $SUITE)" >&2
+        echo "ERROR: unknown SUITE provided, got: $SUITE" >&2
         exit 1
         ;;
 esac
@@ -129,6 +125,7 @@ status_resume() {
                 case "$SUITE" in
                     caas) SETUP_FLOW=setup-caas; DEPLOY_FLOW=deploy-caas ;;
                     maas) SETUP_FLOW=setup-maas; DEPLOY_FLOW=deploy-maas ;;
+                    bmaas) SETUP_FLOW=setup-bmaas; DEPLOY_FLOW=deploy-bmaas ;;
                 esac
             fi
         fi
@@ -252,6 +249,19 @@ for step in "${STEPS[@]}"; do
         continue
     fi
 
+    step_target="$step"
+    suite_stage=""
+    case "$step" in
+        "$SETUP_FLOW") suite_stage=setup ;;
+        "$DEPLOY_FLOW") suite_stage=workload ;;
+    esac
+    if [[ -n "$suite_stage" ]]; then
+        step_target=deploy-suite
+    fi
+    make_args=("$step_target" "SUITE=$SUITE" "OSAC_DEPLOY_MODE=$OSAC_DEPLOY_MODE")
+    if [[ -n "$suite_stage" ]]; then make_args+=("SUITE_STAGE=$suite_stage"); fi
+    if [[ -n "$EXTRA_VARS" ]]; then make_args+=("EXTRA_VARS=$EXTRA_VARS"); fi
+
     status_step "$step" "running"
     attempt=1
     while [[ $attempt -le $MAX_RETRIES ]]; do
@@ -259,16 +269,12 @@ for step in "${STEPS[@]}"; do
 
         echo ""
         echo "========================================"
-        echo "  Running: make $step (attempt $attempt/$MAX_RETRIES)"
+        echo "  Running: make $step (via $step_target${suite_stage:+ stage=$suite_stage}; attempt $attempt/$MAX_RETRIES)"
         echo "  SUITE=$SUITE OSAC_DEPLOY_MODE=$OSAC_DEPLOY_MODE"
         echo "========================================"
         echo ""
 
-        if make "$step" \
-            SUITE="${SUITE}" \
-            OSAC_DEPLOY_MODE="${OSAC_DEPLOY_MODE}" \
-            ${EXTRA_VARS:+EXTRA_VARS="${EXTRA_VARS}"} \
-            2>&1 | tee "$STEP_LOG"; then
+        if make "${make_args[@]}" 2>&1 | tee "$STEP_LOG"; then
             echo "$step" >> "$PROGRESS_FILE"
             status_step "$step" "completed"
             echo "=== DONE $step ==="

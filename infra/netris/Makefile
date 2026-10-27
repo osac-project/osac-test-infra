@@ -5,11 +5,11 @@ EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e bare_metal_services=$(BARE_METAL_SERVICES) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
-# Suite selects CaaS vs MaaS for redeploy-server.sh flow.
+# Suite selects the setup and deploy flow; every suite gets the configured SNO disk size.
 # SUITE=caas (default) — setup-caas / deploy-caas.
-# OCP snapshot restores grow both h00 disks to their configured sizes for every suite.
 # SUITE=maas — setup-maas / deploy-maas.
 SUITE ?= caas
+BASE_SUITE = $(patsubst %_networking,%,$(SUITE))
 
 OSAC_NAMESPACE ?= osac-e2e-ci
 KUBECONFIG ?= /root/.kube/config
@@ -27,6 +27,7 @@ OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONF
 EVPN_VALUES_FILE = $(abspath .evpn-values.yaml)
 VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-f $(EVPN_VALUES_FILE))
 OSAC_TEST_TENANT_NAME ?= test-infra-tenant
+OSAC_TEST_TENANT_NAME ?= tenant1
 CAAS_BAREMETAL_INSTANCE_TYPE ?= ci-worker
 CAAS_DISK_IMAGE_NAME ?= rhcos-4-22-amd64
 CAAS_DISK_IMAGE_SOURCE_REF ?= oci://quay.io/osac-project/rhcos:4.22.0
@@ -35,7 +36,7 @@ CAAS_WORKER_COUNT ?= 1
 CAAS_WORKER_VCPU ?= 4
 CAAS_WORKER_MEMORY_MB ?= 16384
 # BMaaS, CaaS, and MaaS need the BMC service infrastructure.
-BARE_METAL_SERVICES ?= $(if $(filter caas maas bmaas,$(SUITE)),true,false)
+BARE_METAL_SERVICES ?= $(if $(filter caas maas bmaas stretched full,$(BASE_SUITE)),true,false)
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
@@ -59,9 +60,6 @@ deploy-fast: OSAC_DEPLOY_MODE = snapshot
 
 deploy-setup:
 	ansible-playbook playbooks/deploy-setup.yml $(ANSIBLE_EXTRA)
-
-tenant-onboarding:
-	ansible-playbook playbooks/tenant-onboarding.yml $(ANSIBLE_EXTRA)
 
 # Backward compatibility alias
 setup-infra: deploy-setup
@@ -120,6 +118,30 @@ destroy-stretched_networking:
 gather-stretched_networking: SUITE = stretched_networking
 gather-stretched_networking:
 	$(MAKE) gather-full
+setup-caas_networking: setup-caas
+setup-maas_networking: setup-maas
+
+test-caas-networking test-caas_networking:
+	$(MAKE) -C ../.. run-tests INFRA=netris SUITE=caas_networking
+
+test-maas-networking test-maas_networking:
+	$(MAKE) -C ../.. run-tests INFRA=netris SUITE=maas_networking
+
+# E2E setup stops before tenant creation; pytest fixtures provide test tenants.
+prepare-suite:
+	@case "$(BASE_SUITE)" in caas|maas|bmaas) ;; *) echo "Unsupported suite: $(SUITE)" >&2; exit 2;; esac
+	$(MAKE) setup-$(BASE_SUITE) SUITE=$(BASE_SUITE)
+
+# Persistent deployment playbooks prepare tenants and Netris networking before workloads.
+SUITE_STAGE ?= all
+deploy-suite:
+	@case "$(BASE_SUITE)" in caas|maas|bmaas) ;; *) echo "Unsupported suite: $(SUITE)" >&2; exit 2;; esac
+	@case "$(SUITE_STAGE)" in \
+		all) $(MAKE) prepare-suite SUITE=$(BASE_SUITE) && $(MAKE) deploy-$(BASE_SUITE) SUITE=$(BASE_SUITE) ;; \
+		setup) $(MAKE) setup-$(BASE_SUITE) SUITE=$(BASE_SUITE) ;; \
+		workload) $(MAKE) deploy-$(BASE_SUITE) SUITE=$(BASE_SUITE) ;; \
+		*) echo "Unsupported deploy-suite stage: $(SUITE_STAGE)" >&2; exit 2 ;; \
+	esac
 
 setup-caas:
 	ansible-playbook playbooks/setup-caas.yml \
@@ -133,7 +155,7 @@ setup-caas:
 	  $(ANSIBLE_EXTRA)
 
 deploy-caas:
-	scripts/with-osac-tenant.sh $(OSAC_TEST_TENANT_NAME) ansible-playbook playbooks/deploy-caas.yml \
+	ansible-playbook playbooks/deploy-caas.yml \
 	  -e 'caas_baremetal_instance_type=$(CAAS_BAREMETAL_INSTANCE_TYPE)' \
 	  -e 'caas_disk_image_name=$(CAAS_DISK_IMAGE_NAME)' \
 	  -e 'caas_worker_count=$(CAAS_WORKER_COUNT)' \
@@ -195,6 +217,8 @@ setup-full:
 	$(MAKE) setup-caas
 	$(MAKE) setup-bmaas
 	$(MAKE) setup-vmaas SUITE=vmaas OSAC_PROFILE=$(OSAC_PROFILE)
+deploy-bmaas:
+	ansible-playbook playbooks/deploy-bmaas.yml $(ANSIBLE_EXTRA)
 
 destroy-bmaas:
 	ansible-playbook playbooks/destroy-bmaas.yml $(ANSIBLE_EXTRA)
@@ -250,7 +274,7 @@ setup-maas:
 	  $(ANSIBLE_EXTRA)
 
 deploy-maas:
-	scripts/with-osac-tenant.sh $(OSAC_TEST_TENANT_NAME) ansible-playbook playbooks/deploy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
 
 destroy-maas:
 	ansible-playbook playbooks/destroy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
@@ -328,19 +352,20 @@ destroy-full:
 	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
 
 # OSAC_DEPLOY_MODE=fresh (default) or snapshot — same meaning as deploy / deploy-fast.
-# SUITE=caas (default) or maas — selects setup/deploy flow in redeploy-server.sh.
+# SUITE=caas (default), maas, or bmaas — selects setup/deploy flow.
+redeploy-fresh redeploy-continue: SHELL := /bin/bash
 redeploy-fresh:
 	@echo "=== Destroying all infrastructure ==="
 	-$(MAKE) destroy-full
 	@sync
 	@echo "=== Starting deploy (SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)) ==="
-	SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+	@set -o pipefail; SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
 		scripts/redeploy-server.sh --fresh \
 		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
 		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 redeploy-continue:
-	SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+	@set -o pipefail; SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
 		scripts/redeploy-server.sh \
 		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
 		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
@@ -367,11 +392,14 @@ health-check:
         setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
 		setup-vmaas_networking gather-vmaas_networking destroy-vmaas_networking \
 		setup-stretched_networking gather-stretched_networking destroy-stretched_networking \
+        setup-caas setup-caas_networking setup-maas_networking deploy-caas \
+        test-caas-networking test-caas_networking test-maas-networking test-maas_networking \
+        prepare-suite deploy-suite \
 		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
 		destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \
         gather-infra gather-mgmt-cluster gather-caas \
-        setup-bmc setup-bmaas destroy-bmaas gather-bmaas \
+        setup-bmc setup-bmaas deploy-bmaas destroy-bmaas gather-bmaas \
         setup-bmaas_networking destroy-bmaas_networking gather-bmaas_networking \
         install-osac prep-osac run-osac-setup post-osac \
         refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \

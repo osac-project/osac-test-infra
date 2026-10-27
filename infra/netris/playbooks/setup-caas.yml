@@ -3,7 +3,6 @@
   hosts: all
   gather_facts: false
   roles:
-    - tenant-onboard
     - prepare-caas-network
     - prepare-caas-bmaas
     - setup-caas

@@ -1,0 +1,136 @@
+---
+- name: Read the lab ExternalIPPool
+  kubernetes.core.k8s_info:
+    kubeconfig: /root/.kube/config
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIPPool
+    namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+  register: _egress_pools
+
+- name: Read tenant networking resources
+  ansible.builtin.command: "osac --tenant {{ osac_test_tenant_name | quote }} get {{ item }} -o json"
+  loop: [virtualnetworks, natgateways, externalips]
+  register: _egress_resources
+  changed_when: false
+
+- name: Select the lab pool and tenant egress resources
+  vars:
+    _networks: "{{ _egress_resources.results[0].stdout | from_json }}"
+    _gateways: "{{ _egress_resources.results[1].stdout | from_json }}"
+    _ips: "{{ _egress_resources.results[2].stdout | from_json }}"
+  ansible.builtin.set_fact:
+    _egress_pool: >-
+      {{ _egress_pools.resources
+         | selectattr('spec.cidrs', 'equalto', [osac_external_ip_pool_cidr])
+         | selectattr('spec.implementationStrategy', 'equalto', 'netris')
+         | selectattr('status.phase', 'equalto', 'Ready') | list }}
+    _egress_network: >-
+      {{ (_networks.get('items', [_networks]) if _networks is mapping else _networks)
+         | selectattr('metadata.name', 'equalto', 'default')
+         | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name) | list }}
+    _egress_gateways: "{{ _gateways.get('items', [_gateways]) if _gateways is mapping else _gateways }}"
+    _egress_ips: "{{ _ips.get('items', [_ips]) if _ips is mapping else _ips }}"
+
+- name: Select existing tenant NAT and ExternalIP
+  ansible.builtin.set_fact:
+    _egress_nat: >-
+      {{ _egress_gateways
+         | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name)
+         | selectattr('spec.virtual_network.id', 'equalto', (_egress_network | first | default({})).get('id', '')) | list }}
+    _egress_named_nat: >-
+      {{ _egress_gateways
+         | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name)
+         | selectattr('metadata.name', 'equalto', osac_test_tenant_name ~ '-egress') | list }}
+    _egress_named_ip: >-
+      {{ _egress_ips
+         | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name)
+         | selectattr('metadata.name', 'equalto', osac_test_tenant_name ~ '-egress') | list }}
+
+- name: Validate the lab pool and tenant network
+  ansible.builtin.assert:
+    that:
+      - _egress_pool | length == 1
+      - >-
+        ((_egress_pool | first | default({})).get('metadata', {}).get('labels', {})
+         .get('osac.openshift.io/externalippool-uuid', '') | length) > 0
+      - _egress_network | length == 1
+      - (_egress_network | first | default({})).get('spec', {}).get('ipv4_cidr', '') == netris_tenant_network_cidr
+      - (_egress_network | first | default({})).get('status', {}).get('state', '') == 'VIRTUAL_NETWORK_STATE_READY'
+    fail_msg: "Run setup-caas and verify the ready lab pool and tenant default VirtualNetwork."
+
+- name: Reject conflicting tenant egress resources
+  vars:
+    _pool_id: "{{ _egress_pool[0].metadata.labels['osac.openshift.io/externalippool-uuid'] }}"
+    _nat_ip_id: "{{ (_egress_nat | first | default({})).get('spec', {}).get('external_ip', {}).get('id', '') }}"
+    _nat_ips: >-
+      {{ _egress_ips
+         | selectattr('id', 'equalto', _nat_ip_id)
+         | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name)
+         | selectattr('spec.pool.id', 'equalto', _pool_id)
+         | selectattr('status.state', 'equalto', 'EXTERNAL_IP_STATE_ALLOCATED') | list }}
+  ansible.builtin.assert:
+    that:
+      - _egress_nat | length <= 1
+      - _egress_named_ip | length <= 1
+      - _egress_nat | length > 0 or _egress_named_nat | length == 0
+      - _egress_nat | length == 0 or _nat_ips | length == 1
+      - >-
+        _egress_nat | length > 0 or _egress_named_ip | length == 0 or
+        _egress_named_ip[0].spec.pool.id == _pool_id
+    fail_msg: "Tenant egress NAT or ExternalIP conflicts with the configured network/pool."
+
+- name: Allocate a tenant egress ExternalIP when missing
+  ansible.builtin.command: >-
+    osac --tenant {{ osac_test_tenant_name | quote }} create externalip
+    --name {{ (osac_test_tenant_name ~ '-egress') | quote }}
+    --pool {{ _egress_pool[0].metadata.labels['osac.openshift.io/externalippool-uuid'] | quote }}
+  when: _egress_nat | length == 0 and _egress_named_ip | length == 0
+
+- name: Wait for the tenant egress ExternalIP to be allocated
+  ansible.builtin.command: "osac --tenant {{ osac_test_tenant_name | quote }} get externalips -o json"
+  register: _egress_ip_status
+  vars:
+    _ips: "{{ _egress_ip_status.stdout | default('[]') | from_json }}"
+    _items: "{{ _ips.get('items', [_ips]) if _ips is mapping else _ips }}"
+    _allocated: >-
+      {{ _items
+         | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name)
+         | selectattr('metadata.name', 'equalto', osac_test_tenant_name ~ '-egress')
+         | selectattr('status.state', 'equalto', 'EXTERNAL_IP_STATE_ALLOCATED') | list }}
+  until: _allocated | length == 1
+  retries: 60
+  delay: 10
+  changed_when: false
+  when: _egress_nat | length == 0
+
+- name: Create the tenant NATGateway when missing
+  vars:
+    _ips: "{{ _egress_ip_status.stdout | default('[]') | from_json }}"
+    _items: "{{ _ips.get('items', [_ips]) if _ips is mapping else _ips }}"
+    _ip_id: >-
+      {{ (_items
+          | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name)
+          | selectattr('metadata.name', 'equalto', osac_test_tenant_name ~ '-egress')
+          | first | default({})).get('id', '') }}
+  ansible.builtin.command: >-
+    osac --tenant {{ osac_test_tenant_name | quote }} create natgateway
+    --name {{ (osac_test_tenant_name ~ '-egress') | quote }}
+    --virtual-network {{ _egress_network[0].id | quote }}
+    --externalip {{ _ip_id | quote }}
+  when: _egress_nat | length == 0
+
+- name: Wait for tenant outbound NAT to be ready
+  ansible.builtin.command: "osac --tenant {{ osac_test_tenant_name | quote }} get natgateways -o json"
+  register: _egress_nat_status
+  vars:
+    _gateways: "{{ _egress_nat_status.stdout | default('[]') | from_json }}"
+    _items: "{{ _gateways.get('items', [_gateways]) if _gateways is mapping else _gateways }}"
+    _ready: >-
+      {{ _items
+         | selectattr('metadata.tenant', 'equalto', osac_test_tenant_name)
+         | selectattr('spec.virtual_network.id', 'equalto', _egress_network[0].id)
+         | selectattr('status.state', 'equalto', 'NAT_GATEWAY_STATE_READY') | list }}
+  until: _ready | length == 1
+  retries: 60
+  delay: 10
+  changed_when: false

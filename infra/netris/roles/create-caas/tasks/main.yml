@@ -27,41 +27,18 @@
       {{ caas_worker_vm_patterns | length }}, the configured BMaaS worker count.
   when: _cluster_exists.stdout | default('') != 'exists'
 
-- name: Get fulfillment API URL for DiskImage preflight
-  ansible.builtin.shell:
-    cmd: oc get route fulfillment-internal-api -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.status.ingress[0].host}'
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _caas_fulfillment_host
-  changed_when: false
-  when: _cluster_exists.stdout | default('') != 'exists'
-
-- name: Get service account token for DiskImage preflight
-  no_log: true
-  ansible.builtin.shell:
-    cmd: oc create token -n {{ snapshot_osac_namespace | default(osac_namespace) }} admin
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _caas_preflight_token
-  changed_when: false
-  when: _cluster_exists.stdout | default('') != 'exists'
-
-- name: Get target OSAC ClusterVersion for DiskImage preflight
-  no_log: true
-  ansible.builtin.uri:
-    url: "https://{{ _caas_fulfillment_host.stdout }}/api/private/v1/cluster_versions"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ _caas_preflight_token.stdout }}"
-    validate_certs: false
-    status_code: [200]
+- name: Get target OSAC ClusterVersions for DiskImage preflight
+  ansible.builtin.command: "osac --tenant shared get clusterversions -o json"
   register: _caas_preflight_cluster_versions
+  changed_when: false
   when: _cluster_exists.stdout | default('') != 'exists'
 
 - name: Find target OSAC ClusterVersion for DiskImage preflight
+  vars:
+    _versions: "{{ _caas_preflight_cluster_versions.stdout | from_json }}"
   ansible.builtin.set_fact:
     _caas_preflight_version_matches: >-
-      {{ _caas_preflight_cluster_versions.json.get('items', [])
+      {{ (_versions.get('items', [_versions]) if _versions is mapping else _versions)
          | selectattr('spec.version', 'equalto', caas_cluster_version) | list }}
   when: _cluster_exists.stdout | default('') != 'exists'
 
@@ -126,15 +103,13 @@
   changed_when: false
   when: _cluster_exists.stdout | default('') != 'exists'
 
+- name: Ensure tenant egress before provisioning workers
+  ansible.builtin.include_tasks: tenant-egress.yml
+
 - name: Delete existing OSAC pull-secret resource before recreating it
-  ansible.builtin.command:
-    argv:
-      - osac
-      - --tenant
-      - "{{ osac_test_tenant_name }}"
-      - delete
-      - secret
-      - "{{ _caas_pull_secret_name }}"
+  ansible.builtin.command: >-
+    osac --tenant {{ osac_test_tenant_name | quote }}
+    delete secret {{ _caas_pull_secret_name | quote }}
   register: _caas_pull_secret_delete
   when:
     - _cluster_exists.stdout | default('') != 'exists'
@@ -142,43 +117,32 @@
   changed_when: true
 
 - name: Create OSAC pull-secret resource
-  ansible.builtin.command:
-    argv:
-      - osac
-      - --tenant
-      - "{{ osac_test_tenant_name }}"
-      - create
-      - secret
-      - --name
-      - "{{ _caas_pull_secret_name }}"
-      - --type=pull-secret
-      - "--from-file=.dockerconfigjson={{ pull_secret_path }}"
+  ansible.builtin.command: >-
+    osac --tenant {{ osac_test_tenant_name | quote }} create secret
+    --name {{ _caas_pull_secret_name | quote }} --type=pull-secret
+    --from-file={{ ('.dockerconfigjson=' ~ pull_secret_path) | quote }}
   register: _caas_pull_secret_create
-  when: _cluster_exists.stdout | default('') != 'exists'
   changed_when: true
   no_log: false
+  when: _cluster_exists.stdout | default('') != 'exists'
 
 # The selected catalog item uses its template defaults.
 - name: Create cluster from catalog item with selected BareMetalInstanceType
   no_log: false
-  ansible.builtin.shell: |
-    set -euo pipefail
-    args=(
-      osac --tenant "{{ osac_test_tenant_name }}" create cluster
-      --catalog-item "{{ caas_catalog_item }}"
-      --version "{{ caas_cluster_version }}"
-      --pull-secret "{{ _caas_pull_secret_name }}"
-      --ssh-public-key-file "{{ ssh_public_key_path }}"
-      --name "{{ caas_cluster_name }}"
-      --set "node_sets.workers.size={{ caas_worker_count | int }}"
-      --set "node_sets.workers.baremetal_instance_type.name={{ caas_baremetal_instance_type }}"
-    )
-    "${args[@]}"
-  args:
-    executable: /bin/bash
+  ansible.builtin.command: >-
+    osac --tenant {{ osac_test_tenant_name | quote }} create cluster
+    --catalog-item {{ caas_catalog_item | quote }}
+    --version {{ caas_cluster_version | quote }}
+    --pull-secret {{ _caas_pull_secret_name | quote }}
+    --ssh-public-key-file {{ ssh_public_key_path | quote }}
+    --name {{ caas_cluster_name | quote }}
+    --set version.shared=true
+    --set {{ ('node_sets.workers.size=' ~ (caas_worker_count | int | string)) | quote }}
+    --set {{ ('node_sets.workers.baremetal_instance_type.name=' ~ caas_baremetal_instance_type) | quote }}
+    --set node_sets.workers.baremetal_instance_type.shared=true
   register: _cluster_create
-  when: _cluster_exists.stdout | default('') != 'exists'
   changed_when: true
+  when: _cluster_exists.stdout | default('') != 'exists'
 
 - name: Get existing cluster ID
   ansible.builtin.shell:
@@ -293,10 +257,10 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
-- name: Prepare guest networking for CaaS ingress
+- name: Wait for guest networking
   ansible.builtin.include_role:
     name: prepare-caas-network
-    tasks_from: guest-ingress
+    tasks_from: guest-network
 
 - name: Wait for cluster to be ready
   ansible.builtin.shell:

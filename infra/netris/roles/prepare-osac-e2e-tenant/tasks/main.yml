@@ -1,0 +1,38 @@
+---
+# Running a small test under tests/e2e activates the shared session fixtures.
+# They ensure tenant1/tenant2, users, memberships and default subnets before
+# suite-specific networking. Avoid VMaaS tests: their autouse fixtures create
+# extra VM test resources.
+- name: Run shared OSAC E2E tenant fixtures
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      secret=$(oc -n keycloak get secret keycloak-admin-credentials -o json)
+      read_secret() {
+        python3 -c 'import base64,json,sys; print(base64.b64decode(json.load(sys.stdin)["data"][sys.argv[1]]).decode())' "$1" <<< "$secret"
+      }
+      admin_password=$(read_secret admin-password)
+      jwt_password=$(read_secret default-user-password)
+      [[ -n "$admin_password" && -n "$jwt_password" ]] || { echo "Keycloak test credentials are empty" >&2; exit 1; }
+
+      keycloak_host=$(oc -n keycloak get route keycloak -o jsonpath='{.spec.host}')
+      public_host=$(oc -n "$OSAC_NAMESPACE" get route fulfillment-api -o jsonpath='{.spec.host}')
+      private_host=$(oc -n "$OSAC_NAMESPACE" get route fulfillment-internal-api -o jsonpath='{.spec.host}')
+      [[ -n "$keycloak_host" && -n "$public_host" && -n "$private_host" ]] ||
+        { echo "OSAC E2E routes are not ready" >&2; exit 1; }
+
+      export OSAC_KEYCLOAK_ADMIN_PASSWORD="$admin_password"
+      export OSAC_JWT_PASSWORD="$jwt_password"
+      export OSAC_KEYCLOAK_URL="https://$keycloak_host"
+      export OSAC_FULFILLMENT_ADDRESS="$public_host:443"
+      export OSAC_FULFILLMENT_PRIVATE_ADDRESS="$private_host:443"
+      uv run pytest -n 0 -q tests/e2e/core/test_k8s_client.py::test_get_json_supports_an_explicit_namespace
+    chdir: "{{ osac_dir }}"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+    OSAC_NAMESPACE: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    OSAC_JWT_USERNAME: tenant1_admin
+    OSAC_NETWORK_CLASS_K8S_ONLY: ""
+  no_log: true
+  changed_when: false

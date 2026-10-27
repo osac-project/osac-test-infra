@@ -1,0 +1,76 @@
+---
+# The BMaaS tests create a temporary Fedora DiskImage; persistent BMIs need one
+# that remains after pytest exits. The catalog item was published by setup-bmaas.
+- name: Ensure the shared BMaaS DiskImage
+  ansible.builtin.shell: |
+    set -euo pipefail
+    images=$(osac --tenant shared get diskimages -o json)
+    matches=$(jq -c --arg name "$DISK_NAME" '
+      (if type == "array" then . elif (.items? | type) == "array" then .items
+       elif .metadata? then [.] else [] end)
+      | map(select(.metadata.name == $name))' <<< "$images")
+    count=$(jq length <<< "$matches")
+    if (( count > 1 )); then
+      echo "Multiple shared DiskImages named $DISK_NAME" >&2
+      exit 1
+    elif (( count == 1 )); then
+      existing=$(jq -r '.[0].spec.source_ref // .[0].spec.sourceRef // empty' <<< "$matches")
+      [[ "$existing" == "$DISK_SOURCE" ]] || {
+        echo "DiskImage $DISK_NAME has source $existing, expected $DISK_SOURCE" >&2
+        exit 1
+      }
+    else
+      osac --tenant shared create diskimage --name "$DISK_NAME" \
+        --source-ref "$DISK_SOURCE" --architecture amd64
+      echo created
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    DISK_NAME: "{{ bmaas_deploy_disk_image_name }}"
+    DISK_SOURCE: "{{ bmaas_deploy_disk_image_source_ref }}"
+  register: _bmaas_disk_image
+  changed_when: "'created' in _bmaas_disk_image.stdout_lines"
+
+- name: Ensure a BMI type that selects the BMaaS hosts
+  ansible.builtin.shell: |
+    set -euo pipefail
+    profile=$(oc -n "$BMH_NS" get bmh "$FIRST_HOST" -o json |
+      jq -er '.metadata.labels["osac.openshift.io/host-type"]')
+    # The normal CLI config lists public resources only; use the private API here.
+    route=$(oc -n "$OSAC_NS" get route fulfillment-internal-api -o jsonpath='{.status.ingress[0].host}')
+    token=$(oc -n "$OSAC_NS" create token admin --duration=10m)
+    types=$(curl -fsSk -H "Authorization: Bearer $token" "https://$route/api/private/v1/bare_metal_instance_types")
+    matches=$(jq -c --arg name "$TYPE_NAME" '
+      (.items // []) | map(select(.metadata.name == $name and .metadata.tenant == "shared"))' <<< "$types")
+    count=$(jq length <<< "$matches")
+    if (( count > 1 )); then
+      echo "Multiple BMI types named $TYPE_NAME" >&2
+      exit 1
+    elif (( count == 1 )); then
+      existing=$(jq -r '.[0].spec.host_label_selector.match_labels["osac.openshift.io/host-type"] //
+        .[0].spec.hostLabelSelector.matchLabels["osac.openshift.io/host-type"] // empty' <<< "$matches")
+      [[ "$existing" == "$profile" ]] || {
+        echo "BMI type $TYPE_NAME selects profile $existing, expected $profile" >&2
+        exit 1
+      }
+    else
+      osac --tenant shared create baremetalinstancetype --name "$TYPE_NAME" \
+        --cpu-cores "$VCPU" --cpu-architecture amd64 --cpu-threads-per-core 1 \
+        --memory-total-gb "$MEMORY_GB" \
+        --network-port "eth9:fabric:Ethernet:100Gbps" \
+        --host-label "osac.openshift.io/host-type=$profile"
+      echo created
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    BMH_NS: "{{ bmaas_bmh_namespace }}"
+    FIRST_HOST: "{{ bmaas_vm_patterns[0] }}"
+    TYPE_NAME: "{{ bmaas_bmit_name }}"
+    OSAC_NS: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    VCPU: "{{ bmaas_vm_vcpu | string }}"
+    MEMORY_GB: "{{ (bmaas_vm_memory_mb | int // 1024) | string }}"
+    KUBECONFIG: /root/.kube/config
+  register: _bmaas_instance_type
+  changed_when: "'created' in _bmaas_instance_type.stdout_lines"

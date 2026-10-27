@@ -1,6 +1,10 @@
 REPORTS_DIR ?= reports
 
-.PHONY: test lint format test-vmaas test-vmaas-networking test-vmaas_networking test-stretched-networking test-stretched_networking test-caas test-storage test-bmaas test-bmaas-networking test-metering test-references test-full
+.PHONY: test lint format test-vmaas test-vmaas-networking test-vmaas_networking \
+        test-stretched-networking test-stretched_networking test-caas \
+        test-caas-networking test-caas_networking test-maas test-maas-networking \
+        test-maas_networking test-storage test-bmaas test-bmaas-networking \
+        test-bmaas_networking test-metering test-references test-full
 
 test:
 	mkdir -p $(REPORTS_DIR)
@@ -52,6 +56,24 @@ test-full:
 	mkdir -p $(REPORTS_DIR)
 	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -n 0 -v --tb=short -m "$(FULL_TEST_MARKER)" -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
 
+# Dedicated Netris suites can be added to the OSAC mono-repo later. Their
+# pytest fixtures will create the shared tenants when those suites run.
+OSAC_CAAS_NETRIS_TEST_PATH ?= tests/e2e/caas/regression/netris
+OSAC_MAAS_NETRIS_TEST_PATH ?= tests/e2e/maas/regression/netris
+
+test-caas-networking test-caas_networking:
+	@if [ -e "$(OSAC_MONO_DIR)/$(OSAC_CAAS_NETRIS_TEST_PATH)" ]; then \
+		cd $(OSAC_MONO_DIR) && uv run pytest $(OSAC_CAAS_NETRIS_TEST_PATH) -x -n 0 -v --tb=short; \
+	else echo "No CaaS Netris tests at $(OSAC_CAAS_NETRIS_TEST_PATH); no suite tests ran."; fi
+
+test-maas-networking test-maas_networking:
+	@if [ -e "$(OSAC_MONO_DIR)/$(OSAC_MAAS_NETRIS_TEST_PATH)" ]; then \
+		cd $(OSAC_MONO_DIR) && uv run pytest $(OSAC_MAAS_NETRIS_TEST_PATH) -x -n 0 -v --tb=short; \
+	else echo "No MaaS Netris tests at $(OSAC_MAAS_NETRIS_TEST_PATH); no suite tests ran."; fi
+
+# MaaS is also a persistent deployment suite; its dedicated pytest suite is pending.
+test-maas: test-maas_networking
+
 test-metering:
 	mkdir -p $(REPORTS_DIR)
 	pytest -m metering tests/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/metering.xml
@@ -69,13 +91,14 @@ KUBECONFIG         ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
 OSAC_DEPLOY_MODE   ?= fresh
 OSAC_PROFILE       ?=
+SUITE_STAGE        ?= all
 INFRA_DIR           = infra/$(INFRA)
 _FWD_KUBECONFIG     = KUBECONFIG=$(abspath $(KUBECONFIG))
 _FWD_VM_KUBECONFIG = OSAC_VM_KUBECONFIG=$(abspath $(OSAC_VM_KUBECONFIG))
 _FWD_PROFILE        = $(if $(OSAC_PROFILE),OSAC_PROFILE=$(OSAC_PROFILE))
 _FWD_SUITE          = SUITE=$(SUITE)
 
-.PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
+.PHONY: e2e deploy-suite deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite prepare-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
         redeploy-osac _validate-backend _validate-suite-contract
 
@@ -108,7 +131,13 @@ _validate-suite-contract:
 		fi; \
 	fi
 
-e2e: _validate-backend deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
+e2e: _validate-backend
+	$(MAKE) deploy-setup INFRA=$(INFRA) SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) deploy-infra INFRA=$(INFRA) SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) deploy-ocp INFRA=$(INFRA) SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) deploy-osac INFRA=$(INFRA) SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) prepare-suite INFRA=$(INFRA) SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) run-tests INFRA=$(INFRA) SUITE=$(SUITE)
 
 deploy-setup: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) deploy-setup EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
@@ -127,6 +156,13 @@ deploy-osac: _validate-backend
 
 setup-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+
+prepare-suite: _validate-backend
+	$(MAKE) -C $(INFRA_DIR) prepare-suite SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+
+# Operates on an installed OSAC lab; the backend prepares and deploys the suite.
+deploy-suite: _validate-backend _validate-suite-contract
+	$(MAKE) -C $(INFRA_DIR) deploy-suite SUITE=$(SUITE) SUITE_STAGE=$(SUITE_STAGE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
 
 run-tests: _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
