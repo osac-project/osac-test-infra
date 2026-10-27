@@ -172,6 +172,13 @@ jobs:
 
     env:
       FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
+      # Job-scoped (not the Helm default ~/.config/helm/registry/config.json):
+      # osac-ci is a shared fleet where concurrent jobs run under the same
+      # github-runner account and $HOME, so a shared path would let one
+      # job's teardown delete another concurrently-running job's still-in-use
+      # Helm OCI login. github.run_id is unique per run even on the same
+      # host (runner.temp isn't allowed in a job-level env: block).
+      HELM_REGISTRY_CONFIG: "/tmp/helm-registry-config-${{ github.run_id }}.json"
 
     steps:
       - name: Checkout repository
