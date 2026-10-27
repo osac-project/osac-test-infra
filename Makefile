@@ -90,6 +90,25 @@ _FWD_VM_KUBECONFIG = OSAC_VM_KUBECONFIG=$(abspath $(OSAC_VM_KUBECONFIG))
 _FWD_PROFILE        = $(if $(OSAC_PROFILE),OSAC_PROFILE=$(OSAC_PROFILE))
 _FWD_SUITE          = SUITE=$(SUITE)
 
+# Snapshot refresh does not apply the generated Netris runtime overlay or the
+# per-profile Netris overlay. Restrict it to the supported CaaS snapshot path.
+_DEPLOY_GOALS = e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac
+ifneq ($(filter $(_DEPLOY_GOALS),$(MAKECMDGOALS)),)
+ifneq ($(filter-out fresh snapshot,$(OSAC_DEPLOY_MODE)),)
+$(error OSAC_DEPLOY_MODE must be fresh or snapshot (got '$(OSAC_DEPLOY_MODE)'))
+endif
+ifeq ($(OSAC_DEPLOY_MODE),snapshot)
+ifneq ($(SUITE),caas)
+$(error Snapshot mode supports only SUITE=caas with OSAC_PROFILE=caas-ci; use fresh mode for Netris VMaaS, BMaaS, stretched, or full deployments)
+endif
+ifneq ($(strip $(OSAC_PROFILE)),)
+ifneq ($(OSAC_PROFILE),caas-ci)
+$(error Snapshot mode supports only OSAC_PROFILE=caas-ci; use fresh mode for Netris service profiles)
+endif
+endif
+endif
+endif
+
 .PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
         redeploy-osac _validate-backend _validate-suite-contract _validate-test-scope
@@ -159,8 +178,20 @@ setup-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 run-tests: _validate-test-scope _validate-suite-contract
-	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
-		$(MAKE) test-$(SUITE) TEST_SCOPE=$(TEST_SCOPE)
+	@set -e; \
+	set -a; . $(INFRA_DIR)/.env.infra; set +a; \
+	if [ -z "$${METERING_ADAPTER_URL:-}" ]; then \
+		metering_service=$$(oc get svc -n "$$OSAC_NAMESPACE" -l app.kubernetes.io/component=echo-adapter -o jsonpath='{.items[0].metadata.name}'); \
+		if [ -n "$$metering_service" ]; then \
+			if ! oc get route metering-test-adapter -n "$$OSAC_NAMESPACE" >/dev/null 2>&1; then \
+				oc expose "svc/$$metering_service" -n "$$OSAC_NAMESPACE" --name=metering-test-adapter; \
+			fi; \
+			route_host=$$(oc get route metering-test-adapter -n "$$OSAC_NAMESPACE" -o jsonpath='{.spec.host}'); \
+			if [ -z "$$route_host" ]; then echo "ERROR: metering-test-adapter route has no host" >&2; exit 1; fi; \
+			export METERING_ADAPTER_URL="https://$$route_host"; \
+		fi; \
+	fi; \
+	$(MAKE) test-$(SUITE) TEST_SCOPE=$(TEST_SCOPE)
 
 destroy-ocp:
 	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)

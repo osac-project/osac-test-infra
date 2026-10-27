@@ -1,12 +1,17 @@
-# netris-test-infra
+# Netris Backend
 
 Ansible automation to deploy OCP SNO on a [Netris Spectrum-X simulated lab](https://github.com/danmanor/netris-lab) and exercise the deployment scenarios advertised by the backend.
+
+Unless a section says otherwise, backend-only Make targets in this guide run
+from `infra/netris/`. Repository orchestration targets such as `make e2e`,
+`make setup-suite`, and `make run-tests` run from the `osac-test-infra` root.
 
 > **Using this backend from `osac-test-infra`:** run a complete suite from the
 > repository root with `make e2e INFRA=netris SUITE=<suite>`. `SUITE` chooses
 > the deployment scenario and matching Make test target; for VMaaS/BMaaS,
 > `TEST_SCOPE` selects service tests, networking tests, or both. `OSAC_PROFILE`
-> chooses OSAC's Helm values preset. See the root README's [deployment scenario
+> chooses OSAC's Helm values preset. Netris-specific overlays live in the OSAC
+> checkout at `osac-installer/values/<profile>/netris.yaml`. See the root README's [deployment scenario
 > and target table](../../README.md#netris-deployment-scenarios-test-targets-and-profiles)
 > for supported scenarios, test targets, and profile defaults. The `make deploy*`
 > commands in this backend guide are provisioning building blocks; they do not
@@ -47,8 +52,8 @@ Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softga
 - **System packages** — `dnf install -y git make python3-pip ansible-core && /usr/bin/python3 -m pip install --ignore-installed ansible`. `make setup-infra` then installs the rest of the BM bootstrap (`sshpass`, `tmux`, `policycoreutils-python-utils`), EPEL from the Fedora URL (required on RHEL), and the Python dependencies into the Ansible interpreter's environment.
 - **Resources**: ~32+ CPU cores, 128+ GB RAM (lab VMs + OCP SNO VM)
 - **Storage**: ~400GB+ for OCP disk images, K3s, and containers. If the root partition is smaller, use a secondary data disk and enable automatic provisioning with `disk_setup_enabled=true` (via `EXTRA_VARS` or in the config). Run `make disk-setup` standalone or pass the variable during setup: `make setup-infra EXTRA_VARS="disk_setup_enabled=true"`
-- **Netris license key** — place at repo root as `license.key`
-- **OSAC/AAP license** — place at repo root as `license.zip`
+- **Netris license key** — place at `infra/netris/license.key`
+- **OSAC/AAP license** — place at `infra/netris/license.zip`
 - **OpenShift pull secret** — place at `/root/pull-secret` (or set `pull_secret_path`; download from [console.redhat.com](https://console.redhat.com/openshift/downloads))
 - **Config file** — place `infra/netris/config` (INI format, gitignored) with your lab name, AWS credentials, and Quay username/password. The Quay account must have pull access to `quay.io/osac-project/cluster-flavors` for the snapshot flavor download to work. AWS credentials can be obtained from the [CI vault](https://vault.ci.openshift.org/ui/vault/secrets/kv/kv/selfservice%2Fosac%2Fpacket-osac). See Quick Start below. The IAM user needs `route53:ChangeResourceRecordSets`, `route53:ListHostedZones`, and `route53:GetChange` permissions on the hosted zone.
 
@@ -57,24 +62,23 @@ All system packages, tools, and SSH keys are installed automatically by `make se
 ## Quick Start
 
 This section describes the standalone Netris backend workflow: it deploys the
-lab and OSAC, but does not run the OSAC mono-repo test suites. From the
-`osac-test-infra` repository, use the root command
-`make e2e INFRA=netris SUITE=<suite>` to deploy and test in one pipeline. In particular,
-`make deploy` is a backend deployment target; `make e2e` is the target that
-also prepares and runs tests for the selected deployment scenario.
+lab and OSAC, but does not run the OSAC mono-repo test suites. To provision and
+run tests in one pipeline, use `make e2e INFRA=netris SUITE=<suite>` from the
+`osac-test-infra` repository root. The backend targets below are useful when
+you want deployment and CaaS provisioning as separate steps.
 
 ```bash
-git clone --recurse-submodules https://github.com/danmanor/netris-test-infra.git
-cd netris-test-infra
+git clone --recurse-submodules https://github.com/osac-project/osac-test-infra.git
+cd osac-test-infra/infra/netris
 
 # Place prerequisites
 cp /path/to/license.key ./license.key
 cp /path/to/license.zip ./license.zip
 cp /path/to/pull-secret /root/pull-secret
 
-# Create infra/netris/config (unique lab name, AWS credentials, and Quay credentials)
+# Create config (unique lab name, AWS credentials, and Quay credentials)
 # lab_name becomes a subdomain under the shared hosted zone (e.g., jsmith.ecoeng-osac-ci.devcluster.openshift.com)
-cat > infra/netris/config << EOF
+cat > config << EOF
 [default]
 lab_name = <unique-lab-name>
 aws_access_key_id = <your-key>
@@ -88,19 +92,22 @@ EOF
 # Install prerequisites and cache images (shared, run once)
 make setup-infra
 
-# Full deployment — installs OCP + OSAC from scratch
-make deploy
+# Full deployment — installs OCP + OSAC from scratch (default suite: CaaS)
+make deploy SUITE=caas
 
 # OR: Fast deployment (~25 min) — uses a pre-built snapshot with recert.
 # Faster but doesn't test the OCP or OSAC installer flows.
-make deploy-fast
+make deploy-fast SUITE=caas
 
 # Then run a test flow
 make setup-caas    # CaaS setup: discover hosts, label agents, configure resource-class map
 make deploy-caas   # CaaS: create cluster
 ```
 
-After deployment, the kubeconfig is at `/root/.kube/config`.
+After deployment, the kubeconfig is at `/root/.kube/config`. The default
+`SUITE=caas` deploys the CaaS OSAC profile. Then `make setup-caas` and
+`make deploy-caas` prepare and create a CaaS cluster. This backend-only flow
+does not run pytest; use the root `make e2e` command for the complete pipeline.
 
 ## Make Targets
 
@@ -135,12 +142,18 @@ prepared cluster.
 Ansible behavior, default OSAC profile, and corresponding Make test target.
 `TEST_SCOPE` narrows VMaaS or BMaaS tests without changing the deployment.
 
-| `SUITE` | Default `OSAC_PROFILE` | Target run by `make setup-suite` | Target run by `make run-tests` | Test selection |
+| `SUITE` | Default `OSAC_PROFILE` and Netris overlay in the OSAC checkout | Target run by `make setup-suite` | Target run by `make run-tests` | Test selection |
 |---|---|---|---|---|
-| `vmaas` | `vmaas-ci` + `values/vmaas-ci/netris.yaml` | `setup-vmaas` | `test-vmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
-| `bmaas` | `bmaas-ci` + `values/bmaas-ci/netris.yaml` | `setup-bmaas` | `test-bmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
-| `stretched` | `full-ci` + `values/full-ci/netris.yaml` | `setup-stretched` | `test-stretched` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
-| `full` | `full-ci` + `values/full-ci/netris.yaml` | `setup-full` | `test-full` | Broad serial suite plus VMaaS, BMaaS, and stretched Netris networking; CaaS is skipped |
+| `caas` | `caas-ci` (no Netris overlay) | `setup-caas` | `test-caas` | CaaS lifecycle tests |
+| `vmaas` | `vmaas-ci` + `osac-installer/values/vmaas-ci/netris.yaml` | `setup-vmaas` | `test-vmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
+| `bmaas` | `bmaas-ci` + `osac-installer/values/bmaas-ci/netris.yaml` | `setup-bmaas` | `test-bmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
+| `stretched` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-stretched` | `test-stretched` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
+| `full` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-full` | `test-full` | Broad serial suite plus VMaaS, BMaaS, and stretched Netris networking; CaaS is skipped |
+
+This table describes the root orchestration targets. Later backend-only target
+examples in this guide assume the working directory is `infra/netris/`; from
+the repository root, use orchestration targets such as `make e2e`,
+`make setup-suite`, and `make run-tests` with `INFRA=netris`.
 
 For VMaaS and BMaaS, `TEST_SCOPE=service` runs general lifecycle/API tests,
 `TEST_SCOPE=networking` runs only Netris connectivity tests, and
@@ -172,8 +185,10 @@ The variables select different parts of the run:
   changing deployment. It defaults to `service`.
 - `OSAC_PROFILE=...` selects OSAC Helm values and enabled services. The Netris
   backend supplies the defaults in the table; override only when needed.
-- `OSAC_DEPLOY_MODE=fresh|snapshot` chooses a fresh install or a snapshot-based
-  OSAC refresh. `fresh` is the default.
+- `OSAC_DEPLOY_MODE=fresh|snapshot` chooses a fresh install or snapshot-based
+  OSAC refresh. `fresh` is the default. Snapshot mode supports only
+  `SUITE=caas` with `OSAC_PROFILE=caas-ci`; VMaaS, BMaaS, stretched, and full
+  require fresh mode so the Netris overlays are applied.
 - `EXTRA_VARS=...` passes Ansible variables, such as enabling BMaaS BMC
   services. Combine DNS and other overrides in the same value.
 
@@ -195,11 +210,13 @@ link (`eth10` ↔ `swp1s0`) for the `/31` underlay; leaf-0's `eth9` remains the
 Netris, the leaf, and libvirt, configures the EVPN peer, and advertises routes
 from OCP. It does not install or rely on the Netris host agent.
 
-Netris/CUDN EVPN settings are overlays inside the existing service profile
-directories: `vmaas-ci/netris.yaml`, `bmaas-ci/netris.yaml`, and
-`full-ci/netris.yaml`. The backend layers the selected overlay after the base
-profile and generates `netris-runtime.yaml` with lab controller, site, VPC, and
-credential values. Full and stretched share `full-ci/netris.yaml`. BMaaS
+Netris/CUDN EVPN settings are overlays inside the existing OSAC service profile
+directories: `osac-installer/values/vmaas-ci/netris.yaml`,
+`osac-installer/values/bmaas-ci/netris.yaml`, and
+`osac-installer/values/full-ci/netris.yaml`. The backend layers the selected
+overlay after the base profile and generates `netris-runtime.yaml` with lab
+controller, site, VPC, and credential values. Full and stretched share the
+`full-ci` overlay. BMaaS
 retains its per-BMH MAC mapping. `setup-bmaas` publishes the BMI guest interface
 as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched tests consume that value
 instead of hardcoding a server-port name.
@@ -262,10 +279,10 @@ make deploy         # deploy lab + OCP + OSAC (~2-3 hrs)
 make deploy-fast EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-service:pr-123"
 ```
 
-**Deploy with BMaaS values and image overrides:**
+**Deploy OSAC with BMaaS values and image overrides:**
 ```bash
-make deploy-ocp
-make deploy-osac OSAC_VALUES_FILE=values/bmaas-ci/values.yaml \
+make deploy-ocp SUITE=bmaas
+make deploy-osac SUITE=bmaas \
   EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true aap_project_git_branch=my-feature-branch"
 make setup-bmaas
 ```
@@ -416,12 +433,9 @@ OSAC itself is handled by `make deploy-osac` (not part of `deploy-ocp`). In `OSA
 
 `make deploy-osac` runs in three phases:
 
-1. **`prep-osac`** (Ansible) — clones the osac mono-repo, resolves the OCP release CLI image, patches the Helm values file with all CI-specific settings (Netris controller URL/credentials, DNS/AWS settings, SSH keys, instance group config for cluster/network fulfillment), enables required operators (LVMS, MetalLB, CNV, MCE, bundled PostgreSQL), copies license and pull secret to the values directory, and sets up a socat forwarder for OCP ingress on port 9444.
+1. **`prep-osac`** (Ansible) — clones the OSAC mono-repo, validates the selected profile and its Netris overlay, resolves the OCP release CLI image, and writes the generated lab-specific values to `values/<profile>/netris-runtime.yaml`. That file includes credentials, is mode `0600`, and is ignored by Git. The role also copies the license and pull secret into the profile directory and sets up a socat forwarder for OCP ingress on port 9444.
 
-2. **`run-osac-setup`** (shell) — runs `make install` in the osac-installer directory, which executes three Helm install phases:
-   - **Phase 1** (`install-operators`) — installs OLM subscriptions for cert-manager, AAP, LVMS, MetalLB, CNV, and MCE via the `osac-operators` chart
-   - **Phase 2** (`install-prereqs`) — deploys Keycloak, CA certificates, trust-manager bundles, and operator CRD instances via the `osac-prereqs` chart
-   - **Phase 3** (`install-osac`) — deploys the OSAC umbrella chart (osac-operator, fulfillment-service, osac-aap, osac-ui) with post-install hooks for hub creation and template publishing
+2. **`run-osac-setup`** (shell) — runs `make install-infra` and then `make install-osac` in `osac-installer`. It passes `OSAC_PROFILE` plus the profile's static `netris.yaml` and generated `netris-runtime.yaml` overlays. The infrastructure install deploys the required operators and prerequisites; the OSAC install deploys the application chart and runs its hooks.
 
 3. **`post-osac`** (Ansible) — skipped in fresh mode. In snapshot mode, scales down MCE operators and filters `OS_IMAGES` to only the target OCP version.
 
@@ -448,7 +462,7 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 | `ocp_subnet_cidr` | `192.168.40.0/24` | OCP VNet subnet |
 | `ocp_dnat_ip` | `198.51.100.2` | DNAT IP for OCP API/apps access |
 | `osac_namespace` | `osac-e2e-ci` | OSAC Kubernetes namespace |
-| `osac_values_file` | `values/caas-ci/values.yaml` | Helm values file |
+| `osac_values_file` | `values/$(OSAC_PROFILE)/instance.yaml` | Base values file selected by the backend Makefile from `OSAC_PROFILE` |
 | `osac_branch` | `main` | osac mono-repo branch |
 | `netris_username` | `netris` | Netris API username |
 | `netris_password` | *(required)* | Netris API password — set in your local config, validated at deploy time |
@@ -459,7 +473,7 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 | `caas_host_type_id` | `ci-worker` | Resource class for CaaS agents |
 | `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:caas` | OCI image containing the snapshot flavor |
 | `snapshot_osac_namespace` | `osac-e2e-ci` | OSAC namespace baked into the snapshot |
-| `snapshot_osac_values_file` | `values/caas-ci/values.yaml` | Helm values file for OSAC refresh |
+| `snapshot_osac_values_file` | `values/caas-ci/instance.yaml` | Base values file staged for snapshot refresh |
 
 ```bash
 make deploy-ocp EXTRA_VARS="ocp_version=4.18"
@@ -482,7 +496,7 @@ make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
 
 | Variable | Default | Description | Tested |
 |----------|---------|-------------|--------|
-| `ocp_version` | `4.21` | OpenShift version (e.g., `4.18`, `4.19`, `4.21`) | yes (4.18) |
+| `ocp_version` | `4.22` | OpenShift version | default |
 | `ocp_cluster_name` | `ocp-sno` | OCP cluster name | defaults only |
 | `ocp_server_vcpu` | `20` | OCP VM vCPUs | yes (16) |
 | `ocp_server_memory_gb` | `64` | OCP VM RAM in GB | yes (48) |
@@ -521,7 +535,7 @@ dns_server: "10.0.0.1"
 | Variable | Default | Description | Tested |
 |----------|---------|-------------|--------|
 | `osac_namespace` | `osac-e2e-ci` | OSAC Kubernetes namespace | yes |
-| `osac_values_file` | `values/caas-ci/values.yaml` | Helm values file for OSAC | defaults only |
+| `osac_values_file` | `values/$(OSAC_PROFILE)/instance.yaml` | Base values file selected by the backend Makefile from `OSAC_PROFILE` | default |
 | `osac_repo` | `https://github.com/osac-project/osac.git` | osac mono-repo git URI | defaults only |
 | `osac_branch` | `main` | osac mono-repo git branch | defaults only |
 
@@ -537,7 +551,12 @@ dns_server: "10.0.0.1"
 | `aap_project_git_uri` | `""` | AAP config-as-code project git URI override (defaults to installer value) | no |
 | `aap_project_git_branch` | `""` | AAP config-as-code project git branch override (test PR playbooks/collections) | no |
 
-#### Snapshot Deployment (fast path)
+#### Snapshot Deployment (CaaS only)
+
+Snapshot refresh currently supports only `SUITE=caas` with `OSAC_PROFILE=caas-ci`.
+The VMaaS, BMaaS, stretched, and full scenarios require generated Netris runtime
+values and per-profile overlays, which are applied by the fresh-install path.
+Use `OSAC_DEPLOY_MODE=fresh` for those scenarios.
 
 The account configured with `quay_username` and `quay_password` must have pull access to
 `quay.io/osac-project/cluster-flavors`. Setup logs in with these credentials when it downloads
@@ -548,7 +567,7 @@ the flavor image; it reports an actionable error if the credentials are missing 
 | `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:{caas,sno}-4-22` | OCI image containing the snapshot flavor (derived from `osac_deploy_mode`) | defaults only |
 | `snapshot_recert_image` | `quay.io/osac-project/recert:latest` | Recert container image | defaults only |
 | `snapshot_osac_namespace` | `osac-e2e-ci` | OSAC namespace baked into the snapshot | defaults only |
-| `snapshot_osac_values_file` | `values/caas-ci/values.yaml` | Helm values file for OSAC refresh | defaults only |
+| `snapshot_osac_values_file` | `values/caas-ci/instance.yaml` | Base values file staged for OSAC refresh | default |
 
 #### CaaS Configuration
 
@@ -568,7 +587,9 @@ the flavor image; it reports an actionable error if the credentials are missing 
 
 All components live in the osac mono-repo. Override `osac_branch` to test a specific branch, and use image variables to override container images.
 
-> **Note**: `OSAC_VALUES_FILE` is a **Make-level** variable (not an Ansible `EXTRA_VARS` key). It controls which Helm values file is used for both `prep-osac` and `run-osac-setup`. Pass it directly to `make`, not inside `EXTRA_VARS`. Default: `values/caas-ci/values.yaml`.
+The backend Makefile selects `values/<OSAC_PROFILE>/instance.yaml` as the base
+values file and layers the Netris overlay from the same profile directory when
+one exists. `SUITE` supplies the profile default shown in the scenario table.
 
 ### Examples
 
@@ -587,6 +608,6 @@ make deploy-osac EXTRA_VARS='{"osac_operator_image": "quay.io/osac-project/osac-
 **Test BMaaS with custom operator images:**
 ```bash
 make destroy-osac
-make deploy-osac OSAC_VALUES_FILE=values/bmaas-ci/values.yaml \
+make deploy-osac SUITE=bmaas \
   EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true"
 ```

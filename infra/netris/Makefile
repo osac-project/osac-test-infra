@@ -2,13 +2,13 @@
 
 OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml -e snapshot_osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
 # SUITE names the deployment scenario and selects profile/setup behavior.
 # TEST_SCOPE is handled by the root Makefile and only narrows VMaaS/BMaaS tests.
 # SUITE=caas is the default; the root pipeline maps it to setup-caas / test-caas.
-# OCP snapshot restores grow both h00 disks to their configured sizes for every suite.
+# The supported CaaS snapshot restore grows both h00 disks to their configured sizes.
 SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci
@@ -18,6 +18,31 @@ OSAC_PROFILE ?= $(if $(filter vmaas,$(SUITE)),vmaas-ci,$(if $(filter bmaas,$(SUI
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 _KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 _OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
+
+# Snapshot refresh does not apply the generated Netris runtime overlay or the
+# per-profile Netris overlay, so allow snapshot deployment only for CaaS.
+_DEPLOY_GOALS = deploy deploy-fast deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac
+ifneq ($(filter $(_DEPLOY_GOALS),$(MAKECMDGOALS)),)
+ifneq ($(filter-out fresh snapshot,$(OSAC_DEPLOY_MODE)),)
+$(error OSAC_DEPLOY_MODE must be fresh or snapshot (got '$(OSAC_DEPLOY_MODE)'))
+endif
+ifeq ($(OSAC_DEPLOY_MODE),snapshot)
+ifneq ($(SUITE),caas)
+$(error Snapshot mode supports only SUITE=caas with OSAC_PROFILE=caas-ci; use fresh mode for Netris service profiles)
+endif
+ifneq ($(OSAC_PROFILE),caas-ci)
+$(error Snapshot mode supports only OSAC_PROFILE=caas-ci; use fresh mode for Netris service profiles)
+endif
+endif
+endif
+ifneq ($(filter deploy-fast,$(MAKECMDGOALS)),)
+ifneq ($(SUITE),caas)
+$(error deploy-fast uses snapshot mode and supports only SUITE=caas; use deploy for fresh Netris service deployments)
+endif
+ifneq ($(OSAC_PROFILE),caas-ci)
+$(error deploy-fast supports only OSAC_PROFILE=caas-ci; use deploy for fresh Netris service profiles)
+endif
+endif
 
 # Keep deployment-specific Netris/CUDN EVPN values in the existing service
 # profile directories. The prep role always generates a runtime overlay; only
