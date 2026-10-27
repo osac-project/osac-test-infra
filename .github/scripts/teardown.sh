@@ -37,6 +37,10 @@ rm -f "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/aap-license.zip" "$RUNNER_TE
 rm -f "${REGISTRY_AUTH_FILE:-}" "$RUNNER_TEMP/auth.json"
 rm -f "${HOME}/.config/containers/auth.json"
 sudo rm -f /root/.config/containers/auth.json
+# Job-scoped (chart-oci-repo path, written by fetch-stage-registry-secret) --
+# unlike the shared auth.json above, this one is never written by a
+# concurrent job, but clean it up anyway for consistency.
+rm -f "$RUNNER_TEMP/stage-containers-auth.json"
 # `helm registry login` (chart-oci-repo path) stores its credential at a
 # run_id-suffixed path (set job-wide via HELM_REGISTRY_CONFIG, not Helm's
 # shared-HOME default) -- removing it here only ever touches this job's own

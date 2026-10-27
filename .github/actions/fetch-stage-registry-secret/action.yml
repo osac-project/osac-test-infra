@@ -1,12 +1,12 @@
 ---
 name: Fetch and merge stage registry secret
 description: >-
-  Fetch the stage-registry-pull Vault secret and merge it into both the
-  runner's containers auth.json and the cluster pull-secret file. Kept
-  separate from fetch-and-write-secrets, which every E2E workflow calls
-  unconditionally -- only callers that actually install from
-  registry.stage.redhat.io need this credential, and a malformed or missing
-  Vault entry here must not be able to fail every other E2E workflow.
+  Fetch the stage-registry-pull Vault secret and merge it into a job-scoped
+  containers auth file and the cluster pull-secret file. Kept separate from
+  fetch-and-write-secrets, which every E2E workflow calls unconditionally --
+  only callers that actually install from registry.stage.redhat.io need this
+  credential, and a malformed or missing Vault entry here must not be able to
+  fail every other E2E workflow.
 
 inputs:
   role-id:
@@ -15,6 +15,16 @@ inputs:
     required: true
   pull-secret-path:
     description: "Path to the pull-secret.json file that will be passed to cluster-tool boot"
+    required: true
+  auth-json-path:
+    description: >-
+      Job-scoped output path for the merged containers auth file (e.g.
+      under runner.temp). Deliberately NOT the shared
+      ~/.config/containers/auth.json: osac-ci is a shared fleet where
+      concurrent jobs run under the same account and $HOME, and every job's
+      own fetch-and-write-secrets call rewrites that shared file with
+      content that lacks this credential, racing with (and sometimes
+      overwriting) whatever a concurrent staging job just wrote there.
     required: true
 
 runs:
@@ -31,27 +41,29 @@ runs:
         exportEnv: false
         secrets: secret/data/osac/e2e/stage-registry-pull dockerconfigjson | STAGE_REGISTRY_AUTH
 
-    # Merged into both files, not just one: the runner's own auth.json
-    # covers podman/skopeo/helm-login on the runner itself, but cluster-tool
-    # boot reads pull-secret-path separately to seed the cluster's own pull
-    # secret -- without this, the cluster's nodes have no credential to pull
-    # the registry.stage.redhat.io images the installed chart references.
-    - name: Merge into containers auth.json and cluster pull secret
+    # Merged into two job-scoped files, not the shared auth.json: the
+    # runner-local one covers podman/skopeo/helm-login for this job only,
+    # and cluster-tool boot reads pull-secret-path separately to seed the
+    # cluster's own pull secret -- without the second merge, the cluster's
+    # nodes would have no credential to pull the registry.stage.redhat.io
+    # images the installed chart references.
+    - name: Merge into a job-scoped auth file and the cluster pull secret
       shell: bash
       env:
         STAGE_REGISTRY_AUTH: ${{ steps.vault.outputs.STAGE_REGISTRY_AUTH }}
         PULL_SECRET_PATH: ${{ inputs.pull-secret-path }}
+        AUTH_JSON_PATH: ${{ inputs.auth-json-path }}
       run: |
         echo "::group::Merge stage registry credential into pull secrets"
+        # Base is read-only here -- this job's own already-written copy
+        # (from fetch-and-write-secrets), never the live shared file, so a
+        # concurrent job rewriting/removing the shared auth.json afterward
+        # can't affect this job's merged output.
         jq -s '.[0].auths * .[1].auths | {auths: .}' \
           "${HOME}/.config/containers/auth.json" \
           <(printf '%s' "${STAGE_REGISTRY_AUTH}") \
-          > "${HOME}/.config/containers/auth.json.tmp"
-        mv "${HOME}/.config/containers/auth.json.tmp" "${HOME}/.config/containers/auth.json"
-        chmod 600 "${HOME}/.config/containers/auth.json"
-        sudo mkdir -p /root/.config/containers
-        sudo cp "${HOME}/.config/containers/auth.json" /root/.config/containers/auth.json
-        sudo chmod 600 /root/.config/containers/auth.json
+          > "${AUTH_JSON_PATH}"
+        chmod 600 "${AUTH_JSON_PATH}"
 
         jq -s '.[0].auths * .[1].auths | {auths: .}' \
           "${PULL_SECRET_PATH}" \

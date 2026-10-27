@@ -253,6 +253,24 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
 
+      # In chart-oci-repo mode, the test CLI is extracted from the chart's
+      # own resolved service image (Pull resolved chart and read its
+      # service image ref) before any image-overrides are applied at
+      # install time -- an override touching the service image would
+      # silently test a different CLI than the one actually deployed. Fail
+      # fast instead of resolving the effective image after overrides,
+      # which would require reordering CLI extraction after Install OSAC
+      # and rebuilding the test image mid-job.
+      - name: Reject service-image overrides in OCI mode
+        if: inputs.chart-oci-repo != ''
+        env:
+          IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
+        run: |
+          if echo "${IMAGE_OVERRIDES}" | jq -e 'keys[] | select(startswith("service.images.service"))' >/dev/null 2>&1; then
+            echo "::error::image-overrides cannot set service.images.service.* when chart-oci-repo is set -- the test CLI always comes from the chart's own resolved service image, so overriding it here would test a CLI that doesn't match the deployed service."
+            exit 1
+          fi
+
       - name: Authorize fork PR
         if: inputs.fork-pr-author-association != ''
         uses: ./.github/actions/authorize-fork-pr
@@ -280,6 +298,7 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
           pull-secret-path: ${{ runner.temp }}/pull-secret.json
+          auth-json-path: ${{ runner.temp }}/stage-containers-auth.json
 
       # Moved ahead of cluster boot: the chart-oci-repo resolution/login
       # steps below need helm and yq before any cluster exists, not just
@@ -416,17 +435,18 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
           chmod 600 "$RUNNER_TEMP/kubeconfig"
 
-      # The four steps below only run when chart-oci-repo is set (the
+      # The steps below only run when chart-oci-repo is set (the
       # staging/release-validation path). Default (empty) behavior is
       # untouched: they're all gated on inputs.chart-oci-repo != ''.
       #
-      # registry.stage.redhat.io's auth is already merged into
-      # ~/.config/containers/auth.json by fetch-and-write-secrets -- podman
-      # and skopeo read that directly, but Helm's OCI client keeps its own
-      # credential store (~/.config/helm/registry/config.json, written by
-      # `helm registry login`), so it needs a separate explicit login using
-      # the same decoded credential. --password-stdin keeps the password out
-      # of argv/ps.
+      # registry.stage.redhat.io's auth is merged into a job-scoped file by
+      # fetch-stage-registry-secret (not the shared ~/.config/containers/
+      # auth.json -- see that action's own comment on why), which podman
+      # and skopeo read via --authfile/REGISTRY_AUTH_FILE below. Helm's OCI
+      # client keeps its own separate credential store
+      # (HELM_REGISTRY_CONFIG, set job-wide above), so it needs its own
+      # explicit login using the same decoded credential. --password-stdin
+      # keeps the password out of argv/ps.
       - name: Log in to the chart's OCI registry
         if: inputs.chart-oci-repo != ''
         env:
@@ -434,7 +454,7 @@ jobs:
         run: |
           echo "::group::Helm OCI registry login"
           REGISTRY_HOST="${CHART_OCI_REPO%%/*}"
-          AUTH_B64=$(jq -r --arg host "${REGISTRY_HOST}" '.auths[$host].auth // empty' "${HOME}/.config/containers/auth.json")
+          AUTH_B64=$(jq -r --arg host "${REGISTRY_HOST}" '.auths[$host].auth // empty' "${RUNNER_TEMP}/stage-containers-auth.json")
           if [[ -z "${AUTH_B64}" ]]; then
             echo "::error::No credential for ${REGISTRY_HOST} in the merged pull secret (expected a stage-registry-pull Vault entry)."
             exit 1
@@ -459,7 +479,7 @@ jobs:
           CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
         run: |
           echo "::group::Resolve latest published chart version"
-          VERSION=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${HOME}/.config/containers/auth.json" \
+          VERSION=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/stage-containers-auth.json" \
             | jq -r '.Tags[]' \
             | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
             | sort -t. -k1,1n -k2,2n -k3,3n \
@@ -501,11 +521,13 @@ jobs:
           SERVICE_IMAGE: ${{ steps.chart-images.outputs.service-image }}
         run: |
           echo "::group::Extract OSAC CLI from resolved staged image"
-          export REGISTRY_AUTH_FILE="${HOME}/.config/containers/auth.json"
+          export REGISTRY_AUTH_FILE="${RUNNER_TEMP}/stage-containers-auth.json"
           podman pull "${SERVICE_IMAGE}"
           cli_container=$(podman create "${SERVICE_IMAGE}")
+          trap 'podman rm -f "${cli_container}" >/dev/null 2>&1 || true' EXIT
           podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
           podman rm "${cli_container}" >/dev/null 2>&1 || true
+          trap - EXIT
           chmod +x "$RUNNER_TEMP/osac-cli-bin"
           echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
           echo "Extracted OSAC CLI from ${SERVICE_IMAGE}"
@@ -654,8 +676,10 @@ jobs:
           echo "Pulling ${IMAGE}..."
           podman pull "${IMAGE}"
           cli_container=$(podman create "${IMAGE}")
+          trap 'podman rm -f "${cli_container}" >/dev/null 2>&1 || true' EXIT
           podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
           podman rm "${cli_container}" >/dev/null 2>&1 || true
+          trap - EXIT
           chmod +x "$RUNNER_TEMP/osac-cli-bin"
           echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
           echo "Extracted OSAC CLI from ${IMAGE}"
