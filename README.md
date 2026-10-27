@@ -57,11 +57,11 @@ VMaaS/BMaaS. For a networking-only rerun, keep `SUITE=vmaas` and set
 
 | `SUITE` | Default `OSAC_PROFILE` | `make setup-suite` selects | Test target | Deployment and test behavior |
 |---|---|---|---|---|
-| `vmaas` | `cudn-evpn-netris-test` | `setup-vmaas` | `test-vmaas` | VMaaS with the CUDN/EVPN underlay. `TEST_SCOPE` selects service, networking, or both. |
+| `vmaas` | `vmaas-ci` + `values/vmaas-ci/netris.yaml` | `setup-vmaas` | `test-vmaas` | VMaaS with the CUDN/EVPN underlay. `TEST_SCOPE` selects service, networking, or both. |
 | `caas` | `caas-ci` | `setup-caas` | `test-caas` | CaaS lifecycle E2E. It is not included in `full`. |
-| `bmaas` | `bmaas-ci` | `setup-bmaas` | `test-bmaas` | BMaaS lifecycle and Netris tests. `TEST_SCOPE` selects service, networking, or both. |
-| `stretched` | `full-ci` | `setup-stretched` | `test-stretched` | Prepares BMaaS and VMaaS, skips CaaS, and tests a shared-subnet VM↔BM flow. |
-| `full` | `full-ci` | `setup-full` | `test-full` | Broad serial E2E plus VMaaS, BMaaS, and stretched Netris networking. Skips CaaS, slow cross-tenant BMaaS, and external-IP cases. |
+| `bmaas` | `bmaas-ci` + `values/bmaas-ci/netris.yaml` | `setup-bmaas` | `test-bmaas` | BMaaS lifecycle and Netris tests. `TEST_SCOPE` selects service, networking, or both. |
+| `stretched` | `full-ci` + `values/full-ci/netris.yaml` | `setup-stretched` | `test-stretched` | Prepares BMaaS and VMaaS, skips CaaS, and tests a shared-subnet VM↔BM flow. |
+| `full` | `full-ci` + `values/full-ci/netris.yaml` | `setup-full` | `test-full` | Broad serial E2E plus VMaaS, BMaaS, and stretched Netris networking. Skips CaaS, slow cross-tenant BMaaS, and external-IP cases. |
 
 For `SUITE=vmaas` or `SUITE=bmaas`, `TEST_SCOPE` accepts:
 
@@ -109,12 +109,14 @@ title is a workflow display name; `SUITE` selects the deployment and
 
 | PR command | `SUITE` | `TEST_SCOPE` | `OSAC_PROFILE` | Coverage |
 |---|---|---|---|---|
-| `/test vmaas-netris` | `vmaas` | `networking` | `cudn-evpn-netris-test` | VMaaS Netris networking |
-| `/test bmaas-netris` | `bmaas` | `networking` | `bmaas-ci` | BMaaS Netris networking; the slow cross-tenant class is omitted |
-| `/test stretched-netris` | `stretched` | — | `full-ci` | Shared-subnet VMaaS↔BMaaS connectivity |
+| `/test vmaas-netris` | `vmaas` | `networking` | `vmaas-ci` + `values/vmaas-ci/netris.yaml` | VMaaS Netris networking |
+| `/test bmaas-netris` | `bmaas` | `networking` | `bmaas-ci` + `values/bmaas-ci/netris.yaml` | BMaaS Netris networking; the slow cross-tenant class is omitted |
+| `/test stretched-netris` | `stretched` | — | `full-ci` + `values/full-ci/netris.yaml` | Shared-subnet VMaaS↔BMaaS connectivity |
 
-There is no dedicated `/test full-netris` command today. Run `SUITE=full` with
-the Make pipeline below when you want the broad suite.
+There is no dedicated `/test full-netris` command today. To run the broad suite
+from GitHub Actions, dispatch **E2E VMaaS Netris Full Install** and choose
+`suite=full`; the run uses `full-ci` plus `values/full-ci/netris.yaml`. Locally,
+run `SUITE=full` with the Make pipeline below.
 
 The VMaaS EVPN flows (`vmaas`, `stretched`, and `full`) require converged OCP
 4.22 with OVNKubernetes and configure CUDN EVPN

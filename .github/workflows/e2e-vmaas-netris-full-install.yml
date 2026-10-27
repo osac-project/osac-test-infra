@@ -13,15 +13,15 @@ on:
         type: string
         default: "vmaas"
       test-scope:
-        description: "Which VMaaS tests to run: service, networking, or all"
+        description: "VMaaS test scope, or all tests for the full deployment suite"
         required: false
         type: string
         default: "networking"
       osac-profile:
-        description: "OSAC profile for the VMaaS deployment"
+        description: "Base OSAC service profile for the deployment"
         required: false
         type: string
-        default: "cudn-evpn-netris-test"
+        default: "vmaas-ci"
       instance-type:
         description: "EC2 instance type"
         required: false
@@ -374,7 +374,7 @@ jobs:
           OSAC_PROFILE: ${{ inputs['osac-profile'] }}
         run: |
           case "${TEST_SUITE}:${OSAC_PROFILE}:${TEST_SCOPE}" in
-            vmaas:cudn-evpn-netris-test:service|vmaas:cudn-evpn-netris-test:networking|vmaas:cudn-evpn-netris-test:all|full:full-ci:all) ;;
+            vmaas:vmaas-ci:service|vmaas:vmaas-ci:networking|vmaas:vmaas-ci:all|full:full-ci:all) ;;
             *) echo "::error::Unsupported Netris deployment/profile/test-scope: ${TEST_SUITE}/${OSAC_PROFILE}/${TEST_SCOPE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
@@ -582,6 +582,27 @@ jobs:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make setup-suite INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
 
+      - name: Create metering adapter route for full-suite tests
+        id: metering-adapter
+        if: inputs.suite == 'full' || (inputs.suite == 'vmaas' && inputs.test-scope != 'networking')
+        shell: bash
+        env:
+          KUBECONFIG: /root/.kube/config
+          NS: osac-e2e-ci
+        run: |
+          SVC_NAME=$(oc get svc -n "${NS}" -l app.kubernetes.io/component=echo-adapter -o jsonpath='{.items[0].metadata.name}')
+          if [ -z "${SVC_NAME}" ]; then
+            echo "::error::No echo-adapter Service found in namespace ${NS} — metering tests cannot run"
+            exit 1
+          fi
+          oc expose "svc/${SVC_NAME}" -n "${NS}" --name=metering-test-adapter
+          ROUTE_HOST=$(oc get route metering-test-adapter -n "${NS}" -o jsonpath='{.spec.host}')
+          if [ -z "${ROUTE_HOST}" ]; then
+            echo "::error::Metering test adapter route is unavailable"
+            exit 1
+          fi
+          echo "url=http://${ROUTE_HOST}" >> "$GITHUB_OUTPUT"
+
       - name: Run Netris E2E tests
         id: test
         timeout-minutes: 60
@@ -589,6 +610,7 @@ jobs:
         env:
           TEST_SUITE: ${{ inputs.suite }}
           TEST_SCOPE: ${{ inputs.test-scope }}
+          METERING_ADAPTER_URL: ${{ steps.metering-adapter.outputs.url }}
         run: make run-tests INFRA=netris SUITE="${TEST_SUITE}" TEST_SCOPE="${TEST_SCOPE}"
 
       - name: Gather infra diagnostics

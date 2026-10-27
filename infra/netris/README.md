@@ -137,10 +137,10 @@ Ansible behavior, default OSAC profile, and corresponding Make test target.
 
 | `SUITE` | Default `OSAC_PROFILE` | Target run by `make setup-suite` | Target run by `make run-tests` | Test selection |
 |---|---|---|---|---|
-| `vmaas` | `cudn-evpn-netris-test` | `setup-vmaas` | `test-vmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
-| `bmaas` | `bmaas-ci` | `setup-bmaas` | `test-bmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
-| `stretched` | `full-ci` | `setup-stretched` | `test-stretched` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
-| `full` | `full-ci` | `setup-full` | `test-full` | Broad serial suite plus VMaaS, BMaaS, and stretched Netris networking; CaaS is skipped |
+| `vmaas` | `vmaas-ci` + `values/vmaas-ci/netris.yaml` | `setup-vmaas` | `test-vmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
+| `bmaas` | `bmaas-ci` + `values/bmaas-ci/netris.yaml` | `setup-bmaas` | `test-bmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
+| `stretched` | `full-ci` + `values/full-ci/netris.yaml` | `setup-stretched` | `test-stretched` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
+| `full` | `full-ci` + `values/full-ci/netris.yaml` | `setup-full` | `test-full` | Broad serial suite plus VMaaS, BMaaS, and stretched Netris networking; CaaS is skipped |
 
 For VMaaS and BMaaS, `TEST_SCOPE=service` runs general lifecycle/API tests,
 `TEST_SCOPE=networking` runs only Netris connectivity tests, and
@@ -195,8 +195,11 @@ link (`eth10` ↔ `swp1s0`) for the `/31` underlay; leaf-0's `eth9` remains the
 Netris, the leaf, and libvirt, configures the EVPN peer, and advertises routes
 from OCP. It does not install or rely on the Netris host agent.
 
-The `cudn-evpn-netris-test` profile enables VMaaS and BMaaS with the Netris and
-CUDN EVPN managers, so both instance types can attach to one subnet. BMaaS
+Netris/CUDN EVPN settings are overlays inside the existing service profile
+directories: `vmaas-ci/netris.yaml`, `bmaas-ci/netris.yaml`, and
+`full-ci/netris.yaml`. The backend layers the selected overlay after the base
+profile and generates `netris-runtime.yaml` with lab controller, site, VPC, and
+credential values. Full and stretched share `full-ci/netris.yaml`. BMaaS
 retains its per-BMH MAC mapping. `setup-bmaas` publishes the BMI guest interface
 as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched tests consume that value
 instead of hardcoding a server-port name.

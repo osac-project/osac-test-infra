@@ -14,10 +14,16 @@ SUITE ?= caas
 OSAC_NAMESPACE ?= osac-e2e-ci
 KUBECONFIG ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
-OSAC_PROFILE ?= $(if $(filter vmaas,$(SUITE)),cudn-evpn-netris-test,$(if $(filter bmaas,$(SUITE)),bmaas-ci,$(if $(filter full stretched,$(SUITE)),full-ci,caas-ci)))
+OSAC_PROFILE ?= $(if $(filter vmaas,$(SUITE)),vmaas-ci,$(if $(filter bmaas,$(SUITE)),bmaas-ci,$(if $(filter full stretched,$(SUITE)),full-ci,caas-ci)))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 _KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 _OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
+
+# Keep deployment-specific Netris/CUDN EVPN values in the existing service
+# profile directories. The prep role always generates a runtime overlay; only
+# the three service profiles have a committed static Netris overlay.
+NETRIS_PROFILE_VALUES = $(if $(filter vmaas-ci bmaas-ci full-ci,$(OSAC_PROFILE)),-f values/$(OSAC_PROFILE)/netris.yaml)
+NETRIS_INSTANCE_VALUES_EXTRA = $(strip $(NETRIS_PROFILE_VALUES) -f values/$(OSAC_PROFILE)/netris-runtime.yaml)
 
 # VMaaS and full-ci deployments configure OCP as an EVPN VTEP; other scenarios keep their established root path.
 EVPN_SUITES = vmaas stretched full
@@ -239,7 +245,8 @@ run-osac-setup:
 	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-osac \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
-		NS=$(OSAC_NAMESPACE)
+		NS=$(OSAC_NAMESPACE) \
+		INSTANCE_VALUES_EXTRA="$(NETRIS_INSTANCE_VALUES_EXTRA)"
 
 post-osac:
 	ansible-playbook playbooks/post-osac.yml $(OCP_ANSIBLE_EXTRA)

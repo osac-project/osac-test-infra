@@ -134,16 +134,46 @@
     src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
   register: _values_raw
 
+- name: Check for the selected profile's Netris overlay
+  ansible.builtin.stat:
+    path: "{{ osac_installer_dir }}/values/{{ osac_profile }}/netris.yaml"
+  register: _netris_overlay_stat
+
+- name: Require an Netris overlay for CUDN EVPN deployment suites
+  ansible.builtin.assert:
+    that:
+      - _netris_overlay_stat.stat.exists
+    fail_msg: >-
+      SUITE={{ suite }} requires values/{{ osac_profile }}/netris.yaml. Use
+      vmaas-ci for vmaas, bmaas-ci for bmaas, and full-ci for full or stretched.
+  when: suite | default('') in ['vmaas', 'bmaas', 'full', 'stretched']
+
+- name: Read selected Netris overlay
+  ansible.builtin.slurp:
+    src: "{{ osac_installer_dir }}/values/{{ osac_profile }}/netris.yaml"
+  register: _netris_overlay_raw
+  when: _netris_overlay_stat.stat.exists
+
+- name: Combine base profile and Netris overlay for validation
+  ansible.builtin.set_fact:
+    _profile_values: >-
+      {{ (_values_raw.content | b64decode | from_yaml)
+         | combine((_netris_overlay_raw.content | default('') | b64decode | from_yaml | default({}, true)), recursive=true) }}
+
 - name: Read full-ci infrastructure values
   when: suite | default('') in ['full', 'stretched']
   ansible.builtin.slurp:
     src: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
   register: _full_ci_infra_values_raw
 
-- name: Validate the CUDN EVPN VMaaS profile contract
+- name: Validate the selected Netris CUDN EVPN profile contract
   ansible.builtin.assert:
     that:
-      - _selected_vmaas.enabled | default(false) | bool
+      - suite != 'vmaas' or _selected_vmaas.enabled | default(false) | bool
+      - suite != 'bmaas' or _selected_bmaas.enabled | default(false) | bool
+      - suite not in ['full', 'stretched'] or _selected_vmaas.enabled | default(false) | bool
+      - suite not in ['full', 'stretched'] or _selected_bmaas.enabled | default(false) | bool
+      - suite not in ['full', 'stretched'] or _selected_caas.enabled | default(false) | bool
       - _selected_network_managers.enabled | default(false) | bool
       - _selected_fabric_netris.enabled | default(false) | bool
       - _selected_k8s_cudn_evpn.enabled | default(false) | bool
@@ -153,15 +183,16 @@
       - _selected_network_class.fabricManager | default('') == 'netris'
       - _selected_network_class.isDefault | default(false) | bool
     fail_msg: >-
-      Profile {{ osac_profile }} must enable VMaaS, register Netris and cudn_evpn,
-      and explicitly select the default NetworkClass pair (netris, cudn_evpn).
-      prep-osac preserves this source profile selection; it does not synthesize or
-      overwrite NetworkClass settings.
+      Profile {{ osac_profile }} must enable the service selected by SUITE,
+      register Netris and cudn_evpn, and explicitly select the default
+      NetworkClass pair (netris, cudn_evpn).
   vars:
-    _selected_profile_values: "{{ _values_raw.content | b64decode | from_yaml }}"
+    _selected_profile_values: "{{ _profile_values }}"
     _selected_global: "{{ _selected_profile_values.global | default({}) }}"
     _selected_services: "{{ _selected_global.services | default({}) }}"
     _selected_vmaas: "{{ _selected_services.vmaas | default({}) }}"
+    _selected_bmaas: "{{ _selected_services.bmaas | default({}) }}"
+    _selected_caas: "{{ _selected_services.caas | default({}) }}"
     _selected_profile_operator: "{{ _selected_profile_values.operator | default({}) }}"
     _selected_network_managers: "{{ _selected_profile_operator.networkManagers | default({}) }}"
     _selected_fabric_managers: "{{ _selected_network_managers.fabricManagers | default({}) }}"
@@ -170,7 +201,7 @@
     _selected_k8s_cudn_evpn: "{{ _selected_k8s_managers.cudn_evpn | default({}) }}"
     _selected_expert_overrides: "{{ _selected_global.expertOverrides | default({}) }}"
     _selected_network_class: "{{ _selected_profile_values.networkClass | default({}) }}"
-  when: osac_profile == 'cudn-evpn-netris-test'
+  when: _netris_overlay_stat.stat.exists
 
 # Operator enablement (cnv, mce, metallb) is intentionally NOT overridden here:
 # each values profile declares what it needs (e.g. bmaas-ci disables cnv/mce/metallb,
@@ -254,41 +285,6 @@
       }}
 
 
-- name: Add Netris CUDN EVPN manager settings to full-ci
-  when: suite | default('') in ['full', 'stretched']
-  ansible.builtin.set_fact:
-    _values_overrides: >-
-      {{ _values_overrides | combine({
-           'global': {'expertOverrides': {'networkClass': true}},
-           'operator': {'networkManagers': {
-             'enabled': true,
-             'fabricManagers': {'netris': {
-               'enabled': true,
-               'description': 'Netris SDN fabric manager',
-               'capabilities': ['ipv4']
-             }},
-             'k8sManagers': {'cudn_evpn': {
-               'enabled': true,
-               'description': 'OVN EVPN Kubernetes network manager for VM-to-fabric connectivity',
-               'capabilities': ['ipv4']
-             }}
-           }},
-           'networkClass': {
-             'enabled': true,
-             'title': 'CUDN EVPN with Netris',
-             'description': 'Provisions IPv4 networking through the CUDN EVPN k8s manager and the Netris physical fabric manager.',
-             'k8sManager': 'cudn_evpn',
-             'fabricManager': 'netris',
-             'isDefault': true
-           },
-           'aap': {'instanceGroups': {'storageFulfillment': {'enabled': true}}},
-           'metering': {'echoAdapter': {'enabled': true, 'image': {
-             'repository': 'ghcr.io/osac-project/metering-echo-adapter',
-             'tag': 'latest',
-             'pullPolicy': 'Always'
-           }}}
-         }, recursive=true) }}
-
 - name: Validate full-ci services and Netris EVPN overlay
   when: suite | default('') in ['full', 'stretched']
   ansible.builtin.assert:
@@ -312,14 +308,14 @@
       SUITE=full or SUITE=stretched requires the full-ci profile services plus the default NetworkClass
       pair (netris, cudn_evpn). The full-ci EVPN overlay was not applied correctly.
   vars:
-    _full_ci_values: "{{ (_values_raw.content | b64decode | from_yaml) | combine(_values_overrides, recursive=true) }}"
+    _full_ci_values: "{{ _profile_values | combine(_values_overrides, recursive=true) }}"
 
 # Keep bmf.metal3.enabled false here: it enables the BMF subchart's own Secret
 # templates. The OSAC chart's testBackend templates provide those configs instead.
 - name: Configure the Metal3 test backend for bare-metal services
   when:
     - bare_metal_services | bool
-    - (_values_raw.content | b64decode | from_yaml).global.services.bmaas.enabled | default(false) | bool
+    - _profile_values.global.services.bmaas.enabled | default(false) | bool
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ _values_overrides | combine({
@@ -335,15 +331,15 @@
 
 - name: Disable cluster version seeding when CaaS is disabled
   # The seed hook calls the CaaS API, which returns 503 when CaaS is disabled.
-  when: not ((_values_raw.content | b64decode | from_yaml).global.services.caas.enabled | default(true) | bool)
+  when: not (_profile_values.global.services.caas.enabled | default(true) | bool)
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ _values_overrides | combine({'clusterVersions': {'enabled': false}}, recursive=true) }}
 
-- name: Write patched values file
+- name: Write generated Netris runtime values overlay
   ansible.builtin.copy:
-    dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
-    content: "{{ _values_raw.content | b64decode | from_yaml | combine(_values_overrides, recursive=true) | to_nice_yaml(indent=2) }}"
+    dest: "{{ osac_installer_dir }}/values/{{ osac_profile }}/netris-runtime.yaml"
+    content: "{{ _values_overrides | to_nice_yaml(indent=2) }}"
     mode: "0600"
   no_log: true
 
