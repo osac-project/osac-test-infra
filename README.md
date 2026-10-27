@@ -325,22 +325,28 @@ make gather-suite INFRA=netris SUITE=full
 
 ## Configuration
 
-All configuration via environment variables.
+Set these through environment variables or as Make arguments, such as
+`SUITE=vmaas`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `OSAC_MONO_DIR` | `/opt/osac` | OSAC mono-repo checkout containing the E2E tests |
 | `OSAC_NAMESPACE` | `osac-devel` | Namespace where OSAC is deployed |
-| `KUBECONFIG` | `~/.kube/config` | Kubeconfig for the hub cluster |
+| `KUBECONFIG` | `~/.kube/config` for direct tests; `/root/.kube/config` for `make e2e` | Kubeconfig for the hub cluster |
 | `OSAC_VM_KUBECONFIG` | **(required for vmaas)** | Kubeconfig for the VM cluster |
 | `OSAC_PULL_SECRET_PATH` | **(required for caas)** | Path to OCP pull secret |
 | `OSAC_FULFILLMENT_ADDRESS` | auto-derived | Fulfillment API address |
 | `OSAC_VM_TEMPLATE` | `osac.templates.ocp_virt_vm` | VM template |
 | `OSAC_CLUSTER_TEMPLATE` | `osac.templates.ocp_ci_small` | Cluster template |
 | `OSAC_CLI_PATH` | `osac` | Path to the CLI binary |
+| `METERING_ADAPTER_URL` | unset | Required by direct tests marked `metering`; `make run-tests` sets it when the echo-adapter Service exists |
 | `TEST` | (none) | pytest `-k` filter |
+| `MARKER` | (none) | pytest `-m` filter for BMaaS service tests |
 | `INFRA` | `netris` | Infrastructure backend |
 | `SUITE` | `caas` | Deployment scenario; also selects the matching Make test target |
 | `TEST_SCOPE` | `service` | For VMaaS/BMaaS: `service`, `networking`, or `all` |
+| `OSAC_PROFILE` | derived from `SUITE` by the Netris backend | OSAC Helm base profile; the profile table above shows the defaults |
+| `OSAC_DEPLOY_MODE` | `fresh` | `fresh` or `snapshot`; snapshot supports only `SUITE=caas` with `OSAC_PROFILE=caas-ci` |
 | `EXTRA_VARS` | (none) | Extra variables passed to the backend |
 
 For E2E fixture and test guidance, see [the OSAC mono-repo E2E documentation](https://github.com/osac-project/osac/tree/main/tests/e2e).
