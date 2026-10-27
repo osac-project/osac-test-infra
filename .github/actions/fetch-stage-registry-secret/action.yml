@@ -55,12 +55,19 @@ runs:
         AUTH_JSON_PATH: ${{ inputs.auth-json-path }}
       run: |
         echo "::group::Merge stage registry credential into pull secrets"
-        # Base is read-only here -- this job's own already-written copy
-        # (from fetch-and-write-secrets), never the live shared file, so a
-        # concurrent job rewriting/removing the shared auth.json afterward
-        # can't affect this job's merged output.
+        # Belt and suspenders with the explicit chmod calls below: a
+        # permissive default umask would otherwise leave each file
+        # world/group-readable for the brief window between creation and
+        # that chmod.
+        umask 077
+        TMP_PULL_SECRET="${PULL_SECRET_PATH}.tmp"
+        trap 'rm -f "${TMP_PULL_SECRET}"' EXIT
+        # Base is the job-scoped copy fetch-and-write-secrets also writes
+        # (never the shared ~/.config/containers/auth.json), so a
+        # concurrent job rewriting/removing that shared file on the same
+        # osac-ci host can't affect this job's merged output.
         jq -s '.[0].auths * .[1].auths | {auths: .}' \
-          "${HOME}/.config/containers/auth.json" \
+          "$RUNNER_TEMP/containers-auth-base.json" \
           <(printf '%s' "${STAGE_REGISTRY_AUTH}") \
           > "${AUTH_JSON_PATH}"
         chmod 600 "${AUTH_JSON_PATH}"
@@ -68,7 +75,8 @@ runs:
         jq -s '.[0].auths * .[1].auths | {auths: .}' \
           "${PULL_SECRET_PATH}" \
           <(printf '%s' "${STAGE_REGISTRY_AUTH}") \
-          > "${PULL_SECRET_PATH}.tmp"
-        mv "${PULL_SECRET_PATH}.tmp" "${PULL_SECRET_PATH}"
-        chmod 600 "${PULL_SECRET_PATH}"
+          > "${TMP_PULL_SECRET}"
+        chmod 600 "${TMP_PULL_SECRET}"
+        mv "${TMP_PULL_SECRET}" "${PULL_SECRET_PATH}"
+        trap - EXIT
         echo "::endgroup::"

@@ -253,21 +253,25 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
 
-      # In chart-oci-repo mode, the test CLI is extracted from the chart's
-      # own resolved service image (Pull resolved chart and read its
-      # service image ref) before any image-overrides are applied at
-      # install time -- an override touching the service image would
-      # silently test a different CLI than the one actually deployed. Fail
-      # fast instead of resolving the effective image after overrides,
-      # which would require reordering CLI extraction after Install OSAC
-      # and rebuilding the test image mid-job.
-      - name: Reject service-image overrides in OCI mode
+      # In chart-oci-repo mode, Install OSAC re-asserts the chart's own
+      # stamped image refs for every one of these keys as --set-string
+      # overrides (see that step's own comment on why) -- the test CLI is
+      # also extracted from the chart's own resolved service image before
+      # any image-overrides are applied at install time. An image-overrides
+      # entry for any of these keys would either silently be re-overridden
+      # by that reassertion or, for the service image specifically, produce
+      # a test CLI that doesn't match the deployed service. Fail fast on
+      # the conflict instead of resolving it implicitly by key order.
+      - name: Reject stamped-image overrides in OCI mode
         if: inputs.chart-oci-repo != ''
         env:
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
         run: |
-          if echo "${IMAGE_OVERRIDES}" | jq -e 'keys[] | select(startswith("service.images.service"))' >/dev/null 2>&1; then
-            echo "::error::image-overrides cannot set service.images.service.* when chart-oci-repo is set -- the test CLI always comes from the chart's own resolved service image, so overriding it here would test a CLI that doesn't match the deployed service."
+          STAMPED_PREFIXES='["operator.image", "service.images.service", "ui.images.ui", "aap.bootstrap.image", "aap.configAsCode.eeImage", "metering.echoAdapter.image", "metering.m360Adapter.image"]'
+          CONFLICTS=$(echo "${IMAGE_OVERRIDES}" | jq -r --argjson prefixes "${STAMPED_PREFIXES}" \
+            '[keys[] as $k | $prefixes[] as $p | select($k == $p or ($k | startswith($p + "."))) | $k] | unique | join(", ")')
+          if [[ -n "${CONFLICTS}" ]]; then
+            echo "::error::image-overrides cannot set ${CONFLICTS} when chart-oci-repo is set -- Install OSAC always re-asserts the chart's own stamped values for these keys, and the service image specifically must match the already-extracted test CLI."
             exit 1
           fi
 
@@ -495,17 +499,19 @@ jobs:
       # The chart is self-contained (its sub-charts are bundled file://
       # dependencies, not separate oci:// refs -- see osac-build-and-publish.yaml's
       # chart-stamping step) and every image ref inside it is already
-      # stamped to its real staged tag. Pulling and untarring it here is
-      # only to read the fulfillment-service image ref back out, so the
-      # OSAC CLI extracted below matches exactly what gets installed.
-      - name: Pull resolved chart and read its service image ref
+      # stamped to its real staged tag. Pulling and untarring it here reads
+      # that fulfillment-service image ref back out (so the OSAC CLI
+      # extracted below matches exactly what gets installed) and every
+      # other stamped image ref the vmaas-ci CI profile would otherwise
+      # silently clobber (see Install OSAC's own comment on why).
+      - name: Pull resolved chart and read its stamped image refs
         id: chart-images
         if: inputs.chart-oci-repo != ''
         env:
           CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
           CHART_VERSION: ${{ steps.chart-version.outputs.version }}
         run: |
-          echo "::group::Pull resolved chart and read its service image ref"
+          echo "::group::Pull resolved chart and read its stamped image refs"
           CHART_DIR="$RUNNER_TEMP/staged-chart"
           mkdir -p "${CHART_DIR}"
           helm pull "oci://${CHART_OCI_REPO}" --version "${CHART_VERSION}" -d "${CHART_DIR}" --untar
@@ -513,6 +519,25 @@ jobs:
           SERVICE_REPO=$(yq '.service.images.service.repository' "${VALUES_FILE}")
           SERVICE_TAG=$(yq '.service.images.service.tag' "${VALUES_FILE}")
           echo "service-image=${SERVICE_REPO}:${SERVICE_TAG}" >> "$GITHUB_OUTPUT"
+
+          STAMPED_OVERRIDES=$(yq -o=json '{
+              "operator.image.repository": .operator.image.repository,
+              "operator.image.tag": .operator.image.tag,
+              "service.images.service.repository": .service.images.service.repository,
+              "service.images.service.tag": .service.images.service.tag,
+              "ui.images.ui": .ui.images.ui,
+              "aap.bootstrap.image": .aap.bootstrap.image,
+              "aap.configAsCode.eeImage": .aap.configAsCode.eeImage,
+              "metering.echoAdapter.image.repository": .metering.echoAdapter.image.repository,
+              "metering.echoAdapter.image.tag": .metering.echoAdapter.image.tag,
+              "metering.m360Adapter.image.repository": .metering.m360Adapter.image.repository,
+              "metering.m360Adapter.image.tag": .metering.m360Adapter.image.tag
+            }' "${VALUES_FILE}")
+          {
+            echo "stamped-overrides<<EOF_STAMPED_OVERRIDES"
+            echo "${STAMPED_OVERRIDES}"
+            echo "EOF_STAMPED_OVERRIDES"
+          } >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
 
       - name: Extract OSAC CLI from resolved staged image
@@ -777,6 +802,7 @@ jobs:
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
           CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
           CHART_VERSION: ${{ steps.chart-version.outputs.version }}
+          STAMPED_OVERRIDES: ${{ steps.chart-images.outputs.stamped-overrides }}
         run: |
           # Reuse the osac-installer dir resolved by the previous step (via $GITHUB_ENV)
           cd "${INSTALLER_DIR}"
@@ -860,6 +886,29 @@ jobs:
             # actual chart pull.
             yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
             helm dependency update charts/osac/
+          fi
+
+          # --- Re-assert the resolved chart's own stamped image refs ---
+          # values/vmaas-ci/instance.yaml (passed as -f by install-osac for
+          # every PROFILE=vmaas-ci run) hardcodes ghcr.io/*:latest
+          # placeholders for these same components, for the git-based
+          # install path where no real image has been built/stamped yet.
+          # Applied on top of a real staged chart install, that -f file
+          # would silently replace every one of these with the wrong
+          # image -- Helm's own precedence always gives --set-string the
+          # last word over any -f file regardless of flag order, so
+          # reasserting them here (reading what the chart itself already
+          # resolved them to, via Pull resolved chart and read its stamped
+          # image refs) is what actually makes this install exercise the
+          # real staged images rather than silently falling back to GHCR
+          # latest. Reject stamped-image overrides in OCI mode already
+          # guarantees image-overrides can't collide with these keys.
+          if [[ -n "${CHART_OCI_REPO}" ]]; then
+            for key in $(echo "${STAMPED_OVERRIDES}" | jq -r 'keys[]'); do
+              value=$(echo "${STAMPED_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
+              SET_ARGS+=("--set-string" "${key}=${value}")
+              echo "  --set-string ${key}=${value} (resolved chart's own stamped value)"
+            done
           fi
 
           # Deploy OSAC via Helm (includes publish-templates and create-hub hooks).

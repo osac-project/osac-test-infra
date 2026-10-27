@@ -69,6 +69,12 @@ runs:
         sudo mkdir -p /root/.config/containers
         sudo cp "${HOME}/.config/containers/auth.json" /root/.config/containers/auth.json
         sudo chmod 600 /root/.config/containers/auth.json
+        # Job-scoped copy, purely additive: fetch-stage-registry-secret reads
+        # this as its merge base instead of the shared path above, which a
+        # concurrent job's own fetch-and-write-secrets/teardown call can
+        # rewrite or remove out from under it on the shared osac-ci fleet.
+        cp "${HOME}/.config/containers/auth.json" "$RUNNER_TEMP/containers-auth-base.json"
+        chmod 600 "$RUNNER_TEMP/containers-auth-base.json"
         printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
         chmod 600 "$RUNNER_TEMP/pull-secret.json"
         echo "::endgroup::"
