@@ -42,7 +42,6 @@ runs:
           secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
           secret/data/osac/e2e/aap-license license | AAP_LICENSE ;
           secret/data/osac/e2e/snapshot-registry dockerconfigjson | SNAPSHOT_REGISTRY_AUTH ;
-          secret/data/osac/e2e/stage-registry-pull dockerconfigjson | STAGE_REGISTRY_AUTH ;
           secret/data/osac/e2e/quay-io-osac-ci-bot-account user | QUAY_USER ;
           secret/data/osac/e2e/quay-io-osac-ci-bot-account password | QUAY_PASSWORD ;
           secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL ;
@@ -56,17 +55,15 @@ runs:
         PULL_SECRET: ${{ steps.vault.outputs.PULL_SECRET }}
         AAP_LICENSE: ${{ steps.vault.outputs.AAP_LICENSE }}
         SNAPSHOT_REGISTRY_AUTH: ${{ steps.vault.outputs.SNAPSHOT_REGISTRY_AUTH }}
-        STAGE_REGISTRY_AUTH: ${{ steps.vault.outputs.STAGE_REGISTRY_AUTH }}
         QUAY_USER: ${{ steps.vault.outputs.QUAY_USER }}
         QUAY_PASSWORD: ${{ steps.vault.outputs.QUAY_PASSWORD }}
       run: |
         echo "::group::Write pull secret and registry auth"
         mkdir -p "${HOME}/.config/containers"
         jq -s \
-          '.[0].auths * .[1].auths * .[2].auths * {"quay.io/osac-project": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}} | {auths: .}' \
+          '.[0].auths * .[1].auths * {"quay.io/osac-project": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}} | {auths: .}' \
           <(printf '%s' "${PULL_SECRET}") \
           <(printf '%s' "${SNAPSHOT_REGISTRY_AUTH}") \
-          <(printf '%s' "${STAGE_REGISTRY_AUTH}") \
           > "${HOME}/.config/containers/auth.json"
         chmod 600 "${HOME}/.config/containers/auth.json"
         sudo mkdir -p /root/.config/containers

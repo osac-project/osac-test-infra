@@ -37,6 +37,11 @@ rm -f "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/aap-license.zip" "$RUNNER_TE
 rm -f "${REGISTRY_AUTH_FILE:-}" "$RUNNER_TEMP/auth.json"
 rm -f "${HOME}/.config/containers/auth.json"
 sudo rm -f /root/.config/containers/auth.json
+# `helm registry login` (chart-oci-repo path) stores its credential here,
+# separately from containers/auth.json above -- left behind, it would
+# persist on this reused self-hosted runner for a later, unrelated job to
+# read. No-op if the login step never ran.
+rm -f "${HOME}/.config/helm/registry/config.json"
 rm -rf "$RUNNER_TEMP/osac-installer"
 
 # Force-remove any container still referencing this run's test image before

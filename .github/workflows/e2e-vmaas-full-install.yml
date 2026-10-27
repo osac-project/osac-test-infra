@@ -262,6 +262,18 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
+      # Must run before Boot cluster clone: cluster-tool boot reads
+      # pull-secret.json once, at boot time, to seed the cluster's own pull
+      # secret -- merging stage credentials in afterward would be too late
+      # for the cluster's nodes to pull registry.stage.redhat.io images.
+      - name: Fetch and merge stage registry credential
+        if: inputs.chart-oci-repo != ''
+        uses: ./.github/actions/fetch-stage-registry-secret
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          pull-secret-path: ${{ runner.temp }}/pull-secret.json
+
       # Moved ahead of cluster boot: the chart-oci-repo resolution/login
       # steps below need helm and yq before any cluster exists, not just
       # before Install infrastructure operators (which used to be the only

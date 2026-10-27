@@ -1,0 +1,62 @@
+---
+name: Fetch and merge stage registry secret
+description: >-
+  Fetch the stage-registry-pull Vault secret and merge it into both the
+  runner's containers auth.json and the cluster pull-secret file. Kept
+  separate from fetch-and-write-secrets, which every E2E workflow calls
+  unconditionally -- only callers that actually install from
+  registry.stage.redhat.io need this credential, and a malformed or missing
+  Vault entry here must not be able to fail every other E2E workflow.
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+  pull-secret-path:
+    description: "Path to the pull-secret.json file that will be passed to cluster-tool boot"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve stage registry secret from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: secret/data/osac/e2e/stage-registry-pull dockerconfigjson | STAGE_REGISTRY_AUTH
+
+    # Merged into both files, not just one: the runner's own auth.json
+    # covers podman/skopeo/helm-login on the runner itself, but cluster-tool
+    # boot reads pull-secret-path separately to seed the cluster's own pull
+    # secret -- without this, the cluster's nodes have no credential to pull
+    # the registry.stage.redhat.io images the installed chart references.
+    - name: Merge into containers auth.json and cluster pull secret
+      shell: bash
+      env:
+        STAGE_REGISTRY_AUTH: ${{ steps.vault.outputs.STAGE_REGISTRY_AUTH }}
+        PULL_SECRET_PATH: ${{ inputs.pull-secret-path }}
+      run: |
+        echo "::group::Merge stage registry credential into pull secrets"
+        jq -s '.[0].auths * .[1].auths | {auths: .}' \
+          "${HOME}/.config/containers/auth.json" \
+          <(printf '%s' "${STAGE_REGISTRY_AUTH}") \
+          > "${HOME}/.config/containers/auth.json.tmp"
+        mv "${HOME}/.config/containers/auth.json.tmp" "${HOME}/.config/containers/auth.json"
+        chmod 600 "${HOME}/.config/containers/auth.json"
+        sudo mkdir -p /root/.config/containers
+        sudo cp "${HOME}/.config/containers/auth.json" /root/.config/containers/auth.json
+        sudo chmod 600 /root/.config/containers/auth.json
+
+        jq -s '.[0].auths * .[1].auths | {auths: .}' \
+          "${PULL_SECRET_PATH}" \
+          <(printf '%s' "${STAGE_REGISTRY_AUTH}") \
+          > "${PULL_SECRET_PATH}.tmp"
+        mv "${PULL_SECRET_PATH}.tmp" "${PULL_SECRET_PATH}"
+        chmod 600 "${PULL_SECRET_PATH}"
+        echo "::endgroup::"
