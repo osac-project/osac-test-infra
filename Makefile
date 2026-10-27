@@ -38,7 +38,7 @@ test-caas:
 
 test-storage:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/storage/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/storage.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/storage/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/storage.xml
 
 # Optional: MARKER=sanity or MARKER=regression (pytest -m)
 # -n 0 for local full-suite runs so BMH-consuming tests do not race.
@@ -68,11 +68,11 @@ test-full:
 
 test-metering:
 	mkdir -p $(REPORTS_DIR)
-	pytest -m metering tests/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/metering.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -m metering -v $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/metering.xml
 
 test-references:
 	mkdir -p $(REPORTS_DIR)
-	pytest tests/references/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/references.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/references/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/references.xml
 
 # ─── Infrastructure orchestration ───────────────────────────────────
 

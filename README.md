@@ -121,8 +121,9 @@ title is a workflow display name; `SUITE` selects the deployment and
 
 There is no dedicated `/test full-netris` command today. To run the broad suite
 from GitHub Actions, dispatch **E2E VMaaS Netris Full Install** and choose
-`suite=full`; the run uses `full-ci` plus `osac-installer/values/full-ci/netris.yaml`. Locally,
-run `SUITE=full` with the Make pipeline below.
+`suite=full`; Actions titles that run **E2E Netris Full Suite**. It uses
+`full-ci` plus `osac-installer/values/full-ci/netris.yaml`. Locally, run
+`SUITE=full` with the Make pipeline below.
 
 The VMaaS EVPN flows (`vmaas`, `stretched`, and `full`) require converged OCP
 4.22 with OVNKubernetes and configure CUDN EVPN
@@ -249,6 +250,14 @@ TEST=test_name make test-vmaas
 MARKER=regression make test-bmaas
 ```
 
+These cross-cutting E2E targets run against the OSAC checkout in `OSAC_MONO_DIR`:
+
+| Target | OSAC test path | Coverage |
+|---|---|---|
+| `make test-storage` | `tests/e2e/storage/` | Tenant and cluster storage tests |
+| `make test-metering` | `tests/e2e/` with the `metering` marker | Metering tests across E2E suites |
+| `make test-references` | `tests/e2e/references/` | Cross-resource reference tests |
+
 `TEST` becomes pytest's `-k` filter. `MARKER` becomes `-m` for the BMaaS
 service test scope. For the environment variables required by a particular suite,
 see the OSAC mono-repo's [E2E guide](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md).
@@ -256,6 +265,8 @@ The `make run-tests INFRA=netris SUITE=...` orchestration target creates the
 metering adapter Route when the deployed echo-adapter Service exists. If you
 run a direct `make test-*` target that selects metering tests, set
 `METERING_ADAPTER_URL` yourself.
+The root `make test` target only checks the moved-suite placeholder; it does not
+run OSAC E2E tests.
 
 ### Provision Netris and run an E2E suite
 

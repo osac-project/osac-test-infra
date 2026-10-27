@@ -1,6 +1,6 @@
 ---
 name: E2E VMaaS Netris Full Install
-run-name: "${{ inputs.suite == 'full' && 'E2E Full Netris Full Install' || 'E2E VMaaS Netris Full Install' }}${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
+run-name: "${{ inputs.suite == 'full' && 'E2E Netris Full Suite' || 'E2E VMaaS Netris Full Install' }}${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
 
 permissions:
   contents: read
