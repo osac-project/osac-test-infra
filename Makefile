@@ -1,7 +1,7 @@
 REPORTS_DIR ?= reports
 
 .PHONY: test lint format test-vmaas test-vmaas-networking test-vmaas_networking \
-        test-stretched-networking test-stretched_networking test-caas \
+        test-stretched-networking test-stretched_networking test-caas test-caas_agents \
         test-caas-networking test-caas_networking test-maas test-maas-networking \
         test-maas_networking test-storage test-bmaas test-bmaas-networking \
         test-bmaas_networking test-metering test-references test-full
@@ -55,6 +55,11 @@ FULL_TEST_FILTER = not test_cluster_provisioning_chain_by_name and not test_cros
 test-full:
 	mkdir -p $(REPORTS_DIR)
 	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -n 0 -v --tb=short -m "$(FULL_TEST_MARKER)" -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
+
+# Agent discovery is an independent CaaS suite. OSAC monorepo coverage for this
+# Netris path is pending; the persistent deploy path is available separately.
+test-caas_agents:
+	@echo "No dedicated CaaS agent-flow tests are configured; no suite tests ran."
 
 # Dedicated Netris suites can be added to the OSAC mono-repo later. Their
 # pytest fixtures will create the shared tenants when those suites run.

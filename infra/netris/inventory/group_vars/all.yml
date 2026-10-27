@@ -139,6 +139,28 @@ caas_worker_vcpu: 4
 caas_worker_memory_mb: 16384
 caas_worker_disk_gb: 100
 
+# Separate agent suite retained from the upstream discovery path.
+caas_discovery_vm_patterns:
+  - "hgx-pod00-su0-h01"
+  - "hgx-pod00-su0-h02"
+  - "hgx-pod00-su0-h03"
+caas_discovery_vcpu: 4
+caas_discovery_vcpu_overrides: {}
+caas_discovery_memory_mb: 16384
+caas_discovery_memory_mb_overrides: {}
+caas_discovery_disk_gb: 100
+caas_discovery_infraenv_name: "infraenv"
+caas_discovery_infraenv_namespace: "hardware-inventory"
+caas_resource_class_hostnames: []
+caas_cluster_params: []
+caas_agents:
+  - vm_pattern: "hgx-pod00-su0-h01"
+    netris_server_name: "hgx-pod00-su0-h01"
+  - vm_pattern: "hgx-pod00-su0-h02"
+    netris_server_name: "hgx-pod00-su0-h02"
+  - vm_pattern: "hgx-pod00-su0-h03"
+    netris_server_name: "hgx-pod00-su0-h03"
+
 # CaaS agent flow: "hot-pool" (default, legacy) or "cluster-namespace" (Option C).
 # hot-pool: agents live in hardware-inventory, test-infra labels and approves them.
 # cluster-namespace: agents live in the ClusterOrder namespace (created by

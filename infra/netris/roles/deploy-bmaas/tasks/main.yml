@@ -26,6 +26,35 @@
   retries: 60
   delay: 5
 
+- name: Wait for each tenant's default security group
+  ansible.builtin.shell: |
+    set -euo pipefail
+    subnets=$(osac --tenant "$TENANT" get subnets -o json)
+    vnet_id=$(jq -r '
+      (if type == "array" then . elif (.items? | type) == "array" then .items
+       elif .metadata? then [.] else [] end)
+      | .[] | select(.metadata.name == "default-ipv4" and (.metadata.project // "") == "")
+      | .spec.virtual_network.id // empty' <<< "$subnets")
+    osac --tenant "$TENANT" get securitygroups -o json | jq -r --arg tenant "$TENANT" --arg vnet_id "$vnet_id" '
+      (if type == "array" then . elif (.items? | type) == "array" then .items
+       elif .metadata? then [.] else [] end)
+      | any(.[]; .metadata.name == "default"
+        and .metadata.tenant == $tenant
+        and (.metadata.project // "") == ""
+        and .metadata.labels["osac.openshift.io/default"] == "true"
+        and .spec.virtual_network.id == $vnet_id
+        and .status.state == "SECURITY_GROUP_STATE_READY")'
+  args:
+    executable: /bin/bash
+  environment:
+    TENANT: "{{ item }}"
+  loop: "{{ bmaas_deploy_tenants }}"
+  register: _bmaas_default_security_group
+  changed_when: false
+  until: _bmaas_default_security_group.rc == 0 and _bmaas_default_security_group.stdout == 'true'
+  retries: 60
+  delay: 5
+
 - name: Ensure one persistent BMI per tenant
   ansible.builtin.shell: |
     set -euo pipefail

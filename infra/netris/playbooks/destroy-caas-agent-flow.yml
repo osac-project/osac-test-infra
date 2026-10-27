@@ -1,0 +1,6 @@
+---
+- name: Destroy CaaS agent flow
+  hosts: all
+  gather_facts: false
+  roles:
+    - destroy-caas-agent-flow

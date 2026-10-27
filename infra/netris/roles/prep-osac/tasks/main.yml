@@ -352,7 +352,7 @@
                'inventoryConfig': 'osac-inventory-config-metal3-test',
                'managementConfig': 'osac-management-config-metal3-test'
              },
-             'testBackend': {'metal3': {'enabled': true, 'namespace': osac_namespace}}
+             'testBackend': {'metal3': {'enabled': true, 'namespace': bmaas_bmh_namespace}}
            }
          }, recursive=true) }}
 

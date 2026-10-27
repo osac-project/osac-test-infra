@@ -49,7 +49,8 @@ These are the Netris backend's supported `SUITE` selectors (see `infra/netris/ca
 |-------|-------------|
 | **vmaas** | ComputeInstance E2E on the focused CUDN EVPN profile |
 | **vmaas_networking** | Focused VMaaS networking E2E on the CUDN EVPN profile |
-| **caas** | Cluster lifecycle and discovery setup |
+| **caas** | BMaaS-backed cluster setup |
+| **caas_agents** | Original discovery/Agent cluster setup |
 | **bmaas** | BareMetalInstance setup and E2E |
 | **bmaas_networking** | BMaaS networking E2E |
 | **stretched_networking** | Shared-subnet connectivity between a ComputeInstance and BareMetalInstance |
@@ -60,9 +61,9 @@ These are the Netris backend's supported `SUITE` selectors (see `infra/netris/ca
 
 Each backend declares its supported `SUITE` selectors in a `capabilities` file. The system validates the selected value before deployment starts.
 
-| Backend | vmaas | vmaas_networking | caas | caas_networking | maas | maas_networking | bmaas | bmaas_networking | stretched_networking | full |
-|---------|:-----:|:----------------:|:----:|:---------------:|:----:|:---------------:|:-----:|:----------------:|:--------------------:|:----:|
-| netris  | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Backend | vmaas | vmaas_networking | caas | caas_agents | caas_networking | maas | maas_networking | bmaas | bmaas_networking | stretched_networking | full |
+|---------|:-----:|:----------------:|:----:|:-----------:|:---------------:|:----:|:---------------:|:-----:|:----------------:|:--------------------:|:----:|
+| netris  | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 
 The Netris PR workflow exposes three manual checks: `/test vmaas-netris` calls `e2e-vmaas-netris-full-install.yml` with `SUITE=vmaas_networking` and the focused `cudn-evpn-netris-test` profile; `/test bmaas-netris` calls `e2e-bmaas-netris-full-install.yml` with `SUITE=bmaas_networking` and `bmaas-ci`; `/test stretched-netris` calls `e2e-stretched-netris-full-install.yml` with `SUITE=stretched_networking` and `full-ci` to test shared-subnet VM↔BM connectivity. `SUITE=full` still runs the broad full-profile suite and includes the stretched test, while `SUITE=stretched_networking` runs that test alone. The generic `vmaas` and `full` selectors exclude the `requires_netris_vmaas` marker; only `vmaas_networking` selects those tests. The `vmaas`, `vmaas_networking`, `stretched_networking`, and `full` paths register the `cudn_evpn` Kubernetes manager and Netris fabric manager, so VM and bare-metal instances can share a subnet. `full` and `stretched_networking` keep the `full-ci` services enabled and overlay the same Netris EVPN NetworkClass. The OCP target must be converged OCP 4.22 with OVNKubernetes; its platform type may be `None`. ExternalIP tests additionally require a separately provisioned and acknowledged return path for `172.27.0.0/16`.
 
@@ -132,7 +133,7 @@ When you run `make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci` with the re
 3. **`deploy-infra`** — deploys the Netris lab (`ansible-playbook playbooks/deploy-infra.yml`)
 4. **`deploy-ocp`** — restores the OCP snapshot into the lab and waits for the cluster to become healthy. With `SUITE=vmaas`, `SUITE=vmaas_networking`, or `SUITE=full`, it also runs the `configure-cudn-evpn` role, which derives the Netris peer settings and configures the OCP CUDN/EVPN prerequisites. This path requires OCP 4.22 with OVNKubernetes, but does not require `platformStatus.type: BareMetal`.
 5. **`deploy-osac`** — installs or refreshes OSAC on the cluster and writes `.env.infra` with cluster access credentials.
-6. **`setup-suite`** — `setup-full` prepares CaaS and BMaaS resources, then runs the read-only VMaaS EVPN prerequisite check.
+6. **`prepare-suite`** — `setup-full` prepares agent-based CaaS and BMaaS resources, then runs the read-only VMaaS EVPN prerequisite check.
 7. **`run-tests`** — checks the backend's suite contract when one is defined, sources `.env.infra`, then runs `test-full`: the serial OSAC mono-repo E2E run with its configured exclusions.
 When you run `make e2e INFRA=netris SUITE=caas_networking`, the following happens:
 
@@ -142,6 +143,12 @@ When you run `make e2e INFRA=netris SUITE=caas_networking`, the following happen
 4. **`run-tests`** — runs the dedicated OSAC monorepo suite when available; its pytest fixtures create tenant1 and tenant2. Until the Netris suite exists, it reports that no suite tests ran.
 
 For a persistent cluster on an already installed lab, run `make deploy-suite INFRA=netris SUITE=caas` or `SUITE=maas`. For persistent BMIs, use `SUITE=bmaas`; this creates one BMI per test tenant and occupies two of the three BMaaS hosts.
+
+The original discovery/Agent path remains available as `SUITE=caas_agents` through
+`setup-caas_agents`, `deploy-caas_agents`, and `destroy-caas_agents` in `infra/netris`.
+It uses its own roles and the upstream `ocp_ci_small` template. Dedicated agent
+suite pytests have not been configured, so `make e2e ... SUITE=caas_agents`
+prepares the lab but reports that no suite tests ran.
 
 Each step can be run independently — you don't have to run the full pipeline every time.
 
