@@ -28,3 +28,4 @@ infra/netris/.evpn-values.yaml
 # AI workflow artifacts
 .artifacts/
 .superpowers/
+.idea/

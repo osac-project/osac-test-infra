@@ -83,7 +83,20 @@ on:
         type: string
         default: "[]"
       osac-cli-version:
-        description: "OSAC CLI version for the test image (e.g. 0.0.73). Defaults to latest GitHub release."
+        description: "OSAC CLI version for the test image (e.g. 0.0.73). Defaults to latest GitHub release. Ignored when chart-oci-repo is set -- the CLI is always extracted from the resolved staged image instead."
+        required: false
+        type: string
+        default: ""
+      chart-oci-repo:
+        description: >-
+          OCI repository holding a published osac-chart umbrella chart to
+          install (e.g. registry.stage.redhat.io/cloud-extensions/osac-chart)
+          instead of building charts/osac from this checkout. When set, the
+          newest semver-tagged version on that repo is resolved and installed
+          at run time -- every image it references is already stamped to its
+          real published ref, so this validates a real release rather than
+          the current commit. Leave empty (default) for the normal git-based
+          install.
         required: false
         type: string
         default: ""
@@ -249,6 +262,27 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
+      # Moved ahead of cluster boot: the chart-oci-repo resolution/login
+      # steps below need helm and yq before any cluster exists, not just
+      # before Install infrastructure operators (which used to be the only
+      # consumer).
+      - name: Ensure helm and yq are available
+        run: |
+          if ! command -v helm &>/dev/null; then
+            curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          fi
+          TOOL_DIR="${RUNNER_TEMP}/bin"
+          mkdir -p "${TOOL_DIR}"
+          if ! command -v yq &>/dev/null; then
+            YQ_VERSION="v4.53.3"
+            YQ_SHA256="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+            curl --retry 5 --retry-delay 2 -fsSL -o "${TOOL_DIR}/yq" \
+              "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            echo "${YQ_SHA256}  ${TOOL_DIR}/yq" | sha256sum -c -
+            chmod +x "${TOOL_DIR}/yq"
+          fi
+          echo "${TOOL_DIR}" >> "$GITHUB_PATH"
+
       - name: Prepare cluster environment
         env:
           FLAVOR_IMAGE: ${{ inputs.flavor-image }}
@@ -362,6 +396,101 @@ jobs:
           sudo cp "${HOME}/.kube/${CLONE_NAME}.kubeconfig" "$RUNNER_TEMP/kubeconfig"
           sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/kubeconfig"
           chmod 600 "$RUNNER_TEMP/kubeconfig"
+
+      # The four steps below only run when chart-oci-repo is set (the
+      # staging/release-validation path). Default (empty) behavior is
+      # untouched: they're all gated on inputs.chart-oci-repo != ''.
+      #
+      # registry.stage.redhat.io's auth is already merged into
+      # ~/.config/containers/auth.json by fetch-and-write-secrets -- podman
+      # and skopeo read that directly, but Helm's OCI client keeps its own
+      # credential store (~/.config/helm/registry/config.json, written by
+      # `helm registry login`), so it needs a separate explicit login using
+      # the same decoded credential. --password-stdin keeps the password out
+      # of argv/ps.
+      - name: Log in to the chart's OCI registry
+        if: inputs.chart-oci-repo != ''
+        env:
+          CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
+        run: |
+          echo "::group::Helm OCI registry login"
+          REGISTRY_HOST="${CHART_OCI_REPO%%/*}"
+          AUTH_B64=$(jq -r --arg host "${REGISTRY_HOST}" '.auths[$host].auth // empty' "${HOME}/.config/containers/auth.json")
+          if [[ -z "${AUTH_B64}" ]]; then
+            echo "::error::No credential for ${REGISTRY_HOST} in the merged pull secret (expected a stage-registry-pull Vault entry)."
+            exit 1
+          fi
+          USERPASS=$(printf '%s' "${AUTH_B64}" | base64 -d)
+          STAGE_USER="${USERPASS%%:*}"
+          STAGE_PASS="${USERPASS#*:}"
+          printf '%s' "${STAGE_PASS}" | helm registry login "${REGISTRY_HOST}" \
+            --username "${STAGE_USER}" --password-stdin
+          unset USERPASS STAGE_USER STAGE_PASS AUTH_B64
+          echo "::endgroup::"
+
+      # Always resolves to the newest real release, never a pinned or cached
+      # value -- this is the one place "latest" is decided. Tags also
+      # include timestamp-suffixed entries ({{ oci_version }}-{{ timestamp }},
+      # see osac-build-and-publish.yaml's chart-stamping step); only the bare
+      # semver ones are real release versions.
+      - name: Resolve latest published chart version
+        id: chart-version
+        if: inputs.chart-oci-repo != ''
+        env:
+          CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
+        run: |
+          echo "::group::Resolve latest published chart version"
+          VERSION=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${HOME}/.config/containers/auth.json" \
+            | jq -r '.Tags[]' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -t. -k1,1n -k2,2n -k3,3n \
+            | tail -1)
+          if [[ -z "${VERSION}" ]]; then
+            echo "::error::No semver-tagged release found on ${CHART_OCI_REPO}"
+            exit 1
+          fi
+          echo "Resolved latest chart version: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      # The chart is self-contained (its sub-charts are bundled file://
+      # dependencies, not separate oci:// refs -- see osac-build-and-publish.yaml's
+      # chart-stamping step) and every image ref inside it is already
+      # stamped to its real staged tag. Pulling and untarring it here is
+      # only to read the fulfillment-service image ref back out, so the
+      # OSAC CLI extracted below matches exactly what gets installed.
+      - name: Pull resolved chart and read its service image ref
+        id: chart-images
+        if: inputs.chart-oci-repo != ''
+        env:
+          CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
+          CHART_VERSION: ${{ steps.chart-version.outputs.version }}
+        run: |
+          echo "::group::Pull resolved chart and read its service image ref"
+          CHART_DIR="$RUNNER_TEMP/staged-chart"
+          mkdir -p "${CHART_DIR}"
+          helm pull "oci://${CHART_OCI_REPO}" --version "${CHART_VERSION}" -d "${CHART_DIR}" --untar
+          VALUES_FILE=$(find "${CHART_DIR}" -maxdepth 2 -name values.yaml | head -1)
+          SERVICE_REPO=$(yq '.service.images.service.repository' "${VALUES_FILE}")
+          SERVICE_TAG=$(yq '.service.images.service.tag' "${VALUES_FILE}")
+          echo "service-image=${SERVICE_REPO}:${SERVICE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      - name: Extract OSAC CLI from resolved staged image
+        if: inputs.chart-oci-repo != ''
+        env:
+          SERVICE_IMAGE: ${{ steps.chart-images.outputs.service-image }}
+        run: |
+          echo "::group::Extract OSAC CLI from resolved staged image"
+          export REGISTRY_AUTH_FILE="${HOME}/.config/containers/auth.json"
+          podman pull "${SERVICE_IMAGE}"
+          cli_container=$(podman create "${SERVICE_IMAGE}")
+          podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
+          podman rm "${cli_container}" >/dev/null 2>&1 || true
+          chmod +x "$RUNNER_TEMP/osac-cli-bin"
+          echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
+          echo "Extracted OSAC CLI from ${SERVICE_IMAGE}"
+          echo "::endgroup::"
 
       # Loops over the `components` JSON array so any number of components
       # (one, two, or the 5-8 this repo is headed toward) can be built from
@@ -537,23 +666,6 @@ jobs:
           INSTALLER_REPO: ${{ inputs.installer-repo }}
         run: |
           set -o pipefail
-          # Ensure helm and yq are available
-          if ! command -v helm &>/dev/null; then
-            curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          fi
-          TOOL_DIR="${RUNNER_TEMP}/bin"
-          mkdir -p "${TOOL_DIR}"
-          if ! command -v yq &>/dev/null; then
-            YQ_VERSION="v4.53.3"
-            YQ_SHA256="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
-            curl --retry 5 --retry-delay 2 -fsSL -o "${TOOL_DIR}/yq" \
-              "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-            echo "${YQ_SHA256}  ${TOOL_DIR}/yq" | sha256sum -c -
-            chmod +x "${TOOL_DIR}/yq"
-          fi
-          export PATH="${TOOL_DIR}:${PATH}"
-          echo "${TOOL_DIR}" >> "$GITHUB_PATH"
-
           # Clone the OSAC monorepo for installer charts.  When components
           # were built from source earlier in this job, pin to the same
           # commit SHA — the branch may have moved since the component
@@ -620,6 +732,8 @@ jobs:
           INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
           AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
+          CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
+          CHART_VERSION: ${{ steps.chart-version.outputs.version }}
         run: |
           # Reuse the osac-installer dir resolved by the previous step (via $GITHUB_ENV)
           cd "${INSTALLER_DIR}"
@@ -705,8 +819,15 @@ jobs:
             helm dependency update charts/osac/
           fi
 
-          # Deploy OSAC via Helm (includes publish-templates and create-hub hooks)
-          make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=vmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+          # Deploy OSAC via Helm (includes publish-templates and create-hub hooks).
+          # When chart-oci-repo is set, install the resolved published chart
+          # artifact instead of charts/osac from this checkout -- see
+          # osac-installer/Makefile's OSAC_CHART_OCI_REF/OSAC_CHART_OCI_VERSION.
+          CHART_OCI_ARGS=()
+          if [[ -n "${CHART_OCI_REPO}" ]]; then
+            CHART_OCI_ARGS=(OSAC_CHART_OCI_REF="oci://${CHART_OCI_REPO}" OSAC_CHART_OCI_VERSION="${CHART_VERSION}")
+          fi
+          make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=vmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}" "${CHART_OCI_ARGS[@]}"
 
           # Create test tenants (CI-only — the Tenant CRD exists after helm install)
           for tenant in "${INSTALLER_NAMESPACE}" shared; do

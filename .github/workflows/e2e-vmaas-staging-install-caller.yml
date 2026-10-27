@@ -50,13 +50,17 @@ jobs:
   e2e-vmaas-staging-install:
     permissions:
       contents: read
-      # Required by e2e-vmaas-staging-install.yml's "e2e" job -- only
+      # Required by e2e-vmaas-full-install.yml's "e2e" job -- only
       # exercised there when enable-ai-diagnostic is true, but GitHub
       # statically validates a called reusable workflow's declared job
       # permissions against what the caller grants regardless of runtime
       # reachability.
       id-token: write
-    uses: ./.github/workflows/e2e-vmaas-staging-install.yml
+    # Calls the same reusable workflow the full-install caller uses, with
+    # chart-oci-repo set -- that's the only input that switches it from
+    # building charts/osac out of this checkout to installing a real
+    # published chart artifact. See that input's own description.
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
     with:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}
