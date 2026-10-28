@@ -65,7 +65,7 @@ collect_namespace_logs() {
 
 collect_namespace_logs "$E2E_NAMESPACE" "$MGMT_CLUSTER_DIR/namespaces/$E2E_NAMESPACE"
 
-for ns in keycloak ansible-aap; do
+for ns in keycloak ansible-aap openshift-cnv; do
     if oc get namespace "${ns}" &>/dev/null; then
         echo "Gathering logs from namespace ${ns}..."
         collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
