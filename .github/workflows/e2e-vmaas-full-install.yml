@@ -913,9 +913,15 @@ jobs:
             # to a fixed placeholder here avoids drift/mismatch churn. Real
             # registry-hosted deps (e.g. osac-ui's oci:// chart) are left alone --
             # "0.0.0" isn't a published version, so overwriting those breaks the
-            # actual chart pull.
-            yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
-            helm dependency update charts/osac/
+            # actual chart pull. Only meaningful for the git-based install:
+            # chart-oci-repo mode installs the already-packaged OCI artifact,
+            # not charts/osac/ from this checkout, so rebuilding its local
+            # dependency tree here is both pointless and a needless chance to
+            # fail on network/registry issues unrelated to what's installed.
+            if [[ -z "${CHART_OCI_REPO}" ]]; then
+              yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
+              helm dependency update charts/osac/
+            fi
           fi
 
           # --- Re-assert the resolved chart's own stamped image refs ---
