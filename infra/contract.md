@@ -63,6 +63,6 @@ implementation details in the OSAC mono-repo.
 
 ## Variables
 
-The top-level Makefile forwards caller-supplied `EXTRA_VARS`,
-`OSAC_DEPLOY_MODE`, and kubeconfig overrides. When these are unset, the backend
-uses its own defaults.
+The top-level Makefile forwards caller-supplied `EXTRA_VARS` and kubeconfig
+overrides. `EXTRA_VARS` is backend-specific; each backend documents which
+variables its targets consume. When unset, the backend uses its own defaults.

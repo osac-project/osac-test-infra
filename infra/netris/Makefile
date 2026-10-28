@@ -1,14 +1,13 @@
 # ─── Variables ──────────────────────────────────────────────────────
 
-OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e deploy_suite=$(DEPLOY_SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml -e snapshot_osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e deploy_suite=$(DEPLOY_SUITE) -e osac_profile=$(OSAC_PROFILE) -e osac_namespace=$(OSAC_NAMESPACE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
 # DEPLOY_SUITE names the deployment scenario and selects profile/setup behavior.
 # The root TEST_SUITE selector independently chooses the contract and test target.
 # DEPLOY_SUITE=caas is the default; the root pipeline maps it to setup-caas / test-caas.
-# The supported CaaS snapshot restore grows both h00 disks to their configured sizes.
+# The SNO OCP snapshot restore grows both h00 disks to their configured sizes.
 DEPLOY_SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci
@@ -22,34 +21,15 @@ OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 _KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 _OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
 
-# Snapshot refresh does not apply the generated Netris runtime overlay or the
-# per-profile Netris overlay, so allow snapshot deployment only for CaaS.
-_DEPLOY_GOALS = deploy deploy-fast deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac
-ifneq ($(filter $(_DEPLOY_GOALS),$(MAKECMDGOALS)),)
-ifneq ($(filter-out fresh snapshot,$(OSAC_DEPLOY_MODE)),)
-$(error OSAC_DEPLOY_MODE must be fresh or snapshot (got '$(OSAC_DEPLOY_MODE)'))
-endif
-ifeq ($(OSAC_DEPLOY_MODE),snapshot)
-ifneq ($(DEPLOY_SUITE),caas)
-$(error Snapshot mode supports only DEPLOY_SUITE=caas; use fresh mode for Netris service profiles)
-endif
-endif
-endif
-ifneq ($(filter deploy-fast,$(MAKECMDGOALS)),)
-ifneq ($(DEPLOY_SUITE),caas)
-$(error deploy-fast uses snapshot mode and supports only DEPLOY_SUITE=caas; use deploy for fresh Netris service deployments)
-endif
-endif
-
 # Keep deployment-specific Netris/CUDN EVPN values in the existing service
 # profile directories. The prep role always generates a runtime overlay; only
 # the three service profiles have a committed static Netris overlay.
 NETRIS_PROFILE_VALUES = $(if $(filter vmaas-ci bmaas-ci full-ci,$(OSAC_PROFILE)),-f values/$(OSAC_PROFILE)/netris.yaml)
 NETRIS_INSTANCE_VALUES_EXTRA = $(strip $(NETRIS_PROFILE_VALUES) -f values/$(OSAC_PROFILE)/netris-runtime.yaml)
 
-# VMaaS and full-ci deployments configure OCP as an EVPN VTEP; other scenarios keep their established root path.
+# VMaaS and full-ci deployments configure OCP as an EVPN VTEP.
 EVPN_DEPLOY_SUITES = vmaas full
-OCP_KUBECONFIG = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
+OCP_KUBECONFIG = $(_KUBECONFIG_ABS)
 VMAAS_UNDERLAY_EXTRA = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),-e ocp_underlay_enabled=true,)
 OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
 EVPN_VALUES_FILE = $(abspath .evpn-values.yaml)
@@ -57,18 +37,10 @@ VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),-
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
-#   make deploy       — fresh-install pipeline (default)
-#   make deploy-fast  — snapshot restore + OSAC refresh (~25 min)
-#
-# Both run: deploy-infra → deploy-ocp → deploy-osac
-# The difference is OSAC_DEPLOY_MODE, which controls:
-#   - deploy-ocp: which snapshot flavor to use
-#   - deploy-osac: fresh Helm install vs snapshot refresh
+#   make deploy — provision the lab, restore OCP from the SNO snapshot, and
+#                 install OSAC from the selected deployment profile
 
 deploy: deploy-infra deploy-ocp deploy-osac
-
-deploy-fast: deploy-infra deploy-ocp deploy-osac
-deploy-fast: OSAC_DEPLOY_MODE = snapshot
 
 # ─── Contract targets ──────────────────────────────────────────────
 #
@@ -89,11 +61,7 @@ deploy-ocp:
 	ansible-playbook playbooks/deploy-ocp.yml -e deploy_suite=$(DEPLOY_SUITE) $(OCP_ANSIBLE_EXTRA)
 
 deploy-osac:
-	@if [ "$(OSAC_DEPLOY_MODE)" = "snapshot" ]; then \
-		$(MAKE) refresh-osac OSAC_DEPLOY_MODE=snapshot; \
-	else \
-		$(MAKE) install-osac; \
-	fi
+	$(MAKE) install-osac
 	@printf '%s\n' \
 		'KUBECONFIG=$(OCP_KUBECONFIG)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
@@ -249,7 +217,7 @@ force-destroy-maas:
 # ─── Internal sub-targets (deploy-osac implementation) ─────────────
 
 # Fresh install: clone mono-repo, patch Helm values, run make install
-install-osac: prep-osac run-osac-setup post-osac
+install-osac: prep-osac run-osac-setup
 
 prep-osac:
 	ansible-playbook playbooks/prep-osac.yml $(OCP_ANSIBLE_EXTRA)
@@ -274,27 +242,6 @@ run-osac-setup:
 		NS=$(OSAC_NAMESPACE) \
 		INSTANCE_VALUES_EXTRA="$(NETRIS_INSTANCE_VALUES_EXTRA)"
 
-post-osac:
-	ansible-playbook playbooks/post-osac.yml $(OCP_ANSIBLE_EXTRA)
-
-# Snapshot refresh: clone mono-repo, patch values, run refresh-after-snapshot.py
-# post-refresh-osac → patch-osac-refresh (incl. AAP project pin sync + CaC)
-refresh-osac: prep-refresh-osac run-refresh-osac post-refresh-osac
-
-prep-refresh-osac:
-	ansible-playbook playbooks/prep-refresh-osac.yml $(OCP_ANSIBLE_EXTRA)
-
-run-refresh-osac:
-	@echo "=== Running OSAC refresh ==="
-	cd /opt/osac/osac-installer && \
-		KUBECONFIG=$(OCP_KUBECONFIG) \
-		VALUES_FILE=values/$(OSAC_PROFILE)/instance.yaml \
-		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
-		python3 -u scripts/refresh-after-snapshot.py
-
-post-refresh-osac:
-	ansible-playbook playbooks/post-refresh-osac.yml $(OCP_ANSIBLE_EXTRA)
-
 # ─── Utilities ─────────────────────────────────────────────────────
 
 connectivity:
@@ -316,22 +263,19 @@ cleanup-dns:
 destroy-full:
 	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
 
-# OSAC_DEPLOY_MODE=fresh (default) or snapshot — same meaning as deploy / deploy-fast.
 # DEPLOY_SUITE=caas (default) or maas — selects setup/deploy flow in redeploy-server.sh.
 redeploy-fresh:
 	@echo "=== Destroying all infrastructure ==="
 	-$(MAKE) destroy-full
 	@sync
-	@echo "=== Starting deploy (DEPLOY_SUITE=$(DEPLOY_SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)) ==="
-	DEPLOY_SUITE=$(DEPLOY_SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+	@echo "=== Starting deploy (DEPLOY_SUITE=$(DEPLOY_SUITE)) ==="
+	DEPLOY_SUITE=$(DEPLOY_SUITE) \
 		scripts/redeploy-server.sh --fresh \
-		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
 		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 redeploy-continue:
-	DEPLOY_SUITE=$(DEPLOY_SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+	DEPLOY_SUITE=$(DEPLOY_SUITE) \
 		scripts/redeploy-server.sh \
-		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
 		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 deploy-jump:
@@ -351,7 +295,7 @@ health-check:
 
 # ─── .PHONY ────────────────────────────────────────────────────────
 
-.PHONY: deploy deploy-fast \
+.PHONY: deploy \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
         setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
         destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full destroy-suite \
@@ -359,7 +303,6 @@ health-check:
         setup-maas deploy-maas destroy-maas force-destroy-maas \
         gather-infra gather-mgmt-cluster gather-caas \
         setup-bmc setup-bmaas destroy-bmaas gather-bmaas \
-        install-osac prep-osac run-osac-setup post-osac \
-        refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \
+        install-osac prep-osac run-osac-setup \
         connectivity vendor-update lint cleanup-dns \
         redeploy-fresh redeploy-continue deploy-jump disk-setup access-doc post-install health-check

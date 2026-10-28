@@ -1,16 +1,7 @@
 ---
-- name: Detect effective OSAC namespace
-  ansible.builtin.shell:
-    cmd: oc get namespace {{ snapshot_osac_namespace }} >/dev/null 2>&1 && echo {{ snapshot_osac_namespace }} || echo {{ osac_namespace }}
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _detected_osac_ns
-  changed_when: false
-  failed_when: false
-
 - name: Set effective OSAC namespace
   ansible.builtin.set_fact:
-    _osac_namespace: "{{ _detected_osac_ns.stdout | default(osac_namespace) }}"
+    _osac_namespace: "{{ osac_namespace }}"
 
 - name: Create caas gather subdirectories
   ansible.builtin.file:

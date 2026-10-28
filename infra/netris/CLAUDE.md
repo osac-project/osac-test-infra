@@ -15,8 +15,6 @@ roles/                          # Ansible roles (each has tasks/main.yml)
   restore-ocp/                  # Deploy OCP from snapshot: CoW disks, recert, boot, health check
   cache-snapshot/               # Pull + cache flavor OCI image (skopeo)
   prep-osac/                    # Clone mono-repo, patch Helm values (fresh install)
-  prep-refresh-osac/            # Clone mono-repo, patch values, rebuild CLI (snapshot refresh)
-  patch-osac-refresh/           # Post-refresh: Netris/SSH + AAP project pin sync + CaC
   discover-caas/                # Boot discovery VMs with InfraEnv ISO
   setup-caas/                   # Label agents and configure the Netris resource-class map
   create-caas/                  # Create CaaS/MaaS cluster via fulfillment API
@@ -35,11 +33,10 @@ vendor/                         # Vendored Ansible collections
 
 ```
 make deploy                 # Full pipeline: deploy-infra + deploy-ocp + deploy-osac (fresh Helm install)
-make deploy-fast            # Snapshot pipeline: same steps with OSAC_DEPLOY_MODE=snapshot
 make setup-infra            # Install prerequisites, cache images + snapshot flavor
 make deploy-infra           # Deploy netris-lab
 make deploy-ocp             # Configure Netris networking + restore OCP SNO from snapshot
-make deploy-osac            # Deploy OSAC (fresh Helm install or snapshot refresh based on OSAC_DEPLOY_MODE)
+make deploy-osac            # Install OSAC from the profile selected by DEPLOY_SUITE
 make connectivity           # Re-run lab connectivity (VPN, BGP, softgate agents)
 make setup-caas             # CaaS setup: discover hosts, label agents, configure resource-class map
 make deploy-caas            # CaaS: create cluster
@@ -57,7 +54,7 @@ make destroy-bmaas          # Teardown BMaaS (BMHs, sushy-tools, BMC network)
 make setup-bmc              # BMC network + sushy-tools only (subset of setup-bmaas)
 make destroy-setup          # Revert setup-infra (caches, bridges, tools)
 make force-destroy-maas     # force-destroy-caas with MaaS overrides
-make redeploy-fresh         # destroy-full + full BM pipeline (DEPLOY_SUITE / OSAC_DEPLOY_MODE)
+make redeploy-fresh         # destroy-full + full BM pipeline (DEPLOY_SUITE)
 make vendor-update          # Refresh vendored Ansible collections
 make gather-infra           # Gather diagnostic info from the cluster
 # Override variables: make <target> EXTRA_VARS="key=value"
@@ -67,11 +64,9 @@ make gather-infra           # Gather diagnostic info from the cluster
 
 ## Workflow Order
 
-**Full deploy (fresh):** deploy (deploy-infra → deploy-ocp → deploy-osac)
+**Full deploy:** deploy (deploy-infra → deploy-ocp → deploy-osac)
 
-**Snapshot deploy (fast):** deploy-fast (deploy-infra → deploy-ocp → deploy-osac with OSAC_DEPLOY_MODE=snapshot)
-
-**CaaS:** deploy or deploy-fast with `DEPLOY_SUITE=caas` → setup-caas → deploy-caas
+**CaaS:** deploy with `DEPLOY_SUITE=caas` → setup-caas → deploy-caas
 
 **MaaS:** deploy with `DEPLOY_SUITE=full` → setup-maas → deploy-maas
 
@@ -98,7 +93,7 @@ All variables in `inventory/group_vars/all.yml`. Key sections:
 - **OCP install**: `ocp_version`, `ocp_cluster_name`, `ocp_base_domain`
 - **OSAC**: `osac_repo/branch`, `osac_namespace`, `osac_values_file`
 - **Component images**: `osac_operator_image`, `fulfillment_service_image` (empty = defaults)
-- **Snapshot**: `snapshot_flavor_image`, `snapshot_flavor_dir`, `snapshot_recert_image`, `snapshot_osac_namespace`, `snapshot_osac_values_file`
+- **OCP snapshot restore**: `snapshot_flavor_image`, `snapshot_flavor_dir`, `snapshot_recert_image`, `ocp_snapshot_disk_gb`
 - **CaaS / MaaS**: `caas_discovery_vm_patterns`, `caas_host_type_id` (Netris resource-class key), `caas_cluster_name`, `caas_agents`, `caas_resource_class_hostnames` (empty = all agents); per-VM sizing via `caas_discovery_vcpu_overrides` / `caas_discovery_memory_mb_overrides`; MaaS Makefile `MAAS_*` (incl. `MAAS_DISCOVERY_MEMORY_MB_OVERRIDES`, default h01→16GiB)
 
 ## External Dependencies

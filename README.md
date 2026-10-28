@@ -88,9 +88,9 @@ validates and runs the selected test target.
 | `gather-infra` | Collect backend and cluster diagnostics |
 | `gather-suite` | Run `gather-<DEPLOY_SUITE>` |
 
-Backend-specific deployment modes, profiles, host preparation, credentials, and
+Backend-specific deployment choices, profiles, host preparation, credentials, and
 configuration belong in that backend's guide. The root interface does not assign
-meaning to backend-specific `EXTRA_VARS` or `OSAC_DEPLOY_MODE` values.
+meaning to backend-specific `EXTRA_VARS` values.
 
 ## OSAC E2E targets
 
@@ -138,11 +138,10 @@ those selectors.
 | `KUBECONFIG` | Optional hub-cluster kubeconfig override forwarded to the backend; otherwise it uses the backend's default. |
 | `OSAC_VM_KUBECONFIG` | Optional workload-cluster kubeconfig override; otherwise it uses the backend's default. It may equal `KUBECONFIG` for a single-cluster deployment. |
 | `EXTRA_VARS` | Backend-specific deployment variables passed through by the root Makefile. |
-| `OSAC_DEPLOY_MODE` | Optional backend-specific deployment mode override; consult the selected backend guide. If unset, the backend chooses its default. |
 
-The selected backend owns credentials, prerequisites, defaults, and supported
-deployment modes. Follow the corresponding guide or workflow in the inventory
-before provisioning infrastructure.
+The selected backend owns credentials, prerequisites, and defaults. Follow the
+corresponding guide or workflow in the inventory before provisioning
+infrastructure.
 
 ## Adding a backend
 

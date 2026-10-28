@@ -1,7 +1,0 @@
----
-# Configures Netris, SSH keys, and AAP token after OSAC refresh
-- name: Post-refresh OSAC configuration
-  hosts: all
-  gather_facts: false
-  roles:
-    - patch-osac-refresh

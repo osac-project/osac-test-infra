@@ -62,7 +62,6 @@ EXTRA_VARS         ?=
 INFRA_DIR           = infra/$(INFRA)
 _FWD_KUBECONFIG     = $(if $(KUBECONFIG),KUBECONFIG=$(abspath $(KUBECONFIG)))
 _FWD_VM_KUBECONFIG = $(if $(OSAC_VM_KUBECONFIG),OSAC_VM_KUBECONFIG=$(abspath $(OSAC_VM_KUBECONFIG)))
-_FWD_DEPLOY_MODE    = $(if $(OSAC_DEPLOY_MODE),OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE))
 _FWD_DEPLOY_SUITE   = DEPLOY_SUITE=$(DEPLOY_SUITE)
 
 .PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
@@ -110,22 +109,22 @@ _validate-suite-contract: _require-backend
 e2e: _validate-backend deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
 deploy-setup: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) setup-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) setup-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 # Backward compatibility alias
 setup-infra: deploy-setup
 
 deploy-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-ocp: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-osac: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 setup-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) setup-$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) setup-$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 run-tests: _validate-backend _validate-suite-contract
 	@set -e; \

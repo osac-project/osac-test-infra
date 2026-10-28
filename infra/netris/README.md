@@ -17,6 +17,9 @@ from `infra/netris/`. Repository orchestration targets such as `make e2e`,
 > commands in this backend guide are provisioning building blocks; they do not
 > run the OSAC pytest suite.
 
+For the complete per-target Make inputs, environment variables, `EXTRA_VARS`,
+and Ansible variable mapping, see the [Netris target and option reference](targets.md).
+
 ## Architecture
 
 The [netris-lab](https://github.com/danmanor/netris-lab) deploys a full simulated Spectrum-X GPU cluster network on a single bare-metal host using KVM/libvirt:
@@ -91,17 +94,39 @@ EOF
 # Install prerequisites and cache images (shared, run once)
 make setup-infra
 
-# Fresh install — installs OCP + OSAC with the CaaS profile
+# Provision the lab, restore OCP from the SNO snapshot, and install OSAC
+# from the selected profile (this does not run pytest)
 make deploy DEPLOY_SUITE=caas EXTRA_VARS="bare_metal_services=true"
 
-# OR: Fast deployment (~25 min) — uses a pre-built snapshot with recert.
-# Faster but doesn't test the OCP or OSAC installer flows.
-make deploy-fast DEPLOY_SUITE=caas EXTRA_VARS="bare_metal_services=true"
-
-# Then run a test flow
+# Optional: prepare and create a CaaS cluster directly
 make setup-caas    # CaaS setup: discover hosts, label agents, configure resource-class map
 make deploy-caas   # CaaS: create cluster
 ```
+
+### Command order
+
+For an end-to-end test run, start in the repository root and use:
+
+```bash
+make e2e INFRA=netris DEPLOY_SUITE=full TEST_SUITE=stretched \
+  EXTRA_VARS="bare_metal_services=true"
+```
+
+The root target runs these steps in order:
+
+1. `setup-infra` — install backend prerequisites and cache the OCP SNO image.
+2. `deploy-infra` — provision the Netris lab.
+3. `deploy-ocp` — configure OCP networking and restore the SNO cluster.
+4. `deploy-osac` — install OSAC using the profile derived from `DEPLOY_SUITE`.
+5. `setup-suite` — run `setup-<DEPLOY_SUITE>` for the selected deployment.
+6. `run-tests` — validate the test environment and run `test-<TEST_SUITE>`.
+
+To run those steps individually, use the same selectors and options on each
+root command: `make setup-infra`, `make deploy-infra`, `make deploy-ocp`,
+`make deploy-osac`, `make setup-suite`, then `make run-tests`, each with
+`INFRA=netris DEPLOY_SUITE=...` and, when needed, `TEST_SUITE=...`.
+Alternatively, the backend-only `make deploy` target runs steps 2–4 from
+`infra/netris/`; it does not run `setup-suite` or pytest.
 
 After deployment, the kubeconfig is at `/root/.kube/config`. The default
 `DEPLOY_SUITE=caas` deploys the CaaS OSAC profile. Then `make setup-caas` and
@@ -114,12 +139,11 @@ does not run pytest; use the root `make e2e` command for the complete pipeline.
 
 | Target | Description | Time |
 |--------|-------------|------|
-| `make deploy` | Fresh-install pipeline: deploy-infra → deploy-ocp → deploy-osac | ~2-3 hrs |
-| `make deploy-fast` | Snapshot-refresh pipeline: deploy-infra → deploy-ocp → deploy-osac | ~25 min |
-| `make setup-infra` | Install prerequisites, cache images + snapshot flavor, build tools | ~10 min |
+| `make deploy` | Provision the lab, restore OCP from the SNO snapshot, and install OSAC from the selected profile | ~2-3 hrs |
+| `make setup-infra` | Install prerequisites, cache images and the OCP SNO snapshot, build tools | ~10 min |
 | `make deploy-infra` | Deploy netris-lab (K3s, topology, VMs, connectivity) | ~12 min |
-| `make deploy-ocp` | Configure Netris networking and deploy OCP SNO from the selected fresh-install or snapshot flavor | ~15 min |
-| `make deploy-osac` | Prepare OSAC values + Helm install or snapshot refresh (based on `OSAC_DEPLOY_MODE`) | ~30-60 min |
+| `make deploy-ocp` | Configure Netris networking and restore OCP SNO from the OCP-only snapshot | ~15 min |
+| `make deploy-osac` | Prepare profile values and install OSAC with Helm | ~30-60 min |
 
 ### CaaS (run after deploy)
 
@@ -181,11 +205,11 @@ Run the whole pipeline with one command:
 
 ```bash
 make e2e INFRA=netris DEPLOY_SUITE=full \
-  OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
+  EXTRA_VARS="bare_metal_services=true"
 
 # Use the same full-ci deployment and run only stretched tests
 make e2e INFRA=netris DEPLOY_SUITE=full TEST_SUITE=stretched \
-  OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
+  EXTRA_VARS="bare_metal_services=true"
 ```
 
 Or choose a focused networking flow:
@@ -204,12 +228,9 @@ The variables select different parts of the run:
 - `TEST_SUITE=...` selects the test target independently. It defaults to
   `DEPLOY_SUITE`; use `TEST_SUITE=stretched` with `DEPLOY_SUITE=full` to run only the
   shared-subnet VMaaS↔BMaaS test against a full-ci deployment.
-- `OSAC_DEPLOY_MODE=fresh|snapshot` chooses a fresh install or snapshot-based
-  OSAC refresh. `fresh` is the default. Snapshot mode supports only
-  `DEPLOY_SUITE=caas`; VMaaS, BMaaS, and full
-  require fresh mode so the Netris overlays are applied.
 - `EXTRA_VARS=...` passes Ansible variables, such as enabling BMaaS BMC
-  services. Combine DNS and other overrides in the same value.
+  services. Common overrides are shown below; the [target reference](targets.md)
+  lists all supported variables and which targets consume them.
 
 To run only tests after the cluster and OSAC are ready, use the target mapped
 from `TEST_SUITE`. For example, `make test-vmaas` selects Netris VMaaS
@@ -295,28 +316,21 @@ To collect diagnostics from an existing deployment, run `make gather-suite INFRA
 | `make connectivity` | Re-run lab connectivity (VPN, BGP, softgates) without full redeploy |
 | `make run-osac-setup` | Re-run just `make install` in osac-installer (after prep-osac has run) |
 | `make prep-osac` | Ansible-only OSAC prep (clone, patch values, copy secrets) — no Helm install |
-| `make post-osac` | Scale down MCE operators and filter OS images to target version |
 | `make vendor-update` | Refresh vendored Ansible collections |
 | `make lint` | Run ansible-lint |
 | `make gather-infra` | Gather diagnostic info from the cluster |
 
 ### Typical Workflows
 
-**First deploy on a fresh server (fast path — snapshot):**
+**First deployment on a fresh server:**
 ```bash
-make setup-infra          # install prerequisites, cache images + snapshot flavor, build tools
-make deploy-fast    # deploy lab + OCP+OSAC from snapshot (~25 min total)
+make setup-infra    # install prerequisites, cache images and OCP SNO snapshot
+make deploy         # deploy lab + restore OCP + install OSAC (~2-3 hrs)
 ```
 
-**First deploy on a fresh server (full path — from scratch):**
+**Deploy with an image override (test a PR build):**
 ```bash
-make setup-infra          # install prerequisites, cache images, build tools
-make deploy         # deploy lab + OCP + OSAC (~2-3 hrs)
-```
-
-**Fast deploy with image overrides (test a PR build):**
-```bash
-make deploy-fast EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-service:pr-123"
+make deploy EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-service:pr-123"
 ```
 
 **Deploy OSAC with BMaaS values and image overrides:**
@@ -365,19 +379,16 @@ make deploy-maas    # create cluster with ocp_4_20_ai_maas + enable_* params
 **Rebuild from scratch:**
 ```bash
 make destroy-full   # tear down everything
-make deploy-fast    # full redeploy (snapshot path)
+make deploy         # provision again and install OSAC from the selected profile
 ```
 
 **Bare-metal host redeployment pipeline (`redeploy-server.sh`):**
 ```bash
-# CaaS + fresh OSAC install (default)
+# CaaS deployment (default)
 make redeploy-fresh
 
-# CaaS + snapshot OSAC refresh (same mode as deploy-fast)
-make redeploy-fresh OSAC_DEPLOY_MODE=snapshot
-
-# MaaS + snapshot refresh (grows h00 disk; setup-maas / deploy-maas)
-make redeploy-fresh DEPLOY_SUITE=maas OSAC_DEPLOY_MODE=snapshot
+# MaaS deployment
+make redeploy-fresh DEPLOY_SUITE=maas
 ```
 
 ### Bare-Metal Lab Deployment (from laptop)
@@ -413,23 +424,26 @@ ssh root@$SERVER -t tmux attach -t deploy
 ssh root@$SERVER tail -f /root/deploy.log
 ```
 
-**Multiple servers:** Create one env file per server (`scripts/env-mylab.sh`), then:
+**Multiple servers:** Copy the template once per server, for example:
+
 ```bash
-source scripts/env-mylab.sh && make deploy-jump
+cp scripts/env.sh.example scripts/env-rdu.sh
+# Edit scripts/env-rdu.sh for this server, then:
+source scripts/env-rdu.sh && make deploy-jump
 ```
 
 **BM-specific make targets (run on server):**
 
 | Target | Description |
 |--------|-------------|
-| `make redeploy-fresh` | Destroy + wipe progress + complete deployment sequence (`DEPLOY_SUITE`, `OSAC_DEPLOY_MODE`) |
+| `make redeploy-fresh` | Destroy + wipe progress + complete deployment sequence (`DEPLOY_SUITE`) |
 | `make redeploy-continue` | Resume failed redeploy from last incomplete step |
 | `make disk-setup` | Auto-detect and mount data disk |
-| `make post-install` | Fix Keycloak/UI + generate access doc |
+| `make post-install` | Generate the access document |
 | `make access-doc` | Generate handover documentation only |
 | `make health-check` | Quick status verification |
 
-`redeploy-server.sh` steps: `setup-infra` → `deploy-infra` → `deploy-ocp` → `deploy-osac` → `setup-caas|setup-maas` → `deploy-caas|deploy-maas` → `post-install`. Pass `OSAC_DEPLOY_MODE=snapshot` (or `--snapshot`) for refresh instead of Helm install; default is `fresh`.
+`redeploy-server.sh` steps: `setup-infra` → `deploy-infra` → `deploy-ocp` → `deploy-osac` → `setup-caas|setup-maas` → `deploy-caas|deploy-maas` → `post-install`. OSAC is always installed from the profile selected by `DEPLOY_SUITE`.
 
 See the PR description for known issues and workarounds specific to BM/RHEL environments.
 
@@ -455,7 +469,7 @@ Then browse to `https://osac-aap-osac-devel.apps.ocp-sno.osac.local:9444` (accep
 
 ## How deploy-ocp Works
 
-`make deploy-ocp` deploys OCP SNO from a pre-built VM snapshot. It uses a golden qcow2 disk image (cached during `make setup-infra`) and regenerates the cluster's identity (certificates, hostname, IP, domain) using [recert](https://github.com/rh-ecosystem-edge/recert). In `fresh` mode, it uses the `sno-4-22` flavor (OCP only, no OSAC); in `snapshot` mode, the `caas` flavor (OCP+OSAC baked in).
+`make deploy-ocp` restores OCP SNO from the OCP-only `sno-4-22` VM snapshot. It uses a golden qcow2 disk image (cached during `make setup-infra`) and regenerates the cluster's identity (certificates, hostname, IP, domain) using [recert](https://github.com/rh-ecosystem-edge/recert). OSAC is installed separately by `make deploy-osac`.
 
 The flow runs three Ansible roles in sequence:
 
@@ -467,161 +481,51 @@ The server-side Netris port names (for example, `eth9` for data and `eth10` for 
 
 The snapshot flavor is pulled and cached during `make setup-infra` (one-time ~60GB download). Subsequent deploys use copy-on-write overlays, so only changed blocks are written.
 
-OSAC itself is handled by `make deploy-osac` (not part of `deploy-ocp`). In `OSAC_DEPLOY_MODE=snapshot`, that runs `refresh-osac` → `post-refresh-osac` → **`patch-osac-refresh`**, which wires Netris/SSH/socat and then applies `config-as-code-ig`’s `AAP_PROJECT_GIT_*` pin onto the live AAP Project and launches `osac-config-as-code` once (snapshot AAP DB keeps the bake-time `scm_branch`; waiting for the hourly CaC schedule is too late for `setup-maas` / `publish-templates`).
-
 ## How deploy-osac Works
 
-`make deploy-osac` runs in three phases:
+`make deploy-osac` runs in two phases:
 
 1. **`prep-osac`** (Ansible) — clones the OSAC mono-repo, validates the selected profile and its Netris overlay, resolves the OCP release CLI image, and writes the generated lab-specific values to `values/<profile>/netris-runtime.yaml`. That file includes credentials, is mode `0600`, and is ignored by Git. The role also copies the license and pull secret into the profile directory and sets up a socat forwarder for OCP ingress on port 9444.
 
 2. **`run-osac-setup`** (shell) — runs `make install-infra` and then `make install-osac` in `osac-installer`. It passes `OSAC_PROFILE` plus the profile's static `netris.yaml` and generated `netris-runtime.yaml` overlays. The infrastructure install deploys the required operators and prerequisites; the OSAC install deploys the application chart and runs its hooks.
 
-3. **`post-osac`** (Ansible) — skipped in fresh mode. In snapshot mode, scales down MCE operators and filters `OS_IMAGES` to only the target OCP version.
-
 ## Configuration
 
-All parameters are in [`inventory/group_vars/all.yml`](inventory/group_vars/all.yml). Override any variable via `EXTRA_VARS`:
+The [Netris target and option reference](targets.md) is the comprehensive
+reference for Make targets, Make variables, environment/config inputs, and
+Ansible `EXTRA_VARS`. It maps each target to the playbooks and variables it
+uses. Defaults are maintained in
+[`inventory/group_vars/all.yml`](inventory/group_vars/all.yml).
+
+The deployment and test selectors have separate jobs:
+
+- `DEPLOY_SUITE` chooses the deployment scenario and derives the OSAC profile.
+  Supported values are `caas`, `vmaas`, `bmaas`, and `full`.
+- `TEST_SUITE` chooses the pytest target. It defaults to `DEPLOY_SUITE`, but
+  can differ; for example, `DEPLOY_SUITE=full TEST_SUITE=stretched` deploys
+  `full-ci` and runs only the stretched networking suite.
+- `EXTRA_VARS` passes Ansible variable overrides to the playbook run by each
+  target. Use space-separated `key=value` entries or a JSON object.
+
+Common overrides:
+
+| Option | Example | Use |
+|---|---|---|
+| `dns_server` | `EXTRA_VARS="dns_server=10.0.0.1"` | Change the upstream resolver when public DNS is unavailable. Default: `8.8.8.8`. |
+| `bare_metal_services` | `EXTRA_VARS="bare_metal_services=true"` | Prepare BMC/Metal3 support when the deployment needs bare-metal services. |
+| `osac_branch` | `EXTRA_VARS="osac_branch=my-branch"` | Install OSAC charts from a mono-repo branch. |
+| `fulfillment_service_image` | `EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-service:pr-123"` | Override a component image for a build under test. |
+
+For example, combine common options in one `EXTRA_VARS` value:
 
 ```bash
-make deploy-ocp EXTRA_VARS="ocp_version=4.22"
-make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
+make e2e INFRA=netris DEPLOY_SUITE=full TEST_SUITE=stretched \
+  EXTRA_VARS="dns_server=10.0.0.1 bare_metal_services=true"
 ```
 
-### Key Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ocp_version` | `4.22` | OpenShift version |
-| `ocp_cluster_name` | `ocp-sno` | OCP cluster name |
-| `lab_name` | `$LAB_NAME` or `default` | Per-lab subdomain prefix (avoids DNS collisions) |
-| `dns_hosted_zone` | `ecoeng-osac-ci.devcluster.openshift.com` | Route 53 hosted zone |
-| `ocp_base_domain` | `<lab_name>.<dns_hosted_zone>` | DNS base domain (derived) |
-| `ocp_server_vcpu` | `20` | OCP VM vCPUs |
-| `ocp_server_memory_gb` | `64` | OCP VM RAM (GB) |
-| `ocp_subnet_cidr` | `192.168.40.0/24` | OCP VNet subnet |
-| `ocp_dnat_ip` | `198.51.100.2` | DNAT IP for OCP API/apps access |
-| `osac_namespace` | `osac-e2e-ci` | OSAC Kubernetes namespace |
-| `osac_values_file` | `values/$(OSAC_PROFILE)/instance.yaml` | Base values file selected by the backend Makefile from `OSAC_PROFILE` |
-| `osac_branch` | `main` | osac mono-repo branch |
-| `netris_username` | `netris` | Netris API username |
-| `netris_password` | *(required)* | Netris API password — set in your local config, validated at deploy time |
-| `ew_fabric_enable` | `0` | East-West fabric (0=NS only) |
-| `dns_server` | `8.8.8.8` | Upstream DNS server for the lab (override in environments where public DNS is blocked) |
-| `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS cluster creation |
-| `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name |
-| `caas_host_type_id` | `ci-worker` | Resource class for CaaS agents |
-| `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:caas` | OCI image containing the snapshot flavor |
-| `snapshot_osac_namespace` | `osac-e2e-ci` | OSAC namespace baked into the snapshot |
-| `snapshot_osac_values_file` | `values/caas-ci/instance.yaml` | Base values file staged for snapshot refresh |
-
-```bash
-make deploy-ocp EXTRA_VARS="ocp_version=4.18"
-make setup-caas EXTRA_VARS="caas_cluster_name=my-cluster caas_discovery_vcpu=8"
-
-# MaaS: default 10 vCPU / 20GiB for h02–h03; h01 stays 4 vCPU / 16GiB via overrides.
-# Grow workers only (e.g. real model headroom) without resizing h01:
-make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
-```
-
-#### Lab & Identity
-
-| Variable | Default | Description | Tested |
-|----------|---------|-------------|--------|
-| `lab_name` | `$LAB_NAME` or `default` | Per-lab subdomain prefix (avoids DNS collisions) | yes |
-| `dns_hosted_zone` | `ecoeng-osac-ci.devcluster.openshift.com` | Route 53 hosted zone | yes |
-| `ew_fabric_enable` | `0` | East-West fabric (0=NS only, 1=full EW+NS) | no |
-
-#### OCP Installation
-
-| Variable | Default | Description | Tested |
-|----------|---------|-------------|--------|
-| `ocp_version` | `4.22` | OpenShift version | default |
-| `ocp_cluster_name` | `ocp-sno` | OCP cluster name | defaults only |
-| `ocp_server_vcpu` | `20` | OCP VM vCPUs | yes (16) |
-| `ocp_server_memory_gb` | `64` | OCP VM RAM in GB | yes (48) |
-| `ocp_install_disk_gb` | `300` | OCP install disk size in GB | defaults only |
-| `ocp_lvm_disk_gb` | `300` | LVM storage disk size in GB | defaults only |
-| `ocp_snapshot_disk_gb` | `300` | OCP snapshot OS disk size in GB | defaults only |
-
-#### Netris Networking
-
-| Variable | Default | Description | Tested |
-|----------|---------|-------------|--------|
-| `ocp_vpc_name` | `ocp-sno` | Netris VPC name | defaults only |
-| `ocp_subnet_cidr` | `192.168.40.0/24` | OCP VNet subnet | defaults only |
-| `ocp_node_ip` | `192.168.40.2` | OCP node static IP | defaults only |
-| `ocp_snat_ip` | `198.51.100.1` | SNAT translated IP | defaults only |
-| `ocp_dnat_ip` | `198.51.100.2` | DNAT IP for API/apps access | defaults only |
-| `osac_external_ip_pool_cidr` | `198.51.100.24/29` | OSAC tenant ExternalIPPool CIDR; host routes/masquerades it toward the softgate. Must not overlap the mgmt nat/l4lb/bgp pools. OSAC creates the Netris allocation itself. | defaults only |
-| `netris_username` | `netris` | Netris API username | defaults only |
-| `netris_password` | *(required)* | Netris API password — no default, set in local config | yes |
-| `dns_server` | `8.8.8.8` | Upstream DNS server threaded through cloud-init, Netris topology, dnsmasq/DHCP, and the OCP NMState resolver. Override in environments where public DNS (8.8.8.8, 1.1.1.1) is unreachable | yes |
-
-Set `dns_server` when the lab host cannot reach public DNS resolvers. Override per-run via `EXTRA_VARS`, or set it permanently in [`inventory/group_vars/all.yml`](inventory/group_vars/all.yml):
-
-```bash
-# Per-run override (highest precedence)
-make deploy EXTRA_VARS="dns_server=10.0.0.1"
-```
-
-```yaml
-# Persistent: inventory/group_vars/all.yml
-dns_server: "10.0.0.1"
-```
-
-#### OSAC Deployment
-
-| Variable | Default | Description | Tested |
-|----------|---------|-------------|--------|
-| `osac_namespace` | `osac-e2e-ci` | OSAC Kubernetes namespace | yes |
-| `osac_values_file` | `values/$(OSAC_PROFILE)/instance.yaml` | Base values file selected by the backend Makefile from `OSAC_PROFILE` | default |
-| `osac_repo` | `https://github.com/osac-project/osac.git` | osac mono-repo git URI | defaults only |
-| `osac_branch` | `main` | osac mono-repo git branch | defaults only |
-
-#### Container Image Overrides
-
-| Variable | Default | Description | Tested |
-|----------|---------|-------------|--------|
-| `osac_operator_image` | `""` | osac-operator container image override | no |
-| `fulfillment_service_image` | `""` | fulfillment-service container image override | no |
-| `osac_aap_image` | `""` | osac-aap bootstrap image override | no |
-| `osac_ui_image` | `""` | osac-ui container image override | no |
-| `bmf_operator_image` | `""` | bare-metal-fulfillment-operator container image override | no |
-| `aap_project_git_uri` | `""` | AAP config-as-code project git URI override (defaults to installer value) | no |
-| `aap_project_git_branch` | `""` | AAP config-as-code project git branch override (test PR playbooks/collections) | no |
-
-#### Snapshot Deployment (CaaS only)
-
-Snapshot refresh currently supports only `DEPLOY_SUITE=caas`, which maps to `caas-ci`.
-The VMaaS, BMaaS, and full deployments require generated Netris runtime
-values and per-profile overlays, which are applied by the fresh-install path.
-Use `OSAC_DEPLOY_MODE=fresh` for those scenarios.
-
-The account configured with `quay_username` and `quay_password` must have pull access to
-`quay.io/osac-project/cluster-flavors`. Setup logs in with these credentials when it downloads
-the flavor image; it reports an actionable error if the credentials are missing or lack access.
-
-| Variable | Default | Description | Tested |
-|----------|---------|-------------|--------|
-| `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:{caas,sno}-4-22` | OCI image containing the snapshot flavor (derived from `osac_deploy_mode`) | defaults only |
-| `snapshot_recert_image` | `quay.io/osac-project/recert:latest` | Recert container image | defaults only |
-| `snapshot_osac_namespace` | `osac-e2e-ci` | OSAC namespace baked into the snapshot | defaults only |
-| `snapshot_osac_values_file` | `values/caas-ci/instance.yaml` | Base values file staged for OSAC refresh | default |
-
-#### CaaS Configuration
-
-| Variable | Default | Description | Tested |
-|----------|---------|-------------|--------|
-| `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name | yes (custom) |
-| `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS | defaults only |
-| `caas_host_type_id` | `ci-worker` | Resource class label for CaaS agents | defaults only |
-| `caas_discovery_vcpu` | `4` | Discovery VM vCPUs | yes (8) |
-| `caas_discovery_vcpu_overrides` | `{}` | Per-VM vCPU map (VM name → count); empty = use `caas_discovery_vcpu` | defaults only |
-| `caas_discovery_memory_mb` | `16384` | Discovery VM memory in MB | yes (32768) |
-| `caas_discovery_memory_mb_overrides` | `{}` | Per-VM memory map (VM name → MB); empty = use `caas_discovery_memory_mb` | defaults only |
-| `caas_discovery_disk_gb` | `100` | Discovery VM disk in GB | yes (150) |
-| `caas_discovery_vm_patterns` | `[hgx-pod00-su0-h01..03]` | VM names for CaaS discovery | defaults only |
+The comprehensive reference explains which targets consume each option and how
+the config file and environment variables supply credentials. `DEPLOY_SUITE`
+derives the OSAC profile; do not set `OSAC_PROFILE` directly.
 
 ## Testing OSAC Components
 
