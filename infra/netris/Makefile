@@ -2,22 +2,22 @@
 
 OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml -e snapshot_osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e deploy_suite=$(DEPLOY_SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml -e snapshot_osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
-# SUITE names the deployment scenario and selects profile/setup behavior.
+# DEPLOY_SUITE names the deployment scenario and selects profile/setup behavior.
 # The root TEST_SUITE selector independently chooses the contract and test target.
-# SUITE=caas is the default; the root pipeline maps it to setup-caas / test-caas.
+# DEPLOY_SUITE=caas is the default; the root pipeline maps it to setup-caas / test-caas.
 # The supported CaaS snapshot restore grows both h00 disks to their configured sizes.
-SUITE ?= caas
+DEPLOY_SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci
 KUBECONFIG ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
 ifeq ($(origin OSAC_PROFILE),command line)
-$(error OSAC_PROFILE is derived from SUITE; choose the deployment scenario with SUITE)
+$(error OSAC_PROFILE is derived from DEPLOY_SUITE; choose the deployment scenario with DEPLOY_SUITE)
 endif
-OSAC_PROFILE = $(if $(filter vmaas,$(SUITE)),vmaas-ci,$(if $(filter bmaas,$(SUITE)),bmaas-ci,$(if $(filter full,$(SUITE)),full-ci,caas-ci)))
+OSAC_PROFILE = $(if $(filter vmaas,$(DEPLOY_SUITE)),vmaas-ci,$(if $(filter bmaas,$(DEPLOY_SUITE)),bmaas-ci,$(if $(filter full,$(DEPLOY_SUITE)),full-ci,caas-ci)))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 _KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 _OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
@@ -30,14 +30,14 @@ ifneq ($(filter-out fresh snapshot,$(OSAC_DEPLOY_MODE)),)
 $(error OSAC_DEPLOY_MODE must be fresh or snapshot (got '$(OSAC_DEPLOY_MODE)'))
 endif
 ifeq ($(OSAC_DEPLOY_MODE),snapshot)
-ifneq ($(SUITE),caas)
-$(error Snapshot mode supports only SUITE=caas; use fresh mode for Netris service profiles)
+ifneq ($(DEPLOY_SUITE),caas)
+$(error Snapshot mode supports only DEPLOY_SUITE=caas; use fresh mode for Netris service profiles)
 endif
 endif
 endif
 ifneq ($(filter deploy-fast,$(MAKECMDGOALS)),)
-ifneq ($(SUITE),caas)
-$(error deploy-fast uses snapshot mode and supports only SUITE=caas; use deploy for fresh Netris service deployments)
+ifneq ($(DEPLOY_SUITE),caas)
+$(error deploy-fast uses snapshot mode and supports only DEPLOY_SUITE=caas; use deploy for fresh Netris service deployments)
 endif
 endif
 
@@ -48,12 +48,12 @@ NETRIS_PROFILE_VALUES = $(if $(filter vmaas-ci bmaas-ci full-ci,$(OSAC_PROFILE))
 NETRIS_INSTANCE_VALUES_EXTRA = $(strip $(NETRIS_PROFILE_VALUES) -f values/$(OSAC_PROFILE)/netris-runtime.yaml)
 
 # VMaaS and full-ci deployments configure OCP as an EVPN VTEP; other scenarios keep their established root path.
-EVPN_SUITES = vmaas full
-OCP_KUBECONFIG = $(if $(filter $(EVPN_SUITES),$(SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
-VMAAS_UNDERLAY_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-e ocp_underlay_enabled=true,)
+EVPN_DEPLOY_SUITES = vmaas full
+OCP_KUBECONFIG = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
+VMAAS_UNDERLAY_EXTRA = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),-e ocp_underlay_enabled=true,)
 OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
 EVPN_VALUES_FILE = $(abspath .evpn-values.yaml)
-VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-f $(EVPN_VALUES_FILE))
+VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),-f $(EVPN_VALUES_FILE))
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
@@ -86,7 +86,7 @@ deploy-infra:
 
 deploy-ocp:
 	@rm -f .evpn-values.yaml
-	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(OCP_ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-ocp.yml -e deploy_suite=$(DEPLOY_SUITE) $(OCP_ANSIBLE_EXTRA)
 
 deploy-osac:
 	@if [ "$(OSAC_DEPLOY_MODE)" = "snapshot" ]; then \
@@ -97,16 +97,16 @@ deploy-osac:
 	@printf '%s\n' \
 		'KUBECONFIG=$(OCP_KUBECONFIG)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas full,$(SUITE)),$(_OSAC_VM_KUBECONFIG_ABS),$(OCP_KUBECONFIG))' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas full,$(DEPLOY_SUITE)),$(_OSAC_VM_KUBECONFIG_ABS),$(OCP_KUBECONFIG))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
 
 # VMaaS setup/gather is read-only: tenant resources remain owned by the suite fixtures.
-setup-vmaas: SUITE = vmaas
+setup-vmaas: DEPLOY_SUITE = vmaas
 setup-vmaas:
 	ansible-playbook playbooks/setup-vmaas.yml $(OCP_ANSIBLE_EXTRA)
 
-gather-vmaas: SUITE = vmaas
+gather-vmaas: DEPLOY_SUITE = vmaas
 gather-vmaas:
 	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
 
@@ -116,16 +116,16 @@ destroy-vmaas:
 # Keep suite teardown backend-owned: full destroys the whole lab and is not a
 # suite-level cleanup operation. The root dispatcher uses this contract target.
 .PHONY: destroy-suite
-ifeq ($(SUITE),full)
+ifeq ($(DEPLOY_SUITE),full)
 destroy-suite:
-	@echo "ERROR: destroy-suite SUITE=full is not supported; use 'make -C infra/netris destroy-full' only when you intend to destroy the entire lab." >&2
+	@echo "ERROR: destroy-suite DEPLOY_SUITE=full is not supported; use 'make -C infra/netris destroy-full' only when you intend to destroy the entire lab." >&2
 	@exit 2
 else
 destroy-suite:
-	$(MAKE) destroy-$(SUITE) SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) destroy-$(DEPLOY_SUITE) DEPLOY_SUITE=$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)'
 endif
 
-setup-caas: SUITE = caas
+setup-caas: DEPLOY_SUITE = caas
 setup-caas:
 	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
 
@@ -175,17 +175,17 @@ gather-caas:
 setup-bmc:
 	ansible-playbook playbooks/setup-bmc.yml $(ANSIBLE_EXTRA)
 
-setup-bmaas: SUITE = bmaas
+setup-bmaas: DEPLOY_SUITE = bmaas
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
 # The full-ci profile enables all XaaS services. This shared Netris lab setup
 # prepares BMaaS and VMaaS networking. CaaS/MaaS also use the three discovery
 # VMs that BMaaS repurposes, so those host-pool setups cannot run together yet.
-setup-full: SUITE = full
+setup-full: DEPLOY_SUITE = full
 setup-full:
-	$(MAKE) setup-bmaas SUITE=$(SUITE)
-	$(MAKE) setup-vmaas SUITE=$(SUITE)
+	$(MAKE) setup-bmaas DEPLOY_SUITE=$(DEPLOY_SUITE)
+	$(MAKE) setup-vmaas DEPLOY_SUITE=$(DEPLOY_SUITE)
 
 destroy-bmaas:
 	ansible-playbook playbooks/destroy-bmaas.yml $(ANSIBLE_EXTRA)
@@ -256,7 +256,7 @@ prep-osac:
 
 run-osac-setup:
 	@if [ -n "$(VMAAS_EVPN_VALUES_EXTRA)" ] && [ ! -s "$(EVPN_VALUES_FILE)" ]; then \
-		echo "Missing $(EVPN_VALUES_FILE); run make deploy-ocp SUITE=$(SUITE) first." >&2; \
+		echo "Missing $(EVPN_VALUES_FILE); run make deploy-ocp DEPLOY_SUITE=$(DEPLOY_SUITE) first." >&2; \
 		exit 1; \
 	fi
 	@echo "=== Installing OSAC infrastructure via Helm (make install-infra) ==="
@@ -317,19 +317,19 @@ destroy-full:
 	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
 
 # OSAC_DEPLOY_MODE=fresh (default) or snapshot — same meaning as deploy / deploy-fast.
-# SUITE=caas (default) or maas — selects setup/deploy flow in redeploy-server.sh.
+# DEPLOY_SUITE=caas (default) or maas — selects setup/deploy flow in redeploy-server.sh.
 redeploy-fresh:
 	@echo "=== Destroying all infrastructure ==="
 	-$(MAKE) destroy-full
 	@sync
-	@echo "=== Starting deploy (SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)) ==="
-	SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+	@echo "=== Starting deploy (DEPLOY_SUITE=$(DEPLOY_SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)) ==="
+	DEPLOY_SUITE=$(DEPLOY_SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
 		scripts/redeploy-server.sh --fresh \
 		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
 		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 redeploy-continue:
-	SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+	DEPLOY_SUITE=$(DEPLOY_SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
 		scripts/redeploy-server.sh \
 		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
 		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log

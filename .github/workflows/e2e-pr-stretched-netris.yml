@@ -51,7 +51,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/e2e-stretched-netris-full-install.yml
     with:
-      suite: full
+      deploy-suite: full
       test-suite: stretched
       test-infra-repository: ${{ inputs.repo }}
       test-infra-ref: ${{ inputs.sha }}

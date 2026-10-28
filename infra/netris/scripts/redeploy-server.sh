@@ -19,17 +19,17 @@
 #   snapshot — deploy-ocp uses snapshot flavor; deploy-osac runs refresh
 #
 # Usage:
-#   make redeploy-fresh                         → --fresh, SUITE=caas, fresh OSAC
-#   make redeploy-fresh SUITE=maas              → --fresh, MaaS flow
+#   make redeploy-fresh                         → --fresh, DEPLOY_SUITE=caas, fresh OSAC
+#   make redeploy-fresh DEPLOY_SUITE=maas       → --fresh, MaaS flow
 #   make redeploy-fresh OSAC_DEPLOY_MODE=snapshot
 #                                               → --fresh --snapshot
-#   make redeploy-continue                      → resumes (pass same SUITE / mode)
+#   make redeploy-continue                      → resumes (pass same DEPLOY_SUITE / mode)
 #   make deploy-jump                            → from laptop, triggers --fresh via tmux
 #
 # Direct:
 #   scripts/redeploy-server.sh --fresh
 #   scripts/redeploy-server.sh --fresh --snapshot
-#   SUITE=maas scripts/redeploy-server.sh --fresh --snapshot
+#   DEPLOY_SUITE=maas scripts/redeploy-server.sh --fresh --snapshot
 set -euo pipefail
 
 # --- Configuration ---
@@ -40,10 +40,10 @@ MAX_RETRIES=2
 RETRY_DELAY=120
 FRESH=false
 SNAPSHOT=false
-SUITE="${SUITE:-caas}"
+DEPLOY_SUITE="${DEPLOY_SUITE:-caas}"
 OSAC_DEPLOY_MODE="${OSAC_DEPLOY_MODE:-fresh}"
 
-case "$SUITE" in
+case "$DEPLOY_SUITE" in
     caas)
         SETUP_FLOW=setup-caas
         DEPLOY_FLOW=deploy-caas
@@ -53,7 +53,7 @@ case "$SUITE" in
         DEPLOY_FLOW=deploy-maas
         ;;
     *)
-        echo "ERROR: SUITE must be 'caas' or 'maas' (got: $SUITE)" >&2
+        echo "ERROR: DEPLOY_SUITE must be 'caas' or 'maas' (got: $DEPLOY_SUITE)" >&2
         exit 1
         ;;
 esac
@@ -104,10 +104,10 @@ status_init() {
               "post-install":{"status":"pending"}
             }')
         jq --arg id "$RUN_ID" \
-            --arg suite "$SUITE" \
+            --arg deploy_suite "$DEPLOY_SUITE" \
             --arg mode "$OSAC_DEPLOY_MODE" \
             --argjson steps "$steps_json" \
-            '.runs[$id] = {"started_at": (now | todate), "suite": $suite, "osac_deploy_mode": $mode, "overall_status": "running", "steps": $steps} | .current_run = $id' \
+            '.runs[$id] = {"started_at": (now | todate), "deploy_suite": $deploy_suite, "osac_deploy_mode": $mode, "overall_status": "running", "steps": $steps} | .current_run = $id' \
             "$STATUS_FILE" > "${STATUS_FILE}.tmp" && mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
     } 2>/dev/null || true
 }
@@ -116,16 +116,16 @@ status_resume() {
     {
         if [[ -f "$STATUS_FILE" ]]; then
             RUN_ID=$(jq -r '.current_run // empty' "$STATUS_FILE" 2>/dev/null) || true
-            # Prefer saved mode/suite from the in-progress run when continuing
-            local saved_mode saved_suite
+            # Prefer saved mode/deployment suite from the in-progress run when continuing
+            local saved_mode saved_deploy_suite
             saved_mode=$(jq -r --arg run "$RUN_ID" '.runs[$run].osac_deploy_mode // empty' "$STATUS_FILE" 2>/dev/null) || true
-            saved_suite=$(jq -r --arg run "$RUN_ID" '.runs[$run].suite // empty' "$STATUS_FILE" 2>/dev/null) || true
+            saved_deploy_suite=$(jq -r --arg run "$RUN_ID" '.runs[$run].deploy_suite // .runs[$run].suite // empty' "$STATUS_FILE" 2>/dev/null) || true
             if [[ -n "$saved_mode" ]]; then
                 OSAC_DEPLOY_MODE="$saved_mode"
             fi
-            if [[ -n "$saved_suite" ]]; then
-                SUITE="$saved_suite"
-                case "$SUITE" in
+            if [[ -n "$saved_deploy_suite" ]]; then
+                DEPLOY_SUITE="$saved_deploy_suite"
+                case "$DEPLOY_SUITE" in
                     caas) SETUP_FLOW=setup-caas; DEPLOY_FLOW=deploy-caas ;;
                     maas) SETUP_FLOW=setup-maas; DEPLOY_FLOW=deploy-maas ;;
                 esac
@@ -222,7 +222,7 @@ echo ""
 echo "################################################################"
 echo "# Deploy run: $RUN_ID ($(date))"
 echo "# Mode: $(if [[ "$FRESH" == "true" ]]; then echo "fresh"; else echo "continue"; fi)"
-echo "# Suite: $SUITE"
+echo "# Deployment suite: $DEPLOY_SUITE"
 echo "# OSAC_DEPLOY_MODE: $OSAC_DEPLOY_MODE"
 echo "################################################################"
 echo ""
@@ -258,12 +258,12 @@ for step in "${STEPS[@]}"; do
         echo ""
         echo "========================================"
         echo "  Running: make $step (attempt $attempt/$MAX_RETRIES)"
-        echo "  SUITE=$SUITE OSAC_DEPLOY_MODE=$OSAC_DEPLOY_MODE"
+        echo "  DEPLOY_SUITE=$DEPLOY_SUITE OSAC_DEPLOY_MODE=$OSAC_DEPLOY_MODE"
         echo "========================================"
         echo ""
 
         if make "$step" \
-            SUITE="${SUITE}" \
+            DEPLOY_SUITE="${DEPLOY_SUITE}" \
             OSAC_DEPLOY_MODE="${OSAC_DEPLOY_MODE}" \
             ${EXTRA_VARS:+EXTRA_VARS="${EXTRA_VARS}"} \
             2>&1 | tee "$STEP_LOG"; then
@@ -301,7 +301,7 @@ echo ""
 echo "========================================"
 echo "  Full deploy completed successfully!"
 echo "  Run ID: $RUN_ID"
-echo "  Suite: $SUITE"
+echo "  Deployment suite: $DEPLOY_SUITE"
 echo "  OSAC_DEPLOY_MODE: $OSAC_DEPLOY_MODE"
 echo "  Status: cat $STATUS_FILE | jq '.runs[\"$RUN_ID\"]'"
 echo "========================================"

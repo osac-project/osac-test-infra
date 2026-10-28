@@ -1,6 +1,6 @@
 REPORTS_DIR ?= reports
 
-# SUITE selects the deployment scenario. TEST_SUITE selects the OSAC test path;
+# DEPLOY_SUITE selects the deployment scenario. TEST_SUITE selects the OSAC test path;
 # by default both use the same name.
 .PHONY: test lint format test-vmaas test-stretched test-caas test-storage test-bmaas test-metering test-references test-full
 
@@ -56,14 +56,14 @@ test-references:
 # ─── Infrastructure orchestration ───────────────────────────────────
 
 INFRA              ?=
-SUITE              ?= $(shell if [ -r "$(INFRA_DIR)/capabilities" ]; then . "$(INFRA_DIR)/capabilities"; printf '%s' "$${DEFAULT_SUITE:-}"; fi)
-TEST_SUITE         ?= $(SUITE)
+DEPLOY_SUITE       ?= $(shell if [ -r "$(INFRA_DIR)/capabilities" ]; then . "$(INFRA_DIR)/capabilities"; printf '%s' "$${DEFAULT_DEPLOY_SUITE:-}"; fi)
+TEST_SUITE         ?= $(DEPLOY_SUITE)
 EXTRA_VARS         ?=
 INFRA_DIR           = infra/$(INFRA)
 _FWD_KUBECONFIG     = $(if $(KUBECONFIG),KUBECONFIG=$(abspath $(KUBECONFIG)))
 _FWD_VM_KUBECONFIG = $(if $(OSAC_VM_KUBECONFIG),OSAC_VM_KUBECONFIG=$(abspath $(OSAC_VM_KUBECONFIG)))
 _FWD_DEPLOY_MODE    = $(if $(OSAC_DEPLOY_MODE),OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE))
-_FWD_SUITE          = SUITE=$(SUITE)
+_FWD_DEPLOY_SUITE   = DEPLOY_SUITE=$(DEPLOY_SUITE)
 
 .PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
@@ -82,9 +82,9 @@ _require-backend:
 
 _validate-backend: _require-backend
 	@. $(INFRA_DIR)/capabilities && \
-		echo "$$SUPPORTED_SUITES" | tr ' ' '\n' | grep -qx "$(SUITE)" || \
-		{ echo "ERROR: backend '$(INFRA)' does not support suite '$(SUITE)'"; \
-		  echo "Supported: $$(. $(INFRA_DIR)/capabilities && echo $$SUPPORTED_SUITES)"; \
+		echo "$$SUPPORTED_DEPLOY_SUITES" | tr ' ' '\n' | grep -qx "$(DEPLOY_SUITE)" || \
+		{ echo "ERROR: backend '$(INFRA)' does not support deployment suite '$(DEPLOY_SUITE)'"; \
+		  echo "Supported: $$(. $(INFRA_DIR)/capabilities && echo $$SUPPORTED_DEPLOY_SUITES)"; \
 		  exit 1; }
 
 _validate-suite-contract: _require-backend
@@ -110,22 +110,22 @@ _validate-suite-contract: _require-backend
 e2e: _validate-backend deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
 deploy-setup: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) setup-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) setup-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 # Backward compatibility alias
 setup-infra: deploy-setup
 
 deploy-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-ocp: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-osac: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 setup-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) setup-$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 run-tests: _validate-backend _validate-suite-contract
 	@set -e; \
@@ -144,24 +144,24 @@ run-tests: _validate-backend _validate-suite-contract
 	$(MAKE) test-$(TEST_SUITE)
 
 destroy-ocp: _require-backend
-	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 destroy-osac: _require-backend
-	$(MAKE) -C $(INFRA_DIR) destroy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) destroy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 destroy-infra: _require-backend
-	$(MAKE) -C $(INFRA_DIR) destroy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
+	$(MAKE) -C $(INFRA_DIR) destroy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE)
 
 destroy-setup: _require-backend
-	$(MAKE) -C $(INFRA_DIR) destroy-setup EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
+	$(MAKE) -C $(INFRA_DIR) destroy-setup EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE)
 
 destroy-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) destroy-suite EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
+	$(MAKE) -C $(INFRA_DIR) destroy-suite EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE)
 
 gather-infra: _require-backend
-	$(MAKE) -C $(INFRA_DIR) gather-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) gather-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 gather-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) gather-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) gather-$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 redeploy-osac: destroy-osac deploy-osac

@@ -5,11 +5,11 @@ Each backend lives in `infra/<name>/` and must provide:
 ## Required Files
 
 - `Makefile` — implements the contract targets below
-- `capabilities` — shell-sourceable file declaring `SUPPORTED_SUITES` and,
-  optionally, `DEFAULT_SUITE`
+- `capabilities` — shell-sourceable file declaring `SUPPORTED_DEPLOY_SUITES` and,
+  optionally, `DEFAULT_DEPLOY_SUITE`
 
-When set, `DEFAULT_SUITE` must be one of `SUPPORTED_SUITES`. The root Makefile
-uses it when `SUITE` is omitted; backends without a default require callers to
+When set, `DEFAULT_DEPLOY_SUITE` must be one of `SUPPORTED_DEPLOY_SUITES`. The root Makefile
+uses it when `DEPLOY_SUITE` is omitted; backends without a default require callers to
 select a deployment scenario explicitly.
 
 ## Contract Targets
@@ -20,14 +20,14 @@ select a deployment scenario explicitly.
 | `deploy-infra` | Provision the lab infrastructure |
 | `deploy-ocp` | Deploy an OpenShift cluster |
 | `deploy-osac` | Deploy OSAC on the cluster, write `.env.infra` |
-| `setup-<suite>` | Prepare the selected deployment scenario (can be no-op) |
+| `setup-<deploy-suite>` | Prepare the selected deployment scenario (can be no-op) |
 | `destroy-ocp` | Tear down the OpenShift cluster |
 | `destroy-osac` | Tear down OSAC only |
 | `destroy-suite` | Tear down resources owned by the selected deployment scenario; a backend may reject aggregate scenarios that would destroy shared infrastructure |
 | `destroy-setup` | Remove host-side setup installed by `setup-infra`, or no-op if none is needed |
 | `destroy-infra` | Tear down everything |
 | `gather-infra` | Collect infrastructure diagnostics |
-| `gather-<suite>` | Collect diagnostics for the selected deployment scenario |
+| `gather-<deploy-suite>` | Collect diagnostics for the selected deployment scenario |
 
 ## .env.infra
 

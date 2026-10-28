@@ -7,7 +7,7 @@ from `infra/netris/`. Repository orchestration targets such as `make e2e`,
 `make setup-suite`, and `make run-tests` run from the `osac-test-infra` root.
 
 > **Using this backend from `osac-test-infra`:** run a complete suite from the
-> repository root with `make e2e INFRA=netris SUITE=<suite>`. `SUITE` chooses
+> repository root with `make e2e INFRA=netris DEPLOY_SUITE=<suite>`. `DEPLOY_SUITE` chooses
 > the deployment scenario and OSAC profile; `TEST_SUITE` chooses the test
 > target independently. Netris-specific overlays live in the OSAC checkout at
 > `osac-installer/values/<profile>/netris.yaml`. See the root README's [deployment scenario
@@ -62,7 +62,7 @@ All system packages, tools, and SSH keys are installed automatically by `make se
 
 This section describes the standalone Netris backend workflow: it deploys the
 lab and OSAC, but does not run the OSAC mono-repo test suites. To provision and
-run tests in one pipeline, use `make e2e INFRA=netris SUITE=<suite>` from the
+run tests in one pipeline, use `make e2e INFRA=netris DEPLOY_SUITE=<suite>` from the
 `osac-test-infra` repository root. The backend targets below are useful when
 you want deployment and CaaS provisioning as separate steps.
 
@@ -92,11 +92,11 @@ EOF
 make setup-infra
 
 # Fresh install — installs OCP + OSAC with the CaaS profile
-make deploy SUITE=caas EXTRA_VARS="bare_metal_services=true"
+make deploy DEPLOY_SUITE=caas EXTRA_VARS="bare_metal_services=true"
 
 # OR: Fast deployment (~25 min) — uses a pre-built snapshot with recert.
 # Faster but doesn't test the OCP or OSAC installer flows.
-make deploy-fast SUITE=caas EXTRA_VARS="bare_metal_services=true"
+make deploy-fast DEPLOY_SUITE=caas EXTRA_VARS="bare_metal_services=true"
 
 # Then run a test flow
 make setup-caas    # CaaS setup: discover hosts, label agents, configure resource-class map
@@ -104,7 +104,7 @@ make deploy-caas   # CaaS: create cluster
 ```
 
 After deployment, the kubeconfig is at `/root/.kube/config`. The default
-`SUITE=caas` deploys the CaaS OSAC profile. Then `make setup-caas` and
+`DEPLOY_SUITE=caas` deploys the CaaS OSAC profile. Then `make setup-caas` and
 `make deploy-caas` prepare and create a CaaS cluster. This backend-only flow
 does not run pytest; use the root `make e2e` command for the complete pipeline.
 
@@ -137,12 +137,12 @@ The following commands are run from the `osac-test-infra` repository root.
 `make test-*` target skips provisioning and runs tests against an already
 prepared cluster.
 
-`SUITE` names the deployment scenario. It drives the Netris setup path,
+`DEPLOY_SUITE` names the deployment scenario. It drives the Netris setup path,
 Ansible behavior, and derived OSAC profile. `TEST_SUITE` selects the OSAC test
-path and defaults to `SUITE`. Netris networking tests live under
+path and defaults to `DEPLOY_SUITE`. Netris networking tests live under
 `tests/e2e/networking/` in the OSAC mono-repo.
 
-| Deployment `SUITE` | Derived OSAC profile and Netris overlay in the OSAC checkout | Target run by `make setup-suite` | Default `TEST_SUITE` / test target |
+| Deployment `DEPLOY_SUITE` | Derived OSAC profile and Netris overlay in the OSAC checkout | Target run by `make setup-suite` | Default `TEST_SUITE` / test target |
 |---|---|---|---|
 | `caas` | `caas-ci` (no Netris overlay) | `setup-caas` | `caas` / `test-caas` |
 | `vmaas` | `vmaas-ci` + `osac-installer/values/vmaas-ci/netris.yaml` | `setup-vmaas` | `vmaas` / `test-vmaas` |
@@ -161,7 +161,7 @@ The test-suite targets are:
 
 The PR E2E commands use the same split:
 
-| PR command | Deployment `SUITE` | `TEST_SUITE` | OSAC profile | Check |
+| PR command | Deployment `DEPLOY_SUITE` | `TEST_SUITE` | OSAC profile | Check |
 |---|---|---|---|---|
 | `/test vmaas-netris` | `vmaas` | `vmaas` | `vmaas-ci` | `E2E / VMaaS Netris Full Install` |
 | `/test bmaas-netris` | `bmaas` | `bmaas` | `bmaas-ci` | `E2E / BMaaS Netris Full Install` |
@@ -172,41 +172,41 @@ examples in this guide assume the working directory is `infra/netris/`; from
 the repository root, use orchestration targets such as `make e2e`,
 `make setup-suite`, and `make run-tests` with `INFRA=netris`.
 
-`TEST_SUITE` may differ from the deployment `SUITE`. For example,
-`SUITE=full TEST_SUITE=stretched` deploys the full-ci profile and runs only the
+`TEST_SUITE` may differ from the deployment `DEPLOY_SUITE`. For example,
+`DEPLOY_SUITE=full TEST_SUITE=stretched` deploys the full-ci profile and runs only the
 shared-subnet test at `tests/e2e/networking/stretched/`. Do not set
-`OSAC_PROFILE`; the backend derives it from `SUITE`.
+`OSAC_PROFILE`; the backend derives it from `DEPLOY_SUITE`.
 
 Run the whole pipeline with one command:
 
 ```bash
-make e2e INFRA=netris SUITE=full \
+make e2e INFRA=netris DEPLOY_SUITE=full \
   OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
 
 # Use the same full-ci deployment and run only stretched tests
-make e2e INFRA=netris SUITE=full TEST_SUITE=stretched \
+make e2e INFRA=netris DEPLOY_SUITE=full TEST_SUITE=stretched \
   OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
 ```
 
 Or choose a focused networking flow:
 
 ```bash
-make e2e INFRA=netris SUITE=vmaas
-make e2e INFRA=netris SUITE=bmaas EXTRA_VARS="bare_metal_services=true"
+make e2e INFRA=netris DEPLOY_SUITE=vmaas
+make e2e INFRA=netris DEPLOY_SUITE=bmaas EXTRA_VARS="bare_metal_services=true"
 ```
 
 The variables select different parts of the run:
 
 - `INFRA=netris` selects this backend.
-- `SUITE=...` selects the deployment scenario and therefore backend setup,
+- `DEPLOY_SUITE=...` selects the deployment scenario and therefore backend setup,
   Ansible behavior, and OSAC profile. The profile is derived from the suite
   (`vmaas` → `vmaas-ci`, `bmaas` → `bmaas-ci`, `full` → `full-ci`).
 - `TEST_SUITE=...` selects the test target independently. It defaults to
-  `SUITE`; use `TEST_SUITE=stretched` with `SUITE=full` to run only the
+  `DEPLOY_SUITE`; use `TEST_SUITE=stretched` with `DEPLOY_SUITE=full` to run only the
   shared-subnet VMaaS↔BMaaS test against a full-ci deployment.
 - `OSAC_DEPLOY_MODE=fresh|snapshot` chooses a fresh install or snapshot-based
   OSAC refresh. `fresh` is the default. Snapshot mode supports only
-  `SUITE=caas`; VMaaS, BMaaS, and full
+  `DEPLOY_SUITE=caas`; VMaaS, BMaaS, and full
   require fresh mode so the Netris overlays are applied.
 - `EXTRA_VARS=...` passes Ansible variables, such as enabling BMaaS BMC
   services. Combine DNS and other overrides in the same value.
@@ -216,12 +216,12 @@ from `TEST_SUITE`. For example, `make test-vmaas` selects Netris VMaaS
 networking tests. In the pipeline, use:
 
 ```bash
-make run-tests INFRA=netris SUITE=vmaas
+make run-tests INFRA=netris DEPLOY_SUITE=vmaas
 ```
 
 This loads the environment saved by `deploy-osac` and invokes `test-vmaas`.
 For stretched tests against a full-ci deployment, use
-`make run-tests INFRA=netris SUITE=full TEST_SUITE=stretched`.
+`make run-tests INFRA=netris DEPLOY_SUITE=full TEST_SUITE=stretched`.
 
 The VMaaS Netris profile configures CUDN EVPN on single-node OCP 4.22 with
 OVNKubernetes and platform type `None`. It reuses h00's Netris-managed leaf-1
@@ -271,13 +271,13 @@ the selected deployment scenario has been prepared.
 
 Suite fixtures create their own tenant `VirtualNetwork`, `Subnet`, `SecurityGroup`, and `ExternalIPPool` resources. Lab setup owns the cluster/fabric prerequisites and must not pre-create fixture-owned tenant resources. PodNetwork route advertisements support shared-subnet VMaaS/BMaaS traffic. ExternalIP and EgressIP dataplane tests require a separately provisioned and acknowledged route/return path for `172.27.0.0/16`; enable `ocp_vmaas_external_ip_tests_enabled` only after verifying that path.
 
-To collect diagnostics from an existing deployment, run `make gather-suite INFRA=netris SUITE=vmaas`. The CUDN EVPN captures are written under `infra/netris/logs/cudn-evpn/`. Collection is read-only and best-effort; unavailable APIs or peers get an explicit marker in the output. Captured Kubernetes YAML, FRR logs, and Netris responses are scrubbed for credential-like values before they are written.
+To collect diagnostics from an existing deployment, run `make gather-suite INFRA=netris DEPLOY_SUITE=vmaas`. The CUDN EVPN captures are written under `infra/netris/logs/cudn-evpn/`. Collection is read-only and best-effort; unavailable APIs or peers get an explicit marker in the output. Captured Kubernetes YAML, FRR logs, and Netris responses are scrubbed for credential-like values before they are written.
 
 ### Destroy
 
 | Target | Description |
 |--------|-------------|
-| Root `make destroy-suite SUITE=<scenario>` | Safely dispatch a deployment-scenario cleanup; rejects `SUITE=full` because that would destroy the entire lab |
+| Root `make destroy-suite DEPLOY_SUITE=<scenario>` | Safely dispatch a deployment-scenario cleanup; rejects `DEPLOY_SUITE=full` because that would destroy the entire lab |
 | `make destroy-full` | Tear down everything: OSAC + OCP artifacts + netris-lab |
 | `make destroy-osac` | Tear down OSAC: helm releases, operators, CRDs, namespaces |
 | `make destroy-ocp` | Reset OCP for reinstall: delete cluster, recreate disk, boot VM |
@@ -321,8 +321,8 @@ make deploy-fast EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-
 
 **Deploy OSAC with BMaaS values and image overrides:**
 ```bash
-make deploy-ocp SUITE=bmaas
-make deploy-osac SUITE=bmaas \
+make deploy-ocp DEPLOY_SUITE=bmaas
+make deploy-osac DEPLOY_SUITE=bmaas \
   EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true aap_project_git_branch=my-feature-branch"
 make setup-bmaas
 ```
@@ -377,7 +377,7 @@ make redeploy-fresh
 make redeploy-fresh OSAC_DEPLOY_MODE=snapshot
 
 # MaaS + snapshot refresh (grows h00 disk; setup-maas / deploy-maas)
-make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot
+make redeploy-fresh DEPLOY_SUITE=maas OSAC_DEPLOY_MODE=snapshot
 ```
 
 ### Bare-Metal Lab Deployment (from laptop)
@@ -422,7 +422,7 @@ source scripts/env-mylab.sh && make deploy-jump
 
 | Target | Description |
 |--------|-------------|
-| `make redeploy-fresh` | Destroy + wipe progress + complete deployment sequence (`SUITE`, `OSAC_DEPLOY_MODE`) |
+| `make redeploy-fresh` | Destroy + wipe progress + complete deployment sequence (`DEPLOY_SUITE`, `OSAC_DEPLOY_MODE`) |
 | `make redeploy-continue` | Resume failed redeploy from last incomplete step |
 | `make disk-setup` | Auto-detect and mount data disk |
 | `make post-install` | Fix Keycloak/UI + generate access doc |
@@ -593,7 +593,7 @@ dns_server: "10.0.0.1"
 
 #### Snapshot Deployment (CaaS only)
 
-Snapshot refresh currently supports only `SUITE=caas`, which maps to `caas-ci`.
+Snapshot refresh currently supports only `DEPLOY_SUITE=caas`, which maps to `caas-ci`.
 The VMaaS, BMaaS, and full deployments require generated Netris runtime
 values and per-profile overlays, which are applied by the fresh-install path.
 Use `OSAC_DEPLOY_MODE=fresh` for those scenarios.
@@ -629,7 +629,7 @@ All components live in the osac mono-repo. Override `osac_branch` to test a spec
 
 The backend Makefile selects `values/<OSAC_PROFILE>/instance.yaml` as the base
 values file and layers the Netris overlay from the same profile directory when
-one exists. `SUITE` supplies the profile default shown in the scenario table.
+one exists. `DEPLOY_SUITE` supplies the profile default shown in the scenario table.
 
 ### Examples
 
@@ -648,6 +648,6 @@ make deploy-osac EXTRA_VARS='{"osac_operator_image": "quay.io/osac-project/osac-
 **Test BMaaS with custom operator images:**
 ```bash
 make destroy-osac
-make deploy-osac SUITE=bmaas \
+make deploy-osac DEPLOY_SUITE=bmaas \
   EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true"
 ```

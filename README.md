@@ -45,20 +45,20 @@ This command applies to backends marked as wired to the root contract in the
 inventory. Standalone backend workflows document their own invocation.
 
 ```bash
-make e2e INFRA=<backend> [SUITE=<deployment-scenario>] [TEST_SUITE=<test-selection>]
+make e2e INFRA=<backend> [DEPLOY_SUITE=<deployment-scenario>] [TEST_SUITE=<test-selection>]
 ```
 
 The selectors serve different purposes:
 
 - **INFRA** chooses the backend directory, such as `infra/<backend>`.
-- **SUITE** chooses a deployment scenario supported by that backend. The backend
-  uses it for deployment and suite-specific preparation.
+- **DEPLOY_SUITE** chooses a deployment scenario supported by that backend. The backend
+  uses it for deployment and scenario-specific preparation.
 - **TEST_SUITE** chooses the OSAC test target independently. It defaults to
-  **SUITE**, but can differ when the deployment and test selections are not the
+  **DEPLOY_SUITE**, but can differ when the deployment and test selections are not the
   same.
 
 The pipeline validates the deployment scenario against the backend's
-`SUPPORTED_SUITES`, then runs:
+`SUPPORTED_DEPLOY_SUITES`, then runs:
 
 1. Backend setup and infrastructure deployment.
 2. Cluster and OSAC deployment. The backend writes its connection details to
@@ -78,7 +78,7 @@ validates and runs the selected test target.
 | `deploy-infra` | Provision backend infrastructure |
 | `deploy-ocp` | Deploy the cluster |
 | `deploy-osac` | Deploy OSAC and write `.env.infra` |
-| `setup-suite` | Run `setup-<SUITE>` |
+| `setup-suite` | Run `setup-<DEPLOY_SUITE>` |
 | `run-tests` | Validate `contracts/<TEST_SUITE>` and run `test-<TEST_SUITE>` |
 | `destroy-suite` | Ask the backend to safely tear down the selected deployment scenario |
 | `destroy-setup` | Remove host-side setup installed by `setup-infra`, or no-op if none is needed |
@@ -86,7 +86,7 @@ validates and runs the selected test target.
 | `destroy-osac` | Tear down OSAC |
 | `destroy-infra` | Tear down backend infrastructure |
 | `gather-infra` | Collect backend and cluster diagnostics |
-| `gather-suite` | Run `gather-<SUITE>` |
+| `gather-suite` | Run `gather-<DEPLOY_SUITE>` |
 
 Backend-specific deployment modes, profiles, host preparation, credentials, and
 configuration belong in that backend's guide. The root interface does not assign
@@ -124,15 +124,15 @@ For suite-specific environment variables and fixtures, see the
 
 ## Configuration
 
-`INFRA`, `SUITE`, and `TEST_SUITE` apply to infrastructure orchestration.
+`INFRA`, `DEPLOY_SUITE`, and `TEST_SUITE` apply to infrastructure orchestration.
 Direct `test-*` targets run against an existing deployment and do not need
 those selectors.
 
 | Variable | Purpose |
 |---|---|
 | `INFRA` | Required backend selector; choose a backend under `infra/`. |
-| `SUITE` | Deployment scenario, validated against the selected backend's capabilities. It defaults to that backend's `DEFAULT_SUITE` when declared; otherwise specify a supported scenario. |
-| `TEST_SUITE` | Test target; defaults to `SUITE` and may be selected independently. |
+| `DEPLOY_SUITE` | Deployment scenario, validated against the selected backend's capabilities. It defaults to that backend's `DEFAULT_DEPLOY_SUITE` when declared; otherwise specify a supported scenario. |
+| `TEST_SUITE` | Test target; defaults to `DEPLOY_SUITE` and may be selected independently. |
 | `OSAC_MONO_DIR` | OSAC mono-repo checkout used by the E2E targets; defaults to `/opt/osac`. |
 | `TEST` | Optional pytest `-k` filter for a direct test target. |
 | `KUBECONFIG` | Optional hub-cluster kubeconfig override forwarded to the backend; otherwise it uses the backend's default. |
@@ -149,7 +149,7 @@ before provisioning infrastructure.
 Create `infra/<name>/` with:
 
 - A Makefile implementing the targets in [infra/contract.md](infra/contract.md).
-- A shell-sourceable `capabilities` file declaring `SUPPORTED_SUITES` and, optionally, `DEFAULT_SUITE`.
+- A shell-sourceable `capabilities` file declaring `SUPPORTED_DEPLOY_SUITES` and, optionally, `DEFAULT_DEPLOY_SUITE`.
 - Optional shell-sourceable `contracts/<test-selection>` files declaring
   required `.env.infra` variables.
 

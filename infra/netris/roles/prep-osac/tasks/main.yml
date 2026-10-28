@@ -144,9 +144,9 @@
     that:
       - _netris_overlay_stat.stat.exists
     fail_msg: >-
-      SUITE={{ suite }} requires values/{{ osac_profile }}/netris.yaml. Use
+      DEPLOY_SUITE={{ deploy_suite }} requires values/{{ osac_profile }}/netris.yaml. Use
       vmaas-ci for vmaas, bmaas-ci for bmaas, and full-ci for full.
-  when: suite | default('') in ['vmaas', 'bmaas', 'full']
+  when: deploy_suite | default('') in ['vmaas', 'bmaas', 'full']
 
 - name: Read selected Netris overlay
   ansible.builtin.slurp:
@@ -161,7 +161,7 @@
          | combine((_netris_overlay_raw.content | default('') | b64decode | from_yaml | default({}, true)), recursive=true) }}
 
 - name: Read full-ci infrastructure values
-  when: suite | default('') == 'full'
+  when: deploy_suite | default('') == 'full'
   ansible.builtin.slurp:
     src: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
   register: _full_ci_infra_values_raw
@@ -169,11 +169,11 @@
 - name: Validate the selected Netris CUDN EVPN profile contract
   ansible.builtin.assert:
     that:
-      - suite != 'vmaas' or _selected_vmaas.enabled | default(false) | bool
-      - suite != 'bmaas' or _selected_bmaas.enabled | default(false) | bool
-      - suite != 'full' or _selected_vmaas.enabled | default(false) | bool
-      - suite != 'full' or _selected_bmaas.enabled | default(false) | bool
-      - suite != 'full' or _selected_caas.enabled | default(false) | bool
+      - deploy_suite != 'vmaas' or _selected_vmaas.enabled | default(false) | bool
+      - deploy_suite != 'bmaas' or _selected_bmaas.enabled | default(false) | bool
+      - deploy_suite != 'full' or _selected_vmaas.enabled | default(false) | bool
+      - deploy_suite != 'full' or _selected_bmaas.enabled | default(false) | bool
+      - deploy_suite != 'full' or _selected_caas.enabled | default(false) | bool
       - _selected_network_managers.enabled | default(false) | bool
       - _selected_fabric_netris.enabled | default(false) | bool
       - _selected_k8s_cudn_evpn.enabled | default(false) | bool
@@ -183,7 +183,7 @@
       - _selected_network_class.fabricManager | default('') == 'netris'
       - _selected_network_class.isDefault | default(false) | bool
     fail_msg: >-
-      Profile {{ osac_profile }} must enable the service selected by SUITE,
+      Profile {{ osac_profile }} must enable the service selected by DEPLOY_SUITE,
       register Netris and cudn_evpn, and explicitly select the default
       NetworkClass pair (netris, cudn_evpn).
   vars:
@@ -286,7 +286,7 @@
 
 
 - name: Validate full-ci services and Netris EVPN overlay
-  when: suite | default('') == 'full'
+  when: deploy_suite | default('') == 'full'
   ansible.builtin.assert:
     that:
       - _full_ci_values.global.services.caas.enabled | bool
@@ -305,7 +305,7 @@
       - _full_ci_values.aap.instanceGroups.storageFulfillment.enabled | bool
       - _full_ci_values.metering.echoAdapter.enabled | bool
     fail_msg: >-
-      SUITE=full requires the full-ci profile services plus the default NetworkClass
+      DEPLOY_SUITE=full requires the full-ci profile services plus the default NetworkClass
       pair (netris, cudn_evpn). The full-ci EVPN overlay was not applied correctly.
   vars:
     _full_ci_values: "{{ _profile_values | combine(_values_overrides, recursive=true) }}"
@@ -344,7 +344,7 @@
   no_log: true
 
 - name: Enable full-ci Keycloak test fixtures before the infrastructure install
-  when: suite | default('') == 'full'
+  when: deploy_suite | default('') == 'full'
   ansible.builtin.copy:
     dest: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
     content: >-

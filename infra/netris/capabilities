@@ -1,2 +1,2 @@
-DEFAULT_SUITE="caas"
-SUPPORTED_SUITES="caas bmaas vmaas full"
+DEFAULT_DEPLOY_SUITE="caas"
+SUPPORTED_DEPLOY_SUITES="caas bmaas vmaas full"

@@ -57,12 +57,12 @@ make destroy-bmaas          # Teardown BMaaS (BMHs, sushy-tools, BMC network)
 make setup-bmc              # BMC network + sushy-tools only (subset of setup-bmaas)
 make destroy-setup          # Revert setup-infra (caches, bridges, tools)
 make force-destroy-maas     # force-destroy-caas with MaaS overrides
-make redeploy-fresh         # destroy-full + full BM pipeline (SUITE / OSAC_DEPLOY_MODE)
+make redeploy-fresh         # destroy-full + full BM pipeline (DEPLOY_SUITE / OSAC_DEPLOY_MODE)
 make vendor-update          # Refresh vendored Ansible collections
 make gather-infra           # Gather diagnostic info from the cluster
 # Override variables: make <target> EXTRA_VARS="key=value"
 # Image overrides: make deploy-osac EXTRA_VARS="fulfillment_service_image=quay.io/..."
-# MaaS uses the full-ci deployment profile: make deploy SUITE=full, then setup-maas/deploy-maas
+# MaaS uses the full-ci deployment profile: make deploy DEPLOY_SUITE=full, then setup-maas/deploy-maas
 ```
 
 ## Workflow Order
@@ -71,14 +71,14 @@ make gather-infra           # Gather diagnostic info from the cluster
 
 **Snapshot deploy (fast):** deploy-fast (deploy-infra → deploy-ocp → deploy-osac with OSAC_DEPLOY_MODE=snapshot)
 
-**CaaS:** deploy or deploy-fast with `SUITE=caas` → setup-caas → deploy-caas
+**CaaS:** deploy or deploy-fast with `DEPLOY_SUITE=caas` → setup-caas → deploy-caas
 
-**MaaS:** deploy with `SUITE=full` → setup-maas → deploy-maas
+**MaaS:** deploy with `DEPLOY_SUITE=full` → setup-maas → deploy-maas
 
-**VMaaS:** deploy with `SUITE=vmaas`; `setup-vmaas` validates the Netris EVPN
+**VMaaS:** deploy with `DEPLOY_SUITE=vmaas`; `setup-vmaas` validates the Netris EVPN
 prerequisites. Select VMaaS tests with `TEST_SUITE=vmaas`.
 
-**Stretched networking:** deploy with `SUITE=full`, run `setup-full`, and select
+**Stretched networking:** deploy with `DEPLOY_SUITE=full`, run `setup-full`, and select
 only the shared-subnet tests with `TEST_SUITE=stretched`.
 
 ## Ansible Configuration

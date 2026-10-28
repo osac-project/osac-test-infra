@@ -32,16 +32,16 @@ and [README.md](README.md) for the human-facing overview):
 
 - **`infra/<backend>/`** — pluggable infrastructure backends that provision a cluster and deploy
   OSAC. Backends wired to the root Makefile implement the targets in `infra/contract.md`, including
-  `setup-infra`, `deploy-infra`, `deploy-ocp`, `deploy-osac`, `setup-<suite>`, and the destroy/gather
-  targets. Each backend provides a `capabilities` file declaring `SUPPORTED_SUITES` and optionally
-  `DEFAULT_SUITE`.
+  `setup-infra`, `deploy-infra`, `deploy-ocp`, `deploy-osac`, `setup-<deploy-suite>`, and the destroy/gather
+  targets. Each backend provides a `capabilities` file declaring `SUPPORTED_DEPLOY_SUITES` and optionally
+  `DEFAULT_DEPLOY_SUITE`.
   `deploy-osac` writes `.env.infra` with the
   cluster config tests need. `infra/netris/` implements the root orchestration
-  contract; its `SUPPORTED_SUITES` are deployment scenarios (`caas`, `vmaas`,
+  contract; its `SUPPORTED_DEPLOY_SUITES` are deployment scenarios (`caas`, `vmaas`,
   `bmaas`, and `full`). `infra/agentless-net/` implements a standalone CaaS flow
   with its own workflow and is not yet connected to the root orchestration
-  targets. For contract-integrated backends, `SUITE` selects the deployment
-  scenario and `TEST_SUITE` selects the OSAC test target, defaulting to `SUITE`.
+  targets. For contract-integrated backends, `DEPLOY_SUITE` selects the deployment
+  scenario and `TEST_SUITE` selects the OSAC test target, defaulting to `DEPLOY_SUITE`.
   VMaaS/BMaaS networking tests live under the OSAC mono-repo's `tests/e2e/networking/`.
 - **OSAC mono-repo `tests/e2e/`** — pytest suites documented throughout this file. They are
   infrastructure-agnostic: they only consume environment variables, never which backend provisioned
@@ -49,10 +49,10 @@ and [README.md](README.md) for the human-facing overview):
   existing cluster" workflow (`uv sync && make test-vmaas`, etc.) still works exactly as before and
   remains the primary path when you already have a live OSAC deployment.
 
-Orchestration lives in the root `Makefile`: `make e2e INFRA=netris SUITE=caas` runs the
+Orchestration lives in the root `Makefile`: `make e2e INFRA=netris DEPLOY_SUITE=caas` runs the
 validate → setup-infra → deploy-infra → deploy-ocp → deploy-osac → setup-suite → run-tests
 pipeline; each step can also be run individually (`make setup-infra INFRA=netris`, etc.).
-`_validate-backend` checks the selected `SUITE` against backend `capabilities`;
+`_validate-backend` checks the selected `DEPLOY_SUITE` against backend `capabilities`;
 `_validate-suite-contract` checks `.env.infra` against the backend's optional
 `infra/<backend>/contracts/<test-selection>` file before invoking `test-<test-selection>`.
 
