@@ -199,4 +199,3 @@ comments in that file are authoritative.
 not a key in `group_vars/all.yml`. `EXTRA_VARS` may also contain variables
 defined by an included role or the Netris lab submodule. Those variables are
 target-specific and should be checked at the referenced playbook/role.
-
