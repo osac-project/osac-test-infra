@@ -103,7 +103,7 @@
       | grep -v '^$'
       | head -1
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _cluster_order_namespace
   until: _cluster_order_namespace.stdout | length > 0
   retries: 60
@@ -142,7 +142,7 @@
       | grep -v '^$'
       | head -1
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _cp_namespace
   until: _cp_namespace.stdout | length > 0
   retries: 30
@@ -158,7 +158,7 @@
       pod-security.kubernetes.io/warn=privileged
       --overwrite
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: true
 
 - name: Also label the HostedCluster namespace with privileged PodSecurity
@@ -172,7 +172,7 @@
       pod-security.kubernetes.io/enforce=privileged
       --overwrite 2>/dev/null || true
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
 
 - name: Wait for cluster to be ready

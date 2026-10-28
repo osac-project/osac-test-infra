@@ -68,7 +68,7 @@
       --from-literal=.dockerconfigjson='{{ _pull_secret.content | b64decode | trim }}'
       --type=kubernetes.io/dockerconfigjson
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   no_log: true
   register: _pull_secret_result
   changed_when: "'created' in _pull_secret_result.stdout"
@@ -100,14 +100,14 @@
       oc delete infraenv {{ caas_discovery_infraenv_name }}
       -n {{ caas_cluster_order_namespace }} --ignore-not-found
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: true
 
 - name: Apply InfraEnv CR in ClusterOrder namespace
   ansible.builtin.command:
     cmd: oc apply -f /tmp/caas-infraenv-cluster-ns.yml
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _infraenv_apply
   changed_when: "'created' in _infraenv_apply.stdout or 'configured' in _infraenv_apply.stdout"
   until: _infraenv_apply.rc == 0
@@ -121,7 +121,7 @@
       -n {{ caas_cluster_order_namespace }}
       -o jsonpath='{.status.isoDownloadURL}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _iso_url
   until: _iso_url.stdout | length > 0
   retries: 60
@@ -213,7 +213,7 @@
       --no-headers 2>/dev/null | wc -l
     executable: /bin/bash
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _agent_count
   until: _agent_count.stdout | int >= caas_agents | length
   retries: 120
@@ -226,7 +226,7 @@
       oc get agent -n {{ caas_cluster_order_namespace }}
       -o jsonpath='{.items[*].metadata.name}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _agent_names
   changed_when: false
   until: _agent_names.rc == 0 and _agent_names.stdout | length > 0
@@ -261,7 +261,7 @@
       '
     executable: /bin/bash
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _agent_hostnames_raw
   until: _agent_hostnames_raw.rc == 0
   retries: 40
@@ -296,7 +296,7 @@
       osac.openshift.io/resource_class={{ caas_host_type_id }}
       --overwrite
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ _agents_for_resource_class }}"
   loop_control:
     label: "agent {{ ansible_loop.index0 }}"
@@ -314,7 +314,7 @@
       netris.server/name={{ (caas_agents | selectattr('vm_pattern', 'search', item.value) | first).netris_server_name }}
       --overwrite
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ _agent_hostname_map | dict2items }}"
   loop_control:
     label: "agent {{ ansible_loop.index0 }}"

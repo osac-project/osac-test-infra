@@ -25,7 +25,7 @@
           - {{ bmc_net_ocp_ip }}
       EOF
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _prov_cr
   changed_when: "'created' in _prov_cr.stdout or 'configured' in _prov_cr.stdout"
 
@@ -36,7 +36,7 @@
       -l baremetal.openshift.io/cluster-baremetal-operator=metal3-state
       -n openshift-machine-api --timeout=300s
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
 
 - name: Wait for metal3 pods to be ready
@@ -46,7 +46,7 @@
       -l baremetal.openshift.io/cluster-baremetal-operator=metal3-state
       -n openshift-machine-api --timeout=600s
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
 
 # Phase 1b: BM provisioning V-Net
@@ -254,7 +254,7 @@
           spec:
             leaseDurationSeconds: 120
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ kubeconfig_path }}"
 
 # Phase 2: Prepare virtual BMH VMs (repurpose HGX VMs)
 # Skip if BMHs already exist and are available (idempotent re-run)
@@ -264,7 +264,7 @@
       oc get bmh -n {{ bmaas_bmh_namespace }}
       -o jsonpath='{range .items[*]}{.status.provisioning.state}{"\n"}{end}' 2>/dev/null
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _existing_bmh_states
   changed_when: false
   failed_when: false
@@ -430,7 +430,7 @@
   ansible.builtin.command:
     cmd: oc create namespace {{ bmaas_bmh_namespace }}
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _ns_create
   failed_when: false
   changed_when: _ns_create.rc == 0
@@ -506,7 +506,7 @@
         password: password
       EOF
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ bmaas_vms }}"
   register: _bmc_secret
   changed_when: "'created' in _bmc_secret.stdout or 'configured' in _bmc_secret.stdout"
@@ -538,7 +538,7 @@
           credentialsName: {{ item }}-bmc-secret
       EOF
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ bmaas_vms }}"
   loop_control:
     index_var: idx
@@ -552,7 +552,7 @@
       oc get bmh {{ item }} -n {{ bmaas_bmh_namespace }}
       -o jsonpath='{.status.provisioning.state}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _bmh_state
   until: _bmh_state.stdout == 'available'
   retries: 120
@@ -568,7 +568,7 @@
   ansible.builtin.shell:
     cmd: oc get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _fulfillment_host
   changed_when: false
   until: _fulfillment_host.rc == 0 and _fulfillment_host.stdout | length > 0
@@ -584,7 +584,7 @@
   ansible.builtin.shell:
     cmd: oc create token -n {{ osac_namespace }} admin
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _sa_token
   changed_when: false
   until: _sa_token.rc == 0 and _sa_token.stdout | length > 0
@@ -672,7 +672,7 @@
       osac.openshift.io/host-type={{ bmaas_instance_type }}
       --overwrite
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ bmaas_vms }}"
   changed_when: true
 

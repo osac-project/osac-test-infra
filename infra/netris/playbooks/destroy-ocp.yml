@@ -32,7 +32,7 @@
         - /root/.kube/config
       when: >-
         item != '/root/.kube/config' or
-        (ocp_evpn_kubeconfig_path | default('/root/.kube/config')) == '/root/.kube/config'
+        (kubeconfig_path | default('/root/.kube/config')) == '/root/.kube/config'
 
     - name: Recreate blank install disk
       ansible.builtin.command:

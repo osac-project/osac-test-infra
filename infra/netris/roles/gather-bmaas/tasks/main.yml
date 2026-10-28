@@ -13,7 +13,7 @@
   ansible.builtin.shell:
     cmd: oc get bmh -n {{ bmaas_bmh_namespace }} -o yaml > {{ _gather_dir }}/mgmt-cluster/bmaas/bmh-status.yaml
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: false
 
@@ -21,7 +21,7 @@
   ansible.builtin.shell:
     cmd: oc get baremetalinstances -A -o yaml > {{ _gather_dir }}/mgmt-cluster/bmaas/baremetalinstances.yaml
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: false
 
@@ -33,7 +33,7 @@
       --all-containers --tail=500
       > {{ _gather_dir }}/mgmt-cluster/bmaas/ironic-logs.txt 2>&1
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: false
 
@@ -45,7 +45,7 @@
       --all-containers --tail=500
       > {{ _gather_dir }}/mgmt-cluster/bmaas/bmf-operator-logs.txt 2>&1
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: false
 
@@ -67,6 +67,6 @@
         curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instances" | python3 -c 'import sys,json; d=json.load(sys.stdin); [i.pop("template_parameters",None) for i in d.get("items",[])]; json.dump(d,sys.stdout,indent=2)' > {{ _gather_dir }}/mgmt-cluster/bmaas/bmi-instances.json 2>/dev/null
       fi
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: false

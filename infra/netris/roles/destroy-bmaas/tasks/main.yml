@@ -14,7 +14,7 @@
   ansible.builtin.command:
     cmd: oc get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _fulfillment_host
   changed_when: false
   failed_when: false
@@ -31,7 +31,7 @@
       ansible.builtin.command:
         cmd: oc create token -n {{ osac_namespace }} admin
       environment:
-        KUBECONFIG: /root/.kube/config
+        KUBECONFIG: "{{ kubeconfig_path }}"
       register: _sa_token
       changed_when: false
 
@@ -158,7 +158,7 @@
   ansible.builtin.command:
     cmd: oc delete bmh {{ item }} -n {{ bmaas_bmh_namespace }} --ignore-not-found --wait=true --timeout=600s
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ bmaas_vms }}"
   register: _bmh_delete
   failed_when: false
@@ -175,7 +175,7 @@
         echo "gone"
       fi
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ bmaas_vms }}"
   register: _bmh_finalizer
   changed_when: "'force-cleared' in _bmh_finalizer.stdout"
@@ -184,7 +184,7 @@
   ansible.builtin.command:
     cmd: oc delete secret {{ item }}-bmc-secret -n {{ bmaas_bmh_namespace }} --ignore-not-found
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ bmaas_vms }}"
   changed_when: true
 
@@ -192,7 +192,7 @@
   ansible.builtin.command:
     cmd: oc delete namespace {{ bmaas_bmh_namespace }} --ignore-not-found
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: true
 
 # ── Phase 3: Provisioning CR (reverse of setup Phase 1) ──
@@ -200,7 +200,7 @@
   ansible.builtin.command:
     cmd: oc delete provisioning provisioning-configuration --ignore-not-found
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: true
 
 # ── Phase 4: Virtual BMH VMs and disks (reverse of setup Phase 2) ──
@@ -225,7 +225,7 @@
     name: "netris-vnet-lock-{{ bmaas_provisioning_vnet_name }}"
     namespace: "{{ osac_namespace }}"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   ignore_errors: true
 
 # ── Phase 5: Netris BM provisioning V-Net teardown (reverse of setup "Set up BM provisioning V-Net") ──

@@ -53,10 +53,10 @@ Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softga
 - **Bare-metal host** running a RHEL-family distribution (RHEL, Rocky Linux, CentOS Stream, or Fedora) with KVM support
 - **System packages** — `dnf install -y git make python3-pip ansible-core && /usr/bin/python3 -m pip install --ignore-installed ansible`. `make setup-infra` then installs the rest of the BM bootstrap (`sshpass`, `tmux`, `policycoreutils-python-utils`), EPEL from the Fedora URL (required on RHEL), and the Python dependencies into the Ansible interpreter's environment.
 - **Resources**: ~32+ CPU cores, 128+ GB RAM (lab VMs + OCP SNO VM)
-- **Storage**: ~400GB+ for OCP disk images, K3s, and containers. If the root partition is smaller, use a secondary data disk and enable automatic provisioning with `disk_setup_enabled=true` (via `EXTRA_VARS` or in the config). Run `make disk-setup` standalone or pass the variable during setup: `make setup-infra EXTRA_VARS="disk_setup_enabled=true"`
+- **Storage**: ~400GB+ for OCP disk images, K3s, and containers. If the root partition is smaller, use a secondary data disk and enable automatic provisioning with `disk_setup_enabled=true` in `EXTRA_VARS`. Run `make disk-setup` standalone or pass the variable during setup: `make setup-infra EXTRA_VARS="disk_setup_enabled=true"`
 - **Netris license key** — place at `infra/netris/license.key`
 - **OSAC/AAP license** — place at `infra/netris/license.zip`
-- **OpenShift pull secret** — place at `/root/pull-secret` (or set `pull_secret_path`; download from [console.redhat.com](https://console.redhat.com/openshift/downloads))
+- **OpenShift pull secret** — place at `/root/pull-secret` (or set `OSAC_PULL_SECRET_PATH` to a path accessible to deployment and tests; download from [console.redhat.com](https://console.redhat.com/openshift/downloads))
 - **Config file** — place `infra/netris/config` (INI format, gitignored) with your lab name, AWS credentials, and Quay username/password. The Quay account must have pull access to `quay.io/osac-project/cluster-flavors` for the snapshot flavor download to work. AWS credentials can be obtained from the [CI vault](https://vault.ci.openshift.org/ui/vault/secrets/kv/kv/selfservice%2Fosac%2Fpacket-osac). See Quick Start below. The IAM user needs `route53:ChangeResourceRecordSets`, `route53:ListHostedZones`, and `route53:GetChange` permissions on the hosted zone.
 
 All system packages, tools, and SSH keys are installed automatically by `make setup-infra`. A pre-flight check validates all required files, KVM support, and minimum memory before deploying.
@@ -128,7 +128,8 @@ root command: `make setup-infra`, `make deploy-infra`, `make deploy-ocp`,
 Alternatively, the backend-only `make deploy` target runs steps 2–4 from
 `infra/netris/`; it does not run `setup-suite` or pytest.
 
-After deployment, the kubeconfig is at `/root/.kube/config`. The default
+After deployment, the kubeconfig is at `/root/.kube/config` by default; set
+`KUBECONFIG` to use another path throughout the backend. The default
 `DEPLOY_SUITE=caas` deploys the CaaS OSAC profile. Then `make setup-caas` and
 `make deploy-caas` prepare and create a CaaS cluster. This backend-only flow
 does not run pytest; use the root `make e2e` command for the complete pipeline.
@@ -231,6 +232,14 @@ The variables select different parts of the run:
 - `EXTRA_VARS=...` passes Ansible variables, such as enabling BMaaS BMC
   services. Common overrides are shown below; the [target reference](targets.md)
   lists all supported variables and which targets consume them.
+
+Use Make variables for backend selectors and paths; use `EXTRA_VARS` for
+Ansible role settings. For example, `KUBECONFIG=/path/to/kubeconfig` maps to
+the Ansible task environment, while `OSAC_PULL_SECRET_PATH=/path/to/pull-secret`
+sets the same path for deployment and `.env.infra`. In CI, a step's `env:` is
+only how the shell receives a value; the backend explicitly maps it to Make,
+Ansible, or test runtime as needed. The comprehensive [target reference](targets.md)
+documents those mappings and precedence.
 
 To run only tests after the cluster and OSAC are ready, use the target mapped
 from `TEST_SUITE`. For example, `make test-vmaas` selects Netris VMaaS

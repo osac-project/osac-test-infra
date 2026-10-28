@@ -95,7 +95,7 @@
       oc rollout restart statefulset/assisted-image-service -n multicluster-engine
       oc rollout status statefulset/assisted-image-service -n multicluster-engine --timeout=120s
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
 
 # ── InfraEnv + ISO (hot-pool only) ──────────────────────────────────
 # In cluster-namespace mode these are deferred to setup-caas-agents,
@@ -104,7 +104,7 @@
   ansible.builtin.command:
     cmd: oc create namespace {{ caas_discovery_infraenv_namespace }}
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _ns_create
   failed_when: false
   changed_when: _ns_create.rc == 0
@@ -118,7 +118,7 @@
       --from-literal=.dockerconfigjson='{{ _pull_secret.content | b64decode | trim }}'
       --type=kubernetes.io/dockerconfigjson
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   no_log: true
   register: _pull_secret_result
   changed_when: "'created' in _pull_secret_result.stdout"
@@ -138,7 +138,7 @@
   ansible.builtin.command:
     cmd: oc delete infraenv {{ caas_discovery_infraenv_name }} -n {{ caas_discovery_infraenv_namespace }} --ignore-not-found
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: true
   when: (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
 
@@ -146,7 +146,7 @@
   ansible.builtin.command:
     cmd: oc apply -f /tmp/caas-infraenv.yml
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _infraenv_apply
   changed_when: "'created' in _infraenv_apply.stdout or 'configured' in _infraenv_apply.stdout"
   until: _infraenv_apply.rc == 0

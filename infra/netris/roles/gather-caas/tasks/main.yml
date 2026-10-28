@@ -17,7 +17,7 @@
   ansible.builtin.shell:
     cmd: oc --request-timeout=15s get route fulfillment-internal-api -n {{ _osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _gather_fulfillment_host
   changed_when: false
   failed_when: false
@@ -26,7 +26,7 @@
   ansible.builtin.shell:
     cmd: oc --request-timeout=15s create token -n {{ _osac_namespace }} admin
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _gather_sa_token
   changed_when: false
   failed_when: false
@@ -104,7 +104,7 @@
       --dest-dir={{ _gather_dir }}/mgmt-cluster/caas/inspect/hosting \
       2>&1 || echo "inspect failed or cluster unreachable"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
   failed_when: false
 
@@ -114,7 +114,7 @@
     cmd: >-
       oc --request-timeout=15s get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].metadata.namespace}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _hc_ns
   changed_when: false
   failed_when: false
@@ -124,7 +124,7 @@
     cmd: >-
       oc --request-timeout=15s get hostedclusters.hypershift.openshift.io --all-namespaces -o jsonpath='{.items[0].metadata.name}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _hc_name
   changed_when: false
   failed_when: false
@@ -141,7 +141,7 @@
     echo "hosted cluster kubeconfig unavailable"
     rm -f /tmp/caas-hosted-kubeconfig
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
   failed_when: false
   no_log: true
@@ -199,7 +199,7 @@
 
     echo "Collected hosted-cluster status and unhealthy-pod logs; raw must-gather and inspect archives are excluded from the upload."
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   args:
     executable: /bin/bash
   changed_when: false
@@ -224,7 +224,7 @@
       --dest-dir={{ _gather_dir }}/mgmt-cluster/caas/inspect/hosted-control-plane \
       2>&1 || echo "inspect failed or namespace not found"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
   failed_when: false
   when: _hc_name.stdout | default('') | length > 0

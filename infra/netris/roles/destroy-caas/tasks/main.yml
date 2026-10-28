@@ -15,7 +15,7 @@
       oc get route fulfillment-internal-api -n {{ _destroy_osac_ns }}
       -o jsonpath='{.status.ingress[0].host}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _destroy_ful_host
   changed_when: false
   failed_when: _destroy_ful_host.rc != 0 or (_destroy_ful_host.stdout | trim | length) == 0
@@ -35,7 +35,7 @@
       --token-script "oc create token -n {{ _destroy_osac_ns }} admin --duration 1h" \
       --address "https://{{ _destroy_ful_host.stdout | trim }}"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: true
 
 - name: Resolve cluster ID for {{ caas_cluster_name }}
@@ -58,7 +58,7 @@
     print(matches[0] if matches else "")
     ' "{{ caas_cluster_name }}"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _cluster_id
   changed_when: false
   failed_when: false
@@ -72,7 +72,7 @@
   ansible.builtin.command:
     cmd: osac delete cluster {{ _cluster_id.stdout | trim }}
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _osac_delete
   when: (_cluster_id.stdout | trim | length) > 0
   changed_when: _osac_delete.rc == 0
@@ -92,7 +92,7 @@
   ansible.builtin.shell:
     cmd: oc get agent -n {{ caas_agent_namespace }} -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _agents
   changed_when: false
   failed_when: false
@@ -103,7 +103,7 @@
       oc patch agent/{{ item }} -n {{ caas_agent_namespace }}
       --type=merge -p '{"metadata":{"finalizers":null}}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ _agents.stdout.split() }}"
   when: _agents.stdout | length > 0
   failed_when: false
@@ -113,7 +113,7 @@
   ansible.builtin.command:
     cmd: oc delete agent --all -n {{ caas_agent_namespace }} --wait=false
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: true
 
@@ -124,7 +124,7 @@
       oc patch infraenv/{{ caas_discovery_infraenv_name }} -n {{ caas_discovery_infraenv_namespace }}
       --type=merge -p '{"metadata":{"finalizers":null}}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: true
 
@@ -132,7 +132,7 @@
   ansible.builtin.command:
     cmd: oc delete infraenv {{ caas_discovery_infraenv_name }} -n {{ caas_discovery_infraenv_namespace }} --wait=false
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: true
 
@@ -141,7 +141,7 @@
   ansible.builtin.command:
     cmd: oc delete namespace {{ caas_discovery_infraenv_namespace }} --wait=false
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   failed_when: false
   changed_when: true
 

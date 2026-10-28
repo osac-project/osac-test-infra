@@ -52,7 +52,7 @@
           done
     } | grep -E '^order-' | sort -u
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _force_orders_raw
   changed_when: false
   failed_when: false
@@ -200,7 +200,7 @@
     force_ns "$order"
     force_ns "klusterlet-${order}"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ force_destroy_orders }}"
   when: force_destroy_orders | length > 0
   failed_when: false
@@ -248,7 +248,7 @@
       echo "deleted agent $agent ($vm)"
     fi
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ caas_discovery_vm_patterns }}"
   failed_when: false
   changed_when: true
@@ -266,7 +266,7 @@
     fi
     printf '%s' "${url%/}"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _netris_url
   changed_when: false
   failed_when: false
@@ -279,7 +279,7 @@
       -o jsonpath='{.data.NETRIS_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || true)
     printf '%s' "${pass:-netris}"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _netris_pass
   changed_when: false
   failed_when: false

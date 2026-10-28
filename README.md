@@ -137,11 +137,15 @@ those selectors.
 | `TEST` | Optional pytest `-k` filter for a direct test target. |
 | `KUBECONFIG` | Optional hub-cluster kubeconfig override forwarded to the backend; otherwise it uses the backend's default. |
 | `OSAC_VM_KUBECONFIG` | Optional workload-cluster kubeconfig override; otherwise it uses the backend's default. It may equal `KUBECONFIG` for a single-cluster deployment. |
+| `OSAC_PULL_SECRET_PATH` | Optional path for a pull secret needed by deployment or tests; a backend may write it to `.env.infra`. |
 | `EXTRA_VARS` | Backend-specific deployment variables passed through by the root Makefile. |
 
-The selected backend owns credentials, prerequisites, and defaults. Follow the
-corresponding guide or workflow in the inventory before provisioning
-infrastructure.
+The root Makefile treats these as orchestration inputs. `EXTRA_VARS` is an
+opaque backend-specific payload; it does not automatically become environment
+for pytest. Each backend decides how to map Make inputs to its tools and writes
+test runtime values to `.env.infra`, which the root loads before `run-tests`.
+Follow the corresponding guide or workflow in the inventory for exact
+variable mappings, credentials, prerequisites, and defaults.
 
 ## Adding a backend
 

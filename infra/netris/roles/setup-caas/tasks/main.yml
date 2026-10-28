@@ -8,7 +8,7 @@
   ansible.builtin.shell:
     cmd: oc get agent -n {{ caas_agent_namespace }} --no-headers 2>/dev/null | wc -l
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _agent_count
   until: _agent_count.stdout | int >= caas_agents | length
   retries: 120
@@ -20,7 +20,7 @@
   ansible.builtin.shell:
     cmd: oc get agent -n {{ caas_agent_namespace }} -o jsonpath='{.items[*].metadata.name}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _agent_names
   changed_when: false
   until: _agent_names.rc == 0 and _agent_names.stdout | length > 0
@@ -58,7 +58,7 @@
       }))
       '
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _agent_hostnames_raw
   until: _agent_hostnames_raw.rc == 0
   retries: 40
@@ -114,7 +114,7 @@
       osac.openshift.io/resource_class={{ caas_host_type_id }}
       --overwrite
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ _agents_for_resource_class | default([]) }}"
   register: _label_rc
   changed_when: "'labeled' in _label_rc.stdout and 'not labeled' not in _label_rc.stdout"
@@ -129,7 +129,7 @@
       oc label agent/{{ item }} -n {{ caas_agent_namespace }}
       osac.openshift.io/resource_class- --overwrite
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   when:
     - (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
     - (caas_resource_class_hostnames | default([]) | length) > 0
@@ -146,7 +146,7 @@
       netris.server/name={{ (caas_agents | selectattr('vm_pattern', 'search', item.value) | first).netris_server_name }}
       --overwrite
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   loop: "{{ _agent_hostname_map | default({}) | dict2items }}"
   loop_control:
     label: "{{ item.value }}"
@@ -164,7 +164,7 @@
   ansible.builtin.shell:
     cmd: oc get agent/{{ item }} -n {{ caas_agent_namespace }} -o jsonpath='{.spec.approved}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _agent_approved
   changed_when: false
   until: _agent_approved.rc == 0
@@ -179,7 +179,7 @@
       oc patch agent/{{ item.item }} -n {{ caas_agent_namespace }}
       --type=merge -p '{"spec":{"approved":true}}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   when:
     - (caas_agent_flow | default('hot-pool')) != 'cluster-namespace'
     - item.stdout != 'true'
@@ -197,7 +197,7 @@
   ansible.builtin.shell:
     cmd: oc get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _fulfillment_host
   changed_when: false
   until: _fulfillment_host.rc == 0 and _fulfillment_host.stdout | length > 0
@@ -233,7 +233,7 @@
   ansible.builtin.shell:
     cmd: oc create token -n {{ osac_namespace }} admin
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _sa_token
   changed_when: false
   until: _sa_token.rc == 0 and _sa_token.stdout | length > 0
@@ -251,7 +251,7 @@
       -n {{ osac_namespace }}
       -o jsonpath='{.data.NETRIS_RESOURCE_CLASS_MAP}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _netris_rc_map_raw
   changed_when: false
   failed_when: false
@@ -294,7 +294,7 @@
     print(f"patched added {name}={json.dumps(entry)}")
     PY
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
     NETRIS_RC_NS: "{{ osac_namespace }}"
     NETRIS_RC_MAP_RAW: "{{ _netris_rc_map_raw.stdout | default('') }}"
     NETRIS_RC_NAME: "{{ caas_host_type_id }}"
@@ -309,7 +309,7 @@
   ansible.builtin.shell:
     cmd: oc get route osac-aap -n {{ osac_namespace }} -o jsonpath='{.spec.host}'
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _aap_route
   changed_when: false
   until: _aap_route.rc == 0 and _aap_route.stdout | length > 0
@@ -320,7 +320,7 @@
   ansible.builtin.shell:
     cmd: oc get secret osac-aap-controller-admin-password -n {{ osac_namespace }} -o jsonpath='{.data.password}' | base64 -d
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   register: _aap_admin_pw
   changed_when: false
   no_log: true

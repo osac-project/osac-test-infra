@@ -1,13 +1,13 @@
 ---
 - name: Configure OpenShift CUDN EVPN prerequisites
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path }}"
+    KUBECONFIG: "{{ kubeconfig_path }}"
   block:
     - name: Validate static EVPN prerequisites before cluster mutation
       ansible.builtin.assert:
         that:
-          - ocp_evpn_kubeconfig_path | length > 0
-        fail_msg: "ocp_evpn_kubeconfig_path must name the existing OCP kubeconfig"
+          - kubeconfig_path | length > 0
+        fail_msg: "kubeconfig_path must name the existing OCP kubeconfig"
       tags: [cudn_evpn]
 
     - name: Wait for the OCP API to be ready

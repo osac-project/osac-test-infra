@@ -1,7 +1,7 @@
 ---
 - name: Verify kubeconfig exists
   ansible.builtin.stat:
-    path: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    path: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _kubeconfig
   failed_when: not _kubeconfig.stat.exists
 
@@ -123,7 +123,7 @@
   ansible.builtin.command:
     cmd: oc adm release info --image-for=cli
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _ocp_cli_image
   changed_when: false
 
@@ -422,7 +422,7 @@
           - {{ bmc_net_ocp_ip }}
       EOF
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _prov_cr
   changed_when: "'created' in _prov_cr.stdout or 'configured' in _prov_cr.stdout"
 

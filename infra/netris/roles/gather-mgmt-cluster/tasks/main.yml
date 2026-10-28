@@ -105,7 +105,7 @@
       --dest-dir={{ _gather_dir }}/mgmt-cluster/must-gather \
       2>&1 || echo "must-gather failed or cluster unreachable"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
   failed_when: false
 
@@ -118,7 +118,7 @@
       --dest-dir={{ _gather_dir }}/mgmt-cluster/inspect \
       2>&1 || echo "inspect failed or cluster unreachable"
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
   failed_when: false
 
@@ -147,7 +147,7 @@
       oc get daemonsets -n "$ns" -o wide > "$out/daemonsets.txt" 2>&1 || true
     done
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   changed_when: false
   failed_when: false
 
@@ -181,7 +181,7 @@
       done
     done
   environment:
-    KUBECONFIG: /root/.kube/config
+    KUBECONFIG: "{{ kubeconfig_path }}"
   args:
     executable: /bin/bash
   changed_when: false

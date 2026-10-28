@@ -1,7 +1,6 @@
 # ─── Variables ──────────────────────────────────────────────────────
 
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e deploy_suite=$(DEPLOY_SUITE) -e osac_profile=$(OSAC_PROFILE) -e osac_namespace=$(OSAC_NAMESPACE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
 # DEPLOY_SUITE names the deployment scenario and selects profile/setup behavior.
@@ -13,13 +12,26 @@ DEPLOY_SUITE ?= caas
 OSAC_NAMESPACE ?= osac-e2e-ci
 KUBECONFIG ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
+export KUBECONFIG
 ifeq ($(origin OSAC_PROFILE),command line)
 $(error OSAC_PROFILE is derived from DEPLOY_SUITE; choose the deployment scenario with DEPLOY_SUITE)
 endif
 OSAC_PROFILE = $(if $(filter vmaas,$(DEPLOY_SUITE)),vmaas-ci,$(if $(filter bmaas,$(DEPLOY_SUITE)),bmaas-ci,$(if $(filter full,$(DEPLOY_SUITE)),full-ci,caas-ci)))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
-_KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
-_OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
+export OSAC_PULL_SECRET_PATH
+KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
+OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
+
+# Public Make inputs are translated here into Ansible variables. User
+# EXTRA_VARS comes first; backend-owned deployment context and path mappings
+# follow so each value has one canonical public input.
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') \
+	-e deploy_suite=$(DEPLOY_SUITE) \
+	-e osac_profile=$(OSAC_PROFILE) \
+	-e osac_namespace=$(OSAC_NAMESPACE) \
+	-e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml \
+	-e 'kubeconfig_path=$(KUBECONFIG_ABS)' \
+	-e 'pull_secret_path=$(OSAC_PULL_SECRET_PATH)'
 
 # Keep deployment-specific Netris/CUDN EVPN values in the existing service
 # profile directories. The prep role always generates a runtime overlay; only
@@ -29,9 +41,8 @@ NETRIS_INSTANCE_VALUES_EXTRA = $(strip $(NETRIS_PROFILE_VALUES) -f values/$(OSAC
 
 # VMaaS and full-ci deployments configure OCP as an EVPN VTEP.
 EVPN_DEPLOY_SUITES = vmaas full
-OCP_KUBECONFIG = $(_KUBECONFIG_ABS)
 VMAAS_UNDERLAY_EXTRA = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),-e ocp_underlay_enabled=true,)
-OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
+OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) $(VMAAS_UNDERLAY_EXTRA)
 EVPN_VALUES_FILE = $(abspath .evpn-values.yaml)
 VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),-f $(EVPN_VALUES_FILE))
 
@@ -58,14 +69,14 @@ deploy-infra:
 
 deploy-ocp:
 	@rm -f .evpn-values.yaml
-	ansible-playbook playbooks/deploy-ocp.yml -e deploy_suite=$(DEPLOY_SUITE) $(OCP_ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-ocp.yml $(OCP_ANSIBLE_EXTRA)
 
 deploy-osac:
 	$(MAKE) install-osac
 	@printf '%s\n' \
-		'KUBECONFIG=$(OCP_KUBECONFIG)' \
+		'KUBECONFIG=$(KUBECONFIG_ABS)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas full,$(DEPLOY_SUITE)),$(_OSAC_VM_KUBECONFIG_ABS),$(OCP_KUBECONFIG))' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas full,$(DEPLOY_SUITE)),$(OSAC_VM_KUBECONFIG_ABS),$(KUBECONFIG_ABS))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
 
@@ -107,7 +118,7 @@ setup-caas-agents:
 
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make uninstall \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(KUBECONFIG_ABS) make uninstall \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE) 2>/dev/null || true
@@ -228,7 +239,7 @@ run-osac-setup:
 		exit 1; \
 	fi
 	@echo "=== Installing OSAC infrastructure via Helm (make install-infra) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-infra \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(KUBECONFIG_ABS) make install-infra \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE) \
@@ -236,7 +247,7 @@ run-osac-setup:
 	@echo "=== Creating external Netris credentials ==="
 	ansible-playbook playbooks/create-netris-credentials.yml $(OCP_ANSIBLE_EXTRA)
 	@echo "=== Installing OSAC application via Helm (make install-osac) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-osac \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(KUBECONFIG_ABS) make install-osac \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE) \

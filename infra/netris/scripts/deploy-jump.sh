@@ -20,6 +20,7 @@ set -euo pipefail
 #
 # Usage: source scripts/env.sh && make deploy-jump
 # Requires: SERVER, LAB_NAME, PULL_SECRET, LICENSE_KEY, LICENSE_ZIP env vars
+# Optional: OSAC_PULL_SECRET_PATH (remote destination; defaults to /root/pull-secret)
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 
@@ -30,6 +31,7 @@ missing=()
 [[ -z "${PULL_SECRET:-}" ]] && missing+=("PULL_SECRET")
 [[ -z "${LICENSE_KEY:-}" ]] && missing+=("LICENSE_KEY")
 [[ -z "${LICENSE_ZIP:-}" ]] && missing+=("LICENSE_ZIP")
+OSAC_PULL_SECRET_PATH="${OSAC_PULL_SECRET_PATH:-/root/pull-secret}"
 
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "ERROR: Missing required variables: ${missing[*]}"
@@ -39,6 +41,11 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     echo "    PULL_SECRET=/path/to/pull-secret \\"
     echo "    LICENSE_KEY=/path/to/license.key \\"
     echo "    LICENSE_ZIP=/path/to/license.zip"
+    exit 1
+fi
+
+if [[ ! "${OSAC_PULL_SECRET_PATH}" =~ ^/[[:alnum:]_./-]+$ || "${OSAC_PULL_SECRET_PATH}" == "/" ]]; then
+    echo "ERROR: OSAC_PULL_SECRET_PATH must be an absolute path without whitespace or shell metacharacters."
     exit 1
 fi
 
@@ -97,7 +104,10 @@ run_ssh "hostname && echo OK" || { echo "ERROR: Cannot SSH to ${SERVER}"; exit 1
 
 echo ""
 echo "=== [3/9] Copying secrets to server ==="
-run_scp "${PULL_SECRET}" "root@${SERVER}:/root/pull-secret"
+REMOTE_PULL_SECRET_DIR="${OSAC_PULL_SECRET_PATH%/*}"
+[[ -z "${REMOTE_PULL_SECRET_DIR}" ]] && REMOTE_PULL_SECRET_DIR="/"
+run_ssh "mkdir -p -- '${REMOTE_PULL_SECRET_DIR}'"
+run_scp "${PULL_SECRET}" "root@${SERVER}:${OSAC_PULL_SECRET_PATH}"
 run_scp "${LICENSE_KEY}" "root@${SERVER}:/root/license.key"
 run_scp "${LICENSE_ZIP}" "root@${SERVER}:/root/license.zip"
 echo "Secrets copied."
@@ -157,8 +167,9 @@ echo "Config written."
 echo ""
 echo "=== [9/9] Starting deploy in tmux session ==="
 DEPLOY_TARGET="${DEPLOY_TARGET:-redeploy-fresh}"
+REMOTE_DEPLOY_TARGET="${DEPLOY_TARGET} OSAC_PULL_SECRET_PATH=${OSAC_PULL_SECRET_PATH}"
 run_ssh "tmux kill-session -t deploy 2>/dev/null || true"
-run_ssh "tmux new-session -d -s deploy -x 200 -y 50 'cd /root/osac-test-infra/infra/netris && make ${DEPLOY_TARGET} 2>&1 | tee -a /root/deploy.log; exec bash'"
+run_ssh "tmux new-session -d -s deploy -x 200 -y 50 'cd /root/osac-test-infra/infra/netris && make ${REMOTE_DEPLOY_TARGET} 2>&1 | tee -a /root/deploy.log; exec bash'"
 echo ""
 echo "============================================"
 echo "  Deploy started on ${SERVER} in tmux"

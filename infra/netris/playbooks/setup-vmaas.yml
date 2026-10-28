@@ -3,11 +3,11 @@
   hosts: all
   gather_facts: false
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path }}"
+    KUBECONFIG: "{{ kubeconfig_path }}"
   tasks:
     - name: Check the selected OCP kubeconfig exists
       ansible.builtin.stat:
-        path: "{{ ocp_evpn_kubeconfig_path }}"
+        path: "{{ kubeconfig_path }}"
       register: _vmaas_kubeconfig
 
     - name: Require the selected OCP kubeconfig
@@ -15,7 +15,7 @@
         that:
           - _vmaas_kubeconfig.stat.exists
           - _vmaas_kubeconfig.stat.isreg
-        fail_msg: "OCP kubeconfig is missing or is not a regular file: {{ ocp_evpn_kubeconfig_path }}"
+        fail_msg: "OCP kubeconfig is missing or is not a regular file: {{ kubeconfig_path }}"
 
     - name: Check the OCP API is ready
       ansible.builtin.command:

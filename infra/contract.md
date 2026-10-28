@@ -63,6 +63,9 @@ implementation details in the OSAC mono-repo.
 
 ## Variables
 
-The top-level Makefile forwards caller-supplied `EXTRA_VARS` and kubeconfig
-overrides. `EXTRA_VARS` is backend-specific; each backend documents which
-variables its targets consume. When unset, the backend uses its own defaults.
+The top-level Makefile forwards caller-supplied `EXTRA_VARS`, kubeconfig
+overrides, and `OSAC_PULL_SECRET_PATH` when set. `EXTRA_VARS` is an opaque,
+backend-specific payload; it does not define test-process environment by
+itself. Each backend documents how its Make inputs map to deployment tools and
+which variables its targets consume. Backends publish test runtime values
+through `.env.infra`. When an input is unset, the backend uses its own defaults.
