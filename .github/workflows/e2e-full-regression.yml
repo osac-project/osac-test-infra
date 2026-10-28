@@ -1000,7 +1000,6 @@ jobs:
               tests/e2e/bmaas/ \
               --ignore=tests/e2e/vmaas/regression/external_ip \
               --ignore=tests/e2e/vmaas/test_disabled_services.py \
-              -m "not requires_netris and not requires_stretched_networking" \
               -k "${FILTER}" \
               -n 0 \
               --junitxml=/tmp/test-output/junit.xml -v

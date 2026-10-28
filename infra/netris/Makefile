@@ -5,8 +5,7 @@ EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml -e snapshot_osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
-# SUITE names the deployment scenario and selects profile/setup behavior.
-# TEST_SCOPE is handled by the root Makefile and only narrows VMaaS/BMaaS tests.
+# SUITE names the deployment scenario and selects profile/setup/test-path behavior.
 # SUITE=caas is the default; the root pipeline maps it to setup-caas / test-caas.
 # The supported CaaS snapshot restore grows both h00 disks to their configured sizes.
 SUITE ?= caas
@@ -14,7 +13,10 @@ SUITE ?= caas
 OSAC_NAMESPACE ?= osac-e2e-ci
 KUBECONFIG ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
-OSAC_PROFILE ?= $(if $(filter vmaas,$(SUITE)),vmaas-ci,$(if $(filter bmaas,$(SUITE)),bmaas-ci,$(if $(filter full stretched,$(SUITE)),full-ci,caas-ci)))
+ifeq ($(origin OSAC_PROFILE),command line)
+$(error OSAC_PROFILE is derived from SUITE; choose the deployment scenario with SUITE)
+endif
+OSAC_PROFILE = $(if $(filter vmaas,$(SUITE)),vmaas-ci,$(if $(filter bmaas,$(SUITE)),bmaas-ci,$(if $(filter full stretched,$(SUITE)),full-ci,caas-ci)))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 _KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 _OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
@@ -28,19 +30,13 @@ $(error OSAC_DEPLOY_MODE must be fresh or snapshot (got '$(OSAC_DEPLOY_MODE)'))
 endif
 ifeq ($(OSAC_DEPLOY_MODE),snapshot)
 ifneq ($(SUITE),caas)
-$(error Snapshot mode supports only SUITE=caas with OSAC_PROFILE=caas-ci; use fresh mode for Netris service profiles)
-endif
-ifneq ($(OSAC_PROFILE),caas-ci)
-$(error Snapshot mode supports only OSAC_PROFILE=caas-ci; use fresh mode for Netris service profiles)
+$(error Snapshot mode supports only SUITE=caas; use fresh mode for Netris service profiles)
 endif
 endif
 endif
 ifneq ($(filter deploy-fast,$(MAKECMDGOALS)),)
 ifneq ($(SUITE),caas)
 $(error deploy-fast uses snapshot mode and supports only SUITE=caas; use deploy for fresh Netris service deployments)
-endif
-ifneq ($(OSAC_PROFILE),caas-ci)
-$(error deploy-fast supports only OSAC_PROFILE=caas-ci; use deploy for fresh Netris service profiles)
 endif
 endif
 
@@ -119,7 +115,7 @@ destroy-vmaas:
 # Stretched provisions the full profile and needs both BMaaS and VMaaS service prerequisites.
 setup-stretched: SUITE = stretched
 setup-stretched:
-	$(MAKE) setup-full
+	$(MAKE) setup-full SUITE=$(SUITE)
 
 destroy-stretched:
 	@echo "Stretched tests own and clean up their tenant resources; full-profile prerequisites are removed with destroy-ocp."
@@ -128,6 +124,7 @@ gather-stretched: SUITE = stretched
 gather-stretched:
 	$(MAKE) gather-full
 
+setup-caas: SUITE = caas
 setup-caas:
 	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
 
@@ -177,14 +174,16 @@ gather-caas:
 setup-bmc:
 	ansible-playbook playbooks/setup-bmc.yml $(ANSIBLE_EXTRA)
 
+setup-bmaas: SUITE = bmaas
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
 # Full profile setup currently skips CaaS, prepares BMaaS, and runs the
 # VMaaS EVPN prerequisite check.
+setup-full: SUITE = full
 setup-full:
-	$(MAKE) setup-bmaas
-	$(MAKE) setup-vmaas SUITE=vmaas OSAC_PROFILE=$(OSAC_PROFILE)
+	$(MAKE) setup-bmaas SUITE=$(SUITE)
+	$(MAKE) setup-vmaas SUITE=$(SUITE)
 
 destroy-bmaas:
 	ansible-playbook playbooks/destroy-bmaas.yml $(ANSIBLE_EXTRA)

@@ -89,8 +89,6 @@ jobs:
       osac-repo: ${{ inputs.osac-repo || '' }}
       osac-branch: ${{ inputs.osac-branch || '' }}
       suite: ${{ inputs.suite == 'full' && 'full' || 'vmaas' }}
-      test-scope: ${{ inputs.suite == 'full' && 'all' || 'networking' }}
-      osac-profile: ${{ inputs.suite == 'full' && 'full-ci' || 'vmaas-ci' }}
       test-infra-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}
       test-infra-ref: ${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref }}
       test-infra-sha: ${{ inputs.pr-sha || github.event.pull_request.head.sha || '' }}

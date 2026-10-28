@@ -8,10 +8,9 @@ from `infra/netris/`. Repository orchestration targets such as `make e2e`,
 
 > **Using this backend from `osac-test-infra`:** run a complete suite from the
 > repository root with `make e2e INFRA=netris SUITE=<suite>`. `SUITE` chooses
-> the deployment scenario and matching Make test target; for VMaaS/BMaaS,
-> `TEST_SCOPE` selects service tests, networking tests, or both. `OSAC_PROFILE`
-> chooses OSAC's Helm values preset. Netris-specific overlays live in the OSAC
-> checkout at `osac-installer/values/<profile>/netris.yaml`. See the root README's [deployment scenario
+> the deployment scenario, matching networking test path, and OSAC profile.
+> Netris-specific overlays live in the OSAC checkout at
+> `osac-installer/values/<profile>/netris.yaml`. See the root README's [deployment scenario
 > and target table](../../README.md#netris-deployment-scenarios-test-targets-and-profiles)
 > for supported scenarios, test targets, and profile defaults. The `make deploy*`
 > commands in this backend guide are provisioning building blocks; they do not
@@ -139,40 +138,40 @@ The following commands are run from the `osac-test-infra` repository root.
 prepared cluster.
 
 `SUITE` names the deployment scenario. It drives the Netris setup path,
-Ansible behavior, default OSAC profile, and corresponding Make test target.
-`TEST_SCOPE` narrows VMaaS or BMaaS tests without changing the deployment.
+Ansible behavior, derived OSAC profile, and corresponding Make test target.
+Every Netris as-a-service test target selects tests from
+`tests/e2e/networking/` in the OSAC mono-repo.
 
-| `SUITE` | Default `OSAC_PROFILE` and Netris overlay in the OSAC checkout | Target run by `make setup-suite` | Target run by `make run-tests` | Test selection |
+| `SUITE` | Derived OSAC profile and Netris overlay in the OSAC checkout | Target run by `make setup-suite` | Target run by `make run-tests` | Test path |
 |---|---|---|---|---|
 | `caas` | `caas-ci` (no Netris overlay) | `setup-caas` | `test-caas` | CaaS lifecycle tests |
-| `vmaas` | `vmaas-ci` + `osac-installer/values/vmaas-ci/netris.yaml` | `setup-vmaas` | `test-vmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
-| `bmaas` | `bmaas-ci` + `osac-installer/values/bmaas-ci/netris.yaml` | `setup-bmaas` | `test-bmaas` | `TEST_SCOPE=service` (default), `networking`, or `all` |
+| `vmaas` | `vmaas-ci` + `osac-installer/values/vmaas-ci/netris.yaml` | `setup-vmaas` | `test-vmaas` | `tests/e2e/networking/vmaas/` |
+| `bmaas` | `bmaas-ci` + `osac-installer/values/bmaas-ci/netris.yaml` | `setup-bmaas` | `test-bmaas` | `tests/e2e/networking/bmaas/` |
 | `stretched` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-stretched` | `test-stretched` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
-| `full` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-full` | `test-full` | Broad serial suite plus VMaaS, BMaaS, and stretched Netris networking; CaaS is skipped |
+| `full` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-full` | `test-full` | All Netris networking paths serially, excluding ExternalIP cases and the slow cross-tenant BMaaS class; CaaS is skipped |
 
 This table describes the root orchestration targets. Later backend-only target
 examples in this guide assume the working directory is `infra/netris/`; from
 the repository root, use orchestration targets such as `make e2e`,
 `make setup-suite`, and `make run-tests` with `INFRA=netris`.
 
-For VMaaS and BMaaS, `TEST_SCOPE=service` runs general lifecycle/API tests,
-`TEST_SCOPE=networking` runs only Netris connectivity tests, and
-`TEST_SCOPE=all` runs both. PR commands `/test vmaas-netris` and
-`/test bmaas-netris` use the networking scope. The `stretched` deployment is a
-separate shared-subnet scenario and needs no extra scope value.
+The VMaaS, BMaaS, stretched, and full targets all select from the networking
+tree. The deployment suite determines the profile and preparation steps and
+selects the matching test directory. Do not set `OSAC_PROFILE`; the backend
+derives it from `SUITE`.
 
 Run the whole pipeline with one command:
 
 ```bash
-make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci \
+make e2e INFRA=netris SUITE=full \
   OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
 ```
 
 Or choose a focused networking flow:
 
 ```bash
-make e2e INFRA=netris SUITE=vmaas TEST_SCOPE=networking
-make e2e INFRA=netris SUITE=bmaas TEST_SCOPE=networking EXTRA_VARS="bare_metal_services=true"
+make e2e INFRA=netris SUITE=vmaas
+make e2e INFRA=netris SUITE=bmaas EXTRA_VARS="bare_metal_services=true"
 make e2e INFRA=netris SUITE=stretched EXTRA_VARS="bare_metal_services=true"
 ```
 
@@ -180,25 +179,22 @@ The variables select different parts of the run:
 
 - `INFRA=netris` selects this backend.
 - `SUITE=...` selects the deployment scenario and therefore backend setup,
-  Ansible behavior, and the default profile.
-- `TEST_SCOPE=service|networking|all` selects VMaaS/BMaaS test coverage without
-  changing deployment. It defaults to `service`.
-- `OSAC_PROFILE=...` selects OSAC Helm values and enabled services. The Netris
-  backend supplies the defaults in the table; override only when needed.
+  Ansible behavior, OSAC profile, and networking test path. The profile is
+  derived from the suite (`vmaas` → `vmaas-ci`, `bmaas` → `bmaas-ci`, and
+  `stretched`/`full` → `full-ci`).
 - `OSAC_DEPLOY_MODE=fresh|snapshot` chooses a fresh install or snapshot-based
   OSAC refresh. `fresh` is the default. Snapshot mode supports only
-  `SUITE=caas` with `OSAC_PROFILE=caas-ci`; VMaaS, BMaaS, stretched, and full
+  `SUITE=caas`; VMaaS, BMaaS, stretched, and full
   require fresh mode so the Netris overlays are applied.
 - `EXTRA_VARS=...` passes Ansible variables, such as enabling BMaaS BMC
   services. Combine DNS and other overrides in the same value.
 
 To run only tests after the cluster and OSAC are ready, use the target mapped
-from `SUITE` and set `TEST_SCOPE` when needed. For example,
-`make test-vmaas TEST_SCOPE=networking` selects Netris VMaaS connectivity tests.
-In the pipeline, use:
+from `SUITE`. For example, `make test-vmaas` selects Netris VMaaS networking
+tests. In the pipeline, use:
 
 ```bash
-make run-tests INFRA=netris SUITE=vmaas TEST_SCOPE=networking
+make run-tests INFRA=netris SUITE=vmaas
 ```
 
 This loads the environment saved by `deploy-osac` and invokes the same target.
@@ -553,7 +549,7 @@ dns_server: "10.0.0.1"
 
 #### Snapshot Deployment (CaaS only)
 
-Snapshot refresh currently supports only `SUITE=caas` with `OSAC_PROFILE=caas-ci`.
+Snapshot refresh currently supports only `SUITE=caas`, which maps to `caas-ci`.
 The VMaaS, BMaaS, stretched, and full scenarios require generated Netris runtime
 values and per-profile overlays, which are applied by the fresh-install path.
 Use `OSAC_DEPLOY_MODE=fresh` for those scenarios.

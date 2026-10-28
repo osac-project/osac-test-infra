@@ -41,7 +41,7 @@ A backend may define a shell-sourceable contract at `infra/<backend>/contracts/<
 REQUIRED_VARS="KUBECONFIG OSAC_NAMESPACE OSAC_VM_KUBECONFIG"
 ```
 
-Before `run-tests`, the top-level Makefile sources `.env.infra` and checks each variable listed by the backend contract. For `SUITE=vmaas` or `SUITE=bmaas`, `TEST_SCOPE=service` uses `contracts/<suite>`, `networking` uses `contracts/<suite>-networking`, and `all` validates both before running both test scopes. Other deployment scenarios use `contracts/<suite>`. The Netris BMaaS networking scope, `full`, and `stretched` contracts also require the BMaaS SSH host map, instance type, and guest-visible interface name published by setup. Keeping contracts beside a backend lets each backend describe its own connection requirements without placing infrastructure contracts in the moved test suites.
+Before `run-tests`, the top-level Makefile sources `.env.infra` and checks each variable listed by `contracts/<suite>`. Netris VMaaS, BMaaS, stretched, and full test targets select from the networking tree; BMaaS, stretched, and full contracts also require the BMaaS SSH host map, instance type, and guest-visible interface name published by setup. Keeping contracts beside a backend lets each backend describe its own connection requirements without placing infrastructure contracts in the moved test suites.
 
 ## Variables
 

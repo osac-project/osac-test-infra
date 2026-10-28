@@ -60,7 +60,7 @@ make test-vmaas
 make test-caas
 make test-storage
 make test-bmaas
-make test-bmaas TEST_SCOPE=networking
+make test-bmaas
 
 # Run single test by name
 TEST=test_compute_instance_lifecycle make test-vmaas
