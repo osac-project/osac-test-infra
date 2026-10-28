@@ -1,6 +1,7 @@
 REPORTS_DIR ?= reports
 
-# SUITE selects the deployment scenario and its networking test path.
+# SUITE selects the deployment scenario. TEST_SUITE selects the OSAC test path;
+# by default both use the same name.
 .PHONY: test lint format test-vmaas test-stretched test-caas test-storage test-bmaas test-metering test-references test-full
 
 test:
@@ -56,6 +57,7 @@ test-references:
 
 INFRA              ?= netris
 SUITE              ?= caas
+TEST_SUITE         ?= $(SUITE)
 EXTRA_VARS         ?=
 KUBECONFIG         ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
@@ -74,7 +76,7 @@ $(error OSAC_DEPLOY_MODE must be fresh or snapshot (got '$(OSAC_DEPLOY_MODE)'))
 endif
 ifeq ($(OSAC_DEPLOY_MODE),snapshot)
 ifneq ($(SUITE),caas)
-$(error Snapshot mode supports only SUITE=caas; use fresh mode for Netris VMaaS, BMaaS, stretched, or full deployments)
+$(error Snapshot mode supports only SUITE=caas; use fresh mode for Netris VMaaS, BMaaS, or full deployments)
 endif
 endif
 endif
@@ -98,7 +100,7 @@ _validate-suite-contract:
 		echo "ERROR: $(INFRA_DIR)/.env.infra not found. Run 'make deploy-osac' first."; exit 1; \
 	fi
 	@set -e; \
-	suite_contract='$(INFRA_DIR)/contracts/$(SUITE)'; \
+	suite_contract='$(INFRA_DIR)/contracts/$(TEST_SUITE)'; \
 	set -a; . "$(INFRA_DIR)/.env.infra"; set +a; \
 	if [ -f "$$suite_contract" ]; then \
 		. "$$suite_contract"; \
@@ -108,7 +110,7 @@ _validate-suite-contract:
 			if [ -z "$$val" ]; then missing="$$missing $$var"; fi; \
 		done; \
 		if [ -n "$$missing" ]; then \
-			echo "ERROR: backend '$(INFRA)' missing required vars for suite '$(SUITE)':$$missing"; \
+			echo "ERROR: backend '$(INFRA)' missing required vars for test suite '$(TEST_SUITE)':$$missing"; \
 			exit 1; \
 		fi; \
 	fi
@@ -147,7 +149,7 @@ run-tests: _validate-suite-contract
 			export METERING_ADAPTER_URL="https://$$route_host"; \
 		fi; \
 	fi; \
-	$(MAKE) test-$(SUITE)
+	$(MAKE) test-$(TEST_SUITE)
 
 destroy-ocp:
 	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)

@@ -11,6 +11,11 @@ on:
         description: "Deployment scenario to provision"
         required: false
         type: string
+        default: "full"
+      test-suite:
+        description: "OSAC E2E test suite to run"
+        required: false
+        type: string
         default: "stretched"
       instance-type:
         description: "EC2 instance type"
@@ -359,11 +364,16 @@ jobs:
         env:
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_BRANCH: ${{ inputs.osac-branch }}
-          TEST_SUITE: ${{ inputs.suite }}
+          DEPLOY_SUITE: ${{ inputs.suite }}
+          TEST_SUITE: ${{ inputs.test-suite }}
         run: |
+          case "${DEPLOY_SUITE}" in
+            full) ;;
+            *) echo "::error::Unsupported Netris deployment scenario: ${DEPLOY_SUITE}"; exit 1 ;;
+          esac
           case "${TEST_SUITE}" in
             stretched) ;;
-            *) echo "::error::Unsupported Netris deployment scenario: ${TEST_SUITE}"; exit 1 ;;
+            *) echo "::error::Unsupported Netris test suite: ${TEST_SUITE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
@@ -392,9 +402,9 @@ jobs:
         shell: bash
         timeout-minutes: 30
         env:
-          TEST_SUITE: ${{ inputs.suite }}
+          DEPLOY_SUITE: ${{ inputs.suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make setup-infra INFRA=netris SUITE="${TEST_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
+        run: make setup-infra INFRA=netris SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Add osac CLI to PATH
         shell: bash
@@ -417,17 +427,17 @@ jobs:
         shell: bash
         timeout-minutes: 45
         env:
-          TEST_SUITE: ${{ inputs.suite }}
+          DEPLOY_SUITE: ${{ inputs.suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make deploy-infra INFRA=netris SUITE="${TEST_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
+        run: make deploy-infra INFRA=netris SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Deploy OCP from snapshot
         shell: bash
         timeout-minutes: 60
         env:
-          TEST_SUITE: ${{ inputs.suite }}
+          DEPLOY_SUITE: ${{ inputs.suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make deploy-ocp INFRA=netris SUITE="${TEST_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
+        run: make deploy-ocp INFRA=netris SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Build and load component images
         id: components
@@ -549,29 +559,30 @@ jobs:
         timeout-minutes: 90
         shell: bash
         env:
-          TEST_SUITE: ${{ inputs.suite }}
+          DEPLOY_SUITE: ${{ inputs.suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
           COMPONENT_OVERRIDES: ${{ steps.components.outputs.overrides || '{}' }}
         run: |
           MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
-          make deploy-osac INFRA=netris SUITE="${TEST_SUITE}" EXTRA_VARS="${MERGED}"
+          make deploy-osac INFRA=netris SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${MERGED}"
 
-      - name: Set up Netris test prerequisites
+      - name: Set up Netris deployment prerequisites
         shell: bash
         timeout-minutes: 60
         env:
-          TEST_SUITE: ${{ inputs.suite }}
+          DEPLOY_SUITE: ${{ inputs.suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make setup-suite INFRA=netris SUITE="${TEST_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
+        run: make setup-suite INFRA=netris SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Run Netris E2E tests
         id: test
         timeout-minutes: 60
         shell: bash
         env:
-          TEST_SUITE: ${{ inputs.suite }}
+          DEPLOY_SUITE: ${{ inputs.suite }}
+          TEST_SUITE: ${{ inputs.test-suite }}
         run: |
-          make run-tests INFRA=netris SUITE="${TEST_SUITE}"
+          make run-tests INFRA=netris SUITE="${DEPLOY_SUITE}" TEST_SUITE="${TEST_SUITE}"
 
       - name: Gather infra diagnostics
         if: always()
@@ -587,14 +598,14 @@ jobs:
         continue-on-error: true
         run: make -C infra/netris gather-mgmt-cluster
 
-      - name: Gather stretched Netris diagnostics
+      - name: Gather deployment-suite diagnostics
         if: always()
         shell: bash
         timeout-minutes: 10
         continue-on-error: true
         env:
-          TEST_SUITE: ${{ inputs.suite }}
-        run: make gather-suite INFRA=netris SUITE="${TEST_SUITE}"
+          DEPLOY_SUITE: ${{ inputs.suite }}
+        run: make gather-suite INFRA=netris SUITE="${DEPLOY_SUITE}"
 
       - name: Select kubeconfig for artifact collection
         id: artifact-kubeconfig
@@ -624,7 +635,7 @@ jobs:
         with:
           namespace: osac-e2e-ci
           kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
-          artifact-name: ${{ inputs.suite }}-netris-artifacts
+          artifact-name: ${{ inputs.suite }}-${{ inputs.test-suite }}-netris-artifacts
 
       - name: Gather EC2 runner artifacts
         if: always()

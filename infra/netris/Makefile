@@ -16,7 +16,7 @@ OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
 ifeq ($(origin OSAC_PROFILE),command line)
 $(error OSAC_PROFILE is derived from SUITE; choose the deployment scenario with SUITE)
 endif
-OSAC_PROFILE = $(if $(filter vmaas,$(SUITE)),vmaas-ci,$(if $(filter bmaas,$(SUITE)),bmaas-ci,$(if $(filter full stretched,$(SUITE)),full-ci,caas-ci)))
+OSAC_PROFILE = $(if $(filter vmaas,$(SUITE)),vmaas-ci,$(if $(filter bmaas,$(SUITE)),bmaas-ci,$(if $(filter full,$(SUITE)),full-ci,caas-ci)))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 _KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 _OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
@@ -47,7 +47,7 @@ NETRIS_PROFILE_VALUES = $(if $(filter vmaas-ci bmaas-ci full-ci,$(OSAC_PROFILE))
 NETRIS_INSTANCE_VALUES_EXTRA = $(strip $(NETRIS_PROFILE_VALUES) -f values/$(OSAC_PROFILE)/netris-runtime.yaml)
 
 # VMaaS and full-ci deployments configure OCP as an EVPN VTEP; other scenarios keep their established root path.
-EVPN_SUITES = vmaas stretched full
+EVPN_SUITES = vmaas full
 OCP_KUBECONFIG = $(if $(filter $(EVPN_SUITES),$(SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
 VMAAS_UNDERLAY_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-e ocp_underlay_enabled=true,)
 OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
@@ -96,7 +96,7 @@ deploy-osac:
 	@printf '%s\n' \
 		'KUBECONFIG=$(OCP_KUBECONFIG)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas stretched full,$(SUITE)),$(_OSAC_VM_KUBECONFIG_ABS),$(OCP_KUBECONFIG))' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas full,$(SUITE)),$(_OSAC_VM_KUBECONFIG_ABS),$(OCP_KUBECONFIG))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
 		> $(ENV_INFRA)
 
@@ -111,18 +111,6 @@ gather-vmaas:
 
 destroy-vmaas:
 	@echo "VMaaS setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
-
-# Stretched provisions the full profile and needs both BMaaS and VMaaS service prerequisites.
-setup-stretched: SUITE = stretched
-setup-stretched:
-	$(MAKE) setup-full SUITE=$(SUITE)
-
-destroy-stretched:
-	@echo "Stretched tests own and clean up their tenant resources; full-profile prerequisites are removed with destroy-ocp."
-
-gather-stretched: SUITE = stretched
-gather-stretched:
-	$(MAKE) gather-full
 
 setup-caas: SUITE = caas
 setup-caas:
@@ -178,8 +166,9 @@ setup-bmaas: SUITE = bmaas
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
-# Full profile setup currently skips CaaS, prepares BMaaS, and runs the
-# VMaaS EVPN prerequisite check.
+# The full-ci profile enables all XaaS services. This shared Netris lab setup
+# prepares BMaaS and VMaaS networking. CaaS/MaaS also use the three discovery
+# VMs that BMaaS repurposes, so those host-pool setups cannot run together yet.
 setup-full: SUITE = full
 setup-full:
 	$(MAKE) setup-bmaas SUITE=$(SUITE)
@@ -352,7 +341,6 @@ health-check:
 .PHONY: deploy deploy-fast \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
         setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
-		setup-stretched gather-stretched destroy-stretched \
 		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
 		destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \

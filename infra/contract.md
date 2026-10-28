@@ -29,19 +29,19 @@ After `deploy-osac`, write `.env.infra` in the backend directory with the enviro
 ```
 KUBECONFIG=<path>
 OSAC_NAMESPACE=<namespace>
-OSAC_VM_KUBECONFIG=<path>          # required by vmaas and full deployment contracts
+OSAC_VM_KUBECONFIG=<path>          # required by VMaaS, full, and stretched test contracts
 OSAC_PULL_SECRET_PATH=<path>       # commonly required by caas
 ```
 
-`OSAC_VM_KUBECONFIG` is mandatory for VMaaS and full. For a single-cluster deployment it may point to the same kubeconfig as `KUBECONFIG`; set a separate path when the workload cluster has its own kubeconfig.
+`OSAC_VM_KUBECONFIG` is mandatory for VMaaS, full, and stretched test contracts. For a single-cluster deployment it may point to the same kubeconfig as `KUBECONFIG`; set a separate path when the workload cluster has its own kubeconfig.
 
-A backend may define a shell-sourceable contract at `infra/<backend>/contracts/<suite>`. Set `REQUIRED_VARS` there to the `.env.infra` variables that suite needs, for example:
+A backend may define a shell-sourceable contract at `infra/<backend>/contracts/<test-suite>`. Set `REQUIRED_VARS` there to the `.env.infra` variables that test suite needs, for example:
 
 ```sh
 REQUIRED_VARS="KUBECONFIG OSAC_NAMESPACE OSAC_VM_KUBECONFIG"
 ```
 
-Before `run-tests`, the top-level Makefile sources `.env.infra` and checks each variable listed by `contracts/<suite>`. Netris VMaaS, BMaaS, stretched, and full test targets select from the networking tree; BMaaS, stretched, and full contracts also require the BMaaS SSH host map, instance type, and guest-visible interface name published by setup. Keeping contracts beside a backend lets each backend describe its own connection requirements without placing infrastructure contracts in the moved test suites.
+Before `run-tests`, the top-level Makefile sources `.env.infra` and checks each variable listed by `contracts/<test-suite>`. Netris VMaaS, BMaaS, stretched, and full test targets select from the networking tree; BMaaS, stretched, and full test contracts also require the BMaaS SSH host map, instance type, and guest-visible interface name published by setup. Keeping contracts beside a backend lets each backend describe its own connection requirements without placing infrastructure contracts in the moved test suites.
 
 ## Variables
 

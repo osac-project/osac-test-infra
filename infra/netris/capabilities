@@ -1,1 +1,1 @@
-SUPPORTED_SUITES="caas bmaas vmaas stretched full"
+SUPPORTED_SUITES="caas bmaas vmaas full"

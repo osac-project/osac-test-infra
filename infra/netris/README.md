@@ -138,32 +138,45 @@ The following commands are run from the `osac-test-infra` repository root.
 prepared cluster.
 
 `SUITE` names the deployment scenario. It drives the Netris setup path,
-Ansible behavior, derived OSAC profile, and corresponding Make test target.
-Every Netris as-a-service test target selects tests from
+Ansible behavior, and derived OSAC profile. `TEST_SUITE` selects the OSAC test
+path and defaults to `SUITE`. Netris networking tests live under
 `tests/e2e/networking/` in the OSAC mono-repo.
 
-| `SUITE` | Derived OSAC profile and Netris overlay in the OSAC checkout | Target run by `make setup-suite` | Target run by `make run-tests` | Test path |
-|---|---|---|---|---|
-| `caas` | `caas-ci` (no Netris overlay) | `setup-caas` | `test-caas` | CaaS lifecycle tests |
-| `vmaas` | `vmaas-ci` + `osac-installer/values/vmaas-ci/netris.yaml` | `setup-vmaas` | `test-vmaas` | `tests/e2e/networking/vmaas/` |
-| `bmaas` | `bmaas-ci` + `osac-installer/values/bmaas-ci/netris.yaml` | `setup-bmaas` | `test-bmaas` | `tests/e2e/networking/bmaas/` |
-| `stretched` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-stretched` | `test-stretched` | Shared-subnet VMaaS↔BMaaS connectivity only; CaaS setup is skipped |
-| `full` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-full` | `test-full` | All Netris networking paths serially, excluding ExternalIP cases and the slow cross-tenant BMaaS class; CaaS is skipped |
+| Deployment `SUITE` | Derived OSAC profile and Netris overlay in the OSAC checkout | Target run by `make setup-suite` | Default `TEST_SUITE` / test target |
+|---|---|---|---|
+| `caas` | `caas-ci` (no Netris overlay) | `setup-caas` | `caas` / `test-caas` |
+| `vmaas` | `vmaas-ci` + `osac-installer/values/vmaas-ci/netris.yaml` | `setup-vmaas` | `vmaas` / `test-vmaas` |
+| `bmaas` | `bmaas-ci` + `osac-installer/values/bmaas-ci/netris.yaml` | `setup-bmaas` | `bmaas` / `test-bmaas` |
+| `full` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-full` | `full` / `test-full` |
+
+The test-suite targets are:
+
+| `TEST_SUITE` | Make target | OSAC test path |
+|---|---|---|
+| `caas` | `test-caas` | `tests/e2e/caas/` |
+| `vmaas` | `test-vmaas` | `tests/e2e/networking/vmaas/` |
+| `bmaas` | `test-bmaas` | `tests/e2e/networking/bmaas/` |
+| `full` | `test-full` | `tests/e2e/networking/` with the documented exclusions |
+| `stretched` | `test-stretched` | `tests/e2e/networking/stretched/` |
 
 This table describes the root orchestration targets. Later backend-only target
 examples in this guide assume the working directory is `infra/netris/`; from
 the repository root, use orchestration targets such as `make e2e`,
 `make setup-suite`, and `make run-tests` with `INFRA=netris`.
 
-The VMaaS, BMaaS, stretched, and full targets all select from the networking
-tree. The deployment suite determines the profile and preparation steps and
-selects the matching test directory. Do not set `OSAC_PROFILE`; the backend
-derives it from `SUITE`.
+`TEST_SUITE` may differ from the deployment `SUITE`. For example,
+`SUITE=full TEST_SUITE=stretched` deploys the full-ci profile and runs only the
+shared-subnet test at `tests/e2e/networking/stretched/`. Do not set
+`OSAC_PROFILE`; the backend derives it from `SUITE`.
 
 Run the whole pipeline with one command:
 
 ```bash
 make e2e INFRA=netris SUITE=full \
+  OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
+
+# Use the same full-ci deployment and run only stretched tests
+make e2e INFRA=netris SUITE=full TEST_SUITE=stretched \
   OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
 ```
 
@@ -172,32 +185,35 @@ Or choose a focused networking flow:
 ```bash
 make e2e INFRA=netris SUITE=vmaas
 make e2e INFRA=netris SUITE=bmaas EXTRA_VARS="bare_metal_services=true"
-make e2e INFRA=netris SUITE=stretched EXTRA_VARS="bare_metal_services=true"
 ```
 
 The variables select different parts of the run:
 
 - `INFRA=netris` selects this backend.
 - `SUITE=...` selects the deployment scenario and therefore backend setup,
-  Ansible behavior, OSAC profile, and networking test path. The profile is
-  derived from the suite (`vmaas` → `vmaas-ci`, `bmaas` → `bmaas-ci`, and
-  `stretched`/`full` → `full-ci`).
+  Ansible behavior, and OSAC profile. The profile is derived from the suite
+  (`vmaas` → `vmaas-ci`, `bmaas` → `bmaas-ci`, `full` → `full-ci`).
+- `TEST_SUITE=...` selects the test target independently. It defaults to
+  `SUITE`; use `TEST_SUITE=stretched` with `SUITE=full` to run only the
+  shared-subnet VMaaS↔BMaaS test against a full-ci deployment.
 - `OSAC_DEPLOY_MODE=fresh|snapshot` chooses a fresh install or snapshot-based
   OSAC refresh. `fresh` is the default. Snapshot mode supports only
-  `SUITE=caas`; VMaaS, BMaaS, stretched, and full
+  `SUITE=caas`; VMaaS, BMaaS, and full
   require fresh mode so the Netris overlays are applied.
 - `EXTRA_VARS=...` passes Ansible variables, such as enabling BMaaS BMC
   services. Combine DNS and other overrides in the same value.
 
 To run only tests after the cluster and OSAC are ready, use the target mapped
-from `SUITE`. For example, `make test-vmaas` selects Netris VMaaS networking
-tests. In the pipeline, use:
+from `TEST_SUITE`. For example, `make test-vmaas` selects Netris VMaaS
+networking tests. In the pipeline, use:
 
 ```bash
 make run-tests INFRA=netris SUITE=vmaas
 ```
 
-This loads the environment saved by `deploy-osac` and invokes the same target.
+This loads the environment saved by `deploy-osac` and invokes `test-vmaas`.
+For stretched tests against a full-ci deployment, use
+`make run-tests INFRA=netris SUITE=full TEST_SUITE=stretched`.
 
 The VMaaS Netris profile configures CUDN EVPN on single-node OCP 4.22 with
 OVNKubernetes and platform type `None`. It reuses h00's Netris-managed leaf-1
@@ -211,18 +227,20 @@ directories: `osac-installer/values/vmaas-ci/netris.yaml`,
 `osac-installer/values/bmaas-ci/netris.yaml`, and
 `osac-installer/values/full-ci/netris.yaml`. The backend layers the selected
 overlay after the base profile and generates `netris-runtime.yaml` with lab
-controller, site, VPC, and credential values. Full and stretched share the
-`full-ci` overlay. BMaaS
+controller, site, VPC, and credential values. The stretched test suite runs
+against the `full-ci` deployment and overlay. BMaaS
 retains its per-BMH MAC mapping. `setup-bmaas` publishes the BMI guest interface
 as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched tests consume that value
 instead of hardcoding a server-port name.
 
-`SUITE=full` is not every Netris selector: it excludes CaaS, the slow
+`full-ci` enables all four OSAC services (CaaS, VMaaS, BMaaS, and MaaS), but
+`setup-full` currently prepares only BMaaS and VMaaS networking. CaaS/MaaS
+tenant-cluster preparation is separate because those flows reuse the Netris
+lab's discovery VMs. `TEST_SUITE=full` excludes CaaS lifecycle tests, the slow
 cross-tenant BMaaS networking class, and ExternalIP tests that require a
-separately provisioned return path. The stretched test is included in both
-`full` and `stretched`; the latter runs only that test. The PR E2E
-comment offers dedicated `vmaas-netris`, `bmaas-netris`, and `stretched-netris`
-checks. The full suite currently has no dedicated `/test full-netris` command.
+separately provisioned return path. The PR E2E comment offers dedicated
+`vmaas-netris`, `bmaas-netris`, and `stretched-netris` checks; the stretched
+check deploys with `SUITE=full` and runs with `TEST_SUITE=stretched`.
 
 VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
 
@@ -550,7 +568,7 @@ dns_server: "10.0.0.1"
 #### Snapshot Deployment (CaaS only)
 
 Snapshot refresh currently supports only `SUITE=caas`, which maps to `caas-ci`.
-The VMaaS, BMaaS, stretched, and full scenarios require generated Netris runtime
+The VMaaS, BMaaS, and full deployments require generated Netris runtime
 values and per-profile overlays, which are applied by the fresh-install path.
 Use `OSAC_DEPLOY_MODE=fresh` for those scenarios.
 

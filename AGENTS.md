@@ -36,9 +36,9 @@ and [README.md](README.md) for the human-facing overview):
   `capabilities` file declaring `SUPPORTED_SUITES`. `deploy-osac` writes `.env.infra` with the
   cluster config tests need. Currently only `infra/netris/` is implemented; its
   `SUPPORTED_SUITES` are deployment scenarios (`caas`, `vmaas`, `bmaas`,
-  `stretched`, and `full`). VMaaS/BMaaS test coverage is selected separately
-  by selecting tests from `tests/e2e/networking/`; `SUITE` selects the matching
-  deployment scenario, OSAC profile, and test subdirectory.
+  and `full`). `SUITE` selects the deployment scenario and OSAC profile;
+  `TEST_SUITE` selects the test subdirectory and defaults to `SUITE`.
+  VMaaS/BMaaS networking tests live under `tests/e2e/networking/`.
 - **`tests/<suite>/`** — the pytest suites documented throughout this file. They are
   infrastructure-agnostic: they only consume environment variables, never which backend provisioned
   the cluster. **This layer is unaffected by the infra-backend layer** — the "run tests against an

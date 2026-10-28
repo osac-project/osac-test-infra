@@ -62,7 +62,7 @@ make vendor-update          # Refresh vendored Ansible collections
 make gather-infra           # Gather diagnostic info from the cluster
 # Override variables: make <target> EXTRA_VARS="key=value"
 # Image overrides: make deploy-osac EXTRA_VARS="fulfillment_service_image=quay.io/..."
-# Suite / mode: make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot
+# MaaS uses the full-ci deployment profile: make deploy SUITE=full, then setup-maas/deploy-maas
 ```
 
 ## Workflow Order
@@ -71,10 +71,9 @@ make gather-infra           # Gather diagnostic info from the cluster
 
 **Snapshot deploy (fast):** deploy-fast (deploy-infra → deploy-ocp → deploy-osac with OSAC_DEPLOY_MODE=snapshot)
 
-**CaaS:** deploy or deploy-fast → setup-caas → deploy-caas
+**CaaS:** deploy or deploy-fast with `SUITE=caas` → setup-caas → deploy-caas
 
-**MaaS:** deploy or deploy-fast → setup-maas → deploy-maas
-(or `make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot`)
+**MaaS:** deploy with `SUITE=full` → setup-maas → deploy-maas
 
 **VMaaS:** not yet implemented. BMaaS setup is implemented in `infra/netris/`.
 
