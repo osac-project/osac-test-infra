@@ -1,0 +1,48 @@
+---
+name: Fetch Konflux dev registry secret
+description: >-
+  Fetch the konflux-dev-registry-pull Vault secret and write it to a
+  job-scoped containers auth file. Kept separate from fetch-and-write-secrets
+  (every E2E workflow calls it unconditionally -- see
+  fetch-stage-registry-secret's own comment on why) and from
+  fetch-stage-registry-secret itself: this is a different credential for a
+  different registry (Konflux's internal build workspace, not
+  registry.stage.redhat.io), used only by the dev-build packaging-smoke
+  path, which never installs onto a real cluster node from this registry --
+  runner-side tooling (helm pull, skopeo) is the only consumer, so unlike
+  fetch-stage-registry-secret there is no cluster pull-secret to merge into.
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+  auth-json-path:
+    description: "Job-scoped output path for the containers auth file (e.g. under runner.temp)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve Konflux dev registry secret from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: secret/data/osac/e2e/konflux-dev-registry-pull dockerconfigjson | KONFLUX_DEV_REGISTRY_AUTH
+
+    - name: Write job-scoped auth file
+      shell: bash
+      env:
+        KONFLUX_DEV_REGISTRY_AUTH: ${{ steps.vault.outputs.KONFLUX_DEV_REGISTRY_AUTH }}
+        AUTH_JSON_PATH: ${{ inputs.auth-json-path }}
+      run: |
+        echo "::group::Write Konflux dev registry credential"
+        umask 077
+        printf '%s' "${KONFLUX_DEV_REGISTRY_AUTH}" > "${AUTH_JSON_PATH}"
+        chmod 600 "${AUTH_JSON_PATH}"
+        echo "::endgroup::"

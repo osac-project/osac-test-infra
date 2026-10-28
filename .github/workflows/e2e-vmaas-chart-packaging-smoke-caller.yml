@@ -1,0 +1,85 @@
+---
+# Catches the osac.fullname/.Chart.Name class of bug (see osac-project/osac#2041)
+# before a real release, not after: installs the real Konflux-built dev chart
+# artifact (same build-helm-chart-oci-ta task the real release packaging uses,
+# tagged by commit SHA on every push to osac's main that touches the chart --
+# see osac-project/osac's .tekton/osac-chart/push.yaml) rather than building
+# charts/osac from a checkout. Deliberately NOT the same job as
+# E2E VMaaS Staging Install: that one validates a real release's stamped
+# images against registry.stage.redhat.io; this one validates the chart
+# packaging mechanism itself, continuously, against whatever's newest on
+# main -- no stamped images involved, so it uses whatever the chart's own
+# committed defaults/CI profile already resolve to (ordinarily GHCR latest).
+name: E2E VMaaS Chart Packaging Smoke
+
+on:
+  schedule:
+    - cron: "43 4 * * *"
+  workflow_dispatch:
+    inputs:
+      main-sha:
+        description: "osac-project/osac commit SHA to test (defaults to main's current HEAD)"
+        required: false
+        default: ""
+      runner-label:
+        description: "Self-hosted runner label to target (e.g. osac-ci-1 to pin to one machine for verification/debugging). Defaults to the shared fleet-wide label."
+        required: false
+        default: ""
+
+concurrency:
+  group: e2e-vmaas-chart-packaging-smoke-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-sha:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve osac's most recently chart-building commit
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAIN_SHA: ${{ inputs.main-sha }}
+        run: |
+          if [[ -n "${MAIN_SHA}" ]]; then
+            echo "sha=${MAIN_SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # main's raw HEAD SHA is not good enough: the Konflux chart build
+          # (.tekton/osac-chart/push.yaml) only triggers on a push that
+          # changes osac-installer/charts/osac/** (or the pipeline file
+          # itself), so an unrelated later commit on main would never get a
+          # dev-tagged chart build at all -- polling for one would time out
+          # for a build that can never exist, not a real race. Ask GitHub
+          # for the most recent commit that actually touched the chart path,
+          # matching that same trigger condition.
+          sha=$(gh api "repos/osac-project/osac/commits?sha=main&path=osac-installer/charts/osac&per_page=1" --jq '.[0].sha')
+          if [[ -z "${sha}" ]]; then
+            echo "::error::Could not resolve a commit on osac-project/osac's main that touched osac-installer/charts/osac"
+            exit 1
+          fi
+          echo "Resolved most recent chart-changing commit: ${sha}"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+  e2e-vmaas-chart-packaging-smoke:
+    needs: resolve-sha
+    permissions:
+      contents: read
+      # Required by e2e-vmaas-full-install.yml's "e2e" job -- only
+      # exercised there when enable-ai-diagnostic is true, but GitHub
+      # statically validates a called reusable workflow's declared job
+      # permissions against what the caller grants regardless of runtime
+      # reachability.
+      id-token: write
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    with:
+      test-suite: vmaas
+      test-marker: "sanity and not requires_caas and not requires_bmaas"
+      chart-oci-repo: quay.io/redhat-user-workloads/osac-tenant/osac-chart
+      chart-oci-tag: ${{ needs.resolve-sha.outputs.sha }}
+      installer-ref: main
+      installer-repo: osac-project/osac
+      runner-label: ${{ inputs.runner-label || 'osac-ci' }}
+      notify-on-failure: ${{ github.event_name == 'schedule' }}
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}

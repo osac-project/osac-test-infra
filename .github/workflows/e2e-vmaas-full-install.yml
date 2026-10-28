@@ -100,6 +100,19 @@ on:
         required: false
         type: string
         default: ""
+      chart-oci-tag:
+        description: >-
+          Explicit tag to install from chart-oci-repo, bypassing the
+          newest-semver resolution above -- for installing a dev/unstamped
+          build (e.g. a Konflux PR/push build tagged by commit SHA) rather
+          than a real release. When set, the resolved chart's own image
+          refs are NOT read back out or re-asserted (there's nothing
+          stamped to protect): the chart's own committed default images
+          apply, same as they would in the normal git-based install. Has no
+          effect unless chart-oci-repo is also set.
+        required: false
+        type: string
+        default: ""
       fork-pr-author-association:
         description: "PR author_association from the caller (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc). Passed by callers for fork PR authorization since github.event context is not inherited by reusable workflows."
         required: false
@@ -253,15 +266,18 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
 
-      # In chart-oci-repo mode, Install OSAC re-asserts the chart's own
-      # stamped image refs for every one of these keys as --set-string
-      # overrides (see that step's own comment on why) -- the test CLI is
-      # also extracted from the chart's own resolved service image before
-      # any image-overrides are applied at install time. An image-overrides
-      # entry for any of these keys would either silently be re-overridden
-      # by that reassertion or, for the service image specifically, produce
-      # a test CLI that doesn't match the deployed service. Fail fast on
-      # the conflict instead of resolving it implicitly by key order.
+      # In chart-oci-repo mode without an explicit chart-oci-tag, Install
+      # OSAC re-asserts the chart's own stamped image refs for every one of
+      # these keys as --set-string overrides (see that step's own comment
+      # on why). Either way (stamped or dev-build), the test CLI is
+      # extracted from a resolved service image -- the chart's own stamped
+      # one, or the ghcr.io/osac-project/fulfillment-service:latest
+      # fallback for a dev build -- before any image-overrides are applied
+      # at install time. An image-overrides entry for any of these keys
+      # would either silently be re-overridden by that reassertion or, for
+      # the service image specifically, produce a test CLI that doesn't
+      # match the deployed service, in both modes. Fail fast on the
+      # conflict instead of resolving it implicitly by key order.
       # metering.echoAdapter.image is deliberately excluded: the chart ships
       # no real default for it (see Pull resolved chart and read its
       # stamped image refs), so there's nothing of the chart's own to
@@ -275,7 +291,7 @@ jobs:
           CONFLICTS=$(echo "${IMAGE_OVERRIDES}" | jq -r --argjson prefixes "${STAMPED_PREFIXES}" \
             '[keys[] as $k | $prefixes[] as $p | select($k == $p or ($k | startswith($p + "."))) | $k] | unique | join(", ")')
           if [[ -n "${CONFLICTS}" ]]; then
-            echo "::error::image-overrides cannot set ${CONFLICTS} when chart-oci-repo is set -- Install OSAC always re-asserts the chart's own stamped values for these keys, and the service image specifically must match the already-extracted test CLI."
+            echo "::error::image-overrides cannot set ${CONFLICTS} when chart-oci-repo is set -- Install OSAC always re-asserts the chart's own resolved values for these keys, and the service image specifically must match the already-extracted test CLI."
             exit 1
           fi
 
@@ -299,14 +315,31 @@ jobs:
       # pull-secret.json once, at boot time, to seed the cluster's own pull
       # secret -- merging stage credentials in afterward would be too late
       # for the cluster's nodes to pull registry.stage.redhat.io images.
+      # Only for the real-release path (no explicit chart-oci-tag): a
+      # dev-build chart's own image refs are never stamped, so the cluster
+      # never needs to pull from chart-oci-repo itself -- only this
+      # runner's own helm/skopeo calls do, via the dev-registry credential
+      # fetched separately below.
       - name: Fetch and merge stage registry credential
-        if: inputs.chart-oci-repo != ''
+        if: inputs.chart-oci-repo != '' && inputs.chart-oci-tag == ''
         uses: ./.github/actions/fetch-stage-registry-secret
         with:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
           pull-secret-path: ${{ runner.temp }}/pull-secret.json
-          auth-json-path: ${{ runner.temp }}/stage-containers-auth.json
+          auth-json-path: ${{ runner.temp }}/chart-registry-auth.json
+
+      # Dev-build mode (explicit chart-oci-tag): the chart artifact itself
+      # comes from Konflux's internal build registry, not
+      # registry.stage.redhat.io -- a different credential, and runner-side
+      # only (see the comment above).
+      - name: Fetch Konflux dev registry credential
+        if: inputs.chart-oci-repo != '' && inputs.chart-oci-tag != ''
+        uses: ./.github/actions/fetch-konflux-dev-registry-secret
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          auth-json-path: ${{ runner.temp }}/chart-registry-auth.json
 
       # Moved ahead of cluster boot: the chart-oci-repo resolution/login
       # steps below need helm and yq before any cluster exists, not just
@@ -462,7 +495,7 @@ jobs:
         run: |
           echo "::group::Helm OCI registry login"
           REGISTRY_HOST="${CHART_OCI_REPO%%/*}"
-          AUTH_B64=$(jq -r --arg host "${REGISTRY_HOST}" '.auths[$host].auth // empty' "${RUNNER_TEMP}/stage-containers-auth.json")
+          AUTH_B64=$(jq -r --arg host "${REGISTRY_HOST}" '.auths[$host].auth // empty' "${RUNNER_TEMP}/chart-registry-auth.json")
           if [[ -z "${AUTH_B64}" ]]; then
             echo "::error::No credential for ${REGISTRY_HOST} in the merged pull secret (expected a stage-registry-pull Vault entry)."
             exit 1
@@ -475,28 +508,56 @@ jobs:
           unset USERPASS STAGE_USER STAGE_PASS AUTH_B64
           echo "::endgroup::"
 
-      # Always resolves to the newest real release, never a pinned or cached
-      # value -- this is the one place "latest" is decided. Tags also
-      # include timestamp-suffixed entries ({{ oci_version }}-{{ timestamp }},
-      # see osac-build-and-publish.yaml's chart-stamping step); only the bare
-      # semver ones are real release versions.
-      - name: Resolve latest published chart version
+      # With chart-oci-tag unset (the real-release validation path): always
+      # resolves to the newest real release, never a pinned or cached value
+      # -- this is the one place "latest" is decided. Tags also include
+      # timestamp-suffixed entries ({{ oci_version }}-{{ timestamp }}, see
+      # osac-build-and-publish.yaml's chart-stamping step); only the bare
+      # semver ones are real release versions. With chart-oci-tag set (the
+      # dev-build packaging-smoke path), that explicit tag is used as-is --
+      # it's never a semver version, just whatever the caller resolved
+      # (e.g. a commit SHA for a Konflux push build).
+      - name: Resolve chart version to install
         id: chart-version
         if: inputs.chart-oci-repo != ''
         env:
           CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
+          CHART_OCI_TAG: ${{ inputs.chart-oci-tag }}
         run: |
-          echo "::group::Resolve latest published chart version"
-          VERSION=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/stage-containers-auth.json" \
-            | jq -r '.Tags[]' \
-            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-            | sort -t. -k1,1n -k2,2n -k3,3n \
-            | tail -1)
-          if [[ -z "${VERSION}" ]]; then
-            echo "::error::No semver-tagged release found on ${CHART_OCI_REPO}"
-            exit 1
+          echo "::group::Resolve chart version to install"
+          if [[ -n "${CHART_OCI_TAG}" ]]; then
+            VERSION="${CHART_OCI_TAG}"
+            # The dev build this tag names may still be in flight (it's
+            # tagged by commit SHA as soon as the push happens, not once
+            # the build finishes) -- poll instead of assuming it already
+            # exists, same pattern as the real-release path's own
+            # Konflux check-run polling elsewhere in this repo.
+            MAX_WAIT_SECONDS=300
+            POLL_INTERVAL_SECONDS=15
+            elapsed=0
+            until skopeo inspect --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
+              "docker://${CHART_OCI_REPO}:${VERSION}" >/dev/null 2>&1; do
+              if [[ "${elapsed}" -ge "${MAX_WAIT_SECONDS}" ]]; then
+                echo "::error::${CHART_OCI_REPO}:${VERSION} not available after ${MAX_WAIT_SECONDS}s"
+                exit 1
+              fi
+              echo "${CHART_OCI_REPO}:${VERSION} not available yet (${elapsed}s elapsed), retrying in ${POLL_INTERVAL_SECONDS}s..."
+              sleep "${POLL_INTERVAL_SECONDS}"
+              elapsed=$((elapsed + POLL_INTERVAL_SECONDS))
+            done
+            echo "Found ${CHART_OCI_REPO}:${VERSION} after ${elapsed}s"
+          else
+            VERSION=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
+              | jq -r '.Tags[]' \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -t. -k1,1n -k2,2n -k3,3n \
+              | tail -1)
+            if [[ -z "${VERSION}" ]]; then
+              echo "::error::No semver-tagged release found on ${CHART_OCI_REPO}"
+              exit 1
+            fi
+            echo "Resolved latest chart version: ${VERSION}"
           fi
-          echo "Resolved latest chart version: ${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
 
@@ -507,10 +568,16 @@ jobs:
       # that fulfillment-service image ref back out (so the OSAC CLI
       # extracted below matches exactly what gets installed) and every
       # other stamped image ref the vmaas-ci CI profile would otherwise
-      # silently clobber (see Install OSAC's own comment on why).
+      # silently clobber (see Install OSAC's own comment on why). Skipped
+      # entirely with an explicit chart-oci-tag (dev-build mode): nothing
+      # in that chart is stamped, so there's nothing to read back out or
+      # protect -- its own committed default images apply, and the
+      # existing CLI fallback step below already extracts from
+      # ghcr.io/osac-project/fulfillment-service:latest when OSAC_CLI_BIN
+      # is still empty.
       - name: Pull resolved chart and read its stamped image refs
         id: chart-images
-        if: inputs.chart-oci-repo != ''
+        if: inputs.chart-oci-repo != '' && inputs.chart-oci-tag == ''
         env:
           CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
           CHART_VERSION: ${{ steps.chart-version.outputs.version }}
@@ -571,12 +638,12 @@ jobs:
           echo "::endgroup::"
 
       - name: Extract OSAC CLI from resolved staged image
-        if: inputs.chart-oci-repo != ''
+        if: inputs.chart-oci-repo != '' && inputs.chart-oci-tag == ''
         env:
           SERVICE_IMAGE: ${{ steps.chart-images.outputs.service-image }}
         run: |
           echo "::group::Extract OSAC CLI from resolved staged image"
-          export REGISTRY_AUTH_FILE="${RUNNER_TEMP}/stage-containers-auth.json"
+          export REGISTRY_AUTH_FILE="${RUNNER_TEMP}/chart-registry-auth.json"
           podman pull "${SERVICE_IMAGE}"
           cli_container=$(podman create "${SERVICE_IMAGE}")
           trap 'podman rm -f "${cli_container}" >/dev/null 2>&1 || true' EXIT
@@ -939,7 +1006,11 @@ jobs:
           # real staged images rather than silently falling back to GHCR
           # latest. Reject stamped-image overrides in OCI mode already
           # guarantees image-overrides can't collide with these keys.
-          if [[ -n "${CHART_OCI_REPO}" ]]; then
+          # STAMPED_OVERRIDES is empty in dev-build mode (chart-oci-tag set):
+          # the Pull resolved chart.../Extract OSAC CLI... steps that would
+          # populate it don't run there, since nothing in a dev build is
+          # stamped -- see those steps' own comments on why.
+          if [[ -n "${CHART_OCI_REPO}" ]] && [[ -n "${STAMPED_OVERRIDES}" ]]; then
             for key in $(echo "${STAMPED_OVERRIDES}" | jq -r 'keys[]'); do
               value=$(echo "${STAMPED_OVERRIDES}" | jq -r --arg k "${key}" '.[$k]')
               SET_ARGS+=("--set-string" "${key}=${value}")

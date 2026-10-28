@@ -40,8 +40,9 @@ sudo rm -f /root/.config/containers/auth.json
 # Job-scoped (chart-oci-repo path) -- unlike the shared auth.json above,
 # neither of these is ever written by a concurrent job, but clean them up
 # anyway for consistency: the base copy fetch-and-write-secrets writes for
-# fetch-stage-registry-secret to merge from, and that merge's own output.
-rm -f "$RUNNER_TEMP/containers-auth-base.json" "$RUNNER_TEMP/stage-containers-auth.json"
+# fetch-stage-registry-secret to merge from, and the chart registry auth
+# file either that merge or fetch-konflux-dev-registry-secret writes.
+rm -f "$RUNNER_TEMP/containers-auth-base.json" "$RUNNER_TEMP/chart-registry-auth.json"
 # `helm registry login` (chart-oci-repo path) stores its credential at a
 # run_id-suffixed path (set job-wide via HELM_REGISTRY_CONFIG, not Helm's
 # shared-HOME default) -- removing it here only ever touches this job's own
