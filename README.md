@@ -22,21 +22,27 @@ The repository connects two layers:
 - **OSAC E2E suites** in the OSAC mono-repo exercise the deployed services.
   This repository's `tests/` directory is legacy scaffolding only.
 
-Each backend implements the interface in [infra/contract.md](infra/contract.md).
-The root Makefile selects a backend and coordinates its contract targets.
-Backends declare supported deployment scenarios in a `capabilities` file.
-They can also provide `contracts/<test-selection>` files listing environment
-variables required by particular test selections.
+Backends connected to the root Makefile implement the interface in
+[infra/contract.md](infra/contract.md). The root Makefile selects one of those
+backends and coordinates its contract targets. Backends declare supported
+deployment scenarios in a `capabilities` file and can provide
+`contracts/<test-selection>` files listing environment variables required by
+particular test selections. Some backend flows can also run through a dedicated
+workflow before they implement the root contract.
 
-### Implemented backends
+### Backend inventory
 
-| Backend | Status | Backend guide |
+| Backend | Implementation and root integration | Entry point |
 |---|---|---|
-| Netris | Implemented | [Netris backend guide](infra/netris/README.md) |
+| Netris | Implemented and wired to the root orchestration contract | [Netris backend guide](infra/netris/README.md) |
+| Agentless-Net | Implemented CaaS flow; its dedicated workflow calls backend targets directly, and it is not yet wired to root `make e2e` | [Backend Makefile](infra/agentless-net/Makefile), [CaaS workflow](.github/workflows/e2e-caas-agentless-net-full-install.yml) |
 
 ## Deployment and test selection
 
 Run the complete pipeline from this repository root:
+
+This command applies to backends marked as wired to the root contract in the
+inventory. Standalone backend workflows document their own invocation.
 
 ```bash
 make e2e INFRA=<backend> [SUITE=<deployment-scenario>] [TEST_SUITE=<test-selection>]
@@ -135,9 +141,8 @@ those selectors.
 | `OSAC_DEPLOY_MODE` | Optional backend-specific deployment mode override; consult the selected backend guide. If unset, the backend chooses its default. |
 
 The selected backend owns credentials, prerequisites, defaults, and supported
-deployment modes. See its guide before provisioning infrastructure. For the
-current Netris implementation, start with
-[infra/netris/README.md](infra/netris/README.md).
+deployment modes. Follow the corresponding guide or workflow in the inventory
+before provisioning infrastructure.
 
 ## Adding a backend
 

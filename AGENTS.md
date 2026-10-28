@@ -31,15 +31,17 @@ The repo has two layers, connected by a **contract** (see [`infra/contract.md`](
 and [README.md](README.md) for the human-facing overview):
 
 - **`infra/<backend>/`** — pluggable infrastructure backends that provision a cluster and deploy
-  OSAC. Each backend implements the `Makefile` targets in `infra/contract.md`, including
+  OSAC. Backends wired to the root Makefile implement the targets in `infra/contract.md`, including
   `setup-infra`, `deploy-infra`, `deploy-ocp`, `deploy-osac`, `setup-<suite>`, and the destroy/gather
-  targets. Each backend also provides a `capabilities` file declaring `SUPPORTED_SUITES` and
-  optionally `DEFAULT_SUITE`.
+  targets. Each backend provides a `capabilities` file declaring `SUPPORTED_SUITES` and optionally
+  `DEFAULT_SUITE`.
   `deploy-osac` writes `.env.infra` with the
-  cluster config tests need. Currently only `infra/netris/` is implemented; its
-  `SUPPORTED_SUITES` are deployment scenarios (`caas`, `vmaas`, `bmaas`,
-  and `full`). `SUITE` selects the deployment scenario and OSAC profile;
-  `TEST_SUITE` selects the OSAC test target and defaults to `SUITE`.
+  cluster config tests need. `infra/netris/` implements the root orchestration
+  contract; its `SUPPORTED_SUITES` are deployment scenarios (`caas`, `vmaas`,
+  `bmaas`, and `full`). `infra/agentless-net/` implements a standalone CaaS flow
+  with its own workflow and is not yet connected to the root orchestration
+  targets. For contract-integrated backends, `SUITE` selects the deployment
+  scenario and `TEST_SUITE` selects the OSAC test target, defaulting to `SUITE`.
   VMaaS/BMaaS networking tests live under the OSAC mono-repo's `tests/e2e/networking/`.
 - **OSAC mono-repo `tests/e2e/`** — pytest suites documented throughout this file. They are
   infrastructure-agnostic: they only consume environment variables, never which backend provisioned
