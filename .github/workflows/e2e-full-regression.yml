@@ -565,6 +565,7 @@ jobs:
           INSTALLER_REF: ${{ inputs.installer-ref }}
           INSTALLER_REPO: ${{ inputs.installer-repo }}
           TEST_REPOSITORY: ${{ inputs.test-repository }}
+          TEST_REF: ${{ inputs.test-ref }}
         run: |
           set -o pipefail
           if ! command -v helm &>/dev/null; then
@@ -590,9 +591,12 @@ jobs:
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
           PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
           # Fall back to the no-build-path SHA resolved earlier (OSAC-5356).
-          # Guard: only when installer-repo is the same repo the SHA came
-          # from — it may not exist in a different repository.
-          if [[ -z "${PINNED_SHA}" ]] && [[ "${INSTALLER_REPO}" == "${TEST_REPOSITORY}" ]]; then
+          # Guard: only when installer repo AND ref match the test source —
+          # the SHA may not exist in a different repository, and an explicit
+          # installer-ref override must not be silently replaced.
+          if [[ -z "${PINNED_SHA}" ]] && \
+             [[ "${INSTALLER_REPO}" == "${TEST_REPOSITORY}" ]] && \
+             [[ "${INSTALLER_REF}" == "${TEST_REF}" ]]; then
             PINNED_SHA="${PINNED_OSAC_SHA:-}"
           fi
 

@@ -560,7 +560,7 @@ jobs:
             oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
           {
             echo "COMPONENT_BUILD_RESULTS<<EOF_COMPONENT_BUILD_RESULTS"
-            echo "[{\"image\":\"${FS_TAG}\",\"imageKey\":\"service.images.service.repository\",\"repo\":\"${TEST_REPOSITORY}\",\"ref\":\"${TEST_REF}\",\"sha\":\"${PINNED_OSAC_SHA}\",\"containerfile\":\"fulfillment-service/Containerfile\",\"crdsDir\":\"\"}]"
+            echo "[{\"image\":\"${FS_TAG}\",\"imageKey\":\"service.images.service.repository\",\"repo\":\"${TEST_REPOSITORY}\",\"ref\":\"${TEST_REF}\",\"sha\":\"${PINNED_OSAC_SHA}\",\"containerfile\":\"fulfillment-service/Containerfile\",\"crdsDir\":\"\",\"source\":\"osac-5356\"}]"
             echo "EOF_COMPONENT_BUILD_RESULTS"
           } >> "$GITHUB_ENV"
           echo "::endgroup::"
@@ -588,6 +588,7 @@ jobs:
           INSTALLER_REF: ${{ inputs.installer-ref }}
           INSTALLER_REPO: ${{ inputs.installer-repo }}
           TEST_REPOSITORY: ${{ inputs.test-repository }}
+          TEST_REF: ${{ inputs.test-ref }}
         run: |
           set -o pipefail
           if ! command -v helm &>/dev/null; then
@@ -610,12 +611,29 @@ jobs:
           # were built from source earlier in this job, pin to the same
           # commit SHA — the branch may have moved since the component
           # clone, and a second git-clone at the branch name would race.
+          #
+          # Synthetic results from the OSAC-5356 no-build CLI step carry
+          # source=osac-5356.  Skip them when installer-ref differs from
+          # test-ref — the caller chose a different installer version, so
+          # the test-derived SHA must not override it.  Real caller-supplied
+          # component builds (source absent) always pin the installer.
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
-          PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
+          if [[ "${INSTALLER_REF}" == "${TEST_REF}" ]]; then
+            PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r \
+              --arg repo "${INSTALLER_REPO}" \
+              '[.[] | select(.repo == $repo) | .sha] | unique | if length == 1 then .[0] else empty end')
+          else
+            PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r \
+              --arg repo "${INSTALLER_REPO}" \
+              '[.[] | select(.repo == $repo) | select(.source != "osac-5356") | .sha] | unique | if length == 1 then .[0] else empty end')
+          fi
           # Fall back to the no-build-path SHA resolved earlier (OSAC-5356).
-          # Guard: only when installer-repo is the same repo the SHA came
-          # from — it may not exist in a different repository.
-          if [[ -z "${PINNED_SHA}" ]] && [[ "${INSTALLER_REPO}" == "${TEST_REPOSITORY}" ]]; then
+          # Guard: only when installer repo AND ref match the test source —
+          # the SHA may not exist in a different repository, and an explicit
+          # installer-ref override must not be silently replaced.
+          if [[ -z "${PINNED_SHA}" ]] && \
+             [[ "${INSTALLER_REPO}" == "${TEST_REPOSITORY}" ]] && \
+             [[ "${INSTALLER_REF}" == "${TEST_REF}" ]]; then
             PINNED_SHA="${PINNED_OSAC_SHA:-}"
           fi
 
