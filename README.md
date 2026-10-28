@@ -1,338 +1,153 @@
 # OSAC Test Infrastructure
 
 > [!IMPORTANT]
-> **The e2e test suite has moved (OSAC-3593).** Test suites now live in the
-> [osac mono-repo](https://github.com/osac-project/osac). **Do not add, modify,
-> or delete tests in this repository** — make those changes in the mono-repo
-> instead. The `tests/` directory here is retained only for the infrastructure
-> backend contract and a placeholder; new tests added here will not be
-> maintained.
+> **The E2E suites moved (OSAC-3593).** Test suites now live in the
+> [osac mono-repo](https://github.com/osac-project/osac). Do not add, modify,
+> or delete tests in this repository; make test changes in the mono-repo.
 
-Unified repository for OSAC end-to-end infrastructure and test orchestration. Pluggable backends provision clusters; active pytest suites run from the OSAC mono-repo.
+This repository provides infrastructure backends and orchestration for running
+OSAC E2E suites. A backend provisions a cluster and deploys OSAC. The suites
+consume deployment configuration and do not depend on which backend created it.
 
-**AI coding agents**: see [AGENTS.md](AGENTS.md) for repository constraints and infrastructure workflows. E2E test guidance is maintained in the [OSAC mono-repo](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md).
+**AI coding agents:** See [AGENTS.md](AGENTS.md) for repository constraints and
+[the OSAC E2E guide](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md)
+for test conventions.
 
 ## Architecture
 
-The repo has two layers:
+The repository connects two layers:
 
-- **`infra/`** — infrastructure backends that provision a cluster and deploy OSAC. Each backend lives in its own directory and can use any technology (Ansible, shell, Go, etc.).
-- **OSAC mono-repo** — the active pytest E2E suites live in the [osac mono-repo](https://github.com/osac-project/osac), under `tests/e2e/`. They are infrastructure-agnostic and consume environment variables rather than knowing which backend provisioned the cluster. This repository's `tests/` directory is legacy scaffolding; do not add or change E2E tests here.
+- **Infrastructure backends** in `infra/<backend>/` provision a cluster,
+  deploy OSAC, and provide the environment needed by selected tests.
+- **OSAC E2E suites** in the OSAC mono-repo exercise the deployed services.
+  This repository's `tests/` directory is legacy scaffolding only.
 
-A **contract** connects the layers. Each backend implements standard Makefile targets (`setup-infra`, `deploy-infra`, `deploy-osac`, etc.) and writes `.env.infra` with the configuration its suites need. Optional shell-sourceable suite contracts live at `infra/<backend>/contracts/<suite>` and list required environment variables. The top-level Makefile orchestrates the full flow.
+Each backend implements the interface in [infra/contract.md](infra/contract.md).
+The root Makefile selects a backend and coordinates its contract targets.
+Backends declare supported deployment scenarios in a `capabilities` file.
+They can also provide `contracts/<test-selection>` files listing environment
+variables required by particular test selections.
 
-```
-infra/<backend>/                    osac/tests/e2e/<suite>/
-┌──────────────────────┐            ┌──────────────────────┐
-│ setup-infra          │            │                      │
-│ deploy-infra         │            │ uv run pytest        │
-│ deploy-osac ──────────── .env.infra ──▶                │
-│ setup-<suite>        │            │                      │
-│ destroy-osac         │            │                      │
-│ destroy-infra        │            │                      │
-│ gather-infra         │
-│ gather-<suite>       │            │                      │
-└──────────────────────┘            └──────────────────────┘
-```
+### Implemented backends
 
-### Infrastructure Backends
-
-| Backend | Technology | Description | Deploy Time |
-|---------|-----------|-------------|-------------|
-| **netris** | Ansible | Simulated Netris Spectrum-X GPU cluster with OCP and OSAC on KVM/libvirt | ~25 min (snapshot) / ~2h (full) |
-
-### Netris deployment scenarios, test targets, and profiles
-
-Run these commands from the repository root. Use either of these paths:
-
-- `make test-...` runs pytest against an OSAC deployment that already exists.
-- `make e2e INFRA=netris SUITE=...` provisions the Netris lab, deploys OCP and
-  OSAC, prepares the deployment scenario, and runs its selected tests.
-
-`SUITE` names the deployment scenario. It selects the Netris setup path,
-Ansible behavior, and OSAC profile. `TEST_SUITE` selects the OSAC pytest path
-and defaults to `SUITE`. Netris networking tests live under the OSAC mono-repo's
-`tests/e2e/networking/` tree.
-
-| `SUITE` (deployment) | Derived OSAC profile | `make setup-suite` selects | Default `TEST_SUITE` | Default test target |
-|---|---|---|---|---|
-| `vmaas` | `vmaas-ci` + `osac-installer/values/vmaas-ci/netris.yaml` | `setup-vmaas` | `vmaas` | `test-vmaas` |
-| `caas` | `caas-ci` | `setup-caas` | `caas` | `test-caas` |
-| `bmaas` | `bmaas-ci` + `osac-installer/values/bmaas-ci/netris.yaml` | `setup-bmaas` | `bmaas` | `test-bmaas` |
-| `full` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | `setup-full` | `full` | `test-full` |
-
-The `netris.yaml` paths are relative to the OSAC mono-repo checkout. The
-backend layers the selected file after that profile's `instance.yaml` and then
-adds generated lab-specific runtime values.
-
-The Netris backend lists supported deployment scenarios in
-[`infra/netris/capabilities`](infra/netris/capabilities); the top-level Makefile
-checks that list before deployment. The `full-ci` OSAC profile enables CaaS,
-VMaaS, BMaaS, and MaaS. The current `setup-full` prepares the BMaaS and VMaaS
-networking prerequisites; it does not create CaaS or MaaS tenant clusters.
-Those flows reuse the same discovery VMs as BMaaS, so their standalone setup
-targets are not composable in one full run yet.
-
-For example, these two commands run only the preparation and test stages after
-the infrastructure and OSAC are already deployed:
-
-```bash
-make setup-suite INFRA=netris SUITE=full
-make run-tests INFRA=netris SUITE=full TEST_SUITE=stretched
-```
-
-Here, `SUITE=full` keeps the full-ci deployment and preparation path, while
-`TEST_SUITE=stretched` runs only the shared-subnet VMaaS↔BMaaS test. The Netris
-backend derives the profile from `SUITE`: `vmaas-ci` for VMaaS, `bmaas-ci` for
-BMaaS, and `full-ci` for full.
-
-- `OSAC_DEPLOY_MODE` chooses a fresh install (`fresh`, the default) or a
-  snapshot-based OSAC refresh (`snapshot`). Snapshot mode currently supports
-  only `SUITE=caas`; the Netris VMaaS, BMaaS, and full overlays
-  require fresh mode.
-- `TEST=name` adds a pytest `-k` filter to an existing-cluster test target.
-
-The direct `make test-*` targets do not take a `SUITE` argument: the target
-name already selects the tests. For example, run `make test-full` against an
-existing deployment; use `make run-tests INFRA=netris SUITE=full` when you
-want the orchestrator to load `.env.infra` first.
-
-The PR E2E comment currently offers these dedicated Netris checks. The check
-title is a workflow display name; deployment `SUITE` and `TEST_SUITE` select
-the environment and test path separately.
-
-| PR command | Deployment `SUITE` | `TEST_SUITE` | OSAC profile (derived) | Coverage |
-|---|---|---|---|---|
-| `/test vmaas-netris` | `vmaas` | `vmaas` | `vmaas-ci` + `osac-installer/values/vmaas-ci/netris.yaml` | VMaaS Netris networking |
-| `/test bmaas-netris` | `bmaas` | `bmaas` | `bmaas-ci` + `osac-installer/values/bmaas-ci/netris.yaml` | BMaaS Netris networking; the slow cross-tenant class is omitted |
-| `/test stretched-netris` | `full` | `stretched` | `full-ci` + `osac-installer/values/full-ci/netris.yaml` | Shared-subnet VMaaS↔BMaaS connectivity |
-
-There is no dedicated `/test full-netris` command today. To run the full networking suite
-from GitHub Actions, dispatch **E2E VMaaS Netris Full Install** and choose
-`suite=full`; Actions titles that run **E2E Netris Full Suite**. It uses
-`full-ci` plus `osac-installer/values/full-ci/netris.yaml`. Locally, run
-`SUITE=full TEST_SUITE=full` with the Make pipeline below; set
-`TEST_SUITE=stretched` to run only the shared-subnet test on the same deployment.
-
-The VMaaS EVPN flows (`vmaas` and `full`) require converged OCP
-4.22 with OVNKubernetes and configure CUDN EVPN
-with the Netris fabric manager. External-IP dataplane coverage needs a
-separately provisioned and acknowledged return path for `172.27.0.0/16`;
-`full` filters those cases out.
-
-### Backend Setup: Netris
-
-The Netris backend requires the following files placed in `infra/netris/` before running:
-
-| File | Description | How to obtain |
-|------|-------------|---------------|
-| `license.key` | Netris controller license | Obtain from Netris |
-| `license.zip` | OSAC/AAP license (base64-encoded zip) | Obtain from Red Hat |
-| `config` | INI file with lab name, AWS credentials, and Quay credentials | Create manually (see below) |
-
-The `config` file format:
-
-```ini
-[default]
-lab_name = <unique-name>
-aws_access_key_id = <your-key>
-aws_secret_access_key = <your-secret>
-aws_region = us-east-1
-netris_password = <your-netris-password>
-quay_username = <your-quay-username>
-quay_password = <your-quay-password>
-```
-
-- `lab_name` — unique identifier for your lab to avoid DNS collisions in Route 53. The backend uses it as the first DNS label in `ocp_base_domain`. Use a hostname-compatible label of at most 63 characters: ASCII letters, digits, and hyphens only, with a letter or digit at each end. Do not use underscores (for example, `qa-lab-1` is valid).
-- AWS credentials — used for Route 53 DNS record management
-- Quay credentials — the account must have pull access to `quay.io/osac-project/cluster-flavors`; `setup-infra` logs in automatically when it downloads the snapshot flavor image
-
-The Netris backend's `dns_server` defaults to `8.8.8.8`. Some environments block that resolver. If it is unreachable from your lab and you only need a DNS override, export:
-
-```bash
-export EXTRA_VARS="dns_server=<reachable-dns-server>"
-```
-
-The Netris backend derives the OSAC Helm profile from `SUITE`, keeping the
-deployment values, setup path, and test target aligned. Both `caas-ci` and `bmaas-ci` enable
-Metal3, the OSAC component for bare-metal provisioning. Its installer check
-requires a cluster-scoped Kubernetes `Provisioning` resource with
-`watchAllNamespaces: true`. Netris defaults `bare_metal_services` to `false`,
-so `prep-osac` skips creating or updating that resource unless the flag is
-true. If the resource already exists with the required setting, the flag is
-not needed just for the installer check.
-
-The same flag enables Netris's BMC (Baseboard Management Controller) support: `deploy-infra` starts `sushy-tools`, which emulates a server's management interface, and `deploy-ocp` reserves the OCP VM's BMC address. Without the flag those conditional setup tasks are skipped, even though the commands can still succeed. Use the flag when you need these bare-metal services as well as the Metal3 prerequisite.
-
-This flag is profile-dependent, not required for every OSAC deployment:
-
-| OSAC profile | When `bare_metal_services=true` is needed |
-|--------------|-------------------------------------------|
-| `caas-ci` | The current profile enables Metal3; set it if the required `Provisioning` resource is absent. |
-| `bmaas-ci` | The profile enables Metal3; set it if the required `Provisioning` resource is absent. |
-| `vmaas-ci` | Not needed in the current VMaaS full-install workflow. |
-
-For another profile, check whether its values enable `bmf.metal3.enabled`. For `caas-ci` or `bmaas-ci`, if you also need to override DNS, combine both settings in one export; a second `export EXTRA_VARS=...` would replace the first value:
-
-```bash
-export EXTRA_VARS="bare_metal_services=true dns_server=<reachable-dns-server>"
-```
-
-The deployment example below exports `EXTRA_VARS` once; the top-level Makefile forwards it to each backend stage. For a profile that does not need bare-metal services, use only the DNS override if required.
-
-Additionally, an OCP pull secret must be present at `/root/pull-secret` on the host.
-
-All secret files are gitignored.
-
-## How It Works
-
-`make e2e INFRA=netris SUITE=full` runs the complete Netris pipeline. The
-backend derives the `full-ci` profile for this selector. The top-level
-Makefile then:
-
-1. Checks that Netris supports the requested `SUITE`.
-2. Installs prerequisites and caches images (`setup-infra`).
-3. Deploys the Netris lab and restores OCP (`deploy-infra`, `deploy-ocp`). For
-   `vmaas` and `full`, this also
-   configures the CUDN/EVPN underlay on converged OCP 4.22 with OVNKubernetes.
-4. Installs OSAC with the profile derived from `SUITE` and writes `.env.infra`.
-5. Maps `SUITE` to its Netris setup target and OSAC profile. `TEST_SUITE`
-   chooses the OSAC test path independently. `setup-full` prepares BMaaS and
-   VMaaS networking prerequisites; `TEST_SUITE=full` runs all selected
-   networking tests serially, while `TEST_SUITE=stretched` runs only the
-   shared-subnet VMaaS↔BMaaS test.
-
-Run the individual targets when the lab is already at the required stage. For
-example, after OSAC is deployed, `make run-tests INFRA=netris SUITE=full TEST_SUITE=stretched`
-reads `infra/netris/.env.infra` and runs `test-stretched` without provisioning again.
-
-## Quick Start
-
-### Run tests against an existing deployment
-
-These targets run tests only; they do not provision Netris or install OSAC.
-The OSAC mono-repo checkout defaults to `/opt/osac` and can be changed with
-`OSAC_MONO_DIR`.
-
-```bash
-cd /opt/osac && uv sync
-cd /path/to/osac-test-infra
-
-export OSAC_NAMESPACE=osac-devel
-export KUBECONFIG=~/.kube/config
-export OSAC_VM_KUBECONFIG=~/.kube/config
-export METERING_ADAPTER_URL=https://<metering-test-adapter-route>
-make test-vmaas
-make test-bmaas
-make test-stretched
-
-# Optional pytest filters
-TEST=test_name make test-vmaas
-```
-
-These cross-cutting E2E targets run against the OSAC checkout in `OSAC_MONO_DIR`:
-
-| Target | OSAC test path | Coverage |
+| Backend | Status | Backend guide |
 |---|---|---|
-| `make test-storage` | `tests/e2e/storage/` | Tenant and cluster storage tests |
-| `make test-metering` | `tests/e2e/` with the `metering` marker | Metering tests across E2E suites |
-| `make test-references` | `tests/e2e/references/` | Cross-resource reference tests |
+| Netris | Implemented | [Netris backend guide](infra/netris/README.md) |
 
-`TEST` becomes pytest's `-k` filter. For the environment variables required by a particular test suite,
-see the OSAC mono-repo's [E2E guide](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md).
-The `make run-tests INFRA=netris SUITE=...` orchestration target creates the
-metering adapter Route when the deployed echo-adapter Service exists. If you
-run a direct `make test-*` target that selects metering tests, set
-`METERING_ADAPTER_URL` yourself.
-The root `make test` target only checks the moved-suite placeholder; it does not
-run OSAC E2E tests.
+## Deployment and test selection
 
-### Provision Netris and run an E2E suite
-
-Run from this repository's root. `make e2e` performs setup, deployment, suite
-preparation, and tests. `SUITE` may be omitted to use the default CaaS scenario;
-the Netris backend derives the matching OSAC profile automatically.
+Run the complete pipeline from this repository root:
 
 ```bash
-# Deploy the full-ci profile and run all selected Netris networking tests.
-# bare_metal_services enables the BMaaS BMC prerequisites.
-make e2e INFRA=netris SUITE=full \
-  OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
-
-# Deploy full-ci and run only the stretched networking tests.
-make e2e INFRA=netris SUITE=full TEST_SUITE=stretched \
-  OSAC_DEPLOY_MODE=fresh EXTRA_VARS="bare_metal_services=true"
-
-# Provision the VMaaS deployment and run its networking tests
-make e2e INFRA=netris SUITE=vmaas
-
-# Provision the BMaaS deployment and run its networking tests
-make e2e INFRA=netris SUITE=bmaas \
-  EXTRA_VARS="bare_metal_services=true"
-
+make e2e INFRA=<backend> [SUITE=<deployment-scenario>] [TEST_SUITE=<test-selection>]
 ```
 
-To override DNS as well, combine it with the other Ansible variables in the
-same `EXTRA_VARS` value, for example
-`EXTRA_VARS="bare_metal_services=true dns_server=<reachable-dns-server>"`.
-Exporting `EXTRA_VARS` a second time replaces the first value.
+The selectors serve different purposes:
 
-### Iterate on OSAC
+- **INFRA** chooses the backend directory, such as `infra/<backend>`.
+- **SUITE** chooses a deployment scenario supported by that backend. The backend
+  uses it for deployment and suite-specific preparation.
+- **TEST_SUITE** chooses the OSAC test target independently. It defaults to
+  **SUITE**, but can differ when the deployment and test selections are not the
+  same.
+
+The pipeline validates the deployment scenario against the backend's
+`SUPPORTED_SUITES`, then runs:
+
+1. Backend setup and infrastructure deployment.
+2. Cluster and OSAC deployment. The backend writes its connection details to
+   `.env.infra`.
+3. Backend preparation for the selected deployment scenario.
+4. Validation of `.env.infra` against the backend's optional
+   `contracts/<test-selection>`.
+5. The root Makefile target `test-<test-selection>`.
+
+Use individual orchestration targets when the deployment already exists:
+`setup-suite` prepares the selected deployment scenario, and `run-tests`
+validates and runs the selected test target.
+
+| Root target | Backend operation |
+|---|---|
+| `setup-infra` | Install backend prerequisites |
+| `deploy-infra` | Provision backend infrastructure |
+| `deploy-ocp` | Deploy the cluster |
+| `deploy-osac` | Deploy OSAC and write `.env.infra` |
+| `setup-suite` | Run `setup-<SUITE>` |
+| `run-tests` | Validate `contracts/<TEST_SUITE>` and run `test-<TEST_SUITE>` |
+| `destroy-suite` | Ask the backend to safely tear down the selected deployment scenario |
+| `destroy-setup` | Remove host-side setup installed by `setup-infra`, or no-op if none is needed |
+| `destroy-ocp` | Tear down the cluster |
+| `destroy-osac` | Tear down OSAC |
+| `destroy-infra` | Tear down backend infrastructure |
+| `gather-infra` | Collect backend and cluster diagnostics |
+| `gather-suite` | Run `gather-<SUITE>` |
+
+Backend-specific deployment modes, profiles, host preparation, credentials, and
+configuration belong in that backend's guide. The root interface does not assign
+meaning to backend-specific `EXTRA_VARS` or `OSAC_DEPLOY_MODE` values.
+
+## OSAC E2E targets
+
+The test targets run pytest from the OSAC mono-repo checkout. Set
+`OSAC_MONO_DIR` to that checkout; it defaults to `/opt/osac`.
+
+| Target | OSAC test path | Selection |
+|---|---|---|
+| `test-caas` | `tests/e2e/caas/` | CaaS E2E tests |
+| `test-vmaas` | `tests/e2e/networking/vmaas/` | VMaaS networking tests |
+| `test-bmaas` | `tests/e2e/networking/bmaas/` | BMaaS networking tests |
+| `test-stretched` | `tests/e2e/networking/stretched/` | Stretched networking tests |
+| `test-full` | `tests/e2e/networking/` | Serial networking selection, excluding external-IP and cross-tenant BMaaS cases |
+| `test-storage` | `tests/e2e/storage/` | Storage E2E tests |
+| `test-metering` | `tests/e2e/` | Tests marked `metering` |
+| `test-references` | `tests/e2e/references/` | Cross-resource reference tests |
+
+To run tests against an existing deployment, use a target directly:
 
 ```bash
-# Redeploy OSAC without reprovisioning the lab
-make redeploy-osac INFRA=netris
-
-# Then re-run tests
-make run-tests INFRA=netris SUITE=full
+make test-vmaas OSAC_MONO_DIR=/path/to/osac
 ```
 
-### Tear down
+Direct test targets do not provision infrastructure or install OSAC. Test
+filters use pytest's `-k` option through the `TEST` variable. The root
+`make test` target only checks the legacy placeholder; it does not run OSAC
+E2E suites.
 
-```bash
-make destroy-osac INFRA=netris       # OSAC only, keep the lab
-make destroy-ocp INFRA=netris        # Reset OCP, keep the Netris lab
-make destroy-infra INFRA=netris      # Everything
-```
-
-### Gather diagnostics
-
-```bash
-make gather-infra INFRA=netris
-make gather-suite INFRA=netris SUITE=full
-```
+For suite-specific environment variables and fixtures, see the
+[OSAC E2E guide](https://github.com/osac-project/osac/tree/main/tests/e2e).
 
 ## Configuration
 
-Set these through environment variables or as Make arguments, such as
-`SUITE=vmaas`.
+`INFRA`, `SUITE`, and `TEST_SUITE` apply to infrastructure orchestration.
+Direct `test-*` targets run against an existing deployment and do not need
+those selectors.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OSAC_MONO_DIR` | `/opt/osac` | OSAC mono-repo checkout containing the E2E tests |
-| `OSAC_NAMESPACE` | `osac-devel` | Namespace where OSAC is deployed |
-| `KUBECONFIG` | `~/.kube/config` for direct tests; `/root/.kube/config` for `make e2e` | Kubeconfig for the hub cluster |
-| `OSAC_VM_KUBECONFIG` | **(required for vmaas)** | Kubeconfig for the VM cluster |
-| `OSAC_PULL_SECRET_PATH` | **(required for caas)** | Path to OCP pull secret |
-| `OSAC_FULFILLMENT_ADDRESS` | auto-derived | Fulfillment API address |
-| `OSAC_VM_TEMPLATE` | `osac.templates.ocp_virt_vm` | VM template |
-| `OSAC_CLUSTER_TEMPLATE` | `osac.templates.ocp_ci_small` | Cluster template |
-| `OSAC_CLI_PATH` | `osac` | Path to the CLI binary |
-| `METERING_ADAPTER_URL` | unset | Required by direct tests marked `metering`; `make run-tests` sets it when the echo-adapter Service exists |
-| `TEST` | (none) | pytest `-k` filter |
-| `INFRA` | `netris` | Infrastructure backend |
-| `SUITE` | `caas` | Deployment scenario; selects the OSAC profile and setup path |
-| `TEST_SUITE` | defaults to `SUITE` | OSAC test target; can differ from the deployment scenario |
-| `OSAC_DEPLOY_MODE` | `fresh` | `fresh` or `snapshot`; snapshot supports only `SUITE=caas` |
-| `EXTRA_VARS` | (none) | Extra variables passed to the backend |
+| Variable | Purpose |
+|---|---|
+| `INFRA` | Required backend selector; choose a backend under `infra/`. |
+| `SUITE` | Deployment scenario, validated against the selected backend's capabilities. It defaults to that backend's `DEFAULT_SUITE` when declared; otherwise specify a supported scenario. |
+| `TEST_SUITE` | Test target; defaults to `SUITE` and may be selected independently. |
+| `OSAC_MONO_DIR` | OSAC mono-repo checkout used by the E2E targets; defaults to `/opt/osac`. |
+| `TEST` | Optional pytest `-k` filter for a direct test target. |
+| `KUBECONFIG` | Optional hub-cluster kubeconfig override forwarded to the backend; otherwise it uses the backend's default. |
+| `OSAC_VM_KUBECONFIG` | Optional workload-cluster kubeconfig override; otherwise it uses the backend's default. It may equal `KUBECONFIG` for a single-cluster deployment. |
+| `EXTRA_VARS` | Backend-specific deployment variables passed through by the root Makefile. |
+| `OSAC_DEPLOY_MODE` | Optional backend-specific deployment mode override; consult the selected backend guide. If unset, the backend chooses its default. |
 
-For E2E fixture and test guidance, see [the OSAC mono-repo E2E documentation](https://github.com/osac-project/osac/tree/main/tests/e2e).
+The selected backend owns credentials, prerequisites, defaults, and supported
+deployment modes. See its guide before provisioning infrastructure. For the
+current Netris implementation, start with
+[infra/netris/README.md](infra/netris/README.md).
 
-## Adding a New Backend
+## Adding a backend
 
 Create `infra/<name>/` with:
-- `Makefile` — Makefile implementing the contract targets (see `infra/contract.md`)
-- `capabilities` — shell-sourceable file declaring supported deployment scenarios
-- Optional `contracts/<suite>` files — shell-sourceable `REQUIRED_VARS` lists for suite environment validation
 
-Test code belongs in the OSAC mono-repo. Add backend capabilities and contracts as needed; the root Makefile needs a test target when introducing a deployment scenario.
+- A Makefile implementing the targets in [infra/contract.md](infra/contract.md).
+- A shell-sourceable `capabilities` file declaring `SUPPORTED_SUITES` and, optionally, `DEFAULT_SUITE`.
+- Optional shell-sourceable `contracts/<test-selection>` files declaring
+  required `.env.infra` variables.
+
+Test code and test fixtures belong in the OSAC mono-repo. Add a root
+`test-<selection>` target only when introducing a new OSAC test selection that
+the root Makefile does not already provide.

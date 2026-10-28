@@ -5,7 +5,8 @@ EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml -e snapshot_osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
-# SUITE names the deployment scenario and selects profile/setup/test-path behavior.
+# SUITE names the deployment scenario and selects profile/setup behavior.
+# The root TEST_SUITE selector independently chooses the contract and test target.
 # SUITE=caas is the default; the root pipeline maps it to setup-caas / test-caas.
 # The supported CaaS snapshot restore grows both h00 disks to their configured sizes.
 SUITE ?= caas
@@ -56,7 +57,7 @@ VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-f $(EVPN_VALUE
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
-#   make deploy       — full fresh install (default)
+#   make deploy       — fresh-install pipeline (default)
 #   make deploy-fast  — snapshot restore + OSAC refresh (~25 min)
 #
 # Both run: deploy-infra → deploy-ocp → deploy-osac
@@ -111,6 +112,18 @@ gather-vmaas:
 
 destroy-vmaas:
 	@echo "VMaaS setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
+
+# Keep suite teardown backend-owned: full destroys the whole lab and is not a
+# suite-level cleanup operation. The root dispatcher uses this contract target.
+.PHONY: destroy-suite
+ifeq ($(SUITE),full)
+destroy-suite:
+	@echo "ERROR: destroy-suite SUITE=full is not supported; use 'make -C infra/netris destroy-full' only when you intend to destroy the entire lab." >&2
+	@exit 2
+else
+destroy-suite:
+	$(MAKE) destroy-$(SUITE) SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
+endif
 
 setup-caas: SUITE = caas
 setup-caas:
@@ -341,7 +354,7 @@ health-check:
 .PHONY: deploy deploy-fast \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
         setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
-		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
+        destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full destroy-suite \
 		destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \
         gather-infra gather-mgmt-cluster gather-caas \

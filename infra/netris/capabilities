@@ -1,1 +1,2 @@
+DEFAULT_SUITE="caas"
 SUPPORTED_SUITES="caas bmaas vmaas full"

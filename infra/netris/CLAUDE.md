@@ -75,7 +75,11 @@ make gather-infra           # Gather diagnostic info from the cluster
 
 **MaaS:** deploy with `SUITE=full` → setup-maas → deploy-maas
 
-**VMaaS:** not yet implemented. BMaaS setup is implemented in `infra/netris/`.
+**VMaaS:** deploy with `SUITE=vmaas`; `setup-vmaas` validates the Netris EVPN
+prerequisites. Select VMaaS tests with `TEST_SUITE=vmaas`.
+
+**Stretched networking:** deploy with `SUITE=full`, run `setup-full`, and select
+only the shared-subnet tests with `TEST_SUITE=stretched`.
 
 ## Ansible Configuration
 

@@ -38,8 +38,8 @@ test-bmaas:
 
 OSAC_MONO_DIR ?= /opt/osac
 
-# Run only the networking suites configured by the Netris full deployment.
-# Keep the slow cross-tenant case and ExternalIP tests in their dedicated flows.
+# Run the full networking selection serially. Keep slow or separately provisioned
+# networking cases in their dedicated flows.
 FULL_TEST_FILTER = not external_ip and not TestCrossTenantBmaasNetworking
 test-full:
 	mkdir -p $(REPORTS_DIR)
@@ -55,47 +55,39 @@ test-references:
 
 # ─── Infrastructure orchestration ───────────────────────────────────
 
-INFRA              ?= netris
-SUITE              ?= caas
+INFRA              ?=
+SUITE              ?= $(shell if [ -r "$(INFRA_DIR)/capabilities" ]; then . "$(INFRA_DIR)/capabilities"; printf '%s' "$${DEFAULT_SUITE:-}"; fi)
 TEST_SUITE         ?= $(SUITE)
 EXTRA_VARS         ?=
-KUBECONFIG         ?= /root/.kube/config
-OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
-OSAC_DEPLOY_MODE   ?= fresh
 INFRA_DIR           = infra/$(INFRA)
-_FWD_KUBECONFIG     = KUBECONFIG=$(abspath $(KUBECONFIG))
-_FWD_VM_KUBECONFIG = OSAC_VM_KUBECONFIG=$(abspath $(OSAC_VM_KUBECONFIG))
+_FWD_KUBECONFIG     = $(if $(KUBECONFIG),KUBECONFIG=$(abspath $(KUBECONFIG)))
+_FWD_VM_KUBECONFIG = $(if $(OSAC_VM_KUBECONFIG),OSAC_VM_KUBECONFIG=$(abspath $(OSAC_VM_KUBECONFIG)))
+_FWD_DEPLOY_MODE    = $(if $(OSAC_DEPLOY_MODE),OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE))
 _FWD_SUITE          = SUITE=$(SUITE)
-
-# Snapshot refresh does not apply the generated Netris runtime overlay or the
-# per-profile Netris overlay. Restrict it to the supported CaaS snapshot path.
-_DEPLOY_GOALS = e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac
-ifneq ($(filter $(_DEPLOY_GOALS),$(MAKECMDGOALS)),)
-ifneq ($(filter-out fresh snapshot,$(OSAC_DEPLOY_MODE)),)
-$(error OSAC_DEPLOY_MODE must be fresh or snapshot (got '$(OSAC_DEPLOY_MODE)'))
-endif
-ifeq ($(OSAC_DEPLOY_MODE),snapshot)
-ifneq ($(SUITE),caas)
-$(error Snapshot mode supports only SUITE=caas; use fresh mode for Netris VMaaS, BMaaS, or full deployments)
-endif
-endif
-endif
 
 .PHONY: e2e deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
         destroy-ocp destroy-osac destroy-infra destroy-setup destroy-suite gather-infra gather-suite \
-        redeploy-osac _validate-backend _validate-suite-contract
+        redeploy-osac _require-backend _validate-backend _validate-suite-contract
 
-_validate-backend:
+_require-backend:
+	@if [ -z "$(INFRA)" ]; then \
+		echo "ERROR: INFRA is required; choose a backend under infra/"; exit 1; \
+	fi
 	@if [ ! -f $(INFRA_DIR)/Makefile ]; then \
 		echo "ERROR: backend '$(INFRA)' not found at $(INFRA_DIR)/"; exit 1; \
 	fi
+	@if [ ! -f $(INFRA_DIR)/capabilities ]; then \
+		echo "ERROR: backend '$(INFRA)' is missing $(INFRA_DIR)/capabilities"; exit 1; \
+	fi
+
+_validate-backend: _require-backend
 	@. $(INFRA_DIR)/capabilities && \
 		echo "$$SUPPORTED_SUITES" | tr ' ' '\n' | grep -qx "$(SUITE)" || \
 		{ echo "ERROR: backend '$(INFRA)' does not support suite '$(SUITE)'"; \
 		  echo "Supported: $$(. $(INFRA_DIR)/capabilities && echo $$SUPPORTED_SUITES)"; \
 		  exit 1; }
 
-_validate-suite-contract:
+_validate-suite-contract: _require-backend
 	@if [ ! -f $(INFRA_DIR)/.env.infra ]; then \
 		echo "ERROR: $(INFRA_DIR)/.env.infra not found. Run 'make deploy-osac' first."; exit 1; \
 	fi
@@ -118,24 +110,24 @@ _validate-suite-contract:
 e2e: _validate-backend deploy-setup deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
 deploy-setup: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-setup EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) setup-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 # Backward compatibility alias
 setup-infra: deploy-setup
 
 deploy-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-ocp: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 deploy-osac: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 setup-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
+	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_DEPLOY_MODE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
-run-tests: _validate-suite-contract
+run-tests: _validate-backend _validate-suite-contract
 	@set -e; \
 	set -a; . $(INFRA_DIR)/.env.infra; set +a; \
 	if [ -z "$${METERING_ADAPTER_URL:-}" ]; then \
@@ -151,29 +143,25 @@ run-tests: _validate-suite-contract
 	fi; \
 	$(MAKE) test-$(TEST_SUITE)
 
-destroy-ocp:
+destroy-ocp: _require-backend
 	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
-destroy-osac:
+destroy-osac: _require-backend
 	$(MAKE) -C $(INFRA_DIR) destroy-osac EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
-destroy-infra:
+destroy-infra: _require-backend
 	$(MAKE) -C $(INFRA_DIR) destroy-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
 
-destroy-setup:
+destroy-setup: _require-backend
 	$(MAKE) -C $(INFRA_DIR) destroy-setup EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
 
-destroy-suite:
-	@if [ "$(SUITE)" = "full" ]; then \
-		echo "ERROR: destroy-suite SUITE=full is not supported; use 'make -C infra/netris destroy-full' only when you intend to destroy the entire lab." >&2; \
-		exit 2; \
-	fi
-	$(MAKE) -C $(INFRA_DIR) destroy-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
+destroy-suite: _validate-backend
+	$(MAKE) -C $(INFRA_DIR) destroy-suite EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE)
 
-gather-infra:
+gather-infra: _require-backend
 	$(MAKE) -C $(INFRA_DIR) gather-infra EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
-gather-suite:
+gather-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) gather-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 redeploy-osac: destroy-osac deploy-osac

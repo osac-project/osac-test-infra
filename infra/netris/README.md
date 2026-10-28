@@ -8,11 +8,12 @@ from `infra/netris/`. Repository orchestration targets such as `make e2e`,
 
 > **Using this backend from `osac-test-infra`:** run a complete suite from the
 > repository root with `make e2e INFRA=netris SUITE=<suite>`. `SUITE` chooses
-> the deployment scenario, matching networking test path, and OSAC profile.
-> Netris-specific overlays live in the OSAC checkout at
+> the deployment scenario and OSAC profile; `TEST_SUITE` chooses the test
+> target independently. Netris-specific overlays live in the OSAC checkout at
 > `osac-installer/values/<profile>/netris.yaml`. See the root README's [deployment scenario
-> and target table](../../README.md#netris-deployment-scenarios-test-targets-and-profiles)
-> for supported scenarios, test targets, and profile defaults. The `make deploy*`
+> and test selection overview](../../README.md#deployment-and-test-selection)
+> for the generic orchestration contract. The [Netris scenario table below](#netris-deployment-scenarios-test-targets-and-profiles)
+> lists this backend's profiles, targets, and defaults. The `make deploy*`
 > commands in this backend guide are provisioning building blocks; they do not
 > run the OSAC pytest suite.
 
@@ -25,7 +26,7 @@ The [netris-lab](https://github.com/danmanor/netris-lab) deploys a full simulate
 - **4 softgate VMs** — provide NAT/L4LB and BGP peering for internet access
 - **4 server VMs** (hgx-00 to hgx-03) — simulated GPU servers, managed by Netris
 
-This repo takes the first server (hgx-00), resizes it for OCP, configures Netris networking (VPC, VNet, Subnet), and installs OpenShift SNO on it using the Assisted Installer. For CaaS testing, the remaining three servers (hgx-01 to hgx-03) are booted with a discovery ISO and registered as agents for cluster provisioning.
+This repo takes the first server (hgx-00), resizes it for OCP, configures Netris networking (VPC, VNet, Subnet), and installs OpenShift SNO on it using the Assisted Installer. The remaining three servers (hgx-01 to hgx-03) form a scenario-dependent host pool: CaaS uses them as discovery agents, while BMaaS setup repurposes them as bare-metal hosts.
 
 ```
 Bare-metal host
@@ -37,10 +38,9 @@ Bare-metal host
     │   ├── VPC/VNet/Subnet configured via Netris API
     │   ├── OCP SNO installed via Assisted Installer
     │   └── OSAC deployed on top
-    └── hgx-01..03 (CaaS only: 4 vCPU, 16G RAM, 100G disk)
-        ├── Booted with discovery ISO from InfraEnv
-        ├── Registered as agents with resource_class + netris.server/name
-        └── Used to provision a CaaS cluster via fulfillment API
+    └── hgx-01..03 (scenario-dependent host pool)
+        ├── CaaS: booted with discovery ISO and registered as fulfillment agents
+        └── BMaaS: repurposed as bare-metal hosts for the provisioning flow
 ```
 
 Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softgate SNAT → host iptables masquerade → internet.
@@ -91,12 +91,12 @@ EOF
 # Install prerequisites and cache images (shared, run once)
 make setup-infra
 
-# Full deployment — installs OCP + OSAC from scratch (default suite: CaaS)
-make deploy SUITE=caas
+# Fresh install — installs OCP + OSAC with the CaaS profile
+make deploy SUITE=caas EXTRA_VARS="bare_metal_services=true"
 
 # OR: Fast deployment (~25 min) — uses a pre-built snapshot with recert.
 # Faster but doesn't test the OCP or OSAC installer flows.
-make deploy-fast SUITE=caas
+make deploy-fast SUITE=caas EXTRA_VARS="bare_metal_services=true"
 
 # Then run a test flow
 make setup-caas    # CaaS setup: discover hosts, label agents, configure resource-class map
@@ -114,11 +114,11 @@ does not run pytest; use the root `make e2e` command for the complete pipeline.
 
 | Target | Description | Time |
 |--------|-------------|------|
-| `make deploy` | Full pipeline: deploy-infra → deploy-ocp → deploy-osac (fresh Helm install) | ~2-3 hrs |
-| `make deploy-fast` | Snapshot pipeline: deploy-infra → deploy-ocp → deploy-osac (snapshot refresh) | ~25 min |
+| `make deploy` | Fresh-install pipeline: deploy-infra → deploy-ocp → deploy-osac | ~2-3 hrs |
+| `make deploy-fast` | Snapshot-refresh pipeline: deploy-infra → deploy-ocp → deploy-osac | ~25 min |
 | `make setup-infra` | Install prerequisites, cache images + snapshot flavor, build tools | ~10 min |
 | `make deploy-infra` | Deploy netris-lab (K3s, topology, VMs, connectivity) | ~12 min |
-| `make deploy-ocp` | Configure Netris networking + restore OCP SNO from snapshot | ~15 min |
+| `make deploy-ocp` | Configure Netris networking and deploy OCP SNO from the selected fresh-install or snapshot flavor | ~15 min |
 | `make deploy-osac` | Prepare OSAC values + Helm install or snapshot refresh (based on `OSAC_DEPLOY_MODE`) | ~30-60 min |
 
 ### CaaS (run after deploy)
@@ -158,6 +158,14 @@ The test-suite targets are:
 | `bmaas` | `test-bmaas` | `tests/e2e/networking/bmaas/` |
 | `full` | `test-full` | `tests/e2e/networking/` with the documented exclusions |
 | `stretched` | `test-stretched` | `tests/e2e/networking/stretched/` |
+
+The PR E2E commands use the same split:
+
+| PR command | Deployment `SUITE` | `TEST_SUITE` | OSAC profile | Check |
+|---|---|---|---|---|
+| `/test vmaas-netris` | `vmaas` | `vmaas` | `vmaas-ci` | `E2E / VMaaS Netris Full Install` |
+| `/test bmaas-netris` | `bmaas` | `bmaas` | `bmaas-ci` | `E2E / BMaaS Netris Full Install` |
+| `/test stretched-netris` | `full` | `stretched` | `full-ci` | `E2E / Stretched Netris Full Install` |
 
 This table describes the root orchestration targets. Later backend-only target
 examples in this guide assume the working directory is `infra/netris/`; from
@@ -238,11 +246,28 @@ instead of hardcoding a server-port name.
 tenant-cluster preparation is separate because those flows reuse the Netris
 lab's discovery VMs. `TEST_SUITE=full` excludes CaaS lifecycle tests, the slow
 cross-tenant BMaaS networking class, and ExternalIP tests that require a
-separately provisioned return path. The PR E2E comment offers dedicated
-`vmaas-netris`, `bmaas-netris`, and `stretched-netris` checks; the stretched
-check deploys with `SUITE=full` and runs with `TEST_SUITE=stretched`.
+separately provisioned return path.
 
-VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
+### Bare-metal prerequisites
+
+The `bare_metal_services` Ansible variable defaults to `false`. Set it to
+`true` when the selected profile uses bare-metal services (CaaS and BMaaS do)
+and the cluster does not already have the Metal3 `Provisioning` resource
+configured with `watchAllNamespaces: true`, or when the lab needs Netris BMC
+support. It prepares that Metal3 setting, starts `sushy-tools`, and reserves
+the OCP VM's BMC address. The VMaaS, BMaaS, and stretched full-install PR
+workflows currently set it explicitly.
+
+VM-backed tests require `KUBECONFIG`, `OSAC_NAMESPACE`, and
+`OSAC_VM_KUBECONFIG` in `.env.infra`; the VMaaS, full, and stretched test
+contracts check these variables. For a single-cluster profile, the VM kubeconfig
+may point to the hub kubeconfig. Configure a separate path when tests use a
+separate workload cluster.
+
+`setup-bmaas` adds `OSAC_BMH_SSH_HOSTS`, `OSAC_BMI_INSTANCE_TYPE`, and
+`OSAC_BMI_NETWORK_INTERFACE` to `.env.infra`. The BMaaS, full, and stretched
+contracts require these values; the root `run-tests` target checks them after
+the selected deployment scenario has been prepared.
 
 Suite fixtures create their own tenant `VirtualNetwork`, `Subnet`, `SecurityGroup`, and `ExternalIPPool` resources. Lab setup owns the cluster/fabric prerequisites and must not pre-create fixture-owned tenant resources. PodNetwork route advertisements support shared-subnet VMaaS/BMaaS traffic. ExternalIP and EgressIP dataplane tests require a separately provisioned and acknowledged route/return path for `172.27.0.0/16`; enable `ocp_vmaas_external_ip_tests_enabled` only after verifying that path.
 
@@ -252,6 +277,7 @@ To collect diagnostics from an existing deployment, run `make gather-suite INFRA
 
 | Target | Description |
 |--------|-------------|
+| Root `make destroy-suite SUITE=<scenario>` | Safely dispatch a deployment-scenario cleanup; rejects `SUITE=full` because that would destroy the entire lab |
 | `make destroy-full` | Tear down everything: OSAC + OCP artifacts + netris-lab |
 | `make destroy-osac` | Tear down OSAC: helm releases, operators, CRDs, namespaces |
 | `make destroy-ocp` | Reset OCP for reinstall: delete cluster, recreate disk, boot VM |
@@ -342,7 +368,7 @@ make destroy-full   # tear down everything
 make deploy-fast    # full redeploy (snapshot path)
 ```
 
-**BM full pipeline (redeploy-server.sh):**
+**Bare-metal host redeployment pipeline (`redeploy-server.sh`):**
 ```bash
 # CaaS + fresh OSAC install (default)
 make redeploy-fresh
@@ -379,7 +405,7 @@ This single command:
 3. Bootstraps packages (EPEL, Ansible, pip deps)
 4. Sets up data disk (partition, mount, symlinks, SELinux)
 5. Destroys any previous deployment
-6. Runs the full pipeline: setup-infra → deploy-infra → deploy-ocp → deploy-osac → setup-caas → deploy-caas → post-install
+6. Runs the complete pipeline: setup-infra → deploy-infra → deploy-ocp → deploy-osac → setup-caas → deploy-caas → post-install
 
 **Monitor:**
 ```bash
@@ -396,7 +422,7 @@ source scripts/env-mylab.sh && make deploy-jump
 
 | Target | Description |
 |--------|-------------|
-| `make redeploy-fresh` | Destroy + wipe progress + full pipeline (`SUITE`, `OSAC_DEPLOY_MODE`) |
+| `make redeploy-fresh` | Destroy + wipe progress + complete deployment sequence (`SUITE`, `OSAC_DEPLOY_MODE`) |
 | `make redeploy-continue` | Resume failed redeploy from last incomplete step |
 | `make disk-setup` | Auto-detect and mount data disk |
 | `make post-install` | Fix Keycloak/UI + generate access doc |

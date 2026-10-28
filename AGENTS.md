@@ -31,25 +31,28 @@ The repo has two layers, connected by a **contract** (see [`infra/contract.md`](
 and [README.md](README.md) for the human-facing overview):
 
 - **`infra/<backend>/`** — pluggable infrastructure backends that provision a cluster and deploy
-  OSAC. Each backend implements `Makefile` (targets `setup-infra`, `deploy-infra`, `deploy-osac`,
-  `setup-<suite>`, `destroy-osac`, `destroy-infra`, `gather-infra`, `gather-<suite>`) and a
-  `capabilities` file declaring `SUPPORTED_SUITES`. `deploy-osac` writes `.env.infra` with the
+  OSAC. Each backend implements the `Makefile` targets in `infra/contract.md`, including
+  `setup-infra`, `deploy-infra`, `deploy-ocp`, `deploy-osac`, `setup-<suite>`, and the destroy/gather
+  targets. Each backend also provides a `capabilities` file declaring `SUPPORTED_SUITES` and
+  optionally `DEFAULT_SUITE`.
+  `deploy-osac` writes `.env.infra` with the
   cluster config tests need. Currently only `infra/netris/` is implemented; its
   `SUPPORTED_SUITES` are deployment scenarios (`caas`, `vmaas`, `bmaas`,
   and `full`). `SUITE` selects the deployment scenario and OSAC profile;
-  `TEST_SUITE` selects the test subdirectory and defaults to `SUITE`.
-  VMaaS/BMaaS networking tests live under `tests/e2e/networking/`.
-- **`tests/<suite>/`** — the pytest suites documented throughout this file. They are
+  `TEST_SUITE` selects the OSAC test target and defaults to `SUITE`.
+  VMaaS/BMaaS networking tests live under the OSAC mono-repo's `tests/e2e/networking/`.
+- **OSAC mono-repo `tests/e2e/`** — pytest suites documented throughout this file. They are
   infrastructure-agnostic: they only consume environment variables, never which backend provisioned
   the cluster. **This layer is unaffected by the infra-backend layer** — the "run tests against an
   existing cluster" workflow (`uv sync && make test-vmaas`, etc.) still works exactly as before and
   remains the primary path when you already have a live OSAC deployment.
 
-Orchestration lives in the root `Makefile`: `make e2e INFRA=netris SUITE=caas` runs the full
-validate → setup-infra → deploy-infra → deploy-osac → setup-suite → run-tests pipeline; each step
-can also be run individually (`make setup-infra INFRA=netris`, etc.). `_validate-backend` checks
-`capabilities` before anything runs; `_validate-suite-contract` checks `.env.infra` against a
-per-suite `tests/<suite>/contract` file's `REQUIRED_VARS` before invoking `make test-<suite>`.
+Orchestration lives in the root `Makefile`: `make e2e INFRA=netris SUITE=caas` runs the
+validate → setup-infra → deploy-infra → deploy-ocp → deploy-osac → setup-suite → run-tests
+pipeline; each step can also be run individually (`make setup-infra INFRA=netris`, etc.).
+`_validate-backend` checks the selected `SUITE` against backend `capabilities`;
+`_validate-suite-contract` checks `.env.infra` against the backend's optional
+`infra/<backend>/contracts/<test-selection>` file before invoking `test-<test-selection>`.
 
 Only touch this layer when working on infrastructure provisioning itself — for writing or fixing
 pytest tests, everything below in this file still applies unchanged.
