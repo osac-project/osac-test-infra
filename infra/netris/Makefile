@@ -117,15 +117,6 @@ destroy-stretched_networking:
 gather-stretched_networking: SUITE = stretched_networking
 gather-stretched_networking:
 	$(MAKE) gather-full
-# Ori's discovery/Agent path is kept separate from BMaaS-backed caas and maas.
-setup-caas_agents:
-	ansible-playbook playbooks/setup-caas-agent-flow.yml $(ANSIBLE_EXTRA)
-
-deploy-caas_agents:
-	ansible-playbook playbooks/deploy-caas-agent-flow.yml $(ANSIBLE_EXTRA)
-
-destroy-caas_agents:
-	ansible-playbook playbooks/destroy-caas-agent-flow.yml $(ANSIBLE_EXTRA)
 
 setup-caas_networking: setup-caas
 setup-maas_networking: setup-maas
@@ -138,13 +129,13 @@ test-maas-networking test-maas_networking:
 
 # E2E setup stops before tenant creation; pytest fixtures provide test tenants.
 prepare-suite:
-	@case "$(SUITE)" in caas|caas_networking|maas|maas_networking|bmaas|bmaas_networking|caas_agents|vmaas|vmaas_networking|stretched_networking|full) ;; *) echo "Unsupported suite: $(SUITE)" >&2; exit 2;; esac
+	@case "$(SUITE)" in caas|caas_networking|maas|maas_networking|bmaas|bmaas_networking|vmaas|vmaas_networking|stretched_networking|full) ;; *) echo "Unsupported suite: $(SUITE)" >&2; exit 2;; esac
 	$(MAKE) setup-$(SUITE) SUITE=$(SUITE)
 
 # Persistent deployment playbooks prepare tenants and Netris networking before workloads.
 SUITE_STAGE ?= all
 deploy-suite:
-	@case "$(BASE_SUITE)" in caas|maas|bmaas|caas_agents) ;; *) echo "Unsupported suite: $(SUITE)" >&2; exit 2;; esac
+	@case "$(BASE_SUITE)" in caas|maas|bmaas) ;; *) echo "Unsupported suite: $(SUITE)" >&2; exit 2;; esac
 	@case "$(SUITE_STAGE)" in \
 		all) $(MAKE) prepare-suite SUITE=$(BASE_SUITE) && $(MAKE) deploy-$(BASE_SUITE) SUITE=$(BASE_SUITE) ;; \
 		setup) $(MAKE) setup-$(BASE_SUITE) SUITE=$(BASE_SUITE) ;; \
@@ -170,11 +161,6 @@ deploy-caas:
 	  -e 'caas_worker_count=$(CAAS_WORKER_COUNT)' \
 	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
 	  $(ANSIBLE_EXTRA)
-
-# Post-ClusterOrder agent setup for cluster-namespace mode (Option C).
-# Expects caas_cluster_order_namespace in EXTRA_VARS.
-setup-caas-agents:
-	ansible-playbook playbooks/setup-caas-agents.yml $(ANSIBLE_EXTRA)
 
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
@@ -221,11 +207,12 @@ setup-bmc:
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
-# Full profile retains the upstream agent discovery setup, then prepares BMaaS and EVPN.
+# Keep the upstream full-profile order: CaaS prerequisites, BMaaS defaults, then EVPN.
 setup-full:
-	$(MAKE) setup-caas_agents
-	$(MAKE) setup-bmaas
+	$(MAKE) setup-caas SUITE=caas
+	$(MAKE) setup-bmaas SUITE=bmaas
 	$(MAKE) setup-vmaas SUITE=vmaas OSAC_PROFILE=$(OSAC_PROFILE)
+
 deploy-bmaas:
 	ansible-playbook playbooks/deploy-bmaas.yml $(ANSIBLE_EXTRA)
 
@@ -398,12 +385,12 @@ health-check:
 
 .PHONY: deploy deploy-fast \
         deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
-        setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
+        setup-caas deploy-caas setup-vmaas gather-vmaas destroy-vmaas \
 		setup-vmaas_networking gather-vmaas_networking destroy-vmaas_networking \
 		setup-stretched_networking gather-stretched_networking destroy-stretched_networking \
         setup-caas setup-caas_networking setup-maas_networking deploy-caas \
         test-caas-networking test-caas_networking test-maas-networking test-maas_networking \
-        prepare-suite deploy-suite setup-caas_agents deploy-caas_agents destroy-caas_agents \
+        prepare-suite deploy-suite \
 		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
 		destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \

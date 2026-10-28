@@ -81,38 +81,6 @@ else
     pass=$((pass + 1))
 fi
 
-# ── Structural: Ansible role no_log on VM loops ──────────────────
-# Per-task validation: each task that loops over VM names or results
-# derived from them must have its own no_log: true.
-_check_nolog_per_task() {
-    local role_file="$1" role_label="$2" loop_pattern="$3"
-    if [[ ! -f "${role_file}" ]]; then
-        echo "SKIP: ${role_label} role not found at ${role_file}"
-        return 0
-    fi
-    if awk -v pat="${loop_pattern}" '
-      function check() { if (vm && !nl) missing++ }
-      /^- name:/ { check(); vm=0; nl=0 }
-      $0 ~ pat   { vm=1 }
-      /^[[:space:]]*no_log:[[:space:]]*true([[:space:]]|$)/ { nl=1 }
-      END { check(); exit (missing>0) }
-    ' "${role_file}"; then
-        echo "PASS: each VM-loop task in ${role_label} has no_log coverage"
-        pass=$((pass + 1))
-    else
-        echo "FAIL: a VM-loop task in ${role_label} is missing no_log: true"
-        fail=$((fail + 1))
-    fi
-}
-
-ROLE_TASKS="${SCRIPT_DIR}/../../netris/roles/setup-caas-agents/tasks/main.yml"
-_check_nolog_per_task "${ROLE_TASKS}" "setup-caas-agents" \
-    "loop:.*caas_discovery_vms|loop:.*_iso_attached"
-
-DISCOVER_TASKS="${SCRIPT_DIR}/../../netris/roles/discover-caas/tasks/main.yml"
-_check_nolog_per_task "${DISCOVER_TASKS}" "discover-caas" \
-    "loop:.*caas_discovery_vms|loop:.*_vm_states|loop:.*_current_vcpus|loop:.*_current_memory|loop:.*_boot_disk_attached|loop:.*_iso_attached"
-
 # ── Summary ───────────────────────────────────────────────────────
 echo ""
 echo "${pass} passed, ${fail} failed"

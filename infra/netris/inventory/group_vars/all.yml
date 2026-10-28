@@ -31,9 +31,6 @@ ocp_gateway: "192.168.40.1/24"
 ocp_node_ip: "192.168.40.2"
 # Optional when Cloudsim's generated SSH aliases are unavailable.
 ocp_vm_mgmt_ip: ""
-ocp_server_ports:
-  - name: "{{ 'eth9@hgx-pod00-su0-h00' if bare_metal_services | default(false) | bool else 'eth10@hgx-pod00-su0-h00' }}"
-    accessMode: true
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 
@@ -139,41 +136,8 @@ caas_worker_vcpu: 4
 caas_worker_memory_mb: 16384
 caas_worker_disk_gb: 100
 
-# Separate agent suite retained from the upstream discovery path.
-caas_discovery_vm_patterns:
-  - "hgx-pod00-su0-h01"
-  - "hgx-pod00-su0-h02"
-  - "hgx-pod00-su0-h03"
-caas_discovery_vcpu: 4
-caas_discovery_vcpu_overrides: {}
-caas_discovery_memory_mb: 16384
-caas_discovery_memory_mb_overrides: {}
-caas_discovery_disk_gb: 100
-caas_discovery_infraenv_name: "infraenv"
-caas_discovery_infraenv_namespace: "hardware-inventory"
-caas_resource_class_hostnames: []
-caas_cluster_params: []
-caas_agents:
-  - vm_pattern: "hgx-pod00-su0-h01"
-    netris_server_name: "hgx-pod00-su0-h01"
-  - vm_pattern: "hgx-pod00-su0-h02"
-    netris_server_name: "hgx-pod00-su0-h02"
-  - vm_pattern: "hgx-pod00-su0-h03"
-    netris_server_name: "hgx-pod00-su0-h03"
-
-# CaaS agent flow: "hot-pool" (default, legacy) or "cluster-namespace" (Option C).
-# hot-pool: agents live in hardware-inventory, test-infra labels and approves them.
-# cluster-namespace: agents live in the ClusterOrder namespace (created by
-#   osac-operator after ClusterOrder submission), test-infra labels but does NOT
-#   approve agents — osac.service.cluster_infra ci_create owns approval.
-# Temporary compatibility bridge for osac PR #1264 rollout.
-caas_agent_flow: "hot-pool"
-
-# CaaS setup (resource-class label, agent annotations, cluster creation)
-caas_agent_namespace: "{{ caas_discovery_infraenv_namespace }}"
 caas_server_cluster_template_name: "ns-only"
 caas_server_cluster_template_gateway: "192.168.101.1/24"
-caas_host_type_id: "ci-worker"
 # CaaS Setup (BMaaS instance type, DiskImage and cluster creation)
 # NetworkClass defaults for newly onboarded tenants (including plain BMaaS).
 netris_tenant_network_cidr: "192.168.101.0/24"

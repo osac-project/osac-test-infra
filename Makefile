@@ -1,7 +1,7 @@
 REPORTS_DIR ?= reports
 
 .PHONY: test lint format test-vmaas test-vmaas-networking test-vmaas_networking \
-        test-stretched-networking test-stretched_networking test-caas test-caas_agents \
+        test-stretched-networking test-stretched_networking test-caas \
         test-caas-networking test-caas_networking test-maas test-maas-networking \
         test-maas_networking test-storage test-bmaas test-bmaas-networking \
         test-bmaas_networking test-metering test-references test-full
@@ -56,11 +56,6 @@ test-full:
 	mkdir -p $(REPORTS_DIR)
 	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/ -n 0 -v --tb=short -m "$(FULL_TEST_MARKER)" -k "$(if $(TEST),($(TEST)) and )$(FULL_TEST_FILTER)" --junitxml=$(CURDIR)/$(REPORTS_DIR)/full.xml
 
-# Agent discovery is an independent CaaS suite. OSAC monorepo coverage for this
-# Netris path is pending; the persistent deploy path is available separately.
-test-caas_agents:
-	@echo "No dedicated CaaS agent-flow tests are configured; no suite tests ran."
-
 # Dedicated Netris suites can be added to the OSAC mono-repo later. Their
 # pytest fixtures will create the shared tenants when those suites run.
 OSAC_CAAS_NETRIS_TEST_PATH ?= tests/e2e/caas/regression/netris
@@ -69,12 +64,12 @@ OSAC_MAAS_NETRIS_TEST_PATH ?= tests/e2e/maas/regression/netris
 test-caas-networking test-caas_networking:
 	@if [ -e "$(OSAC_MONO_DIR)/$(OSAC_CAAS_NETRIS_TEST_PATH)" ]; then \
 		cd $(OSAC_MONO_DIR) && uv run pytest $(OSAC_CAAS_NETRIS_TEST_PATH) -x -n 0 -v --tb=short; \
-	else echo "No CaaS Netris tests at $(OSAC_CAAS_NETRIS_TEST_PATH); no suite tests ran."; fi
+	else echo "ERROR: CaaS Netris tests do not exist at $(OSAC_MONO_DIR)/$(OSAC_CAAS_NETRIS_TEST_PATH)" >&2; exit 2; fi
 
 test-maas-networking test-maas_networking:
 	@if [ -e "$(OSAC_MONO_DIR)/$(OSAC_MAAS_NETRIS_TEST_PATH)" ]; then \
 		cd $(OSAC_MONO_DIR) && uv run pytest $(OSAC_MAAS_NETRIS_TEST_PATH) -x -n 0 -v --tb=short; \
-	else echo "No MaaS Netris tests at $(OSAC_MAAS_NETRIS_TEST_PATH); no suite tests ran."; fi
+	else echo "ERROR: MaaS Netris tests do not exist at $(OSAC_MONO_DIR)/$(OSAC_MAAS_NETRIS_TEST_PATH)" >&2; exit 2; fi
 
 # MaaS is also a persistent deployment suite; its dedicated pytest suite is pending.
 test-maas: test-maas_networking
@@ -163,11 +158,11 @@ setup-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_SUITE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 prepare-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) prepare-suite SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) -C $(INFRA_DIR) prepare-suite SUITE=$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 # Operates on an installed OSAC lab; the backend prepares and deploys the suite.
 deploy-suite: _validate-backend _validate-suite-contract
-	$(MAKE) -C $(INFRA_DIR) deploy-suite SUITE=$(SUITE) SUITE_STAGE=$(SUITE_STAGE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE)
+	$(MAKE) -C $(INFRA_DIR) deploy-suite SUITE=$(SUITE) SUITE_STAGE=$(SUITE_STAGE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) $(_FWD_PROFILE) $(_FWD_KUBECONFIG) $(_FWD_VM_KUBECONFIG)
 
 run-tests: _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \

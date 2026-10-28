@@ -171,47 +171,6 @@
   ansible.builtin.debug:
     msg: "Cluster '{{ caas_cluster_name }}' {{ 'already exists' if (_cluster_exists.stdout | default('')) == 'exists' else 'created' }} with ID {{ caas_cluster_id }}"
 
-# ── ClusterOrder namespace discovery (cluster-namespace mode) ──────
-# The osac-operator creates a namespace named <order-ns>-<order-name>
-# and labels it osac.openshift.io/clusterorder=<name>. Wait for it to
-# appear so downstream setup-caas-agents can create InfraEnv there.
-- name: Wait for ClusterOrder namespace to appear
-  ansible.builtin.shell:
-    cmd: >-
-      oc get ns
-      -l osac.openshift.io/clusterorder={{ caas_cluster_name }}
-      --no-headers 2>/dev/null
-      | awk '{print $1}'
-      | grep -v '^$'
-      | head -1
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _cluster_order_namespace
-  until: _cluster_order_namespace.stdout | length > 0
-  retries: 60
-  delay: 10
-  changed_when: false
-  when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'
-
-- name: Export ClusterOrder namespace fact
-  ansible.builtin.set_fact:
-    caas_cluster_order_namespace: "{{ _cluster_order_namespace.stdout }}"
-  when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'
-  no_log: true
-
-- name: Report ClusterOrder namespace discovered
-  ansible.builtin.debug:
-    msg: "ClusterOrder namespace discovered ({{ caas_cluster_order_namespace | length }} chars)"
-  when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'
-
-# In cluster-namespace mode, agents must be booted and registered BEFORE
-# we wait for CLUSTER_STATE_READY — otherwise the cluster can never
-# become ready because no worker nodes exist.
-- name: Set up agents in ClusterOrder namespace
-  ansible.builtin.include_role:
-    name: setup-caas-agents
-  when: (caas_agent_flow | default('hot-pool')) == 'cluster-namespace'
-
 # The HyperShift operator creates the hosted control plane namespace with
 # PodSecurity enforce=restricted, which blocks ALL CP pods (etcd, apiserver,
 # capi-provider). We must relabel it to privileged before they can start.

@@ -96,11 +96,8 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make deploy-ocp` | Configure Netris networking + restore OCP SNO from snapshot | ~15 min |
 | `make deploy-osac` | Prepare OSAC values + Helm install or snapshot refresh (based on `OSAC_DEPLOY_MODE`) | ~30-60 min |
 
-The BMaaS-backed `caas` and `maas` suites use the persistent cluster roles.
-The original discovery/Agent flow is available separately with
-`make setup-caas_agents`, `make deploy-caas_agents`, and
-`make destroy-caas_agents`. Its setup and cluster creation use the original
-agent roles and the `ocp_ci_small` template.
+The `caas` and `maas` suites use BMaaS-backed workers and the persistent
+cluster roles.
 
 ## CaaS (run after deploy)
 
@@ -119,8 +116,11 @@ A full `redeploy-fresh` recreates the management VM and its DHCP file; a partial
 redeployment that retains the VM may retain an older injected router line.
 The tenant VNet DHCP should supply the worker default gateway. Cluster API and
 ingress use the Netris external-access flow configured in AAP; the shared
-ExternalIPPool is used for tenant egress. The guest OVN `routingViaHost`
-setting remains configured separately.
+ExternalIPPool is used for tenant egress. The guest network task restores
+`routingViaHost: false` only if an older cluster has it set to true, then waits
+for the Network operator. Fresh clusters keep their default setting. The OCP
+data uplink is discovered from the live Netris topology; `eth10` remains the
+VMaaS EVPN underlay when enabled.
 
 ### VMaaS and BMaaS shared-subnet networking
 
@@ -154,7 +154,7 @@ make e2e INFRA=netris SUITE=stretched_networking OSAC_PROFILE=full-ci OSAC_DEPLO
 make e2e INFRA=netris SUITE=full OSAC_PROFILE=full-ci OSAC_DEPLOY_MODE=fresh
 ```
 
-`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` prepares agent-based CaaS and BMaaS resources, then runs the VMaaS prerequisite check. `test-full` runs the serial OSAC mono-repo E2E set with its configured exclusions; it includes only the generic `requires_stretched_networking` shared-subnet test and excludes the dedicated VMaaS and BMaaS Netris cases. The Netris PR workflow exposes `bmaas-netris`, `vmaas-netris`, and `stretched-netris`; the stretched check runs only the shared-subnet BMI/ComputeInstance test.
+`SUITE=full` uses the `full-ci` OSAC profile and configures the same h00 underlay and CUDN EVPN prerequisites. `setup-full` prepares BMaaS-backed CaaS prerequisites, reapplies BMaaS defaults, then runs the VMaaS prerequisite check. `test-full` runs the serial OSAC mono-repo E2E set with its configured exclusions; it includes only the generic `requires_stretched_networking` shared-subnet test and excludes the dedicated VMaaS and BMaaS Netris cases. The Netris PR workflow exposes `bmaas-netris`, `vmaas-netris`, and `stretched-netris`; the stretched check runs only the shared-subnet BMI/ComputeInstance test.
 
 VMaaS requires `KUBECONFIG`, `OSAC_NAMESPACE`, and `OSAC_VM_KUBECONFIG` in `.env.infra`. For the single-cluster profile, the VM kubeconfig may default to the hub kubeconfig; configure a separate path when a separate workload cluster is used.
 
@@ -404,7 +404,7 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 | `netris_password` | *(required)* | Netris API password — set in your local config, validated at deploy time |
 | `ew_fabric_enable` | `0` | East-West fabric (0=NS only) |
 | `dns_server` | `8.8.8.8` | Upstream DNS server for the lab (override in environments where public DNS is blocked) |
-| `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS cluster creation |
+| `caas_cluster_template` | `osac.templates.ocp_small` | Cluster template for BMaaS-backed CaaS; avoids reattaching a worker port already used by its BMI |
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name |
 | `caas_baremetal_instance_type` | `ci-worker` | BMaaS BareMetalInstanceType selected for CaaS workers |
 | `snapshot_flavor_image` | `quay.io/osac-project/cluster-flavors:caas` | OCI image containing the snapshot flavor |
@@ -468,11 +468,15 @@ To retry the deployment after setup, run
 `make deploy-suite SUITE=maas SUITE_STAGE=workload` (choose the suite in use).
 That stage reruns tenant preparation and, for CaaS/MaaS, the Netris network
 check before creating resources. It requires the /opt/osac checkout installed
-by deploy-osac and the CI profile's Keycloak test users. `make e2e` runs setup
-and then the monorepo suite; its fixtures create tenants when suite tests exist.
+by deploy-osac and the CI profile's Keycloak test users. `make e2e` runs
+setup and then the monorepo suite; its fixtures create tenants when suite tests
+exist. Missing CaaS/MaaS Netris test paths cause an error rather than a
+successful run.
 If an earlier deployment used `test-infra-tenant`, first remove its cluster with
 `make force-destroy-maas OSAC_TEST_TENANT_NAME=test-infra-tenant` (or the CaaS
-variant). Switching this default does not delete that tenant or its cluster.
+variant). This force cleanup scans all remaining orders and is not isolated
+to the named tenant. Switching the default does not delete that tenant or its
+cluster.
 
 CaaS tenant network preparation uses tenant1's default network. Fresh and
 snapshot Helm values set `netris_tenant_network_cidr` and `netris_tenant_subnet_cidr` to
@@ -544,7 +548,7 @@ the flavor image; it reports an actionable error if the credentials are missing 
 | Variable | Default | Description | Tested |
 |----------|---------|-------------|--------|
 | `caas_cluster_name` | `caas-ci-cluster` | CaaS cluster name | yes (custom) |
-| `caas_cluster_template` | `osac.templates.ocp_ci_small` | Cluster template for CaaS | defaults only |
+| `caas_cluster_template` | `osac.templates.ocp_small` | Cluster template for BMaaS-backed CaaS | defaults only |
 | `caas_baremetal_instance_type` | `ci-worker` | BMaaS BareMetalInstanceType selected for CaaS workers | defaults only |
 | `caas_worker_vcpu` | `4` | BMaaS worker VM vCPUs | yes (8) |
 | `caas_worker_memory_mb` | `16384` | BMaaS worker VM memory in MB | yes (32768) |
@@ -579,13 +583,12 @@ make deploy-osac OSAC_VALUES_FILE=values/bmaas-ci/values.yaml \
   EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true"
 ```
 
-### Netris identity for BMaaS-created CaaS Agents
+### Netris server labels for BMaaS workers
 
 `prepare-caas-bmaas` installs `test-infra-netris-agents.service` on the hypervisor.
 It maps the configured worker VMs' hardware UUIDs to their Netris server names and
 sets `netris.server/name` on matching Agents in the OSAC namespace. It runs after
 setup exits, so replacement Agents and later scale-out workers receive the label.
-It does not boot discovery media, approve Agents, or select workers.
 
 The `test-infra-netris-agent-identity` ValidatingAdmissionPolicy blocks binding
 only those configured Agents until their label is correct. This prevents the
@@ -595,7 +598,6 @@ is unavailable, those workers wait; inspect it with
 `journalctl -u test-infra-netris-agents -n 50`. Setup must run before deployment.
 The service and policy remain across cluster teardown for reuse.
 
-The legacy `discover-caas` role and its InfraEnv template have been removed.
 BMaaS owns worker power, disks and discovery; setup only reconfigures VMs whose
 persistent hardware/disk configuration differs. Existing claimed, deleting, or
 non-available BMHs are rejected before VM mutation. Standalone BMaaS retains its
