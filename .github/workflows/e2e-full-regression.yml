@@ -588,8 +588,21 @@ jobs:
           # were built from source earlier in this job, pin to the same
           # commit SHA — the branch may have moved since the component
           # clone, and a second git-clone at the branch name would race.
+          #
+          # Filter by INSTALLER_REPO so components from a different repo
+          # don't pin the installer clone.  Synthetic OSAC-5356 entries
+          # (source=osac-5356) are excluded when INSTALLER_REF differs
+          # from TEST_REF — the caller's explicit ref must be honored.
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
-          PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
+          if [[ "${INSTALLER_REF}" == "${TEST_REF}" ]]; then
+            PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r \
+              --arg repo "${INSTALLER_REPO}" \
+              '[.[] | select(.repo == $repo) | .sha] | unique | if length == 1 then .[0] else empty end')
+          else
+            PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r \
+              --arg repo "${INSTALLER_REPO}" \
+              '[.[] | select(.repo == $repo) | select(.source != "osac-5356") | .sha] | unique | if length == 1 then .[0] else empty end')
+          fi
           # Fall back to the no-build-path SHA resolved earlier (OSAC-5356).
           # Guard: only when installer repo AND ref match the test source —
           # the SHA may not exist in a different repository, and an explicit

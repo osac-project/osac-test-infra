@@ -43,7 +43,11 @@ jobs:
           python3 -I .github/scripts/test_setup_virtual_bmh.py
           python3 -I .github/scripts/test_upsert_pr_comment.py
       - name: Shell script tests
-        run: bash .github/scripts/discover-audit-runs-test.sh
+        run: |
+          set -euo pipefail
+          pip install 'pyyaml>=6.0'  # declared in pyproject.toml [project.dependencies]
+          bash .github/scripts/discover-audit-runs-test.sh
+          bash .github/scripts/test_installer_sha_selection.sh
 
   CI:
     name: CI
