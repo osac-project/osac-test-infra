@@ -128,6 +128,7 @@ install_packages() {
         python3 \
         python3-pip \
         virt-install \
+        guestfs-tools \
         openssh-clients \
         iproute \
         iputils
@@ -173,21 +174,20 @@ create_runner_user() {
     fi
     chown "${RUNNER_USER}:${RUNNER_USER}" "${AGENT_STORAGE}"
 
-    # Install osac-hosts-entry helper for /etc/hosts management (referenced
-    # by the HOSTS_ENTRY_ADD/HOSTS_ENTRY_REMOVE sudoers grants below). Guard
-    # on the sibling file existing -- when this script runs via Ansible's
-    # ansible.builtin.script module, only this one file is copied to the
-    # remote host (no siblings), so SCRIPT_DIR won't have osac-hosts-entry
-    # next to it. fleet/roles/machine_base/tasks/runner_user.yml installs it
-    # separately via a native copy task for that path.
-    if [[ -f "${SCRIPT_DIR}/osac-hosts-entry" ]]; then
-        install -m 0755 "${SCRIPT_DIR}/osac-hosts-entry" /usr/local/sbin/osac-hosts-entry
-        echo "    Installed /usr/local/sbin/osac-hosts-entry"
-    elif [[ ! -f /usr/local/sbin/osac-hosts-entry ]]; then
-        echo "    WARNING: ${SCRIPT_DIR}/osac-hosts-entry not found and" >&2
-        echo "    /usr/local/sbin/osac-hosts-entry doesn't already exist -- skipping." >&2
-        echo "    Install it manually or via the fleet Ansible role." >&2
-    fi
+    # Ansible's script module copies only machine-init.sh, so the fleet role
+    # installs these root-owned helpers separately.
+    for helper in \
+        osac-hosts-entry osac-compact-dns cluster-tool-compact-boot \
+        osac-compact-boot-diagnostics osac-compact-kubeconfig; do
+        if [[ -f "${SCRIPT_DIR}/${helper}" ]]; then
+            install -m 0755 "${SCRIPT_DIR}/${helper}" "/usr/local/sbin/${helper}"
+            echo "    Installed /usr/local/sbin/${helper}"
+        elif [[ ! -f "/usr/local/sbin/${helper}" ]]; then
+            echo "    WARNING: ${SCRIPT_DIR}/${helper} not found and" >&2
+            echo "    /usr/local/sbin/${helper} doesn't already exist -- skipping." >&2
+            echo "    Install it manually or via the fleet Ansible role." >&2
+        fi
+    done
 
     RUNNER_HOME=$(eval echo "~${RUNNER_USER}")
 
@@ -233,6 +233,9 @@ Cmnd_Alias CLUSTER_TOOL_FLAVORS_DELETE  = /usr/bin/python3 ${CLUSTER_TOOL_BIN} f
 Cmnd_Alias CLUSTER_TOOL_PULL            = /usr/bin/python3 ${CLUSTER_TOOL_BIN} pull *
 Cmnd_Alias CLUSTER_TOOL_DESTROY         = /usr/bin/python3 ${CLUSTER_TOOL_BIN} destroy *
 Cmnd_Alias CLUSTER_TOOL_BOOT            = /usr/bin/python3 ${CLUSTER_TOOL_BIN} boot --flavor * --name *
+# The wrapper validates runner arguments and always supplies --host local.
+Cmnd_Alias CLUSTER_TOOL_COMPACT_BOOT    = /usr/local/sbin/cluster-tool-compact-boot *
+Cmnd_Alias COMPACT_BOOT_DIAGNOSTICS     = /usr/local/sbin/osac-compact-boot-diagnostics *
 Cmnd_Alias CLUSTER_TOOL_CLEANUP_HAPROXY = /usr/bin/python3 ${CLUSTER_TOOL_BIN} cleanup-haproxy
 
 Cmnd_Alias BRIDGE_DOWN   = /usr/sbin/ip link set br-* down
@@ -245,17 +248,20 @@ Cmnd_Alias AUTH_JSON_RM    = /usr/bin/rm -f /root/.config/containers/auth.json
 
 Cmnd_Alias HOSTS_ENTRY_ADD    = /usr/local/sbin/osac-hosts-entry add * *
 Cmnd_Alias HOSTS_ENTRY_REMOVE = /usr/local/sbin/osac-hosts-entry remove *
+Cmnd_Alias COMPACT_DNS_ADD    = /usr/local/sbin/osac-compact-dns add *
+Cmnd_Alias COMPACT_DNS_REMOVE = /usr/local/sbin/osac-compact-dns remove *
+Cmnd_Alias COMPACT_KUBECONFIG_COPY = /usr/local/sbin/osac-compact-kubeconfig *
 
 ${KUBECONFIG_COPY_ALIAS}
 
 ${KUBECONFIG_CHOWN_ALIAS}
 
 ${RUNNER_USER} ALL=(root) NOPASSWD: CLUSTER_TOOL_FLAVORS, CLUSTER_TOOL_FLAVORS_DELETE, \\
-    CLUSTER_TOOL_PULL, CLUSTER_TOOL_DESTROY, CLUSTER_TOOL_BOOT, CLUSTER_TOOL_CLEANUP_HAPROXY, \\
+    CLUSTER_TOOL_PULL, CLUSTER_TOOL_DESTROY, CLUSTER_TOOL_BOOT, CLUSTER_TOOL_COMPACT_BOOT, COMPACT_BOOT_DIAGNOSTICS, CLUSTER_TOOL_CLEANUP_HAPROXY, \\
     BRIDGE_DOWN, BRIDGE_DELETE, \\
     AUTH_JSON_MKDIR, AUTH_JSON_COPY, AUTH_JSON_CHMOD, AUTH_JSON_RM, \\
-    HOSTS_ENTRY_ADD, HOSTS_ENTRY_REMOVE, \\
-    KUBECONFIG_COPY, KUBECONFIG_CHOWN
+    HOSTS_ENTRY_ADD, HOSTS_ENTRY_REMOVE, COMPACT_DNS_ADD, COMPACT_DNS_REMOVE, \\
+    KUBECONFIG_COPY, KUBECONFIG_CHOWN, COMPACT_KUBECONFIG_COPY
 EOF
 
     if ! visudo -c -f "${SUDOERS_STAGING}" >/dev/null; then

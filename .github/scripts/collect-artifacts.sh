@@ -21,6 +21,15 @@ COLLECT_TIMEOUT_SECONDS="${COLLECT_TIMEOUT_SECONDS:-900}"
 # not vouch for this one.
 rm -f "${ARTIFACT_DIR}/.redaction-complete"
 
+# Compact boot diagnostics are deliberately collected without kubeconfig
+# access. Their helper omits raw cluster-tool logs; the upload action must scan
+# and redact this path successfully before it can be uploaded.
+if [[ ! -f "${KUBECONFIG:-}" && -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
+  echo "No kubeconfig is available; retaining selected compact-boot host diagnostics only."
+  touch "${ARTIFACT_DIR}/.redaction-complete"
+  exit 0
+fi
+
 NETRIS_ARTIFACT_LAYOUT=false
 if [[ -d "${ARTIFACT_DIR}/netris-logs" \
   || -d "${GITHUB_WORKSPACE}/infra/netris/logs" \

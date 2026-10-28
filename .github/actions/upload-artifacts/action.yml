@@ -28,6 +28,12 @@ runs:
       env:
         ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
       run: |
+        if [[ -d "${ARTIFACT_DIR}/compact-boot" ]] \
+          && [[ ! -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
+          echo "::error::Compact-boot diagnostics are incomplete — removing artifacts instead of uploading"
+          rm -rf "${ARTIFACT_DIR}"
+          exit 1
+        fi
         if [[ -d "${ARTIFACT_DIR}" ]] && [[ ! -f "${ARTIFACT_DIR}/.redaction-complete" ]]; then
           echo "::error::Gather script did not complete — refusing to upload"
           rm -rf "${ARTIFACT_DIR}"
@@ -51,6 +57,10 @@ runs:
           exit 0
         fi
 
+        COMPACT_DIAGNOSTICS=false
+        if [[ -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
+          COMPACT_DIAGNOSTICS=true
+        fi
 
         ENGINE=""
         if command -v docker &>/dev/null; then
@@ -58,6 +68,11 @@ runs:
         elif command -v podman &>/dev/null; then
           ENGINE=podman
         else
+          if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
+            echo "::error::No container runtime available to scan compact-boot diagnostics — removing artifacts instead of uploading"
+            rm -rf "${ARTIFACT_DIR}"
+            exit 1
+          fi
           echo "::warning::Neither docker nor podman available — uploading without pre-scan (post-upload scanner will cover)"
           exit 0
         fi
@@ -97,6 +112,9 @@ runs:
             --report-format=json \
             --report-path="/out/$(basename "${REPORT}")" \
             --exit-code=0; then
+            if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
+              fail_closed "Gitleaks scan failed for compact-boot diagnostics"
+            fi
             echo "::warning::Gitleaks scan failed — uploading anyway (post-upload scanner will cover)"
             echo "::endgroup::"
             rm -rf "${REPORT_DIR}"
@@ -138,6 +156,9 @@ runs:
               --report-format=json \
               --report-path="/out/findings-final.json" \
               --exit-code=0; then
+              if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
+                fail_closed "Final gitleaks scan failed for compact-boot diagnostics"
+              fi
               echo "::warning::Final gitleaks scan failed — uploading anyway (post-upload scanner will cover)"
               break
             fi
@@ -147,6 +168,9 @@ runs:
             REMAINING=$(jq 'length' "${FINAL_REPORT}") \
               || fail_closed "Could not read the final gitleaks report"
             if [[ "${REMAINING}" -gt 0 ]]; then
+              if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
+                fail_closed "${REMAINING} finding(s) remain in compact-boot diagnostics after ${MAX_PASSES} redaction passes"
+              fi
               echo "::warning::${REMAINING} finding(s) remain after ${MAX_PASSES} redaction passes — uploading anyway (post-upload scanner will cover)"
               echo "Remaining findings (sanitized):"
               jq -r '.[] | "  \(.RuleID) \(.File):\(.StartLine)"' "${FINAL_REPORT}" || true

@@ -4,18 +4,22 @@
 # with a different number of registered runner instances can override it
 # via fleet/inventory group_vars/host_vars (see fleet/inventory/group_vars/all.yml).
 #
-# osac-hosts-entry is installed separately (native copy, not via the
+# Root-owned helpers are installed separately (native copy, not via the
 # script) because ansible.builtin.script only copies the one script file
-# to the remote host -- create_runner_user()'s own install of its sibling
-# osac-hosts-entry file (for the direct/manual-invocation path) would
-# silently no-op here otherwise.
-- name: Install osac-hosts-entry helper for /etc/hosts management
+# to the remote host -- create_runner_user() cannot see sibling files here.
+- name: Install root-owned runner helpers
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../scripts/osac-hosts-entry"
-    dest: /usr/local/sbin/osac-hosts-entry
+    src: "{{ playbook_dir }}/../../scripts/{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
     owner: root
     group: root
     mode: "0755"
+  loop:
+    - osac-hosts-entry
+    - osac-compact-dns
+    - cluster-tool-compact-boot
+    - osac-compact-boot-diagnostics
+    - osac-compact-kubeconfig
 
 - name: Run machine-init.sh runner-user
   ansible.builtin.script: "{{ playbook_dir }}/../../scripts/machine-init.sh runner-user"
