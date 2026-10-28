@@ -202,7 +202,7 @@ jobs:
       # and test failures (OSAC-5356).
       - name: Resolve osac SHA for version consistency
         id: resolve-sha
-        if: inputs.osac-cli-version == ''
+        if: inputs.osac-cli-version == '' && inputs.chart-oci-repo == ''
         env:
           TEST_REF: ${{ inputs.test-ref }}
           TEST_REPOSITORY: ${{ inputs.test-repository }}
