@@ -262,12 +262,16 @@ jobs:
       # by that reassertion or, for the service image specifically, produce
       # a test CLI that doesn't match the deployed service. Fail fast on
       # the conflict instead of resolving it implicitly by key order.
+      # metering.echoAdapter.image is deliberately excluded: the chart ships
+      # no real default for it (see Pull resolved chart and read its
+      # stamped image refs), so there's nothing of the chart's own to
+      # protect there -- the CI profile's own value is correct as-is.
       - name: Reject stamped-image overrides in OCI mode
         if: inputs.chart-oci-repo != ''
         env:
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
         run: |
-          STAMPED_PREFIXES='["operator.image", "service.images.service", "ui.images.ui", "aap.bootstrap.image", "aap.configAsCode.eeImage", "metering.echoAdapter.image", "metering.m360Adapter.image"]'
+          STAMPED_PREFIXES='["operator.image", "service.images.service", "ui.images.ui", "aap.bootstrap.image", "aap.configAsCode.eeImage", "metering.m360Adapter.image"]'
           CONFLICTS=$(echo "${IMAGE_OVERRIDES}" | jq -r --argjson prefixes "${STAMPED_PREFIXES}" \
             '[keys[] as $k | $prefixes[] as $p | select($k == $p or ($k | startswith($p + "."))) | $k] | unique | join(", ")')
           if [[ -n "${CONFLICTS}" ]]; then
@@ -520,19 +524,45 @@ jobs:
           SERVICE_TAG=$(yq '.service.images.service.tag' "${VALUES_FILE}")
           echo "service-image=${SERVICE_REPO}:${SERVICE_TAG}" >> "$GITHUB_OUTPUT"
 
-          STAMPED_OVERRIDES=$(yq -o=json '{
-              "operator.image.repository": .operator.image.repository,
-              "operator.image.tag": .operator.image.tag,
-              "service.images.service.repository": .service.images.service.repository,
-              "service.images.service.tag": .service.images.service.tag,
-              "ui.images.ui": .ui.images.ui,
-              "aap.bootstrap.image": .aap.bootstrap.image,
-              "aap.configAsCode.eeImage": .aap.configAsCode.eeImage,
-              "metering.echoAdapter.image.repository": .metering.echoAdapter.image.repository,
-              "metering.echoAdapter.image.tag": .metering.echoAdapter.image.tag,
-              "metering.m360Adapter.image.repository": .metering.m360Adapter.image.repository,
-              "metering.m360Adapter.image.tag": .metering.m360Adapter.image.tag
-            }' "${VALUES_FILE}")
+          # metering.m360Adapter.image isn't set in the umbrella's own
+          # values.yaml -- it's a bundled sub-chart default, only visible by
+          # reading the sub-chart's own file directly (Helm merges this at
+          # render time, not as a literal key in the parent file). Empty if
+          # the bundling shape ever changes from today's raw-directory
+          # layout; add_override below skips it in that case.
+          #
+          # metering.echoAdapter.image is deliberately NOT read or
+          # reasserted here: the chart's own echoAdapter.image block ships
+          # fully commented out (it's "test/development tool only, not for
+          # production use" per the sub-chart's own values.yaml comment) --
+          # there is no real stamped value to protect, and the CI profile's
+          # own ghcr.io placeholder is the only correct source for it.
+          METERING_VALUES_FILE=$(find "${CHART_DIR}" -path "*/charts/osac-metering/values.yaml" | head -1)
+          M360_REPO=""
+          M360_TAG=""
+          if [[ -n "${METERING_VALUES_FILE}" ]]; then
+            M360_REPO=$(yq '.m360Adapter.image.repository' "${METERING_VALUES_FILE}")
+            M360_TAG=$(yq '.m360Adapter.image.tag' "${METERING_VALUES_FILE}")
+          fi
+
+          # Skips a key entirely (rather than stamping a literal "null")
+          # when the resolved chart doesn't actually set it -- Install OSAC
+          # then leaves whatever the CI profile's own -f file provided.
+          STAMPED_OVERRIDES="{}"
+          add_override() {
+            if [[ -n "$2" ]] && [[ "$2" != "null" ]]; then
+              STAMPED_OVERRIDES=$(echo "${STAMPED_OVERRIDES}" | jq -c --arg k "$1" --arg v "$2" '. + {($k): $v}')
+            fi
+          }
+          add_override "operator.image.repository" "$(yq '.operator.image.repository' "${VALUES_FILE}")"
+          add_override "operator.image.tag" "$(yq '.operator.image.tag' "${VALUES_FILE}")"
+          add_override "service.images.service.repository" "${SERVICE_REPO}"
+          add_override "service.images.service.tag" "${SERVICE_TAG}"
+          add_override "ui.images.ui" "$(yq '.ui.images.ui' "${VALUES_FILE}")"
+          add_override "aap.bootstrap.image" "$(yq '.aap.bootstrap.image' "${VALUES_FILE}")"
+          add_override "aap.configAsCode.eeImage" "$(yq '.aap.configAsCode.eeImage' "${VALUES_FILE}")"
+          add_override "metering.m360Adapter.image.repository" "${M360_REPO}"
+          add_override "metering.m360Adapter.image.tag" "${M360_TAG}"
           {
             echo "stamped-overrides<<EOF_STAMPED_OVERRIDES"
             echo "${STAMPED_OVERRIDES}"
