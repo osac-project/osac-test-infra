@@ -532,10 +532,17 @@ jobs:
             # the build finishes) -- poll instead of assuming it already
             # exists, same pattern as the real-release path's own
             # Konflux check-run polling elsewhere in this repo.
+            #
+            # --raw is required: a Helm OCI chart is an artifact, not an
+            # image, and plain `skopeo inspect` fails outright on it
+            # ("unsupported image-specific operation on artifact with
+            # type ... cncf.helm.config...") regardless of whether the
+            # tag exists -- without --raw this loop would always run to
+            # the full timeout and report a false "not available".
             MAX_WAIT_SECONDS=300
             POLL_INTERVAL_SECONDS=15
             elapsed=0
-            until skopeo inspect --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
+            until skopeo inspect --raw --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
               "docker://${CHART_OCI_REPO}:${VERSION}" >/dev/null 2>&1; do
               if [[ "${elapsed}" -ge "${MAX_WAIT_SECONDS}" ]]; then
                 echo "::error::${CHART_OCI_REPO}:${VERSION} not available after ${MAX_WAIT_SECONDS}s"
@@ -546,6 +553,23 @@ jobs:
               elapsed=$((elapsed + POLL_INTERVAL_SECONDS))
             done
             echo "Found ${CHART_OCI_REPO}:${VERSION} after ${elapsed}s"
+
+            # A commit SHA (or any other non-semver tag) can't be passed
+            # to Helm at all -- `helm pull`/`helm upgrade --install`
+            # always parses the tag portion as a semver constraint,
+            # whether it arrives via --version or embedded in the OCI
+            # ref's `:tag` suffix, and rejects anything else with
+            # "improper constraint". The only form Helm accepts for a
+            # non-semver reference is a content digest embedded directly
+            # in the ref as `@sha256:...` (never via --version, which
+            # rejects a digest-shaped string the same way). Resolve the
+            # tag to its manifest digest here so the install step can
+            # build that ref; sha256sum of the raw manifest bytes matches
+            # exactly what Helm itself reports as `Digest:` after a pull.
+            DIGEST=$(skopeo inspect --raw --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
+              "docker://${CHART_OCI_REPO}:${VERSION}" | sha256sum | cut -d' ' -f1)
+            echo "Resolved ${CHART_OCI_REPO}:${VERSION} to digest sha256:${DIGEST}"
+            echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           else
             VERSION=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
               | jq -r '.Tags[]' \
@@ -899,6 +923,7 @@ jobs:
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
           CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
           CHART_VERSION: ${{ steps.chart-version.outputs.version }}
+          CHART_DIGEST: ${{ steps.chart-version.outputs.digest }}
           STAMPED_OVERRIDES: ${{ steps.chart-images.outputs.stamped-overrides }}
         run: |
           # Reuse the osac-installer dir resolved by the previous step (via $GITHUB_ENV)
@@ -1022,8 +1047,19 @@ jobs:
           # When chart-oci-repo is set, install the resolved published chart
           # artifact instead of charts/osac from this checkout -- see
           # osac-installer/Makefile's OSAC_CHART_OCI_REF/OSAC_CHART_OCI_VERSION.
+          #
+          # CHART_DIGEST is only set in dev-build mode (chart-oci-tag):
+          # Helm can't install a commit-SHA tag directly (see Resolve
+          # chart version to install's comment on why), so that ref is
+          # pinned by content digest instead, with no --version at all --
+          # Makefile's install-osac target accepts OSAC_CHART_OCI_REF
+          # without OSAC_CHART_OCI_VERSION specifically when the ref
+          # already carries an @sha256: digest. The real-release path
+          # (CHART_DIGEST empty) is unchanged: plain semver tag + --version.
           CHART_OCI_ARGS=()
-          if [[ -n "${CHART_OCI_REPO}" ]]; then
+          if [[ -n "${CHART_OCI_REPO}" ]] && [[ -n "${CHART_DIGEST}" ]]; then
+            CHART_OCI_ARGS=(OSAC_CHART_OCI_REF="oci://${CHART_OCI_REPO}@sha256:${CHART_DIGEST}")
+          elif [[ -n "${CHART_OCI_REPO}" ]]; then
             CHART_OCI_ARGS=(OSAC_CHART_OCI_REF="oci://${CHART_OCI_REPO}" OSAC_CHART_OCI_VERSION="${CHART_VERSION}")
           fi
           make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=vmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}" "${CHART_OCI_ARGS[@]}"
