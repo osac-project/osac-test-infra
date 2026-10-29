@@ -483,11 +483,19 @@ jobs:
       # registry.stage.redhat.io's auth is merged into a job-scoped file by
       # fetch-stage-registry-secret (not the shared ~/.config/containers/
       # auth.json -- see that action's own comment on why), which podman
-      # and skopeo read via --authfile/REGISTRY_AUTH_FILE below. Helm's OCI
-      # client keeps its own separate credential store
-      # (HELM_REGISTRY_CONFIG, set job-wide above), so it needs its own
-      # explicit login using the same decoded credential. --password-stdin
-      # keeps the password out of argv/ps.
+      # and skopeo read via --authfile/REGISTRY_AUTH_FILE below -- both
+      # already walk an auths key from the full repo path down to the bare
+      # host themselves. Helm's OCI client keeps its own separate
+      # credential store (HELM_REGISTRY_CONFIG, set job-wide above) and
+      # only supports a single exact key per `helm registry login`, so this
+      # step has to replicate that same prefix walk by hand: a robot
+      # account scoped to one repo (e.g. the Konflux dev-registry
+      # credential) is keyed by the full path
+      # (quay.io/redhat-user-workloads/osac-tenant/osac-chart), while
+      # registry.stage.redhat.io's own entry is keyed by the bare host --
+      # confirmed both shapes occur for real via a live CI failure where
+      # looking up the bare host alone missed the quay.io entry.
+      # --password-stdin keeps the password out of argv/ps.
       - name: Log in to the chart's OCI registry
         if: inputs.chart-oci-repo != ''
         env:
@@ -495,9 +503,15 @@ jobs:
         run: |
           echo "::group::Helm OCI registry login"
           REGISTRY_HOST="${CHART_OCI_REPO%%/*}"
-          AUTH_B64=$(jq -r --arg host "${REGISTRY_HOST}" '.auths[$host].auth // empty' "${RUNNER_TEMP}/chart-registry-auth.json")
+          LOOKUP_KEY="${CHART_OCI_REPO}"
+          AUTH_B64=""
+          while true; do
+            AUTH_B64=$(jq -r --arg key "${LOOKUP_KEY}" '.auths[$key].auth // empty' "${RUNNER_TEMP}/chart-registry-auth.json")
+            [[ -n "${AUTH_B64}" || "${LOOKUP_KEY}" == "${REGISTRY_HOST}" ]] && break
+            LOOKUP_KEY="${LOOKUP_KEY%/*}"
+          done
           if [[ -z "${AUTH_B64}" ]]; then
-            echo "::error::No credential for ${REGISTRY_HOST} in the merged pull secret (expected a stage-registry-pull Vault entry)."
+            echo "::error::No credential for ${CHART_OCI_REPO} (or any parent path down to ${REGISTRY_HOST}) in the merged pull secret."
             exit 1
           fi
           USERPASS=$(printf '%s' "${AUTH_B64}" | base64 -d)
