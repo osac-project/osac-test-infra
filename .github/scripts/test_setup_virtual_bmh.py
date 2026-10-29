@@ -296,11 +296,13 @@ class SetupVirtualBmhTests(unittest.TestCase):
         self.assertFalse(any(call["command"] == "qemu-img" for call in calls))
 
     def test_default_and_empty_config_preserve_single_disk(self) -> None:
+        """BMaaS keeps its single OS disk unless data storage is explicitly enabled."""
         for data_size in (None, ""):
             with self.subTest(data_size=data_size):
                 self._assert_disks(data_size)
 
     def test_invalid_data_disk_size_fails_before_external_commands(self) -> None:
+        """Malformed opt-in sizes fail before any external commands or file writes."""
         for data_size in ("0", "0G", "-50G", "1.5G", "50GB", " 50G", "50G\n", "$(false)"):
             with self.subTest(data_size=data_size):
                 result, calls = self._run_setup(data_size)
@@ -309,6 +311,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
                 self.assertEqual(calls, [])
 
     def test_only_caas_workflow_enables_data_disk(self) -> None:
+        """The CaaS workflow supplies 50G to this consumer while BMaaS stays off."""
         workflows = ROOT / ".github/workflows"
         caas = (workflows / "e2e-caas-full-install.yml").read_text()
         step = caas.split("- name: Setup virtual BareMetalHosts\n", 1)[1].split("\n      - name:", 1)[0]
@@ -319,6 +322,34 @@ class SetupVirtualBmhTests(unittest.TestCase):
         self._assert_disks(match.group(1))
         bmaas = (workflows / "e2e-bmaas-full-install.yml").read_text()
         self.assertNotIn("BMH_DATA_DISK_SIZE:", bmaas)
+
+    def test_clone_cleanup_removes_both_disks_without_touching_other_clones(self) -> None:
+        """The actual cleanup block honors a custom disk parent and clone isolation."""
+        teardown = (ROOT / ".github/scripts/teardown.sh").read_text()
+        start = teardown.index('\nVIRSH="virsh -c qemu:///system"\n')
+        end = teardown.index("\nSUSHY_CONFIG_DIR=", start)
+        with tempfile.TemporaryDirectory() as disk_parent, tempfile.TemporaryDirectory() as fake_bin:
+            disks = Path(disk_parent) / "virtual-bmh-disks-cleanup-contract"
+            disks.mkdir()
+            other_disks = Path(disk_parent) / "virtual-bmh-disks-other-clone"
+            other_disks.mkdir()
+            other_disk = other_disks / "other-data.qcow2"
+            other_disk.write_text("keep")
+            for filename in ("worker.qcow2", "worker-data.qcow2", "worker-VARS.fd"):
+                (disks / filename).touch()
+            fake_virsh = Path(fake_bin) / "virsh"
+            fake_virsh.write_text("#!/usr/bin/env bash\nexit 0\n")
+            fake_virsh.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {"CLONE_NAME": "cleanup-contract", "VM_DISK_DIR": disk_parent, "PATH": f"{fake_bin}:{env['PATH']}"}
+            )
+            result = subprocess.run(
+                ["bash", "-euc", teardown[start:end]], env=env, capture_output=True, text=True, timeout=10, check=False
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(disks.exists())
+            self.assertEqual(other_disk.read_text(), "keep")
 
     def test_virtual_media_downloads_are_published_over_http(self) -> None:
         """The generated Provisioning CR must disable virtual-media TLS."""
