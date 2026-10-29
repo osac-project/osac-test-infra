@@ -217,7 +217,7 @@ make gather-suite INFRA=netris SUITE=full
 
 ## Configuration
 
-All configuration via environment variables.
+Configuration is supplied through environment variables and backend-specific Make/Ansible variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -227,7 +227,7 @@ All configuration via environment variables.
 | `OSAC_PULL_SECRET_PATH` | **(required for caas)** | Path to OCP pull secret |
 | `OSAC_FULFILLMENT_ADDRESS` | auto-derived | Fulfillment API address |
 | `OSAC_VM_TEMPLATE` | `osac.templates.ocp_virt_vm` | VM template |
-| `OSAC_CLUSTER_TEMPLATE` | `osac.templates.ocp_ci_small` | Cluster template |
+| `caas_cluster_template` | `osac.templates.ocp_small` | Netris CaaS cluster template for BMaaS-backed workers |
 | `OSAC_CLI_PATH` | `osac` | Path to the CLI binary |
 | `TEST` | (none) | pytest `-k` filter |
 | `INFRA` | `netris` | Infrastructure backend |
