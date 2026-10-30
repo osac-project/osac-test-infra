@@ -59,6 +59,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             domain_dir = temp / "domains"
             domain_dir.mkdir()
             protected_files = {}
+            protected_links = {}
             if reuse or fault.startswith("orphan"):
                 disk_dir.mkdir(parents=True)
                 for number in range(1, 4):
@@ -68,8 +69,13 @@ class SetupVirtualBmhTests(unittest.TestCase):
                     nvram = disk_dir / f"{name}-VARS.fd"
                     files = [disk, nvram] + ([data] if data_size else [])
                     if fault.startswith("orphan"):
-                        files = [data] if fault == "orphan_data" else [disk]
+                        files = [data] if fault.startswith("orphan_data") else [disk]
                     for path in files:
+                        if fault == "orphan_data_symlink":
+                            destination = temp / f"missing-{number}.qcow2"
+                            path.symlink_to(destination)
+                            protected_links[path] = destination
+                            continue
                         if (fault, path) in (
                             ("missing_data_file", data),
                             ("missing_os_file", disk),
@@ -211,6 +217,10 @@ class SetupVirtualBmhTests(unittest.TestCase):
             calls = [json.loads(line) for line in calls_file.read_text().splitlines()] if calls_file.exists() else []
             for path, content in protected_files.items():
                 self.assertEqual(path.read_text(), content, f"Existing storage changed: {path.name}")
+            for path, destination in protected_links.items():
+                self.assertTrue(path.is_symlink())
+                self.assertEqual(path.readlink(), destination)
+                self.assertFalse(destination.exists(), "Orphan symlink target was written")
             return result, calls
 
     def _assert_disks(self, data_size: str | None) -> None:
@@ -272,6 +282,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             "missing_os_file",
             "missing_nvram_file",
             "orphan_data",
+            "orphan_data_symlink",
             "orphan_os",
         )
         for fault in faults:

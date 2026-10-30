@@ -385,7 +385,7 @@ for i in $(seq 1 "${BMH_COUNT}"); do
       echo "ERROR: VM '${VM_NAME}' is in unsupported state '${VM_STATE}'." >&2
       exit 1
     fi
-  elif [[ -e "${DISK_PATH}" || -e "${VARS_PATH}" || -e "${DATA_DISK_PATH}" ]]; then
+  elif [[ -e "${DISK_PATH}" || -e "${VARS_PATH}" || -e "${DATA_DISK_PATH}" || -L "${DATA_DISK_PATH}" ]]; then
     echo "ERROR: Disk/NVRAM/data disk files for '${VM_NAME}' exist without their VM." >&2
     exit 1
   else
