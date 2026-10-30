@@ -9,8 +9,8 @@
 # refuses to upload the unredacted files.
 #
 # Required env: KUBECONFIG, RUNNER_TEMP, GITHUB_WORKSPACE
-# Optional env: E2E_NAMESPACE, JUNIT_PATH (read by gather-osac-logs.sh),
-#               COLLECT_TIMEOUT_SECONDS (default 900)
+# Optional env: E2E_NAMESPACE, JUNIT_PATH, INVENTORY_FILE (read by
+#               gather-osac-logs.sh), COLLECT_TIMEOUT_SECONDS (default 900)
 set -eo pipefail
 
 ARTIFACT_DIR="${RUNNER_TEMP}/osac-artifacts"

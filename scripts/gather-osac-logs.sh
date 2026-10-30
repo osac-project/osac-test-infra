@@ -10,6 +10,9 @@
 #   E2E_NAMESPACE          — OSAC namespace (default: osac-e2e-ci)
 #   OSAC_AGENT_NAMESPACE   — namespace where Assisted Installer Agent CRs live (default: hardware-inventory)
 #   JUNIT_PATH             — path to JUnit XML to include (optional)
+#   INVENTORY_FILE         — path to the raw virtual-BMH inventory (optional;
+#                            set by setup-virtual-bmh.sh through GITHUB_ENV;
+#                            collected with the BMC passwords redacted)
 #
 set -o nounset
 set -o pipefail
@@ -407,6 +410,35 @@ else
     echo "  AAP route or admin password not found, skipping job stdout capture"
 fi
 
+# Raw virtual-BMH inventory (see setup-virtual-bmh.sh). jq redacts the
+# BMC passwords at copy time, so raw values never enter the artifact
+# directory; the bmc_password sed sweep below is defense in depth.
+if [[ -n "${INVENTORY_FILE:-}" && -f "${INVENTORY_FILE}" ]]; then
+    INVENTORY_BASENAME="$(basename "${INVENTORY_FILE}")"
+    INVENTORY_DEST="${ARTIFACT_DIR}/${INVENTORY_BASENAME}"
+    # An inventory already inside the artifact directory is redacted in
+    # place: a plain redirect would truncate it before jq reads it.
+    if [[ "$(realpath -m "${INVENTORY_DEST}")" == "$(realpath -m "${INVENTORY_FILE}")" ]]; then
+        INVENTORY_TMP="$(mktemp)"
+        if jq '(.hosts[]? | select(has("bmc_password")) | .bmc_password) |= "REDACTED"' \
+            "${INVENTORY_FILE}" > "${INVENTORY_TMP}"; then
+            mv "${INVENTORY_TMP}" "${INVENTORY_FILE}"
+            echo "Redacted the virtual BMH inventory in place: ${INVENTORY_FILE}"
+        else
+            rm -f "${INVENTORY_TMP}"
+            echo "::warning::could not redact ${INVENTORY_FILE}" >&2
+        fi
+    elif jq '(.hosts[]? | select(has("bmc_password")) | .bmc_password) |= "REDACTED"' \
+        "${INVENTORY_FILE}" > "${INVENTORY_DEST}"; then
+        echo "Collected virtual BMH inventory (bmc_password redacted): ${INVENTORY_FILE}"
+    else
+        echo "::warning::could not redact ${INVENTORY_FILE}; not collecting it" >&2
+        rm -f "${INVENTORY_DEST}"
+    fi
+else
+    echo "No virtual BMH inventory (INVENTORY_FILE not set or missing), skipping"
+fi
+
 if [[ -n "${JUNIT_PATH}" && -f "${JUNIT_PATH}" ]]; then
     cp "${JUNIT_PATH}" "${ARTIFACT_DIR}/junit.xml"
     for extra in "$(dirname "${JUNIT_PATH}")"/junit-*.xml; do
@@ -440,9 +472,11 @@ find "${ARTIFACT_DIR}" \( -name "pods-describe.txt" -o -name "*.log" -o -name "*
 # Base64-encoded database passwords and API tokens (operator logs, AAP job stdout)
 # [^"]+ (not [A-Za-z0-9+/=]) so passwords with punctuation (@/%/#) are covered too.
 # find -exec succeeds on zero matches (unlike xargs); fail closed on sed errors.
+# bmc_password: defense in depth on top of the jq redaction at collection.
 find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.json" \) \
     -exec sed -i -E \
         -e 's/"password":\s*"[^"]+"/"password": "REDACTED"/g' \
+        -e 's/"bmc_password":\s*"[^"]+"/"bmc_password": "REDACTED"/g' \
         -e 's/"token":\s*"[^"]+"/"token": "REDACTED"/g' \
         {} + || {
     echo "ERROR: password/token redaction failed" >&2
