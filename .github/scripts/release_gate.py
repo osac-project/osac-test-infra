@@ -51,6 +51,7 @@ import os
 import pathlib
 import re
 import sys
+import tarfile
 import zipfile
 
 # Shorter strings (usernames, hostnames, placeholders) would flag ordinary text.
@@ -107,7 +108,7 @@ def collect_needles(value: object, label: str, out: dict[bytes, str], depth: int
 def _add_string(text: str, label: str, out: dict[bytes, str], depth: int, min_len: int = MIN_LEN) -> None:
     if len(text) < min_len:
         return
-    out.setdefault(text.encode(), label)
+    out.setdefault(text.encode("utf-8", "surrogateescape"), label)
     if depth >= _MAX_NESTING:
         return
     try:
@@ -132,7 +133,7 @@ def _add_string(text: str, label: str, out: dict[bytes, str], depth: int, min_le
 
 
 def needles_from_secret_file(path: pathlib.Path) -> dict[bytes, str]:
-    raw = path.read_text(errors="replace")
+    raw = path.read_text(encoding="utf-8", errors="replace")
     needles: dict[bytes, str] = {}
     try:
         collect_needles(json.loads(raw), "", needles)
@@ -145,7 +146,7 @@ def needles_from_secret_file(path: pathlib.Path) -> dict[bytes, str]:
 
 def needles_from_k8s_secrets(path: pathlib.Path) -> dict[bytes, str]:
     """Values of `oc get secrets -o json`, without public certificates."""
-    document = json.loads(path.read_text())
+    document = json.loads(path.read_text(encoding="utf-8"))
     items = document.get("items", [document]) if isinstance(document, dict) else []
     needles: dict[bytes, str] = {}
     for item in items:
@@ -347,8 +348,41 @@ def censor_bytes(data: bytes, patterns: Patterns) -> tuple[bytes, collections.Co
     return data, hits
 
 
+_ARCHIVE_MAGICS = (b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00", b"PK\x03\x04", b"\x28\xb5\x2f\xfd", b"7z\xbc\xaf", b"Rar!")
+
+
+def _is_archive(data: bytes) -> bool:
+    return data.startswith(_ARCHIVE_MAGICS)
+
+
+def _tar_holds_archive(payload: bytes) -> bool:
+    """True if a tar stream has a member that is itself an archive."""
+    if payload[257:262] != b"ustar":
+        return False
+    with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+        for member in archive.getmembers():
+            handle = archive.extractfile(member) if member.isfile() else None
+            if handle is not None and _is_archive(handle.read(8)):
+                return True
+    return False
+
+
 def _archive_payload(data: bytes) -> bytes | None | bool:
-    """Decompressed bytes of a known archive, None if not an archive, False if unreadable."""
+    """Decompressed bytes of a known archive, None if not an archive, False if unreadable.
+
+    One level only: an archive inside the payload, including any single member of
+    a zip or tar, cannot be searched, so it counts as unreadable.
+    """
+    try:
+        payload = _unpack(data)
+        if isinstance(payload, bytes) and (_is_archive(payload) or _tar_holds_archive(payload)):
+            return False
+        return payload
+    except Exception:
+        return False
+
+
+def _unpack(data: bytes) -> bytes | None | bool:
     try:
         if data[:2] == b"\x1f\x8b":
             return gzip.GzipFile(fileobj=io.BytesIO(data)).read(MAX_FILE_BYTES + 1)
@@ -358,7 +392,10 @@ def _archive_payload(data: bytes) -> bytes | None | bool:
             return lzma.decompress(data)
         if data[:4] == b"PK\x03\x04":
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                return b"\n".join(archive.read(name) for name in archive.namelist())
+                members = [archive.read(name) for name in archive.namelist()]
+            if any(_is_archive(member) for member in members):
+                return False
+            return b"\n".join(members)
         if data[:4] in (b"\x28\xb5\x2f\xfd", b"7z\xbc\xaf", b"Rar!"):
             return False
     except Exception:
@@ -382,12 +419,26 @@ class Report:
         return {"censored": self.censored, "withheld": self.withheld, "inventory": self.inventory}
 
 
+def _entries(root: pathlib.Path) -> list[pathlib.Path]:
+    """Every file and every symbolic link under root, without ever following a link.
+
+    A link to a directory is listed as a link and not descended into, so what it
+    points at is neither read nor rewritten through it.
+    """
+    found: list[pathlib.Path] = []
+    for directory, subdirs, files in os.walk(root, followlinks=False):
+        base = pathlib.Path(directory)
+        found += [base / name for name in subdirs if (base / name).is_symlink()]
+        found += [base / name for name in files]
+    return sorted(found)
+
+
 def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bool = False) -> Report:
     patterns = Patterns(inventory)
     report = Report()
-    for path in sorted(root.rglob("*")):
+    for path in _entries(root):
         relative = str(path.relative_to(root))
-        if relative == REPORT_NAME or path.is_dir():
+        if relative == REPORT_NAME:
             continue
         if path.is_symlink():
             report.withheld.append({"file": relative, "reason": "symbolic link"})
@@ -487,7 +538,7 @@ def _write_summary(report: Report, check: bool) -> None:
     lines += [f"| `{c['file']}` | `{c['rule']}` | {c['count']} |" for c in report.censored]
     lines += [f"| `{w['file']}` | withheld | {w['reason']} |" for w in report.withheld]
     try:
-        with open(summary, "a") as handle:
+        with open(summary, "a", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
     except OSError:
         pass
@@ -523,7 +574,7 @@ def main(argv: list[str]) -> int:
     _write_summary(report, args.check)
     if not args.check:
         report_path = pathlib.Path(args.report) if args.report else root / REPORT_NAME
-        report_path.write_text(json.dumps(report.as_json(), indent=2) + "\n")
+        report_path.write_text(json.dumps(report.as_json(), indent=2) + "\n", encoding="utf-8")
     values = sum(int(s["values"]) for s in sources)
     print(f"Release gate: {len(report.censored)} censoring(s), {len(report.withheld)} file(s) withheld, "
           f"{values} known value(s) checked")
@@ -532,5 +583,16 @@ def main(argv: list[str]) -> int:
     return 0
 
 
+def run_cli(argv: list[str]) -> int:
+    """main(), with every unexpected failure mapped to 2: status 1 means "found"."""
+    try:
+        return main(argv)
+    except SystemExit as exit_:  # argparse exits 2 on bad usage
+        return exit_.code if isinstance(exit_.code, int) else 2
+    except BaseException as exc:  # noqa: BLE001 - the caller must see a failure, never a pass
+        print(f"release gate failed: {exc.__class__.__name__}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(run_cli(sys.argv))

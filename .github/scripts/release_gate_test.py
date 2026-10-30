@@ -7,9 +7,13 @@ import contextlib
 import gzip
 import io
 import json
+import os
 import pathlib
+import subprocess
 import sys
+import tarfile
 import tempfile
+import zipfile
 
 # Import sibling module without requiring package install.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -250,6 +254,85 @@ def test_env_and_k8s_secret_inventory() -> None:
         _assert("user admin" in text, "a short, low-entropy Secret value must not be censored")
 
 
+def test_symlink_to_directory_is_removed_and_target_left_alone() -> None:
+    with Fixture() as fx:
+        outside = fx.root.parent / "outside"
+        outside.mkdir()
+        victim = outside / "other-job.log"
+        victim.write_text(f"not ours {TOKEN}\n")
+        (fx.root / "linked").symlink_to(outside, target_is_directory=True)
+        fx.gate()
+        _assert(not (fx.root / "linked").is_symlink(), "directory symlink was published")
+        _assert(victim.read_text() == f"not ours {TOKEN}\n", "a file outside the artifact was rewritten")
+        report = json.loads((fx.root / gate.REPORT_NAME).read_text())
+        _assert(any(w["file"] == "linked" for w in report["withheld"]), f"not reported: {report}")
+
+
+def test_nested_archives_are_withheld() -> None:
+    with Fixture() as fx:
+        inner = gzip.compress(f"leak {TOKEN}\n".encode())
+        fx.write("gz-in-gz.gz", gzip.compress(inner))
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("plain.txt", "fine")
+            zf.writestr("hidden.gz", inner)
+        fx.write("zip-with-gz.zip", archive.getvalue())
+        tar_bytes = io.BytesIO()
+        with tarfile.open(fileobj=tar_bytes, mode="w") as tf:
+            info = tarfile.TarInfo("hidden.gz")
+            info.size = len(inner)
+            tf.addfile(info, io.BytesIO(inner))
+        fx.write("tar-with-gz.tar.gz", gzip.compress(tar_bytes.getvalue()))
+        fx.write("single-level.gz", gzip.compress(b"nothing here\n"))
+        fx.gate()
+        for name in ("gz-in-gz.gz", "zip-with-gz.zip", "tar-with-gz.tar.gz"):
+            _assert(not (fx.root / name).exists(), f"{name}: nested archive was published")
+        _assert((fx.root / "single-level.gz").exists(), "a clean single-level archive must stay")
+
+
+def test_a_crash_exits_2_never_1() -> None:
+    with Fixture() as fx:
+        fx.write("a.log", "x\n")
+        original = gate.process_directory
+        gate.process_directory = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                code = gate.run_cli(["release_gate", str(fx.root)])
+        finally:
+            gate.process_directory = original
+        _assert(code == 2, f"a crash must exit 2 (1 means found), got {code}")
+        _assert("RuntimeError" in err.getvalue() and "boom" not in err.getvalue(), "report the class, not the message")
+
+
+def test_non_utf8_environment_variable_does_not_crash() -> None:
+    with Fixture() as fx:
+        raw = b"prefix-\xff\xfe-0123456789abcdef"
+        os.environb[b"GATE_TEST_BINARY"] = raw
+        try:
+            fx.write("a.log", b"before " + raw + b" after\n")
+            code, _, _ = _run(fx.root, "--env", "GATE_TEST_BINARY")
+        finally:
+            del os.environb[b"GATE_TEST_BINARY"]
+        _assert(code == 0, f"gate crashed on a non-UTF-8 value: {code}")
+        _assert(raw not in (fx.root / "a.log").read_bytes(), "undecodable secret survived")
+
+
+def test_non_ascii_secret_with_an_ascii_locale() -> None:
+    """The file encodings must not depend on the runner's locale."""
+    with Fixture() as fx:
+        value = "P\u00e4ssw\u00f6rd-0123456789abcdef"
+        fx.secret.write_text(json.dumps({"password": value}, ensure_ascii=False), encoding="utf-8")
+        fx.write("a.log", f"login {value}\n")
+        env = {**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
+        env.pop("PYTHONIOENCODING", None)
+        # No -I: isolated mode ignores the PYTHON* variables that force the ASCII locale.
+        done = subprocess.run([sys.executable, "-X", "utf8=0", str(pathlib.Path(gate.__file__)), str(fx.root),
+                               "--secret-file", str(fx.secret)], env=env, capture_output=True, text=True)
+        _assert(done.returncode == 0, f"gate failed under an ASCII locale: {done.stderr[-300:]}")
+        _assert(value.encode() not in (fx.root / "a.log").read_bytes(), "non-ASCII secret survived")
+
+
 def main() -> None:
     test_incident_shape_is_censored_and_json_stays_valid()
     test_shape_rules_catch_it_without_any_known_value()
@@ -266,6 +349,11 @@ def main() -> None:
     test_symlink_is_removed()
     test_missing_secret_file_is_skipped_and_empty_one_is_an_error()
     test_env_and_k8s_secret_inventory()
+    test_symlink_to_directory_is_removed_and_target_left_alone()
+    test_nested_archives_are_withheld()
+    test_a_crash_exits_2_never_1()
+    test_non_utf8_environment_variable_does_not_crash()
+    test_non_ascii_secret_with_an_ascii_locale()
     print("release_gate_test.py: ok")
 
 

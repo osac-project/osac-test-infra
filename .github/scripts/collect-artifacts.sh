@@ -39,7 +39,7 @@ timeout "${COLLECT_TIMEOUT_SECONDS}" \
 # and is readable by this user only.
 INVENTORY_DIR="${RUNNER_TEMP}/osac-secret-inventory"
 mkdir -p "${INVENTORY_DIR}"
-(umask 077 && oc get secrets -n "${E2E_NAMESPACE:-osac-e2e-ci}" -o json \
+(umask 077 && timeout 60 oc get secrets -n "${E2E_NAMESPACE:-osac-e2e-ci}" -o json \
   > "${INVENTORY_DIR}/k8s-secrets.json" 2>/dev/null) \
   || { rm -f "${INVENTORY_DIR}/k8s-secrets.json"; echo "::notice::Secret inventory not collected"; }
 
