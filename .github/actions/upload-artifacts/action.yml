@@ -11,6 +11,35 @@ inputs:
     description: "Name for the uploaded artifact"
     required: false
     default: "osac-logs"
+  known-secret-files:
+    description: >-
+      Newline-separated files holding secrets the job uses, such as the
+      registry pull secret. Every value in them, in any encoding, is censored
+      from the artifacts. Empty means RUNNER_TEMP/pull-secret.json. A listed
+      file that does not exist is skipped.
+    required: false
+    default: ""
+  known-secret-env:
+    description: >-
+      Newline-separated names of environment variables whose values are
+      censored from the artifacts.
+    required: false
+    default: ""
+  k8s-secrets-file:
+    description: >-
+      `oc get secrets -o json` output taken while the cluster was up; the
+      collect-artifacts action writes it outside the artifact directory. Empty
+      means RUNNER_TEMP/osac-secret-inventory/k8s-secrets.json. Skipped when
+      absent.
+    required: false
+    default: ""
+  fail-on-censor:
+    description: >-
+      Fail the job when the release gate had to censor or withhold anything.
+      The artifact that is uploaded is clean either way; this makes a leak at
+      the source visible instead of silently repaired.
+    required: false
+    default: "false"
   overwrite:
     description: >-
       Replace an artifact of the same name. The retry after an upload that a
@@ -155,6 +184,51 @@ runs:
         done
 
         rm -rf "${REPORT_DIR}"
+
+    - name: Release gate - censor secrets
+      if: always()
+      shell: bash
+      env:
+        ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
+        KNOWN_SECRET_FILES: ${{ inputs.known-secret-files }}
+        KNOWN_SECRET_ENV: ${{ inputs.known-secret-env }}
+        K8S_SECRETS_FILE: ${{ inputs.k8s-secrets-file }}
+        FAIL_ON_CENSOR: ${{ inputs.fail-on-censor }}
+      run: |
+        if [[ ! -d "${ARTIFACT_DIR}" ]]; then
+          exit 0
+        fi
+        args=()
+        while IFS= read -r secret_file; do
+          [[ -n "${secret_file}" ]] && args+=(--secret-file "${secret_file}")
+        done <<<"${KNOWN_SECRET_FILES:-${RUNNER_TEMP}/pull-secret.json}"
+        while IFS= read -r variable; do
+          [[ -n "${variable}" ]] && args+=(--env "${variable}")
+        done <<<"${KNOWN_SECRET_ENV}"
+        args+=(--k8s-secrets "${K8S_SECRETS_FILE:-${RUNNER_TEMP}/osac-secret-inventory/k8s-secrets.json}")
+        if [[ "${FAIL_ON_CENSOR}" == "true" ]]; then
+          args+=(--fail-on-find)
+        fi
+
+        # Pattern scanners only find shapes they have a rule for. The gate also
+        # searches for the values the job holds, in every encoding, and replaces
+        # what it finds. Anything it cannot inspect is removed, and so is the
+        # whole directory if the gate itself fails: the upload step below runs
+        # even after this one fails.
+        status=0
+        python3 -I "${{ github.workspace }}/.github/scripts/release_gate.py" \
+          "${ARTIFACT_DIR}" "${args[@]}" || status=$?
+        # The snapshot of the cluster's Secrets has done its job; do not leave it
+        # on a runner that outlives this job.
+        rm -f "${RUNNER_TEMP}/osac-secret-inventory/k8s-secrets.json"
+        if [[ ${status} -eq 1 ]]; then
+          echo "::error::Release gate censored secrets that the collection should not have written"
+          exit 1
+        elif [[ ${status} -ne 0 ]]; then
+          echo "::error::Release gate could not run — removing the artifacts instead of uploading"
+          rm -rf "${ARTIFACT_DIR}"
+          exit 1
+        fi
 
     - name: Upload artifacts
       if: always()
