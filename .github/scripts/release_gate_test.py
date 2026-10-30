@@ -381,6 +381,11 @@ def test_decompression_bombs_are_abandoned_at_the_limit() -> None:
         zf.writestr("big.txt", zeros)
     samples = {"gzip.gz": gzip.compress(zeros), "bz2.bz2": bz2.compress(zeros), "xz.xz": lzma.compress(zeros),
                "one-member.zip": single.getvalue(), "many-members.zip": members.getvalue()}
+    for label, method in (("bzip2", zipfile.ZIP_BZIP2), ("lzma", zipfile.ZIP_LZMA)):
+        packed = io.BytesIO()
+        with zipfile.ZipFile(packed, "w", method) as zf:
+            zf.writestr("big.txt", zeros)
+        samples[f"{label}-member.zip"] = packed.getvalue()
     original = gate.MAX_FILE_BYTES
     gate.MAX_FILE_BYTES = 4 * 1024 * 1024
     try:
@@ -397,6 +402,20 @@ def test_decompression_bombs_are_abandoned_at_the_limit() -> None:
                 _assert(peak < 24 * 1024 * 1024, f"{name}: inflated {peak >> 20} MiB before giving up")
     finally:
         gate.MAX_FILE_BYTES = original
+
+
+def test_zip_entries_with_unbounded_methods_are_refused() -> None:
+    """Even a small, harmless entry: the interpreter's limit on these methods is not guaranteed."""
+    with Fixture() as fx:
+        for label, method in (("bzip2", zipfile.ZIP_BZIP2), ("lzma", zipfile.ZIP_LZMA), ("deflate", zipfile.ZIP_DEFLATED)):
+            packed = io.BytesIO()
+            with zipfile.ZipFile(packed, "w", method) as zf:
+                zf.writestr("note.txt", "nothing sensitive")
+            fx.write(f"{label}.zip", packed.getvalue())
+        fx.gate()
+        _assert(not (fx.root / "bzip2.zip").exists(), "bzip2 zip entry was accepted")
+        _assert(not (fx.root / "lzma.zip").exists(), "lzma zip entry was accepted")
+        _assert((fx.root / "deflate.zip").exists(), "a harmless deflate zip must stay")
 
 
 def main() -> None:
@@ -424,6 +443,7 @@ def main() -> None:
     test_a_file_named_like_the_report_is_still_scanned()
     test_a_secret_file_that_is_not_utf8_is_an_error()
     test_decompression_bombs_are_abandoned_at_the_limit()
+    test_zip_entries_with_unbounded_methods_are_refused()
     print("release_gate_test.py: ok")
 
 
