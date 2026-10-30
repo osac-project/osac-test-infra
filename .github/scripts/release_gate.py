@@ -382,17 +382,35 @@ def _archive_payload(data: bytes) -> bytes | None | bool:
         return False
 
 
+def _read_bounded(stream, budget: int) -> bytes:
+    """Read a decompression stream, stopping the moment it yields more than `budget` bytes."""
+    chunks, total = [], 0
+    while chunk := stream.read(1 << 20):
+        total += len(chunk)
+        if total > budget:
+            raise ValueError("archive larger than the inspection limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _unpack(data: bytes) -> bytes | None | bool:
+    # Every format is read through _read_bounded, so a small archive that expands to
+    # gigabytes is abandoned at the limit instead of filling the runner's memory.
     try:
         if data[:2] == b"\x1f\x8b":
-            return gzip.GzipFile(fileobj=io.BytesIO(data)).read(MAX_FILE_BYTES + 1)
+            return _read_bounded(gzip.GzipFile(fileobj=io.BytesIO(data)), MAX_FILE_BYTES)
         if data[:3] == b"BZh":
-            return bz2.decompress(data)
+            return _read_bounded(bz2.BZ2File(io.BytesIO(data)), MAX_FILE_BYTES)
         if data[:6] == b"\xfd7zXZ\x00":
-            return lzma.decompress(data)
+            return _read_bounded(lzma.LZMAFile(io.BytesIO(data)), MAX_FILE_BYTES)
         if data[:4] == b"PK\x03\x04":
+            budget, members = MAX_FILE_BYTES, []
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                members = [archive.read(info) for info in archive.infolist()]
+                for info in archive.infolist():
+                    with archive.open(info) as member:
+                        content = _read_bounded(member, budget)
+                    budget -= len(content)
+                    members.append(content)
             if any(_is_archive(member) for member in members):
                 return False
             return b"\n".join(members)

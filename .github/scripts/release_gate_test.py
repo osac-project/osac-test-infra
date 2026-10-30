@@ -6,13 +6,16 @@ import base64
 import contextlib
 import gzip
 import io
+import bz2
 import json
+import lzma
 import os
 import pathlib
 import subprocess
 import sys
 import tarfile
 import tempfile
+import tracemalloc
 import zipfile
 
 # Import sibling module without requiring package install.
@@ -366,6 +369,36 @@ def test_a_secret_file_that_is_not_utf8_is_an_error() -> None:
         _assert(TOKEN not in err, "the value was printed")
 
 
+def test_decompression_bombs_are_abandoned_at_the_limit() -> None:
+    """A small archive that expands hugely must not be inflated in memory first."""
+    zeros = bytes(64 * 1024 * 1024)
+    members = io.BytesIO()
+    with zipfile.ZipFile(members, "w", zipfile.ZIP_DEFLATED) as zf:
+        for index in range(20):  # each member is under the limit, together they are far over it
+            zf.writestr(f"part{index}.txt", bytes(3 * 1024 * 1024))
+    single = io.BytesIO()
+    with zipfile.ZipFile(single, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("big.txt", zeros)
+    samples = {"gzip.gz": gzip.compress(zeros), "bz2.bz2": bz2.compress(zeros), "xz.xz": lzma.compress(zeros),
+               "one-member.zip": single.getvalue(), "many-members.zip": members.getvalue()}
+    original = gate.MAX_FILE_BYTES
+    gate.MAX_FILE_BYTES = 4 * 1024 * 1024
+    try:
+        for name, blob in samples.items():
+            with Fixture() as fx:
+                fx.write(name, blob)
+                tracemalloc.start()
+                try:
+                    fx.gate()
+                    peak = tracemalloc.get_traced_memory()[1]
+                finally:
+                    tracemalloc.stop()
+                _assert(not (fx.root / name).exists(), f"{name}: oversized archive was published")
+                _assert(peak < 24 * 1024 * 1024, f"{name}: inflated {peak >> 20} MiB before giving up")
+    finally:
+        gate.MAX_FILE_BYTES = original
+
+
 def main() -> None:
     test_incident_shape_is_censored_and_json_stays_valid()
     test_shape_rules_catch_it_without_any_known_value()
@@ -390,6 +423,7 @@ def main() -> None:
     test_zip_entries_with_the_same_name_are_all_inspected()
     test_a_file_named_like_the_report_is_still_scanned()
     test_a_secret_file_that_is_not_utf8_is_an_error()
+    test_decompression_bombs_are_abandoned_at_the_limit()
     print("release_gate_test.py: ok")
 
 
