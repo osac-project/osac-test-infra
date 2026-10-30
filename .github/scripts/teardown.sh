@@ -3,7 +3,9 @@
 # files, and remove the test container image.
 #
 # Required env: CLONE_NAME, E2E_IMAGE
-# Optional env: COMPONENT_BUILD_RESULTS (JSON array with an "image" field per
+# Optional env: CLUSTER_TOPOLOGY (mno for compact DNS cleanup),
+# BRIDGE_PREFIX (compact cluster bridge name),
+# COMPONENT_BUILD_RESULTS (JSON array with an "image" field per
 # built component, set by the e2e workflow's build step -- empty/unset if no
 # components were built from source)
 set -euo pipefail
@@ -22,15 +24,36 @@ rm -f "${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}.qcow2" "${AGENT_VM_STORAGE_DIR}/
 
 # --- Destroy cluster clone ---
 echo "Destroying clone '${CLONE_NAME}'..."
-sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>&1 || true
+COMPACT_CLEANUP_FAILED=false
+CLUSTER_DESTROYED=false
+if sudo python3 /usr/local/bin/cluster-tool destroy "${CLONE_NAME}" 2>&1; then
+  CLUSTER_DESTROYED=true
+else
+  echo "ERROR: Failed to destroy clone '${CLONE_NAME}'." >&2
+  if [[ "${CLUSTER_TOPOLOGY:-sno}" == "mno" ]]; then
+    COMPACT_CLEANUP_FAILED=true
+  fi
+fi
+if [[ "${CLUSTER_TOPOLOGY:-sno}" == "mno" && "${CLUSTER_DESTROYED}" == "true" ]]; then
+  if ! sudo /usr/local/sbin/osac-compact-dns remove "${CLONE_NAME}" 2>&1; then
+    echo "ERROR: Failed to remove compact DNS configuration for '${CLONE_NAME}'." >&2
+    COMPACT_CLEANUP_FAILED=true
+  fi
+fi
 
-# Remove orphaned bridges that survive virsh net-destroy
-BRIDGE_PREFIX="br-${CLONE_NAME:0:8}"
-for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
-  echo "Removing orphaned bridge ${br}..."
-  sudo ip link set "${br}" down 2>/dev/null || true
-  sudo ip link delete "${br}" 2>/dev/null || true
-done
+# Remove orphaned bridges that survive virsh net-destroy. Compact bridges
+# stay intact when destroy fails: cluster-tool preserves the clone's state
+# for a retry, and those bridges may still be in use by its masters.
+if [[ "${CLUSTER_TOPOLOGY:-sno}" != "mno" || "${CLUSTER_DESTROYED}" == "true" ]]; then
+  BRIDGE_PREFIX="${BRIDGE_PREFIX:-br-${CLONE_NAME:0:8}}"
+  for br in $(ip -o link show | grep -oP "${BRIDGE_PREFIX}[^ @]*"); do
+    echo "Removing orphaned bridge ${br}..."
+    sudo ip link set "${br}" down 2>/dev/null || true
+    sudo ip link delete "${br}" 2>/dev/null || true
+  done
+else
+  echo "Preserving compact bridges because clone destruction failed."
+fi
 
 # --- Clean up temporary files ---
 rm -f "$RUNNER_TEMP/pull-secret.json" "$RUNNER_TEMP/aap-license.zip" "$RUNNER_TEMP/kubeconfig"
@@ -213,6 +236,6 @@ if [[ -d "${SUSHY_VMEDIA_TMP}" ]]; then
   echo "ERROR: Sushy vmedia temp directory '${SUSHY_VMEDIA_TMP}' still present after cleanup" >&2
   BMH_LEAKED=true
 fi
-if [[ "${BMH_LEAKED}" == "true" ]]; then
+if [[ "${BMH_LEAKED}" == "true" || "${COMPACT_CLEANUP_FAILED}" == "true" ]]; then
   exit 1
 fi

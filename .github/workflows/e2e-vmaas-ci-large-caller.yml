@@ -1,0 +1,61 @@
+name: OSAC CI Large
+run-name: "OSAC CI Large · ${{ github.actor }}"
+permissions: {}
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-suite:
+        description: "Test suite (vmaas, vmaas/regression, ...). Default: vmaas."
+        required: false
+        default: "vmaas"
+      test-filter:
+        description: "pytest -k filter"
+        required: false
+        default: ""
+      test-marker:
+        description: "pytest -m marker expression. When empty, excludes tests marked requires_caas or requires_bmaas."
+        required: false
+        default: ""
+      installer-ref:
+        description: "Branch/ref of the OSAC monorepo (Makefile/profile values only -- not the chart itself)"
+        required: false
+        default: "main"
+      installer-repo:
+        description: "GitHub repo (owner/name) of the OSAC monorepo"
+        required: false
+        default: "osac-project/osac"
+      image-overrides:
+        description: "JSON mapping Helm value paths to image refs -- debugging escape hatch"
+        required: false
+        default: "{}"
+      runner-label:
+        description: "Self-hosted runner label. Defaults to osac-ci-large, which should only be assigned to a host sized for three MNO VMs."
+        required: false
+        default: "osac-ci-large"
+
+concurrency:
+  group: e2e-ci-large
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  osac-ci-large:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    with:
+      test-suite: ${{ inputs.test-suite || 'vmaas' }}
+      test-filter: ${{ inputs.test-filter || '' }}
+      test-marker: ${{ inputs.test-marker || 'not requires_caas and not requires_bmaas' }}
+      chart-oci-repo: registry.stage.redhat.io/cloud-extensions/osac-chart
+      installer-ref: ${{ inputs.installer-ref || 'main' }}
+      installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}
+      image-overrides: ${{ inputs.image-overrides || '{}' }}
+      flavor-image: quay.io/osac-project/cluster-flavors:mno-3node-24gb
+      flavor-name: mno-3node-24gb
+      cluster-topology: mno
+      runner-label: ${{ inputs.runner-label || 'osac-ci-large' }}
+      notify-on-failure: false
+      enable-ai-diagnostic: false

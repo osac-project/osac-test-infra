@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Run compact-boot locally with only validated runner-provided arguments.
+set -euo pipefail
+
+if [[ $# -ne 3 ]]; then
+  echo "Usage: cluster-tool-compact-boot FLAVOR CLONE_ID PULL_SECRET" >&2
+  exit 2
+fi
+
+flavor="$1"
+clone_id="$2"
+pull_secret="$3"
+
+[[ "${flavor}" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] ||
+  { echo "Invalid compact flavor: ${flavor}" >&2; exit 2; }
+[[ "${clone_id}" =~ ^[a-z0-9]([a-z0-9-]{0,29}[a-z0-9])?$ ]] ||
+  { echo "Invalid compact clone ID: ${clone_id}" >&2; exit 2; }
+[[ "${SUDO_USER:-}" == github-runner && -n "${SUDO_UID:-}" ]] ||
+  { echo "This command must be run through sudo by github-runner" >&2; exit 1; }
+
+runner_home=$(getent passwd github-runner | cut -d: -f6)
+[[ -n "${runner_home}" && "${runner_home}" != "/" ]] ||
+  { echo "Could not find github-runner's home directory" >&2; exit 1; }
+relative_path="${pull_secret#"${runner_home}"/action-runners/}"
+runner_name="${relative_path%%/*}"
+if [[ "${relative_path}" != "${runner_name}/_work/_temp/pull-secret.json" ||
+      ! "${runner_name}" =~ ^runner-[1-9][0-9]*$ ]]; then
+  echo "Pull secret must be in a github-runner action runner temp directory" >&2
+  exit 2
+fi
+
+runner_temp="${runner_home}/action-runners/${runner_name}/_work/_temp"
+for dir in "${runner_home}/action-runners" "${runner_home}/action-runners/${runner_name}" \
+           "${runner_home}/action-runners/${runner_name}/_work" "${runner_temp}"; do
+  [[ -d "${dir}" && ! -L "${dir}" ]] ||
+    { echo "Invalid runner temp directory: ${dir}" >&2; exit 1; }
+done
+[[ -f "${pull_secret}" && ! -L "${pull_secret}" ]] ||
+  { echo "Pull secret must be a regular, non-symlink file" >&2; exit 1; }
+[[ "$(stat -c '%u' -- "${pull_secret}")" == "${SUDO_UID}" ]] ||
+  { echo "Pull secret must be owned by the invoking runner user" >&2; exit 1; }
+
+exec /usr/bin/python3 /usr/local/bin/cluster-tool compact-boot \
+  --flavor "${flavor}" --name "${clone_id}" --host local \
+  --pull-secret "${pull_secret}"

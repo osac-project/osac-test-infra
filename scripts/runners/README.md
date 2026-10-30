@@ -108,6 +108,39 @@ given runner count.
 - **Base directory:** `~/action-runners/runner-N/`
 - **Container runtime:** Podman (via `/var/run/docker.sock` symlink)
 
+The **OSAC CI Large** workflow (`e2e-vmaas-ci-large-caller.yml`) targets
+`osac-ci-large` by default. Assign that label only to a host with capacity for
+three 24-GiB MNO master VMs at once (72 GiB for the guests, plus host and other
+workload overhead) and enough disk for the flavor copies. The cluster-tool
+flavor directory and `/var/lib/libvirt/images` must be on the same filesystem,
+and that filesystem must support reflinks: `compact-boot` creates disk copies
+with `cp --reflink=always`. Before the first run, verify the selected runner's
+mount layout and reflink support. On that dedicated host, register with
+`LABELS="self-hosted,osac-ci-large"` so ordinary E2E jobs cannot use its
+capacity. Install `guestfs-tools`, update the host's cluster-tool to a version
+with `compact-boot`, and regenerate the scoped sudo rules:
+
+```bash
+sudo dnf install -y guestfs-tools
+sudo git -C /opt/cluster-tool pull --ff-only
+sudo install -m 0755 /opt/cluster-tool/cluster-tool /usr/local/bin/cluster-tool
+sudo ./scripts/machine-init.sh runner-user
+sudo ./scripts/machine-init.sh cluster-tool
+```
+
+The `cluster-tool` step initializes local cluster-tool state and configures
+NetworkManager to use dnsmasq, including its configuration directory. The
+runner-user step installs the root-owned `cluster-tool-compact-boot`,
+`osac-compact-dns`, `osac-compact-boot-diagnostics`, and
+`osac-compact-kubeconfig` helpers and refreshes sudoers. The boot wrapper
+validates runner arguments and always keeps compact boot local. The DNS helper
+makes the clone's API and `*.apps` routes resolve on the runner host. The
+kubeconfig helper validates the clone and runner temp directory before staging
+the root-owned kubeconfig without following symlinks. The diagnostics helper
+records selected libvirt/network state in the existing scanned artifact flow
+and writes a notice instead of copying the raw cluster-tool log, which may
+contain sensitive data.
+
 ### Registering a dedicated runner (different labels/purpose)
 
 `LABELS`, `BASE_DIR`, and `RUNNER_NAME_PREFIX` are overridable via env vars

@@ -7,6 +7,7 @@ self-hosted-runner:
     - monitoring-central
     - osac-ci-orchestrator
     - osac-ci-small
+    - osac-ci-large
     # Per-host labels (fleet/inventory/hosts.yml's ci_runners group) used to
     # be listed here too, since fleet-podman-cleanup.yml's matrix was a
     # literal list actionlint could statically resolve. That list drifted
@@ -89,3 +90,8 @@ paths:
       # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_*
       # (added to GitHub 2026); drop this when actionlint is bumped to v1.18+.
       - 'property "workflow_(repository|sha)" is not defined'
+  .github/workflows/e2e-vmaas-ci-large-caller.yml:
+    ignore:
+      # actionlint v1.7.12 predates concurrency.queue, supported by GitHub
+      # Actions since 2026-05-07. Drop this when actionlint's schema catches up.
+      - 'unexpected key "queue" for "concurrency" section'
