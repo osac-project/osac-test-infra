@@ -4,7 +4,7 @@
     kubeconfig: /root/.kube/config
     api_version: osac.openshift.io/v1alpha1
     kind: ExternalIPPool
-    namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    namespace: "{{ osac_namespace }}"
   register: _egress_pools
 
 - name: Read tenant networking resources

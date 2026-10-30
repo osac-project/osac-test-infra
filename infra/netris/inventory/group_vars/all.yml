@@ -1,7 +1,10 @@
 # Netris Lab
 netris_lab_dir: "{{ inventory_dir }}/../netris-lab"
 ew_fabric_enable: 0
-# Public upstream resolver; override where public DNS is blocked.
+# Installation-level resolver for bare metal: configure-netris writes it to the
+# Netris default DHCP option set (the lab's copy of the provider install step).
+# VMs do not use it. Public upstream resolver; override where public DNS is
+# blocked.
 dns_server: "8.8.8.8"
 
 # Netris Controller (URL is discovered dynamically by configure-netris role)
@@ -42,9 +45,12 @@ ocp_underlay_leaf_port: "swp1s0"
 ocp_underlay_p2p_cidr: "192.0.2.0/31"
 ocp_underlay_ocp_asn: 4209999999
 
-# VMaaS's ExternalIP fixtures allocate from this separate test-only range.
-# The VMaaS route is deliberately not installed until the OCP/Netris/ISP path
-# has a narrow, verified policy for this RFC1918 prefix.
+# Only the external_ip/ and references/ tests of tests/e2e/networking/vmaas
+# allocate from this separate test-only range. The NAT and ExternalIP tests of
+# the main VMaaS networking module use the routed 198.51.100.24/29 pool and run
+# without ocp_vmaas_external_ip_*. The route for this RFC1918 prefix is
+# deliberately not installed until the OCP/Netris/ISP path has a narrow,
+# verified policy for it.
 osac_vmaas_external_ip_pool_cidr: "172.27.0.0/16"
 
 # OSAC tenant ExternalIPPool CIDR. The host routes this toward the softgate/ISP
@@ -54,11 +60,6 @@ osac_vmaas_external_ip_pool_cidr: "172.27.0.0/16"
 # tenant ExternalIP is requested; the lab only prepares host routing/masquerade.
 osac_external_ip_pool_cidr: "198.51.100.24/29"
 osac_external_ip_pool_name: "netris-lab-public"
-
-# Empty selects OSAC's legacy Netris ExternalIP allocation until the v1
-# client sends its session cookie correctly (OSAC PR #1843).
-# OSAC PR #2009 proposes the cookie fix; restore v1 after it is merged, deployed, and verified.
-netris_external_ip_contract_version: ""
 
 # Configuration file (INI format, optional — values fall back to env vars)
 config_path: "{{ inventory_dir }}/../config"
@@ -72,6 +73,8 @@ ocp_version: "4.22"
 ocp_cluster_name: "ocp-sno"
 ocp_base_domain: "{{ lab_name }}.{{ dns_hosted_zone }}"
 pull_secret_path: "/root/pull-secret"
+# Shared by Netris Ansible targets that run oc/kubectl; the Makefile passes KUBECONFIG here.
+kubeconfig_path: "/root/.kube/config"
 ssh_public_key_path: "/root/.ssh/id_rsa.pub"
 
 # OSAC mono-repo
@@ -81,7 +84,7 @@ osac_dir: "/opt/osac"
 osac_installer_dir: "{{ osac_dir }}/osac-installer"
 osac_namespace: "osac-e2e-ci"
 osac_test_tenant_name: "tenant1"
-osac_values_file: "values/caas-ci/values.yaml"
+osac_values_file: "values/caas-ci/instance.yaml"
 osac_license_path: "{{ inventory_dir }}/../license.zip"
 
 # Container image overrides (leave empty to use installer defaults)
@@ -98,23 +101,11 @@ bmf_operator_image: ""
 aap_project_git_uri: ""
 aap_project_git_branch: ""
 
-# Snapshot-based deployment (fast path)
-# Deploy mode: "fresh" (OCP-only snapshot + Helm install) or
-# "snapshot" (CaaS snapshot with baked OSAC + refresh)
-osac_deploy_mode: "fresh"
-
-# Snapshot flavor — derived from deploy mode, overrideable directly
-snapshot_flavor_image: >-
-  {{ (osac_deploy_mode == 'snapshot')
-     | ternary('quay.io/osac-project/cluster-flavors:caas-4-22',
-               'quay.io/osac-project/cluster-flavors:sno-4-22') }}
-snapshot_flavor_dir: >-
-  {{ (osac_deploy_mode == 'snapshot')
-     | ternary('/var/cache/netris-lab/cluster-flavors/caas-4-22',
-               '/var/cache/netris-lab/cluster-flavors/sno-4-22') }}
+# OCP snapshot restore. OSAC itself is always a fresh Helm install; the
+# snapshot only provides the single-node OCP cluster.
+snapshot_flavor_image: "quay.io/osac-project/cluster-flavors:sno-4-22"
+snapshot_flavor_dir: "/var/cache/netris-lab/cluster-flavors/sno-4-22"
 snapshot_recert_image: "quay.io/osac-project/recert:latest"
-snapshot_osac_namespace: "osac-e2e-ci"
-snapshot_osac_values_file: "values/caas-ci/values.yaml"
 # Target OS disk size for every snapshot restore.
 ocp_snapshot_disk_gb: 300
 
@@ -284,7 +275,6 @@ bmaas_provisioning_snat_vpc_id: 1
 # OVNKubernetes cluster and the single-node underlay, then writes private
 # installer values. osac-installer configures the OpenShift-side resources.
 # The OCP cluster may use the virtualized `None` platform.
-ocp_evpn_kubeconfig_path: "/root/.kube/config"
 ocp_evpn_required_version: "4.22"
 
 # The Netris underlay peer uses IPv4 unicast for PodNetwork advertisements;
@@ -300,3 +290,20 @@ ocp_vmaas_external_ip_tests_enabled: false
 ocp_evpn_vtep_cidr: "198.18.0.0/24"
 ocp_evpn_vtep_node_ip_cidr: "198.18.0.1/32"
 ocp_evpn_vtep_dummy_interface: "evpn-vtep0"
+
+# ── Netris Fabric Manager (VMaaS, OSAC networking contract) ──────────
+# Suites whose NetworkClass selects the cudn_evpn Kubernetes Manager. The
+# values/<profile>/netris.yaml overlay sets it (cudn_evpn for vmaas and full,
+# "" for bmaas); caas-ci keeps its profile value. This list only feeds the
+# prep-osac asserts.
+netris_k8s_manager_suites: [vmaas, full]
+# Netris private allocation of the lab; always in excludedIpv4Cidrs.
+netris_private_allocation_cidr: "10.0.0.0/8"
+# Extra IPv4 CIDRs for global.networking.excludedIpv4Cidrs. prep-osac always
+# excludes all of 10.0.0.0/8 (the Netris private allocation of the lab, so
+# tenant CIDRs must come from elsewhere: the E2E suites use 172.16-172.31
+# except 172.27 and 172.30), the bare-metal DNS resolver, the node, management
+# and BMC networks,
+# the provisioning SNAT range, the VTEP CIDR, the Netris loopbacks and the node
+# uplinks.
+netris_extra_excluded_cidrs: []

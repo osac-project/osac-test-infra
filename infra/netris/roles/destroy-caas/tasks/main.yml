@@ -4,7 +4,7 @@
 
 - name: Resolve OSAC namespace for destroy
   ansible.builtin.set_fact:
-    _destroy_osac_ns: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    _destroy_osac_ns: "{{ osac_namespace }}"
 
 - name: Get fulfillment internal API host
   ansible.builtin.shell:

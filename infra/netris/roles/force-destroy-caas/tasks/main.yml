@@ -8,7 +8,7 @@
 
 - name: Resolve OSAC namespace for force destroy
   ansible.builtin.set_fact:
-    _force_osac_ns: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    _force_osac_ns: "{{ osac_namespace }}"
 
 - name: Collect leftover order names
   ansible.builtin.shell: |

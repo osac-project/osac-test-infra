@@ -7,16 +7,23 @@ permissions:
 on:
   workflow_call:
     inputs:
+      deploy-suite:
+        description: "Deployment scenario to provision"
+        required: false
+        type: string
+        default: "bmaas"
+      # Deprecated and ignored: osac main passes these until osac#2051 merges.
+      # Delete both right after it does.
       suite:
-        description: "BMaaS Netris suite to run"
+        description: "Deprecated, ignored"
         required: false
         type: string
-        default: "bmaas_networking"
+        default: ""
       osac-profile:
-        description: "OSAC profile for the BMaaS Netris suite"
+        description: "Deprecated, ignored"
         required: false
         type: string
-        default: "bmaas-ci"
+        default: ""
       instance-type:
         description: "EC2 instance type"
         required: false
@@ -364,12 +371,11 @@ jobs:
         env:
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_BRANCH: ${{ inputs.osac-branch }}
-          TEST_SUITE: ${{ inputs.suite }}
-          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
         run: |
-          case "${TEST_SUITE}:${OSAC_PROFILE}" in
-            bmaas_networking:bmaas-ci) ;;
-            *) echo "::error::Unsupported Netris suite/profile pair: ${TEST_SUITE}/${OSAC_PROFILE}"; exit 1 ;;
+          case "${DEPLOY_SUITE}" in
+            bmaas) ;;
+            *) echo "::error::Unsupported Netris deployment scenario: ${DEPLOY_SUITE}"; exit 1 ;;
           esac
           if ! command -v jq >/dev/null 2>&1; then
             sudo dnf install -y jq
@@ -398,10 +404,9 @@ jobs:
         shell: bash
         timeout-minutes: 30
         env:
-          TEST_SUITE: ${{ inputs.suite }}
-          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make setup-infra INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
+        run: make setup-infra INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Add osac CLI to PATH
         shell: bash
@@ -424,19 +429,17 @@ jobs:
         shell: bash
         timeout-minutes: 45
         env:
-          TEST_SUITE: ${{ inputs.suite }}
-          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make deploy-infra INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
+        run: make deploy-infra INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Deploy OCP from snapshot
         shell: bash
         timeout-minutes: 60
         env:
-          TEST_SUITE: ${{ inputs.suite }}
-          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make deploy-ocp INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
+        run: make deploy-ocp INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Build and load component images
         id: components
@@ -558,32 +561,30 @@ jobs:
         timeout-minutes: 90
         shell: bash
         env:
-          TEST_SUITE: ${{ inputs.suite }}
-          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
           COMPONENT_OVERRIDES: ${{ steps.components.outputs.overrides || '{}' }}
         run: |
           MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
-          make deploy-osac INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${MERGED}"
+          make deploy-osac INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${MERGED}"
 
-      - name: Setup Netris suite
+      - name: Set up Netris test prerequisites
         shell: bash
         timeout-minutes: 60
         env:
-          TEST_SUITE: ${{ inputs.suite }}
-          OSAC_PROFILE: ${{ inputs['osac-profile'] }}
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
-        run: make setup-suite INFRA=netris SUITE="${TEST_SUITE}" OSAC_PROFILE="${OSAC_PROFILE}" EXTRA_VARS="${EXTRA_VARS}"
+        run: make setup-suite INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" EXTRA_VARS="${EXTRA_VARS}"
 
-      - name: Run BMaaS networking tests
+      - name: Run Netris E2E tests
         id: test
         timeout-minutes: 60
         shell: bash
         env:
-          TEST_SUITE: ${{ inputs.suite }}
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
         run: |
           # Keep the slow, flaky cross-tenant class out of this workflow.
-          make run-tests INFRA=netris SUITE="${TEST_SUITE}" TEST='not TestCrossTenantBmaasNetworking'
+          make run-tests INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}" TEST='not TestCrossTenantBmaasNetworking'
 
       - name: Gather infra diagnostics
         if: always()
@@ -599,14 +600,14 @@ jobs:
         continue-on-error: true
         run: make -C infra/netris gather-mgmt-cluster
 
-      - name: Gather BMaaS Netris diagnostics
+      - name: Gather Netris diagnostics
         if: always()
         shell: bash
         timeout-minutes: 10
         continue-on-error: true
         env:
-          TEST_SUITE: ${{ inputs.suite }}
-        run: make gather-suite INFRA=netris SUITE="${TEST_SUITE}"
+          DEPLOY_SUITE: ${{ inputs.deploy-suite }}
+        run: make gather-suite INFRA=netris DEPLOY_SUITE="${DEPLOY_SUITE}"
 
       - name: Select kubeconfig for artifact collection
         id: artifact-kubeconfig
@@ -636,7 +637,7 @@ jobs:
         with:
           namespace: osac-e2e-ci
           kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
-          artifact-name: ${{ inputs.suite }}-netris-artifacts
+          artifact-name: ${{ inputs.deploy-suite }}-netris-artifacts
 
       - name: Gather EC2 runner artifacts
         if: always()

@@ -1,7 +1,18 @@
 ---
+- name: Check the OSAC image overrides
+  ansible.builtin.include_tasks: check_images.yml
+
+- name: Require the Netris password
+  ansible.builtin.assert:
+    that:
+      - netris_password is defined
+      - netris_password | length > 0
+    fail_msg: netris_password is empty; set it in the local config or NETRIS_PASSWORD.
+  no_log: true
+
 - name: Verify kubeconfig exists
   ansible.builtin.stat:
-    path: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    path: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _kubeconfig
   failed_when: not _kubeconfig.stat.exists
 
@@ -24,25 +35,17 @@
     version: "{{ osac_branch }}"
     force: true
 
-# The isolated Netris lab exposes its controller API through an HTTP NodePort.
-# Keep _netris_ctl_url as HTTP because the Netris API clients and the deployed
-# fulfillment jobs use that endpoint. The networking facade and the AAP values
-# it derives both validate controller URLs as HTTPS-only, so relax only those
-# Netris URL patterns in the cloned chart while retaining every other schema
-# validation rule.
+# The lab Netris controller is reached over plain HTTP at its NodePort. The
+# aap chart template rejects anything but https://, so relax it in the clone
+# only. The task fails when the expected text is gone, so a chart change cannot
+# silently undo the patch (compare upstream test-infra's schema patch).
 - name: Allow HTTP Netris controller URL in the isolated lab
   ansible.builtin.replace:
-    path: "{{ osac_installer_dir }}/charts/osac/values.schema.json"
-    regexp: '(?s)("controllerUrl"\s*:\s*\{.*?"pattern"\s*:\s*"\^)(\$\|\^)?(https://)'
-    replace: '\1\2https?://'
-    validate: "python3 -m json.tool %s"
-
-- name: Allow HTTP derived Netris controller URL in the isolated lab
-  ansible.builtin.replace:
-    path: "{{ osac_installer_dir }}/charts/osac/values.schema.json"
-    regexp: '(?s)("NETRIS_CONTROLLER_URL"\s*:\s*\{\s*"type"\s*:\s*"string"\s*,\s*"pattern"\s*:\s*"\^\$\|\^)(https://)'
-    replace: '\1https?://'
-    validate: "python3 -m json.tool %s"
+    path: "{{ osac_dir }}/osac-aap/charts/aap/templates/config-as-code-secret.yaml"
+    regexp: '\^https://\[\^/'
+    replace: '^https?://[^/'
+  register: _allow_http_netris
+  failed_when: not _allow_http_netris.changed
 
 - name: Determine values directory
   ansible.builtin.set_fact:
@@ -115,6 +118,114 @@
           'mgmt_interface': caas_netris_mgmt_interface,
           'vpc_interfaces': caas_netris_vpc_interfaces} }}
 
+# --- Compute the networking contract inputs ---
+#
+# The Netris Fabric Manager registration (osac-network-fabric-manager-netris)
+# and the cudn_evpn registration are rendered by the installer chart from
+# global.networking; nothing is applied by hand. The lab supplies the manager
+# settings (aap.instanceGroups.networkFulfillment) and the excluded ranges.
+
+- name: Read the base profile values
+  ansible.builtin.slurp:
+    src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
+  register: _values_raw
+
+- name: Check for the selected profile's Netris overlay
+  ansible.builtin.stat:
+    path: "{{ _values_dir }}/netris.yaml"
+  register: _netris_overlay_stat
+
+- name: Require a Netris overlay for the VMaaS, BMaaS and full suites
+  ansible.builtin.assert:
+    that:
+      - _netris_overlay_stat.stat.exists
+    fail_msg: >-
+      DEPLOY_SUITE={{ deploy_suite }} requires values/{{ osac_profile }}/netris.yaml
+      in the osac checkout (osac_branch={{ osac_branch }}). That commit predates
+      the per-service Netris overlays; use a newer osac commit.
+  when: deploy_suite | default('') in ['vmaas', 'bmaas', 'full']
+
+- name: Read the Netris overlay
+  ansible.builtin.slurp:
+    src: "{{ _values_dir }}/netris.yaml"
+  register: _netris_overlay_raw
+  when: _netris_overlay_stat.stat.exists
+
+# netris.yaml layers after instance.yaml, as in the Helm command. caas-ci has no
+# overlay.
+- name: Combine the base profile and the Netris overlay
+  ansible.builtin.set_fact:
+    _profile_values: >-
+      {{ (_values_raw.content | b64decode | from_yaml)
+         | combine(((_netris_overlay_raw.content | b64decode | from_yaml)
+                    if _netris_overlay_stat.stat.exists else {}), recursive=true) }}
+
+- name: Read full-ci infrastructure values
+  when: deploy_suite | default('') == 'full'
+  ansible.builtin.slurp:
+    src: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
+  register: _full_ci_infra_values_raw
+
+- name: Check for the EVPN host values written by deploy-ocp
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../.evpn-values.yaml"
+  register: _evpn_values_stat
+
+- name: Require the EVPN host values for the suites that use cudn_evpn
+  ansible.builtin.assert:
+    that:
+      - _evpn_values_stat.stat.exists
+    fail_msg: >-
+      DEPLOY_SUITE={{ deploy_suite | default('') }} uses the cudn_evpn Kubernetes Manager, but
+      {{ playbook_dir }}/../.evpn-values.yaml is missing; run make deploy-ocp
+      DEPLOY_SUITE={{ deploy_suite | default('') }} first.
+  when: deploy_suite | default('') in netris_k8s_manager_suites
+
+- name: Read the EVPN host values written by deploy-ocp
+  ansible.builtin.slurp:
+    src: "{{ playbook_dir }}/../.evpn-values.yaml"
+  register: _evpn_values_raw
+  when: _evpn_values_stat.stat.exists
+
+# The Netris private allocation (all of 10.0.0.0/8) is excluded as a whole, so
+# no tenant network can take a 10.x address. Entries inside it stay listed:
+# the chart and fulfillment accept overlapping entries.
+# The excluded ranges hold the infrastructure networks, the
+# bare-metal resolver (the Netris default DHCP option set hands dns_server to
+# bare metal), the VTEP range, the fabric loopbacks and the node uplinks.
+# ipaddr('subnet') keeps every entry canonical, also when an uplink address is
+# not the network address.
+- name: Compute the excluded IPv4 CIDRs
+  ansible.builtin.set_fact:
+    _netris_excluded_ipv4_cidrs: >-
+      {{ (([dns_server ~ '/32', ocp_snat_ip ~ '/32', ocp_dnat_ip ~ '/32',
+            ocp_subnet_cidr, '192.168.16.0/20', bmc_net_cidr,
+            bmaas_provisioning_snat_cidr, netris_private_allocation_cidr]
+           + ([_netris_evpn.vtepCIDR] if _netris_evpn.vtepCIDR is defined else [])
+           + (_netris_evpn.bgp.acceptPrefixes | default([]))
+           + (_netris_evpn.nodes | default([]) | map(attribute='uplinks') | flatten
+              | map(attribute='address') | list)
+           + netris_extra_excluded_cidrs)
+          | map('ansible.utils.ipaddr', 'subnet') | unique | sort) }}
+  vars:
+    _netris_evpn: >-
+      {{ (_evpn_values_raw.content | b64decode | from_yaml).evpn
+         if _evpn_values_stat.stat.exists else {} }}
+
+- name: Build the Netris Fabric Manager and cudn_evpn settings
+  ansible.builtin.set_fact:
+    _netris_manager_config: >-
+      {{ {'NETRIS_CONTROLLER_URL': _netris_ctl_url,
+          'NETRIS_USERNAME': netris_username,
+          'NETRIS_VALIDATE_CERTS': 'false',
+          'NETRIS_SITE_ID': _netris_site_id | string,
+          'NETRIS_TENANT_ID': '1',
+          'NETRIS_TENANT_NAME': 'Admin',
+          'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
+          'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
+          'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name,
+          'NETRIS_RESOURCE_CLASS_MAP': _netris_resource_class_map | to_json} }}
+
 # --- Read SSH private key for instance group secrets ---
 
 - name: Read SSH private key
@@ -129,54 +240,11 @@
   ansible.builtin.command:
     cmd: oc adm release info --image-for=cli
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _ocp_cli_image
   changed_when: false
 
-# --- Patch values file with all settings ---
-
-- name: Read current values file
-  ansible.builtin.slurp:
-    src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
-  register: _values_raw
-
-- name: Read full-ci infrastructure values
-  when: suite | default('') in ['full', 'stretched_networking']
-  ansible.builtin.slurp:
-    src: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
-  register: _full_ci_infra_values_raw
-
-- name: Validate the CUDN EVPN VMaaS profile contract
-  ansible.builtin.assert:
-    that:
-      - _selected_vmaas.enabled | default(false) | bool
-      - _selected_network_managers.enabled | default(false) | bool
-      - _selected_fabric_netris.enabled | default(false) | bool
-      - _selected_k8s_cudn_evpn.enabled | default(false) | bool
-      - _selected_expert_overrides.networkClass | default(false) | bool
-      - _selected_network_class.enabled | default(false) | bool
-      - _selected_network_class.k8sManager | default('') == 'cudn_evpn'
-      - _selected_network_class.fabricManager | default('') == 'netris'
-      - _selected_network_class.isDefault | default(false) | bool
-    fail_msg: >-
-      Profile {{ osac_profile }} must enable VMaaS, register Netris and cudn_evpn,
-      and explicitly select the default NetworkClass pair (netris, cudn_evpn).
-      prep-osac preserves this source profile selection; it does not synthesize or
-      overwrite NetworkClass settings.
-  vars:
-    _selected_profile_values: "{{ _values_raw.content | b64decode | from_yaml }}"
-    _selected_global: "{{ _selected_profile_values.global | default({}) }}"
-    _selected_services: "{{ _selected_global.services | default({}) }}"
-    _selected_vmaas: "{{ _selected_services.vmaas | default({}) }}"
-    _selected_profile_operator: "{{ _selected_profile_values.operator | default({}) }}"
-    _selected_network_managers: "{{ _selected_profile_operator.networkManagers | default({}) }}"
-    _selected_fabric_managers: "{{ _selected_network_managers.fabricManagers | default({}) }}"
-    _selected_fabric_netris: "{{ _selected_fabric_managers.netris | default({}) }}"
-    _selected_k8s_managers: "{{ _selected_network_managers.k8sManagers | default({}) }}"
-    _selected_k8s_cudn_evpn: "{{ _selected_k8s_managers.cudn_evpn | default({}) }}"
-    _selected_expert_overrides: "{{ _selected_global.expertOverrides | default({}) }}"
-    _selected_network_class: "{{ _selected_profile_values.networkClass | default({}) }}"
-  when: osac_profile == 'cudn-evpn-netris-test'
+# --- Collect the lab values (written to netris-runtime.yaml below) ---
 
 # Operator enablement (cnv, mce, metallb) is intentionally NOT overridden here:
 # each values profile declares what it needs (e.g. bmaas-ci disables cnv/mce/metallb,
@@ -184,34 +252,29 @@
 # profile and installed CNV on BMaaS, whose golden-image DataVolumes filled the LVMS
 # pool and starved the AAP postgres PVC. lvms/bundledPostgres stay overridden because
 # every profile needs them.
-# Let the networking facade derive AAP settings even when the source profile
-# opts out. Otherwise caas-ci retains NETWORK_CLASS=ci despite fabricManager=netris.
-# The BM provisioning V-Net stays only on networkFulfillment.
+# The lab has a real Netris controller, so provider networking is enabled for
+# every suite. values/<profile>/netris.yaml selects the managers for vmaas,
+# bmaas and full; caas-ci and its maas alias have no overlay and keep their
+# k8sManager. These overrides hold what only the lab knows: the excluded ranges,
+# the tenant defaults, and the manager settings and secrets in
+# aap.instanceGroups.networkFulfillment. clusterFulfillment.config rejects keys
+# outside its declared schema, so the BM provisioning V-Net stays only on
+# networkFulfillment.
 - name: Build values overrides
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ {'cliImage': _ocp_cli_image.stdout | trim,
           'bundledPostgres': {'enabled': true},
           'lvms': {'enabled': true},
-          'global': {'expertOverrides': {'aap': false, 'networkClass': false},
-                     'networking': {'fabricManager': 'netris', 'k8sManager': '',
-                       'networkClass': {'defaults': {
-                         'virtualNetworkIPv4CIDR': netris_tenant_network_cidr,
-                         'subnetIPv4CIDR': netris_tenant_subnet_cidr}},
-                       'netris': {
-              'controllerUrl': _netris_ctl_url,
-              'credentials': {'username': netris_username, 'externalSecret': true},
-              'siteId': _netris_site_id | string,
-              'tenantId': '1',
-              'tenantName': 'Admin',
-              'mgmtVpcId': _netris_mgmt_vpc_id | string,
-              'mgmtVpcName': ocp_vpc_name,
-              'resourceClassMap': _netris_resource_class_map | to_json
-            }}},
-          'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}},
-                       'controllers': {'networkingProvisioning': true},
-                       'networkManagers': {'fabricManagers': {'netris': {
-                         'externalIPContractVersion': netris_external_ip_contract_version}}}},
+          'global': {'networking': {
+              'provisioningEnabled': true,
+              'fabricManager': 'netris',
+              'excludedIpv4Cidrs': _netris_excluded_ipv4_cidrs,
+              'networkClass': {'defaults': {
+                'virtualNetworkIPv4CIDR': netris_tenant_network_cidr,
+                'subnetIPv4CIDR': netris_tenant_subnet_cidr}}
+            }},
+          'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
           'bmf': {'env': {'enableNetworkingProvisioning': 'true'}},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
               'NETRIS_USERNAME': netris_username,
@@ -237,17 +300,20 @@
               'SERVER_SSH_KEY': _ssh_private_key.content | b64decode,
               'SERVER_SSH_BASTION_KEY': _ssh_private_key.content | b64decode
             }},
-            'networkFulfillment': {'enabled': true, 'config': {
-              'NETRIS_USERNAME': netris_username,
-              'NETRIS_SITE_ID': _netris_site_id | string,
-              'NETRIS_TENANT_ID': '1',
-              'NETRIS_TENANT_NAME': 'Admin',
-              'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
-              'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
-              'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name
-            }}
+            'networkFulfillment': {'enabled': true, 'config': _netris_manager_config,
+                                     'secret': {'NETRIS_PASSWORD': netris_password}}
           }}
          }
+         | combine(({'aap': {'instanceGroups': {'clusterFulfillment': {
+               'config': {
+                 'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
+                 'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
+                 'NETRIS_RESOURCE_CLASS_MAP': _netris_resource_class_map | to_json,
+                 'NETWORK_CLASS': 'netris',
+                 'NETWORK_STEPS_COLLECTION': 'netris.steps'
+               },
+               'secret': {'NETRIS_PASSWORD': netris_password}
+             }}}} if _caas_enabled else {}), recursive=true)
          | combine(({'operator': {'image': {
                'repository': osac_operator_image | regex_replace(':([^/]+)$', ''),
                'tag': (osac_operator_image | regex_search(':([^/]+)$', '\1') | first | default('latest')),
@@ -270,72 +336,13 @@
                'pullPolicy': ('IfNotPresent' if bmf_operator_image.startswith('localhost/') else 'Always')
              }}}
                     if bmf_operator_image | default('') | length > 0 else {}), recursive=true)
-         | combine(({'aap': {'configAsCode': {'projectGitUri': aap_project_git_uri}}}
-                    if aap_project_git_uri | default('') | length > 0 else {}), recursive=true)
-         | combine(({'aap': {'configAsCode': {'projectGitBranch': aap_project_git_branch}}}
-                    if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
+         | combine({'aap': {'configAsCode': {
+               'projectGitUri': aap_project_git_uri | default(osac_repo, true),
+               'projectGitBranch': aap_project_git_branch | default(osac_branch, true)}}}, recursive=true)
       }}
-
-
-- name: Add Netris CUDN EVPN manager settings to full-ci
-  when: suite | default('') in ['full', 'stretched_networking']
-  ansible.builtin.set_fact:
-    _values_overrides: >-
-      {{ _values_overrides | combine({
-           'global': {'expertOverrides': {'networkClass': true}},
-           'operator': {'networkManagers': {
-             'enabled': true,
-             'fabricManagers': {'netris': {
-               'enabled': true,
-               'description': 'Netris SDN fabric manager',
-               'capabilities': ['ipv4']
-             }},
-             'k8sManagers': {'cudn_evpn': {
-               'enabled': true,
-               'description': 'OVN EVPN Kubernetes network manager for VM-to-fabric connectivity',
-               'capabilities': ['ipv4']
-             }}
-           }},
-           'networkClass': {
-             'enabled': true,
-             'title': 'CUDN EVPN with Netris',
-             'description': 'Provisions IPv4 networking through the CUDN EVPN k8s manager and the Netris physical fabric manager.',
-             'k8sManager': 'cudn_evpn',
-             'fabricManager': 'netris',
-             'isDefault': true
-           },
-           'aap': {'instanceGroups': {'storageFulfillment': {'enabled': true}}},
-           'metering': {'echoAdapter': {'enabled': true, 'image': {
-             'repository': 'ghcr.io/osac-project/metering-echo-adapter',
-             'tag': 'latest',
-             'pullPolicy': 'Always'
-           }}}
-         }, recursive=true) }}
-
-- name: Validate full-ci services and Netris EVPN overlay
-  when: suite | default('') in ['full', 'stretched_networking']
-  ansible.builtin.assert:
-    that:
-      - _full_ci_values.global.services.caas.enabled | bool
-      - _full_ci_values.global.services.vmaas.enabled | bool
-      - _full_ci_values.global.services.bmaas.enabled | bool
-      - _full_ci_values.global.services.maas.enabled | bool
-      - _full_ci_values.operator.networkManagers.enabled | bool
-      - _full_ci_values.operator.networkManagers.fabricManagers.netris.enabled | bool
-      - _full_ci_values.operator.networkManagers.k8sManagers.cudn_evpn.enabled | bool
-      - _full_ci_values.global.expertOverrides.networkClass | bool
-      - _full_ci_values.networkClass.enabled | bool
-      - _full_ci_values.networkClass.k8sManager == 'cudn_evpn'
-      - _full_ci_values.networkClass.fabricManager == 'netris'
-      - _full_ci_values.networkClass.isDefault | bool
-      - _full_ci_values.aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION == 'ci.steps'
-      - _full_ci_values.aap.instanceGroups.storageFulfillment.enabled | bool
-      - _full_ci_values.metering.echoAdapter.enabled | bool
-    fail_msg: >-
-      SUITE=full or SUITE=stretched_networking requires the full-ci profile services plus the default NetworkClass
-      pair (netris, cudn_evpn). The full-ci EVPN overlay was not applied correctly.
   vars:
-    _full_ci_values: "{{ (_values_raw.content | b64decode | from_yaml) | combine(_values_overrides, recursive=true) }}"
+    _caas_enabled: "{{ _profile_values.global.services.caas.enabled | default(false) | bool }}"
+  no_log: true
 
 # Keep bmf.metal3.enabled false here: it enables the BMF subchart's own Secret
 # templates. The OSAC chart's testBackend templates provide those configs instead.
@@ -347,7 +354,7 @@
 - name: Configure the Metal3 test backend for bare-metal services
   when:
     - bare_metal_services | bool
-    - (_values_raw.content | b64decode | from_yaml).global.services.bmaas.enabled | default(false) | bool
+    - _profile_values.global.services.bmaas.enabled | default(false) | bool
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ _values_overrides | combine({
@@ -360,23 +367,81 @@
              'testBackend': {'metal3': {'enabled': true, 'namespace': bmaas_bmh_namespace}}
            }
          }, recursive=true) }}
+  no_log: true
 
 - name: Disable cluster version seeding when CaaS is disabled
   # The seed hook calls the CaaS API, which returns 503 when CaaS is disabled.
-  when: not ((_values_raw.content | b64decode | from_yaml).global.services.caas.enabled | default(true) | bool)
+  when: not (_profile_values.global.services.caas.enabled | default(true) | bool)
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ _values_overrides | combine({'clusterVersions': {'enabled': false}}, recursive=true) }}
+  no_log: true
 
-- name: Write patched values file
+- name: Merge the profile values with the lab overrides
+  ansible.builtin.set_fact:
+    _final_values: "{{ _profile_values | combine(_values_overrides, recursive=true) }}"
+  no_log: true
+
+# Replaces the old assert on operator.networkManagers and networkClass, which no
+# longer exist in the chart schema. The registrations and the NetworkClass are
+# rendered by the installer from global.networking.
+- name: Validate the networking contract of the final values
+  ansible.builtin.assert:
+    that:
+      - _final_values.global.networking.provisioningEnabled | bool
+      - _final_values.global.networking.fabricManager == 'netris'
+      - deploy_suite | default('') not in netris_k8s_manager_suites or _final_values.global.networking.k8sManager == 'cudn_evpn'
+      - _final_values.global.networking.excludedIpv4Cidrs | length > 0
+      - netris_private_allocation_cidr in _final_values.global.networking.excludedIpv4Cidrs
+      - (netris_tenant_network_cidr | split('.'))[0] != '10'
+      - (netris_tenant_subnet_cidr | split('.'))[0] != '10'
+      - _final_values.aap.instanceGroups.networkFulfillment.enabled | bool
+      - _final_values.aap.instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL | length > 0
+      - _final_values.aap.instanceGroups.networkFulfillment.config.NETRIS_RESOURCE_CLASS_MAP | length > 0
+      - deploy_suite | default('') != 'bmaas' or _final_values.global.networking.k8sManager == ''
+    fail_msg: >-
+      Profile {{ osac_profile }} must enable provider networking, select the
+      Netris Fabric Manager (and cudn_evpn for DEPLOY_SUITE in
+      {{ netris_k8s_manager_suites | join(', ') }}), exclude the lab ranges,
+      and carry the Netris settings in aap.instanceGroups.networkFulfillment.
+      Final global.networking: {{ _final_values.global.networking | to_json }}
+  no_log: false
+
+- name: Validate the VMaaS profile services
+  ansible.builtin.assert:
+    that:
+      - _final_values.global.services.vmaas.enabled | default(false) | bool
+      - _final_values.global.networking.k8sManager == 'cudn_evpn'
+    fail_msg: >-
+      Profile {{ osac_profile }} must enable VMaaS with the cudn_evpn Kubernetes Manager.
+  when: deploy_suite | default('') == 'vmaas'
+
+- name: Validate full-ci services
+  when: deploy_suite | default('') == 'full'
+  ansible.builtin.assert:
+    that:
+      - _final_values.global.services.caas.enabled | bool
+      - _final_values.global.services.vmaas.enabled | bool
+      - _final_values.global.services.bmaas.enabled | bool
+      - _final_values.global.services.maas.enabled | bool
+      - _final_values.aap.instanceGroups.storageFulfillment.enabled | bool
+      - _final_values.metering.echoAdapter.enabled | bool
+    fail_msg: >-
+      DEPLOY_SUITE=full requires the full-ci profile
+      services (CaaS, VMaaS, BMaaS, MaaS), storage fulfillment and the echo adapter.
+
+# Helm reads instance.yaml, netris.yaml when the profile has one, then this
+# file, so the committed profile stays untouched. It holds the AWS, SSH and
+# Netris secrets: mode 0600, and never passed through --set.
+- name: Write the generated Netris runtime values
   ansible.builtin.copy:
-    dest: "{{ osac_installer_dir }}/{{ osac_values_file }}"
-    content: "{{ _values_raw.content | b64decode | from_yaml | combine(_values_overrides, recursive=true) | to_nice_yaml(indent=2) }}"
+    dest: "{{ _values_dir }}/netris-runtime.yaml"
+    content: "{{ _values_overrides | to_nice_yaml(indent=2) }}"
     mode: "0600"
   no_log: true
 
 - name: Enable full-ci Keycloak test fixtures before the infrastructure install
-  when: suite | default('') in ['full', 'stretched_networking']
+  when: deploy_suite | default('') == 'full'
   ansible.builtin.copy:
     dest: "{{ osac_installer_dir }}/{{ osac_values_file | dirname }}/infra.yaml"
     content: >-
@@ -454,7 +519,7 @@
           - {{ bmc_net_ocp_ip }}
       EOF
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _prov_cr
   changed_when: "'created' in _prov_cr.stdout or 'configured' in _prov_cr.stdout"
 

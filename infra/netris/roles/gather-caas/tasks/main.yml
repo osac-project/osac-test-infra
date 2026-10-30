@@ -1,17 +1,4 @@
 ---
-- name: Detect effective OSAC namespace
-  ansible.builtin.shell:
-    cmd: oc get namespace {{ snapshot_osac_namespace }} >/dev/null 2>&1 && echo {{ snapshot_osac_namespace }} || echo {{ osac_namespace }}
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _detected_osac_ns
-  changed_when: false
-  failed_when: false
-
-- name: Set effective OSAC namespace
-  ansible.builtin.set_fact:
-    _osac_namespace: "{{ _detected_osac_ns.stdout | default(osac_namespace) }}"
-
 - name: Create caas gather subdirectories
   ansible.builtin.file:
     path: "{{ _gather_dir }}/mgmt-cluster/caas/{{ item }}"
@@ -24,7 +11,7 @@
 # ── Fulfillment API ──
 - name: Get fulfillment API URL for gather
   ansible.builtin.shell:
-    cmd: oc --request-timeout=15s get route fulfillment-internal-api -n {{ _osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
+    cmd: oc --request-timeout=15s get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
   environment:
     KUBECONFIG: /root/.kube/config
   register: _gather_fulfillment_host
@@ -33,7 +20,7 @@
 
 - name: Get service account token for gather
   ansible.builtin.shell:
-    cmd: oc --request-timeout=15s create token -n {{ _osac_namespace }} admin
+    cmd: oc --request-timeout=15s create token -n {{ osac_namespace }} admin
   environment:
     KUBECONFIG: /root/.kube/config
   register: _gather_sa_token

@@ -21,7 +21,7 @@
   vars:
     _caas_label_config:
       oc: "{{ _caas_label_oc.stdout }}"
-      namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+      namespace: "{{ osac_namespace }}"
       servers: "{{ _caas_agent_server_names }}"
   register: _caas_label_config_file
 
@@ -84,7 +84,7 @@
           matchConditions:
             - name: configured-lab-workers
               expression: >-
-                request.namespace == {{ snapshot_osac_namespace | default(osac_namespace) | to_json }}
+                request.namespace == {{ osac_namespace | to_json }}
                 && object.metadata.name in {{ _caas_agent_server_names | list | to_json }}
           variables:
             - name: servers

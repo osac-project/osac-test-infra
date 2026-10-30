@@ -18,7 +18,7 @@
 # Step 1: Register BareMetalInstanceTypes with selectors matching BMH profile labels
 - name: Get fulfillment internal API URL
   ansible.builtin.shell:
-    cmd: oc get route fulfillment-internal-api -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.status.ingress[0].host}'
+    cmd: oc get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
   environment:
     KUBECONFIG: /root/.kube/config
   register: _fulfillment_host
@@ -44,7 +44,7 @@
   ansible.builtin.copy:
     content: |
       {
-        "token_script": "oc create token -n {{ snapshot_osac_namespace | default(osac_namespace) }} admin --duration 1h",
+        "token_script": "oc create token -n {{ osac_namespace }} admin --duration 1h",
         "insecure": true,
         "address": "{{ _fulfillment_host.stdout }}:443"
       }
@@ -54,7 +54,7 @@
 - name: Get service account token
   no_log: true
   ansible.builtin.shell:
-    cmd: oc create token -n {{ snapshot_osac_namespace | default(osac_namespace) }} admin
+    cmd: oc create token -n {{ osac_namespace }} admin
   environment:
     KUBECONFIG: /root/.kube/config
   register: _sa_token
@@ -364,7 +364,7 @@
   ansible.builtin.shell:
     cmd: >-
       oc get configmap cluster-fulfillment-ig
-      -n {{ snapshot_osac_namespace | default(osac_namespace) }}
+      -n {{ osac_namespace }}
       -o jsonpath='{.data.NETRIS_RESOURCE_CLASS_MAP}'
   environment:
     KUBECONFIG: /root/.kube/config
@@ -417,7 +417,7 @@
     PY
   environment:
     KUBECONFIG: /root/.kube/config
-    NETRIS_RC_NS: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    NETRIS_RC_NS: "{{ osac_namespace }}"
     NETRIS_RC_MAP_RAW: "{{ _netris_rc_map_raw.stdout | default('{}', true) | from_json | to_json }}"
     NETRIS_RC_NAMES: "{{ caas_baremetal_instance_type_profiles | map(attribute='name') | list | to_json }}"
     NETRIS_RC_TEMPLATE_ID: "{{ caas_netris_server_cluster_template_id | default(2) }}"
@@ -429,7 +429,7 @@
 # Step 4: Trigger AAP publish-templates job and wait for cluster template
 - name: Get AAP route
   ansible.builtin.shell:
-    cmd: oc get route osac-aap -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.spec.host}'
+    cmd: oc get route osac-aap -n {{ osac_namespace }} -o jsonpath='{.spec.host}'
   environment:
     KUBECONFIG: /root/.kube/config
   register: _aap_route
@@ -440,7 +440,7 @@
 
 - name: Get AAP admin password
   ansible.builtin.shell:
-    cmd: oc get secret osac-aap-controller-admin-password -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.data.password}' | base64 -d
+    cmd: oc get secret osac-aap-controller-admin-password -n {{ osac_namespace }} -o jsonpath='{.data.password}' | base64 -d
   environment:
     KUBECONFIG: /root/.kube/config
   register: _aap_admin_pw

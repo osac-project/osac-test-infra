@@ -3,7 +3,7 @@
 # setting. Defer DNS cleanup until no orders remain.
 - name: Read existing ClusterOrders before changing worker DHCP DNS
   ansible.builtin.command: >-
-    oc get clusterorders -n {{ snapshot_osac_namespace | default(osac_namespace) | quote }} -o json
+    oc get clusterorders -n {{ osac_namespace | quote }} -o json
   environment:
     KUBECONFIG: /root/.kube/config
   register: _caas_existing_orders_for_dhcp

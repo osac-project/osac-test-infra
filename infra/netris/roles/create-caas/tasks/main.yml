@@ -178,7 +178,7 @@
   ansible.builtin.shell:
     cmd: >-
       oc get ns -l hypershift.openshift.io/hosted-control-plane=true --no-headers 2>/dev/null
-      | grep '{{ snapshot_osac_namespace | default(osac_namespace) }}'
+      | grep '{{ osac_namespace }}'
       | awk '{print $1}'
       | grep -v '^$'
       | head -1
@@ -206,7 +206,7 @@
   ansible.builtin.shell:
     cmd: >-
       HC_NS=$(oc get hostedcluster -A --no-headers 2>/dev/null
-      | grep '{{ snapshot_osac_namespace | default(osac_namespace) }}'
+      | grep '{{ osac_namespace }}'
       | awk '{print $1}'
       | head -1);
       [ -n "$HC_NS" ] && oc label ns "$HC_NS"

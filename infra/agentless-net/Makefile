@@ -1,6 +1,5 @@
 # ─── Variables ──────────────────────────────────────────────────────
 
-OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
 ENV_INFRA := .env.infra
 SCRIPTS := scripts

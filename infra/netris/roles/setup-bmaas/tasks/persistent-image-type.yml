@@ -68,7 +68,7 @@
     BMH_NS: "{{ bmaas_bmh_namespace }}"
     FIRST_HOST: "{{ bmaas_vm_patterns[0] }}"
     TYPE_NAME: "{{ bmaas_bmit_name }}"
-    OSAC_NS: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    OSAC_NS: "{{ osac_namespace }}"
     VCPU: "{{ bmaas_vm_vcpu | string }}"
     MEMORY_GB: "{{ (bmaas_vm_memory_mb | int // 1024) | string }}"
     KUBECONFIG: /root/.kube/config

@@ -1,13 +1,13 @@
 ---
-- name: Check VMaaS cluster and OSAC readiness (read-only)
+- name: Check VMaaS cluster and OSAC readiness (no cluster changes)
   hosts: all
   gather_facts: false
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path }}"
+    KUBECONFIG: "{{ kubeconfig_path }}"
   tasks:
     - name: Check the selected OCP kubeconfig exists
       ansible.builtin.stat:
-        path: "{{ ocp_evpn_kubeconfig_path }}"
+        path: "{{ kubeconfig_path }}"
       register: _vmaas_kubeconfig
 
     - name: Require the selected OCP kubeconfig
@@ -15,7 +15,7 @@
         that:
           - _vmaas_kubeconfig.stat.exists
           - _vmaas_kubeconfig.stat.isreg
-        fail_msg: "OCP kubeconfig is missing or is not a regular file: {{ ocp_evpn_kubeconfig_path }}"
+        fail_msg: "OCP kubeconfig is missing or is not a regular file: {{ kubeconfig_path }}"
 
     - name: Check the OCP API is ready
       ansible.builtin.command:
@@ -181,7 +181,7 @@
           - ocp_underlay_enabled | default(false) | bool
           - not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool)
         fail_msg: >-
-          VMaaS requires the dedicated underlay. If ExternalIP tests are enabled,
+          VMaaS requires the dedicated underlay. If the external_ip/ and references/ tests are enabled (ocp_vmaas_external_ip_tests_enabled),
           their separate 172.27.0.0/16 return path must also be independently
           provisioned and acknowledged. This check does not mutate or verify
           external Netris/ISP policy; BGP peer state is checked below.
@@ -425,11 +425,22 @@
           - _vmaas_compute_instance_crd.status.conditions | default([]) | selectattr('type', 'equalto', 'Established') | selectattr('status', 'equalto', 'True') | list | length > 0
           - _vmaas_fabric_manager.metadata.labels['osac.openshift.io/network-fabric-manager'] == 'true'
           - _vmaas_fabric_manager.data.name == 'netris'
+          - _vmaas_fabric_manager.immutable | default(false) | bool
+          - _vmaas_fabric_manager.data.ansible_role == 'osac.templates.netris'
+          - "'evpn' in (_vmaas_fabric_manager.data.network_types | default('') | split(',') | map('trim') | list)"
           - _vmaas_k8s_manager.metadata.labels['osac.openshift.io/network-k8s-manager'] == 'true'
           - _vmaas_k8s_manager.data.name == 'cudn_evpn'
+          - _vmaas_k8s_manager.immutable | default(false) | bool
+          - _vmaas_fabric_manager.data.capabilities | default('') == 'eastWestEthernet,security_group_icmp'
+          - "'capabilities' not in _vmaas_k8s_manager.data"
         fail_msg: >-
-          VMaaS requires an Established ComputeInstance CRD and Netris/cudn_evpn
-          manager ConfigMaps in namespace {{ osac_namespace }}.
+          VMaaS requires an Established ComputeInstance CRD and the immutable
+          installer-rendered Netris (ansible_role osac.templates.netris,
+          network_types containing evpn, capabilities
+          eastWestEthernet,security_group_icmp) and cudn_evpn (no capabilities
+          key) manager ConfigMaps in namespace {{ osac_namespace }}. An
+          existing lab needs the immutable osac-network-fabric-manager-netris
+          ConfigMap deleted before a helm upgrade changes its data.
 
     - name: Require a deployment with the VMaaS controller enabled
       ansible.builtin.assert:
@@ -447,14 +458,96 @@
           The deployment with OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER=true is not
           fully available in namespace {{ osac_namespace }}.
 
-    - name: Report Fulfillment API checks not available through Kubernetes
+    - name: Get the fulfillment internal API host
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - route/fulfillment-internal-api
+          - -n
+          - "{{ osac_namespace }}"
+          - -o
+          - jsonpath={.status.ingress[0].host}
+      register: _vmaas_fulfillment_host
+      changed_when: false
+      until: _vmaas_fulfillment_host.rc == 0 and _vmaas_fulfillment_host.stdout | length > 0
+      retries: 10
+      delay: 15
+
+    - name: Get a service account token for the private API
+      ansible.builtin.command:
+        argv: [oc, create, token, -n, "{{ osac_namespace }}", admin]
+      register: _vmaas_sa_token
+      changed_when: false
+      no_log: true
+
+    # The installer's NetworkClass step creates the NetworkClass from
+    # global.networking; the operator sets READY once it resolved the
+    # registrations of the configured managers.
+    - name: Wait for the NetworkClass to be READY
+      # The token is only in the request header; no_log stays off so a timeout
+      # shows the API error.
+      ansible.builtin.uri:
+        url: "https://{{ _vmaas_fulfillment_host.stdout }}/api/private/v1/network_classes"
+        headers:
+          Authorization: "Bearer {{ _vmaas_sa_token.stdout }}"
+        validate_certs: false
+        return_content: true
+      register: _vmaas_network_classes
+      until: >-
+        _vmaas_network_classes.status == 200 and
+        (_vmaas_network_classes.json['items'] | default([])
+         | selectattr('status.state', 'defined')
+         | selectattr('status.state', 'equalto', 'NETWORK_CLASS_STATE_READY') | list | length) == 1
+      retries: 30
+      delay: 10
+
+    - name: Require the NetworkClass to select netris and cudn_evpn
+      ansible.builtin.assert:
+        that:
+          - _vmaas_network_classes.json['items'] | length == 1
+          - _vmaas_network_classes.json['items'][0].fabric_manager == 'netris'
+          - _vmaas_network_classes.json['items'][0].k8s_manager == 'cudn_evpn'
+          - _vmaas_network_classes.json['items'][0].status.state == 'NETWORK_CLASS_STATE_READY'
+          - _vmaas_network_classes.json['items'][0].status.network_type | default('evpn') == 'evpn'
+        fail_msg: >-
+          The default NetworkClass must be NETWORK_CLASS_STATE_READY with
+          fabric_manager=netris and k8s_manager=cudn_evpn. Observed:
+          {{ _vmaas_network_classes.json['items'] | map(attribute='status') | list | to_json }}.
+
+    # Only the external_ip/ and references/ tests of the VMaaS networking E2E
+    # are gated by this variable (they use the 172.27.0.0/16 pool). The NAT and
+    # ExternalIP tests of test_vmaas_networking.py (test_11..17) always run. It
+    # is only set when the lab operator has provisioned and acknowledged the
+    # 172.27.0.0/16 return path.
+    - name: Publish the external path switch for the VMaaS tests
+      ansible.builtin.lineinfile:
+        path: "{{ inventory_dir }}/../.env.infra"
+        regexp: '^OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED='
+        line: OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED=true
+        create: true
+        mode: "0644"
+      when:
+        - ocp_vmaas_external_ip_tests_enabled | default(false) | bool
+        - ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool
+
+    - name: Remove the external path switch when the return path is not acknowledged
+      ansible.builtin.lineinfile:
+        path: "{{ inventory_dir }}/../.env.infra"
+        regexp: '^OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED='
+        state: absent
+      when: >-
+        not ((ocp_vmaas_external_ip_tests_enabled | default(false) | bool) and
+             (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool))
+
+    - name: Report the VMaaS readiness result
       ansible.builtin.debug:
         msg: >-
-          Read-only Kubernetes readiness passed for the OSAC VMaaS controller,
-          ComputeInstance API, and Netris/cudn_evpn registrations. This checkout
-          exposes NetworkClass and ComputeInstanceTemplate through Fulfillment
-          APIs, not Kubernetes resources. The setup target does not query the
-          private NetworkClass API or guess a template endpoint/name; ensure the
-          installed default NetworkClass selects fabricManager=netris and
-          k8sManager=cudn_evpn, and that the VMaaS template configured for the
-          suite exists and is usable.
+          Read-only readiness passed for the OSAC VMaaS controller, the
+          ComputeInstance API, the installer-rendered Netris and cudn_evpn
+          registrations, and the default NetworkClass (netris, cudn_evpn,
+          READY). The ComputeInstanceTemplate is not queried here; ensure the
+          VMaaS template configured for the suite exists and is usable.
+          OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED is exported to .env.infra only
+          when the ExternalIP tests and the return path acknowledgement are both
+          enabled.

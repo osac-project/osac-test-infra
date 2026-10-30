@@ -14,9 +14,7 @@ roles/                          # Ansible roles (each has tasks/main.yml)
   configure-dns/                # Route 53 + dnsmasq DNS for OCP
   restore-ocp/                  # Deploy OCP from snapshot: CoW disks, recert, boot, health check
   cache-snapshot/               # Pull + cache flavor OCI image (skopeo)
-  prep-osac/                    # Clone mono-repo, patch Helm values (fresh install)
-  prep-refresh-osac/            # Clone mono-repo, patch values, rebuild CLI (snapshot refresh)
-  patch-osac-refresh/           # Post-refresh: Netris/SSH + AAP project pin sync + CaC
+  prep-osac/                    # Clone mono-repo, generate netris-runtime.yaml (fresh install)
   prepare-caas-network/         # remove legacy CaaS DNS overrides; guest network readiness
   prepare-caas-bmaas/           # Reuse BMaaS roles to register CaaS/MaaS worker BMHs
   setup-caas/                   # Register worker profiles, DiskImage, and catalog
@@ -36,11 +34,10 @@ vendor/                         # Vendored Ansible collections
 
 ```
 make deploy                 # Full pipeline: deploy-infra + deploy-ocp + deploy-osac (fresh Helm install)
-make deploy-fast            # Snapshot pipeline: same steps with OSAC_DEPLOY_MODE=snapshot
 make setup-infra            # Install prerequisites, cache images + snapshot flavor
 make deploy-infra           # Deploy netris-lab
 make deploy-ocp             # Configure Netris networking + restore OCP SNO from snapshot
-make deploy-osac            # Deploy OSAC (fresh Helm install or snapshot refresh based on OSAC_DEPLOY_MODE)
+make deploy-osac            # Deploy OSAC (fresh Helm install)
 make connectivity           # Re-run lab connectivity (VPN, BGP, softgate agents)
 make setup-caas             # Prepare BMaaS workers and register CaaS prerequisites
 make deploy-caas            # CaaS: create cluster
@@ -58,26 +55,27 @@ make destroy-bmaas          # Teardown BMaaS (BMHs, sushy-tools, BMC network)
 make setup-bmc              # BMC network + sushy-tools only (subset of setup-bmaas)
 make destroy-setup          # Revert setup-infra (caches, bridges, tools)
 make force-destroy-maas     # Force-clean the MaaS order, worker BMHs/VMs, and Netris orphans
-make redeploy-fresh         # destroy-full + full BM pipeline (SUITE / OSAC_DEPLOY_MODE)
+make redeploy-fresh         # destroy-full + full BM pipeline (DEPLOY_SUITE)
 make vendor-update          # Refresh vendored Ansible collections
 make gather-infra           # Gather diagnostic info from the cluster
 # Override variables: make <target> EXTRA_VARS="key=value"
 # Image overrides: make deploy-osac EXTRA_VARS="fulfillment_service_image=quay.io/..."
-# Suite / mode: make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot
+# Deploy suite: make redeploy-fresh DEPLOY_SUITE=maas (see targets.md)
 ```
 
 ## Workflow Order
 
-**Full deploy (fresh):** deploy (deploy-infra → deploy-ocp → deploy-osac)
+**Full deploy:** deploy (deploy-infra → deploy-ocp → deploy-osac). OSAC is always a fresh Helm install; only the OCP SNO cluster is restored from a snapshot.
 
-**Snapshot deploy (fast):** deploy-fast (deploy-infra → deploy-ocp → deploy-osac with OSAC_DEPLOY_MODE=snapshot)
+**CaaS:** deploy → setup-caas → deploy-caas
 
-**CaaS:** deploy or deploy-fast → setup-caas → deploy-caas
+**MaaS:** deploy → setup-maas → deploy-maas
+(or `make redeploy-fresh DEPLOY_SUITE=maas`)
 
-**MaaS:** deploy or deploy-fast → setup-maas → deploy-maas
-(or `make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot`)
+**VMaaS:** `make e2e INFRA=netris DEPLOY_SUITE=vmaas EXTRA_VARS="$IMG"`. prep-osac writes `values/vmaas-ci/netris-runtime.yaml`; `values/vmaas-ci/netris.yaml` selects the managers; the installer chart renders the registrations and the NetworkClass. See README "VMaaS with the Netris Fabric Manager". Select VMaaS tests with `TEST_SUITE=vmaas`.
 
-**VMaaS:** not yet implemented. BMaaS setup is implemented in `infra/netris/`.
+**Stretched networking:** deploy with `DEPLOY_SUITE=full`, run `setup-full`, and select
+only the shared-subnet tests with `TEST_SUITE=stretched`.
 
 ## Ansible Configuration
 
@@ -95,8 +93,9 @@ All variables in `inventory/group_vars/all.yml`. Key sections:
 - **Netris networking**: `ocp_vpc_name`, `ocp_subnet_cidr`, SNAT/DNAT IPs
 - **OCP install**: `ocp_version`, `ocp_cluster_name`, `ocp_base_domain`
 - **OSAC**: `osac_repo/branch`, `osac_namespace`, `osac_values_file`
+- **Netris networking contract**: `netris_k8s_manager_suites`, `netris_extra_excluded_cidrs`
 - **Component images**: `osac_operator_image`, `fulfillment_service_image` (empty = defaults)
-- **Snapshot**: `snapshot_flavor_image`, `snapshot_flavor_dir`, `snapshot_recert_image`, `snapshot_osac_namespace`, `snapshot_osac_values_file`
+- **Snapshot**: `snapshot_flavor_image`, `snapshot_flavor_dir`, `snapshot_recert_image` (OCP SNO restore only)
 - **CaaS / MaaS**: BMaaS-backed workers via `caas_worker_vm_patterns`, `caas_baremetal_instance_type`, `caas_worker_count`, and `caas_cluster_name`; VM sizing uses `caas_worker_vcpu` / `caas_worker_memory_mb`; MaaS defaults to three identical 10 vCPU / 20 GiB g5 hosts with initial cluster size two
 
 ## External Dependencies

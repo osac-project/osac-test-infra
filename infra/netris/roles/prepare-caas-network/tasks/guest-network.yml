@@ -5,7 +5,7 @@
     kubeconfig: /root/.kube/config
     api_version: osac.openshift.io/v1alpha1
     kind: ClusterOrder
-    namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    namespace: "{{ osac_namespace }}"
     label_selectors:
       - "osac.openshift.io/clusterorder-uuid={{ caas_cluster_id }}"
   register: _caas_network_order

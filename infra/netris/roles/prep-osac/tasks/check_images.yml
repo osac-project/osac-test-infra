@@ -1,0 +1,24 @@
+---
+- name: Require branch-built OSAC images for the networking contract suites
+  when:
+    - deploy_suite | default('') in netris_k8s_manager_suites
+  ansible.builtin.assert:
+    that:
+      - item.value | default('') | length > 0
+      - item.value is match('^[^@]+:[^/:@]+$')
+      - item.value is not match('^.+:(latest|main)$')
+    fail_msg: >-
+      DEPLOY_SUITE={{ deploy_suite | default('') }} with a fresh install needs {{ item.key }}
+      set to an image built from the PR branch
+      (<registry>/<image>:<tag>, for example on-pr-<sha>; use a tag, not a digest, and not :latest or :main).
+      The profile defaults are main images without the networking contract, and
+      the AAP bootstrap image carries the job templates AAP will use. Set
+      fulfillment_service_image, osac_operator_image and osac_aap_image, for
+      example EXTRA_VARS="fulfillment_service_image=<registry>/fulfillment-service:<tag> ...".
+      Current {{ item.key }}: '{{ item.value | default('') }}'.
+  loop:
+    - {key: fulfillment_service_image, value: "{{ fulfillment_service_image | default('') }}"}
+    - {key: osac_operator_image, value: "{{ osac_operator_image | default('') }}"}
+    - {key: osac_aap_image, value: "{{ osac_aap_image | default('') }}"}
+  loop_control:
+    label: "{{ item.key }}"

@@ -80,11 +80,16 @@
       ocp_server_ports disagrees with the verified North-South connection
       (SNO MAC {{ ocp_uplink_mac }} -> {{ ocp_server_port }}). Remove the override.
 
-# Point the Default DHCP option set at the lab's configurable DNS server. This
-# option set is what every V-Net DHCP hands out (the OCP mgmt-cluster V-Net and
-# the BMaaS provisioning V-Net included); Netris ships it with public resolvers
-# (1.1.1.1/8.8.8.8), which are unreachable on labs that only allow an internal
-# resolver — leaving DHCP clients (e.g. the metal3 IPA) unable to resolve quay.io.
+# Point the Default DHCP option set at the lab's configurable DNS server
+# (dns_server, default 8.8.8.8). This is the lab's copy of the provider install
+# step that sets the installation-level resolver for bare metal: OSAC has no
+# per-resource DNS, and bare-metal instances get their resolver from this
+# option set. It is what every V-Net DHCP hands out (the OCP mgmt-cluster V-Net
+# and the BMaaS provisioning V-Net included); Netris ships it with public
+# resolvers (1.1.1.1/8.8.8.8), which are unreachable on labs that only allow an
+# internal resolver, leaving DHCP clients (e.g. the metal3 IPA) unable to
+# resolve quay.io. VMs on the primary UDN get the cluster DNS from OVN-K DHCP
+# and do not use it. deploy-ocp runs this role for every deployment suite.
 - name: Get DHCP option sets
   no_log: true
   ansible.builtin.uri:
@@ -102,6 +107,15 @@
       {{ (_dhcp_option_sets.json.data | default([]))
          | selectattr('isDefault', 'equalto', true) | list | first | default({}) }}
 
+- name: Require the default DHCP option set
+  ansible.builtin.assert:
+    that:
+      - _default_dhcp_option_set.id is defined
+    fail_msg: >-
+      Netris has no default DHCP option set (GET /api/v2/dhcp-option-set returned
+      none with isDefault=true). Bare metal gets its resolver from it, so the
+      lab cannot continue without it.
+
 - name: Set lab DNS server on the default DHCP option set
   no_log: true
   ansible.builtin.uri:
@@ -116,7 +130,6 @@
       dnsServers: ["{{ dns_server }}"]
     status_code: [200]
     validate_certs: "{{ netris_validate_certs | default(false) }}"
-  when: _default_dhcp_option_set.id is defined
 
 - name: Create VPC for OCP
   ansible.builtin.include_role:

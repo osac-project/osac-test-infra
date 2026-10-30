@@ -31,7 +31,7 @@
     executable: /bin/bash
   environment:
     KUBECONFIG: /root/.kube/config
-    OSAC_NAMESPACE: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    OSAC_NAMESPACE: "{{ osac_namespace }}"
     OSAC_JWT_USERNAME: tenant1_admin
     OSAC_NETWORK_CLASS_K8S_ONLY: ""
   no_log: true

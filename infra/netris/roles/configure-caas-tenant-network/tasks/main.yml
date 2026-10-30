@@ -77,7 +77,7 @@
     kubeconfig: /root/.kube/config
     api_version: osac.openshift.io/v1alpha1
     kind: Subnet
-    namespace: "{{ snapshot_osac_namespace | default(osac_namespace) }}"
+    namespace: "{{ osac_namespace }}"
     label_selectors:
       - "osac.openshift.io/subnet-uuid={{ _caas_tenant_subnet_items[0].id }}"
   register: _caas_subnet_cr
@@ -132,15 +132,22 @@
   vars:
     vpc_state: read
 
+# The Netris Fabric Manager names its objects after the OSAC resource ids:
+# osac-vn-<VirtualNetwork id> for the VPC and osac-sn-<Subnet id> for the V-Net.
+- name: Set the Netris object names of the tenant network
+  ansible.builtin.set_fact:
+    _caas_netris_vpc_name: "osac-vn-{{ _caas_subnet_cr.resources[0].spec.virtualNetwork }}"
+    _caas_netris_vnet_name: "osac-sn-{{ _caas_tenant_subnet_items[0].id }}"
+
 - name: Require the tenant VPC in Netris
   ansible.builtin.assert:
     that:
-      - _caas_vn_cr.resources[0].metadata.name in netris_vpc_by_name
-    fail_msg: "Netris has no VPC matching the tenant VirtualNetwork CR."
+      - _caas_netris_vpc_name in netris_vpc_by_name
+    fail_msg: "Netris has no VPC named {{ _caas_netris_vpc_name }} for the tenant VirtualNetwork."
 
 - name: Set the CaaS ingress VPC
   ansible.builtin.set_fact:
-    _caas_ingress_vpc: "{{ netris_vpc_by_name[_caas_vn_cr.resources[0].metadata.name] }}"
+    _caas_ingress_vpc: "{{ netris_vpc_by_name[_caas_netris_vpc_name] }}"
 
 - name: Read tenant V-Net configuration
   ansible.builtin.uri:
@@ -156,7 +163,7 @@
   ansible.builtin.set_fact:
     _caas_tenant_vnets: >-
       {{ _caas_vnets.json.data
-         | selectattr('name', 'equalto', _caas_subnet_cr.resources[0].metadata.name)
+         | selectattr('name', 'equalto', _caas_netris_vnet_name)
          | selectattr('vpc.id', 'equalto', _caas_ingress_vpc.id) | list }}
 
 - name: Require exactly one tenant V-Net
@@ -180,7 +187,7 @@
 - name: Require the tenant V-Net IPv4 gateway
   ansible.builtin.assert:
     that:
-      - _caas_vnet_detail.json.data.name == _caas_subnet_cr.resources[0].metadata.name
+      - _caas_vnet_detail.json.data.name == _caas_netris_vnet_name
       - _caas_vnet_detail.json.data.vpc.id == _caas_ingress_vpc.id
       - _caas_vnet_detail.json.data.gateways | selectattr('prefix', 'equalto', _caas_gateway_prefix) | list | length == 1
     fail_msg: "Expected the tenant V-Net with gateway {{ _caas_gateway_prefix }}."

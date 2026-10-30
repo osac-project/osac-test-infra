@@ -1,1 +1,2 @@
-SUPPORTED_SUITES="caas caas_networking maas maas_networking bmaas bmaas_networking vmaas vmaas_networking stretched_networking full"
+DEFAULT_DEPLOY_SUITE="caas"
+SUPPORTED_DEPLOY_SUITES="caas maas bmaas vmaas full"

@@ -6,7 +6,7 @@
     - name: Load Netris fabric values for EVPN peer derivation
       ansible.builtin.include_vars:
         file: "{{ netris_lab_dir }}/group_vars/all.yml"
-      when: suite | default('') in ['vmaas', 'vmaas_networking', 'stretched_networking', 'full']
+      when: deploy_suite | default('') in netris_k8s_manager_suites
   roles:
     - configure-netris
     - configure-dns
@@ -19,4 +19,4 @@
         ocp_evpn_netris_leaf_asn_start: "{{ ns_fabric.asn_start }}"
         ocp_evpn_netris_leaf_count: "{{ ns_fabric.leaf_count }}"
         ocp_evpn_netris_loopback_cidr: "{{ ns_fabric.lo_subnet }}"
-      when: suite | default('') in ['vmaas', 'vmaas_networking', 'stretched_networking', 'full']
+      when: deploy_suite | default('') in netris_k8s_manager_suites

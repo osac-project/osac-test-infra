@@ -579,12 +579,12 @@
 
 - name: Check whether the selected kubeconfig parent directory exists
   ansible.builtin.stat:
-    path: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') | dirname }}"
+    path: "{{ kubeconfig_path | default('/root/.kube/config') | dirname }}"
   register: _ocp_kubeconfig_parent
 
 - name: Create the selected kubeconfig parent directory when missing
   ansible.builtin.file:
-    path: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') | dirname }}"
+    path: "{{ kubeconfig_path | default('/root/.kube/config') | dirname }}"
     state: directory
     mode: "0700"
   when: not _ocp_kubeconfig_parent.stat.exists
@@ -604,8 +604,25 @@
 - name: Copy kubeconfig to the selected location
   ansible.builtin.copy:
     content: "{{ _kubeconfig_content.stdout }}"
-    dest: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    dest: "{{ kubeconfig_path | default('/root/.kube/config') }}"
     mode: "0600"
+
+# Many roles and playbooks read the default path directly, so keep it in step
+# when KUBECONFIG selects another one.
+- name: Keep the default kubeconfig path in step
+  when: (kubeconfig_path | default('/root/.kube/config')) != '/root/.kube/config'
+  block:
+    - name: Ensure the default kubeconfig directory exists
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: "0700"
+
+    - name: Copy kubeconfig to the default location
+      ansible.builtin.copy:
+        content: "{{ _kubeconfig_content.stdout }}"
+        dest: /root/.kube/config
+        mode: "0600"
 
 # --- Wait for cluster ready ---
 
@@ -614,7 +631,7 @@
     cmd: >-
       oc get nodes --no-headers 2>/dev/null | grep -q ' Ready'
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _node_ready
   until: _node_ready.rc == 0
   retries: 60
@@ -638,7 +655,7 @@
       print(f'All {len(cos)} ClusterOperators healthy')
       "
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _co_health
   until: _co_health.rc == 0
   retries: 40
@@ -657,7 +674,7 @@
   ansible.builtin.command:
     cmd: oc get namespace multicluster-engine
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _mce_namespace_check
   until: _mce_namespace_check.rc == 0 or 'NotFound' in (_mce_namespace_check.stderr | default(''))
   retries: 90
@@ -686,7 +703,7 @@
           print('OK')
           "
       environment:
-        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
       register: _cpam_crash_check
       until: _cpam_crash_check.stdout | default('') | trim in ['CRASHING', 'OK']
       retries: 9
@@ -701,13 +718,13 @@
           ansible.builtin.command:
             cmd: oc delete secret cluster-proxy-signer -n multicluster-engine
           environment:
-            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+            KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
 
         - name: Restart cluster-proxy-addon-manager deployment
           ansible.builtin.command:
             cmd: oc rollout restart deployment/cluster-proxy-addon-manager -n multicluster-engine
           environment:
-            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+            KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
 
         # Rollout can stall on a stale watch connection at "1 old replicas
         # pending termination" -- retry re-issues a fresh `oc rollout
@@ -716,7 +733,7 @@
           ansible.builtin.command:
             cmd: oc rollout status deployment/cluster-proxy-addon-manager -n multicluster-engine --timeout=300s
           environment:
-            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+            KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
           register: _cpam_rollout
           until: _cpam_rollout.rc == 0
           retries: 2
@@ -732,7 +749,7 @@
               oc wait --for=jsonpath='{.status.phase}'=Available
               multiclusterengine/multiclusterengine --timeout=120s
           environment:
-            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+            KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
           register: _mce_available
           until: _mce_available.rc == 0
           retries: 10
@@ -747,7 +764,7 @@
   ansible.builtin.command:
     cmd: oc get namespace cert-manager
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _certmgr_namespace_check
   changed_when: false
   failed_when: false
@@ -769,7 +786,7 @@
           print('OK')
           "
       environment:
-        KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
       register: _certmgr_webhook_check
       changed_when: false
       failed_when: false
@@ -781,19 +798,19 @@
           ansible.builtin.command:
             cmd: oc delete secret cert-manager-webhook-ca -n cert-manager
           environment:
-            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+            KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
 
         - name: Restart cert-manager-webhook deployment
           ansible.builtin.command:
             cmd: oc rollout restart deployment/cert-manager-webhook -n cert-manager
           environment:
-            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+            KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
 
         - name: Wait for cert-manager-webhook rollout
           ansible.builtin.command:
             cmd: oc rollout status deployment/cert-manager-webhook -n cert-manager --timeout=300s
           environment:
-            KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+            KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
           register: _certmgr_rollout
           until: _certmgr_rollout.rc == 0
           retries: 2
@@ -813,7 +830,7 @@
       json.dump(obj, sys.stdout)
       " | oc replace -f -
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
 
 - name: Report cluster status
   ansible.builtin.debug:

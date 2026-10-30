@@ -8,8 +8,8 @@
 # Until osac main's values/full-ci matches the per-suite CI profiles, this
 # workflow deep-merges .github/overlays/full-ci-{infra,instance}.yaml into the
 # cloned installer values before the first Helm install. The instance overlay
-# also selects the shared Netris NetworkClass while preserving full-ci's
-# custom ci.steps cluster-fulfillment backend.
+# adds storage, LVMS and the echo adapter, and keeps full-ci's networking
+# (provider networking off) and its custom ci.steps cluster-fulfillment backend.
 name: E2E Full Regression
 
 on:
@@ -580,7 +580,7 @@ jobs:
           echo "--- infra.yaml (keycloak) ---"
           yq '.keycloak' values/full-ci/infra.yaml
           echo "--- instance.yaml (networking, AAP group enabled flags, lvms, metering.echoAdapter) ---"
-          yq '.global.networking | pick(["fabricManager", "k8sManager", "netris"]) | .netris |= pick(["siteId", "tenantId", "tenantName"])' values/full-ci/instance.yaml
+          yq '.global.networking | pick(["provisioningEnabled", "fabricManager", "k8sManager"])' values/full-ci/instance.yaml
           yq '.aap.instanceGroups | pick(["clusterFulfillment", "networkFulfillment", "storageFulfillment"]) | with_entries(.value = (.value.enabled == true))' values/full-ci/instance.yaml
           yq '.lvms' values/full-ci/instance.yaml
           yq '.metering.echoAdapter' values/full-ci/instance.yaml
@@ -952,7 +952,7 @@ jobs:
           KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
 
           # One install (PROFILE=full-ci) runs every cluster-tool suite. Its
-          # shared default NetworkClass is Netris-backed for NAT and BMaaS.
+          # networking is the full-ci profile's, with provider networking off.
           # VMaaS ExternalIPPool needs k8s-only MetalLB (vmaas-ci NetworkClass),
           # so keep that suite excluded from this shared install. -n 0 prevents
           # BMaaS BMH tests from racing.
@@ -1000,7 +1000,6 @@ jobs:
               tests/e2e/bmaas/ \
               --ignore=tests/e2e/vmaas/regression/external_ip \
               --ignore=tests/e2e/vmaas/test_disabled_services.py \
-              -m "not requires_netris and not requires_stretched_networking" \
               -k "${FILTER}" \
               -n 0 \
               --junitxml=/tmp/test-output/junit.xml -v

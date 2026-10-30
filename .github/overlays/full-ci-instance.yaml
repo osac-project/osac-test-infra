@@ -3,23 +3,13 @@
 #   - storageFulfillment: per-tenant StorageClasses (ClusterStorageReady)
 #   - lvms: register StorageBackend + StorageTier named "local" (VMaaS disk tests)
 #   - echoAdapter: metering tests and the workflow metering-adapter step
-#   - Netris: the shared default NetworkClass used by NAT and BMaaS tests
-# Keep full-ci's custom ci.steps cluster-fulfillment backend. The networking
-# facade derives Netris instance-group connection settings from global.networking.
-global:
-  networking:
-    fabricManager: netris
-    k8sManager: ""
-    netris:
-      controllerUrl: "https://test-ctl.netris.io"
-      credentials:
-        username: "netris"
-        # NETRIS_PASSWORD is provided by the externally managed secret.
-        externalSecret: true
-      siteId: "1"
-      tenantId: "1"
-      tenantName: Admin
-
+# Keep full-ci's custom ci.steps cluster-fulfillment backend.
+# Provider networking stays at the profile's setting (provisioningEnabled:
+# false). global.networking.netris no longer exists in the chart schema, and
+# the network-fulfillment instance group reads its Netris password only from
+# the Secret that the installer writes from values, never from the optional
+# netris-credentials Secret (that one is mounted by cluster fulfillment only).
+# Turning provisioning on here would need a password in values.
 aap:
   instanceGroups:
     storageFulfillment:

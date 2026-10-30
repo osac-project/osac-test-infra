@@ -31,7 +31,7 @@ Keep this running in a terminal. All cluster URLs below will work directly from 
 ### Copy kubeconfig to laptop
 
 ```bash
-scp root@{{ _bm_ip }}:/root/.kube/config ~/.kube/ocp-{{ lab_name }}.yaml
+scp root@{{ _bm_ip }}:{{ kubeconfig_path }} ~/.kube/ocp-{{ lab_name }}.yaml
 export KUBECONFIG=~/.kube/ocp-{{ lab_name }}.yaml
 oc whoami
 ```
