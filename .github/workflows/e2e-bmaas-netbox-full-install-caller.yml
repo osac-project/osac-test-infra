@@ -1,0 +1,70 @@
+---
+name: E2E BMaaS NetBox Full Install
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-suite:
+        description: "Suite relative to tests/e2e (bmaas/sanity, bmaas/regression, bmaas/serial, or bmaas for all). Default: bmaas/sanity."
+        required: false
+        default: "bmaas/sanity"
+      test-filter:
+        description: "pytest -k filter (GHA always also excludes TestBmaasNetworking)"
+        required: false
+        default: ""
+      test-marker:
+        description: "pytest -m marker (optional). Empty uses directory tiers from test-suite."
+        required: false
+        default: ""
+      test-ref:
+        description: "Git ref of the osac mono-repo checkout for the e2e tests (e.g. a netbox-backend branch)"
+        required: false
+        default: "main"
+      installer-ref:
+        description: "Branch/ref of the OSAC monorepo"
+        required: false
+        default: "main"
+      installer-repo:
+        description: "GitHub repo (owner/name) of the OSAC monorepo"
+        required: false
+        default: "osac-project/osac"
+      image-overrides:
+        description: "JSON mapping Helm value paths to image refs"
+        required: false
+        default: "{}"
+      osac-cli-version:
+        description: "OSAC CLI version (e.g. 0.0.73). Defaults to latest."
+        required: false
+        default: ""
+      runner-label:
+        description: "Self-hosted runner label to target (e.g. osac-ci-1 to pin to one machine for verification/debugging). Defaults to the shared fleet-wide label."
+        required: false
+        default: ""
+
+concurrency:
+  group: e2e-bmaas-netbox-full-install-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-bmaas-netbox-full-install:
+    permissions:
+      contents: read
+      # AI diagnosis is OIDC-gated (main branch only); see the identical
+      # grant and rationale in e2e-bmaas-full-install-caller.yml.
+      id-token: write
+    uses: ./.github/workflows/e2e-bmaas-netbox-full-install.yml
+    with:
+      test-suite: ${{ inputs.test-suite || 'bmaas/sanity' }}
+      # Networking is Netris-lab only. Overlay of tests/e2e/bmaas would collect
+      # it from regression/; deselect so GHA matches lifecycle+inventory.
+      test-filter: ${{ inputs.test-filter && format('({0}) and not TestBmaasNetworking', inputs.test-filter) || 'not TestBmaasNetworking' }}
+      test-marker: ${{ inputs.test-marker || '' }}
+      test-ref: ${{ inputs.test-ref || 'main' }}
+      installer-ref: ${{ inputs.installer-ref || 'main' }}
+      installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}
+      image-overrides: ${{ inputs.image-overrides || '{}' }}
+      components: "[]"
+      osac-cli-version: ${{ inputs.osac-cli-version || '' }}
+      runner-label: ${{ inputs.runner-label || 'osac-ci' }}
+      notify-on-failure: false
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}

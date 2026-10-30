@@ -99,10 +99,26 @@ fi
 # All paths are derived from CLONE_NAME so teardown works even if setup
 # failed before exporting state. When no matching resources exist, cleanup
 # is a no-op (VMaaS teardown unaffected).
-# NOTE: naming conventions here must match setup-virtual-bmh.sh.
+# NOTE: the VM name prefix lives in the raw inventory file
+# (written by manage-virtual-bmh-vms.py).
 VIRSH="virsh -c qemu:///system"
-BMH_VM_PREFIX="virtual-bmh-${CLONE_NAME}-"
-BMH_VM_NAMES=$(${VIRSH} list --all --name 2>/dev/null | grep "^${BMH_VM_PREFIX}" || true)
+BMH_INVENTORY_FILE="${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json"
+# The prefix is written before any VM exists. Fall back to the legacy
+# fixed prefix when no usable inventory was written — no VMs should
+# exist then, so the grep below matches nothing.
+BMH_VM_PREFIX="virtual-bmh-${CLONE_NAME}"
+if [[ -f "${BMH_INVENTORY_FILE}" ]]; then
+  BMH_VM_PREFIX=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f)['name_prefix'])
+" "${BMH_INVENTORY_FILE}" 2>/dev/null) || BMH_VM_PREFIX=""
+fi
+if [[ -z "${BMH_VM_PREFIX}" ]]; then
+  echo "WARNING: no usable name_prefix in ${BMH_INVENTORY_FILE}, using the legacy prefix." >&2
+  BMH_VM_PREFIX="virtual-bmh-${CLONE_NAME}"
+fi
+BMH_VM_NAMES=$(${VIRSH} list --all --name 2>/dev/null | grep "^${BMH_VM_PREFIX}-" || true)
 if [[ -n "${BMH_VM_NAMES}" ]]; then
   echo "Cleaning up virtual BMH VMs..."
   for VM_NAME in ${BMH_VM_NAMES}; do
@@ -122,6 +138,16 @@ fi
 BMH_DISK_DIR="/tmp/virtual-bmh-disks-${CLONE_NAME}"
 if [[ -d "${BMH_DISK_DIR}" ]]; then
   rm -rf "${BMH_DISK_DIR}"
+fi
+
+# Keep the inventory while VMs of the group remain — or libvirt is
+# unreachable: it is the map for cleaning up a leak by hand.
+if VM_LISTING=$(${VIRSH} list --all --name 2>/dev/null); then
+  if [[ -z "$(grep "^${BMH_VM_PREFIX}-" <<<"${VM_LISTING}" || true)" ]]; then
+    rm -f "${BMH_INVENTORY_FILE}"
+  fi
+else
+  echo "WARNING: could not list libvirt domains; keeping the virtual BMH inventory ${BMH_INVENTORY_FILE}." >&2
 fi
 
 SUSHY_CONFIG_DIR="${HOME}/sushy-${CLONE_NAME}"
@@ -179,7 +205,12 @@ fi
 # --- Verify BMaaS cleanup ---
 # Fail the job if critical resources leaked so we're notified early.
 BMH_LEAKED=false
-REMAINING_VMS=$(${VIRSH} list --all --name 2>/dev/null | grep "^${BMH_VM_PREFIX}" || true)
+if ! REMAINING_VMS=$(${VIRSH} list --all --name 2>/dev/null); then
+  echo "ERROR: could not list libvirt domains; VM cleanup could not be verified" >&2
+  BMH_LEAKED=true
+  REMAINING_VMS=""
+fi
+REMAINING_VMS=$(grep "^${BMH_VM_PREFIX}-" <<<"${REMAINING_VMS}" || true)
 if [[ -n "${REMAINING_VMS}" ]]; then
   echo "ERROR: VMs still present after cleanup:" >&2
   echo "${REMAINING_VMS}" >&2
@@ -203,6 +234,10 @@ if podman volume exists "${SUSHY_CACHE_VOLUME}"; then
 fi
 if [[ -d "${BMH_DISK_DIR}" ]]; then
   echo "ERROR: Disk directory '${BMH_DISK_DIR}' still present after cleanup" >&2
+  BMH_LEAKED=true
+fi
+if [[ -f "${BMH_INVENTORY_FILE}" && -z "${REMAINING_VMS}" ]]; then
+  echo "ERROR: Virtual BMH inventory file '${BMH_INVENTORY_FILE}' still present after cleanup" >&2
   BMH_LEAKED=true
 fi
 if [[ -d "${SUSHY_CONFIG_DIR}" ]]; then
