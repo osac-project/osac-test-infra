@@ -1,0 +1,454 @@
+[
+  {
+    "SuitePath": "ciobs-ginkgo-fixture",
+    "SuiteDescription": "CI Observability Ginkgo Fixture Suite",
+    "SuiteLabels": [],
+    "SuiteSemVerConstraints": [],
+    "SuiteComponentSemVerConstraints": {},
+    "SuiteSucceeded": false,
+    "SuiteHasProgrammaticFocus": false,
+    "SpecialSuiteFailureReasons": null,
+    "PreRunStats": {
+      "TotalSpecs": 3,
+      "SpecsThatWillRun": 3
+    },
+    "StartTime": "2026-10-28T00:36:08.385567176+02:00",
+    "EndTime": "2026-10-28T00:36:08.38623524+02:00",
+    "RunTime": 668061,
+    "SuiteConfig": {
+      "RandomSeed": 1793140568,
+      "RandomizeAllSpecs": false,
+      "FocusStrings": null,
+      "SkipStrings": null,
+      "FocusFiles": null,
+      "SkipFiles": null,
+      "LabelFilter": "",
+      "SemVerFilter": "",
+      "FailOnPending": false,
+      "FailOnEmpty": false,
+      "FailFast": false,
+      "FlakeAttempts": 3,
+      "MustPassRepeatedly": 0,
+      "DryRun": false,
+      "PollProgressAfter": 0,
+      "PollProgressInterval": 0,
+      "Timeout": 3600000000000,
+      "EmitSpecProgress": false,
+      "OutputInterceptorMode": "",
+      "SourceRoots": null,
+      "GracePeriod": 30000000000,
+      "SleepOnFailure": 0,
+      "ParallelProcess": 1,
+      "ParallelTotal": 1,
+      "ParallelHost": ""
+    },
+    "SpecReports": [
+      {
+        "ContainerHierarchyTexts": [
+          "ci observability fixture"
+        ],
+        "ContainerHierarchyLocations": [
+          {
+            "FileName": "suite_test.go",
+            "LineNumber": 15
+          }
+        ],
+        "ContainerHierarchyLabels": [
+          []
+        ],
+        "ContainerHierarchySemVerConstraints": [
+          []
+        ],
+        "ContainerHierarchyComponentSemVerConstraints": [
+          {}
+        ],
+        "LeafNodeType": "It",
+        "LeafNodeLocation": {
+          "FileName": "suite_test.go",
+          "LineNumber": 16
+        },
+        "LeafNodeLabels": [],
+        "LeafNodeSemVerConstraints": [],
+        "LeafNodeComponentSemVerConstraints": {},
+        "LeafNodeText": "passes on purpose",
+        "SpecPriority": 0,
+        "IsSerial": false,
+        "IsInOrderedContainer": false,
+        "State": "passed",
+        "StartTime": "2026-10-28T00:36:08.385714803+02:00",
+        "EndTime": "2026-10-28T00:36:08.385780847+02:00",
+        "RunTime": 66046,
+        "ParallelProcess": 1,
+        "RunningInParallel": false,
+        "NumAttempts": 1,
+        "MaxFlakeAttempts": 3,
+        "MaxMustPassRepeatedly": 0,
+        "SpecEvents": [
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 16
+            },
+            "TimelineLocation": {
+              "Order": 1,
+              "Time": "2026-10-28T00:36:08.385729497+02:00"
+            },
+            "Message": "passes on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 16
+            },
+            "TimelineLocation": {
+              "Order": 3,
+              "Time": "2026-10-28T00:36:08.385772199+02:00"
+            },
+            "Message": "passes on purpose",
+            "Duration": 42699,
+            "NodeType": "It"
+          }
+        ]
+      },
+      {
+        "ContainerHierarchyTexts": [
+          "ci observability fixture"
+        ],
+        "ContainerHierarchyLocations": [
+          {
+            "FileName": "suite_test.go",
+            "LineNumber": 15
+          }
+        ],
+        "ContainerHierarchyLabels": [
+          []
+        ],
+        "ContainerHierarchySemVerConstraints": [
+          []
+        ],
+        "ContainerHierarchyComponentSemVerConstraints": [
+          {}
+        ],
+        "LeafNodeType": "It",
+        "LeafNodeLocation": {
+          "FileName": "suite_test.go",
+          "LineNumber": 20
+        },
+        "LeafNodeLabels": [],
+        "LeafNodeSemVerConstraints": [],
+        "LeafNodeComponentSemVerConstraints": {},
+        "LeafNodeText": "fails on purpose",
+        "SpecPriority": 0,
+        "IsSerial": false,
+        "IsInOrderedContainer": false,
+        "State": "failed",
+        "StartTime": "2026-10-28T00:36:08.385791624+02:00",
+        "EndTime": "2026-10-28T00:36:08.386060026+02:00",
+        "RunTime": 268406,
+        "ParallelProcess": 1,
+        "RunningInParallel": false,
+        "Failure": {
+          "Message": "Expected\n    <int>: 2\nto equal\n    <int>: 3",
+          "Location": {
+            "FileName": "suite_test.go",
+            "LineNumber": 21,
+            "FullStackTrace": "example.com/ciobs-ginkgo-fixture_test.init.func1.2()\n\tsuite_test.go:21 +0x74"
+          },
+          "TimelineLocation": {
+            "Order": 13,
+            "Time": "2026-10-28T00:36:08.386057422+02:00"
+          },
+          "FailureNodeContext": "leaf-node",
+          "FailureNodeType": "It",
+          "FailureNodeLocation": {
+            "FileName": "suite_test.go",
+            "LineNumber": 20
+          },
+          "ProgressReport": {
+            "LeafNodeLocation": {},
+            "SpecStartTime": "0001-01-01T00:00:00Z",
+            "CurrentNodeLocation": {},
+            "CurrentNodeStartTime": "0001-01-01T00:00:00Z",
+            "CurrentStepLocation": {},
+            "CurrentStepStartTime": "0001-01-01T00:00:00Z",
+            "TimelineLocation": {
+              "Time": "0001-01-01T00:00:00Z"
+            }
+          }
+        },
+        "NumAttempts": 3,
+        "MaxFlakeAttempts": 3,
+        "MaxMustPassRepeatedly": 0,
+        "AdditionalFailures": [
+          {
+            "State": "failed",
+            "Failure": {
+              "Message": "Failure recorded during attempt 1:\nExpected\n    <int>: 2\nto equal\n    <int>: 3",
+              "Location": {
+                "FileName": "suite_test.go",
+                "LineNumber": 21,
+                "FullStackTrace": "example.com/ciobs-ginkgo-fixture_test.init.func1.2()\n\tsuite_test.go:21 +0x74"
+              },
+              "TimelineLocation": {
+                "Order": 5,
+                "Time": "2026-10-28T00:36:08.385907628+02:00"
+              },
+              "FailureNodeContext": "leaf-node",
+              "FailureNodeType": "It",
+              "FailureNodeLocation": {
+                "FileName": "suite_test.go",
+                "LineNumber": 20
+              },
+              "ProgressReport": {
+                "LeafNodeLocation": {},
+                "SpecStartTime": "0001-01-01T00:00:00Z",
+                "CurrentNodeLocation": {},
+                "CurrentNodeStartTime": "0001-01-01T00:00:00Z",
+                "CurrentStepLocation": {},
+                "CurrentStepStartTime": "0001-01-01T00:00:00Z",
+                "TimelineLocation": {
+                  "Time": "0001-01-01T00:00:00Z"
+                }
+              }
+            }
+          },
+          {
+            "State": "failed",
+            "Failure": {
+              "Message": "Failure recorded during attempt 2:\nExpected\n    <int>: 2\nto equal\n    <int>: 3",
+              "Location": {
+                "FileName": "suite_test.go",
+                "LineNumber": 21,
+                "FullStackTrace": "example.com/ciobs-ginkgo-fixture_test.init.func1.2()\n\tsuite_test.go:21 +0x74"
+              },
+              "TimelineLocation": {
+                "Order": 9,
+                "Time": "2026-10-28T00:36:08.385980497+02:00"
+              },
+              "FailureNodeContext": "leaf-node",
+              "FailureNodeType": "It",
+              "FailureNodeLocation": {
+                "FileName": "suite_test.go",
+                "LineNumber": 20
+              },
+              "ProgressReport": {
+                "LeafNodeLocation": {},
+                "SpecStartTime": "0001-01-01T00:00:00Z",
+                "CurrentNodeLocation": {},
+                "CurrentNodeStartTime": "0001-01-01T00:00:00Z",
+                "CurrentStepLocation": {},
+                "CurrentStepStartTime": "0001-01-01T00:00:00Z",
+                "TimelineLocation": {
+                  "Time": "0001-01-01T00:00:00Z"
+                }
+              }
+            }
+          }
+        ],
+        "SpecEvents": [
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 4,
+              "Time": "2026-10-28T00:36:08.385792397+02:00"
+            },
+            "Message": "fails on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 6,
+              "Time": "2026-10-28T00:36:08.385910477+02:00"
+            },
+            "Message": "fails on purpose",
+            "Duration": 118079,
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Retry",
+            "CodeLocation": {},
+            "TimelineLocation": {
+              "Order": 7,
+              "Time": "2026-10-28T00:36:08.385914446+02:00"
+            },
+            "Attempt": 1
+          },
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 8,
+              "Time": "2026-10-28T00:36:08.385916234+02:00"
+            },
+            "Message": "fails on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 10,
+              "Time": "2026-10-28T00:36:08.385982482+02:00"
+            },
+            "Message": "fails on purpose",
+            "Duration": 66247,
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Retry",
+            "CodeLocation": {},
+            "TimelineLocation": {
+              "Order": 11,
+              "Time": "2026-10-28T00:36:08.385983879+02:00"
+            },
+            "Attempt": 2
+          },
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 12,
+              "Time": "2026-10-28T00:36:08.385987301+02:00"
+            },
+            "Message": "fails on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 14,
+              "Time": "2026-10-28T00:36:08.386059359+02:00"
+            },
+            "Message": "fails on purpose",
+            "Duration": 72057,
+            "NodeType": "It"
+          }
+        ]
+      },
+      {
+        "ContainerHierarchyTexts": [
+          "ci observability fixture"
+        ],
+        "ContainerHierarchyLocations": [
+          {
+            "FileName": "suite_test.go",
+            "LineNumber": 15
+          }
+        ],
+        "ContainerHierarchyLabels": [
+          []
+        ],
+        "ContainerHierarchySemVerConstraints": [
+          []
+        ],
+        "ContainerHierarchyComponentSemVerConstraints": [
+          {}
+        ],
+        "LeafNodeType": "It",
+        "LeafNodeLocation": {
+          "FileName": "suite_test.go",
+          "LineNumber": 24
+        },
+        "LeafNodeLabels": [],
+        "LeafNodeSemVerConstraints": [],
+        "LeafNodeComponentSemVerConstraints": {},
+        "LeafNodeText": "skips on purpose",
+        "SpecPriority": 0,
+        "IsSerial": false,
+        "IsInOrderedContainer": false,
+        "State": "skipped",
+        "StartTime": "2026-10-28T00:36:08.38616581+02:00",
+        "EndTime": "2026-10-28T00:36:08.386230989+02:00",
+        "RunTime": 65178,
+        "ParallelProcess": 1,
+        "RunningInParallel": false,
+        "Failure": {
+          "Message": "skipped on purpose",
+          "Location": {
+            "FileName": "suite_test.go",
+            "LineNumber": 25,
+            "FullStackTrace": "example.com/ciobs-ginkgo-fixture_test.init.func1.3()\n\tsuite_test.go:25 +0x26"
+          },
+          "TimelineLocation": {
+            "Order": 16,
+            "Time": "2026-10-28T00:36:08.386227835+02:00"
+          },
+          "FailureNodeContext": "leaf-node",
+          "FailureNodeType": "It",
+          "FailureNodeLocation": {
+            "FileName": "suite_test.go",
+            "LineNumber": 24
+          },
+          "ProgressReport": {
+            "LeafNodeLocation": {},
+            "SpecStartTime": "0001-01-01T00:00:00Z",
+            "CurrentNodeLocation": {},
+            "CurrentNodeStartTime": "0001-01-01T00:00:00Z",
+            "CurrentStepLocation": {},
+            "CurrentStepStartTime": "0001-01-01T00:00:00Z",
+            "TimelineLocation": {
+              "Time": "0001-01-01T00:00:00Z"
+            }
+          }
+        },
+        "NumAttempts": 1,
+        "MaxFlakeAttempts": 3,
+        "MaxMustPassRepeatedly": 0,
+        "SpecEvents": [
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 24
+            },
+            "TimelineLocation": {
+              "Order": 15,
+              "Time": "2026-10-28T00:36:08.386166559+02:00"
+            },
+            "Message": "skips on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 24
+            },
+            "TimelineLocation": {
+              "Order": 17,
+              "Time": "2026-10-28T00:36:08.386230098+02:00"
+            },
+            "Message": "skips on purpose",
+            "Duration": 63539,
+            "NodeType": "It"
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,71 @@
+{
+ "numTotalTestSuites": 1,
+ "numPassedTestSuites": 0,
+ "numFailedTestSuites": 1,
+ "numPendingTestSuites": 0,
+ "numTotalTests": 3,
+ "numPassedTests": 1,
+ "numFailedTests": 1,
+ "numPendingTests": 1,
+ "numTodoTests": 0,
+ "snapshot": {
+  "added": 0,
+  "failure": false,
+  "filesAdded": 0,
+  "filesRemoved": 0,
+  "filesRemovedList": [],
+  "filesUnmatched": 0,
+  "filesUpdated": 0,
+  "matched": 0,
+  "total": 0,
+  "unchecked": 0,
+  "uncheckedKeysByFile": [],
+  "unmatched": 0,
+  "updated": 0,
+  "didUpdate": false
+ },
+ "startTime": 1793204227387,
+ "success": false,
+ "testResults": [
+  {
+   "assertionResults": [
+    {
+     "ancestorTitles": [],
+     "fullName": "passes on purpose",
+     "status": "passed",
+     "title": "passes on purpose",
+     "duration": 1.0793049999999909,
+     "failureMessages": [],
+     "meta": {},
+     "tags": []
+    },
+    {
+     "ancestorTitles": [],
+     "fullName": "fails on purpose",
+     "status": "failed",
+     "title": "fails on purpose",
+     "duration": 3.2614439999999973,
+     "failureMessages": [
+      "sanitized failure message 2"
+     ],
+     "meta": {},
+     "tags": []
+    },
+    {
+     "ancestorTitles": [],
+     "fullName": "skips on purpose",
+     "status": "skipped",
+     "title": "skips on purpose",
+     "failureMessages": [],
+     "meta": {},
+     "tags": []
+    }
+   ],
+   "startTime": 1793204227499,
+   "endTime": 1793204227503.2615,
+   "status": "failed",
+   "message": "",
+   "name": "sanitized/vitest/suite.test.js"
+  }
+ ]
+}

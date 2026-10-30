@@ -1,0 +1,8 @@
+# Runtime dependencies of the CI observability ledger, ingestion, and read API.
+# The monitoring deployment installs these into the service image; the
+# tests run with the shared monitoring test tools instead.
+psycopg[binary]==3.3.6
+# Contract validation (monitoring/ci_observability/contracts) is imported
+# by the ingest path (bundle_reader), so it is a runtime dependency here
+# too, pinned to the same version the test tools use.
+jsonschema==4.23.0

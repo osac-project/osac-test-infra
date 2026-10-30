@@ -1,0 +1,103 @@
+{
+  "schema": "osac.ci-observability.bundle-manifest",
+  "schema_version": 1,
+  "created_at": "2026-10-28T00:40:15.000Z",
+  "producer": {
+    "name": "osac-ci-observability-native-adapter",
+    "version": "0.2.0"
+  },
+  "execution": {
+    "execution_id": "6e51d8f7-2b90-4c3d-8f1e-807b0c3d2e45",
+    "repository_id": 812345678,
+    "repository": "osac-project/osac",
+    "workflow": {
+      "path": ".github/workflows/tests.yml",
+      "revision": "a31fea65edcf9ff0f6a0012e7150f6150bde4c58"
+    },
+    "run_id": 1122334600,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "job": {
+      "logical_job_key": "tests.yml#fulfillment-unit",
+      "github_job_id": 4588112233,
+      "job_name": "fulfillment-unit"
+    },
+    "cohort": "pull-request"
+  },
+  "suite": {
+    "framework": "ginkgo",
+    "tier": "unit",
+    "component": "fulfillment-service",
+    "variant": "unit-ginkgo",
+    "selection": {
+      "worker_count": 0
+    }
+  },
+  "environment": {
+    "sources": [
+      {
+        "role": "tested",
+        "repository": "osac-project/osac",
+        "revision": "a31fea65edcf9ff0f6a0012e7150f6150bde4c58"
+      },
+      {
+        "role": "workflow",
+        "repository": "osac-project/osac",
+        "revision": "a31fea65edcf9ff0f6a0012e7150f6150bde4c58"
+      },
+      {
+        "role": "test-suite",
+        "repository": "osac-project/osac",
+        "revision": "a31fea65edcf9ff0f6a0012e7150f6150bde4c58"
+      }
+    ]
+  },
+  "completeness": {
+    "complete": true,
+    "end_reason": "finished",
+    "dropped_records": 0,
+    "collection_errors": []
+  },
+  "redaction": {
+    "applied": true,
+    "findings": 0
+  },
+  "files": [
+    {
+      "path": "journals/controller.jsonl",
+      "kind": "journal",
+      "sha256": "1c2ec5891d74cac9e95e5cedb07220bd9f33c35c54e98739f09d4a21ff671f05",
+      "size_bytes": 990,
+      "record_count": 2,
+      "complete": true
+    },
+    {
+      "path": "journals/ginkgo-run-1.jsonl",
+      "kind": "journal",
+      "sha256": "68f50a27fa4df430e01afc5f3716caa30137393368d4aef2f45b47181d2ba25c",
+      "size_bytes": 6929,
+      "record_count": 13,
+      "complete": true
+    },
+    {
+      "path": "journals/ginkgo-run-2.jsonl",
+      "kind": "journal",
+      "sha256": "a9c9abc1b042bc15a61ca2e6f631fcf1f55b8a6ce58597bd5b51c6ced66dcbc4",
+      "size_bytes": 7670,
+      "record_count": 14,
+      "complete": true
+    },
+    {
+      "path": "native-report/ginkgo-run-1.json",
+      "kind": "native-report",
+      "sha256": "e7badfc853aedc92da52bb473e54d34fdd68b78a4c24483e3f431cf735a2cfd2",
+      "size_bytes": 11922
+    },
+    {
+      "path": "native-report/ginkgo-run-2.json",
+      "kind": "native-report",
+      "sha256": "8aa7c4aa3499ca7eb7d40f49d67b3152fad30c4ee525228abec1fbb19bea6f6d",
+      "size_bytes": 14269
+    }
+  ]
+}

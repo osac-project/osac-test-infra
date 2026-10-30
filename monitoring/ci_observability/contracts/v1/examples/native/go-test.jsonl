@@ -1,0 +1,28 @@
+{"ImportPath":"example.com/ciobs-go-fixture/brokenpkg.test","Action":"build-output","Output":"# example.com/ciobs-go-fixture/brokenpkg\n"}
+{"ImportPath":"example.com/ciobs-go-fixture/brokenpkg.test","Action":"build-output","Output":"brokenpkg/broken_test.go:6:32: missing ',' before newline in argument list\n"}
+{"ImportPath":"example.com/ciobs-go-fixture/brokenpkg.test","Action":"build-fail"}
+{"Time":"2026-10-28T00:24:29.708770292+02:00","Action":"start","Package":"example.com/ciobs-go-fixture/brokenpkg"}
+{"Time":"2026-10-28T00:24:29.70881538+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/brokenpkg","Output":"FAIL\texample.com/ciobs-go-fixture/brokenpkg [setup failed]\n"}
+{"Time":"2026-10-28T00:24:29.708822105+02:00","Action":"fail","Package":"example.com/ciobs-go-fixture/brokenpkg","Elapsed":0,"FailedBuild":"example.com/ciobs-go-fixture/brokenpkg.test"}
+{"Time":"2026-10-28T00:24:29.84803891+02:00","Action":"start","Package":"example.com/ciobs-go-fixture/passfail"}
+{"Time":"2026-10-28T00:24:29.849293088+02:00","Action":"run","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestPassAlways"}
+{"Time":"2026-10-28T00:24:29.849323444+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestPassAlways","Output":"=== RUN   TestPassAlways\n"}
+{"Time":"2026-10-28T00:24:29.849329905+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestPassAlways","Output":"=== PAUSE TestPassAlways\n"}
+{"Time":"2026-10-28T00:24:29.849333768+02:00","Action":"pause","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestPassAlways"}
+{"Time":"2026-10-28T00:24:29.849340371+02:00","Action":"run","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestFailAlways"}
+{"Time":"2026-10-28T00:24:29.849344382+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestFailAlways","Output":"=== RUN   TestFailAlways\n"}
+{"Time":"2026-10-28T00:24:29.84934887+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestFailAlways","Output":"    passfail_test.go:13: this test fails on purpose\n"}
+{"Time":"2026-10-28T00:24:29.849354249+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestFailAlways","Output":"--- FAIL: TestFailAlways (0.00s)\n"}
+{"Time":"2026-10-28T00:24:29.849357664+02:00","Action":"fail","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestFailAlways","Elapsed":0}
+{"Time":"2026-10-28T00:24:29.849361246+02:00","Action":"run","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestSkipAlways"}
+{"Time":"2026-10-28T00:24:29.849363411+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestSkipAlways","Output":"=== RUN   TestSkipAlways\n"}
+{"Time":"2026-10-28T00:24:29.849365716+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestSkipAlways","Output":"    passfail_test.go:17: this test skips on purpose\n"}
+{"Time":"2026-10-28T00:24:29.849368454+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestSkipAlways","Output":"--- SKIP: TestSkipAlways (0.00s)\n"}
+{"Time":"2026-10-28T00:24:29.849370827+02:00","Action":"skip","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestSkipAlways","Elapsed":0}
+{"Time":"2026-10-28T00:24:29.849373139+02:00","Action":"cont","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestPassAlways"}
+{"Time":"2026-10-28T00:24:29.849375111+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestPassAlways","Output":"=== CONT  TestPassAlways\n"}
+{"Time":"2026-10-28T00:24:29.849377665+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestPassAlways","Output":"--- PASS: TestPassAlways (0.00s)\n"}
+{"Time":"2026-10-28T00:24:29.849379908+02:00","Action":"pass","Package":"example.com/ciobs-go-fixture/passfail","Test":"TestPassAlways","Elapsed":0}
+{"Time":"2026-10-28T00:24:29.849382051+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Output":"FAIL\n"}
+{"Time":"2026-10-28T00:24:29.849526364+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/passfail","Output":"FAIL\texample.com/ciobs-go-fixture/passfail\t0.001s\n"}
+{"Time":"2026-10-28T00:24:29.84954472+02:00","Action":"fail","Package":"example.com/ciobs-go-fixture/passfail","Elapsed":0.002}

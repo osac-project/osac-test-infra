@@ -1,0 +1,86 @@
+# Loki configuration for the OSAC CI observability pilot (W05a).
+#
+# PILOT-ONLY, single-process (monolithic) Loki on local-disk filesystem
+# storage. This is not a fleet deployment: fleet rollout requires
+# configured, durable object storage for logs. See
+# monitoring/observability-services.md before expanding this stack.
+# Tempo (W05b) is out of scope here.
+#
+# Private loopback endpoints only: HTTP 127.0.0.1:3100, gRPC
+# 127.0.0.1:9097. The gRPC port is deliberately NOT Loki's 9095 default,
+# because the isolated CI Prometheus listens on 127.0.0.1:9095 in the
+# same host network (see quadlet/ci-observability-prometheus.container).
+
+# Single tenant, no org-ID header required: the only writers are the
+# local Alloy and trusted tooling on the loopback interface.
+auth_enabled: false
+
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 3100
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9097
+
+common:
+  path_prefix: /data
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+    # Advertise loopback so Loki's internal gRPC dialing targets
+    # 127.0.0.1 (matching the loopback-only gRPC listener above) instead
+    # of the host's LAN address.
+    instance_addr: 127.0.0.1
+  storage:
+    filesystem:
+      chunks_directory: /data/chunks
+      rules_directory: /data/rules
+
+# TSDB index, schema v13, structured metadata enabled: run, test, and
+# resource identifiers ride as structured metadata, never as stream
+# labels, so label cardinality stays bounded (see the CI observability
+# implementation plan, "Runtime metrics and logs").
+schema_config:
+  configs:
+    - from: "2026-01-01"
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /data/tsdb-index
+    cache_location: /data/tsdb-cache
+
+# Retention: with retention_enabled, the compactor deletes chunks older
+# than limits_config.retention_period below (14 days, per the pilot
+# retention table in the implementation plan). The deletion mode default
+# (filter-and-delete) applies.
+compactor:
+  working_directory: /data/compactor
+  retention_enabled: true
+  # Delete/retention markers live on the same local-disk store.
+  delete_request_store: filesystem
+
+frontend:
+  # Same loopback advertisement as the ring above: the frontend tells
+  # the querier where to send results, and that must match the
+  # loopback-only gRPC listener. (The yaml key is "address", even though
+  # the equivalent flag is -frontend.instance-addr.)
+  address: 127.0.0.1
+
+limits_config:
+  retention_period: 336h
+  allow_structured_metadata: true
+  # Bound ingestion and query cost on the trusted monitoring host.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  ingestion_rate_mb: 4
+  ingestion_burst_size_mb: 8
+  max_streams_per_user: 1000
+  max_global_streams_per_user: 2000
+  max_query_series: 500
+  max_query_lookback: 336h

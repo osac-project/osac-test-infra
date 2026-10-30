@@ -1,0 +1,48 @@
+# Podman Quadlet unit for the OSAC CI observability pilot's Grafana Alloy
+# (W05a). Installed by monitoring/scripts/observability-stack.sh --deploy
+# to ~/.config/containers/systemd/ci-observability-alloy.container.
+#
+# Ships ONLY redacted logs: W06's host collector writes sanitized NDJSON
+# into the private spool directory, which this unit mounts read-only.
+# There is no journald or raw-log source; see the alloy config and
+# monitoring/observability-services.md.
+#
+# Private loopback endpoint only: 127.0.0.1:12345 (host network), where
+# the CI Prometheus scrapes Alloy's own telemetry. Note that a healthy
+# Alloy does not mean log collection is working: the source is idle
+# until W06 writes spool files.
+#
+# Quadlet generates ci-observability-alloy.service from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=CI observability Alloy, redacted spool to Loki (OSAC CI Observability pilot)
+
+[Container]
+# docker.io/grafana/alloy:v1.21.2, digest verified 2026-10-27.
+Image=docker.io/grafana/alloy@sha256:89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18
+ContainerName=ci-observability-alloy
+
+# Host network with a loopback-only HTTP listener (Exec below).
+Network=host
+
+Volume=%h/.ci-observability/config/alloy-config.alloy:/etc/alloy/config.alloy:ro,Z
+# Read positions survive restarts, so entries are not re-read.
+Volume=%h/.ci-observability/data/alloy:/var/lib/alloy/data:Z
+# The redacted spool, written by W06's collector. Read-only: Alloy only
+# consumes it, and W06 owns the directory's contents.
+Volume=%h/.ci-observability/spool/redacted:/spool/redacted:ro,Z
+
+# Loopback-only HTTP server (metrics for the CI Prometheus, UI, reload).
+Exec=run --server.http.listen-addr=127.0.0.1:12345 /etc/alloy/config.alloy
+
+# Conservative resource quotas: hard memory cap bounds runaway growth.
+PodmanArgs=--memory=512m --memory-swap=512m --cpus=0.5 --pids-limit=128
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

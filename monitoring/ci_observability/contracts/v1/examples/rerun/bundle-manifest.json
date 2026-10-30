@@ -1,0 +1,73 @@
+{
+  "schema": "osac.ci-observability.bundle-manifest",
+  "schema_version": 1,
+  "created_at": "2026-10-27T09:20:03.480Z",
+  "producer": {
+    "name": "osac-ci-observability-pytest-plugin",
+    "version": "0.3.0"
+  },
+  "execution": {
+    "execution_id": "3b2ea5c4-9e6d-4f0a-9c8b-5d4e7f0a9b12",
+    "repository_id": 998877665,
+    "repository": "osac-project/osac-test-infra",
+    "workflow": {
+      "path": ".github/workflows/e2e-caas-full-install.yml",
+      "revision": "a83e38daedff09895cbc388a4798dacf6252daf7"
+    },
+    "run_id": 1122334477,
+    "run_attempt": 2,
+    "event": "pull_request",
+    "job": {
+      "logical_job_key": "e2e-caas-full-install.yml#e2e-caas",
+      "github_job_id": 4588999999,
+      "job_name": "e2e-caas"
+    },
+    "cohort": "pull-request"
+  },
+  "suite": {
+    "framework": "pytest",
+    "tier": "e2e",
+    "component": "e2e",
+    "variant": "caas-parallel",
+    "selection": {
+      "paths": [
+        "tests/e2e/caas/"
+      ],
+      "worker_count": 4
+    }
+  },
+  "environment": {
+    "sources": [
+      {
+        "role": "tested",
+        "repository": "osac-project/osac",
+        "revision": "9de4227b54c5343e54e9d868e6b225c84cd24636"
+      },
+      {
+        "role": "workflow",
+        "repository": "osac-project/osac-test-infra",
+        "revision": "a83e38daedff09895cbc388a4798dacf6252daf7"
+      }
+    ]
+  },
+  "completeness": {
+    "complete": true,
+    "end_reason": "finished",
+    "dropped_records": 0,
+    "collection_errors": []
+  },
+  "redaction": {
+    "applied": true,
+    "findings": 1
+  },
+  "files": [
+    {
+      "path": "journals/main.jsonl",
+      "kind": "journal",
+      "sha256": "643cbffa663c61cd75f8a693c49e4d80a6bf9838f0ab5ce128b7641b98fa72ca",
+      "size_bytes": 7166,
+      "record_count": 16,
+      "complete": true
+    }
+  ]
+}

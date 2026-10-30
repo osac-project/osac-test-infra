@@ -1,0 +1,81 @@
+{
+ "numTotalTestSuites": 1,
+ "numPassedTestSuites": 0,
+ "numFailedTestSuites": 1,
+ "numPendingTestSuites": 0,
+ "numTotalTests": 4,
+ "numPassedTests": 2,
+ "numFailedTests": 1,
+ "numPendingTests": 1,
+ "numTodoTests": 0,
+ "snapshot": {
+  "added": 0,
+  "failure": false,
+  "filesAdded": 0,
+  "filesRemoved": 0,
+  "filesRemovedList": [],
+  "filesUnmatched": 0,
+  "filesUpdated": 0,
+  "matched": 0,
+  "total": 0,
+  "unchecked": 0,
+  "uncheckedKeysByFile": [],
+  "unmatched": 0,
+  "updated": 0,
+  "didUpdate": false
+ },
+ "startTime": 1793204227815,
+ "success": false,
+ "testResults": [
+  {
+   "assertionResults": [
+    {
+     "ancestorTitles": [],
+     "fullName": "passes on purpose",
+     "status": "passed",
+     "title": "passes on purpose",
+     "duration": 1.291242000000011,
+     "failureMessages": [],
+     "meta": {},
+     "tags": []
+    },
+    {
+     "ancestorTitles": [],
+     "fullName": "passes on purpose",
+     "status": "passed",
+     "title": "passes on purpose",
+     "duration": 0.13601500000000044,
+     "failureMessages": [],
+     "meta": {},
+     "tags": []
+    },
+    {
+     "ancestorTitles": [],
+     "fullName": "fails on purpose",
+     "status": "failed",
+     "title": "fails on purpose",
+     "duration": 3.6929269999999974,
+     "failureMessages": [
+      "sanitized failure message 3"
+     ],
+     "meta": {},
+     "tags": []
+    },
+    {
+     "ancestorTitles": [],
+     "fullName": "skips on purpose",
+     "status": "skipped",
+     "title": "skips on purpose",
+     "failureMessages": [],
+     "meta": {},
+     "tags": []
+    }
+   ],
+   "startTime": 1793204227940,
+   "endTime": 1793204227945.6929,
+   "status": "failed",
+   "message": "",
+   "name": "sanitized/vitest-411/suite.test.ts"
+  }
+ ]
+}

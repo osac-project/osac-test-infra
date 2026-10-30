@@ -1,0 +1,57 @@
+# Podman Quadlet unit for the OSAC CI observability pilot's PostgreSQL 17
+# (W05a). Installed by monitoring/scripts/observability-stack.sh --deploy
+# to ~/.config/containers/systemd/ci-observability-postgres.container.
+#
+# OPT-IN pilot stack, separate from the fleet monitoring deployed by
+# monitoring-setup.sh: that script never installs or touches this unit.
+# Private loopback endpoint 127.0.0.1:5433, database ci_observability.
+# Tempo (W05b) is out of scope here.
+#
+# Quadlet generates ci-observability-postgres.service from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=CI observability PostgreSQL 17 (OSAC CI Observability pilot)
+
+[Container]
+# docker.io/library/postgres:17 (PostgreSQL 17.11), digest verified 2026-10-27.
+Image=docker.io/library/postgres@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+ContainerName=ci-observability-postgres
+
+# Private loopback publish only: nothing off this host can connect.
+PublishPort=127.0.0.1:5433:5432
+
+# Named volume (not a host bind): the image's postgres user (uid 999)
+# owns its data without host-uid mapping, the pattern the other local
+# ci-observability postgres containers use on rootless podman.
+Volume=ci-observability-postgres-data:/var/lib/postgresql/data
+
+# First-boot bootstrap (runs only on an empty volume): roles
+# ci_observability (ingest) and ci_observability_reader (SELECT-only),
+# schema ci_observability, reader default privileges. See the file.
+Volume=%h/.ci-observability/config/postgres-init-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro,Z
+
+# Secrets come only from this protected file (mode 600, created by
+# observability-stack.sh --init-secrets). Never from a command line.
+EnvironmentFile=%h/.ci-observability/secrets/postgres.env
+
+Environment=POSTGRES_USER=postgres
+Environment=POSTGRES_DB=ci_observability
+# SCRAM-SHA-256 for TCP (host) connections. The in-container unix socket
+# keeps the image default so `podman exec` tooling (backup/restore)
+# needs no password; the socket is not reachable off the host.
+Environment=POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+
+# Bounded server: small pool, few connections.
+Exec=postgres -c shared_buffers=128MB -c max_connections=40 -c work_mem=8MB -c maintenance_work_mem=64MB
+
+# Conservative resource quotas: hard memory cap bounds runaway growth.
+PodmanArgs=--memory=768m --memory-swap=768m --cpus=1.0 --pids-limit=160
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

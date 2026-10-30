@@ -1,0 +1,126 @@
+[
+ {
+  "StartTime": "2026-10-27T14:11:47.512119668Z",
+  "EndTime": "2026-10-27T14:11:54.401140387Z",
+  "RunTime": 6889020711,
+  "SuiteSucceeded": true,
+  "SuiteDescription": "sanitized it suite",
+  "SuitePath": "sanitized/it/suite/path",
+  "SpecialSuiteFailureReasons": [],
+  "PreRunStats": {
+   "TotalSpecs": 623,
+   "SpecsThatWillRun": 1
+  },
+  "SpecReports": [
+   {
+    "LeafNodeType": "BeforeSuite",
+    "State": "passed",
+    "NumAttempts": 0,
+    "RunTime": 5548732009,
+    "StartTime": "2026-10-27T14:11:47.512225408Z",
+    "EndTime": "2026-10-27T14:11:53.060957415Z",
+    "ContainerHierarchyTexts": [],
+    "LeafNodeText": "sanitized spec 40ad85c4d00b",
+    "LeafNodeLocation": {
+     "FileName": "sanitized/it/suite/path/sanitized_file_a6053cd322da.go",
+     "LineNumber": 57
+    }
+   },
+   {
+    "LeafNodeType": "It",
+    "State": "skipped",
+    "NumAttempts": 0,
+    "RunTime": 0,
+    "StartTime": "2026-10-27T14:11:53.062046976Z",
+    "EndTime": "0001-01-01T00:00:00Z",
+    "ContainerHierarchyTexts": [
+     "sanitized container 1e4d67386295"
+    ],
+    "LeafNodeText": "sanitized spec c00ca0fe7066",
+    "LeafNodeLocation": {
+     "FileName": "sanitized/it/suite/path/sanitized_file_a07120b8cfd6.go",
+     "LineNumber": 108
+    }
+   },
+   {
+    "LeafNodeType": "It",
+    "State": "skipped",
+    "NumAttempts": 0,
+    "RunTime": 0,
+    "StartTime": "2026-10-27T14:11:53.062067923Z",
+    "EndTime": "0001-01-01T00:00:00Z",
+    "ContainerHierarchyTexts": [
+     "sanitized container 1e4d67386295"
+    ],
+    "LeafNodeText": "sanitized spec fc8b5dfba57e",
+    "LeafNodeLocation": {
+     "FileName": "sanitized/it/suite/path/sanitized_file_a07120b8cfd6.go",
+     "LineNumber": 146
+    }
+   },
+   {
+    "LeafNodeType": "It",
+    "State": "skipped",
+    "NumAttempts": 0,
+    "RunTime": 0,
+    "StartTime": "2026-10-27T14:11:53.062074622Z",
+    "EndTime": "0001-01-01T00:00:00Z",
+    "ContainerHierarchyTexts": [
+     "sanitized container 1e4d67386295"
+    ],
+    "LeafNodeText": "sanitized spec 6cc2bb44109d",
+    "LeafNodeLocation": {
+     "FileName": "sanitized/it/suite/path/sanitized_file_a07120b8cfd6.go",
+     "LineNumber": 199
+    }
+   },
+   {
+    "LeafNodeType": "It",
+    "State": "skipped",
+    "NumAttempts": 0,
+    "RunTime": 0,
+    "StartTime": "2026-10-27T14:11:53.062085904Z",
+    "EndTime": "0001-01-01T00:00:00Z",
+    "ContainerHierarchyTexts": [
+     "sanitized container 1e4d67386295",
+     "sanitized container 9d6b533e8d36"
+    ],
+    "LeafNodeText": "sanitized spec bb357824be0a",
+    "LeafNodeLocation": {
+     "FileName": "sanitized/it/suite/path/sanitized_file_a07120b8cfd6.go",
+     "LineNumber": 347
+    }
+   },
+   {
+    "LeafNodeType": "It",
+    "State": "passed",
+    "NumAttempts": 1,
+    "RunTime": 93071514,
+    "StartTime": "2026-10-27T14:11:53.066184631Z",
+    "EndTime": "2026-10-27T14:11:53.159256144Z",
+    "ContainerHierarchyTexts": [
+     "sanitized container 845076fc0494"
+    ],
+    "LeafNodeText": "sanitized spec ece7d02033f5",
+    "LeafNodeLocation": {
+     "FileName": "sanitized/it/suite/path/sanitized_file_630705d641a4.go",
+     "LineNumber": 37
+    }
+   },
+   {
+    "LeafNodeType": "DeferCleanup (Suite)",
+    "State": "passed",
+    "NumAttempts": 0,
+    "RunTime": 1240671028,
+    "StartTime": "2026-10-27T14:11:53.160421016Z",
+    "EndTime": "2026-10-27T14:11:54.40109203Z",
+    "ContainerHierarchyTexts": [],
+    "LeafNodeText": "sanitized spec 40ad85c4d00b",
+    "LeafNodeLocation": {
+     "FileName": "sanitized/it/suite/path/sanitized_file_a6053cd322da.go",
+     "LineNumber": 92
+    }
+   }
+  ]
+ }
+]

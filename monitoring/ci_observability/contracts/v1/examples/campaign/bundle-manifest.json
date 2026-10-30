@@ -1,0 +1,85 @@
+{
+  "schema": "osac.ci-observability.bundle-manifest",
+  "schema_version": 1,
+  "created_at": "2026-10-27T12:13:45.331Z",
+  "producer": {
+    "name": "osac-ci-observability-pytest-plugin",
+    "version": "0.3.0"
+  },
+  "execution": {
+    "execution_id": "4c3fb6d5-0f7e-4a1b-8d9c-6e5f8a1b0c23",
+    "repository_id": 998877665,
+    "repository": "osac-project/osac-test-infra",
+    "workflow": {
+      "path": ".github/workflows/e2e-flake-campaign.yml",
+      "revision": "adff941fbeeb2ba245b1818be934aff6948f4e55"
+    },
+    "run_id": 1122334500,
+    "run_attempt": 1,
+    "event": "workflow_dispatch",
+    "job": {
+      "logical_job_key": "e2e-flake-campaign.yml#flake-campaign-caas",
+      "github_job_id": 4589001111,
+      "job_name": "flake-campaign-caas"
+    },
+    "cohort": "flake-campaign"
+  },
+  "suite": {
+    "framework": "pytest",
+    "tier": "e2e",
+    "component": "e2e",
+    "variant": "flake-campaign-caas",
+    "selection": {
+      "paths": [
+        "tests/e2e/caas/"
+      ],
+      "keyword": "test_cluster_lifecycle",
+      "worker_count": 0
+    },
+    "campaign": {
+      "campaign_id": "flake-20261027-caas-lifecycle",
+      "group": "caas",
+      "repetition": 1,
+      "repetitions_total": 3
+    }
+  },
+  "environment": {
+    "sources": [
+      {
+        "role": "tested",
+        "repository": "osac-project/osac",
+        "revision": "0190bcbec275469b39d996207d46b35126f3216e"
+      },
+      {
+        "role": "workflow",
+        "repository": "osac-project/osac-test-infra",
+        "revision": "adff941fbeeb2ba245b1818be934aff6948f4e55"
+      },
+      {
+        "role": "orchestration",
+        "repository": "osac-project/osac-ci",
+        "revision": "7e12b9f0e4d5c3b2a1908f7e6d5c4b3a29180f7e"
+      }
+    ]
+  },
+  "completeness": {
+    "complete": true,
+    "end_reason": "finished",
+    "dropped_records": 0,
+    "collection_errors": []
+  },
+  "redaction": {
+    "applied": true,
+    "findings": 0
+  },
+  "files": [
+    {
+      "path": "journals/main.jsonl",
+      "kind": "journal",
+      "sha256": "10ab77dbd435b472a3317562e353e0594ebcfdf4a8793dd89a3385cc5967f803",
+      "size_bytes": 10018,
+      "record_count": 22,
+      "complete": true
+    }
+  ]
+}

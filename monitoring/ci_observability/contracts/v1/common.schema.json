@@ -1,0 +1,421 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ci-observability.osac-project.org/contracts/v1/common.schema.json",
+  "title": "CI observability shared definitions (v1)",
+  "description": "Definitions shared by the v1 bundle manifest and journal record schemas. Version 1 is frozen: later changes are additive only and ship under a new schema_version.",
+  "$defs": {
+    "utc_timestamp": {
+      "type": "string",
+      "description": "Wall-clock time in UTC. Must end in Z and be a real calendar date-time; naive timestamps, non-UTC offsets, and impossible dates are rejected.",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    },
+    "git_sha": {
+      "description": "Full 40-character lowercase hex git revision, or null when the revision was never resolved (for example an early failure before checkout). Short SHAs are rejected; a dummy SHA must never stand in for unknown.",
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256_hex": {
+      "type": "string",
+      "description": "Lowercase hex SHA-256 digest.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "image_digest": {
+      "type": "string",
+      "description": "Container image digest.",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "execution_id": {
+      "type": "string",
+      "description": "Opaque unique identifier of one job execution, recommended as a UUID minted at execution start. Matrix legs and called jobs have separate execution ids. Native invocations within one job share its execution id. Trusted reconciliation stores the GitHub binding beside this identity without rewriting it.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$"
+    },
+    "short_id": {
+      "type": "string",
+      "description": "Short identifier such as a journal id, worker id, invocation id, or operation id. Globally unique within its kind when the contract says so. Filename-safe characters only.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "logical_job_key": {
+      "type": "string",
+      "description": "Stable identity of a job within a workflow, independent of run attempt and of GitHub's per-attempt numeric job ids. Recommended composition: {workflow file name}#{job key in the workflow file}, plus a matrix discriminator when needed. Never a display name.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/#=-]{0,255}$"
+    },
+    "repository": {
+      "type": "string",
+      "description": "Repository in owner/name form.",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "bundle_file_path": {
+      "type": "string",
+      "description": "Path of a file inside a bundle, relative to the manifest, in canonical form (no double dots, no double slashes, no dot segments, no backslash, no leading slash).",
+      "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
+    },
+    "workflow_path": {
+      "type": "string",
+      "description": "Workflow file path within a repository, with either .yml or .yaml extension.",
+      "pattern": "^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml$"
+    },
+    "workflow_event": {
+      "description": "GitHub event type that started the workflow run, as GitHub reports it. Unknown events are rejected here, never reinterpreted: an unrecognized trigger must fail validation rather than silently count as periodic.",
+      "enum": [
+        "check_run",
+        "check_suite",
+        "issue_comment",
+        "issues",
+        "merge_group",
+        "pull_request",
+        "pull_request_review",
+        "pull_request_target",
+        "push",
+        "release",
+        "repository_dispatch",
+        "schedule",
+        "workflow_dispatch",
+        "workflow_run"
+      ]
+    },
+    "cohort": {
+      "description": "Reporting cohort, kept separate from the raw GitHub event because one event can serve several cohorts and the plan requires them to stay distinct.",
+      "enum": ["pull-request", "merge-queue", "scheduled", "nightly", "manual", "flake-campaign"]
+    },
+    "source_role": {
+      "description": "Role a checked-out source plays in the execution. Roles stay distinct even within one repository: the same repo can be checked out at different revisions for different roles.",
+      "enum": ["tested", "workflow", "test-suite", "installer", "infrastructure", "orchestration"]
+    },
+    "framework": {
+      "description": "Test framework of a suite or invocation. mixed is only valid for a job-level declared suite whose invocations run more than one framework; every invocation record names its actual framework.",
+      "enum": ["pytest", "ginkgo", "go-test", "vitest", "ansible", "mixed"]
+    },
+    "tier": {
+      "description": "Test tier, using the documented OSAC integration-testing boundaries.",
+      "enum": ["unit", "envtest", "component-integration", "contract", "e2e"]
+    },
+    "phase": {
+      "description": "Test lifecycle phase. Setup, body (call), and cleanup (teardown) stay distinct; one phase failing must never be recorded as another.",
+      "enum": ["setup", "call", "teardown"]
+    },
+    "fixture_scope": {
+      "description": "Fixture scope, in pytest terms. Adapters for other frameworks map to the closest scope.",
+      "enum": ["session", "package", "module", "class", "function"]
+    },
+    "fixture_phase": {
+      "description": "Fixture work phase. Setup work and finalizer work are measured separately; the span between them is the fixture's lifetime, including idle time while tests consume it.",
+      "enum": ["setup", "teardown"]
+    },
+    "outcome": {
+      "description": "Canonical outcome space for tests, phases, fixtures, operations, and executions. inherited is assigned only by trusted reconciliation of GitHub data; a producer journal never claims it. interrupted and unknown preserve lost workers and missing endings.",
+      "enum": [
+        "passed",
+        "failed",
+        "error",
+        "timeout",
+        "cancelled",
+        "skipped",
+        "expected_failure",
+        "unexpected_pass",
+        "not_run",
+        "inherited",
+        "interrupted",
+        "unknown"
+      ]
+    },
+    "native_result_outcome": {
+      "description": "Outcomes a native report or finished phase can carry directly. not_run and inherited are derived by consumers, never observed, so they are not representable here.",
+      "enum": [
+        "passed",
+        "failed",
+        "error",
+        "timeout",
+        "cancelled",
+        "skipped",
+        "expected_failure",
+        "unexpected_pass",
+        "interrupted",
+        "unknown"
+      ]
+    },
+    "selection": {
+      "type": "object",
+      "description": "Effective test selection, as structured fields rather than one opaque string. Selection differences between cohorts are facts, not noise.",
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "type": "array",
+          "description": "Selected test paths.",
+          "maxItems": 32,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256}
+        },
+        "markers": {
+          "type": "string",
+          "description": "Marker expression, for example 'not requires_netris'.",
+          "maxLength": 256
+        },
+        "keyword": {
+          "type": "string",
+          "description": "Keyword expression (-k).",
+          "maxLength": 256
+        },
+        "worker_count": {
+          "description": "Effective worker count. null means unknown; 0 means serial execution with no parallel workers; a positive integer is a known worker count. Unknown is never the same as serial.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "campaign": {
+      "type": "object",
+      "description": "Flake-campaign identity: the structured campaign id, the group this run belongs to, which campaign invocation it is, and how many repetitions the run plans. repetition must not exceed repetitions_total.",
+      "additionalProperties": false,
+      "required": ["campaign_id", "group", "repetition", "repetitions_total"],
+      "properties": {
+        "campaign_id": {
+          "type": "string",
+          "description": "Structured identifier of the campaign this run belongs to.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "group": {"type": "string", "minLength": 1, "maxLength": 64},
+        "repetition": {
+          "type": "integer",
+          "description": "Invocation number of this campaign run.",
+          "minimum": 1
+        },
+        "repetitions_total": {
+          "type": "integer",
+          "description": "Planned repetitions of the target test within this run.",
+          "minimum": 1
+        }
+      }
+    },
+    "suite": {
+      "type": "object",
+      "description": "Suite variant: what ran, at which tier, in which component, under which variant name, with which effective selection. A job-level suite is the declared cohort: with mixed frameworks it uses framework 'mixed', and each invocation_started record carries the actual framework.",
+      "additionalProperties": false,
+      "required": ["framework", "tier", "component", "variant"],
+      "properties": {
+        "framework": {"$ref": "#/$defs/framework"},
+        "tier": {"$ref": "#/$defs/tier"},
+        "component": {
+          "type": "string",
+          "description": "Owning component, for example fulfillment-service or e2e.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "variant": {
+          "type": "string",
+          "description": "Variant name that separates otherwise identical suites, for example vmaas-parallel or flake-campaign-caas.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "selection": {"$ref": "#/$defs/selection"},
+        "campaign": {"$ref": "#/$defs/campaign"}
+      }
+    },
+    "job_identity": {
+      "type": "object",
+      "description": "Identity of the GitHub job this bundle belongs to. github_job_id is the numeric GitHub job database id, or null when unknown at emit time. It is never the GITHUB_JOB string. logical_job_key is the stable join across attempts.",
+      "additionalProperties": false,
+      "required": ["logical_job_key", "github_job_id"],
+      "properties": {
+        "logical_job_key": {"$ref": "#/$defs/logical_job_key"},
+        "github_job_id": {
+          "description": "Numeric GitHub job id, or null when unbound. Never a string.",
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "job_name": {
+          "type": "string",
+          "description": "Display name for humans only. Never used as an identity join.",
+          "maxLength": 256
+        }
+      }
+    },
+    "test_ref": {
+      "type": "object",
+      "description": "Explicit reference to one test attempt. invocation_id names the invocation the attempt belongs to when the reference crosses invocations; it defaults to the referencing record's own invocation. Parentage is never inferred from timestamp proximity or journal placement.",
+      "additionalProperties": false,
+      "required": ["test_id", "attempt_index"],
+      "properties": {
+        "test_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "attempt_index": {"type": "integer", "minimum": 1},
+        "worker_id": {"$ref": "#/$defs/short_id"},
+        "invocation_id": {"$ref": "#/$defs/short_id"}
+      }
+    },
+    "cluster_role": {
+      "description": "Role of the cluster a resource or observation belongs to.",
+      "enum": ["management", "workload", "hosted", "lab"]
+    },
+    "resource_ref": {
+      "type": "object",
+      "description": "Reference to a resource a test or operation worked on. Identity is a UID, not a reusable name; name is informational only. Owner chains, the tenant annotation, and the fulfillment API id are explicit known-safe fields, never a generic dump.",
+      "additionalProperties": false,
+      "required": ["kind", "uid"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Kubernetes kind or OSAC resource kind, for example ComputeInstance.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "uid": {
+          "type": "string",
+          "description": "Kubernetes UID or API-returned resource id.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Resource name. Informational only; never an identity join.",
+          "maxLength": 253
+        },
+        "api_version": {
+          "type": "string",
+          "description": "Resource apiVersion, for example osac.openshift.io/v1.",
+          "maxLength": 64
+        },
+        "cluster_uid": {
+          "type": "string",
+          "description": "UID of the cluster the resource lived in.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "cluster_role": {"$ref": "#/$defs/cluster_role"},
+        "namespace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "owner_uids": {
+          "type": "array",
+          "description": "UIDs of the resource's owner chain, nearest first.",
+          "maxItems": 16,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        },
+        "tenant": {
+          "type": "string",
+          "description": "Value of the osac.openshift.io/tenant annotation, when present.",
+          "maxLength": 128
+        },
+        "api_id": {
+          "type": "string",
+          "description": "Fulfillment API resource id, when it differs from the Kubernetes UID.",
+          "maxLength": 128
+        }
+      }
+    },
+    "observed_resource_ref": {
+      "type": "object",
+      "description": "Resource identity as an observer records it. Cluster identity is required: an observation without its cluster is not interpretable.",
+      "additionalProperties": false,
+      "required": ["kind", "uid", "cluster_uid", "cluster_role"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1, "maxLength": 64},
+        "uid": {"type": "string", "minLength": 1, "maxLength": 128},
+        "name": {"type": "string", "maxLength": 253},
+        "api_version": {"type": "string", "maxLength": 64},
+        "cluster_uid": {"type": "string", "minLength": 1, "maxLength": 64},
+        "cluster_role": {"$ref": "#/$defs/cluster_role"},
+        "namespace": {"type": "string", "minLength": 1, "maxLength": 64},
+        "owner_uids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        },
+        "tenant": {"type": "string", "maxLength": 128},
+        "api_id": {"type": "string", "maxLength": 128}
+      }
+    },
+    "condition": {
+      "type": "object",
+      "description": "One observed resource condition, allowlisted Kubernetes status fields only.",
+      "additionalProperties": false,
+      "required": ["type", "status"],
+      "properties": {
+        "type": {"type": "string", "minLength": 1, "maxLength": 128},
+        "status": {"type": "string", "minLength": 1, "maxLength": 16},
+        "reason": {"type": "string", "maxLength": 128},
+        "last_transition_at": {"$ref": "#/$defs/utc_timestamp"}
+      }
+    },
+    "container_status": {
+      "type": "object",
+      "description": "Observed state of one container of a pod, allowlisted status fields only.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "init": {
+          "type": "boolean",
+          "description": "True when this is an init container."
+        },
+        "ready": {"type": "boolean"},
+        "restarts": {"type": "integer", "minimum": 0},
+        "state": {
+          "type": "string",
+          "description": "Observed state, for example Running, Terminated, or Waiting.",
+          "maxLength": 32
+        },
+        "reason": {
+          "type": "string",
+          "description": "Observed reason, for example CrashLoopBackOff or Error.",
+          "maxLength": 128
+        },
+        "exit_code": {
+          "type": ["integer", "null"],
+          "description": "Container exit code, when terminated.",
+          "minimum": 0
+        },
+        "started_at": {"$ref": "#/$defs/utc_timestamp"},
+        "finished_at": {"$ref": "#/$defs/utc_timestamp"}
+      }
+    },
+    "controller_replicas": {
+      "type": "object",
+      "description": "Observed replica status of a controller resource.",
+      "additionalProperties": false,
+      "properties": {
+        "desired": {"type": "integer", "minimum": 0},
+        "ready": {"type": "integer", "minimum": 0},
+        "observed_generation": {"type": "integer", "minimum": 0}
+      }
+    },
+    "warning_event": {
+      "type": "object",
+      "description": "One observed Kubernetes warning event. No event messages or payloads: only the bounded classification fields.",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": {"type": "string", "minLength": 1, "maxLength": 128},
+        "type": {"type": "string", "maxLength": 64},
+        "involved_uid": {
+          "type": "string",
+          "description": "UID of the resource the event involved.",
+          "maxLength": 128
+        },
+        "last_seen_at": {"$ref": "#/$defs/utc_timestamp"},
+        "count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "description": "Failure observation. signature is the normalized safe signature; message is redacted text, never a raw dump.",
+      "additionalProperties": false,
+      "required": ["signature"],
+      "properties": {
+        "signature": {
+          "type": "string",
+          "description": "Normalized, redacted failure signature.",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "message": {
+          "type": "string",
+          "description": "Redacted failure text. Redaction happens before any remote storage or artifact upload.",
+          "maxLength": 4096
+        },
+        "phase": {"$ref": "#/$defs/phase"}
+      }
+    }
+  }
+}

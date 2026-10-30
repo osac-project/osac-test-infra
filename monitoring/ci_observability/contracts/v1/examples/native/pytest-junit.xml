@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="1" skipped="2" tests="5" time="0.018" timestamp="2026-10-28T00:24:38.733614+02:00" hostname="ci-fixture-host"><testcase classname="tests.test_fixture" name="test_passes" time="0.000" /><testcase classname="tests.test_fixture" name="test_fails" time="0.000"><failure message="assert (1 + 1) == 3">def test_fails():
+&gt;       assert 1 + 1 == 3
+E       assert (1 + 1) == 3
+
+tests/test_fixture.py:9: AssertionError</failure></testcase><testcase classname="tests.test_fixture" name="test_skips" time="0.000"><skipped type="pytest.skip" message="skipped on purpose">tests/test_fixture.py:13: skipped on purpose</skipped></testcase><testcase classname="tests.test_fixture" name="test_expected_failure" time="0.000"><skipped type="pytest.xfail" message="expected failure on purpose" /></testcase><testcase classname="tests.test_fixture" name="test_unexpected_pass" time="0.000" /></testsuite></testsuites>

@@ -1,0 +1,52 @@
+# Podman Quadlet unit for the OSAC CI observability pilot's isolated CI
+# Prometheus (W05a). Installed by monitoring/scripts/observability-stack.sh
+# --deploy to ~/.config/containers/systemd/ci-observability-prometheus.container.
+#
+# This is NOT the fleet Prometheus (quadlet/prometheus.container,
+# 127.0.0.1:9091): high-churn per-run CI metrics stay here, behind a
+# short 7-day retention, so pod and job churn cannot silently exhaust
+# the fleet monitor's storage.
+#
+# Private loopback endpoint only: 127.0.0.1:9095 (host network).
+#
+# Quadlet generates ci-observability-prometheus.service from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=CI observability Prometheus, isolated short-retention (OSAC CI Observability pilot)
+
+[Container]
+# quay.io/prometheus/prometheus:v3.15.1, digest verified 2026-10-27.
+Image=quay.io/prometheus/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+ContainerName=ci-observability-prometheus
+
+# Host network with a loopback-only web listener (Exec below), the same
+# pattern as the fleet prometheus.container.
+Network=host
+
+Volume=%h/.ci-observability/config/ci-prometheus.yml:/etc/prometheus/ci-prometheus.yml:ro,Z
+Volume=%h/.ci-observability/data/prometheus:/prometheus:Z
+
+# Short retention plus a soft disk target: retention.size is a target,
+# not a hard filesystem cap -- the write-ahead log, head blocks, and
+# compaction scratch space can exceed it. A real filesystem quota for
+# this data directory is an explicit W05/W13 rollout gate on the trusted
+# host, not something these units provide. WAL compression on.
+Exec=--config.file=/etc/prometheus/ci-prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=7d --storage.tsdb.retention.size=4GB --web.listen-address=127.0.0.1:9095
+
+# Run as the host user: keep-id maps the invoking user's UID into the
+# container so the data volume is owned by the host user (the image
+# defaults to nobody:65534).
+UserNS=keep-id
+User=%U
+
+# Conservative resource quotas: hard memory cap bounds runaway growth.
+PodmanArgs=--memory=768m --memory-swap=768m --cpus=0.5 --pids-limit=128
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

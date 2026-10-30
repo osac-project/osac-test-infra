@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ci-observability.osac-project.org/contracts/v1/bundle-manifest.schema.json",
+  "title": "CI observability bundle manifest (v1)",
+  "description": "Manifest of one delivered evidence bundle. It declares the execution identity and resolved environment, lists every other file in the bundle with checksums and sizes, and states collection completeness and redaction results. All identity fields are producer claims, untrusted until reconciliation: GitHub APIs authenticate the authoritative run and job binding, and ingestion performs that binding outside this payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "created_at",
+    "producer",
+    "execution",
+    "suite",
+    "environment",
+    "files",
+    "completeness",
+    "redaction"
+  ],
+  "properties": {
+    "schema": {"const": "osac.ci-observability.bundle-manifest"},
+    "schema_version": {"const": 1},
+    "created_at": {
+      "description": "UTC time at which the manifest was written.",
+      "$ref": "common.schema.json#/$defs/utc_timestamp"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Producing component, for example the pytest journaling plugin.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "description": "Declared execution identity. Untrusted claims: ingestion binds them to the authoritative GitHub run, attempt, and job.",
+      "additionalProperties": false,
+      "required": [
+        "execution_id",
+        "repository_id",
+        "repository",
+        "workflow",
+        "run_id",
+        "run_attempt",
+        "event",
+        "job"
+      ],
+      "properties": {
+        "execution_id": {"$ref": "common.schema.json#/$defs/execution_id"},
+        "repository_id": {
+          "type": "integer",
+          "description": "Numeric GitHub repository id.",
+          "minimum": 1
+        },
+        "repository": {"$ref": "common.schema.json#/$defs/repository"},
+        "workflow": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "revision"],
+          "properties": {
+            "path": {
+              "description": "Workflow file path within the repository.",
+              "$ref": "common.schema.json#/$defs/workflow_path"
+            },
+            "revision": {
+              "description": "Revision of the repository the workflow file was read from, or null when unresolved.",
+              "$ref": "common.schema.json#/$defs/git_sha"
+            }
+          }
+        },
+        "run_id": {
+          "type": "integer",
+          "description": "Numeric GitHub workflow run id.",
+          "minimum": 1
+        },
+        "run_attempt": {
+          "type": "integer",
+          "description": "Attempt number of the run. A later green attempt never erases an earlier failed one.",
+          "minimum": 1
+        },
+        "event": {"$ref": "common.schema.json#/$defs/workflow_event"},
+        "cohort": {
+          "description": "Reporting cohort, distinct from the raw GitHub event.",
+          "$ref": "common.schema.json#/$defs/cohort"
+        },
+        "job": {"$ref": "common.schema.json#/$defs/job_identity"}
+      }
+    },
+    "suite": {"$ref": "common.schema.json#/$defs/suite"},
+    "environment": {
+      "type": "object",
+      "description": "Resolved environment, by source role. The tested and workflow roles are required; a revision is null when it was never resolved, never a dummy value. Roles stay distinct even within one repository.",
+      "additionalProperties": false,
+      "required": ["sources"],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "description": "Every source the execution checked out, one entry per role.",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "repository", "revision"],
+            "properties": {
+              "role": {"$ref": "common.schema.json#/$defs/source_role"},
+              "repository": {"$ref": "common.schema.json#/$defs/repository"},
+              "revision": {"$ref": "common.schema.json#/$defs/git_sha"}
+            }
+          }
+        },
+        "image_digests": {
+          "type": "object",
+          "description": "Digest of each container image the deployment was built from, keyed by image name.",
+          "maxProperties": 32,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_./:-]+$"
+          },
+          "additionalProperties": {"$ref": "common.schema.json#/$defs/image_digest"}
+        },
+        "cluster_snapshot": {
+          "type": "string",
+          "description": "Identifier of the cluster snapshot restored before the run, when one was used.",
+          "maxLength": 128
+        },
+        "config_hash": {
+          "description": "Hash of the resolved deployment configuration.",
+          "$ref": "common.schema.json#/$defs/sha256_hex"
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "description": "Every file in the bundle except the manifest itself. Paths are unique and canonical.",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/file_entry"}
+    },
+    "completeness": {
+      "type": "object",
+      "description": "Collection health of the bundle as a whole. dropped_records and collection_errors are measured: 0 and an empty list mean healthy collection, not unknown. A complete bundle has no drops, no collection errors, and every journal flushed.",
+      "additionalProperties": false,
+      "required": ["complete", "end_reason", "dropped_records", "collection_errors"],
+      "properties": {
+        "complete": {
+          "type": "boolean",
+          "description": "True when the execution reached its terminal state and all sources flushed."
+        },
+        "end_reason": {
+          "enum": ["finished", "cancelled", "interrupted", "unknown"]
+        },
+        "dropped_records": {
+          "type": "integer",
+          "description": "Records dropped under collection pressure. A drop is counted and attributed, never hidden as sampling.",
+          "minimum": 0
+        },
+        "collection_errors": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "message"],
+            "properties": {
+              "source": {"type": "string", "maxLength": 128},
+              "message": {"type": "string", "maxLength": 512}
+            }
+          }
+        }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "description": "Redaction result claimed by the producer. A claim is not a trust boundary: the central ingest repeats validation and redaction checks.",
+      "additionalProperties": false,
+      "required": ["applied", "findings"],
+      "properties": {
+        "applied": {
+          "type": "boolean",
+          "description": "True when the producer ran redaction over the bundle contents."
+        },
+        "findings": {
+          "type": "integer",
+          "description": "Number of redaction replacements made. 0 means redaction ran and found nothing.",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "file_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "sha256", "size_bytes"],
+      "properties": {
+        "path": {
+          "description": "Path relative to the manifest, canonical: no leading slash, no dot or double-dot segments, no double slashes.",
+          "$ref": "common.schema.json#/$defs/bundle_file_path"
+        },
+        "kind": {
+          "description": "journal: a v1 JSON Lines journal. native-report: a framework-native report file consumed by an adapter. other: any additional evidence file.",
+          "enum": ["journal", "native-report", "other"]
+        },
+        "sha256": {"$ref": "common.schema.json#/$defs/sha256_hex"},
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "record_count": {
+          "type": "integer",
+          "description": "Number of journal records. Required for journals: 0 means an empty journal, not an unknown count.",
+          "minimum": 0
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "Required for journals: true when the writer flushed its terminal record, false when the journal is truncated or its end state is unknown."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "journal"}}},
+          "then": {"required": ["record_count", "complete"]}
+        }
+      ]
+    }
+  }
+}

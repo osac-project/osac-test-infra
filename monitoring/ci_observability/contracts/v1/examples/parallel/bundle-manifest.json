@@ -1,0 +1,100 @@
+{
+  "schema": "osac.ci-observability.bundle-manifest",
+  "schema_version": 1,
+  "created_at": "2026-10-27T06:41:27.010Z",
+  "producer": {
+    "name": "osac-ci-observability-pytest-plugin",
+    "version": "0.3.0"
+  },
+  "execution": {
+    "execution_id": "2a1f94b3-8d5c-4e9f-8b7a-4c3d6e9f8a01",
+    "repository_id": 998877665,
+    "repository": "osac-project/osac-test-infra",
+    "workflow": {
+      "path": ".github/workflows/e2e-vmaas-full-install.yml",
+      "revision": "fff44c5cd83a908492ecc75a14fdd50337100ce6"
+    },
+    "run_id": 1122334466,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "job": {
+      "logical_job_key": "e2e-vmaas-full-install.yml#e2e-vmaas",
+      "github_job_id": 4588888888,
+      "job_name": "e2e-vmaas"
+    },
+    "cohort": "pull-request"
+  },
+  "suite": {
+    "framework": "pytest",
+    "tier": "e2e",
+    "component": "e2e",
+    "variant": "vmaas-parallel",
+    "selection": {
+      "paths": [
+        "tests/e2e/vmaas/"
+      ],
+      "worker_count": 2
+    }
+  },
+  "environment": {
+    "sources": [
+      {
+        "role": "tested",
+        "repository": "osac-project/osac",
+        "revision": "a5cc1e7a2cb319189f0c0b07b361b1bd46d426db"
+      },
+      {
+        "role": "workflow",
+        "repository": "osac-project/osac-test-infra",
+        "revision": "fff44c5cd83a908492ecc75a14fdd50337100ce6"
+      },
+      {
+        "role": "infrastructure",
+        "repository": "osac-project/osac-test-infra",
+        "revision": "d739a8c4fd6c2d1e29eb382cefb3341679b77283"
+      }
+    ]
+  },
+  "completeness": {
+    "complete": true,
+    "end_reason": "finished",
+    "dropped_records": 0,
+    "collection_errors": []
+  },
+  "redaction": {
+    "applied": true,
+    "findings": 2
+  },
+  "files": [
+    {
+      "path": "journals/controller.jsonl",
+      "kind": "journal",
+      "sha256": "624643a7fde2f3903f62e67aaa364082f4ca86c503c020ddb70f6db26773a581",
+      "size_bytes": 5764,
+      "record_count": 14,
+      "complete": true
+    },
+    {
+      "path": "journals/gw0.jsonl",
+      "kind": "journal",
+      "sha256": "2c4f1f7e4e51a0c4c511958a2d52739c808f997c68ff2a9204d3831db3ae387d",
+      "size_bytes": 15077,
+      "record_count": 28,
+      "complete": true
+    },
+    {
+      "path": "journals/gw1.jsonl",
+      "kind": "journal",
+      "sha256": "0a81984059e5a3852b973838a975ac9f966be657ede6f7149d6f1e2576a49136",
+      "size_bytes": 10394,
+      "record_count": 22,
+      "complete": true
+    },
+    {
+      "path": "native-report/junit.xml",
+      "kind": "native-report",
+      "sha256": "433352ff928d153a06ea3fe08709cc6cc99ce0660aab1b212df5aff56d76b97f",
+      "size_bytes": 2269
+    }
+  ]
+}

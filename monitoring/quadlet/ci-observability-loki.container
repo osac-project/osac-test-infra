@@ -1,0 +1,49 @@
+# Podman Quadlet unit for the OSAC CI observability pilot's Loki (W05a).
+# Installed by monitoring/scripts/observability-stack.sh --deploy to
+# ~/.config/containers/systemd/ci-observability-loki.container.
+#
+# PILOT-ONLY: single-process Loki on LOCAL-DISK storage, explicitly
+# labeled as a pilot in the shipped Alloy labels and in
+# monitoring/observability-services.md. Fleet rollout requires
+# configured object storage; do not scale this unit.
+#
+# Private loopback endpoints only (host network): HTTP 127.0.0.1:3100,
+# gRPC 127.0.0.1:9097 (not Loki's 9095 default -- that port belongs to
+# the CI Prometheus). Retention: 14 days, enforced by the compactor.
+#
+# Quadlet generates ci-observability-loki.service from this file.
+# See: man podman-systemd.unit(5)
+
+[Unit]
+Description=CI observability Loki, single-process local-disk pilot (OSAC CI Observability)
+
+[Container]
+# docker.io/grafana/loki:3.7.9, digest verified 2026-10-27.
+Image=docker.io/grafana/loki@sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28
+ContainerName=ci-observability-loki
+
+# Host network with loopback-only listeners in loki.yml, the same
+# pattern as the fleet prometheus.container.
+Network=host
+
+Volume=%h/.ci-observability/config/loki.yml:/etc/loki/loki.yml:ro,Z
+Volume=%h/.ci-observability/data/loki:/data:Z
+
+Exec=-config.file=/etc/loki/loki.yml
+
+# Run as the host user: the image defaults to uid 10001, which cannot
+# write a host-owned bind-mounted data directory under rootless podman.
+# keep-id maps the invoking user's UID into the container instead.
+UserNS=keep-id
+User=%U
+
+# Conservative resource quotas: hard memory cap bounds runaway growth.
+PodmanArgs=--memory=512m --memory-swap=512m --cpus=0.5 --pids-limit=128
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

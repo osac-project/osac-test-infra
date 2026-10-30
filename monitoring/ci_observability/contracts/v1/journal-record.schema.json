@@ -1,0 +1,592 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ci-observability.osac-project.org/contracts/v1/journal-record.schema.json",
+  "title": "CI observability journal record (v1)",
+  "description": "One line of an append-only JSON Lines journal. Each worker process writes its own journal file, named after its journal_id. Sequence numbers are per journal and contiguous from 1; blank lines are violations, not silently dropped. Starts are recorded immediately, so an interruption leaves a useful partial record: a phase, fixture, or operation with no finish record keeps its last observed state and counts as interrupted or unknown.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "execution_id",
+    "journal_id",
+    "sequence",
+    "recorded_at",
+    "mono_ns",
+    "event",
+    "data"
+  ],
+  "properties": {
+    "schema": {"const": "osac.ci-observability.journal-record"},
+    "schema_version": {"const": 1},
+    "execution_id": {"$ref": "common.schema.json#/$defs/execution_id"},
+    "journal_id": {
+      "description": "Identity of the journal file this record belongs to. The file is named {journal_id}.jsonl.",
+      "$ref": "common.schema.json#/$defs/short_id"
+    },
+    "invocation_id": {
+      "description": "Identity of the native process invocation this record belongs to, when one job runs several (for example pytest plus Ansible targets, or Go test plus Ginkgo). Must have an invocation_started record in the same bundle.",
+      "$ref": "common.schema.json#/$defs/short_id"
+    },
+    "sequence": {
+      "type": "integer",
+      "description": "Per-journal sequence number, starting at 1 and contiguous.",
+      "minimum": 1
+    },
+    "recorded_at": {
+      "description": "UTC wall-clock time at which this record was written.",
+      "$ref": "common.schema.json#/$defs/utc_timestamp"
+    },
+    "source_at": {
+      "description": "UTC time of the underlying event according to its source, for records converted from a native report. Absent means the record was observed live.",
+      "$ref": "common.schema.json#/$defs/utc_timestamp"
+    },
+    "mono_ns": {
+      "description": "Monotonic clock of the writing process in nanoseconds, or null when unknown. Native reports carry no monotonic clock: converted records use null plus duration_ns on finish records, never a fabricated clock. Clock domains never merge by default: records are only compared within one clock_id, and one journal carries one clock.",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "clock_id": {
+      "description": "Identity of the monotonic clock domain. Distinguishes which process's clock mono_ns comes from when records from several processes are compared.",
+      "$ref": "common.schema.json#/$defs/short_id"
+    },
+    "clock_uncertainty_ns": {
+      "description": "Bound on the uncertainty of the recorded times, in nanoseconds, for cross-host events.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "event": {
+      "enum": [
+        "execution_started",
+        "execution_finished",
+        "invocation_started",
+        "invocation_finished",
+        "worker_started",
+        "worker_stopped",
+        "collection_finished",
+        "test_collected",
+        "test_phase_started",
+        "test_phase_finished",
+        "test_result",
+        "fixture_started",
+        "fixture_finished",
+        "fixture_used",
+        "operation_started",
+        "operation_progress",
+        "operation_finished",
+        "resource_observed",
+        "collection_state"
+      ]
+    },
+    "data": {
+      "type": "object",
+      "description": "Event payload. The event field selects which payload applies."
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"event": {"const": "execution_started"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/execution_started_data"}}}},
+    {"if": {"properties": {"event": {"const": "execution_finished"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/execution_finished_data"}}}},
+    {"if": {"properties": {"event": {"const": "invocation_started"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/invocation_started_data"}}}},
+    {"if": {"properties": {"event": {"const": "invocation_finished"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/invocation_finished_data"}}}},
+    {"if": {"properties": {"event": {"const": "worker_started"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/worker_started_data"}}}},
+    {"if": {"properties": {"event": {"const": "worker_stopped"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/worker_stopped_data"}}}},
+    {"if": {"properties": {"event": {"const": "collection_finished"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/collection_finished_data"}}}},
+    {"if": {"properties": {"event": {"const": "test_collected"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/test_collected_data"}}}},
+    {"if": {"properties": {"event": {"const": "test_phase_started"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/test_phase_started_data"}}}},
+    {"if": {"properties": {"event": {"const": "test_phase_finished"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/test_phase_finished_data"}}}},
+    {"if": {"properties": {"event": {"const": "test_result"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/test_result_data"}}}},
+    {"if": {"properties": {"event": {"const": "fixture_started"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/fixture_started_data"}}}},
+    {"if": {"properties": {"event": {"const": "fixture_finished"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/fixture_finished_data"}}}},
+    {"if": {"properties": {"event": {"const": "fixture_used"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/fixture_used_data"}}}},
+    {"if": {"properties": {"event": {"const": "operation_started"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/operation_started_data"}}}},
+    {"if": {"properties": {"event": {"const": "operation_progress"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/operation_progress_data"}}}},
+    {"if": {"properties": {"event": {"const": "operation_finished"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/operation_finished_data"}}}},
+    {"if": {"properties": {"event": {"const": "resource_observed"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/resource_observed_data"}}}},
+    {"if": {"properties": {"event": {"const": "collection_state"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/collection_state_data"}}}}
+  ],
+  "$defs": {
+    "execution_started_data": {
+      "type": "object",
+      "description": "Job-level opening record. Its job identity and suite must equal the manifest's; the suite is the declared cohort, which may use framework 'mixed' when the job's invocations run several frameworks.",
+      "additionalProperties": false,
+      "required": ["job", "suite"],
+      "properties": {
+        "job": {"$ref": "common.schema.json#/$defs/job_identity"},
+        "suite": {"$ref": "common.schema.json#/$defs/suite"}
+      }
+    },
+    "execution_finished_data": {
+      "type": "object",
+      "description": "Terminal record of an execution. outcome is the producer's own observed result, an untrusted claim: GitHub owns the authoritative CI conclusion. inherited is not claimable here; trusted reconciliation assigns it to jobs that were not re-run in a later attempt.",
+      "additionalProperties": false,
+      "required": ["outcome", "exit_code"],
+      "properties": {
+        "outcome": {
+          "enum": ["passed", "failed", "timeout", "cancelled", "unknown"]
+        },
+        "exit_code": {
+          "description": "Process exit code, or null when the process was lost.",
+          "type": ["integer", "null"]
+        },
+        "failure": {
+          "description": "First observed failure. A cleanup failure never overwrites it.",
+          "$ref": "common.schema.json#/$defs/failure"
+        },
+        "duration_ns": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "invocation_started_data": {
+      "type": "object",
+      "description": "Opening record of one native process invocation in the job, with its actual framework context. One job can mix frameworks (for example AAP pytest plus Ansible targets); the job-level suite stays the declared cohort and never claims that every record shares one framework.",
+      "additionalProperties": false,
+      "required": ["invocation_id", "framework", "tier", "component", "variant"],
+      "properties": {
+        "invocation_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "framework": {"$ref": "common.schema.json#/$defs/framework"},
+        "tier": {"$ref": "common.schema.json#/$defs/tier"},
+        "component": {"type": "string", "minLength": 1, "maxLength": 64},
+        "variant": {"type": "string", "minLength": 1, "maxLength": 64},
+        "selection": {"$ref": "common.schema.json#/$defs/selection"},
+        "dependencies": {
+          "type": "array",
+          "description": "Real dependencies the invocation needs, for example kind, postgres, or envtest. A job named unit may use a real database; its invocation records that.",
+          "maxItems": 16,
+          "items": {"type": "string", "minLength": 1, "maxLength": 64}
+        }
+      }
+    },
+    "invocation_finished_data": {
+      "type": "object",
+      "description": "Terminal record of one native invocation, with the child process exit outcome.",
+      "additionalProperties": false,
+      "required": ["invocation_id", "outcome", "exit_code"],
+      "properties": {
+        "invocation_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "outcome": {
+          "enum": ["passed", "failed", "timeout", "cancelled", "unknown"]
+        },
+        "exit_code": {
+          "description": "Child process exit code, or null when the child was lost.",
+          "type": ["integer", "null"]
+        },
+        "failure": {"$ref": "common.schema.json#/$defs/failure"},
+        "duration_ns": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "worker_started_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worker_id"],
+      "properties": {
+        "worker_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "host": {
+          "type": "string",
+          "description": "Runner host name.",
+          "maxLength": 128
+        },
+        "pid": {
+          "type": "integer",
+          "description": "Worker process id.",
+          "minimum": 1
+        }
+      }
+    },
+    "worker_stopped_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worker_id", "outcome"],
+      "properties": {
+        "worker_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "outcome": {
+          "enum": ["completed", "interrupted", "unknown"]
+        }
+      }
+    },
+    "collection_finished_data": {
+      "type": "object",
+      "description": "Terminal record of test collection for one invocation. Completed capture is separate from availability of the counts: on a collection error the outcome is 'error' and the counts stay null rather than being guessed. A completed collection with collected_count 0 is a measured empty selection, not a failure. Count and membership checks run only for completed collections; a bundle may be complete with no collection record at all, for example a build failure before any test collection.",
+      "additionalProperties": false,
+      "required": ["outcome"],
+      "properties": {
+        "outcome": {
+          "enum": ["completed", "error", "interrupted", "unknown"]
+        },
+        "collected_count": {
+          "description": "Number of collected tests, selected plus deselected. Required and non-null when the outcome is completed; 0 means measured empty.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "deselected_count": {
+          "description": "Number of collected tests the selection deselected.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"outcome": {"const": "completed"}}},
+          "then": {"required": ["collected_count", "deselected_count"]}
+        }
+      ]
+    },
+    "test_collected_data": {
+      "type": "object",
+      "description": "One test found by collection, before or after deselection. When collection completed, executed tests must be collected and not deselected; selected-but-never-run tests are legitimate (fail-fast, deselection at runtime) and are not evidence loss.",
+      "additionalProperties": false,
+      "required": ["test_id", "deselected"],
+      "properties": {
+        "test_id": {
+          "type": "string",
+          "description": "Full safe test identity. Must not contain secrets or raw parameter values.",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "deselected": {
+          "type": "boolean",
+          "description": "True when the selection filtered this test out."
+        },
+        "deselection_reason": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "test_phase_started_data": {
+      "type": "object",
+      "description": "Start of one phase of one test attempt, recorded live by an instrumented framework. attempt_index counts attempts of the same test_id within this execution: in-job retries and campaign repetitions are new attempts.",
+      "additionalProperties": false,
+      "required": ["test_id", "attempt_index", "phase", "worker_id"],
+      "properties": {
+        "test_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "attempt_index": {"type": "integer", "minimum": 1},
+        "phase": {"$ref": "common.schema.json#/$defs/phase"},
+        "worker_id": {"$ref": "common.schema.json#/$defs/short_id"}
+      }
+    },
+    "test_phase_finished_data": {
+      "type": "object",
+      "description": "Finish of one phase, recorded live. Native framework outcomes are preserved as observed in the phase they occurred in: expected failures and skips can appear in setup or even teardown, and a teardown can time out. The overall attempt outcome is derived from all phases, never stored beside them.",
+      "additionalProperties": false,
+      "required": ["test_id", "attempt_index", "phase", "worker_id", "outcome"],
+      "properties": {
+        "test_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "attempt_index": {"type": "integer", "minimum": 1},
+        "phase": {"$ref": "common.schema.json#/$defs/phase"},
+        "worker_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "outcome": {"$ref": "common.schema.json#/$defs/native_result_outcome"},
+        "failure": {"$ref": "common.schema.json#/$defs/failure"},
+        "duration_ns": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "test_result_data": {
+      "type": "object",
+      "description": "Native test result as a report or adapter states it, without fabricating phase boundaries the report does not contain. result_scope distinguishes a per-attempt result from the aggregate final result of a test. Aggregate durations must never be charged to the final retry: an aggregate record carries the total, attempt records carry their own measured spans, and null means unknown, never zero. A test attempt must not be represented both by phase records and by a native attempt result.",
+      "additionalProperties": false,
+      "required": ["result_scope", "test_id", "outcome"],
+      "properties": {
+        "result_scope": {
+          "enum": ["attempt", "aggregate"]
+        },
+        "test_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "attempt_index": {
+          "description": "Attempt this result belongs to. Required for attempt scope, null when unknown.",
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "attempt_count": {
+          "description": "Total attempts the native source reports, for example Ginkgo NumAttempts. Retained without inventing per-retry records; null when unknown.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "outcome": {"$ref": "common.schema.json#/$defs/native_result_outcome"},
+        "worker_id": {
+          "description": "Worker that produced the result, or null when the report does not say.",
+          "anyOf": [{"$ref": "common.schema.json#/$defs/short_id"}, {"type": "null"}]
+        },
+        "duration_ns": {
+          "description": "Native duration of this result. For an aggregate this is the total across attempts, never the final retry's span.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "source_started_at": {
+          "description": "Start time from the native report. Omitted when the source does not provide it.",
+          "$ref": "common.schema.json#/$defs/utc_timestamp"
+        },
+        "source_ended_at": {
+          "description": "End time from the native report. Omitted when the source does not provide it.",
+          "$ref": "common.schema.json#/$defs/utc_timestamp"
+        },
+        "failure": {"$ref": "common.schema.json#/$defs/failure"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"result_scope": {"const": "attempt"}}},
+          "then": {"required": ["attempt_index"]}
+        },
+        {
+          "if": {"properties": {"result_scope": {"const": "aggregate"}}},
+          "then": {"required": ["attempt_count"]}
+        }
+      ]
+    },
+    "fixture_started_data": {
+      "type": "object",
+      "description": "Start of one phase of work on one fixture instance. fixture_instance_id groups the setup pair, the use edges, and the teardown pair of the same instance, so two parameterized instances of one fixture stay separate. The setup-to-teardown span is the instance lifetime, including idle time while tests consume it.",
+      "additionalProperties": false,
+      "required": ["fixture_instance_id", "fixture_id", "scope", "worker_id", "phase"],
+      "properties": {
+        "fixture_instance_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "fixture_id": {
+          "type": "string",
+          "description": "Dotted fixture identity, for example tests.conftest.default_subnet.",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.]{0,255}$"
+        },
+        "scope": {"$ref": "common.schema.json#/$defs/fixture_scope"},
+        "worker_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "phase": {"$ref": "common.schema.json#/$defs/fixture_phase"},
+        "params_fingerprint": {
+          "description": "Safe parameter identity for a parameterized fixture, as a hash. Raw parameter values are never recorded.",
+          "$ref": "common.schema.json#/$defs/sha256_hex"
+        }
+      }
+    },
+    "fixture_finished_data": {
+      "type": "object",
+      "description": "Finish of one phase of work on one fixture instance. The outcome belongs to that phase only; a finalizer failure never overwrites the setup outcome.",
+      "additionalProperties": false,
+      "required": ["fixture_instance_id", "fixture_id", "scope", "worker_id", "phase", "outcome"],
+      "properties": {
+        "fixture_instance_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "fixture_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.]{0,255}$"
+        },
+        "scope": {"$ref": "common.schema.json#/$defs/fixture_scope"},
+        "worker_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "phase": {"$ref": "common.schema.json#/$defs/fixture_phase"},
+        "outcome": {
+          "$ref": "common.schema.json#/$defs/native_result_outcome"
+        },
+        "failure": {"$ref": "common.schema.json#/$defs/failure"},
+        "duration_ns": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "fixture_used_data": {
+      "type": "object",
+      "description": "Edge from a fixture instance to one consuming test attempt. Shared fixture cost is recorded once and linked through these edges, so no giant dependent list is needed at setup time.",
+      "additionalProperties": false,
+      "required": ["fixture_instance_id", "test_id", "attempt_index", "worker_id"],
+      "properties": {
+        "fixture_instance_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "test_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "attempt_index": {"type": "integer", "minimum": 1},
+        "worker_id": {"$ref": "common.schema.json#/$defs/short_id"}
+      }
+    },
+    "operation_started_data": {
+      "type": "object",
+      "description": "Start of a bounded wait or other tracked operation. name is an allowlisted helper name, not a command line. test links the operation to the test attempt that caused it; parent_operation_id is the only dependency link between operations, and it must reference an operation that started in the same invocation without forming a cycle. The journal that carries the record identifies the acting worker.",
+      "additionalProperties": false,
+      "required": ["operation_id", "name", "expected_condition"],
+      "properties": {
+        "operation_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "name": {
+          "type": "string",
+          "description": "Allowlisted operation name, for example wait_for_provision.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_condition": {
+          "type": "string",
+          "description": "Safe description of the condition waited for.",
+          "maxLength": 256
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": "Polling budget in milliseconds.",
+          "minimum": 0
+        },
+        "parent_operation_id": {
+          "description": "Explicit dependency link to an operation in the same invocation.",
+          "$ref": "common.schema.json#/$defs/short_id"
+        },
+        "resource": {"$ref": "common.schema.json#/$defs/resource_ref"},
+        "test": {"$ref": "common.schema.json#/$defs/test_ref"}
+      }
+    },
+    "operation_progress_data": {
+      "type": "object",
+      "description": "Intermediate progress of a running operation. Only bounded, safe summaries; never arbitrary polled values or command arguments.",
+      "additionalProperties": false,
+      "required": ["operation_id"],
+      "properties": {
+        "operation_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "observed_state": {
+          "type": "string",
+          "description": "Safe observed state summary, for example a resource phase.",
+          "maxLength": 128
+        },
+        "observed_count": {
+          "type": "integer",
+          "description": "Safe count of observed items, for example ready pods.",
+          "minimum": 0
+        }
+      }
+    },
+    "operation_finished_data": {
+      "type": "object",
+      "description": "Terminal record of an operation. When it repeats the resource of its start record, the two must agree.",
+      "additionalProperties": false,
+      "required": ["operation_id", "outcome"],
+      "properties": {
+        "operation_id": {"$ref": "common.schema.json#/$defs/short_id"},
+        "outcome": {
+          "enum": ["passed", "failed", "timeout", "cancelled", "interrupted", "unknown"]
+        },
+        "resource": {"$ref": "common.schema.json#/$defs/resource_ref"},
+        "failure": {"$ref": "common.schema.json#/$defs/failure"},
+        "test": {"$ref": "common.schema.json#/$defs/test_ref"},
+        "duration_ns": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "resource_observed_data": {
+      "type": "object",
+      "description": "One observation of one resource, from a watch or a snapshot. Strictly allowlisted identity, metadata, and status fields: no specs, no labels or annotations, no IP, MAC, or network data, no Secret or ConfigMap bodies, no log payloads. Missing optional fields mean not observed; a deleted observation carries deleted=true rather than disappearing. Details the observer could not read stay absent, never guessed.",
+      "additionalProperties": false,
+      "required": ["resource"],
+      "properties": {
+        "resource": {"$ref": "common.schema.json#/$defs/observed_resource_ref"},
+        "deleted": {
+          "type": "boolean",
+          "description": "True when the observation recorded the resource's deletion."
+        },
+        "generation": {
+          "type": "integer",
+          "description": "Observed metadata.generation.",
+          "minimum": 0
+        },
+        "finalizers": {
+          "type": "array",
+          "description": "Observed metadata.finalizers.",
+          "maxItems": 16,
+          "items": {"type": "string", "minLength": 1, "maxLength": 253}
+        },
+        "ready": {
+          "type": "boolean",
+          "description": "Observed readiness, when the kind has a single readiness notion."
+        },
+        "restart_count": {
+          "type": "integer",
+          "description": "Observed restart count, when the kind has exactly one.",
+          "minimum": 0
+        },
+        "status": {
+          "type": "string",
+          "description": "Observed status phase or state field.",
+          "maxLength": 128
+        },
+        "conditions": {
+          "type": "array",
+          "description": "Observed status conditions.",
+          "maxItems": 64,
+          "items": {"$ref": "common.schema.json#/$defs/condition"}
+        },
+        "containers": {
+          "type": "array",
+          "description": "Observed per-container status of a pod, init containers included.",
+          "maxItems": 32,
+          "items": {"$ref": "common.schema.json#/$defs/container_status"}
+        },
+        "replicas": {
+          "description": "Observed replica status of a controller resource.",
+          "$ref": "common.schema.json#/$defs/controller_replicas"
+        },
+        "warning_events": {
+          "type": "array",
+          "description": "Observed Kubernetes warning events for the resource.",
+          "maxItems": 32,
+          "items": {"$ref": "common.schema.json#/$defs/warning_event"}
+        }
+      }
+    },
+    "collection_state_data": {
+      "type": "object",
+      "description": "Health of one collection source. Emitted periodically as a heartbeat and once terminally; a complete bundle's every reported source has a terminal record. dropped_records is measured: 0 means nothing was dropped. omitted_fields names contract fields this source could not fill. Not every source is available in every bundle: an absent source is a coverage gap stated by the producer, not a violation.",
+      "additionalProperties": false,
+      "required": ["source", "status", "complete", "dropped_records"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Collecting source, for example cluster-observer.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "status": {
+          "enum": ["collecting", "degraded", "stopped", "unavailable", "unknown"]
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "True when the source covered its full interval."
+        },
+        "covered_from": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+        "covered_to": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+        "dropped_records": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["message"],
+            "properties": {
+              "message": {"type": "string", "maxLength": 512}
+            }
+          }
+        },
+        "omitted_fields": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"type": "string", "maxLength": 128}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+# Prometheus configuration for the isolated CI observability pilot (W05a).
+#
+# This is NOT the fleet Prometheus (127.0.0.1:9091, quadlet/
+# prometheus.container): per-run pod, job, and node churn stays here,
+# behind a short 7-day retention and a soft size target. Filesystem
+# quotas remain a rollout prerequisite. Private loopback endpoint
+# 127.0.0.1:9095. Retention flags live in the container unit
+# (quadlet/ci-observability-prometheus.container), not in this file.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: ci-observability
+    deployment: pilot-local
+
+scrape_configs:
+  - job_name: ci-observability-prometheus
+    static_configs:
+      - targets:
+          - 127.0.0.1:9095
+
+  - job_name: ci-observability-alloy
+    static_configs:
+      - targets:
+          - 127.0.0.1:12345
+
+  # The ci_observability ledger's HTTP metrics endpoint. W01 owns that
+  # service; it is NOT deployed by W05a, so this target stays visibly
+  # DOWN until the read API runs on 127.0.0.1:9185. Kept here so the
+  # interface is explicit and W01 needs no Prometheus change.
+  - job_name: ci-observability-ledger
+    static_configs:
+      - targets:
+          - 127.0.0.1:9185

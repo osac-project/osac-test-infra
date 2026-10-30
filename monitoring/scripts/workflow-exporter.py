@@ -9,18 +9,21 @@ Polls the GitHub API for workflow run status across all repos in the org and exp
   - JSON API at /api/jobs with detailed recent job info for Grafana Infinity
 """
 
+import errno
 import os
 import re
 import sys
 import time
 import json
 import logging
+import math
 import sqlite3
 import statistics
 import threading
-from datetime import datetime, timezone, timedelta
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from typing import ClassVar
+from typing import ClassVar, NamedTuple, TypeAlias, TypeVar, Union
 from urllib.parse import urlparse, parse_qs
 
 import requests
@@ -72,6 +75,36 @@ JOBS_HISTORY_MAX_COUNT = int(os.getenv("JOBS_HISTORY_MAX_COUNT", "100000"))
 CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.monitoring-server/data"))
 DB_FILE = os.path.join(CACHE_DIR, "workflow-exporter.db")
 LEGACY_CACHE_FILE = os.path.join(CACHE_DIR, "workflow-exporter-cache.json")
+
+# ---------------------------------------------------------------------------
+# Source-facts outbox (W01c) — explicit opt-in, off by default
+# ---------------------------------------------------------------------------
+# Unset (the default) disables the feature entirely: no directory, no
+# writes, zero extra IO or API calls. A shadow source for the CI
+# observability ledger (W01b/W06 own the consumer and transport), NOT
+# activated by the shipped quadlet; only an approved trusted non-runner
+# host may enable it later. See monitoring/source-facts-outbox.md.
+SOURCE_FACTS_OUTBOX_DIR = os.getenv("SOURCE_FACTS_OUTBOX_DIR")
+# Explicit byte caps: a record over the record cap is dropped and counted
+# (GitHub facts are replayable from the API); segments rotate at the
+# segment cap; at the segment-count cap new writes are refused, never
+# deleted — deleting after acknowledgement is the consumer's job.
+SOURCE_FACTS_MAX_SEGMENT_BYTES = int(os.getenv("SOURCE_FACTS_MAX_SEGMENT_BYTES", str(8 * 1024 * 1024)))
+SOURCE_FACTS_MAX_SEGMENTS = int(os.getenv("SOURCE_FACTS_MAX_SEGMENTS", "64"))
+SOURCE_FACTS_MAX_RECORD_BYTES = int(os.getenv("SOURCE_FACTS_MAX_RECORD_BYTES", str(1024 * 1024)))
+# Historical attempts: for a run whose current attempt is N, also record up
+# to LOOKBACK earlier attempts through the same _get rate budget, bounded
+# per collect cycle and deferred explicitly when capped. Backfill and
+# initial_load never fetch history (bulk history backfill is separate work).
+SOURCE_FACTS_ATTEMPT_LOOKBACK = int(os.getenv("SOURCE_FACTS_ATTEMPT_LOOKBACK", "2"))
+SOURCE_FACTS_ATTEMPT_CALL_BUDGET = int(os.getenv("SOURCE_FACTS_ATTEMPT_CALL_BUDGET", "25"))
+# The artifacts listing is its own opt-in subflag, off by default, with its
+# own per-cycle call budget.
+SOURCE_FACTS_ARTIFACTS = os.getenv("SOURCE_FACTS_ARTIFACTS", "").strip().lower() in ("1", "true", "yes")
+SOURCE_FACTS_ARTIFACT_CALL_BUDGET = int(os.getenv("SOURCE_FACTS_ARTIFACT_CALL_BUDGET", "10"))
+# Extra outbox requests stop when the GitHub rate-limit remaining is at or
+# below this; unknown (no header seen yet) never blocks.
+SOURCE_FACTS_RATE_RESERVE = int(os.getenv("SOURCE_FACTS_RATE_RESERVE", "500"))
 
 JOB_COLUMNS = [
     "id", "repo", "workflow", "display_name", "category", "branch",
@@ -145,6 +178,946 @@ api_remaining = Gauge(
     "GitHub API rate limit remaining (workflow exporter)",
     ["org"],
 )
+# Source-facts outbox health (W01c). Label values are bounded enums — kinds
+# and drop reasons — never run ids, URLs, or any payload value. The counters
+# exist (at zero) with the feature off; only writes increment them.
+source_facts_records = Counter(
+    "workflow_exporter_source_facts_records_total",
+    "Source-facts outbox records written (workflow exporter)",
+    ["kind"],
+)
+source_facts_dropped = Counter(
+    "workflow_exporter_source_facts_dropped_total",
+    "Source-facts records dropped or refused before the outbox (workflow exporter)",
+    ["reason"],
+)
+source_facts_segments = Gauge(
+    "workflow_exporter_source_facts_segments",
+    "Source-facts outbox segments currently on disk (workflow exporter)",
+)
+source_facts_bytes = Counter(
+    "workflow_exporter_source_facts_written_bytes_total",
+    "Bytes appended to the source-facts outbox (workflow exporter)",
+)
+
+
+# ---------------------------------------------------------------------------
+# Source-facts outbox writer (W01c)
+# ---------------------------------------------------------------------------
+# The JSON value shapes the outbox accepts (enforced by
+# SourceFactsOutbox._validate_json_value): what a well-formed API response
+# parses to, and nothing json.dumps would silently normalize — tuples,
+# non-string keys, NaN/Infinity, cycles, or over-deep nesting are refused.
+JSONValue: TypeAlias = Union[bool, int, float, str, "list[JSONValue]", "dict[str, JSONValue]", None]
+
+_SeenKey = TypeVar("_SeenKey")
+
+
+class PendingFact(NamedTuple):
+    """One owed source fact: a retryable write failure, a budget or rate
+    deferral, or a fetch failure, kept for retry on later collect cycles —
+    independent of the legacy upsert gate, which never re-observes an
+    already-stored run. Re-fetch is by known identity only (never a second
+    poller); the set is bounded in count and age, and an expired obligation
+    is stated as a coverage record, not silently dropped."""
+
+    kind: str                 # "jobs" | "run_attempt" | "artifacts"
+    repo: str
+    run_id: int
+    run_attempt: int | None
+    window: str               # funnel to re-observe it under
+    run_status: str | None    # jobs observation bucket source; "" when N/A
+    deadline: float           # time.monotonic() after which it expires
+
+
+
+class SourceFactsOutbox:
+    """Append-only JSON Lines outbox of raw GitHub source facts.
+
+    A shadow source for the CI observability ledger: the exporter's SQLite
+    keeps only each run's latest attempt as flattened rows, while this
+    records the raw central API responses — before any filtering or
+    derivation — so the reconciler can rebuild immutable attempt history.
+    Producer telemetry payloads never enter it, and suite-derived rows or
+    artifact names never establish identity: repo, run id, and run attempt
+    come from the API request context only.
+
+    Inert unless a root directory is configured (no directory, no writes,
+    no extra IO or API calls). Payloads hold user-controlled GitHub
+    strings, so the root is 0700 and segments 0600; if privacy cannot be
+    enforced the writer refuses and counts degraded health instead of
+    writing. Drop and error signals are value-free bounded enums; logs
+    never carry tokens, DSNs, URLs, or record contents.
+
+    At-least-once (see monitoring/source-facts-outbox.md for the consumer
+    handoff): dedupe is per-process and in-memory, so a restart re-emits;
+    every record carries the identity the consumer needs to deduplicate.
+    Segments are exclusively created (O_EXCL), append-only, and never
+    deleted by this writer. A failed write abandons the segment, so a torn
+    record can only ever be a segment's trailing line.
+    """
+
+    SCHEMA = "osac.ci-observability.source-facts"
+    VERSION = 1
+    SEGMENT_PREFIX = "sf-"
+    SEGMENT_SUFFIX = ".jsonl"
+    # Past this many remembered keys a dedupe set clears and facts re-emit;
+    # observation never silently stops.
+    SEEN_CAP = 20000
+    # Depth bound for accepted payloads: real GitHub run/job objects nest a
+    # handful of levels; anything deeper is not an API response shape.
+    JSON_MAX_DEPTH = 24
+    # Pending-obligation bounds: at most this many owed facts, each retried
+    # for at most this long before expiring with a coverage record.
+    PENDING_MAX = 200
+    PENDING_MAX_AGE = 6 * 3600.0
+    DROP_RECORD_TOO_LARGE = "record_too_large"
+    DROP_SEGMENT_CAP = "segment_cap"
+    DROP_SERIALIZE = "serialize_error"
+    DROP_DISK_FULL = "disk_full"
+    DROP_PERMISSION = "permission"
+    DROP_WRITE = "write_error"
+    DROP_FSYNC = "fsync_failed"
+    DROP_PAGINATION_REFUSED = "pagination_refused"
+    DROP_INVALID_IDENTITY = "invalid_identity"
+    DROP_INVALID_STATUS = "invalid_status"
+    DROP_ROOT_REPLACED = "root_replaced"
+
+    def __init__(
+        self,
+        *,
+        root: str | None = None,
+        max_segment_bytes: int | None = None,
+        max_segments: int | None = None,
+        max_record_bytes: int | None = None,
+        attempt_lookback: int | None = None,
+        artifacts_enabled: bool | None = None,
+        pending_max_age: float | None = None,
+    ) -> None:
+        self.root = SOURCE_FACTS_OUTBOX_DIR if root is None else root
+        self.enabled = bool(self.root)
+        self.max_segment_bytes = max_segment_bytes or SOURCE_FACTS_MAX_SEGMENT_BYTES
+        self.max_segments = max_segments or SOURCE_FACTS_MAX_SEGMENTS
+        self.max_record_bytes = max_record_bytes or SOURCE_FACTS_MAX_RECORD_BYTES
+        self.attempt_lookback = SOURCE_FACTS_ATTEMPT_LOOKBACK if attempt_lookback is None else attempt_lookback
+        self.artifacts_enabled = SOURCE_FACTS_ARTIFACTS if artifacts_enabled is None else bool(artifacts_enabled)
+        self.pending_max_age = SourceFactsOutbox.PENDING_MAX_AGE if pending_max_age is None else pending_max_age
+        self._attempt_calls_left = 0
+        self._artifact_calls_left = 0
+        self._seen_runs: set[tuple[str, int | None, int | None, str]] = set()
+        self._seen_attempt_jobs: set[tuple[str, int, int | None, str]] = set()
+        self._seen_run_attempts: set[tuple[str, int, int | None]] = set()
+        self._seen_artifacts: set[tuple[str, int, int | None]] = set()
+        self._pending: dict[tuple[str, str, int, int | None, str | None], PendingFact] = {}
+        self._root_identity: tuple[int, int] | None = None
+        self._segment_fd: int | None = None
+        self._segment_path: str | None = None
+        self._segment_size = 0
+        self._seq = 0
+        self._dir_ready = False
+
+    def new_cycle(self) -> None:
+        """Reset the per-collect-cycle extra-call budgets."""
+        self._attempt_calls_left = SOURCE_FACTS_ATTEMPT_CALL_BUDGET
+        self._artifact_calls_left = SOURCE_FACTS_ARTIFACT_CALL_BUDGET
+
+    def take_attempt_call(self, *, rate_remaining: int | None) -> str:
+        """Whether one extra historical-attempt request may be made now:
+        "ok", or the bounded deferral reason ("budget" / "rate_limit")."""
+        if self._attempt_calls_left <= 0:
+            return "budget"
+        if rate_remaining is not None and rate_remaining <= SOURCE_FACTS_RATE_RESERVE:
+            return "rate_limit"
+        self._attempt_calls_left -= 1
+        return "ok"
+
+    def take_artifact_call(self, *, rate_remaining: int | None) -> str:
+        """Same gate as take_attempt_call, for the artifacts subflag."""
+        if self._artifact_calls_left <= 0:
+            return "budget"
+        if rate_remaining is not None and rate_remaining <= SOURCE_FACTS_RATE_RESERVE:
+            return "rate_limit"
+        self._artifact_calls_left -= 1
+        return "ok"
+
+    def count_drop(self, *, reason: str) -> None:
+        source_facts_dropped.labels(reason=reason).inc()
+
+    def count_pagination_refusal(self) -> None:
+        self.count_drop(reason=self.DROP_PAGINATION_REFUSED)
+
+    def add_pending(
+        self, *, kind: str, repo: str, run_id: int, run_attempt: int | None, window: str, run_status: str | None = None
+    ) -> None:
+        """Remember an owed source fact for retry on later cycles. Bounded:
+        past PENDING_MAX entries the earliest-deadline obligation expires
+        immediately, stated as a coverage record. A malformed identity or
+        run status is refused (never keyed, never coerced into an invented
+        id) and stated as a loss record instead.
+
+        Jobs obligations are keyed by the derived observation bucket, not
+        the raw API status: an in-progress or None sighting normalizes to
+        "active" once, here, so the key and the stored fact match what
+        observe_jobs settles on recovery. Historical-attempt and artifact
+        keys already agree and are untouched."""
+        if not self._identity_ok(repo=repo, run_id=run_id, run_attempt=run_attempt):
+            self._drop_record(
+                kind=kind, repo=repo, run_id=run_id, run_attempt=run_attempt, reason=self.DROP_INVALID_IDENTITY
+            )
+            return
+        if not self._status_ok(value=run_status):
+            self._drop_record(
+                kind=kind, repo=repo, run_id=run_id, run_attempt=run_attempt, reason=self.DROP_INVALID_STATUS
+            )
+            return
+        if kind == "jobs":
+            run_status = "completed" if run_status == "completed" else "active"
+        key = (kind, repo, run_id, run_attempt, run_status)
+        if key in self._pending:
+            return
+        if len(self._pending) >= self.PENDING_MAX:
+            oldest_key = min(self._pending, key=lambda k: self._pending[k].deadline)
+            self._expire_pending(pending=self._pending.pop(oldest_key))
+        self._pending[key] = PendingFact(
+            kind, repo, run_id, run_attempt, window, run_status, time.monotonic() + self.pending_max_age
+        )
+
+    def pending_facts(self) -> list[PendingFact]:
+        """The owed facts awaiting retry, in insertion order (bounded)."""
+        return list(self._pending.values())
+
+    def expire_due_pending(self) -> None:
+        """Remove overdue obligations, stating each as a coverage record:
+        the fact will not arrive from this producer (still replayable from
+        the API)."""
+        now = time.monotonic()
+        for key, pending in list(self._pending.items()):
+            if pending.deadline <= now:
+                self._expire_pending(pending=self._pending.pop(key))
+
+    def _expire_pending(self, *, pending: PendingFact) -> None:
+        self.observe_coverage(
+            repo=pending.repo,
+            payload={"window": "outbox_health", "event": "pending_expired", "pending_kind": pending.kind},
+            run_id=pending.run_id,
+            run_attempt=pending.run_attempt,
+        )
+
+    def observe_run(self, *, repo: str, run: dict[str, JSONValue], window: str) -> bool:
+        """Record one raw run object as first observed in `window` (a
+        bounded funnel name), once per (repo, run id, attempt, active vs
+        completed bucket) per process; again on restart (at-least-once).
+        A malformed identity is refused before any dedupe key exists and
+        stated as a loss record with an explicit unknown identity."""
+        if not self.enabled:
+            return False
+        run_id = run.get("id")
+        attempt = run.get("run_attempt")
+        if not self._identity_ok(repo=repo, run_id=run_id, run_attempt=attempt):
+            self._drop_record(
+                kind="run", repo=repo, run_id=run_id, run_attempt=attempt, reason=self.DROP_INVALID_IDENTITY
+            )
+            return False
+        key = (repo, run_id, attempt, self._bucket(run=run))
+        if key in self._seen_runs:
+            return False
+        status = self._write(
+            kind="run",
+            repo=repo,
+            run_id=run_id,
+            run_attempt=attempt,
+            payload={"window": window, "run": run},
+            page_complete=True,
+        )
+        if status != "retryable":
+            self._remember(seen=self._seen_runs, key=key)
+        return status == "written"
+
+    def observe_jobs(
+        self,
+        *,
+        repo: str,
+        run_id: int,
+        run_attempt: int | None,
+        jobs: list[JSONValue],
+        complete: bool,
+        window: str,
+        run_status: str | None,
+    ) -> bool:
+        """Record the raw jobs of a run's current attempt — every page when
+        `complete`. An in-progress first sighting and the completed fetch
+        are separate observations. A retryable write failure keeps the fact
+        as a pending obligation for later cycles; a malformed identity or
+        run status is refused before any dedupe key exists, so a raw API
+        value can never make an observer raise into the legacy loop."""
+        if not self.enabled:
+            return False
+        if not self._identity_ok(repo=repo, run_id=run_id, run_attempt=run_attempt):
+            self._drop_record(
+                kind="jobs", repo=repo, run_id=run_id, run_attempt=run_attempt, reason=self.DROP_INVALID_IDENTITY
+            )
+            return False
+        if not self._status_ok(value=run_status):
+            self._drop_record(
+                kind="jobs", repo=repo, run_id=run_id, run_attempt=run_attempt, reason=self.DROP_INVALID_STATUS
+            )
+            return False
+        bucket = "completed" if run_status == "completed" else "active"
+        key = (repo, run_id, run_attempt, bucket)
+        if key in self._seen_attempt_jobs:
+            # Already retained: any queued obligation for this bucket is
+            # settled here too, not only on the write path.
+            self._pending.pop(("jobs", repo, run_id, run_attempt, bucket), None)
+            return False
+        status = self._write(
+            kind="jobs",
+            repo=repo,
+            run_id=run_id,
+            run_attempt=run_attempt,
+            payload={"window": window, "jobs": jobs},
+            page_complete=complete,
+        )
+        if status == "retryable":
+            self.add_pending(
+                kind="jobs", repo=repo, run_id=run_id, run_attempt=run_attempt, window=window, run_status=bucket
+            )
+            return False
+        self._remember(seen=self._seen_attempt_jobs, key=key)
+        self._pending.pop(("jobs", repo, run_id, run_attempt, bucket), None)
+        return status == "written"
+
+    def observe_jobs_gap(
+        self,
+        *,
+        repo: str,
+        run_id: int,
+        run_attempt: int | None,
+        window: str,
+        pages_fetched: int,
+        reason: str | None = None,
+    ) -> bool:
+        """Record that a jobs fetch failed: an honest unknown (with the
+        bounded reason), never a fake empty jobs list."""
+        if not self.enabled:
+            return False
+        return (
+            self._write(
+                kind="coverage",
+                repo=repo,
+                run_id=run_id,
+                run_attempt=run_attempt,
+                payload={"window": window, "event": "jobs_unknown", "pages_fetched": pages_fetched, "reason": reason},
+                page_complete=False,
+            )
+            == "written"
+        )
+
+    def observe_run_attempt(
+        self, *, repo: str, run_id: int, attempt_run: dict[str, JSONValue], jobs: list[JSONValue], complete: bool
+    ) -> bool:
+        """Record the terminal state of one historical attempt (n < the
+        run's current attempt): the attempt's run object and its jobs. A
+        retryable write failure keeps the fact as a pending obligation;
+        a malformed identity is refused before any dedupe key exists.
+        Success also marks the attempt's run-level fact retained, so a
+        later lookback skips it only when both facts are held."""
+        if not self.enabled:
+            return False
+        attempt = attempt_run.get("run_attempt")
+        if not self._identity_ok(repo=repo, run_id=run_id, run_attempt=attempt):
+            self._drop_record(
+                kind="run_attempt", repo=repo, run_id=run_id, run_attempt=attempt, reason=self.DROP_INVALID_IDENTITY
+            )
+            return False
+        # Deduped on its own record, not on the jobs fact: a run whose
+        # current-attempt jobs were already recorded still gets its
+        # recovered run object written.
+        if (repo, run_id, attempt) in self._seen_run_attempts:
+            self._pending.pop(("run_attempt", repo, run_id, attempt, "completed"), None)
+            return False
+        status = self._write(
+            kind="run_attempt",
+            repo=repo,
+            run_id=run_id,
+            run_attempt=attempt,
+            payload={"window": "attempt_history", "run": attempt_run, "jobs": jobs},
+            page_complete=complete,
+        )
+        if status == "retryable":
+            self.add_pending(
+                kind="run_attempt",
+                repo=repo,
+                run_id=run_id,
+                run_attempt=attempt,
+                window="attempt_history",
+                run_status="completed",
+            )
+            return False
+        self._remember(seen=self._seen_run_attempts, key=(repo, run_id, attempt))
+        key = (repo, run_id, attempt, "completed")
+        self._remember(seen=self._seen_attempt_jobs, key=key)
+        self._remember(seen=self._seen_runs, key=key)
+        self._pending.pop(("run_attempt", repo, run_id, attempt, "completed"), None)
+        return status == "written"
+
+    def attempt_jobs_recorded(self, *, repo: str, run_id: int, attempt: int | None) -> bool:
+        """Whether this attempt's jobs are already recorded (as a current
+        completed attempt or an earlier historical fetch)."""
+        return (repo, run_id, attempt, "completed") in self._seen_attempt_jobs
+
+    def attempt_facts_retained(self, *, repo: str, run_id: int, attempt: int | None) -> bool:
+        """Whether both the jobs fact and a run-level fact for this attempt
+        are retained: the run fact observed when the attempt was current,
+        or the run object recorded by an earlier historical fetch. History
+        skips an attempt only when both are held, so a lost run fact is
+        refetched instead of silently dropped."""
+        return (
+            self.attempt_jobs_recorded(repo=repo, run_id=run_id, attempt=attempt)
+            and (repo, run_id, attempt, "completed") in self._seen_runs
+        )
+
+    def observe_artifacts(
+        self,
+        *,
+        repo: str,
+        run_id: int,
+        run_attempt: int | None,
+        artifacts: list[JSONValue],
+        complete: bool,
+        window: str,
+    ) -> bool:
+        """Record one observation of a run's raw artifact listing, made
+        while processing `run_attempt`. The attempt is observation context
+        only: the endpoint stays run-wide, and names and URLs never
+        establish attempt or job authority. A retryable write failure keeps
+        the fact as a pending obligation; a malformed identity is refused
+        before any dedupe key exists."""
+        if not self.enabled:
+            return False
+        if not self._identity_ok(repo=repo, run_id=run_id, run_attempt=run_attempt):
+            self._drop_record(
+                kind="artifacts", repo=repo, run_id=run_id, run_attempt=run_attempt, reason=self.DROP_INVALID_IDENTITY
+            )
+            return False
+        if (repo, run_id, run_attempt) in self._seen_artifacts:
+            self._pending.pop(("artifacts", repo, run_id, run_attempt, None), None)
+            return False
+        status = self._write(
+            kind="artifacts",
+            repo=repo,
+            run_id=run_id,
+            run_attempt=run_attempt,
+            payload={"window": window, "artifacts": artifacts},
+            page_complete=complete,
+        )
+        if status == "retryable":
+            self.add_pending(kind="artifacts", repo=repo, run_id=run_id, run_attempt=run_attempt, window=window)
+            return False
+        self._remember(seen=self._seen_artifacts, key=(repo, run_id, run_attempt))
+        self._pending.pop(("artifacts", repo, run_id, run_attempt, None), None)
+        return status == "written"
+
+    def artifacts_recorded(self, *, repo: str, run_id: int, run_attempt: int | None) -> bool:
+        return (repo, run_id, run_attempt) in self._seen_artifacts
+
+    def observe_coverage(
+        self, *, repo: str, payload: dict[str, JSONValue], run_id: int | None = None, run_attempt: int | None = None
+    ) -> bool:
+        """Record a window/coverage fact (heartbeat, truncation, deferral,
+        unknown, or loss state). Not deduplicated: each observation
+        describes its own cycle. Payloads are bounded enums and counts."""
+        if not self.enabled:
+            return False
+        return (
+            self._write(
+                kind="coverage", repo=repo, run_id=run_id, run_attempt=run_attempt, payload=payload, page_complete=None
+            )
+            == "written"
+        )
+
+    @staticmethod
+    def _bucket(*, run: dict[str, JSONValue]) -> str:
+        return "completed" if run.get("status") == "completed" else "active"
+
+    @staticmethod
+    def _identity_ok(*, repo: object, run_id: object, run_attempt: object) -> bool:
+        """Bounded identity check, run before any seen/pending key is
+        built: repo must be a str, and each id a non-bool int or None. A
+        malformed API value (a list, NaN, a str id, a non-str repo) is
+        refused here — never coerced into an invented id — so an observer
+        cannot raise or interrupt legacy processing; the refused fact is
+        stated as a loss record with an explicit unknown identity."""
+        if not isinstance(repo, str):
+            return False
+        for value in (run_id, run_attempt):
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+                return False
+        return True
+
+    @staticmethod
+    def _status_ok(*, value: object) -> bool:
+        """Bounded run-status check, run before any pending key is built:
+        only a string or None is accepted. A raw API value (a list, a
+        dict) would make the key unhashable and raise inside the observer,
+        so it is refused here and stated as a loss record instead."""
+        return value is None or isinstance(value, str)
+
+    @staticmethod
+    def _remember(*, seen: set[_SeenKey], key: _SeenKey) -> None:
+        if len(seen) > SourceFactsOutbox.SEEN_CAP:
+            seen.clear()
+        seen.add(key)
+
+    def _write(
+        self,
+        *,
+        kind: str,
+        repo: str,
+        run_id: int | None,
+        run_attempt: int | None,
+        payload: JSONValue,
+        page_complete: bool | None,
+    ) -> str:
+        """Serialize and append one envelope. Returns "written",
+        "retryable" (a transient write failure — safe to re-observe on a
+        later sighting), or "dropped" (deterministic: unserializable or
+        over the record cap; the consumer learns it from a loss-state
+        record)."""
+        envelope: dict[str, JSONValue] = {
+            "schema": self.SCHEMA,
+            "version": self.VERSION,
+            "kind": kind,
+            "repo": repo,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+            "fetched_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "page_complete": page_complete,
+            "payload": payload,
+        }
+        if not self._validate_json_value(value=envelope, depth=0, seen=set()):
+            return self._drop_record(
+                kind=kind, repo=repo, run_id=run_id, run_attempt=run_attempt, reason=self.DROP_SERIALIZE
+            )
+        try:
+            # allow_nan=False: json.dumps would otherwise emit NaN/Infinity,
+            # which is not JSON and would corrupt the segment mid-file.
+            line = json.dumps(envelope, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError, RecursionError):
+            return self._drop_record(
+                kind=kind, repo=repo, run_id=run_id, run_attempt=run_attempt, reason=self.DROP_SERIALIZE
+            )
+        data = line.encode("utf-8") + b"\n"
+        if len(data) > self.max_record_bytes:
+            return self._drop_record(
+                kind=kind, repo=repo, run_id=run_id, run_attempt=run_attempt, reason=self.DROP_RECORD_TOO_LARGE
+            )
+        if not self._append(data=data):
+            return "retryable"
+        source_facts_records.labels(kind=kind).inc()
+        return "written"
+
+    def _drop_record(self, *, kind: str, repo: str, run_id: int | None, run_attempt: int | None, reason: str) -> str:
+        """Count a deterministic drop and leave a durable loss-state record
+        (see _record_loss_state)."""
+        self.count_drop(reason=reason)
+        self._record_loss_state(kind=kind, repo=repo, run_id=run_id, run_attempt=run_attempt, reason=reason)
+        return "dropped"
+
+    def _record_loss_state(
+        self, *, kind: str, repo: str, run_id: int | None, run_attempt: int | None, reason: str
+    ) -> None:
+        """A bounded note, durable in the outbox itself, that a source fact
+        was dropped (unserializable or over the record cap), so the
+        consumer learns the gap from the outbox, not only Prometheus.
+        Identity fields are sanitized to provably-valid values — an invalid
+        identity becomes an explicit unknown, never a faked one — and the
+        whole path is guarded: it can count, but never raise into the
+        collect loop. Disk-full and segment-cap refusals cannot be recorded
+        here (no space by definition): those stay counter-only and recover
+        through the pending-obligation retries."""
+        envelope = {
+            "schema": self.SCHEMA,
+            "version": self.VERSION,
+            "kind": "coverage",
+            "repo": repo if isinstance(repo, str) else "unknown",
+            "run_id": self._loss_identity(value=run_id),
+            "run_attempt": self._loss_identity(value=run_attempt),
+            "fetched_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "page_complete": None,
+            "payload": {
+                "window": "outbox_health",
+                "event": "record_dropped",
+                "dropped_kind": kind if isinstance(kind, str) else "unknown",
+                "reason": reason if isinstance(reason, str) else "unknown",
+            },
+        }
+        try:
+            line = json.dumps(envelope, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError, RecursionError):
+            self.count_drop(reason=self.DROP_SERIALIZE)
+            return
+        if self._append(data=line.encode("utf-8") + b"\n"):
+            source_facts_records.labels(kind="coverage").inc()
+
+    @staticmethod
+    def _loss_identity(*, value: object) -> int | None:
+        """A loss record's identity carries only provably-valid values:
+        anything else (a NaN id, a str, any non-int) becomes an explicit
+        unknown rather than a faked or unserializable identity."""
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        return None
+
+    @classmethod
+    def _validate_json_value(cls, *, value: object, depth: int, seen: set[int]) -> bool:
+        """Strict boundary check: only null, bool, int, finite float, str,
+        list, and str-keyed dict, within JSON_MAX_DEPTH and without cycles.
+        Anything json.dumps would silently normalize — tuples to arrays,
+        non-string keys to strings, NaN/Infinity to invalid JSON — is
+        refused instead."""
+        if value is None or isinstance(value, (bool, int, str)):
+            return True
+        if isinstance(value, float):
+            return math.isfinite(value)
+        if not isinstance(value, (list, dict)):
+            return False
+        if depth >= cls.JSON_MAX_DEPTH or id(value) in seen:
+            return False
+        seen.add(id(value))
+        try:
+            if isinstance(value, list):
+                return all(cls._validate_json_value(value=v, depth=depth + 1, seen=seen) for v in value)
+            return all(
+                isinstance(k, str) and cls._validate_json_value(value=v, depth=depth + 1, seen=seen)
+                for k, v in value.items()
+            )
+        finally:
+            seen.discard(id(value))
+
+    def _append(self, *, data: bytes) -> bool:
+        """Append one encoded record, rotating segments as needed, and fsync
+        it before acknowledging: a record is "written" only once it is on
+        the disk, not in the page cache. Any OSError — write or fsync —
+        abandons the current segment and is counted as degraded source
+        health, never raised into the polling loop."""
+        try:
+            rotate = self._segment_fd is None or self._segment_size >= self.max_segment_bytes
+            if rotate and not self._open_segment():
+                return False
+            view = memoryview(data)
+            while view:
+                written = os.write(self._segment_fd, view)
+                self._segment_size += written
+                source_facts_bytes.inc(written)
+                view = view[written:]
+        except OSError as exc:
+            self._close_segment()
+            self.count_drop(reason=self._drop_reason(exc=exc))
+            return False
+        try:
+            os.fsync(self._segment_fd)
+        except OSError:
+            self._close_segment()
+            self.count_drop(reason=self.DROP_FSYNC)
+            return False
+        return True
+
+    @classmethod
+    def _drop_reason(cls, *, exc: OSError) -> str:
+        if exc.errno == errno.ENOSPC:
+            return cls.DROP_DISK_FULL
+        # ENOTDIR is how Linux reports a symlinked component to an
+        # O_DIRECTORY|O_NOFOLLOW open: a refusal to traverse, so it maps
+        # to permission exactly like ELOOP, at adoption time and after.
+        if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.ELOOP, errno.ENOTDIR):
+            return cls.DROP_PERMISSION
+        return cls.DROP_WRITE
+
+    def _close_segment(self) -> None:
+        """Close the current segment and never append to it again: a failed
+        write may have left a torn line, and a later append would bury it
+        mid-segment where the consumer could not detect it. The segment's
+        contents stay — unacknowledged data is never deleted here."""
+        if self._segment_fd is not None:
+            with suppress(OSError):
+                os.close(self._segment_fd)
+        self._segment_fd = None
+        self._segment_path = None
+        self._segment_size = 0
+
+    def _fsync_dir(self) -> bool:
+        """Persist the root's directory entries through a component-checked
+        open, after verifying the pinned device/inode identity: a root
+        that was renamed away and replaced — or whose path now runs
+        through a symlinked ancestor — is refused, never fsynced or
+        acknowledged."""
+        try:
+            fd = self._open_root()
+        except OSError as exc:
+            self.count_drop(reason=self._drop_reason(exc=exc))
+            return False
+        try:
+            st = os.fstat(fd)
+            if self._root_identity is None or (st.st_dev, st.st_ino) != self._root_identity:
+                self.count_drop(reason=self.DROP_ROOT_REPLACED)
+                return False
+            os.fsync(fd)
+        except OSError:
+            self.count_drop(reason=self.DROP_FSYNC)
+            return False
+        finally:
+            os.close(fd)
+        return True
+
+    def _open_segment(self) -> bool:
+        """Open the next exclusively-created segment (O_EXCL, mode 0600),
+        refusing — not deleting — once the segment cap is reached or the
+        directory cannot be listed to count it.
+
+        The parent directory is pinned as a descriptor, opened through
+        the same component-checked walk as adoption, for the whole
+        create/cleanup span: the segment is created and, on failure,
+        removed relative to that exact directory (os.open/os.unlink
+        dir_fd), so a root swapped in between can never redirect cleanup
+        at a replacement writer's file. This writer never deletes a file
+        it did not create."""
+        if not self._ensure_dir():
+            return False
+        self._close_segment()
+        try:
+            parent_fd = self._open_root()
+        except OSError as exc:
+            self.count_drop(reason=self._drop_reason(exc=exc))
+            return False
+        try:
+            st = os.fstat(parent_fd)
+            if self._root_identity is None or (st.st_dev, st.st_ino) != self._root_identity:
+                self.count_drop(reason=self.DROP_ROOT_REPLACED)
+                return False
+            existing = self._segment_names(root_fd=parent_fd)
+            if existing is None:
+                # The cap cannot be checked honestly against an unreadable
+                # directory: refuse the write rather than guess.
+                self.count_drop(reason=self.DROP_WRITE)
+                return False
+            if len(existing) >= self.max_segments:
+                self.count_drop(reason=self.DROP_SEGMENT_CAP)
+                return False
+            while True:
+                self._seq += 1
+                name = f"{self.SEGMENT_PREFIX}{self._seq:010d}{self.SEGMENT_SUFFIX}"
+                path = os.path.join(self.root, name)
+                try:
+                    fd = os.open(name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=parent_fd)
+                except FileExistsError:
+                    continue  # a previous process already used this sequence number
+                except OSError as exc:
+                    self.count_drop(reason=self._drop_reason(exc=exc))
+                    return False
+                self._segment_fd = fd
+                self._segment_path = path
+                self._segment_size = 0
+                if not self._fsync_dir():
+                    # The root at the configured path is no longer the
+                    # pinned one, or its entries could not be made durable:
+                    # never acknowledge into it. Cleanup is relative to the
+                    # pinned parent, so it can only remove this call's own
+                    # empty file — never a replacement writer's data.
+                    self._close_segment()
+                    with suppress(OSError):
+                        os.unlink(name, dir_fd=parent_fd)
+                    return False
+                source_facts_segments.set(len(existing) + 1)
+                return True
+        finally:
+            os.close(parent_fd)
+
+    def _segment_names(self, *, root_fd: int | None = None) -> list[str] | None:
+        """Segment names in the root, or None when the directory cannot be
+        read: the caller must refuse to write rather than guess the cap.
+        The listing goes through the pinned, component-checked root
+        descriptor, never a path that a swapped symlink could redirect."""
+        fd = root_fd
+        opened_here = fd is None
+        if fd is None:
+            try:
+                fd = self._open_root()
+            except OSError:
+                return None
+        try:
+            return [n for n in os.listdir(fd) if n.startswith(self.SEGMENT_PREFIX)]
+        except OSError:
+            return None
+        finally:
+            if opened_here:
+                with suppress(OSError):
+                    os.close(fd)
+
+    def _ensure_dir(self) -> bool:
+        """Create (or adopt) the outbox root and pin its identity.
+
+        Refuses to write when privacy cannot be enforced or the directory
+        cannot be listed: the records hold user-controlled GitHub strings,
+        and the segment cap must stay checkable. The root and any missing
+        ancestors are created one component at a time, each new entry's
+        parent fsynced before the first acknowledgement; the existing
+        directory the chain adopts — the root itself, or the deepest
+        existing anchor — always has its own parent entry fsynced too,
+        unconditionally and idempotently, so a directory left behind by
+        any failed writer (this process, a fresh one, or a concurrent
+        creator) is never adopted with an unpersisted entry; every
+        component is opened relative to the previous one's pinned
+        descriptor with O_DIRECTORY and O_NOFOLLOW, so a symlinked leaf
+        or ancestor is refused rather than followed into an external
+        target (which is never chmod'ed); and the root's device/inode
+        identity is pinned so a renamed and replaced root can never be
+        fsynced or acknowledged later."""
+        if self._dir_ready:
+            return True
+        root_fd = self._create_root_chain()
+        if root_fd is None:
+            return False
+        try:
+            st = os.fstat(root_fd)
+            if st.st_mode & 0o077:
+                # fchmod through the pinned, component-checked fd: never
+                # follows a symlink, never touches an external target.
+                os.fchmod(root_fd, 0o700)
+                st = os.fstat(root_fd)
+            if st.st_mode & 0o077:
+                # A filesystem that silently ignores chmod: refuse rather
+                # than write private data widely.
+                self.count_drop(reason=self.DROP_PERMISSION)
+                return False
+            self._root_identity = (st.st_dev, st.st_ino)
+        except OSError as exc:
+            self.count_drop(reason=self._drop_reason(exc=exc))
+            return False
+        finally:
+            os.close(root_fd)
+        names = self._segment_names()
+        if names is None:
+            self.count_drop(reason=self.DROP_WRITE)
+            return False
+        for name in names:
+            try:
+                self._seq = max(
+                    self._seq, int(name.removeprefix(self.SEGMENT_PREFIX).removesuffix(self.SEGMENT_SUFFIX))
+                )
+            except ValueError:
+                continue
+        self._dir_ready = True
+        source_facts_segments.set(len(names))
+        return True
+
+    def _walk_root_chain(self) -> tuple[int, int | None, list[str]]:
+        """Walk the configured root's absolute components one at a time
+        from the filesystem root, each opened relative to the previous
+        component's pinned descriptor with O_NOFOLLOW: a symlink anywhere
+        on the chain — not only at the root — is refused with ELOOP
+        instead of followed into an external target.
+
+        Returns (anchor_fd, anchor_parent_fd, missing): the descriptor of
+        the deepest existing component, the descriptor of its parent
+        (None only when the anchor is the filesystem root), and the
+        remaining components below it. Raises OSError, with the walk's
+        descriptors closed, when a component cannot be opened."""
+        components = [c for c in os.path.abspath(self.root).split(os.sep) if c]
+        anchor_fd = os.open(os.sep, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        parent_fd: int | None = None
+        index = 0
+        try:
+            while index < len(components):
+                try:
+                    next_fd = os.open(components[index], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=anchor_fd)
+                except FileNotFoundError:
+                    break
+                if parent_fd is not None:
+                    os.close(parent_fd)
+                parent_fd, anchor_fd = anchor_fd, next_fd
+                index += 1
+            return anchor_fd, parent_fd, components[index:]
+        except BaseException:
+            with suppress(OSError):
+                os.close(anchor_fd)
+            if parent_fd is not None:
+                with suppress(OSError):
+                    os.close(parent_fd)
+            raise
+
+    def _open_root(self) -> int:
+        """Open the configured root by re-walking every component with
+        O_NOFOLLOW: a symlink introduced anywhere above the root after
+        adoption is refused, never followed, and a vanished root raises
+        FileNotFoundError. Raises OSError; counting the drop is the
+        caller's, so each failure is counted exactly once."""
+        anchor_fd, parent_fd, missing = self._walk_root_chain()
+        if parent_fd is not None:
+            with suppress(OSError):
+                os.close(parent_fd)
+        if missing:
+            with suppress(OSError):
+                os.close(anchor_fd)
+            raise FileNotFoundError(errno.ENOENT, "outbox root is missing")
+        return anchor_fd
+
+    def _create_root_chain(self) -> int | None:
+        """Create the root and any missing ancestors, fsyncing each new
+        directory's parent so the entry is durable before the first
+        acknowledgement. The existing directory the walk adopts — the root
+        itself, or the deepest existing anchor — always has its own parent
+        entry fsynced too: the fsync is idempotent, and it is the only way
+        a directory left behind by a failed writer (this process, a fresh
+        one, or a concurrent creator whose fsync has not run yet) is never
+        adopted with an unpersisted entry. Returns the pinned root
+        descriptor, or None with the refusal counted."""
+        try:
+            anchor_fd, parent_fd, missing = self._walk_root_chain()
+        except OSError:
+            # ELOOP (a symlinked component), ENOTDIR, EACCES: refuse
+            # rather than create or traverse.
+            self.count_drop(reason=self.DROP_PERMISSION)
+            return None
+        created = False
+        try:
+            # Unconditional, idempotent adoption fsync: persist the adopted
+            # anchor's own entry before anything below it is acknowledged.
+            if parent_fd is not None:
+                try:
+                    os.fsync(parent_fd)
+                except OSError:
+                    self.count_drop(reason=self.DROP_FSYNC)
+                    return None
+            for name in missing:
+                try:
+                    os.mkdir(name, 0o700, dir_fd=anchor_fd)
+                except FileExistsError:
+                    pass  # a concurrent creator; the open below verifies it
+                except OSError as exc:
+                    self.count_drop(reason=self._drop_reason(exc=exc))
+                    return None
+                # The new entry is durable before anything exists below it.
+                try:
+                    os.fsync(anchor_fd)
+                except OSError:
+                    self.count_drop(reason=self.DROP_FSYNC)
+                    return None
+                try:
+                    child_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=anchor_fd)
+                except OSError:
+                    self.count_drop(reason=self.DROP_PERMISSION)
+                    return None
+                os.close(anchor_fd)
+                anchor_fd = child_fd
+            created = True
+            return anchor_fd
+        finally:
+            if not created:
+                with suppress(OSError):
+                    os.close(anchor_fd)
+            if parent_fd is not None:
+                with suppress(OSError):
+                    os.close(parent_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +1562,14 @@ class WorkflowExporter:
         self._pr_map = {}
         self._pr_map_ts = 0
         self._pr_backfill_done = False
+        # Raw source-facts outbox (W01c): entirely off unless
+        # SOURCE_FACTS_OUTBOX_DIR is set. Every observe is a no-op when off
+        # and a counted, value-free degraded-health drop when a write
+        # fails — it can never break the collect loop.
+        self._source_facts = SourceFactsOutbox()
+        # Last GitHub rate-limit remaining seen by _get (None until a
+        # response carries the header). Gates outbox extra calls only.
+        self._api_rate_remaining = None
         self._init_db()
 
     # -- SQLite persistence ---------------------------------------------------
@@ -1082,6 +2063,7 @@ class WorkflowExporter:
     def _update_rate_limit(self, resp):
         remaining = resp.headers.get("X-RateLimit-Remaining")
         if remaining is not None:
+            self._api_rate_remaining = int(remaining)
             api_remaining.labels(org=ORG).set(int(remaining))
 
     def _get(self, url):
@@ -1731,6 +2713,7 @@ class WorkflowExporter:
         """
         runs = []
         complete = True
+        raw_seen = 0
         for status in ("queued", "in_progress"):
             url = (
                 f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
@@ -1742,6 +2725,11 @@ class WorkflowExporter:
                     complete = False
                     break
                 for run in resp.json().get("workflow_runs", []):
+                    raw_seen += 1
+                    # Raw fact recorded before the legacy filter, so
+                    # ignored-event runs stay visible as source facts
+                    # while their legacy rows stay excluded.
+                    self._source_facts.observe_run(repo=repo, run=run, window="active_runs")
                     if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
                         continue
                     record = self._make_job_record(run, repo)
@@ -1749,7 +2737,7 @@ class WorkflowExporter:
                         record["zombie"] = True
                     suites = []
                     if status == "in_progress":
-                        jobs = self._fetch_run_jobs(repo, run["id"])
+                        jobs = self._fetch_ingestion_jobs(repo=repo, run=run, window="active_runs")
                         if jobs:
                             record["runner_name"] = self._extract_runner_names(jobs)
                             self._refine_pipeline_category(record, jobs, active=True)
@@ -1763,6 +2751,12 @@ class WorkflowExporter:
                     runs.append(record)
                     runs.extend(suites)
                 url = resp.links.get("next", {}).get("url")
+        # Full-paginated window fact: complete only when every page of
+        # both status lists was fetched (see the callers' skip-on-partial
+        # handling of the returned flag).
+        self._source_facts.observe_coverage(repo=repo, payload={
+            "window": "active_runs", "complete": complete, "runs_seen": raw_seen,
+        })
         return runs, complete
 
     def _recent_completed(self, repo):
@@ -1787,30 +2781,77 @@ class WorkflowExporter:
         rank lower. See collect()'s dropped-from-active-list catch-up for
         the mechanism that actually covers long-running runs; this
         function alone is not sufficient for them.
+
+        With the source-facts outbox on, each fetch also records a window
+        coverage fact: one page of 50 is complete only when total_count
+        says it genuinely held every completed run -- a truncated window
+        is stated as one, never implied to be a full 30/90-day history.
         """
         resp = self._get(
             f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
             f"?status=completed&per_page=50"
         )
         if not resp.ok:
+            self._source_facts.observe_coverage(repo=repo, payload={
+                "window": "recent_completed", "complete": False,
+                "event": "fetch_failed",
+            })
             return []
-        return resp.json().get("workflow_runs", [])
+        payload = resp.json()
+        runs = payload.get("workflow_runs", [])
+        # complete is claimed only from a known valid total: a missing or
+        # malformed total_count is an explicit unknown, never runs_seen in
+        # disguise, and one page of 50 never implies a full 30/90-day
+        # history (see the docstring above).
+        total = payload.get("total_count")
+        if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+            self._source_facts.observe_coverage(repo=repo, payload={
+                "window": "recent_completed", "complete": len(runs) >= total,
+                "runs_seen": len(runs), "runs_total": total,
+            })
+        else:
+            self._source_facts.observe_coverage(repo=repo, payload={
+                "window": "recent_completed", "complete": None,
+                "event": "total_unknown", "runs_seen": len(runs),
+            })
+        return runs
 
     def _fetch_recent_history(self, repo):
         """Fetch the most recent completed runs for initial history load.
 
         Fetches 100 most recent completed runs per repo to seed Prometheus
-        counters and the JSON API with a meaningful baseline.
+        counters and the JSON API with a meaningful baseline. With the
+        source-facts outbox on, records the same honest single-page window
+        coverage fact as _recent_completed: complete only from a known
+        valid total_count, an explicit unknown when it is missing.
         """
         resp = self._get(
             f"{API_URL}/repos/{ORG}/{repo}/actions/runs"
             f"?status=completed&per_page=100"
         )
         if not resp.ok:
+            self._source_facts.observe_coverage(repo=repo, payload={
+                "window": "initial_load", "complete": False,
+                "event": "fetch_failed",
+            })
             return []
-        return resp.json().get("workflow_runs", [])
+        payload = resp.json()
+        runs = payload.get("workflow_runs", [])
+        total = payload.get("total_count")
+        if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+            self._source_facts.observe_coverage(repo=repo, payload={
+                "window": "initial_load", "complete": len(runs) >= total,
+                "runs_seen": len(runs), "runs_total": total,
+            })
+        else:
+            self._source_facts.observe_coverage(repo=repo, payload={
+                "window": "initial_load", "complete": None,
+                "event": "total_unknown", "runs_seen": len(runs),
+            })
+        return runs
 
-    def _fetch_run_jobs(self, repo, run_id, run_attempt=None):
+    def _fetch_run_jobs(self, repo: str, run_id: int, run_attempt: int | None = None
+                        ) -> list[dict[str, JSONValue]] | None:
         """Fetch job-level details for a run.
 
         With run_attempt, fetches that attempt's jobs; without it, the
@@ -1820,21 +2861,405 @@ class WorkflowExporter:
         a record built from a failed fetch would look like a complete,
         jobless run forever, since a run already stored looks "seen" to
         _needs_upsert.
+
+        Always exactly one per_page=30 page, whatever the source-facts
+        outbox state: the zombie recheck and the off-default ingestion
+        path rely on that one request. Pagination belongs to
+        _fetch_run_jobs_paged (source-facts ingestion only).
         """
-        if run_attempt is None:
-            url = (
-                f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}/jobs"
-                f"?filter=latest&per_page=30"
-            )
-        else:
-            url = (
-                f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}"
-                f"/attempts/{run_attempt}/jobs?per_page=30"
-            )
-        resp = self._get(url)
+        resp = self._get(self._jobs_url(repo=repo, run_id=run_id, run_attempt=run_attempt))
         if not resp.ok:
             return None
         return resp.json().get("jobs", [])
+
+    @staticmethod
+    def _jobs_url(*, repo: str, run_id: int, run_attempt: int | None) -> str:
+        """The jobs-listing URL for one attempt, or for the latest attempt
+        when run_attempt is None — the URL both the legacy one-page fetch
+        and the paginated ingestion fetch start from."""
+        if run_attempt is None:
+            return (f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}/jobs"
+                    f"?filter=latest&per_page=30")
+        return (f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}"
+                f"/attempts/{run_attempt}/jobs?per_page=30")
+
+    # Upper bounds on followed Link pages per fetch: GitHub's list
+    # endpoints stop around 1000 results, so anything past these is a
+    # malformed or hostile Link chain, not a real listing.
+    MAX_JOB_PAGES = 40          # 40 x per_page=30 = 1200 jobs
+    MAX_ARTIFACT_PAGES = 10     # 10 x per_page=100 = 1000 artifacts
+
+    # Query parameters GitHub may advance between pages of one listing;
+    # every other parameter (filter, per_page, ...) is part of the
+    # request's identity and must not change across its pages.
+    PAGINATION_CURSOR_PARAMS = frozenset({"page", "cursor"})
+
+    def _fetch_run_jobs_paged(self, *, repo: str, run_id: int, run_attempt: int | None = None,
+                              gate_first: bool = False
+                              ) -> tuple[list[dict[str, JSONValue]] | None, bool, int, str | None]:
+        """Fetch a run's jobs for source-facts ingestion as (jobs,
+        page_complete, pages_fetched, gap_reason).
+
+        jobs is None on any failure — the first page, a later Link page, a
+        refused pagination target, or a budget/rate decline — with
+        gap_reason a bounded enum ("fetch_failed" / "pagination_refused" /
+        "budget" / "rate_limit"), so callers keep the unchanged
+        None-means-retry-later semantics and never ingest a truncated or
+        foreign listing. Link pages are followed to the end, each target
+        validated against the exact resource path and query context of the
+        first request (see _validated_pagination_target).
+
+        Every Link tail page — a request the legacy path never made — is
+        checked against the per-cycle attempt budget and the rate floor
+        immediately before it is requested, whatever the mode; with
+        `gate_first` (historical attempts and pending retries) the first
+        page is checked too. A decline returns the pages already fetched
+        with the bounded reason, never a complete listing, and the budget
+        can never go negative. The legacy first page of the
+        current-attempt ingestion fetch is the one exemption: it is the
+        call the legacy path already made.
+        """
+        first_url = self._jobs_url(repo=repo, run_id=run_id, run_attempt=run_attempt)
+        if gate_first:
+            status = self._source_facts.take_attempt_call(rate_remaining=self._api_rate_remaining)
+            if status != "ok":
+                return None, False, 0, status
+        resp = self._get(first_url)
+        if not resp.ok:
+            return None, False, 0, "fetch_failed"
+        jobs = list(resp.json().get("jobs", []))
+        pages = 1
+        seen_urls = {first_url}
+        next_raw = resp.links.get("next", {}).get("url")
+        while next_raw:
+            next_url = self._validated_pagination_target(next_url=next_raw, first_url=first_url)
+            if (next_url is None or next_url in seen_urls
+                    or pages >= self.MAX_JOB_PAGES):
+                self._source_facts.count_pagination_refusal()
+                logger.warning(
+                    "Refusing a jobs pagination target that is not the same "
+                    "listing, loops, or exceeds the page cap")
+                return None, False, pages, "pagination_refused"
+            status = self._source_facts.take_attempt_call(rate_remaining=self._api_rate_remaining)
+            if status != "ok":
+                return None, False, pages, status
+            seen_urls.add(next_url)
+            resp = self._get(next_url)
+            if not resp.ok:
+                return None, False, pages, "fetch_failed"
+            jobs.extend(resp.json().get("jobs", []))
+            pages += 1
+            next_raw = resp.links.get("next", {}).get("url")
+        return jobs, True, pages, None
+
+    @staticmethod
+    def _validated_pagination_target(*, next_url: str, first_url: str) -> str | None:
+        """A rel=next target is followed only when it names the exact same
+        listing as the first request: same origin, byte-identical resource
+        path (org, repo, run, attempt, resource kind), and the same query
+        context except for the page cursor. A Link header is response
+        data: anything else would send the token to another host or
+        smuggle a different run's, attempt's, repo's, or endpoint's data
+        under this request's identity — refused like a failed page."""
+        if not next_url:
+            return None
+        target = urlparse(next_url)
+        first = urlparse(first_url)
+        if (target.scheme != first.scheme
+                or target.netloc != first.netloc
+                or target.path != first.path):
+            return None
+        target_q = parse_qs(target.query, keep_blank_values=True)
+        first_q = parse_qs(first.query, keep_blank_values=True)
+        cursors = WorkflowExporter.PAGINATION_CURSOR_PARAMS
+        for key, values in first_q.items():
+            if key not in cursors and target_q.get(key) != values:
+                return None
+        if any(key not in first_q and key not in cursors for key in target_q):
+            return None
+        return next_url
+
+    def _fetch_ingestion_jobs(self, *, repo: str, run: dict[str, JSONValue],
+                              window: str) -> list[dict[str, JSONValue]] | None:
+        """Fetch a run's jobs at an ingestion site (active-run tracking,
+        completed-run processing, backfill, initial load).
+
+        With the source-facts outbox off, exactly the historical
+        single-page latest-attempt fetch. With it on: the run's actual
+        attempt is requested through the same attempts endpoint the
+        zombie check already uses, Link tail pages are followed with each
+        one preflighted against the attempt budget and the rate floor,
+        and the observation is recorded — or, on failure, an honest
+        jobs-unknown coverage gap instead of a fake empty list. A
+        declined tail page leaves the listing incomplete (None, so the
+        legacy row is not stored either) and keeps the owed jobs fact as
+        a pending obligation: the run can leave the ingestion windows
+        before the budget recovers. The zombie recheck calls
+        _fetch_run_jobs directly: one page, no emission, ever.
+        """
+        run_id = run["id"]
+        if not self._source_facts.enabled:
+            return self._fetch_run_jobs(repo, run_id)
+        attempt = run.get("run_attempt")
+        jobs, complete, pages, reason = self._fetch_run_jobs_paged(repo=repo, run_id=run_id, run_attempt=attempt)
+        if jobs is None:
+            self._source_facts.observe_jobs_gap(repo=repo, run_id=run_id, run_attempt=attempt, window=window,
+                                                pages_fetched=pages, reason=reason)
+            if reason in ("budget", "rate_limit"):
+                self._source_facts.add_pending(
+                    kind="jobs", repo=repo, run_id=run_id, run_attempt=attempt,
+                    window=window, run_status=run.get("status"))
+            return None
+        self._source_facts.observe_jobs(repo=repo, run_id=run_id, run_attempt=attempt, jobs=jobs,
+                                        complete=complete, window=window,
+                                        run_status=run.get("status"))
+        return jobs
+
+    def _fetch_attempt_run(self, *, repo: str, run_id: int,
+                           attempt: int) -> dict[str, JSONValue] | None:
+        """The run object of one historical attempt. None on failure. Only
+        called with the source-facts outbox on (extra request, budgeted)."""
+        resp = self._get(
+            f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}/attempts/{attempt}"
+        )
+        if not resp.ok:
+            return None
+        return resp.json()
+
+    def _record_attempt_history(self, *, repo: str, run: dict[str, JSONValue]) -> None:
+        """Source-facts outbox only: observe the terminal state of a
+        re-run's earlier attempts (n < the current attempt) — the
+        attempt's run object plus its jobs, through the same _get rate
+        budget with every extra request gated immediately before it is
+        made. A budget or rate decline queues every remaining owed
+        identity in the lookback range as a pending obligation (no
+        further API calls) before stopping; fetch failures become pending
+        too, so a gap heals when the API answers again. An attempt is
+        skipped only when both its jobs fact and a run-level fact are
+        retained, so a lost run fact is refetched, never silently
+        dropped. Backfill and initial_load never call this: bulk history
+        backfill is a separate work unit."""
+        if not self._source_facts.enabled:
+            return
+        current = run.get("run_attempt") or 1
+        if current < 2:
+            return
+        run_id = run["id"]
+        oldest = max(1, current - self._source_facts.attempt_lookback)
+        for attempt in range(current - 1, oldest - 1, -1):
+            if self._source_facts.attempt_facts_retained(repo=repo, run_id=run_id, attempt=attempt):
+                continue
+            status = self._source_facts.take_attempt_call(rate_remaining=self._api_rate_remaining)
+            if status != "ok":
+                # Queue every remaining owed identity in the range before
+                # stopping: the legacy row about to be stored closes the
+                # upsert gate, so an unqueued attempt would never be
+                # revisited by ingestion alone.
+                self._defer_remaining_history(
+                    repo=repo, run_id=run_id, declined=attempt, oldest=oldest, reason=status)
+                return
+            attempt_run = self._fetch_attempt_run(repo=repo, run_id=run_id, attempt=attempt)
+            if attempt_run is None:
+                self._source_facts.observe_coverage(
+                    repo=repo,
+                    payload={"window": "attempt_history", "event": "attempt_unknown"},
+                    run_id=run_id, run_attempt=attempt,
+                )
+                self._source_facts.add_pending(
+                    kind="run_attempt", repo=repo, run_id=run_id, run_attempt=attempt,
+                    window="attempt_history", run_status="completed")
+                continue
+            jobs, complete, pages, reason = self._fetch_run_jobs_paged(
+                repo=repo, run_id=run_id, run_attempt=attempt, gate_first=True)
+            if jobs is None:
+                if reason in ("budget", "rate_limit"):
+                    # The gate is spent mid-list: this attempt keeps its
+                    # honest incomplete record and pending obligation, and
+                    # every older owed identity queues too, with no
+                    # further API calls.
+                    self._gap_attempt_history(repo=repo, run_id=run_id, attempt=attempt,
+                                              pages=pages, reason=reason)
+                    self._defer_remaining_history(
+                        repo=repo, run_id=run_id, declined=attempt - 1, oldest=oldest,
+                        reason=reason if reason is not None else "budget")
+                    return
+                self._gap_attempt_history(repo=repo, run_id=run_id, attempt=attempt,
+                                          pages=pages, reason=reason)
+                continue
+            self._source_facts.observe_run_attempt(repo=repo, run_id=run_id, attempt_run=attempt_run,
+                                                   jobs=jobs, complete=complete)
+
+    def _defer_remaining_history(self, *, repo: str, run_id: int, declined: int,
+                                 oldest: int, reason: str) -> None:
+        """Queue every unretained attempt from `declined` down to `oldest`
+        as a pending obligation, each with its own bounded deferral
+        record, then stop requesting. Makes no API calls: the gate has
+        already declined."""
+        for attempt in range(declined, oldest - 1, -1):
+            if self._source_facts.attempt_facts_retained(repo=repo, run_id=run_id, attempt=attempt):
+                continue
+            self._defer_attempt_history(repo=repo, run_id=run_id, attempt=attempt, reason=reason)
+
+    def _defer_attempt_history(self, *, repo: str, run_id: int, attempt: int,
+                               reason: str) -> None:
+        """State a budget/rate deferral and keep the attempt as a pending
+        obligation for later cycles."""
+        self._source_facts.observe_coverage(
+            repo=repo,
+            payload={"window": "attempt_history", "event": "deferred", "reason": reason},
+            run_id=run_id, run_attempt=attempt,
+        )
+        self._source_facts.add_pending(
+            kind="run_attempt", repo=repo, run_id=run_id, run_attempt=attempt,
+            window="attempt_history", run_status="completed")
+
+    def _gap_attempt_history(self, *, repo: str, run_id: int, attempt: int,
+                             pages: int, reason: str | None) -> None:
+        """State an incomplete historical-attempt jobs fetch — a failure or
+        a mid-list budget/rate decline (the bounded reason says which,
+        with the pages already fetched) — and keep the attempt pending for
+        later cycles, never marked seen."""
+        self._source_facts.observe_coverage(
+            repo=repo,
+            payload={"window": "attempt_history", "event": "jobs_unknown",
+             "pages_fetched": pages, "reason": reason},
+            run_id=run_id, run_attempt=attempt,
+        )
+        self._source_facts.add_pending(
+            kind="run_attempt", repo=repo, run_id=run_id, run_attempt=attempt,
+            window="attempt_history", run_status="completed")
+
+    def _fetch_run_artifacts_paged(self, *, repo: str, run_id: int
+                                   ) -> tuple[list[dict[str, JSONValue]] | None, bool, int, str | None]:
+        """A run's artifact listing as (artifacts, page_complete, pages,
+        gap_reason), Link-paginated with the same strict target validation
+        as jobs. Artifacts are always extra requests beyond the legacy
+        path, so every page — including each Link tail page — is checked
+        against the per-cycle artifact budget and the rate floor
+        immediately before it is made. artifacts is None on any failure.
+        Only called with the artifacts subflag on."""
+        first_url = (
+            f"{API_URL}/repos/{ORG}/{repo}/actions/runs/{run_id}"
+            f"/artifacts?per_page=100"
+        )
+        status = self._source_facts.take_artifact_call(rate_remaining=self._api_rate_remaining)
+        if status != "ok":
+            return None, False, 0, status
+        resp = self._get(first_url)
+        if not resp.ok:
+            return None, False, 0, "fetch_failed"
+        artifacts = list(resp.json().get("artifacts", []))
+        pages = 1
+        seen_urls = {first_url}
+        next_raw = resp.links.get("next", {}).get("url")
+        while next_raw:
+            next_url = self._validated_pagination_target(next_url=next_raw, first_url=first_url)
+            if (next_url is None or next_url in seen_urls
+                    or pages >= self.MAX_ARTIFACT_PAGES):
+                self._source_facts.count_pagination_refusal()
+                logger.warning(
+                    "Refusing an artifacts pagination target that is not the "
+                    "same listing, loops, or exceeds the page cap")
+                return None, False, pages, "pagination_refused"
+            status = self._source_facts.take_artifact_call(rate_remaining=self._api_rate_remaining)
+            if status != "ok":
+                return None, False, pages, status
+            seen_urls.add(next_url)
+            resp = self._get(next_url)
+            if not resp.ok:
+                return None, False, pages, "fetch_failed"
+            artifacts.extend(resp.json().get("artifacts", []))
+            pages += 1
+            next_raw = resp.links.get("next", {}).get("url")
+        return artifacts, True, pages, None
+
+    def _record_run_artifacts(self, *, repo: str, run: dict[str, JSONValue], window: str) -> None:
+        """Source-facts outbox, artifacts subflag only (off by default):
+        record one run-wide artifact listing per newly observed run
+        attempt, every request gated immediately before it is made. The
+        same attempt re-observed makes no extra call; a new attempt
+        refreshes the listing (the endpoint stays run-wide — the attempt
+        is observation context, never a claim that every artifact belongs
+        to it). Deferrals and fetch failures become pending obligations
+        retried on later cycles. Artifact names and URLs are recorded as
+        plain data — they never establish attempt or job authority; the
+        envelope's repo/run identity comes from the API request context,
+        not from artifact contents."""
+        if not self._source_facts.artifacts_enabled:
+            return
+        run_id = run["id"]
+        attempt = run.get("run_attempt")
+        if self._source_facts.artifacts_recorded(repo=repo, run_id=run_id, run_attempt=attempt):
+            return
+        artifacts, complete, pages, reason = self._fetch_run_artifacts_paged(repo=repo, run_id=run_id)
+        if artifacts is None:
+            event = ("deferred" if reason in ("budget", "rate_limit") and pages == 0
+                     else "artifacts_unknown")
+            self._source_facts.observe_coverage(
+                repo=repo,
+                payload={"window": "artifacts", "event": event,
+                 "pages_fetched": pages, "reason": reason},
+                run_id=run_id, run_attempt=attempt,
+            )
+            self._source_facts.add_pending(kind="artifacts", repo=repo, run_id=run_id,
+                                           run_attempt=attempt, window=window)
+            return
+        self._source_facts.observe_artifacts(repo=repo, run_id=run_id, run_attempt=attempt,
+                                             artifacts=artifacts, complete=complete, window=window)
+
+    def _retry_pending_source_facts(self) -> None:
+        """Retry owed source facts from earlier cycles — retryable write
+        failures, budget/rate deferrals, and fetch failures — independent
+        of the legacy upsert gate, which never re-observes an
+        already-stored run. Re-fetch is by known identity only (never a
+        second poller), through the same _get rate budget with every
+        request gated, and never touches legacy rows, counters, or
+        metrics. A budget or rate stop leaves the rest pending for the
+        next cycle; overdue obligations expire with a coverage record."""
+        sf = self._source_facts
+        if not sf.enabled:
+            return
+        sf.expire_due_pending()
+        if not sf.pending_facts():
+            return
+        for pending in sf.pending_facts():
+            if pending.kind == "run_attempt":
+                status = sf.take_attempt_call(rate_remaining=self._api_rate_remaining)
+                if status != "ok":
+                    return
+                attempt_run = self._fetch_attempt_run(
+                    repo=pending.repo, run_id=pending.run_id, attempt=pending.run_attempt)
+                if attempt_run is None:
+                    continue
+                jobs, complete, _, reason = self._fetch_run_jobs_paged(
+                    repo=pending.repo, run_id=pending.run_id, run_attempt=pending.run_attempt,
+                    gate_first=True)
+                if jobs is None:
+                    if reason in ("budget", "rate_limit"):
+                        return
+                    continue
+                sf.observe_run_attempt(repo=pending.repo, run_id=pending.run_id, attempt_run=attempt_run,
+                                       jobs=jobs, complete=complete)
+            elif pending.kind == "artifacts":
+                artifacts, complete, _, reason = self._fetch_run_artifacts_paged(
+                    repo=pending.repo, run_id=pending.run_id)
+                if artifacts is None:
+                    if reason in ("budget", "rate_limit"):
+                        return
+                    continue
+                sf.observe_artifacts(repo=pending.repo, run_id=pending.run_id, run_attempt=pending.run_attempt,
+                                     artifacts=artifacts, complete=complete, window=pending.window)
+            else:
+                jobs, complete, _, reason = self._fetch_run_jobs_paged(
+                    repo=pending.repo, run_id=pending.run_id, run_attempt=pending.run_attempt,
+                    gate_first=True)
+                if jobs is None:
+                    if reason in ("budget", "rate_limit"):
+                        return
+                    continue
+                sf.observe_jobs(repo=pending.repo, run_id=pending.run_id, run_attempt=pending.run_attempt,
+                                jobs=jobs, complete=complete, window=pending.window,
+                                run_status=pending.run_status)
 
     def _extract_failed_steps(self, jobs):
         """Extract failed step info from a list of job objects.
@@ -1926,9 +3351,12 @@ class WorkflowExporter:
 
     def _backfill_page(self, repo, url):
         """Paginate a single (already narrow enough) runs-list query,
-        upserting every run. Returns (seen, new).
+        upserting every run. Returns (seen, new). With the source-facts
+        outbox on, a failed page records an explicit coverage gap for the
+        truncated window instead of looking like the end of the results.
         """
         seen = new = 0
+        pages = 0
         while url:
             resp = self._get(url)
 
@@ -1942,9 +3370,15 @@ class WorkflowExporter:
             if not resp.ok:
                 logger.error("Backfill fetch failed for %s: %s %s",
                              repo, resp.status_code, resp.text[:200])
+                self._source_facts.observe_coverage(repo=repo, payload={
+                    "window": "backfill_page", "complete": False,
+                    "event": "fetch_failed", "pages_fetched": pages,
+                })
                 break
 
+            pages += 1
             for run in resp.json().get("workflow_runs", []):
+                self._source_facts.observe_run(repo=repo, run=run, window="backfill")
                 if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
                     continue
                 run_id = run["id"]
@@ -1954,7 +3388,7 @@ class WorkflowExporter:
 
                 record = self._make_job_record(run, repo)
                 conclusion = run.get("conclusion") or "unknown"
-                jobs = self._fetch_run_jobs(repo, run_id)
+                jobs = self._fetch_ingestion_jobs(repo=repo, run=run, window="backfill")
                 if jobs is None:
                     logger.warning(
                         "Skipping run %s (%s): job-details fetch failed, will retry next pass",
@@ -2007,7 +3441,19 @@ class WorkflowExporter:
         if not probe.ok:
             logger.error("Backfill probe failed for %s [%s..%s]: %s %s",
                          repo, since_str, until_str, probe.status_code, probe.text[:200])
+            self._source_facts.observe_coverage(repo=repo, payload={
+                "window": "backfill_range", "since": since_str, "until": until_str,
+                "complete": False, "event": "fetch_failed",
+            })
             return 0, 0
+        # The range query itself succeeded (follow-up page failures inside
+        # _backfill_page emit their own gap records). complete here says
+        # nothing about 30/90-day history: only that this range's probe
+        # answered.
+        self._source_facts.observe_coverage(repo=repo, payload={
+            "window": "backfill_range", "since": since_str, "until": until_str,
+            "complete": True,
+        })
 
         total_count = probe.json().get("total_count", 0)
         if total_count > self.BACKFILL_SAFE_RESULT_LIMIT and (until_dt - since_dt) > timedelta(hours=1):
@@ -2022,6 +3468,7 @@ class WorkflowExporter:
         # response as the first page instead of refetching it.
         seen = new = 0
         for run in probe.json().get("workflow_runs", []):
+            self._source_facts.observe_run(repo=repo, run=run, window="backfill")
             if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
                 continue
             run_id = run["id"]
@@ -2030,7 +3477,7 @@ class WorkflowExporter:
                 continue
             record = self._make_job_record(run, repo)
             conclusion = run.get("conclusion") or "unknown"
-            jobs = self._fetch_run_jobs(repo, run_id)
+            jobs = self._fetch_ingestion_jobs(repo=repo, run=run, window="backfill")
             if jobs is None:
                 logger.warning(
                     "Skipping run %s (%s): job-details fetch failed, will retry next pass",
@@ -2114,6 +3561,7 @@ class WorkflowExporter:
         for repo in repos:
             try:
                 for run in self._fetch_recent_history(repo):
+                    self._source_facts.observe_run(repo=repo, run=run, window="initial_load")
                     if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
                         continue
                     run_id = run["id"]
@@ -2121,7 +3569,7 @@ class WorkflowExporter:
                     conclusion = run.get("conclusion") or "unknown"
 
                     # Fetch job-level data for failed steps and step durations
-                    jobs = self._fetch_run_jobs(repo, run_id)
+                    jobs = self._fetch_ingestion_jobs(repo=repo, run=run, window="initial_load")
                     if jobs is None:
                         logger.warning(
                             "Skipping run %s (%s): job-details fetch failed, will retry next pass",
@@ -2153,7 +3601,7 @@ class WorkflowExporter:
 
         logger.info("Initial load: %d jobs seeded", loaded)
 
-    def _process_completed_run(self, repo, run):
+    def _process_completed_run(self, repo, run, *, window: str = "recent_completed"):
         """Fetch job-level detail for one completed run and upsert it,
         incrementing the completed/duration/failed-step metrics on
         success. Returns True if the row was actually (newly) upserted.
@@ -2164,7 +3612,11 @@ class WorkflowExporter:
         processing. Safe to call twice for the same run (e.g. if both
         paths happen to surface it in the same cycle): _needs_upsert/
         _upsert_job are the actual dedup point, keyed on run id + attempt.
+
+        `window` is the source-facts funnel name (bounded) recorded with
+        the outbox observation; it changes nothing when the outbox is off.
         """
+        self._source_facts.observe_run(repo=repo, run=run, window=window)
         if run.get("event") in WorkflowExporter.IGNORED_EVENTS:
             return False
         run_id = run["id"]
@@ -2177,7 +3629,7 @@ class WorkflowExporter:
         # The stable name, not the run name: a flow run is named after its
         # commit or comment, which would give every run its own label set.
         workflow_name = record["workflow"]
-        jobs = self._fetch_run_jobs(repo, run_id)
+        jobs = self._fetch_ingestion_jobs(repo=repo, run=run, window=window)
         if jobs is None:
             logger.warning(
                 "Skipping run %s (%s): job-details fetch failed, will retry next pass",
@@ -2238,9 +3690,16 @@ class WorkflowExporter:
                 org=ORG, workflow=workflow_name, step=f["step"]
             ).inc()
 
+        # Only for a genuinely new attempt (the upsert above succeeded):
+        # observe the re-run's earlier attempts and, if its own subflag is
+        # on, the artifact listing. Both no-op with the outbox off.
+        self._record_attempt_history(repo=repo, run=run)
+        self._record_run_artifacts(repo=repo, run=run, window=window)
+
         return True
 
     def collect(self):
+        self._source_facts.new_cycle()
         self._prune_jobs()
         self._prune_pr_merges()
         repos = REPOS_FILTER if REPOS_FILTER else self.get_active_repos()
@@ -2416,7 +3875,7 @@ class WorkflowExporter:
                             self._make_job_record(run_json, dropped_repo)
                         )
                         continue
-                    self._process_completed_run(dropped_repo, run_json)
+                    self._process_completed_run(dropped_repo, run_json, window="catchup")
                 except Exception:
                     logger.exception(
                         "Error catching up dropped-active run %s (%s)",
@@ -2425,6 +3884,11 @@ class WorkflowExporter:
 
         with self._lock:
             self.active_runs = current_active
+
+        # Owed source facts from earlier cycles (write failures,
+        # deferrals, fetch failures) retry here, independent of the legacy
+        # upsert gate; pure outbox work, no legacy rows or metrics.
+        self._retry_pending_source_facts()
 
         with self._db() as conn:
             total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]

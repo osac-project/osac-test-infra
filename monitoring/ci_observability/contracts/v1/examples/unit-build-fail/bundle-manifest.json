@@ -1,0 +1,84 @@
+{
+  "schema": "osac.ci-observability.bundle-manifest",
+  "schema_version": 1,
+  "created_at": "2026-10-28T01:36:05.000Z",
+  "producer": {
+    "name": "osac-ci-observability-native-adapter",
+    "version": "0.2.0"
+  },
+  "execution": {
+    "execution_id": "7d62e9a8-3ca1-4d4e-9a0f-918c1d4e3f56",
+    "repository_id": 812345678,
+    "repository": "osac-project/osac",
+    "workflow": {
+      "path": ".github/workflows/tests.yml",
+      "revision": "a5cc1e7a2cb319189f0c0b07b361b1bd46d426db"
+    },
+    "run_id": 1122334700,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "job": {
+      "logical_job_key": "tests.yml#operator-unit",
+      "github_job_id": 4588112244,
+      "job_name": "operator-unit"
+    },
+    "cohort": "pull-request"
+  },
+  "suite": {
+    "framework": "go-test",
+    "tier": "unit",
+    "component": "osac-operator",
+    "variant": "operator-unit",
+    "selection": {
+      "worker_count": 0
+    }
+  },
+  "environment": {
+    "sources": [
+      {
+        "role": "tested",
+        "repository": "osac-project/osac",
+        "revision": "a5cc1e7a2cb319189f0c0b07b361b1bd46d426db"
+      },
+      {
+        "role": "workflow",
+        "repository": "osac-project/osac",
+        "revision": "a5cc1e7a2cb319189f0c0b07b361b1bd46d426db"
+      }
+    ]
+  },
+  "completeness": {
+    "complete": true,
+    "end_reason": "finished",
+    "dropped_records": 0,
+    "collection_errors": []
+  },
+  "redaction": {
+    "applied": true,
+    "findings": 0
+  },
+  "files": [
+    {
+      "path": "journals/controller.jsonl",
+      "kind": "journal",
+      "sha256": "67cd0aa21c1533366fa08152b0878b314ffa3f65e661d543d3c6bfb64dc25d4f",
+      "size_bytes": 954,
+      "record_count": 2,
+      "complete": true
+    },
+    {
+      "path": "journals/go-build.jsonl",
+      "kind": "journal",
+      "sha256": "52999b09e365be0c27c2ecbd8db2f914375bd114da32cd9f78ddcd381d84a784",
+      "size_bytes": 901,
+      "record_count": 2,
+      "complete": true
+    },
+    {
+      "path": "native-report/go-test.jsonl",
+      "kind": "native-report",
+      "sha256": "3cb9f1547f1cb0dfb53378e0e7dea51320b8d8f67a7057f0448185ab93476db9",
+      "size_bytes": 885
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{"ImportPath":"example.com/ciobs-go-fixture/brokenpkg.test","Action":"build-output","Output":"# example.com/ciobs-go-fixture/brokenpkg\n"}
+{"ImportPath":"example.com/ciobs-go-fixture/brokenpkg.test","Action":"build-output","Output":"brokenpkg/broken_test.go:6:32: missing ',' before newline in argument list\n"}
+{"ImportPath":"example.com/ciobs-go-fixture/brokenpkg.test","Action":"build-fail"}
+{"Time":"2026-10-28T01:35:54.107166741+02:00","Action":"start","Package":"example.com/ciobs-go-fixture/brokenpkg"}
+{"Time":"2026-10-28T01:35:54.107218591+02:00","Action":"output","Package":"example.com/ciobs-go-fixture/brokenpkg","Output":"FAIL\texample.com/ciobs-go-fixture/brokenpkg [setup failed]\n"}
+{"Time":"2026-10-28T01:35:54.107223853+02:00","Action":"fail","Package":"example.com/ciobs-go-fixture/brokenpkg","Elapsed":0,"FailedBuild":"example.com/ciobs-go-fixture/brokenpkg.test"}

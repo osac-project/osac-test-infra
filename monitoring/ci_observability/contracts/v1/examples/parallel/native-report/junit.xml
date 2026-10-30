@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest" tests="6" failures="1" errors="0" skipped="2" xfail="0" time="2592.401">
+  <testsuite name="tests/e2e/vmaas/test_compute_instance_lifecycle.py" tests="2" failures="1" errors="0" skipped="0" xfail="0" time="1500.912">
+    <testcase classname="tests.e2e.vmaas.test_compute_instance_lifecycle" name="test_compute_instance_lifecycle[ocp-virt-vm]" time="1201.810">
+      <failure type="AssertionError" message="ComputeInstance phase was Provisioning, expected Ready">poll_until timeout after 1200s; last observed phase Provisioning; credentials [redacted]</failure>
+    </testcase>
+    <testcase classname="tests.e2e.vmaas.test_compute_instance_lifecycle" name="test_compute_instance_lifecycle[ocp-virt-vm-small]" time="298.994"/>
+  </testsuite>
+  <testsuite name="tests/e2e/vmaas/test_console_access.py" tests="1" failures="0" errors="0" skipped="1" xfail="0" time="3.290">
+    <testcase classname="tests.e2e.vmaas.test_console_access" name="test_console_rejects_wrong_credentials" time="3.287">
+      <skipped type="pytest.xfail" message="console credentials are rotated by the operator">xfail</skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="tests/e2e/vmaas/test_vm_instance_exists.py" tests="1" failures="0" errors="0" skipped="0" xfail="0" time="93.401">
+    <testcase classname="tests.e2e.vmaas.test_vm_instance_exists" name="test_vm_instance_exists" time="93.397">
+      <error type="NamespaceCleanupError" message="namespace finalizer stuck after teardown">teardown failed after a passing body</error>
+    </testcase>
+  </testsuite>
+  <testsuite name="tests/e2e/vmaas/test_subnet_lifecycle.py" tests="1" failures="0" errors="0" skipped="1" xfail="0" time="0.004">
+    <testcase classname="tests.e2e.vmaas.test_subnet_lifecycle" name="test_subnet_lifecycle" time="0.002">
+      <skipped type="pytest.skip" message="subnet pool exhausted in this profile">skipped</skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="tests/e2e/vmaas/test_external_ip_allocation.py" tests="1" failures="0" errors="0" skipped="0" xfail="0" time="14.794">
+    <testcase classname="tests.e2e.vmaas.test_external_ip_allocation" name="test_external_ip_allocation" time="14.790"/>
+  </testsuite>
+</testsuites>

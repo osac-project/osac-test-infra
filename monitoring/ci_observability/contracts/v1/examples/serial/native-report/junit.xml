@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest" tests="2" failures="0" errors="0" skipped="1" xfail="0" time="997.810">
+  <testsuite name="tests/e2e/bmaas/test_bare_metal_instance_lifecycle.py" tests="1" failures="0" errors="0" skipped="0" xfail="0" time="950.791">
+    <testcase classname="tests.e2e.bmaas.test_bare_metal_instance_lifecycle" name="test_bare_metal_instance_lifecycle" time="950.787"/>
+  </testsuite>
+  <testsuite name="tests/e2e/bmaas/test_bare_metal_inventory.py" tests="1" failures="0" errors="0" skipped="1" xfail="0" time="0.012">
+    <testcase classname="tests.e2e.bmaas.test_bare_metal_inventory" name="test_bare_metal_inventory_waits" time="0.004">
+      <skipped type="pytest.skip" message="BMH inventory not available in this profile">skipped by marker: requires_netris</skipped>
+    </testcase>
+  </testsuite>
+</testsuites>

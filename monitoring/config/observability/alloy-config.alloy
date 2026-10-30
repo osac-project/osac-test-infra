@@ -1,0 +1,90 @@
+// Grafana Alloy configuration for the OSAC CI observability pilot (W05a).
+//
+// Ships REDACTED logs only: W06's host collector writes sanitized NDJSON
+// files into the private spool directory, and this config tails them into
+// the pilot Loki on 127.0.0.1:3100. There is deliberately NO journald or
+// raw-log source here: redaction must happen before any storage, and no
+// in-container regex redactor is invented to work around that.
+//
+// Spool input contract (proposed W06 producer interface, see
+// monitoring/observability-services.md): one JSON object per line in
+// %h/.ci-observability/spool/redacted/*.ndjson with
+//   timestamp  RFC3339Nano UTC string
+//   message    single redacted line (already free of credentials, raw
+//              command arguments, and environment dumps)
+//   run_id, test_id  optional structured-metadata identifiers
+// Structured metadata is allowlisted to those keys; everything else in
+// the JSON is dropped. Stream labels stay static and bounded
+// (osac_stack, source), so label cardinality cannot grow with runs.
+// Until W06 writes files, this source simply stays idle: a healthy
+// Alloy does not mean log collection is working, and source
+// availability reporting arrives with W06.
+
+loki.relabel "redacted_spool" {
+  forward_to = [loki.write.pilot.receiver]
+
+  rule {
+    target_label = "osac_stack"
+    replacement  = "ci-observability-pilot"
+  }
+
+  rule {
+    target_label = "source"
+    replacement  = "redacted-spool"
+  }
+}
+
+local.file_match "redacted_spool" {
+  path_targets = [{__path__ = "/spool/redacted/*.ndjson"}]
+}
+
+loki.source.file "redacted_spool" {
+  targets    = local.file_match.redacted_spool.targets
+  forward_to = [loki.process.redacted_spool.receiver]
+}
+
+loki.process "redacted_spool" {
+  forward_to = [loki.relabel.redacted_spool.receiver]
+
+  // The auto-added filename label would turn spool file names into
+  // streams; run identity belongs in structured metadata instead.
+  stage.label_drop {
+    values = ["filename"]
+  }
+
+  stage.json {
+    // Non-JSON lines are dropped here so malformed spool content never
+    // reaches Loki verbatim. Strict schema validation, redaction, and
+    // drop accounting stay W06's responsibility; valid JSON with an
+    // unexpected shape still passes through as-is.
+    drop_malformed = true
+    expressions = {
+      timestamp = "timestamp",
+      message   = "message",
+      run_id    = "run_id",
+      test_id   = "test_id",
+    }
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+    format = "RFC3339Nano"
+  }
+
+  stage.output {
+    source = "message"
+  }
+
+  stage.structured_metadata {
+    values = {
+      run_id  = "",
+      test_id = "",
+    }
+  }
+}
+
+loki.write "pilot" {
+  endpoint {
+    url = "http://127.0.0.1:3100/loki/api/v1/push"
+  }
+}

@@ -1,0 +1,386 @@
+[
+  {
+    "SuitePath": "ciobs-ginkgo-fixture",
+    "SuiteDescription": "CI Observability Ginkgo Fixture Suite",
+    "SuiteLabels": [],
+    "SuiteSemVerConstraints": [],
+    "SuiteComponentSemVerConstraints": {},
+    "SuiteSucceeded": false,
+    "SuiteHasProgrammaticFocus": false,
+    "SpecialSuiteFailureReasons": null,
+    "PreRunStats": {
+      "TotalSpecs": 3,
+      "SpecsThatWillRun": 3
+    },
+    "StartTime": "2026-10-28T00:24:30.038843158+02:00",
+    "EndTime": "2026-10-28T00:24:30.039296988+02:00",
+    "RunTime": 453829,
+    "SuiteConfig": {
+      "RandomSeed": 1793139870,
+      "RandomizeAllSpecs": false,
+      "FocusStrings": null,
+      "SkipStrings": null,
+      "FocusFiles": null,
+      "SkipFiles": null,
+      "LabelFilter": "",
+      "SemVerFilter": "",
+      "FailOnPending": false,
+      "FailOnEmpty": false,
+      "FailFast": false,
+      "FlakeAttempts": 2,
+      "MustPassRepeatedly": 0,
+      "DryRun": false,
+      "PollProgressAfter": 0,
+      "PollProgressInterval": 0,
+      "Timeout": 3600000000000,
+      "EmitSpecProgress": false,
+      "OutputInterceptorMode": "",
+      "SourceRoots": null,
+      "GracePeriod": 30000000000,
+      "SleepOnFailure": 0,
+      "ParallelProcess": 1,
+      "ParallelTotal": 1,
+      "ParallelHost": ""
+    },
+    "SpecReports": [
+      {
+        "ContainerHierarchyTexts": [
+          "ci observability fixture"
+        ],
+        "ContainerHierarchyLocations": [
+          {
+            "FileName": "suite_test.go",
+            "LineNumber": 15
+          }
+        ],
+        "ContainerHierarchyLabels": [
+          []
+        ],
+        "ContainerHierarchySemVerConstraints": [
+          []
+        ],
+        "ContainerHierarchyComponentSemVerConstraints": [
+          {}
+        ],
+        "LeafNodeType": "It",
+        "LeafNodeLocation": {
+          "FileName": "suite_test.go",
+          "LineNumber": 16
+        },
+        "LeafNodeLabels": [],
+        "LeafNodeSemVerConstraints": [],
+        "LeafNodeComponentSemVerConstraints": {},
+        "LeafNodeText": "passes on purpose",
+        "SpecPriority": 0,
+        "IsSerial": false,
+        "IsInOrderedContainer": false,
+        "State": "passed",
+        "StartTime": "2026-10-28T00:24:30.038918566+02:00",
+        "EndTime": "2026-10-28T00:24:30.038952867+02:00",
+        "RunTime": 34301,
+        "ParallelProcess": 1,
+        "RunningInParallel": false,
+        "NumAttempts": 1,
+        "MaxFlakeAttempts": 2,
+        "MaxMustPassRepeatedly": 0,
+        "SpecEvents": [
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 16
+            },
+            "TimelineLocation": {
+              "Order": 1,
+              "Time": "2026-10-28T00:24:30.038933058+02:00"
+            },
+            "Message": "passes on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 16
+            },
+            "TimelineLocation": {
+              "Order": 3,
+              "Time": "2026-10-28T00:24:30.038951459+02:00"
+            },
+            "Message": "passes on purpose",
+            "Duration": 18402,
+            "NodeType": "It"
+          }
+        ]
+      },
+      {
+        "ContainerHierarchyTexts": [
+          "ci observability fixture"
+        ],
+        "ContainerHierarchyLocations": [
+          {
+            "FileName": "suite_test.go",
+            "LineNumber": 15
+          }
+        ],
+        "ContainerHierarchyLabels": [
+          []
+        ],
+        "ContainerHierarchySemVerConstraints": [
+          []
+        ],
+        "ContainerHierarchyComponentSemVerConstraints": [
+          {}
+        ],
+        "LeafNodeType": "It",
+        "LeafNodeLocation": {
+          "FileName": "suite_test.go",
+          "LineNumber": 20
+        },
+        "LeafNodeLabels": [],
+        "LeafNodeSemVerConstraints": [],
+        "LeafNodeComponentSemVerConstraints": {},
+        "LeafNodeText": "fails on purpose",
+        "SpecPriority": 0,
+        "IsSerial": false,
+        "IsInOrderedContainer": false,
+        "State": "failed",
+        "StartTime": "2026-10-28T00:24:30.038963102+02:00",
+        "EndTime": "2026-10-28T00:24:30.039138657+02:00",
+        "RunTime": 175555,
+        "ParallelProcess": 1,
+        "RunningInParallel": false,
+        "Failure": {
+          "Message": "Expected\n    <int>: 2\nto equal\n    <int>: 3",
+          "Location": {
+            "FileName": "suite_test.go",
+            "LineNumber": 21,
+            "FullStackTrace": "example.com/ciobs-ginkgo-fixture_test.init.func1.2()\n\tsuite_test.go:21 +0x74"
+          },
+          "TimelineLocation": {
+            "Order": 9,
+            "Time": "2026-10-28T00:24:30.039135889+02:00"
+          },
+          "FailureNodeContext": "leaf-node",
+          "FailureNodeType": "It",
+          "FailureNodeLocation": {
+            "FileName": "suite_test.go",
+            "LineNumber": 20
+          },
+          "ProgressReport": {
+            "LeafNodeLocation": {},
+            "SpecStartTime": "0001-01-01T00:00:00Z",
+            "CurrentNodeLocation": {},
+            "CurrentNodeStartTime": "0001-01-01T00:00:00Z",
+            "CurrentStepLocation": {},
+            "CurrentStepStartTime": "0001-01-01T00:00:00Z",
+            "TimelineLocation": {
+              "Time": "0001-01-01T00:00:00Z"
+            }
+          }
+        },
+        "NumAttempts": 2,
+        "MaxFlakeAttempts": 2,
+        "MaxMustPassRepeatedly": 0,
+        "AdditionalFailures": [
+          {
+            "State": "failed",
+            "Failure": {
+              "Message": "Failure recorded during attempt 1:\nExpected\n    <int>: 2\nto equal\n    <int>: 3",
+              "Location": {
+                "FileName": "suite_test.go",
+                "LineNumber": 21,
+                "FullStackTrace": "example.com/ciobs-ginkgo-fixture_test.init.func1.2()\n\tsuite_test.go:21 +0x74"
+              },
+              "TimelineLocation": {
+                "Order": 5,
+                "Time": "2026-10-28T00:24:30.039068019+02:00"
+              },
+              "FailureNodeContext": "leaf-node",
+              "FailureNodeType": "It",
+              "FailureNodeLocation": {
+                "FileName": "suite_test.go",
+                "LineNumber": 20
+              },
+              "ProgressReport": {
+                "LeafNodeLocation": {},
+                "SpecStartTime": "0001-01-01T00:00:00Z",
+                "CurrentNodeLocation": {},
+                "CurrentNodeStartTime": "0001-01-01T00:00:00Z",
+                "CurrentStepLocation": {},
+                "CurrentStepStartTime": "0001-01-01T00:00:00Z",
+                "TimelineLocation": {
+                  "Time": "0001-01-01T00:00:00Z"
+                }
+              }
+            }
+          }
+        ],
+        "SpecEvents": [
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 4,
+              "Time": "2026-10-28T00:24:30.038963773+02:00"
+            },
+            "Message": "fails on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 6,
+              "Time": "2026-10-28T00:24:30.039070761+02:00"
+            },
+            "Message": "fails on purpose",
+            "Duration": 106988,
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Retry",
+            "CodeLocation": {},
+            "TimelineLocation": {
+              "Order": 7,
+              "Time": "2026-10-28T00:24:30.039074642+02:00"
+            },
+            "Attempt": 1
+          },
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 8,
+              "Time": "2026-10-28T00:24:30.039076466+02:00"
+            },
+            "Message": "fails on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 20
+            },
+            "TimelineLocation": {
+              "Order": 10,
+              "Time": "2026-10-28T00:24:30.039137952+02:00"
+            },
+            "Message": "fails on purpose",
+            "Duration": 61486,
+            "NodeType": "It"
+          }
+        ]
+      },
+      {
+        "ContainerHierarchyTexts": [
+          "ci observability fixture"
+        ],
+        "ContainerHierarchyLocations": [
+          {
+            "FileName": "suite_test.go",
+            "LineNumber": 15
+          }
+        ],
+        "ContainerHierarchyLabels": [
+          []
+        ],
+        "ContainerHierarchySemVerConstraints": [
+          []
+        ],
+        "ContainerHierarchyComponentSemVerConstraints": [
+          {}
+        ],
+        "LeafNodeType": "It",
+        "LeafNodeLocation": {
+          "FileName": "suite_test.go",
+          "LineNumber": 24
+        },
+        "LeafNodeLabels": [],
+        "LeafNodeSemVerConstraints": [],
+        "LeafNodeComponentSemVerConstraints": {},
+        "LeafNodeText": "skips on purpose",
+        "SpecPriority": 0,
+        "IsSerial": false,
+        "IsInOrderedContainer": false,
+        "State": "skipped",
+        "StartTime": "2026-10-28T00:24:30.039224287+02:00",
+        "EndTime": "2026-10-28T00:24:30.03929241+02:00",
+        "RunTime": 68123,
+        "ParallelProcess": 1,
+        "RunningInParallel": false,
+        "Failure": {
+          "Message": "skipped on purpose",
+          "Location": {
+            "FileName": "suite_test.go",
+            "LineNumber": 25,
+            "FullStackTrace": "example.com/ciobs-ginkgo-fixture_test.init.func1.3()\n\tsuite_test.go:25 +0x26"
+          },
+          "TimelineLocation": {
+            "Order": 12,
+            "Time": "2026-10-28T00:24:30.039289218+02:00"
+          },
+          "FailureNodeContext": "leaf-node",
+          "FailureNodeType": "It",
+          "FailureNodeLocation": {
+            "FileName": "suite_test.go",
+            "LineNumber": 24
+          },
+          "ProgressReport": {
+            "LeafNodeLocation": {},
+            "SpecStartTime": "0001-01-01T00:00:00Z",
+            "CurrentNodeLocation": {},
+            "CurrentNodeStartTime": "0001-01-01T00:00:00Z",
+            "CurrentStepLocation": {},
+            "CurrentStepStartTime": "0001-01-01T00:00:00Z",
+            "TimelineLocation": {
+              "Time": "0001-01-01T00:00:00Z"
+            }
+          }
+        },
+        "NumAttempts": 1,
+        "MaxFlakeAttempts": 2,
+        "MaxMustPassRepeatedly": 0,
+        "SpecEvents": [
+          {
+            "SpecEventType": "Node",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 24
+            },
+            "TimelineLocation": {
+              "Order": 11,
+              "Time": "2026-10-28T00:24:30.039224965+02:00"
+            },
+            "Message": "skips on purpose",
+            "NodeType": "It"
+          },
+          {
+            "SpecEventType": "Node (End)",
+            "CodeLocation": {
+              "FileName": "suite_test.go",
+              "LineNumber": 24
+            },
+            "TimelineLocation": {
+              "Order": 13,
+              "Time": "2026-10-28T00:24:30.039291544+02:00"
+            },
+            "Message": "skips on purpose",
+            "Duration": 66579,
+            "NodeType": "It"
+          }
+        ]
+      }
+    ]
+  }
+]

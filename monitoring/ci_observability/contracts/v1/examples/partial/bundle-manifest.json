@@ -1,0 +1,91 @@
+{
+  "schema": "osac.ci-observability.bundle-manifest",
+  "schema_version": 1,
+  "created_at": "2026-10-27T07:05:12.331Z",
+  "producer": {
+    "name": "osac-ci-observability-host-collector",
+    "version": "0.3.0"
+  },
+  "execution": {
+    "execution_id": "5d40c7e6-1a8f-4b2c-9e0d-7f6a9b2c1d34",
+    "repository_id": 998877665,
+    "repository": "osac-project/osac-test-infra",
+    "workflow": {
+      "path": ".github/workflows/e2e-vmaas-full-install.yml",
+      "revision": "c7695786be6aa3a0ffd63c194bb2de13ca04d0b6"
+    },
+    "run_id": 1122334888,
+    "run_attempt": 1,
+    "event": "schedule",
+    "job": {
+      "logical_job_key": "e2e-vmaas-full-install.yml#e2e-vmaas",
+      "github_job_id": null,
+      "job_name": "e2e-vmaas"
+    },
+    "cohort": "scheduled"
+  },
+  "suite": {
+    "framework": "pytest",
+    "tier": "e2e",
+    "component": "e2e",
+    "variant": "vmaas-parallel",
+    "selection": {
+      "paths": [
+        "tests/e2e/vmaas/"
+      ],
+      "worker_count": 2
+    }
+  },
+  "environment": {
+    "sources": [
+      {
+        "role": "tested",
+        "repository": "osac-project/osac",
+        "revision": "5e6b950d5076679e2318f54e87afc4ada9f00030"
+      },
+      {
+        "role": "workflow",
+        "repository": "osac-project/osac-test-infra",
+        "revision": "c7695786be6aa3a0ffd63c194bb2de13ca04d0b6"
+      },
+      {
+        "role": "orchestration",
+        "repository": "osac-project/osac-ci",
+        "revision": null
+      }
+    ]
+  },
+  "completeness": {
+    "complete": false,
+    "end_reason": "interrupted",
+    "dropped_records": 3,
+    "collection_errors": [
+      {
+        "source": "cluster-observer",
+        "message": "watch relist failed: resource version expired"
+      }
+    ]
+  },
+  "redaction": {
+    "applied": true,
+    "findings": 1
+  },
+  "files": [
+    {
+      "path": "journals/controller.jsonl",
+      "kind": "journal",
+      "sha256": "9ac86232e13dda72099d6ed96f2ebdb4c129e2079351c3d4b508920761222bbf",
+      "size_bytes": 4547,
+      "record_count": 9,
+      "complete": true
+    },
+    {
+      "path": "journals/gw0.jsonl",
+      "kind": "journal",
+      "sha256": "6aae238b5177e5b3cfbb52a9062c0ef50bfd538eea329e61003c057b837da691",
+      "size_bytes": 1749,
+      "record_count": 4,
+      "complete": false
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "schema": "osac.ci-observability.bundle-manifest",
+  "schema_version": 1,
+  "created_at": "2026-10-28T02:12:45.000Z",
+  "producer": {
+    "name": "osac-ci-observability-pytest-plugin",
+    "version": "0.3.0"
+  },
+  "execution": {
+    "execution_id": "8e73fab9-4db2-4e5f-8b1a-029d2e5f4a67",
+    "repository_id": 812345678,
+    "repository": "osac-project/osac",
+    "workflow": {
+      "path": ".github/workflows/tests.yml",
+      "revision": "9de4227b54c5343e54e9d868e6b225c84cd24636"
+    },
+    "run_id": 1122334800,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "job": {
+      "logical_job_key": "tests.yml#aap-integration",
+      "github_job_id": 4588223344,
+      "job_name": "aap-integration"
+    },
+    "cohort": "pull-request"
+  },
+  "suite": {
+    "framework": "mixed",
+    "tier": "component-integration",
+    "component": "osac-aap",
+    "variant": "aap-integration"
+  },
+  "environment": {
+    "sources": [
+      {
+        "role": "tested",
+        "repository": "osac-project/osac",
+        "revision": "9de4227b54c5343e54e9d868e6b225c84cd24636"
+      },
+      {
+        "role": "workflow",
+        "repository": "osac-project/osac",
+        "revision": "9de4227b54c5343e54e9d868e6b225c84cd24636"
+      },
+      {
+        "role": "test-suite",
+        "repository": "osac-project/osac",
+        "revision": "9de4227b54c5343e54e9d868e6b225c84cd24636"
+      }
+    ]
+  },
+  "completeness": {
+    "complete": true,
+    "end_reason": "finished",
+    "dropped_records": 0,
+    "collection_errors": []
+  },
+  "redaction": {
+    "applied": true,
+    "findings": 0
+  },
+  "files": [
+    {
+      "path": "journals/controller.jsonl",
+      "kind": "journal",
+      "sha256": "3a715a1ff132f00d9cb6e1ebb7c0ef14db6764eb2f9fa56e5cb30e30c6f37bad",
+      "size_bytes": 953,
+      "record_count": 2,
+      "complete": true
+    },
+    {
+      "path": "journals/pytest-aap.jsonl",
+      "kind": "journal",
+      "sha256": "561ae35774ee66bf554d58ec20463674ade0c530d475ecb1d7dc014b22bf20b1",
+      "size_bytes": 4712,
+      "record_count": 11,
+      "complete": true
+    },
+    {
+      "path": "journals/ansible-targets.jsonl",
+      "kind": "journal",
+      "sha256": "3d22b9ea93dd336b6fd5bfe8134907e13596502d301312793f56fc239943218a",
+      "size_bytes": 2075,
+      "record_count": 4,
+      "complete": true
+    }
+  ]
+}
