@@ -133,7 +133,7 @@ def _add_string(text: str, label: str, out: dict[bytes, str], depth: int, min_le
 
 
 def needles_from_secret_file(path: pathlib.Path) -> dict[bytes, str]:
-    raw = path.read_text(encoding="utf-8", errors="replace")
+    raw = path.read_text(encoding="utf-8")
     needles: dict[bytes, str] = {}
     try:
         collect_needles(json.loads(raw), "", needles)
@@ -392,7 +392,7 @@ def _unpack(data: bytes) -> bytes | None | bool:
             return lzma.decompress(data)
         if data[:4] == b"PK\x03\x04":
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                members = [archive.read(name) for name in archive.namelist()]
+                members = [archive.read(info) for info in archive.infolist()]
             if any(_is_archive(member) for member in members):
                 return False
             return b"\n".join(members)
@@ -438,8 +438,6 @@ def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bo
     report = Report()
     for path in _entries(root):
         relative = str(path.relative_to(root))
-        if relative == REPORT_NAME:
-            continue
         if path.is_symlink():
             report.withheld.append({"file": relative, "reason": "symbolic link"})
             if not check:
@@ -499,7 +497,7 @@ def build_inventory(args: argparse.Namespace) -> tuple[dict[bytes, str], list[di
             continue
         try:
             found = needles_from_secret_file(path)
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             print(f"{path}: unreadable ({exc.__class__.__name__})", file=sys.stderr)
             return {}, sources, 2
         if not found:

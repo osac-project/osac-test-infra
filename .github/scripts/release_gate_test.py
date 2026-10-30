@@ -333,6 +333,39 @@ def test_non_ascii_secret_with_an_ascii_locale() -> None:
         _assert(value.encode() not in (fx.root / "a.log").read_bytes(), "non-ASCII secret survived")
 
 
+def test_zip_entries_with_the_same_name_are_all_inspected() -> None:
+    import warnings
+    with Fixture() as fx:
+        archive = io.BytesIO()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # zipfile warns about the duplicate on purpose
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("log.txt", f"first {TOKEN}")
+                zf.writestr("log.txt", "second, harmless")
+        fx.write("dup.zip", archive.getvalue())
+        fx.gate()
+        _assert(not (fx.root / "dup.zip").exists(), "the first of two same-named entries was never inspected")
+
+
+def test_a_file_named_like_the_report_is_still_scanned() -> None:
+    with Fixture() as fx:
+        planted = fx.write(gate.REPORT_NAME, f"hidden {TOKEN}\n")
+        elsewhere = fx.root.parent / "report-elsewhere.json"
+        code, _, _ = _run(fx.root, "--secret-file", str(fx.secret), "--report", str(elsewhere))
+        _assert(code == 0, "run failed")
+        _assert(TOKEN.encode() not in planted.read_bytes(), "a file named like the report skipped the scan")
+
+
+def test_a_secret_file_that_is_not_utf8_is_an_error() -> None:
+    with Fixture() as fx:
+        fx.write("a.log", "x\n")
+        broken = fx.root.parent / "broken.txt"
+        broken.write_bytes(b"prefix \xff\xfe " + TOKEN.encode())
+        code, _, err = _run(fx.root, "--secret-file", str(broken))
+        _assert(code == 2, f"an undecodable secret file must fail closed (exit 2), got {code}")
+        _assert(TOKEN not in err, "the value was printed")
+
+
 def main() -> None:
     test_incident_shape_is_censored_and_json_stays_valid()
     test_shape_rules_catch_it_without_any_known_value()
@@ -354,6 +387,9 @@ def main() -> None:
     test_a_crash_exits_2_never_1()
     test_non_utf8_environment_variable_does_not_crash()
     test_non_ascii_secret_with_an_ascii_locale()
+    test_zip_entries_with_the_same_name_are_all_inspected()
+    test_a_file_named_like_the_report_is_still_scanned()
+    test_a_secret_file_that_is_not_utf8_is_an_error()
     print("release_gate_test.py: ok")
 
 
