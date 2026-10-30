@@ -381,7 +381,10 @@ def test_decompression_bombs_are_abandoned_at_the_limit() -> None:
         zf.writestr("big.txt", zeros)
     samples = {"gzip.gz": gzip.compress(zeros), "bz2.bz2": bz2.compress(zeros), "xz.xz": lzma.compress(zeros),
                "one-member.zip": single.getvalue(), "many-members.zip": members.getvalue()}
-    for label, method in (("bzip2", zipfile.ZIP_BZIP2), ("lzma", zipfile.ZIP_LZMA)):
+    bomb_methods = [("bzip2", zipfile.ZIP_BZIP2), ("lzma", zipfile.ZIP_LZMA)]
+    if hasattr(zipfile, "ZIP_ZSTANDARD"):
+        bomb_methods.append(("zstd", zipfile.ZIP_ZSTANDARD))
+    for label, method in bomb_methods:
         packed = io.BytesIO()
         with zipfile.ZipFile(packed, "w", method) as zf:
             zf.writestr("big.txt", zeros)
@@ -407,15 +410,28 @@ def test_decompression_bombs_are_abandoned_at_the_limit() -> None:
 def test_zip_entries_with_unbounded_methods_are_refused() -> None:
     """Even a small, harmless entry: the interpreter's limit on these methods is not guaranteed."""
     with Fixture() as fx:
-        for label, method in (("bzip2", zipfile.ZIP_BZIP2), ("lzma", zipfile.ZIP_LZMA), ("deflate", zipfile.ZIP_DEFLATED)):
+        methods = [("bzip2", zipfile.ZIP_BZIP2), ("lzma", zipfile.ZIP_LZMA)]
+        if hasattr(zipfile, "ZIP_ZSTANDARD"):  # Python 3.14 and later
+            methods.append(("zstd", zipfile.ZIP_ZSTANDARD))
+        allowed = [("deflate", zipfile.ZIP_DEFLATED), ("stored", zipfile.ZIP_STORED)]
+        for label, method in methods + allowed:
             packed = io.BytesIO()
             with zipfile.ZipFile(packed, "w", method) as zf:
                 zf.writestr("note.txt", "nothing sensitive")
             fx.write(f"{label}.zip", packed.getvalue())
+        # A method this module has never heard of: patch the id in both headers of a stored zip.
+        odd = io.BytesIO()
+        with zipfile.ZipFile(odd, "w", zipfile.ZIP_STORED) as zf:
+            zf.writestr("note.txt", "nothing sensitive")
+        raw = odd.getvalue().replace(b"PK\x03\x04\x14\x00\x00\x00\x00\x00", b"PK\x03\x04\x14\x00\x00\x00\x63\x00") \
+                           .replace(b"PK\x01\x02\x14\x03\x14\x00\x00\x00\x00\x00", b"PK\x01\x02\x14\x03\x14\x00\x00\x00\x63\x00")
+        fx.write("unknown-method.zip", raw)
         fx.gate()
-        _assert(not (fx.root / "bzip2.zip").exists(), "bzip2 zip entry was accepted")
-        _assert(not (fx.root / "lzma.zip").exists(), "lzma zip entry was accepted")
-        _assert((fx.root / "deflate.zip").exists(), "a harmless deflate zip must stay")
+        for label, _ in methods:
+            _assert(not (fx.root / f"{label}.zip").exists(), f"{label} zip entry was accepted")
+        _assert(not (fx.root / "unknown-method.zip").exists(), "an unknown zip method was accepted")
+        for label, _ in allowed:
+            _assert((fx.root / f"{label}.zip").exists(), f"a harmless {label} zip must stay")
 
 
 def main() -> None:

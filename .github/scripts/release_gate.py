@@ -407,10 +407,11 @@ def _unpack(data: bytes) -> bytes | None | bool:
             budget, members = MAX_FILE_BYTES, []
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 for info in archive.infolist():
-                    # Whether the interpreter bounds one decompress() call for these two
-                    # methods depends on its version, and the runner's python3 is not
-                    # pinned. Refuse them rather than rely on it.
-                    if info.compress_type in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
+                    # Allow-list: whether the interpreter bounds one decompress() call
+                    # differs per method and per version (bzip2, lzma and Zstandard have
+                    # all been unbounded somewhere), and the runner's python3 is not
+                    # pinned. Anything but stored and deflate is uninspectable.
+                    if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
                         raise ValueError("zip entry compressed with a method that is not bounded")
                     with archive.open(info) as member:
                         content = _read_bounded(member, budget)
