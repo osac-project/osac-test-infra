@@ -434,6 +434,175 @@ def test_zip_entries_with_unbounded_methods_are_refused() -> None:
             _assert((fx.root / f"{label}.zip").exists(), f"a harmless {label} zip must stay")
 
 
+def test_optional_secret_files_are_skipped_when_absent_or_empty() -> None:
+    """Snapshots of auth files the job may leave empty must not abort the upload."""
+    with Fixture() as fx:
+        path = fx.write("a.log", f"leak {TOKEN}\n")
+        empty = fx.root.parent / "auth.json"
+        empty.write_text(json.dumps({"auths": {}}))
+        code, out, _ = _run(fx.root, "--optional-secret-file", str(empty),
+                            "--optional-secret-file", str(fx.root.parent / "absent.json"),
+                            "--optional-secret-file", str(fx.secret))
+        _assert(code == 0, f"an empty or missing optional file must be skipped, got {code}: {out}")
+        _assert(TOKEN not in path.read_text(), "the non-empty optional file was not used")
+        code, _, _ = _run(fx.root, "--secret-file", str(empty))
+        _assert(code == 2, "a named --secret-file with no value must still fail closed")
+
+
+def test_a_value_inside_its_own_marker_label_is_censored_not_withheld() -> None:
+    """Secret fulfillment-service-kafka holding the value fulfillment-service."""
+    with Fixture() as fx:
+        value = "fulfillment-service"
+        listing = fx.root.parent / "secrets.json"
+        listing.write_text(json.dumps({"items": [{"metadata": {"namespace": "ns", "name": "fulfillment-service-kafka"},
+                                                  "data": {"password": base64.b64encode(value.encode()).decode()}}]}))
+        path = fx.write("job.txt", f"connecting as {value} ok\nagain {value}\n")
+        code, _, _ = _run(fx.root, "--k8s-secrets", str(listing))
+        _assert(code == 0 and path.exists(), "a value that appears in its own marker label got the file withheld")
+        text = path.read_text()
+        _assert(text.count("[REDACTED:") == 2 and "[REDACTED:secret/ns/" in text, f"unexpected markers: {text!r}")
+        _assert("[REDACTED:secret/ns/[REDACTED" not in text, f"markers were nested: {text!r}")
+        _assert(not json.loads((fx.root / gate.REPORT_NAME).read_text())["withheld"], "the file was reported as withheld")
+
+
+def test_identity_keys_of_cluster_secrets_are_left_alone() -> None:
+    with Fixture() as fx:
+        listing = fx.root.parent / "secrets.json"
+        encode = lambda text: base64.b64encode(text.encode()).decode()
+        listing.write_text(json.dumps({"items": [{"metadata": {"namespace": "ns", "name": "kafka"}, "data": {
+            "user": encode("fulfillment-service"), "client-id": encode("osac-ui-backend-client"),
+            "password": encode("Zx9!qL2mPa7vR4tY")}}]}))
+        path = fx.write("a.log", "user fulfillment-service client osac-ui-backend-client password Zx9!qL2mPa7vR4tY\n")
+        _run(fx.root, "--k8s-secrets", str(listing))
+        text = path.read_text()
+        _assert("fulfillment-service" in text and "osac-ui-backend-client" in text, f"identity values were censored: {text!r}")
+        _assert("Zx9!qL2mPa7vR4tY" not in text, "the password was not censored")
+
+
+def test_text_shaped_like_a_marker_does_not_hide_a_secret() -> None:
+    with Fixture() as fx:
+        spoof = fx.write("spoof.log", f"before [REDACTED:note {TOKEN} ] after\nplain {TOKEN}\n")
+        benign = fx.write("benign.log", "report said [REDACTED:something] and nothing else\n")
+        before = benign.read_bytes()
+        code, _, _ = fx.gate()
+        _assert(code == 0 and spoof.exists(), "the file with a lookalike marker was withheld or the run failed")
+        text = spoof.read_text()
+        _assert(TOKEN not in text, f"a marker-shaped string hid the token: {text!r}")
+        _assert(text.count("[REDACTED:password") + text.count("[REDACTED:") >= 1, "the token was not replaced by a marker")
+        _assert(benign.read_bytes() == before, "a file with a lookalike but no secret must stay byte-identical")
+
+
+def test_credential_bearing_urls_in_cluster_secrets_are_censored() -> None:
+    with Fixture() as fx:
+        encode = lambda text: base64.b64encode(text.encode()).decode()
+        listing = fx.root.parent / "secrets.json"
+        listing.write_text(json.dumps({"items": [{"metadata": {"namespace": "ns", "name": "db"}, "data": {
+            "url": encode("postgres://svc:Zx9qL2mPa7vR4tY@db.example:5432/app"),
+            "endpoint": encode("https://storage.example.com/bucket"),
+            "webhook": encode("https://hooks.example.com/notify?token=Tq8wE5rY2uI9oP1a")}}]}))
+        path = fx.write("a.log", "db postgres://svc:Zx9qL2mPa7vR4tY@db.example:5432/app\n"
+                                  "storage https://storage.example.com/bucket\n"
+                                  "hook https://hooks.example.com/notify?token=Tq8wE5rY2uI9oP1a\n")
+        _run(fx.root, "--k8s-secrets", str(listing))
+        text = path.read_text()
+        _assert("Zx9qL2mPa7vR4tY" not in text, "a password inside a url survived")
+        _assert("Tq8wE5rY2uI9oP1a" not in text, "a token in a query string survived")
+        _assert("https://storage.example.com/bucket" in text, "a plain public endpoint must stay")
+
+
+def test_a_port_followed_by_a_query_is_not_a_password() -> None:
+    with Fixture() as fx:
+        listing = fx.root.parent / "secrets.json"
+        listing.write_text(json.dumps({"items": [{"metadata": {"namespace": "ns", "name": "api"}, "data": {
+            "endpoint": base64.b64encode(b"https://api.example:443?user=a@b").decode()}}]}))
+        path = fx.write("a.log", "calling https://api.example:443?user=a@b now\n")
+        before = path.read_bytes()
+        _run(fx.root, "--k8s-secrets", str(listing))
+        _assert(path.read_bytes() == before, "a public endpoint was mistaken for a credential-bearing url")
+
+
+def test_url_credentials_are_inventoried_on_their_own() -> None:
+    with Fixture() as fx:
+        encode = lambda text: base64.b64encode(text.encode()).decode()
+        listing = fx.root.parent / "secrets.json"
+        listing.write_text(json.dumps({"items": [{"metadata": {"namespace": "ns", "name": "db"}, "data": {
+            "url": encode("postgres://svc:Zx9qL2mPa7vR4tY@db.example:5432/app"),
+            "dsn": encode("postgres://svc:p%40ss%2Fw0rd-Qm4x@db.example/app"),
+            "webhook": encode("https://hooks.example.com/notify?token=Tq8wE5rY2uI9oP1a&x=1")}}]}))
+        path = fx.write("a.log", "password Zx9qL2mPa7vR4tY alone\nlogin p@ss/w0rd-Qm4x alone\ntoken Tq8wE5rY2uI9oP1a alone\n")
+        _run(fx.root, "--k8s-secrets", str(listing))
+        text = path.read_text()
+        for leaked in ("Zx9qL2mPa7vR4tY", "p@ss/w0rd-Qm4x", "Tq8wE5rY2uI9oP1a"):
+            _assert(leaked not in text, f"{leaked[:6]}... was printed on its own and survived: {text!r}")
+
+
+def test_url_credentials_split_on_semicolons_and_decode_form_encoding() -> None:
+    with Fixture() as fx:
+        encode = lambda text: base64.b64encode(text.encode()).decode()
+        listing = fx.root.parent / "secrets.json"
+        listing.write_text(json.dumps({"items": [{"metadata": {"namespace": "ns", "name": "hooks"}, "data": {
+            "one": encode("https://h.example/x?token=Aa1Bb2Cc3Dd4;password=Zz9Yy8Xx7Ww6"),
+            "two": encode("https://h.example/y?password=long+secretValue99&x=1")}}]}))
+        path = fx.write("a.log", "second Zz9Yy8Xx7Ww6 alone\nfirst Aa1Bb2Cc3Dd4 alone\ndecoded long secretValue99 alone\n")
+        _run(fx.root, "--k8s-secrets", str(listing))
+        text = path.read_text()
+        for leaked in ("Zz9Yy8Xx7Ww6", "Aa1Bb2Cc3Dd4", "long secretValue99"):
+            _assert(leaked not in text, f"{leaked[:6]}... survived: {text!r}")
+
+
+def test_a_credential_never_ends_up_in_a_marker_label_or_the_report() -> None:
+    """A Secret named after its own credential must not put it into the published marker."""
+    with Fixture() as fx:
+        credential = "Zx9qL2mPa7vR4tY"
+        listing = fx.root.parent / "secrets.json"
+        listing.write_text(json.dumps({"items": [{"metadata": {"namespace": "ns", "name": f"db-{credential}"}, "data": {
+            "password": base64.b64encode(credential.encode()).decode(),
+            "url": base64.b64encode(f"postgres://svc:{credential}@db.example/app".encode()).decode()}}]}))
+        path = fx.write("a.log", f"login {credential}\n")
+        code, out, err = _run(fx.root, "--k8s-secrets", str(listing))
+        _assert(code == 0, f"run failed: {out}{err}")
+        published = path.read_text() + (fx.root / gate.REPORT_NAME).read_text() + out + err
+        _assert(credential not in published, f"the credential reached a marker, the report or the output: {published!r}")
+        _assert("(h-" in path.read_text(), "the label did not carry a hash in place of the credential")
+
+
+def test_a_secret_in_a_file_or_directory_name_is_not_published_or_reported() -> None:
+    import tempfile as _tempfile
+    for value in ("Zx9qL2mPa7vR4tY-ascii", "P\u00e4ssw\u00f6rd-0123456789abcdef"):
+        with Fixture() as fx:
+            fx.secret.write_text(json.dumps({"password": value}, ensure_ascii=False), encoding="utf-8")
+            fx.write(f"pod-{value}.log", "harmless content\n")
+            fx.write(f"dir-{value}/inner.log", "harmless too\n")
+            keep = fx.write("kept/normal.log", "unrelated\n")
+            summary = pathlib.Path(_tempfile.mkdtemp()) / "summary.md"
+            os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
+            os.environ["GITHUB_ACTIONS"] = "true"
+            try:
+                code, out, err = fx.gate()
+            finally:
+                del os.environ["GITHUB_STEP_SUMMARY"], os.environ["GITHUB_ACTIONS"]
+            _assert(code == 0, f"run failed: {out}{err}")
+            published = [str(p.relative_to(fx.root)) for p in fx.root.rglob("*")]
+            _assert(not any(value in name for name in published), f"a name still carries the secret: {published}")
+            _assert(keep.exists(), "an unrelated file was removed")
+            # The files are kept under a safe name, not thrown away.
+            _assert(any(n.startswith("pod-(h-") and n.endswith(".log") for n in published), f"the file was not renamed: {published}")
+            _assert(any(n.startswith("dir-(h-") and n.endswith("inner.log") for n in published), f"the directory was not renamed: {published}")
+            seen = out + err + (fx.root / gate.REPORT_NAME).read_text(encoding="utf-8") + (summary.read_text(encoding="utf-8") if summary.exists() else "")
+            _assert(value not in seen and json.dumps(value) not in seen,
+                    f"the secret reached the output, the step summary or the report: {seen!r}")
+            report = json.loads((fx.root / gate.REPORT_NAME).read_text(encoding="utf-8"))
+            _assert(any(c["rule"] == "path:known-value" for c in report["censored"]), f"not reported: {report}")
+
+
+def test_check_mode_reports_a_secret_in_a_name_without_touching_it() -> None:
+    with Fixture() as fx:
+        path = fx.write(f"pod-{TOKEN}.log", "harmless\n")
+        code, out, err = fx.gate("--check")
+        _assert(code == 1 and path.exists(), "check mode must flag the name and leave the file")
+        _assert(TOKEN not in out + err, "check mode printed the secret from a file name")
+
+
 def main() -> None:
     test_incident_shape_is_censored_and_json_stays_valid()
     test_shape_rules_catch_it_without_any_known_value()
@@ -460,6 +629,17 @@ def main() -> None:
     test_a_secret_file_that_is_not_utf8_is_an_error()
     test_decompression_bombs_are_abandoned_at_the_limit()
     test_zip_entries_with_unbounded_methods_are_refused()
+    test_optional_secret_files_are_skipped_when_absent_or_empty()
+    test_a_value_inside_its_own_marker_label_is_censored_not_withheld()
+    test_identity_keys_of_cluster_secrets_are_left_alone()
+    test_text_shaped_like_a_marker_does_not_hide_a_secret()
+    test_credential_bearing_urls_in_cluster_secrets_are_censored()
+    test_a_port_followed_by_a_query_is_not_a_password()
+    test_url_credentials_are_inventoried_on_their_own()
+    test_url_credentials_split_on_semicolons_and_decode_form_encoding()
+    test_a_credential_never_ends_up_in_a_marker_label_or_the_report()
+    test_a_secret_in_a_file_or_directory_name_is_not_published_or_reported()
+    test_check_mode_reports_a_secret_in_a_name_without_touching_it()
     print("release_gate_test.py: ok")
 
 

@@ -52,6 +52,7 @@ import pathlib
 import re
 import sys
 import tarfile
+import urllib.parse
 import zipfile
 
 # Shorter strings (usernames, hostnames, placeholders) would flag ordinary text.
@@ -69,6 +70,37 @@ REPORT_NAME = "redaction-report.json"
 _IDENTITY_KEYS = {"email", "username", "user"}
 # Kubernetes Secret keys holding public material.
 _K8S_PUBLIC_KEYS = {"ca.crt", "tls.crt", "ca-bundle.crt", "service-ca.crt", "namespace"}
+# Identifiers that sit next to a credential and show up in ordinary logs. Their value is
+# left out of the inventory unless it carries a credential itself (see _CREDENTIAL_IN_TEXT).
+_K8S_IDENTITY_KEYS = {
+    "user", "username", "user-id", "userid", "client-id", "client_id", "clientid", "email",
+    "host", "hostname", "url", "endpoint", "region",
+}
+# A password in the userinfo of a URL, or a token-like query parameter. Userinfo ends at the
+# first / ? or #, so a port followed by a query string is not mistaken for user:password.
+_URL_USERINFO = re.compile(r"://[^/\s:@?#]+:([^/\s@?#]+)@")
+_CREDENTIAL_QUERY = re.compile(
+    r"[?&;](?:token|password|passwd|pwd|secret|key|apikey|api_key|access_key|sig|signature|auth)=([^&;\s#]+)", re.I
+)
+_MIN_URL_CREDENTIAL = 8
+
+
+def _credential_bearing(text: str) -> bool:
+    return bool(_URL_USERINFO.search(text) or _CREDENTIAL_QUERY.search(text))
+
+
+def _add_url_credentials(text: str, label: str, out: dict[bytes, str]) -> None:
+    """The password and token values inside a URL, so a log that prints only one still matches."""
+    # In userinfo a "+" is a plus sign; in a query string it is a space.
+    for regex, form_encoded in ((_URL_USERINFO, False), (_CREDENTIAL_QUERY, True)):
+        for match in regex.finditer(text):
+            raw = match.group(1)
+            values = {raw, urllib.parse.unquote(raw)}
+            if form_encoded:
+                values.add(urllib.parse.unquote_plus(raw))
+            for value in values:
+                if len(value) >= _MIN_URL_CREDENTIAL:
+                    out.setdefault(value.encode("utf-8", "surrogateescape"), f"{label}(url credential)")
 
 _B64_CHARS = frozenset(
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_"
@@ -109,6 +141,7 @@ def _add_string(text: str, label: str, out: dict[bytes, str], depth: int, min_le
     if len(text) < min_len:
         return
     out.setdefault(text.encode("utf-8", "surrogateescape"), label)
+    _add_url_credentials(text, label, out)
     if depth >= _MAX_NESTING:
         return
     try:
@@ -159,7 +192,9 @@ def needles_from_k8s_secrets(path: pathlib.Path) -> dict[bytes, str]:
                 values[key] = decoded.decode(errors="replace")
         values.update({k: v for k, v in (item.get("stringData") or {}).items() if isinstance(v, str)})
         for key, text in values.items():
-            if key in _K8S_PUBLIC_KEYS or text.startswith("-----BEGIN CERTIFICATE-----"):
+            if key.lower() in _K8S_PUBLIC_KEYS or text.startswith("-----BEGIN CERTIFICATE-----"):
+                continue
+            if key.lower() in _K8S_IDENTITY_KEYS and not _credential_bearing(text):
                 continue
             label = f"{prefix}/{key}"
             if text.lstrip().startswith(("{", "[")):
@@ -198,8 +233,12 @@ def fingerprint(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()[:10]
 
 
+_MARKER = re.compile(rb"\[REDACTED:[^\]]*\]")
+
+
 def _marker(name: str, suffix: str = "") -> bytes:
-    safe = re.sub(r"[^A-Za-z0-9._:/()\[\]-]", "_", name)
+    # No brackets in the label, so a marker always ends at its first closing bracket.
+    safe = re.sub(r"[^A-Za-z0-9._:/()-]", "_", name)
     return f"[REDACTED:{safe}{':' + suffix if suffix else ''}]".encode()
 
 
@@ -292,11 +331,23 @@ class Patterns:
     """Known-value search patterns built once from the inventory."""
 
     def __init__(self, inventory: dict[bytes, str]) -> None:
+        ordered = sorted(inventory.items(), key=lambda kv: -len(kv[0]))
         self.items = [
-            (label, form, pattern, is_b64)
-            for needle, label in sorted(inventory.items(), key=lambda kv: -len(kv[0]))
+            (self._safe_label(label, inventory), form, pattern, is_b64)
+            for needle, label in ordered
             for form, pattern, is_b64 in variants(needle)
         ]
+
+    @staticmethod
+    def _safe_label(label: str, inventory: dict[bytes, str]) -> str:
+        """A marker label comes from object names (Secret, key), which can contain the very
+        value being hidden. The label ends up in the artifact and in the report, so any
+        inventory value found in it is replaced by a short hash."""
+        raw = label.encode("utf-8", "surrogateescape")
+        for needle in sorted(inventory, key=len, reverse=True):
+            if needle in raw:
+                raw = raw.replace(needle, f"(h-{fingerprint(needle)})".encode())
+        return raw.decode("utf-8", "surrogateescape")
 
     def present(self, data: bytes) -> list[str]:
         return sorted({label for label, _form, pattern, _b64 in self.items if pattern in data})
@@ -337,15 +388,34 @@ def censor_shapes(data: bytes, hits: collections.Counter) -> bytes:
     return data
 
 
+def _outside_markers(data: bytes, transform) -> bytes:
+    """Apply `transform` to the text between markers, leaving the markers themselves alone.
+
+    A marker's label names a secret and can contain the very value that was replaced
+    (a Secret called fulfillment-service-kafka holding the user fulfillment-service).
+    Searching inside markers would wrap them again on every round.
+    """
+    pieces, position = [], 0
+    for match in _MARKER.finditer(data):
+        pieces += [transform(data[position:match.start()]), match.group(0)]
+        position = match.end()
+    pieces.append(transform(data[position:]))
+    return b"".join(pieces)
+
+
 def censor_bytes(data: bytes, patterns: Patterns) -> tuple[bytes, collections.Counter]:
     hits: collections.Counter = collections.Counter()
+    original = data
+    # Text in the artifact that merely looks like one of this gate's markers must not be
+    # trusted: _outside_markers would skip whatever sits inside it, and the survivor check
+    # would delete it. Only markers created below, after this rename, count.
+    data = data.replace(b"[REDACTED:", b"[REDACTED_INPUT:")
     for _round in range(3):
         before = data
-        data = censor_known(data, patterns, hits)
-        data = censor_shapes(data, hits)
+        data = _outside_markers(data, lambda text: censor_shapes(censor_known(text, patterns, hits), hits))
         if data == before:
             break
-    return data, hits
+    return (data, hits) if hits else (original, hits)
 
 
 _ARCHIVE_MAGICS = (b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00", b"PK\x03\x04", b"\x28\xb5\x2f\xfd", b"7z\xbc\xaf", b"Rar!")
@@ -460,15 +530,54 @@ def _entries(root: pathlib.Path) -> list[pathlib.Path]:
 def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bool = False) -> Report:
     patterns = Patterns(inventory)
     report = Report()
+
+    def shown(relative_path: str) -> str:
+        """A path as the report and the output may show it: with any secret in it censored."""
+        raw = relative_path.encode("utf-8", "surrogateescape")
+        return censor_bytes(raw, patterns)[0].decode("utf-8", "surrogateescape")
+
+    def rename_target(relative_path: str) -> str | None:
+        """The path with every inventory value replaced by a short hash, or None if a value
+        still shows through (an encoded form) and the file has to go. Only characters that
+        upload-artifact accepts in a path: no brackets-and-colon marker."""
+        raw = relative_path.encode("utf-8", "surrogateescape")
+        for needle in sorted(inventory, key=len, reverse=True):
+            raw = raw.replace(needle, f"(h-{fingerprint(needle)})".encode())
+        return None if patterns.present(raw) else raw.decode("utf-8", "surrogateescape")
+
     for path in _entries(root):
         relative = str(path.relative_to(root))
+        name = shown(relative)
         if path.is_symlink():
-            report.withheld.append({"file": relative, "reason": "symbolic link"})
+            report.withheld.append({"file": name, "reason": "symbolic link"})
             if not check:
                 path.unlink()
             continue
         if not path.is_file():
             continue
+        if patterns.present(relative.encode("utf-8", "surrogateescape")):
+            # The name is published with the artifact, so a secret in it is a leak like any other.
+            target = rename_target(relative)
+            if check:
+                report.censored.append({"file": name, "rule": "path:known-value", "count": 1})
+            elif target is None:
+                report.withheld.append({"file": name, "reason": "path contains a known value"})
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                continue
+            else:
+                new_path = root / target
+                new_path.parent.mkdir(parents=True, exist_ok=True)
+                counter = 1
+                while new_path.exists():
+                    new_path = root / f"{target}-dup{counter}"
+                    counter += 1
+                path.rename(new_path)
+                path, relative = new_path, str(new_path.relative_to(root))
+                name = shown(relative)
+                report.censored.append({"file": name, "rule": "path:known-value", "count": 1})
         try:
             if path.stat().st_size > MAX_FILE_BYTES:
                 raise ValueError("larger than the inspection limit")
@@ -482,7 +591,7 @@ def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bo
                 _clean, hits = censor_bytes(payload, patterns)
                 if hits:
                     report.withheld.append(
-                        {"file": relative, "reason": "secret inside archive: " + ", ".join(sorted(hits))}
+                        {"file": name, "reason": "secret inside archive: " + ", ".join(sorted(hits))}
                     )
                     if not check:
                         path.unlink()
@@ -490,22 +599,31 @@ def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bo
             cleaned, hits = censor_bytes(data, patterns)
             if hits:
                 for rule, count in sorted(hits.items()):
-                    report.censored.append({"file": relative, "rule": rule, "count": count})
+                    report.censored.append({"file": name, "rule": rule, "count": count})
                 if check:
                     continue
-                survivors = patterns.present(cleaned)
+                survivors = patterns.present(_MARKER.sub(b"", cleaned))
                 if survivors:
                     path.unlink()
                     report.withheld.append(
-                        {"file": relative, "reason": "known value survived censoring: " + ", ".join(survivors)}
+                        {"file": name, "reason": "known value survived censoring: " + ", ".join(survivors)}
                     )
                 else:
                     path.write_bytes(cleaned)
         except (OSError, ValueError, MemoryError) as exc:
-            report.withheld.append({"file": relative, "reason": f"{exc.__class__.__name__}: {exc}"})
+            report.withheld.append({"file": name, "reason": f"{exc.__class__.__name__}: {exc}"})
             if not check:
                 try:
                     path.unlink()
+                except OSError:
+                    pass
+    if not check:
+        # A directory named after a secret is published too, even when it is empty.
+        for directory, _subdirs, _files in os.walk(root, topdown=False, followlinks=False):
+            folder = pathlib.Path(directory)
+            if folder != root and patterns.present(str(folder.relative_to(root)).encode("utf-8", "surrogateescape")):
+                try:
+                    folder.rmdir()
                 except OSError:
                     pass
     return report
@@ -514,21 +632,27 @@ def process_directory(root: pathlib.Path, inventory: dict[bytes, str], check: bo
 def build_inventory(args: argparse.Namespace) -> tuple[dict[bytes, str], list[dict[str, object]], int]:
     inventory: dict[bytes, str] = {}
     sources: list[dict[str, object]] = []
-    for name in args.secret_file:
-        path = pathlib.Path(name)
-        if not path.is_file():
-            print(f"{path}: not present, nothing to check against")
-            continue
-        try:
-            found = needles_from_secret_file(path)
-        except (OSError, UnicodeDecodeError) as exc:
-            print(f"{path}: unreadable ({exc.__class__.__name__})", file=sys.stderr)
-            return {}, sources, 2
-        if not found:
-            print(f"{path}: no value of {MIN_LEN}+ characters to check against", file=sys.stderr)
-            return {}, sources, 2
-        inventory.update(found)
-        sources.append({"source": path.name, "values": len(found)})
+    for optional, names in ((False, args.secret_file), (True, args.optional_secret_file)):
+        for name in names:
+            path = pathlib.Path(name)
+            if not path.is_file():
+                print(f"{path}: not present, nothing to check against")
+                continue
+            try:
+                found = needles_from_secret_file(path)
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"{path}: unreadable ({exc.__class__.__name__})", file=sys.stderr)
+                return {}, sources, 2
+            if not found:
+                # A named secret file with nothing in it is an error. A snapshot of a file
+                # the job may legitimately have left empty is only skipped.
+                print(f"{path}: no value of {MIN_LEN}+ characters to check against",
+                      file=sys.stdout if optional else sys.stderr)
+                if optional:
+                    continue
+                return {}, sources, 2
+            inventory.update(found)
+            sources.append({"source": path.name, "values": len(found)})
     for name in args.env:
         value = os.environ.get(name, "")
         if len(value) >= MIN_LEN:
@@ -570,6 +694,8 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("directory")
     parser.add_argument("--secret-file", action="append", default=[])
+    parser.add_argument("--optional-secret-file", action="append", default=[],
+                        help="like --secret-file, but a file that is missing or holds no value is skipped")
     parser.add_argument("--env", action="append", default=[], help="environment variable holding a secret")
     parser.add_argument("--k8s-secrets", action="append", default=[], help="`oc get secrets -o json` output")
     parser.add_argument("--report", help=f"report path (default: <directory>/{REPORT_NAME})")
@@ -587,6 +713,13 @@ def main(argv: list[str]) -> int:
 
     report = process_directory(root, inventory, check=args.check)
     report.inventory = sources
+    # Validate before anything is printed, written to the step summary or saved. Names in the
+    # report are already censored; this is the check that they really are. No ASCII escaping, so
+    # a value with non-ASCII characters is compared as it appears in an artifact.
+    report_text = json.dumps(report.as_json(), indent=2, ensure_ascii=False) + "\n"
+    if Patterns(inventory).present(report_text.encode("utf-8", "surrogateescape")):
+        print("release gate failed: the report would contain a secret value", file=sys.stderr)
+        return 2
     in_actions = os.environ.get("GITHUB_ACTIONS") == "true"
     for entry in report.censored:
         print(f"{'::warning::' if in_actions else ''}{entry['file']}: {entry['rule']} x{entry['count']}"
@@ -596,7 +729,7 @@ def main(argv: list[str]) -> int:
     _write_summary(report, args.check)
     if not args.check:
         report_path = pathlib.Path(args.report) if args.report else root / REPORT_NAME
-        report_path.write_text(json.dumps(report.as_json(), indent=2) + "\n", encoding="utf-8")
+        report_path.write_text(report_text, encoding="utf-8")
     values = sum(int(s["values"]) for s in sources)
     print(f"Release gate: {len(report.censored)} censoring(s), {len(report.withheld)} file(s) withheld, "
           f"{values} known value(s) checked")

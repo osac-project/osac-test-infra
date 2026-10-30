@@ -15,8 +15,10 @@ inputs:
     description: >-
       Newline-separated files holding secrets the job uses, such as the
       registry pull secret. Every value in them, in any encoding, is censored
-      from the artifacts. Empty means RUNNER_TEMP/pull-secret.json. A listed
-      file that does not exist is skipped.
+      from the artifacts. Each must exist and hold a value. In addition, the
+      secret files that the collect-artifacts action snapshotted before
+      Teardown deleted them (the pull secret and registry auth files) are
+      always checked; those are skipped when absent or empty.
     required: false
     default: ""
   known-secret-env:
@@ -196,12 +198,20 @@ runs:
         FAIL_ON_CENSOR: ${{ inputs.fail-on-censor }}
       run: |
         if [[ ! -d "${ARTIFACT_DIR}" ]]; then
+          # Nothing to censor, but the collection step may have saved copies of the secrets.
+          rm -rf "${RUNNER_TEMP}/osac-secret-inventory"
           exit 0
         fi
         args=()
+        # Named files must hold a secret. The defaults are the snapshots the collection
+        # step took before Teardown deleted the originals, and the original in case
+        # this runs without a collection; those are skipped when absent or empty.
         while IFS= read -r secret_file; do
           [[ -n "${secret_file}" ]] && args+=(--secret-file "${secret_file}")
-        done <<<"${KNOWN_SECRET_FILES:-${RUNNER_TEMP}/pull-secret.json}"
+        done <<<"${KNOWN_SECRET_FILES}"
+        for secret_file in "${RUNNER_TEMP}"/osac-secret-inventory/secret-files/* "${RUNNER_TEMP}/pull-secret.json"; do
+          [[ -f "${secret_file}" ]] && args+=(--optional-secret-file "${secret_file}")
+        done
         while IFS= read -r variable; do
           [[ -n "${variable}" ]] && args+=(--env "${variable}")
         done <<<"${KNOWN_SECRET_ENV}"
@@ -220,7 +230,7 @@ runs:
           "${ARTIFACT_DIR}" "${args[@]}" || status=$?
         # The snapshot of the cluster's Secrets has done its job; do not leave it
         # on a runner that outlives this job.
-        rm -f "${RUNNER_TEMP}/osac-secret-inventory/k8s-secrets.json"
+        rm -rf "${RUNNER_TEMP}/osac-secret-inventory"
         if [[ ${status} -eq 1 ]]; then
           echo "::error::Release gate censored secrets that the collection should not have written"
           exit 1
@@ -241,3 +251,10 @@ runs:
           !${{ runner.temp }}/osac-artifacts/.redaction-complete
         retention-days: 7
         if-no-files-found: warn
+
+    # Every path above removes the snapshots, but a step that fails or is skipped before
+    # reaching its own cleanup must not leave copies of the secrets on the runner.
+    - name: Remove secret snapshots
+      if: always()
+      shell: bash
+      run: rm -rf "${RUNNER_TEMP}/osac-secret-inventory"
