@@ -24,6 +24,9 @@
 server:
   http_listen_port: 3200
   grpc_listen_port: 9096
+  # The stock 30s write timeout would cut off a search that legitimately uses
+  # the 120s query budget below before its response reaches Grafana.
+  http_server_write_timeout: 150s
 
 distributor:
   receivers:
