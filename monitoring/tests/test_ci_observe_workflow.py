@@ -201,7 +201,10 @@ class TestAction:
         # Staged inside the standard artifact directory the upload action
         # gates, and gated on that staging step's output.
         assert "${RUNNER_TEMP}/osac-artifacts" in stage["run"]
-        assert upload["if"] == "always() && steps.stage.outputs.staged == 'true'"
+        assert (
+            upload["if"] == "always() && steps.stage.outputs.staged == 'true'"
+            " && steps.license_prep.outcome == 'success'"
+        )
         # The gitleaks pre-scan is opted out: ~1 GB of telemetry JSONL costs
         # ~24 minutes of pattern scanning. The release gate and the upload
         # still run (pinned by .github/scripts/upload_artifacts_test.py).
