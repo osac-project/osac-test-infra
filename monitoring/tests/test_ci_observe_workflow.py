@@ -23,6 +23,7 @@ the capture supervisor's own validation; see monitoring/ci-observe.md.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 from pathlib import Path
 
@@ -137,6 +138,10 @@ class TestAction:
         assert inputs["command"]["required"] is True
         assert inputs["capture-id"]["required"] is False
         assert inputs["capture-id"]["default"] == ""
+        assert inputs["suite"]["required"] is False
+        assert inputs["suite"]["default"] == ""
+        assert inputs["pr"]["required"] is False
+        assert inputs["pr"]["default"] == ""
         # Self-contained: every step is an inline run or an existing repo
         # action, never a script of its own.
         for step in action["runs"]["steps"]:
@@ -150,6 +155,30 @@ class TestAction:
         assert "monitoring/config/ci-observe/collector.yaml" in script
         assert CLUSTER_MANIFEST.is_file()
         assert COLLECTOR_CONFIG.is_file()
+
+    def test_renders_suite_and_pr_into_the_cluster_manifest(self, action: dict) -> None:
+        """The suite and PR inputs become the CI_OBSERVE_SUITE / CI_OBSERVE_PR
+        env values of the gateway (the collector turns them into the
+        osac.ci.suite / osac.ci.pr resource attributes), and are narrowed to
+        safe charsets first: they land inside a sed replacement and a
+        double-quoted manifest value."""
+        deploy = step_by_id(action["runs"]["steps"], "deploy")
+        script = deploy["run"]
+        assert deploy["env"]["SUITE_INPUT"] == "${{ inputs.suite }}"
+        assert deploy["env"]["PR_INPUT"] == "${{ inputs.pr }}"
+        for token in ("CI_OBSERVE_SUITE", "CI_OBSERVE_PR"):
+            assert f'-e "s|\\${{{token}}}' in script, token
+        assert "tr -cd 'a-z0-9-'" in script
+        assert "tr -cd '0-9'" in script
+
+    def test_capture_id_is_a_short_dns_label(self, action: dict) -> None:
+        """The capture id names the PVC and the readout pod; the readout pod
+        prepends 19 characters to it and Kubernetes caps pod names at 63, so
+        the action must refuse anything longer than 44 characters instead of
+        losing the capture at readout-pod creation."""
+        deploy = step_by_id(action["runs"]["steps"], "deploy")
+        script = deploy["run"]
+        assert '"${#capture_id}" -gt 44' in script
 
     def test_beyla_image_is_configurable_and_defaults_to_the_pinned_patch_build(self, action: dict) -> None:
         beyla = action["inputs"]["beyla-image"]
@@ -320,6 +349,27 @@ class TestWorkflowWiring:
         assert entry["type"] == "boolean"
         assert entry["required"] is False
         assert entry["default"] is False
+
+    def test_observed_step_passes_a_flavored_capture_identity(self, workflow: dict) -> None:
+        """The capture id is <suite>-pr<N|main>-<run id>-a<attempt>: readable
+        in the Grafana capture dropdown, DNS-1123 by construction (fixed
+        suite word, digits, "main"), unique through the full run id, and
+        short enough (under 30 characters) that the PVC and readout pod names
+        built from it fit the 63-character pod-name cap. Suite and PR reach
+        the action separately and become the osac.ci.suite / osac.ci.pr
+        resource attributes."""
+        observed = step_by_id(steps_of(workflow), "test-observed")
+        capture_id = observed["with"]["capture-id"]
+        match = re.fullmatch(
+            r"\$\{\{ format\('(?P<suite>[a-z]+)-\{0\}-\{1\}-a\{2\}', "
+            r"inputs\.pr-number != '' && format\('pr\{0\}', inputs\.pr-number\) \|\| 'main', "
+            r"github\.run_id, github\.run_attempt\) \}\}",
+            capture_id,
+        )
+        assert match, f"capture-id is not the flavored format: {capture_id}"
+        assert match.group("suite") in SUITES
+        assert observed["with"]["suite"] == match.group("suite")
+        assert observed["with"]["pr"] == "${{ inputs.pr-number }}"
 
     def test_exactly_one_test_step_runs_depending_on_the_input(self, workflow: dict) -> None:
         steps = steps_of(workflow)

@@ -44,8 +44,11 @@ otlp:
     - kafka.cluster.alias
     # The capture id and observed namespace select a run's metrics in the
     # ci-observe-runs dashboard; without promotion they never become labels.
+    # The suite and PR labels make runs filterable by flavor and pull request.
     - osac.ci.capture_id
     - osac.ci.observed_namespace
+    - osac.ci.suite
+    - osac.ci.pr
 storage:
   tsdb:
     out_of_order_time_window: 7d

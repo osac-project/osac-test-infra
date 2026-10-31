@@ -6,6 +6,8 @@
 #   CI_OBSERVE_NAMESPACE         observed OSAC namespace, e.g. osac-e2e-ci
 #   CI_OBSERVE_CLUSTER_UID       cluster identity
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250
+#   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
+#   CI_OBSERVE_PR                pull request number; empty for non-PR runs
 #
 # Images are pinned by digest (verified against the remote registries):
 #   gateway/replay: opentelemetry-collector-contrib 0.164.0
@@ -139,6 +141,10 @@ spec:
               value: "${CI_OBSERVE_CLUSTER_UID}"
             - name: CI_OBSERVE_KUBELET_ENDPOINT
               value: "${CI_OBSERVE_KUBELET_ENDPOINT}"
+            - name: CI_OBSERVE_SUITE
+              value: "${CI_OBSERVE_SUITE}"
+            - name: CI_OBSERVE_PR
+              value: "${CI_OBSERVE_PR}"
           ports:
             - name: otlp-grpc
               containerPort: 4317

@@ -113,13 +113,50 @@ def test_render_manifest_resolves_every_token(*, capture_module: ModuleType, tmp
     (tmp_path / "cluster.yaml").write_text(original)
     capture_module.MANIFEST = tmp_path / "cluster.yaml"
     rendered = capture_module.render_manifest(
-        capture_id="cap123", namespace="osac-e2e-ci", cluster_uid="uid-1", kubelet_endpoint="https://192.0.2.1:10250"
+        capture_id="cap123",
+        namespace="osac-e2e-ci",
+        cluster_uid="uid-1",
+        kubelet_endpoint="https://192.0.2.1:10250",
+        suite="vmaas",
+        pr="2051",
     )
     assert "${CI_OBSERVE_" not in rendered
     assert "ci-observe-capture-cap123" in rendered
     assert "namespace: osac-e2e-ci" in rendered
     assert "k8s_namespace: osac-e2e-ci" in rendered
+    # Suite and PR become the gateway env values the collector's
+    # ${env:...} placeholders read.
+    assert 'name: CI_OBSERVE_SUITE\n              value: "vmaas"' in rendered
+    assert 'name: CI_OBSERVE_PR\n              value: "2051"' in rendered
     capture_module.MANIFEST = source / "cluster.yaml"
+
+
+def test_render_manifest_leaves_suite_and_pr_empty_when_unset(*, capture_module: ModuleType, tmp_path: Path) -> None:
+    """A local capture without suite/PR context still renders: the tokens
+    resolve to empty env values, and the collector stamps empty attributes
+    (Loki and Prometheus drop empty label values)."""
+    rendered = capture_module.render_manifest(
+        capture_id="cap123", namespace="osac-e2e-ci", cluster_uid="uid-1", kubelet_endpoint="https://192.0.2.1:10250"
+    )
+    assert "${CI_OBSERVE_" not in rendered
+    assert 'value: ""' in rendered
+
+
+def test_render_manifest_narrows_suite_and_pr_to_safe_charsets(*, capture_module: ModuleType, tmp_path: Path) -> None:
+    """The values land inside the manifest's double-quoted env values (and,
+    in the CI action, inside a sed replacement), so anything outside the
+    safe charset is dropped rather than corrupting the manifest."""
+    rendered = capture_module.render_manifest(
+        capture_id="cap123",
+        namespace="osac-e2e-ci",
+        cluster_uid="uid-1",
+        kubelet_endpoint="https://192.0.2.1:10250",
+        suite="vmaas/x&",
+        pr="20 51",
+    )
+    assert "${CI_OBSERVE_" not in rendered
+    assert 'name: CI_OBSERVE_SUITE\n              value: "vmaasx"' in rendered
+    assert 'name: CI_OBSERVE_PR\n              value: "2051"' in rendered
 
 
 def test_render_manifest_rejects_unresolved_tokens(*, capture_module: ModuleType, tmp_path: Path) -> None:

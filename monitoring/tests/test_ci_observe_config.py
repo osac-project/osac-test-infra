@@ -190,6 +190,11 @@ class TestGateway:
         assert actions["osac.ci.capture_id"]["value"] == "${env:CI_OBSERVE_CAPTURE_ID}"
         assert actions["osac.ci.observed_namespace"]["value"] == "${env:CI_OBSERVE_NAMESPACE}"
         assert actions["osac.ci.cluster_uid"]["value"] == "${env:CI_OBSERVE_CLUSTER_UID}"
+        # Suite and PR make captures filterable in Grafana. They are upserted
+        # on every signal the gateway exports; empty for non-PR runs (Loki and
+        # Prometheus drop empty label values, so the labels are just absent).
+        assert actions["osac.ci.suite"]["value"] == "${env:CI_OBSERVE_SUITE}"
+        assert actions["osac.ci.pr"]["value"] == "${env:CI_OBSERVE_PR}"
         for action in actions.values():
             assert action["action"] == "upsert"
 
@@ -293,6 +298,8 @@ class TestCluster:
             "CI_OBSERVE_NAMESPACE",
             "CI_OBSERVE_CLUSTER_UID",
             "CI_OBSERVE_KUBELET_ENDPOINT",
+            "CI_OBSERVE_SUITE",
+            "CI_OBSERVE_PR",
         }
         assert all(value.startswith("${CI_OBSERVE_") for value in env.values())
         security = container["securityContext"]
@@ -332,3 +339,48 @@ class TestCluster:
         )
         text = (CONFIG_DIR / "cluster.yaml").read_text()
         assert "SCC GATE" in text and "add-scc-to-user" in text
+
+
+class TestLgtmOverrides:
+    """The local LGTM stack must promote the capture's osac.ci.* resource
+    attributes to queryable labels, or suite/PR filtering silently shows no
+    data. Both lists replace the curated defaults, so they must keep repeating
+    them while adding the osac.ci attributes."""
+
+    # The stock grafana/otel-lgtm 0.38.1 defaults each list replaces.
+    LOKI_DEFAULTS = (
+        "service.name",
+        "service.namespace",
+        "service.instance.id",
+        "deployment.environment",
+        "deployment.environment.name",
+        "cloud.region",
+        "cloud.availability_zone",
+        "k8s.cluster.name",
+        "k8s.namespace.name",
+        "k8s.pod.name",
+        "k8s.container.name",
+        "container.name",
+        "k8s.replicaset.name",
+        "k8s.deployment.name",
+        "k8s.statefulset.name",
+        "k8s.daemonset.name",
+        "k8s.cronjob.name",
+        "k8s.job.name",
+    )
+
+    def test_loki_promotes_the_osac_ci_attributes_to_index_labels(self) -> None:
+        config = yaml.safe_load((CONFIG_DIR / "lgtm-overrides" / "loki-config.yaml").read_text())
+        attributes = config["limits_config"]["otlp_config"]["resource_attributes"]["attributes_config"][0]["attributes"]
+        for name in self.LOKI_DEFAULTS:
+            assert name in attributes, name
+        for name in ("osac.ci.capture_id", "osac.ci.observed_namespace", "osac.ci.suite", "osac.ci.pr"):
+            assert name in attributes, name
+
+    def test_prometheus_promotes_the_osac_ci_attributes(self) -> None:
+        config = yaml.safe_load((CONFIG_DIR / "lgtm-overrides" / "prometheus.yaml").read_text())
+        promoted = config["otlp"]["promote_resource_attributes"]
+        for name in ("osac.ci.capture_id", "osac.ci.observed_namespace", "osac.ci.suite", "osac.ci.pr"):
+            assert name in promoted, name
+        # The list replaces the curated defaults; they must stay repeated.
+        assert "service.name" in promoted and "k8s.pod.name" in promoted

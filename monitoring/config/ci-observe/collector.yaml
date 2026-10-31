@@ -16,6 +16,8 @@
 #   CI_OBSERVE_NAMESPACE         observed OSAC namespace, e.g. osac-e2e-ci
 #   CI_OBSERVE_CLUSTER_UID       cluster identity
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250 (single-node canary)
+#   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
+#   CI_OBSERVE_PR                pull request number; empty for non-PR runs
 #
 # Capture interface (shared with the other lanes): /capture holds
 # traces.jsonl, metrics.jsonl, logs.jsonl and the coordinator-owned
@@ -153,6 +155,18 @@ processors:
         action: upsert
       - key: osac.ci.cluster_uid
         value: ${env:CI_OBSERVE_CLUSTER_UID}
+        action: upsert
+      # Suite and PR make captures filterable in Grafana (osac.ci.suite,
+      # osac.ci.pr). They are upserted here, on every signal the gateway
+      # exports -- pytest and Beyla traces, k8sobjects/filelog logs and
+      # kubelet metrics alike -- because the test process itself knows
+      # nothing about them. Empty for non-PR runs: Loki and Prometheus drop
+      # empty label values, so the label is simply absent there.
+      - key: osac.ci.suite
+        value: ${env:CI_OBSERVE_SUITE}
+        action: upsert
+      - key: osac.ci.pr
+        value: ${env:CI_OBSERVE_PR}
         action: upsert
   memory_limiter:
     check_interval: 1s

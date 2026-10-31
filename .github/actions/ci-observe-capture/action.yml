@@ -25,7 +25,24 @@ inputs:
   capture-id:
     description: >-
       Capture identity; also names the capture PVC and the readout pod.
-      Defaults to run-<run id>-attempt-<run attempt>.
+      Defaults to run-<run id>-attempt-<run attempt>. The E2E workflows pass
+      a readable flavored id, <suite>-pr<N|main>-<run id>-a<attempt>. Must
+      stay a DNS-1123 label of at most 44 characters: the readout pod name
+      prepends 19 and Kubernetes caps pod names at 63.
+    required: false
+    default: ""
+  suite:
+    description: >-
+      Test suite (vmaas/caas/bmaas). Stamped onto every captured signal as
+      the osac.ci.suite resource attribute by the gateway collector. Empty
+      leaves the attribute empty.
+    required: false
+    default: ""
+  pr:
+    description: >-
+      Pull request number, empty for non-PR runs (scheduled, merge queue).
+      Stamped onto every captured signal as the osac.ci.pr resource
+      attribute by the gateway collector.
     required: false
     default: ""
   command:
@@ -54,6 +71,8 @@ runs:
         KUBECONFIG: ${{ inputs.kubeconfig-path }}
         OBSERVED_NAMESPACE: ${{ inputs.namespace }}
         CAPTURE_ID_INPUT: ${{ inputs.capture-id }}
+        SUITE_INPUT: ${{ inputs.suite }}
+        PR_INPUT: ${{ inputs.pr }}
         BEYLA_IMAGE_INPUT: ${{ inputs.beyla-image }}
       run: |
         set -euo pipefail
@@ -63,12 +82,21 @@ runs:
 
         capture_id="${CAPTURE_ID_INPUT:-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}}"
         # The capture id names the PVC and the readout pod, so it must stay a
-        # DNS-1123 label (lowercase alphanumeric and hyphens).
-        if [[ ! "${capture_id}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+        # DNS-1123 label (lowercase alphanumeric and hyphens), and the readout
+        # pod name (ci-observe-readout-<id>, 19 characters of prefix) must fit
+        # the 63-character Kubernetes pod-name cap.
+        if [[ ! "${capture_id}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || [[ "${#capture_id}" -gt 44 ]]; then
           echo "::warning::ci-observe: invalid capture-id '${capture_id}'; running the test without capture"
           exit 0
         fi
         echo "CI_OBSERVE_CAPTURE_ID=${capture_id}" >> "${GITHUB_ENV}"
+
+        # Suite and PR are rendered into the cluster manifest as env values
+        # for the gateway. Digits and lowercase alphanumerics only, so the
+        # sed replacement and the manifest stay well-formed whatever the
+        # caller passed.
+        suite="$(printf '%s' "${SUITE_INPUT}" | tr -cd 'a-z0-9-')"
+        pr="$(printf '%s' "${PR_INPUT}" | tr -cd '0-9')"
 
         # Every fallible command below carries an explicit "|| return 1":
         # this function runs inside an `if !` condition, where bash suspends
@@ -92,13 +120,16 @@ runs:
           # Render the coordinator tokens the cluster manifest expects
           # (same envsubst-style substitution as the local capture
           # supervisor, monitoring/scripts/ci_observe_capture.py). The
-          # values are a UUID, a DNS name and a URL, safe for sed.
+          # values are a UUID, a DNS name, a URL, a suite word and a PR
+          # number, safe for sed.
           rendered="${ci_dir}/cluster-rendered.yaml"
           sed \
             -e "s|\${CI_OBSERVE_CAPTURE_ID}|${capture_id}|g" \
             -e "s|\${CI_OBSERVE_NAMESPACE}|${OBSERVED_NAMESPACE}|g" \
             -e "s|\${CI_OBSERVE_CLUSTER_UID}|${cluster_uid}|g" \
             -e "s|\${CI_OBSERVE_KUBELET_ENDPOINT}|${kubelet_endpoint}|g" \
+            -e "s|\${CI_OBSERVE_SUITE}|${suite}|g" \
+            -e "s|\${CI_OBSERVE_PR}|${pr}|g" \
             "${GITHUB_WORKSPACE}/monitoring/config/ci-observe/cluster.yaml" > "${rendered}"
           if grep -qF '${CI_OBSERVE_' "${rendered}"; then
             echo "unresolved tokens in the rendered manifest" >&2

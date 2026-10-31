@@ -13,7 +13,8 @@
 #     were dropped and the ci-observe-runs dashboard's capture_id variable (a Loki
 #     label-values query on osac_ci_capture_id) stayed empty: every panel filtered
 #     on an empty variable and showed no data. The list below replaces the
-#     defaults, so it repeats them and adds the two osac.ci attributes.
+#     defaults, so it repeats them and adds the osac.ci attributes (capture id,
+#     observed namespace, suite and PR).
 #
 # This is a local development stack setting, not a fleet production setting. Keep
 # the remaining defaults in sync with the pinned image when it changes.
@@ -97,3 +98,5 @@ limits_config:
             - k8s.job.name
             - osac.ci.capture_id
             - osac.ci.observed_namespace
+            - osac.ci.suite
+            - osac.ci.pr

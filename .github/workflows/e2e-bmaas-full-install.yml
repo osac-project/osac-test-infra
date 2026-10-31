@@ -818,6 +818,16 @@ jobs:
         with:
           kubeconfig-path: ${{ runner.temp }}/kubeconfig
           namespace: ${{ inputs.namespace }}
+          # <suite>-pr<N|main>-<run id>-a<attempt>: readable in the Grafana
+          # capture dropdown and filterable once the suite and PR attributes
+          # are promoted to labels. Every component is DNS-1123 by
+          # construction (fixed suite word, digits, "main"), and the full run
+          # id keeps the id unique; the total stays under 30 characters, so
+          # the PVC and readout pod names built from it fit the 63-character
+          # pod-name cap.
+          capture-id: ${{ format('bmaas-{0}-{1}-a{2}', inputs.pr-number != '' && format('pr{0}', inputs.pr-number) || 'main', github.run_id, github.run_attempt) }}
+          suite: bmaas
+          pr: ${{ inputs.pr-number }}
           command: |
 
             KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"

@@ -161,13 +161,22 @@ def _kubelet_endpoint(kubeconfig: Path) -> str:
     return f"https://{address}:10250"
 
 
-def render_manifest(*, capture_id: str, namespace: str, cluster_uid: str, kubelet_endpoint: str) -> str:
-    """Substitute the plain ``${...}`` tokens the coordinator owns."""
+def render_manifest(
+    *, capture_id: str, namespace: str, cluster_uid: str, kubelet_endpoint: str, suite: str = "", pr: str = ""
+) -> str:
+    """Substitute the plain ``${...}`` tokens the coordinator owns.
+
+    Suite and PR are narrowed to safe charsets (lowercase alphanumeric with
+    hyphens, and digits): the values land inside the manifest's double-quoted
+    env values, and the CI action renders the same tokens through sed.
+    """
     tokens = {
         "CI_OBSERVE_CAPTURE_ID": capture_id,
         "CI_OBSERVE_NAMESPACE": namespace,
         "CI_OBSERVE_CLUSTER_UID": cluster_uid,
         "CI_OBSERVE_KUBELET_ENDPOINT": kubelet_endpoint,
+        "CI_OBSERVE_SUITE": re.sub(r"[^a-z0-9-]", "", suite),
+        "CI_OBSERVE_PR": re.sub(r"[^0-9]", "", pr),
     }
 
     def replace(match: re.Match[str]) -> str:
@@ -396,6 +405,8 @@ def capture(args: object) -> int:
             namespace=args.namespace,
             cluster_uid=_cluster_uid(kubeconfig),
             kubelet_endpoint=_kubelet_endpoint(kubeconfig),
+            suite=args.suite,
+            pr=args.pr,
         )
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or error.stdout or "").strip().splitlines()
