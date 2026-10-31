@@ -166,13 +166,17 @@ class TestAction:
         assert "${{ github.run_id }}" in name
         assert "${{ github.run_attempt }}" in name
 
-    def test_upload_goes_through_the_gitleaks_scanning_path(self, action: dict) -> None:
+    def test_upload_goes_through_the_release_gate_path(self, action: dict) -> None:
         upload = next(step for step in action["runs"]["steps"] if step.get("uses") == UPLOAD_ACTION)
         stage = step_by_id(action["runs"]["steps"], "stage")
         # Staged inside the standard artifact directory the upload action
-        # scans, and gated on that staging step's output.
+        # gates, and gated on that staging step's output.
         assert "${RUNNER_TEMP}/osac-artifacts" in stage["run"]
         assert upload["if"] == "always() && steps.stage.outputs.staged == 'true'"
+        # The gitleaks pre-scan is opted out: ~1 GB of telemetry JSONL costs
+        # ~24 minutes of pattern scanning. The release gate and the upload
+        # still run (pinned by .github/scripts/upload_artifacts_test.py).
+        assert upload["with"]["gitleaks"] == "false"
 
     def test_test_exit_code_is_preserved(self, action: dict) -> None:
         steps = action["runs"]["steps"]
@@ -209,7 +213,7 @@ class TestAction:
         assert "--wait=false" in script
         assert "pvc/ci-observe-capture-" in script
         # The expensive steps are skipped for a cancelled job: the full close
-        # (cluster waits, file copy) and the staged upload (gitleaks scan).
+        # (cluster waits, file copy) and the staged upload (artifact upload).
         assert step_by_id(steps, "close")["if"].startswith("always() && !cancelled()")
         assert step_by_id(steps, "stage")["if"].startswith("always() && !cancelled()")
 

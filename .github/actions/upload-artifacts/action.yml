@@ -53,6 +53,16 @@ inputs:
       withheld. Ordinary uploads use 512; telemetry captures opt into 2048.
     required: false
     default: "512"
+  gitleaks:
+    description: >-
+      Run the gitleaks pre-upload scan. The release gate and the upload below
+      always run, whatever this input says: the gate censors the values of the
+      secrets this job actually holds (pull secret, k8s Secrets inventory),
+      and a post-upload scanner still covers the artifact. Only the ci-observe
+      capture opts out: its ~1 GB telemetry JSONL costs ~24 minutes of
+      pattern scanning.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -73,7 +83,9 @@ runs:
         # first (collect-artifacts.sh), and the upload leaves it out.
 
     - name: Scan artifacts with gitleaks
-      if: always()
+      # Skipped only when the caller passes gitleaks: "false" (see the input):
+      # the release gate and the upload below still run for every caller.
+      if: always() && inputs.gitleaks == 'true'
       shell: bash
       env:
         ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts

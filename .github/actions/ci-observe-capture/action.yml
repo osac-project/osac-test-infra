@@ -7,7 +7,10 @@ description: >-
   OTEL exporter environment pointed at the gateway, then -- always, even
   after a failed or cancelled test -- stop the collectors, copy the capture
   off its PVC, write metadata.json and upload the capture directory as a
-  workflow artifact through the gitleaks-scanning upload-artifacts action.
+  workflow artifact through the upload-artifacts action. The upload skips
+  the gitleaks pre-scan (a ~1 GB telemetry JSONL costs ~24 minutes of
+  pattern scanning); the release gate still censors the job's real secret
+  values and a post-upload scanner still covers the artifact.
   The test command's own exit code is what this action reports. A capture
   failure degrades to a warning in the job summary, never to a changed job
   result. Default-off: nothing runs unless a workflow calls this action.
@@ -360,8 +363,8 @@ runs:
 
     - name: Stage capture for upload
       id: stage
-      # Skipped for cancelled jobs: the upload's gitleaks scan would eat the
-      # cancellation budget (see the quick-cleanup step).
+      # Skipped for cancelled jobs: the upload would eat the cancellation
+      # budget (see the quick-cleanup step).
       if: always() && !cancelled() && env.CI_OBSERVE_DEPLOYED == '1'
       continue-on-error: true
       shell: bash
@@ -375,8 +378,8 @@ runs:
         fi
 
         # Stage inside the standard artifact directory so the upload passes
-        # through the same gitleaks scan as every other artifact of this
-        # job. The cluster-log collection owns that directory afterwards;
+        # through the same release gate as every other artifact of this job.
+        # The cluster-log collection owns that directory afterwards;
         # the cleanup step below removes the staged copy once the capture
         # has its own artifact.
         stage_dir="${RUNNER_TEMP}/osac-artifacts/ci-observe/${capture_id}"
@@ -399,6 +402,10 @@ runs:
         artifact-name: ci-observe-capture-${{ github.run_id }}-attempt-${{ github.run_attempt }}
         overwrite: "true"
         max-file-mbytes: "2048"
+        # The ~1 GB telemetry JSONL costs ~24 minutes of gitleaks pattern
+        # scanning; the release gate still censors the job's real secret
+        # values and a post-upload scanner still covers the artifact.
+        gitleaks: "false"
 
     - name: Clean staged capture files
       if: always()

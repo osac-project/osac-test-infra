@@ -92,7 +92,21 @@ class UploadArtifactsTest(unittest.TestCase):
         self.assertEqual(upload["uses"], "./.github/actions/upload-artifacts")
         self.assertEqual(upload["with"]["max-file-mbytes"], "2048")
         self.assertEqual(upload["with"]["overwrite"], "true")
+        # The capture opts out of the gitleaks pre-scan: ~1 GB of telemetry
+        # JSONL costs ~24 minutes of pattern scanning. The release gate and
+        # the upload still run for it.
+        self.assertEqual(upload["with"]["gitleaks"], "false")
         self.assert_size("2048", {"max-file-mbytes": upload["with"]["max-file-mbytes"]})
+
+    def test_gitleaks_scan_runs_by_default(self) -> None:
+        # Default true, so every caller that does not pass the input keeps
+        # the full scan.
+        self.assertEqual(self.action["inputs"]["gitleaks"]["default"], "true")
+        scan = self.step("Scan artifacts with gitleaks")
+        self.assertEqual(scan["if"], "always() && inputs.gitleaks == 'true'")
+        # The gate and the upload must always run, whatever the input says.
+        self.assertEqual(self.step("Release gate - censor secrets")["if"], "always()")
+        self.assertEqual(self.step("Upload artifacts")["if"], "always()")
 
     def test_invalid_size_fails_closed(self) -> None:
         result = self.run_step("Release gate - censor secrets", {"max-file-mbytes": "invalid"})

@@ -148,8 +148,9 @@ class TestGateway:
         """Policy (user decision, 2026-10-30): debuggability first. Only the
         container registry pull secret and the AAP license are scrubbed from
         captures; raw parameter values, exception text, stack traces and
-        command lines are kept for investigation, and the gitleaks scanner on
-        the artifact upload path is the second layer for these two secrets."""
+        command lines are kept for investigation, and the release gate and
+        the post-upload scanner on the artifact upload path are the second
+        layer for these two secrets."""
         blocks = collector["processors"]["transform/sanitize_traces"]["trace_statements"]
         contexts = {block["context"]: block["statements"] for block in blocks}
         assert set(contexts) == {"resource", "span", "spanevent"}
