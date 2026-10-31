@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -180,6 +181,32 @@ class ContainerfileContextTests(unittest.TestCase):
         result = self.run_validator(".", containerfile.name)
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_accepts_double_leading_slash_for_source_in_context(self) -> None:
+        context = self.repo / "context"
+        source = f"//tmp/{self.repo.name}/mirrored-marker"
+        marker = context / source.lstrip("/")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("inside context\n")
+        containerfile = self.repo / "Containerfile.double-leading-in-context"
+        containerfile.write_text(f"FROM scratch\nCOPY {json.dumps([source, '/payload'])}\n")
+
+        result = self.run_validator("context", containerfile.name)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_double_leading_slash_does_not_escape_context(self) -> None:
+        (self.repo / "context").mkdir()
+        outside_marker = self.repo / "outside-double-marker"
+        outside_marker.write_text("outside context\n")
+        source = f"/{outside_marker.as_posix()}"
+        containerfile = self.repo / "Containerfile.double-leading-outside-context"
+        containerfile.write_text(f"FROM scratch\nCOPY {json.dumps([source, '/payload'])}\n")
+
+        result = self.run_validator("context", containerfile.name)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"source '{source}'", result.stderr)
 
     def test_accepts_glob_matching_hidden_file(self) -> None:
         (self.repo / ".settings.cfg").write_text("setting=true\n")

@@ -95,7 +95,7 @@ def _context_relative(source: str) -> Path:
     # symlink must not change how the source path is normalized.
     parts: list[str] = []
     for part in PurePosixPath(source).parts:
-        if part in {"/", "."}:
+        if part in {"/", "//", "."}:
             continue
         if part == "..":
             if parts:
