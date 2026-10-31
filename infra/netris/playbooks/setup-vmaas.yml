@@ -517,7 +517,7 @@
 
     # Only the external_ip/ and references/ tests of the VMaaS networking E2E
     # are gated by this variable (they use the 172.27.0.0/16 pool). The NAT and
-    # ExternalIP tests of test_vmaas_networking.py (test_11..17) always run. It
+    # ExternalIP tests of test_vmaas_networking.py (test_09..13 and the pool fixture check) always run. It
     # is only set when the lab operator has provisioned and acknowledged the
     # 172.27.0.0/16 return path.
     - name: Publish the external path switch for the VMaaS tests

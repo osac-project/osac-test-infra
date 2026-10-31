@@ -257,6 +257,127 @@ def test_env_and_k8s_secret_inventory() -> None:
         _assert("user admin" in text, "a short, low-entropy Secret value must not be censored")
 
 
+# A Secret whose name contains its own value (run 41182623253: a Kafka user).
+NAMED_VALUE = "userAb12Cd34"
+NAMED_SECRET = f"svc-kafka-{NAMED_VALUE}"
+
+
+def _named_secret_listing(fx: "Fixture") -> pathlib.Path:
+    document = {"items": [
+        {"metadata": {"namespace": "osac", "name": NAMED_SECRET},
+         "data": {"user": base64.b64encode(NAMED_VALUE.encode()).decode()}},
+    ]}
+    listing = fx.root.parent / "named-secrets.json"
+    listing.write_text(json.dumps(document))
+    return listing
+
+
+def test_a_marker_never_contains_an_inventory_value() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        path = fx.write("a.log", f"connect as {NAMED_VALUE} ok\n")
+        summary = fx.root.parent / "summary.md"
+        os.environ["GITHUB_STEP_SUMMARY"] = summary.as_posix()
+        try:
+            code, out, err = _run(fx.root, "--k8s-secrets", str(listing))
+        finally:
+            del os.environ["GITHUB_STEP_SUMMARY"]
+        _assert(code == 0, "gate failed")
+        _assert(path.exists(), "file withheld although no value survived (false positive from the marker)")
+        text = path.read_text()
+        _assert(NAMED_VALUE not in text, f"value still present: {text!r}")
+        _assert(text.startswith("connect as [REDACTED:known-value:") and text.endswith("] ok\n"),
+                f"unexpected marker shape: {text!r}")
+        report_text = (fx.root / gate.REPORT_NAME).read_text()
+        for name, where in (("report", report_text), ("stdout", out + err), ("step summary", summary.read_text())):
+            _assert(NAMED_VALUE not in where, f"the value is in the {name}")
+        _assert("svc-kafka-<value>/user" in out and "svc-kafka-<value>/user" in summary.read_text(), "key name lost")
+        report = json.loads(report_text)
+        _assert(report["withheld"] == [], f"unexpected withheld: {report['withheld']}")
+        rules = [c["rule"] for c in report["censored"]]
+        _assert(rules == ["known-value:secret/osac/svc-kafka-<value>/user"], f"label not shown as expected: {rules}")
+
+
+def test_no_label_shows_a_value_of_the_same_secret() -> None:
+    with Fixture() as fx:
+        document = {"items": [{"metadata": {"namespace": "osac", "name": NAMED_SECRET}, "data": {
+            "user": base64.b64encode(NAMED_VALUE.encode()).decode(),
+            "password": base64.b64encode(b"Zx9!qL2mPa7vR4tY").decode()}}]}
+        listing = fx.root.parent / "two-keys.json"
+        listing.write_text(json.dumps(document))
+        fx.write("a.log", f"{NAMED_VALUE} and Zx9!qL2mPa7vR4tY\n")
+        summary = fx.root.parent / "summary.md"
+        os.environ["GITHUB_STEP_SUMMARY"] = summary.as_posix()
+        try:
+            _, out, err = _run(fx.root, "--k8s-secrets", str(listing))
+        finally:
+            del os.environ["GITHUB_STEP_SUMMARY"]
+        everything = (fx.root / gate.REPORT_NAME).read_text() + out + err + summary.read_text()
+        _assert(NAMED_VALUE not in everything, "a value is shown in a label of another key")
+        for kept in ("secret/osac/svc-kafka-<value>/user", "secret/osac/svc-kafka-<value>/password"):
+            _assert(kept in everything, f"{kept} missing: namespace and key names must stay")
+
+
+def test_a_value_next_to_a_marker_is_still_censored() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        marker = f"[REDACTED:known-value:{gate.fingerprint(b'x')}]"
+        path = fx.write("a.log", f"{marker}{NAMED_VALUE}{marker} and {NAMED_VALUE}\n")
+        _run(fx.root, "--k8s-secrets", str(listing))
+        _assert(path.exists(), "file withheld")
+        _assert(NAMED_VALUE not in path.read_text(), "value next to a marker survived")
+
+
+def test_the_base64_marker_hides_the_value_and_keeps_the_file() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        encoded = base64.b64encode(f"x:{NAMED_VALUE}".encode()).decode()
+        path = fx.write("a.log", f"token {encoded}\n")
+        _run(fx.root, "--k8s-secrets", str(listing))
+        _assert(path.exists(), "file withheld")
+        text = path.read_text()
+        _assert(NAMED_VALUE not in text and encoded not in text and ":b64]" in text, f"bad b64 marker: {text!r}")
+
+
+def test_a_real_survivor_is_still_withheld() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        path = fx.write("a.log", f"x {NAMED_VALUE}\n")
+        original = gate.censor_bytes
+
+        def leaky(data: bytes, patterns: "gate.Patterns"):
+            cleaned, hits = original(data, patterns)
+            return cleaned + NAMED_VALUE.encode(), hits  # a value the censor did not reach
+
+        gate.censor_bytes = leaky
+        try:
+            _run(fx.root, "--k8s-secrets", str(listing))
+        finally:
+            gate.censor_bytes = original
+        _assert(not path.exists(), "a file with a surviving value was published")
+        report = json.loads((fx.root / gate.REPORT_NAME).read_text())
+        _assert(len(report["withheld"]) == 1 and "survived" in report["withheld"][0]["reason"],
+                f"survivor not reported: {report}")
+        _assert(NAMED_VALUE not in json.dumps(report), "the survivor reason shows the value")
+        _assert("svc-kafka-<value>/user" in report["withheld"][0]["reason"], "survivor reason lost the key name")
+
+
+def test_a_second_run_over_the_output_changes_nothing() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        fx.write("a.log", f"connect as {NAMED_VALUE} ok\n")
+        fx.write("b/c.log", f"{NAMED_VALUE}\n{NAMED_VALUE}\n")
+        elsewhere = fx.root.parent / "report.json"
+        _run(fx.root, "--k8s-secrets", str(listing), "--report", str(elsewhere))
+        first = fx.everything()
+        code, _, _ = _run(fx.root, "--k8s-secrets", str(listing), "--report", str(elsewhere),
+                          "--fail-on-find")
+        _assert(code == 0, "second run found something in the first run's output")
+        _assert(fx.everything() == first, "second run changed the output")
+        report = json.loads(elsewhere.read_text())
+        _assert(report["censored"] == [] and report["withheld"] == [], f"second run reported: {report}")
+
+
 def test_symlink_to_directory_is_removed_and_target_left_alone() -> None:
     with Fixture() as fx:
         outside = fx.root.parent / "outside"
@@ -465,6 +586,12 @@ def main() -> None:
     test_symlink_is_removed()
     test_missing_secret_file_is_skipped_and_empty_one_is_an_error()
     test_env_and_k8s_secret_inventory()
+    test_a_marker_never_contains_an_inventory_value()
+    test_no_label_shows_a_value_of_the_same_secret()
+    test_a_value_next_to_a_marker_is_still_censored()
+    test_the_base64_marker_hides_the_value_and_keeps_the_file()
+    test_a_real_survivor_is_still_withheld()
+    test_a_second_run_over_the_output_changes_nothing()
     test_symlink_to_directory_is_removed_and_target_left_alone()
     test_nested_archives_are_withheld()
     test_a_crash_exits_2_never_1()

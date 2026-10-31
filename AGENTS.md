@@ -22,7 +22,7 @@ uv sync
 make test-vmaas
 ```
 
-`make test-vmaas` runs the mono-repo `tests/e2e/networking/vmaas/` module, which needs the Netris networking environment (a lab from `make e2e INFRA=netris DEPLOY_SUITE=vmaas`). Against another cluster, `uv run pytest tests/e2e/vmaas/` in the mono-repo is the generic way.
+`make test-vmaas` runs the mono-repo `tests/e2e/networking/vmaas/` module and billing files, which need the Netris networking environment (a lab from `make e2e INFRA=netris DEPLOY_SUITE=vmaas`). Against another cluster, `uv run pytest tests/e2e/vmaas/` in the mono-repo is the generic way.
 
 See [Running Tests Locally](#running-tests-locally) below for the full command reference
 (all suites, single-test filters, sequential debugging runs) and required environment variables.

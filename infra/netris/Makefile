@@ -98,6 +98,7 @@ deploy-osac:
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
 		'OSAC_VM_KUBECONFIG=$(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),$(OSAC_VM_KUBECONFIG_ABS),$(KUBECONFIG_ABS))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
+		'OSAC_E2E_FABRIC_SNAPSHOT_CMD=$(abspath scripts/fabric-snapshot.sh)' \
 		> $(ENV_INFRA)
 
 # VMaaS setup/gather is read-only: tenant resources remain owned by the suite fixtures.
@@ -107,8 +108,7 @@ setup-vmaas:
 
 gather-vmaas: DEPLOY_SUITE = vmaas
 gather-vmaas:
-	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
-	-KUBECONFIG=$(KUBECONFIG_ABS) kubectl delete pod,secret,networkpolicy -A -l osac-e2e/ssh-helper=true --ignore-not-found
+	ansible-playbook playbooks/gather-vmaas.yml $(ANSIBLE_EXTRA) -e 'osac_vm_kubeconfig=$(OSAC_VM_KUBECONFIG_ABS)'
 
 destroy-vmaas:
 	@echo "VMaaS setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp. Removing helper resources left by aborted test runs."
@@ -231,6 +231,7 @@ gather-bmaas:
 gather-full:
 	$(MAKE) gather-caas
 	$(MAKE) gather-bmaas
+	$(MAKE) gather-vmaas
 	$(MAKE) gather-infra
 
 # ---------------------------------------------------------------------------

@@ -17,10 +17,29 @@ lint:
 format:
 	ruff format tests/
 
-# Ordered module: no -x, so a NAT failure does not hide what follows, and never slice it with TEST.
+# Two pytest runs, each with -x. The first is test_vmaas_networking.py, an ordered module whose tests depend on each
+# other: never slice it with TEST. The second is the billing files. It starts even when the first failed, so a module
+# failure cannot hide them, and it appends to e2e.log. A failure of either run fails the target, and the module's exit
+# code wins. A billing file this osac checkout does not have is skipped, so this target merges in any order with osac.
+VMAAS_SUITE_DIR = tests/e2e/networking/vmaas
+VMAAS_BILLING_FILES = test_external_ip_billing.py test_external_ip_reattach_billing.py test_nat_gateway_billing.py
+
 test-vmaas:
+	@if [ -n "$(TEST)" ]; then echo "ERROR: test-vmaas runs one ordered module; TEST (-k) must not slice it" >&2; exit 2; fi
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/vmaas/ -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/vmaas-networking.xml
+	cd $(OSAC_MONO_DIR) || exit 2; \
+	main=0; billing=0; files=; \
+	uv run pytest $(VMAAS_SUITE_DIR)/test_vmaas_networking.py -x -n 0 -v --tb=short --junitxml=$(abspath $(REPORTS_DIR))/vmaas-networking.xml || main=$$?; \
+	for file in $(VMAAS_BILLING_FILES); do \
+		if [ -e "$(VMAAS_SUITE_DIR)/$$file" ]; then files="$$files $(VMAAS_SUITE_DIR)/$$file"; \
+		else echo "test-vmaas: skipping $$file, not in this osac checkout"; fi; \
+	done; \
+	if [ -n "$$files" ]; then \
+		uv run pytest $$files -x -n 0 -v --tb=short -o log_file_mode=a --junitxml=$(abspath $(REPORTS_DIR))/vmaas-billing.xml || billing=$$?; \
+	fi; \
+	echo "test-vmaas: main module exit $$main, billing files exit $$billing"; \
+	if [ "$$main" -ne 0 ]; then exit "$$main"; fi; \
+	exit "$$billing"
 
 test-stretched:
 	mkdir -p $(REPORTS_DIR)

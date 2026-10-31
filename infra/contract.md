@@ -40,7 +40,14 @@ KUBECONFIG=<path>
 OSAC_NAMESPACE=<namespace>
 OSAC_VM_KUBECONFIG=<path>          # when selected tests need a separate workload cluster
 OSAC_PULL_SECRET_PATH=<path>       # when deployment or tests need the pull secret
+OSAC_E2E_FABRIC_SNAPSHOT_CMD=<abs path>  # optional, see below
 ```
+
+`OSAC_E2E_FABRIC_SNAPSHOT_CMD` is optional and is never a `REQUIRED_VARS` entry.
+When set, the tests run it at each failure with a 30 second limit and store its
+stdout as `fabric.json` (stderr is for errors). The command must be read-only and
+backend-agnostic for the tests: the backend owns its credentials and the output
+format. The Netris backend sets it to `infra/netris/scripts/fabric-snapshot.sh`.
 
 The backend writes base connection variables to `.env.infra` during
 `deploy-osac`. `setup-<suite>` may add values needed by the selected tests;

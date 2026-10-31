@@ -138,7 +138,7 @@ runs:
             --user "$(id -u):$(id -g)" \
             -v "${ARTIFACT_DIR}:/scan:ro${SELINUX_SUFFIX}" \
             -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro${SELINUX_SUFFIX}" \
-            -v "${REPORT_DIR}:/out${SELINUX_SUFFIX}" \
+            -v "${REPORT_DIR}:/out:rw${SELINUX_SUFFIX}" \
             "${GITLEAKS_IMAGE}" dir /scan \
             --config=/gitleaks.toml \
             --report-format=json \
@@ -179,7 +179,7 @@ runs:
               --user "$(id -u):$(id -g)" \
               -v "${ARTIFACT_DIR}:/scan:ro${SELINUX_SUFFIX}" \
               -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro${SELINUX_SUFFIX}" \
-              -v "${REPORT_DIR}:/out${SELINUX_SUFFIX}" \
+              -v "${REPORT_DIR}:/out:rw${SELINUX_SUFFIX}" \
               "${GITLEAKS_IMAGE}" dir /scan \
               --config=/gitleaks.toml \
               --report-format=json \

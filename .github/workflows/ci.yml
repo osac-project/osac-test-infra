@@ -48,8 +48,12 @@ jobs:
           python3 -I .github/scripts/test_setup_virtual_bmh.py
           python3 -I .github/scripts/test_upsert_pr_comment.py
           python3 -I .github/scripts/netris_catalog_test.py
+          python3 -I .github/scripts/export_vm_allowlist_test.py
       - name: Shell script tests
-        run: bash .github/scripts/discover-audit-runs-test.sh
+        run: |
+          set -euo pipefail
+          bash .github/scripts/discover-audit-runs-test.sh
+          bash .github/scripts/fabric-snapshot-test.sh
 
   CI:
     name: CI

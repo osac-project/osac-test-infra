@@ -142,7 +142,7 @@ the root `make e2e` does not wire up.
 
 | `TEST_SUITE` | Selects | Valid on |
 |---|---|---|
-| `vmaas` | `tests/e2e/networking/vmaas/` | `vmaas` |
+| `vmaas` | `tests/e2e/networking/vmaas/test_vmaas_networking.py`, then its billing files | `vmaas` |
 | `bmaas` | `tests/e2e/networking/bmaas/` | `bmaas` only: its `PROTOCOL_ICMP` rules are rejected with cudn_evpn |
 | `stretched` | `tests/e2e/networking/stretched/` | `full` |
 | `full` | `tests/e2e/` minus `networking/vmaas` and `networking/bmaas`, serial | `full` |
@@ -150,7 +150,15 @@ the root `make e2e` does not wire up.
 
 `maas`, `caas_networking`, `maas_networking`, `storage`, `metering` and
 `references` also exist as `test-<suite>` targets. `tests/e2e/networking/vmaas/`
-is one ordered module: never pass `TEST=` (`-k`) to slice it.
+holds one ordered module whose tests depend on each other: `test-vmaas` runs
+`test_vmaas_networking.py` (`test_00` to `test_14`) with `-x` (stops at the first failure; the
+fixture finalizers clean up) and `TEST=` (`-k`) must never slice it. A second
+pytest run, also with `-x`, then runs `test_external_ip_billing.py`,
+`test_external_ip_reattach_billing.py` and `test_nat_gateway_billing.py`. It
+starts even when the module failed, and a failure of either run fails the
+target. A listed file that the osac checkout does not have is skipped, so the
+target merges in either order with osac. The billing files skip when no
+metering echo adapter is found. Every kept test decides the job.
 
 The PR E2E commands use the same split:
 
@@ -282,8 +290,8 @@ The playbook shown is the direct backend Makefile entry point.
 | `prep-osac` | `playbooks/prep-osac.yml` | `DEPLOY_SUITE`, `KUBECONFIG`, `EXTRA_VARS`; prepares OSAC and generates `values/<profile>/netris-runtime.yaml`. |
 | `run-osac-setup` | OSAC installer (`install-infra`, then `install-osac`) | `DEPLOY_SUITE`, `OSAC_NAMESPACE`, `KUBECONFIG`; consumes the OCP EVPN values from `deploy-ocp`, the profile's `netris.yaml`, and the runtime values. |
 | `setup-vmaas` | `playbooks/setup-vmaas.yml` | `KUBECONFIG`, `EXTRA_VARS`; uses the EVPN validation and VMaaS return-path variables below. |
-| `gather-vmaas` | `playbooks/gather-infra.yml` | `KUBECONFIG`, `EXTRA_VARS`; collects infrastructure/EVPN state. |
-| `destroy-vmaas` | No-op | VMaaS setup creates no tenant resources. Cluster prerequisites are removed by `destroy-ocp`. |
+| `gather-vmaas` | `playbooks/gather-vmaas.yml` | `KUBECONFIG`, `OSAC_VM_KUBECONFIG`, `OSAC_NAMESPACE`, `EXTRA_VARS`; read-only (`oc get`, `oc logs`): writes `mgmt-cluster/vmaas/` (hub CRs, workload VMs and VMIs reduced to an allow-list without cloud-init data, UDN/NADs, SSH helper Pods, OSAC operator logs). The workflow runs `gather-infra` separately; `gather-full` runs both. |
+| `destroy-vmaas` | Makefile only | `KUBECONFIG` (hub). VMaaS setup creates no tenant resources, but the target deletes the helper Pods, Secrets and NetworkPolicies labeled `osac-e2e/ssh-helper=true` in every namespace (`kubectl delete -A`; nothing found is fine). Cluster prerequisites are removed by `destroy-ocp`. |
 | `setup-caas` | `playbooks/setup-caas.yml` | `CAAS_*`, `OSAC_TEST_TENANT_NAME`, `EXTRA_VARS`; prepares BMaaS worker VMs, registers worker types, the DiskImage, the Netris ExternalIPPool, and the catalog. Task commands use `kubeconfig_path` (default `/root/.kube/config`). |
 | `deploy-caas` | `playbooks/deploy-caas.yml` | `CAAS_*`, `OSAC_TEST_TENANT_NAME`, `EXTRA_VARS`; creates the CaaS catalog cluster with one `ci-worker` BareMetalInstanceType. Task commands use `kubeconfig_path` (default `/root/.kube/config`). |
 | `setup-bmc` | `playbooks/setup-bmc.yml` | `EXTRA_VARS`; uses `bare_metal_services`, `bmc_net_*`, and `sushy_tools_*`. |
@@ -524,7 +532,7 @@ The VMaaS and stretched tests reach guests through a helper Pod, not `virtctl`. 
 `OSAC_PULL_SECRET_PATH`. `setup-bmaas` appends the BMaaS keys (`OSAC_BMH_SSH_HOSTS`, `OSAC_BMI_INSTANCE_TYPE`,
 `OSAC_BMI_NETWORK_INTERFACE`) that the contracts in `infra/netris/contracts/<test-suite>` require (`bmaas`,
 `stretched`, `full`; `vmaas` needs only `KUBECONFIG`, `OSAC_NAMESPACE`, `OSAC_VM_KUBECONFIG`). `setup-vmaas` adds `OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED=true` only when the `172.27.0.0/16`
-return path is acknowledged.
+return path is acknowledged; only older osac checkouts read it.
 
 ## Old names
 

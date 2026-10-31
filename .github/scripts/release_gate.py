@@ -12,7 +12,8 @@ two independent layers so a secret has to evade both:
      pull secret, environment variables, and the data of the cluster's Kubernetes
      Secrets) is searched for in the artifact as read, JSON-escaped and base64
      encoded at every byte alignment. Each hit is replaced with
-     [REDACTED:<name>]; a base64 hit replaces the whole enclosing base64 token.
+     [REDACTED:known-value:<hash of the name>] (the readable name is only in the
+     report, since a name can contain the value); a base64 hit replaces the whole enclosing base64 token.
   2. Shapes. Docker auth entries, private keys, JWTs, Authorization headers,
      well-known provider tokens and password fields are replaced even when no
      known value matches.
@@ -198,6 +199,17 @@ def fingerprint(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()[:10]
 
 
+def _known_marker(label: str, suffix: str = "") -> bytes:
+    """Marker for a known-value hit: a hash of the label, never the label itself.
+
+    A label such as secret/<ns>/<name>/<key> can contain the value it names (a Secret
+    called kafka-user whose "user" is the value), and then the marker would hold a
+    known value and be censored or reported as a survivor. A hash cannot be chosen to
+    contain a value. The report keeps the readable label in its "rule" field.
+    """
+    return _marker(f"known-value:{fingerprint(label.encode('utf-8', 'surrogateescape'))}", suffix)
+
+
 def _marker(name: str, suffix: str = "") -> bytes:
     safe = re.sub(r"[^A-Za-z0-9._:/()\[\]-]", "_", name)
     return f"[REDACTED:{safe}{':' + suffix if suffix else ''}]".encode()
@@ -292,6 +304,17 @@ class Patterns:
     """Known-value search patterns built once from the inventory."""
 
     def __init__(self, inventory: dict[bytes, str]) -> None:
+        # What the report and the printed lines call a label: a Secret named after one
+        # of its values (secret/ns/<value>-kafka/<key>) would otherwise print that
+        # value, in the label of any of its keys. Every inventory value is hidden
+        # in every label, longest first.
+        values = sorted((n.decode("utf-8", "surrogateescape") for n in inventory), key=len, reverse=True)
+        self.shown: dict[str, str] = {}
+        for label in set(inventory.values()):
+            shown = label
+            for value in values:
+                shown = shown.replace(value, "<value>")
+            self.shown[label] = shown
         self.items = [
             (label, form, pattern, is_b64)
             for needle, label in sorted(inventory.items(), key=lambda kv: -len(kv[0]))
@@ -299,7 +322,7 @@ class Patterns:
         ]
 
     def present(self, data: bytes) -> list[str]:
-        return sorted({label for label, _form, pattern, _b64 in self.items if pattern in data})
+        return sorted({self.shown[label] for label, _form, pattern, _b64 in self.items if pattern in data})
 
 
 def censor_known(data: bytes, patterns: Patterns, hits: collections.Counter) -> bytes:
@@ -307,8 +330,8 @@ def censor_known(data: bytes, patterns: Patterns, hits: collections.Counter) -> 
         if pattern not in data:
             continue
         if not is_b64:
-            hits[f"known-value:{label}"] += data.count(pattern)
-            data = data.replace(pattern, _marker(label))
+            hits[f"known-value:{patterns.shown[label]}"] += data.count(pattern)
+            data = data.replace(pattern, _known_marker(label))
             continue
         pieces, position = [], 0
         while (index := data.find(pattern, position)) >= 0:
@@ -317,9 +340,9 @@ def censor_known(data: bytes, patterns: Patterns, hits: collections.Counter) -> 
                 start -= 1
             while end < len(data) and (data[end] in _B64_CHARS or data[end] == _EQUALS):
                 end += 1
-            pieces += [data[position:start], _marker(label, "b64")]
+            pieces += [data[position:start], _known_marker(label, "b64")]
             position = end
-            hits[f"known-value:{label}"] += 1
+            hits[f"known-value:{patterns.shown[label]}"] += 1
         pieces.append(data[position:])
         data = b"".join(pieces)
     return data

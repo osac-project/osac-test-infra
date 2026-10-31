@@ -105,7 +105,7 @@ The test targets run pytest from the OSAC mono-repo checkout. Set
 | Target | OSAC test path | Selection |
 |---|---|---|
 | `test-caas` | `tests/e2e/caas/` | CaaS E2E tests |
-| `test-vmaas` | `tests/e2e/networking/vmaas/` | VMaaS networking tests; one ordered module, never filtered with `TEST` |
+| `test-vmaas` | `tests/e2e/networking/vmaas/` | VMaaS networking tests; one ordered module, then the billing files, never filtered with `TEST` |
 | `test-bmaas` | `tests/e2e/networking/bmaas/` | BMaaS networking tests |
 | `test-stretched` | `tests/e2e/networking/stretched/` | Stretched networking tests |
 | `test-full` | `tests/e2e/` | Serial run of the full profile; ignores `networking/vmaas` and `networking/bmaas` and filters the external-IP cases |
