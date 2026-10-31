@@ -1,0 +1,52 @@
+{
+  "version": "osac-laya-stage-v2",
+  "model": "english",
+  "questions": {
+    "global": {
+      "failure_domain": {
+        "type": "choice",
+        "instructions": "Choose the first directly failing component shown by the evidence. Failed AAP bootstrap is aap_policy, not Kubernetes config. A failed AAP job that later succeeds is not the cause. Use unknown if only a generic install timeout is shown.",
+        "criteria": {
+          "aap_policy": "AAP controller rejects instance_group creation or pod_spec_override policy, even if its error mentions Kubernetes secrets.",
+          "build_dependency": "Container or app build fails due to dependency resolution, module path mismatch, or package export mismatch.",
+          "build_compile": "Go or TypeScript compiler reports a source error such as undefined symbol or type error.",
+          "source_checkout": "Git fetch/checkout fails, a requested ref is absent, or a required source/build context directory is missing.",
+          "deployment_config": "Kubernetes resource, operator, or controller configuration prevents installation or readiness; includes missing secret, bad auth endpoint, or operator timeout.",
+          "ci_environment": "CI authorization or runner setup blocks execution before build/install/test, such as fork approval.",
+          "app_startup": "Deployed application process fails to start due to an application error, such as duplicate database migration.",
+          "app_or_e2e": "An E2E assertion, API call, provisioned resource, metering event, lifecycle, or teardown fails after installation.",
+          "unknown": "Only an uninformative symptom is shown and no direct failing component can be determined."
+        }
+      }
+    },
+    "build": {
+      "failure_domain": {
+        "type": "choice",
+        "instructions": "Classify the direct error in the build or source stage.",
+        "criteria": {
+          "build_dependency": "Container or app build fails due to dependency resolution, module path mismatch, or package export mismatch.",
+          "build_compile": "Go or TypeScript compiler reports a source error such as undefined symbol or type error.",
+          "source_checkout": "Git fetch/checkout fails, a requested ref is absent, or a required source/build context directory is missing.",
+          "unknown": "Only an uninformative symptom is shown and no direct failing component can be determined."
+        }
+      }
+    },
+    "install": {
+      "failure_domain": {
+        "type": "choice",
+        "instructions": "Classify the direct install failure. AAP instance_group API rejection is aap_policy even if Kubernetes secrets appear in the message. Use unknown for a generic timeout without direct evidence.",
+        "criteria": {
+          "aap_policy": "AAP controller rejects instance_group creation or pod_spec_override policy, even if its error mentions Kubernetes secrets.",
+          "source_checkout": "Git or AAP project source checkout/fetch fails, a requested ref is absent, or a required source/build context directory is missing.",
+          "deployment_config": "Kubernetes resource, operator, or controller configuration prevents installation or readiness; includes missing secret, bad auth endpoint, or operator timeout.",
+          "app_startup": "Deployed application process fails to start due to an application error, such as duplicate database migration.",
+          "unknown": "Only an uninformative symptom is shown and no direct failing component can be determined."
+        }
+      }
+    }
+  },
+  "direct_step_routes": {
+    "e2e": "app_or_e2e",
+    "ci": "ci_environment"
+  }
+}
