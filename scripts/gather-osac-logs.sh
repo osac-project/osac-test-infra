@@ -10,6 +10,9 @@
 #   E2E_NAMESPACE          — OSAC namespace (default: osac-e2e-ci)
 #   OSAC_AGENT_NAMESPACE   — namespace where Assisted Installer Agent CRs live (default: hardware-inventory)
 #   JUNIT_PATH             — path to JUnit XML to include (optional)
+#   OSAC_E2E_OUTPUT_DIR    — where the E2E suites write their output
+#                            (default: dirname of JUNIT_PATH, else /tmp/test-output);
+#                            copied to e2e/
 #
 set -o nounset
 set -o pipefail
@@ -24,6 +27,11 @@ if [[ "${NETRIS_ARTIFACT_LAYOUT:-false}" == "true" ]]; then
 fi
 E2E_NAMESPACE="${E2E_NAMESPACE:-osac-e2e-ci}"
 JUNIT_PATH="${JUNIT_PATH:-}"
+# Order: OSAC_E2E_OUTPUT_DIR, the directory of JUNIT_PATH (workflows that run the
+# tests in a container mount it at /tmp/test-output, and this script runs on the
+# host), then /tmp/test-output.
+E2E_OUTPUT_DIR="${OSAC_E2E_OUTPUT_DIR:-${JUNIT_PATH:+$(dirname "${JUNIT_PATH}")}}"
+E2E_OUTPUT_DIR="${E2E_OUTPUT_DIR:-/tmp/test-output}"
 
 if [[ ! -f "${KUBECONFIG:-}" ]]; then
     echo "ERROR: KUBECONFIG not set or file does not exist" >&2
@@ -421,12 +429,38 @@ if [[ -n "${JUNIT_PATH}" ]]; then
     fi
 fi
 
+# E2E suite output: the merged log, results-*.jsonl and failures/. A killed
+# session writes no JUnit file, so this does not depend on JUNIT_PATH. Every
+# step is best effort: a missing directory or a failed copy must not fail the
+# collection, which is all-or-nothing.
+if [[ -d "${E2E_OUTPUT_DIR}" ]]; then
+    echo "Collecting E2E output from ${E2E_OUTPUT_DIR}..."
+    mkdir -p "${ARTIFACT_DIR}/e2e" || true
+    E2E_PARTS=("${E2E_OUTPUT_DIR}"/e2e*.log)
+    # The JUnit block above already merged the logs of its own directory to e2e.log.
+    junit_dir=""
+    [[ -n "${JUNIT_PATH}" ]] && junit_dir="$(cd "$(dirname "${JUNIT_PATH}")" 2>/dev/null && pwd -P)"
+    if [[ -e "${E2E_PARTS[0]}" ]] \
+        && ! [[ -f "${ARTIFACT_DIR}/e2e.log" && "${junit_dir}" == "$(cd "${E2E_OUTPUT_DIR}" && pwd -P)" ]]; then
+        sort -m -t' ' -k1,1 "${E2E_PARTS[@]}" > "${ARTIFACT_DIR}/e2e/e2e.log" 2>/dev/null || true
+    fi
+    for results in "${E2E_OUTPUT_DIR}"/results-*.jsonl; do
+        [[ -f "${results}" ]] && { cp "${results}" "${ARTIFACT_DIR}/e2e/" || true; }
+    done
+    if [[ -d "${E2E_OUTPUT_DIR}/failures" ]]; then
+        # Not preserving modes: the reporter makes 0700 directories, and a copy that
+        # keeps an unreadable mode would break the redaction pass below.
+        cp -r --no-preserve=mode,ownership "${E2E_OUTPUT_DIR}/failures" "${ARTIFACT_DIR}/e2e/" || true
+        chmod -R u+rwX "${ARTIFACT_DIR}/e2e" 2>/dev/null || true
+    fi
+fi
+
 # ── Redact ───────────────────────────────────────────────────────────
 
 echo "Redacting sensitive data..."
 
 # AAP RESOURCE_SERVER SECRET_KEY in YAML, logs, and escaped JSON annotations
-find "${ARTIFACT_DIR}" -type f \( -name "*.yaml" -o -name "*.log" -o -name "*.txt" -o -name "*.json" \) -print0 \
+find "${ARTIFACT_DIR}" -type f \( -name "*.yaml" -o -name "*.log" -o -name "*.txt" -o -name "*.json" -o -name "*.jsonl" \) -print0 \
     | xargs -0 sed -i -E \
         -e 's/(SECRET_KEY[":\\]+\s*["\\]*)[A-Za-z0-9_-]{40,}/\1REDACTED/g' \
         -e 's/(SECRET_KEY[^A-Za-z0-9]*value[^A-Za-z0-9]*)[A-Za-z0-9_-]{40,}/\1REDACTED/g' \
@@ -440,7 +474,7 @@ find "${ARTIFACT_DIR}" \( -name "pods-describe.txt" -o -name "*.log" -o -name "*
 # Base64-encoded database passwords and API tokens (operator logs, AAP job stdout)
 # [^"]+ (not [A-Za-z0-9+/=]) so passwords with punctuation (@/%/#) are covered too.
 # find -exec succeeds on zero matches (unlike xargs); fail closed on sed errors.
-find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.json" \) \
+find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.json" -o -name "*.jsonl" \) \
     -exec sed -i -E \
         -e 's/"password":\s*"[^"]+"/"password": "REDACTED"/g' \
         -e 's/"token":\s*"[^"]+"/"token": "REDACTED"/g' \
@@ -452,7 +486,7 @@ find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.jso
 # Fulfillment: break-glass credentials in controller and grpc-server logs
 # (plaintext JSON form). Broader than pod-fulfillment-* so describe/event
 # dumps that copy the same payload are covered too.
-find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.json" \) \
+find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.json" -o -name "*.jsonl" \) \
     -exec sed -i -E 's/"break_glass_credentials"\s*:\s*\{[^}]+\}/"break_glass_credentials":{"password":"REDACTED","username":"REDACTED"}/g' {} + || {
     echo "ERROR: break-glass plaintext redaction failed" >&2
     exit 1
@@ -536,13 +570,13 @@ if ! command -v python3 &>/dev/null; then
     echo "ERROR: python3 is required to redact base64-encoded break-glass credentials" >&2
     exit 1
 fi
-readarray -d '' b64_files < <(find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.json" \) -print0)
+readarray -d '' b64_files < <(find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.json" -o -name "*.jsonl" \) -print0)
 if [[ ${#b64_files[@]} -gt 0 ]]; then
     redact_break_glass_b64 "${b64_files[@]}" || exit 1
 fi
 
 # Broad sweep: .dockerconfigjson base64 blobs
-find "${ARTIFACT_DIR}" -type f \( -name "*.yaml" -o -name "*.json" \) -print0 \
+find "${ARTIFACT_DIR}" -type f \( -name "*.yaml" -o -name "*.json" -o -name "*.jsonl" \) -print0 \
     | xargs -0 sed -i -E 's/(\.dockerconfigjson:\s*)[A-Za-z0-9+/=]{50,}/\1REDACTED/g' || true
 
 # Broad sweep: curl -u "admin:password" patterns

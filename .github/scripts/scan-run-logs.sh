@@ -264,7 +264,7 @@ run_gitleaks() {
   "${engine}" run --rm --network=none \
     -v "${scan_dir}:/scan:ro${z}" \
     -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro${z}" \
-    -v "$(dirname "${report_path}"):/out${z}" \
+    -v "$(dirname "${report_path}"):/out:rw${z}" \
     "${GITLEAKS_IMAGE}" dir /scan \
     --config=/gitleaks.toml \
     --report-format=json \

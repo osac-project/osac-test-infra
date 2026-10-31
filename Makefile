@@ -17,10 +17,12 @@ lint:
 format:
 	ruff format tests/
 
-# Ordered module: no -x, so a NAT failure does not hide what follows, and never slice it with TEST.
+# Runs only test_vmaas_networking.py (external_ip/, references/ and the billing test are outside the job).
+# Ordered module whose tests depend on each other: -x stops at the first failure, and never slice it with TEST.
 test-vmaas:
+	@if [ -n "$(TEST)" ]; then echo "ERROR: test-vmaas runs one ordered module; TEST (-k) must not slice it" >&2; exit 2; fi
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/vmaas/ -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(abspath $(REPORTS_DIR))/vmaas-networking.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/networking/vmaas/test_vmaas_networking.py -x -n 0 -v --tb=short --junitxml=$(abspath $(REPORTS_DIR))/vmaas-networking.xml
 
 test-stretched:
 	mkdir -p $(REPORTS_DIR)
