@@ -430,10 +430,19 @@ runs:
         echo "staged=true" >> "${GITHUB_OUTPUT}"
 
     - name: Prepare the AAP license for the release gate
-      # The gate reads text files; the license is a zip. Concatenate its
-      # contents into one file and let the gate censor every value in it,
-      # next to the pull secret. Tokens under 16 characters are ignored by
-      # the gate, so certificate boilerplate words censor nothing.
+      # The gate reads text files; the license is a zip. Extract it --
+      # recursively, because AAP licenses nest archives (e.g.
+      # consumer_export.zip) -- and concatenate the text files into one
+      # inventory the gate censors, next to the pull secret. Tokens under
+      # 16 characters are ignored by the gate, so certificate boilerplate
+      # words censor nothing.
+      #
+      # Fail-closed: a corrupt or partially extracted license must stop
+      # the upload, not pass the gate with a partial inventory. The step
+      # stays continue-on-error so a capture problem never fails the job;
+      # the upload below checks this step's outcome instead (outcome keeps
+      # the raw result under continue-on-error).
+      id: license_prep
       if: always() && !cancelled() && env.CI_OBSERVE_DEPLOYED == '1'
       continue-on-error: true
       shell: bash
@@ -441,20 +450,53 @@ runs:
         set -u
         license_zip="${RUNNER_TEMP}/aap-license.zip"
         out="${RUNNER_TEMP}/aap-license-contents.txt"
+        # The plaintext license must be as private as its zip (0600).
+        umask 077
         : > "${out}"
-        if [[ -f "${license_zip}" ]]; then
-          tmp="$(mktemp -d)"
-          python3 -m zipfile -e "${license_zip}" "${tmp}/" 2>/dev/null || true
-          find "${tmp}" -type f -print0 | while IFS= read -r -d '' file; do
-            cat "${file}" || true
-            printf '\n'
-          done >> "${out}"
-          rm -rf "${tmp}"
+        if [[ ! -f "${license_zip}" ]]; then
+          echo "no AAP license on this runner; the gate redacts the pull secret and cluster Secrets"
+          exit 0
         fi
+        python3 - "${license_zip}" "${out}" <<'PY'
+        import pathlib
+        import sys
+        import zipfile
+
+        license_zip, out = sys.argv[1], sys.argv[2]
+
+        def texts(archive: pathlib.Path, depth: int = 0):
+            with zipfile.ZipFile(archive) as zf:
+                for name in zf.namelist():
+                    data = zf.read(name)
+                    if name.lower().endswith(".zip"):
+                        if depth >= 4:
+                            raise ValueError(f"license nesting too deep at {name}")
+                        inner = archive.parent / f"nested-{depth}-{name.replace('/', '_')}"
+                        inner.write_bytes(data)
+                        try:
+                            yield from texts(inner, depth + 1)
+                        finally:
+                            inner.unlink()
+                    else:
+                        try:
+                            yield data.decode("utf-8")
+                        except UnicodeDecodeError:
+                            # Binary: not text the gate could match anyway.
+                            continue
+
+        with open(out, "w") as sink:
+            for text in texts(pathlib.Path(license_zip)):
+                sink.write(text)
+                sink.write("\n")
+        PY
 
     - name: Upload capture artifact
       id: upload
-      if: always() && steps.stage.outputs.staged == 'true'
+      # The license preparation must have succeeded: a partial inventory
+      # would pass the gate without redacting the license. (The prep step
+      # is skipped when no license exists on the runner, and staging only
+      # happens when the collectors deployed, so the two conditions agree.)
+      if: always() && steps.stage.outputs.staged == 'true' && steps.license_prep.outcome == 'success'
       continue-on-error: true
       uses: ./.github/actions/upload-artifacts
       with:
@@ -481,8 +523,10 @@ runs:
         # the cluster-log artifact (collected after this action) does not
         # upload the same files twice. At this point the directory holds
         # only the staged capture: the cluster-log collection has not run
-        # yet.
+        # yet. The plaintext license inventory goes with it: the gate has
+        # consumed it, and the runner must not keep an unzipped license.
         rm -rf "${RUNNER_TEMP}/osac-artifacts"
+        rm -f "${RUNNER_TEMP}/aap-license-contents.txt"
 
     - name: Write capture summary
       if: always()
