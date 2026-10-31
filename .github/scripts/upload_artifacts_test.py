@@ -96,6 +96,13 @@ class UploadArtifactsTest(unittest.TestCase):
         # JSONL costs ~24 minutes of pattern scanning. The release gate and
         # the upload still run for it.
         self.assertEqual(upload["with"]["gitleaks"], "false")
+        # The gate's secret list replaces its pull-secret-only default, so
+        # the capture lists the pull secret and the extracted AAP license
+        # contents explicitly; absent files are skipped.
+        self.assertEqual(
+            [line.strip() for line in upload["with"]["known-secret-files"].splitlines() if line.strip()],
+            ["${{ runner.temp }}/pull-secret.json", "${{ runner.temp }}/aap-license-contents.txt"],
+        )
         self.assert_size("2048", {"max-file-mbytes": upload["with"]["max-file-mbytes"]})
 
     def test_gitleaks_scan_runs_by_default(self) -> None:

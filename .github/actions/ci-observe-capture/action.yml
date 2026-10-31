@@ -393,6 +393,29 @@ runs:
         touch "${RUNNER_TEMP}/osac-artifacts/.redaction-complete"
         echo "staged=true" >> "${GITHUB_OUTPUT}"
 
+    - name: Prepare the AAP license for the release gate
+      # The gate reads text files; the license is a zip. Concatenate its
+      # contents into one file and let the gate censor every value in it,
+      # next to the pull secret. Tokens under 16 characters are ignored by
+      # the gate, so certificate boilerplate words censor nothing.
+      if: always() && !cancelled() && env.CI_OBSERVE_DEPLOYED == '1'
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -u
+        license_zip="${RUNNER_TEMP}/aap-license.zip"
+        out="${RUNNER_TEMP}/aap-license-contents.txt"
+        : > "${out}"
+        if [[ -f "${license_zip}" ]]; then
+          tmp="$(mktemp -d)"
+          python3 -m zipfile -e "${license_zip}" "${tmp}/" 2>/dev/null || true
+          find "${tmp}" -type f -print0 | while IFS= read -r -d '' file; do
+            cat "${file}" || true
+            printf '\n'
+          done >> "${out}"
+          rm -rf "${tmp}"
+        fi
+
     - name: Upload capture artifact
       id: upload
       if: always() && steps.stage.outputs.staged == 'true'
@@ -406,6 +429,12 @@ runs:
         # scanning; the release gate still censors the job's real secret
         # values and a post-upload scanner still covers the artifact.
         gitleaks: "false"
+        # The gate censors these values in any encoding. The list replaces
+        # the pull-secret-only default, so the pull secret is listed too;
+        # a file that does not exist is skipped.
+        known-secret-files: |
+          ${{ runner.temp }}/pull-secret.json
+          ${{ runner.temp }}/aap-license-contents.txt
 
     - name: Clean staged capture files
       if: always()
