@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Everything about one ci-observe E2E capture: pytest test spans, Beyla service-request spans, cluster/pod logs, and kubelet cluster metrics. Pick the capture with the Capture variable (Loki label osac_ci_capture_id, defaults to the newest). The default time range is 7 days because captures are imported asynchronously after the run finishes and keep their original timestamps. Tempo search returns at most 100 spans per spanset per trace, and a pytest session is a single trace, so test tables and counts cover the first 100 tests of larger runs. Kubelet metrics carry no capture-id label (the capture backend's Prometheus only promotes the k8s.* resource attributes), so the Cluster panels are scoped by the dashboard time range instead: narrow it to the run window shown by the Run duration stat.",
+  "description": "One ci-observe E2E capture at a time: pick it with the Capture variable (Loki label osac_ci_capture_id, newest first). Read the rows top to bottom: Run overview says what ran and whether it passed, Tests drills into the pytest spans, Service requests covers the Beyla service spans, and Logs and Cluster metrics give the environment around the run. Keep the default 7-day time range while picking a capture (captures are imported asynchronously and keep their original timestamps), then narrow the range to the run window for the Cluster panels, which are scoped by time rather than capture id.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -10,6 +10,7 @@
   "panels": [
     {
       "title": "Run overview",
+      "description": "Read this first: what the run was, whether it passed, and how long it took.",
       "type": "row",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "collapsed": false,
@@ -17,7 +18,7 @@
     },
     {
       "title": "Tests",
-      "description": "Parent pytest test spans (pytest.span_type = test, phase spans ::setup/::call/::teardown excluded) in the selected capture. Tempo caps a spanset at 100 spans, so runs with more than 100 tests are undercounted.",
+      "description": "Parent pytest test spans (pytest.span_type = test, ::setup/::call/::teardown phase spans excluded) in the selected capture. Tempo caps a spanset at 100 spans, so runs with more than 100 tests are undercounted.",
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
@@ -52,7 +53,7 @@
     },
     {
       "title": "Failed tests",
-      "description": "Test spans with status = error (OTLP error status set by pytest-opentelemetry on failures).",
+      "description": "Test spans with status = error, set by pytest-opentelemetry on failures. Empty when the run passed.",
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
@@ -89,10 +90,76 @@
       ]
     },
     {
-      "title": "Run duration",
-      "description": "Duration of the pytest 'test run' span. One per session; with pytest-xdist there is one per worker.",
+      "title": "Suite",
+      "description": "Suite label (osac_ci_suite) carried on the capture's Loki streams; shows 'not labeled' for captures imported before suite labels existed.",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 1 },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "loki", "uid": "ci-observe-logs" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "not labeled",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (osac_ci_suite) (count_over_time({osac_ci_capture_id=\"$capture_id\"}[$__range]))",
+          "legendFormat": "{{osac_ci_suite}}",
+          "queryType": "range"
+        }
+      ]
+    },
+    {
+      "title": "PR",
+      "description": "Pull-request label (osac_ci_pr) carried on the capture's Loki streams; shows 'not labeled' for captures imported before PR labels existed.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "loki", "uid": "ci-observe-logs" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "not labeled",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (osac_ci_pr) (count_over_time({osac_ci_capture_id=\"$capture_id\"}[$__range]))",
+          "legendFormat": "{{osac_ci_pr}}",
+          "queryType": "range"
+        }
+      ]
+    },
+    {
+      "title": "Run duration",
+      "description": "Duration of the longest pytest worker 'test run' span; the workers start together, so this is the wall-clock duration of the run.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 1 },
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
       "fieldConfig": {
         "defaults": {
@@ -109,7 +176,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "duration", "values": false },
+        "reduceOptions": { "calcs": ["max"], "fields": "duration", "values": false },
         "textMode": "auto"
       },
       "targets": [
@@ -124,80 +191,8 @@
       ]
     },
     {
-      "title": "Service spans",
-      "description": "Beyla service-request spans (every span that is not a pytest span) returned by the search. Capped by Tempo's spanset and trace limits, so treat as a lower bound on large captures.",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
-      "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "blue", "value": null }]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["count"], "fields": "duration", "values": false },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil}",
-          "limit": 30000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "title": "Service errors",
-      "description": "Service spans with status = error, for example failed Redis commands or HTTP 5xx responses.",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
-      "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["count"], "fields": "duration", "values": false },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil && status = error}",
-          "limit": 30000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
       "title": "Tests",
+      "description": "The pytest test spans of the capture: every test, the slowest ones, and the failures.",
       "type": "row",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
       "collapsed": false,
@@ -266,10 +261,20 @@
     },
     {
       "title": "Slowest tests",
-      "description": "Same test spans sorted by duration, longest first. The span name is the full pytest nodeid.",
+      "description": "The 20 slowest test spans in the capture, longest first. The span name is the full pytest nodeid; runs with more than 100 tests are truncated by Tempo's spanset cap.",
       "type": "table",
       "gridPos": { "h": 10, "w": 12, "x": 12, "y": 6 },
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": { "sort": [{ "field": "Duration", "desc": true }] }
+        },
+        {
+          "id": "limit",
+          "options": { "limitField": 20 }
+        }
+      ],
       "fieldConfig": {
         "defaults": {
           "noValue": "No test spans in this capture"
@@ -388,16 +393,90 @@
     },
     {
       "title": "Service requests",
+      "description": "Beyla service-request spans: everything in the capture that is not a pytest span.",
       "type": "row",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
       "collapsed": false,
       "panels": []
     },
     {
+      "title": "Service spans",
+      "description": "Beyla service-request spans (every span that is not a pytest span) returned by the search. Capped by Tempo's spanset and trace limits, so treat as a lower bound on large captures.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 23 },
+      "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["count"], "fields": "duration", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil}",
+          "limit": 30000,
+          "spss": 100,
+          "tableType": "spans"
+        }
+      ]
+    },
+    {
+      "title": "Service errors",
+      "description": "Service spans with status = error, for example failed Redis commands or HTTP 5xx responses.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 23 },
+      "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["count"], "fields": "duration", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil && status = error}",
+          "limit": 30000,
+          "spss": 100,
+          "tableType": "spans"
+        }
+      ]
+    },
+    {
       "title": "Request volume by service",
       "description": "Matched Beyla spans grouped by service, with the slowest span per service. Counts are of the spans returned by the search (Tempo caps 100 spans per spanset), so they rank services by activity rather than measure the exact totals.",
       "type": "table",
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 23 },
+      "gridPos": { "h": 9, "w": 16, "x": 8, "y": 23 },
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
       "transformations": [
         {
@@ -450,7 +529,7 @@
       "title": "Slowest service operations",
       "description": "Beyla spans (everything that is not a pytest span) sorted by duration, longest first: gRPC methods, HTTP routes, and Redis/PostgreSQL operations, with the serving service.",
       "type": "table",
-      "gridPos": { "h": 9, "w": 16, "x": 8, "y": 23 },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 32 },
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
       "fieldConfig": {
         "defaults": {
@@ -507,7 +586,7 @@
       "title": "gRPC errors",
       "description": "gRPC spans (rpc.system = grpc) with rpc.grpc.status_code != 0. Empty when the capture holds no gRPC spans or none failed; Beyla marks general operation failures with status = error (see the Service errors stat).",
       "type": "table",
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 32 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 41 },
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
       "fieldConfig": {
         "defaults": {
@@ -566,8 +645,9 @@
     },
     {
       "title": "Logs",
+      "description": "Cluster-object events and pod logs captured for the run.",
       "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 },
       "collapsed": false,
       "panels": []
     },
@@ -575,7 +655,7 @@
       "title": "Cluster and pod logs",
       "description": "Cluster-object events (k8sobjects receiver) and pod logs captured for the run, newest first, limited to 2000 lines. Filter further with Loki syntax, for example |~ \"error\" for error lines.",
       "type": "logs",
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 39 },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 49 },
       "datasource": { "type": "loki", "uid": "ci-observe-logs" },
       "fieldConfig": {
         "defaults": {},
@@ -604,16 +684,17 @@
     },
     {
       "title": "Cluster (kubelet metrics)",
+      "description": "Kubelet node and pod metrics scraped by the capture backend. These panels populate for captures from 2026-11-01 onward; the metrics carry no capture-id label, so they are scoped by the dashboard time range.",
       "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 51 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 62 },
       "collapsed": false,
       "panels": []
     },
     {
       "title": "Node CPU usage (cores)",
-      "description": "rate() of the kubelet node CPU time counter, collected every 60s during the capture. Kubelet metrics are not labeled with the capture id, so these panels show whatever the capture backend holds inside the dashboard time range: keep the 7d default to find the capture, then narrow the range to the run window.",
+      "description": "rate() of the kubelet node CPU time counter, collected every 60s during the capture. Not capture-labeled (scoped by the dashboard time range) and populated only for captures from 2026-11-01 onward.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 52 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
       "datasource": { "type": "prometheus", "uid": "ci-observe-metrics" },
       "fieldConfig": {
         "defaults": {
@@ -641,9 +722,9 @@
     },
     {
       "title": "Node memory working set",
-      "description": "Kubelet node memory working set during the capture window. Not capture-labeled; scoped by the dashboard time range.",
+      "description": "Kubelet node memory working set during the capture window. Not capture-labeled (scoped by the dashboard time range) and populated only for captures from 2026-11-01 onward.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 52 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
       "datasource": { "type": "prometheus", "uid": "ci-observe-metrics" },
       "fieldConfig": {
         "defaults": {
@@ -670,9 +751,9 @@
     },
     {
       "title": "Pod CPU usage (top 10)",
-      "description": "rate() of the kubelet pod CPU time counter, ten busiest pods. Not capture-labeled; scoped by the dashboard time range.",
+      "description": "rate() of the kubelet pod CPU time counter, ten busiest pods. Not capture-labeled (scoped by the dashboard time range) and populated only for captures from 2026-11-01 onward.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 60 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 71 },
       "datasource": { "type": "prometheus", "uid": "ci-observe-metrics" },
       "fieldConfig": {
         "defaults": {
@@ -700,9 +781,9 @@
     },
     {
       "title": "Pod memory working set (top 10)",
-      "description": "Kubelet pod memory working set, ten largest pods. Not capture-labeled; scoped by the dashboard time range.",
+      "description": "Kubelet pod memory working set, ten largest pods. Not capture-labeled (scoped by the dashboard time range) and populated only for captures from 2026-11-01 onward.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 60 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 71 },
       "datasource": { "type": "prometheus", "uid": "ci-observe-metrics" },
       "fieldConfig": {
         "defaults": {

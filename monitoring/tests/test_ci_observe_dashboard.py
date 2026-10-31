@@ -118,6 +118,68 @@ def test_rows_present(dashboard: dict) -> None:
     assert titles == ["Run overview", "Tests", "Service requests", "Logs", "Cluster (kubelet metrics)"]
 
 
+def test_panels_are_in_reading_order(dashboard: dict) -> None:
+    """The panels array must read top to bottom, left to right (by gridPos)."""
+    positions = [(p["gridPos"]["y"], p["gridPos"]["x"]) for p in dashboard["panels"]]
+    assert positions == sorted(positions)
+
+
+def test_every_panel_has_title_and_description(dashboard: dict) -> None:
+    for panel in _iter_panels(dashboard["panels"]):
+        assert panel.get("title"), f"panel without a title: {panel.get('id')}"
+        assert panel.get("description"), f"panel without a description: {panel['title']}"
+
+
+def test_dashboard_description_explains_reading_order(dashboard: dict) -> None:
+    description = dashboard["description"]
+    assert description.count(".") == 3
+    for row in ["Run overview", "Tests", "Service requests", "Logs", "Cluster"]:
+        assert row in description, f"dashboard description does not mention the {row} row"
+
+
+def test_run_overview_stat_panels(dashboard: dict) -> None:
+    """Run overview holds the four summary stats plus Run duration, before the Tests row."""
+    panels = [p for p in dashboard["panels"] if p["type"] != "row"]
+    overview = [p for p in panels if p["gridPos"]["y"] < 5]
+    assert [p["title"] for p in overview] == ["Tests", "Failed tests", "Suite", "PR", "Run duration"]
+
+
+def test_suite_and_pr_info_panels_degrade_gracefully(dashboard: dict) -> None:
+    """Suite/PR stats read the Loki labels and show 'not labeled' when absent (old captures)."""
+    panels = {p["title"]: p for p in _iter_panels(dashboard["panels"])}
+    for title, label in [("Suite", "osac_ci_suite"), ("PR", "osac_ci_pr")]:
+        panel = panels[title]
+        assert panel["type"] == "stat"
+        assert panel["datasource"]["uid"] == "ci-observe-logs"
+        assert panel["options"]["textMode"] == "name"
+        assert panel["fieldConfig"]["defaults"]["noValue"] == "not labeled"
+        expr = panel["targets"][0]["expr"]
+        assert f'sum by ({label}) (count_over_time({{osac_ci_capture_id="$capture_id"}}' in expr
+
+
+def test_slowest_tests_is_top_20(dashboard: dict) -> None:
+    """The table must sort by duration server-side of the client sort, then keep 20 rows."""
+    panels = {p["title"]: p for p in _iter_panels(dashboard["panels"])}
+    transformations = panels["Slowest tests"]["transformations"]
+    assert transformations[0] == {"id": "sortBy", "options": {"sort": [{"field": "Duration", "desc": True}]}}
+    assert transformations[1] == {"id": "limit", "options": {"limitField": 20}}
+
+
+def test_run_duration_is_longest_worker(dashboard: dict) -> None:
+    """Run duration reduces the pytest 'run' spans with max, the wall-clock run length."""
+    panels = {p["title"]: p for p in _iter_panels(dashboard["panels"])}
+    panel = panels["Run duration"]
+    assert panel["options"]["reduceOptions"]["calcs"] == ["max"]
+    assert '.pytest.span_type = "run"' in panel["targets"][0]["query"]
+
+
+def test_cluster_row_notes_kubelet_availability(dashboard: dict) -> None:
+    """Kubelet metrics only exist for captures from 2026-11-01 onward; the row says so."""
+    rows = [p for p in dashboard["panels"] if p["type"] == "row" and p["title"].startswith("Cluster")]
+    assert rows, "Cluster row missing"
+    assert "2026-11-01" in rows[0]["description"]
+
+
 def test_tempo_targets_use_traceql_search(dashboard: dict) -> None:
     tempo_targets = [
         (panel, target)
