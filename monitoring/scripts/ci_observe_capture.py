@@ -402,6 +402,9 @@ def capture(args: object) -> int:
         last = detail[-1] if detail else "unknown kubectl failure"
         print(f"ci-observe: cluster access failed: {last}", file=sys.stderr)
         return 2
+    except ValueError as error:
+        print(f"ci-observe: cluster access failed: {error}", file=sys.stderr)
+        return 2
     except subprocess.TimeoutExpired:
         print("ci-observe: cluster access failed: kubectl timed out", file=sys.stderr)
         return 2
