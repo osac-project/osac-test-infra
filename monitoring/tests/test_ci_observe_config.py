@@ -109,6 +109,16 @@ class TestGateway:
         assert kubelet["endpoint"] == "${env:CI_OBSERVE_KUBELET_ENDPOINT}"
         assert kubelet["insecure_skip_verify"] is True
 
+    def test_kubelet_stats_needs_no_kubelet_pods_permission(self, collector: dict[str, Any]) -> None:
+        """extra_metadata_labels makes every scrape call the kubelet /pods
+        endpoint, which the kubelet authorizes as nodes/proxy — outside the
+        nodes/stats grant — and the 403 aborts the whole scrape (kubeletstats
+        0.164): metrics.jsonl stays empty. Pod/container identity comes from
+        /stats/summary itself."""
+        kubelet = collector["receivers"]["kubelet_stats"]
+        assert "extra_metadata_labels" not in kubelet
+        assert "metric_groups" not in kubelet, "defaults are node, pod and container: the bounded set"
+
     def test_capture_files_are_append_only_jsonl(self, collector: dict[str, Any]) -> None:
         for signal in SIGNALS:
             exporter = collector["exporters"][f"file/{signal}"]

@@ -68,7 +68,9 @@ subjects:
     namespace: ci-observability-canary
 ---
 # Kubelet stats only (CPU/memory/pressure metrics). Read-only, single
-# subresource, nothing else.
+# subresource, nothing else. Do NOT add nodes/proxy for kubelet metadata:
+# collector.yaml must stay free of extra_metadata_labels (see its
+# kubelet_stats comment), so nothing the gateway runs ever needs it.
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:

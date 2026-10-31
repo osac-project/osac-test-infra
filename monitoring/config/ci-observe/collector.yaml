@@ -122,15 +122,25 @@ receivers:
         from: attributes.log
         to: body
 
-  # Node CPU, memory and pressure metrics. Requires the narrow read-only
-  # nodes/stats ClusterRole in cluster.yaml. If the kubelet refuses the
-  # service account, this degrades to a named metrics gap.
+  # Node, pod and container CPU/memory/filesystem/network metrics from the
+  # kubelet summary API. Requires the narrow read-only nodes/stats
+  # ClusterRole in cluster.yaml. If the kubelet refuses the service account,
+  # this degrades to a named metrics gap.
+  #
+  # No extra_metadata_labels, ever: any entry makes every scrape call the
+  # kubelet /pods endpoint first (kubeletstats 0.164, scraper.go), which the
+  # kubelet authorizes as the nodes/proxy subresource — outside the
+  # nodes/stats grant — and a /pods failure aborts the whole scrape, so not
+  # one metric reaches metrics.jsonl. That is exactly how every capture so
+  # far lost its cluster metrics. Pod and container identity (k8s.pod.name,
+  # k8s.namespace.name, k8s.pod.uid, k8s.container.name) comes from
+  # /stats/summary itself and needs no extra call; only container.id would
+  # need /pods, and it is not worth the wider grant.
   kubelet_stats:
     auth_type: serviceAccount
     endpoint: ${env:CI_OBSERVE_KUBELET_ENDPOINT}
     collection_interval: 60s
     insecure_skip_verify: true
-    extra_metadata_labels: [container.id]
 
 processors:
   resource/capture:

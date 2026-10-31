@@ -132,6 +132,25 @@ def test_render_manifest_rejects_unresolved_tokens(*, capture_module: ModuleType
     capture_module.MANIFEST = MANIFEST
 
 
+def test_kubelet_endpoint_selects_internal_ip(*, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The kubelet endpoint must be the node IP, not addresses[0]: that entry
+    is the InternalDNS hostname on OpenShift and need not resolve from the
+    gateway pod, which would silently starve metrics.jsonl."""
+
+    def fake_kubectl(kubeconfig: Path, *arguments: str, stdin: str | None = None) -> str:
+        assert any('type=="InternalIP"' in argument for argument in arguments), arguments
+        return "192.0.2.10\n"
+
+    monkeypatch.setattr(capture_module, "_kubectl", fake_kubectl)
+    assert capture_module._kubelet_endpoint(Path("/fake/kubeconfig")) == "https://192.0.2.10:10250"
+
+
+def test_kubelet_endpoint_requires_internal_ip(*, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(capture_module, "_kubectl", lambda *args, **kwargs: "\n")
+    with pytest.raises(ValueError, match="InternalIP"):
+        capture_module._kubelet_endpoint(Path("/fake/kubeconfig"))
+
+
 def test_capture_metadata_files_and_hashes(*, capture_module: ModuleType, tmp_path: Path) -> None:
     (tmp_path / "traces.jsonl").write_text("{}\n")
     (tmp_path / "metrics.jsonl").write_text("")

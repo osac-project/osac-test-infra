@@ -151,7 +151,13 @@ def _cluster_uid(kubeconfig: Path) -> str:
 
 
 def _kubelet_endpoint(kubeconfig: Path) -> str:
-    address = _kubectl(kubeconfig, "get", "nodes", "-o", "jsonpath={.items[0].status.addresses[0].address}").strip()
+    # Select the InternalIP address by type: addresses[0] is the InternalDNS
+    # hostname on OpenShift, which need not resolve from the gateway pod, and
+    # an unresolvable kubelet endpoint silently starves metrics.jsonl.
+    query = 'jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+    address = _kubectl(kubeconfig, "get", "nodes", "-o", query).strip()
+    if not address:
+        raise ValueError("node reports no InternalIP address")
     return f"https://{address}:10250"
 
 

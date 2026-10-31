@@ -74,7 +74,17 @@ runs:
         # command (success) -- a partial deployment reported as deployed.
         deploy_collectors() {
           cluster_uid="$(oc get namespace kube-system -o jsonpath='{.metadata.uid}')" || return 1
-          kubelet_endpoint="https://$(oc get nodes -o jsonpath='{.items[0].status.addresses[0].address}'):10250" || return 1
+          # Select the InternalIP address by type: addresses[0] is the
+          # InternalDNS hostname on OpenShift, which need not resolve from
+          # the gateway pod, and an unresolvable kubelet endpoint silently
+          # starves metrics.jsonl. The gateway pod shares the node network,
+          # so the IP is always reachable.
+          kubelet_address="$(oc get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')" || return 1
+          if [[ -z "${kubelet_address}" ]]; then
+            echo "node reports no InternalIP address" >&2
+            return 1
+          fi
+          kubelet_endpoint="https://${kubelet_address}:10250"
 
           # Render the coordinator tokens the cluster manifest expects
           # (same envsubst-style substitution as the local capture
