@@ -32,6 +32,15 @@ Environment=REPOS=osac,osac-test-infra
 # with a hard row-count cap as a disk safety net.
 Environment=JOBS_HISTORY_DAYS=60
 Environment=JOBS_HISTORY_MAX_COUNT=100000
+# Max /api/* requests served at once; extra ones get a 503 (see
+# MAX_CONCURRENT_API_REQUESTS in workflow-exporter.py).
+Environment=MAX_CONCURRENT_API_REQUESTS=4
+
+# Resource guard: normal use is a few hundred MB. Without a limit, a pile-up
+# of slow /api requests once grew the process to ~107 GB and made /metrics
+# time out. Hitting the limit OOM-kills the container and Restart=always
+# brings it back, instead of starving the whole host.
+PodmanArgs=--memory=8g --memory-swap=8g --pids-limit=1024
 
 # Mount the exporter script into the container
 Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z

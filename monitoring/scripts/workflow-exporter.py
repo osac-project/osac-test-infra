@@ -67,6 +67,13 @@ JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "60"))
 # Hard cap on stored job count regardless of age, as a memory/disk safety
 # net -- not expected to be the binding constraint at normal CI volume.
 JOBS_HISTORY_MAX_COUNT = int(os.getenv("JOBS_HISTORY_MAX_COUNT", "100000"))
+# Max /api/* requests served at once. Each one can read up to
+# JOBS_HISTORY_MAX_COUNT rows into Python objects, and a dashboard refresh
+# fires several together; without a cap, slow requests overlap, pile up
+# (one thread and a large in-memory row set each), and starve /metrics via
+# the GIL until Prometheus scrapes time out. Requests over the cap get an
+# immediate 503 instead of queueing. /metrics is never limited.
+MAX_CONCURRENT_API_REQUESTS = max(1, int(os.getenv("MAX_CONCURRENT_API_REQUESTS", "4")))
 # Data directory for the SQLite DB (persists across restarts) and the
 # legacy JSON cache file this exporter migrates from on first startup.
 CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.monitoring-server/data"))
@@ -123,6 +130,10 @@ in_progress_by_category = Gauge(
     "github_actions_in_progress_runs_by_category",
     "In-progress workflow runs by category (e2e, ai, lint, ci, automation, release)",
     ["org", "category"],
+)
+api_rejected_requests = Counter(
+    "workflow_exporter_api_rejected_requests_total",
+    "/api/* requests rejected with 503 because MAX_CONCURRENT_API_REQUESTS were already in flight",
 )
 completed_runs = Counter(
     "github_actions_completed_runs_total",
@@ -2499,8 +2510,13 @@ class WorkflowExporter:
         job["steps"] = json.loads(steps_json) if steps_json else []
         return job
 
-    def get_jobs_json(self, params):
+    def get_jobs_json(self, params, columns=None):
         """Return jobs list as JSON, with optional filters.
+
+        `columns` limits the DB-backed rows to those JOB_COLUMNS names and
+        skips the per-row steps parsing -- for callers that only aggregate a
+        few fields over up to JOBS_HISTORY_MAX_COUNT rows. Active runs are
+        returned in full either way.
 
         Query params:
           status    - filter by conclusion (success, failure, cancelled)
@@ -2664,14 +2680,24 @@ class WorkflowExporter:
             ) + ")")
             args["search"] = f"%{search_lower}%"
 
-        sql = "SELECT * FROM jobs"
+        if columns:
+            unknown = set(columns) - set(JOB_COLUMNS)
+            if unknown:
+                raise ValueError(f"unknown job columns: {sorted(unknown)}")
+            select = ", ".join(columns)
+        else:
+            select = "*"
+        sql = f"SELECT {select} FROM jobs"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY created_at DESC LIMIT :limit"
 
         with self._db() as conn:
             rows = conn.execute(sql, args).fetchall()
-        result = [self._row_to_job(r) for r in rows]
+        if columns:
+            result = [dict(r) for r in rows]
+        else:
+            result = [self._row_to_job(r) for r in rows]
 
         # -- in-memory active (queued/in_progress) runs -------------------
         # Not persisted in the DB, so filtered in Python against the same
@@ -3144,8 +3170,10 @@ class WorkflowExporter:
                   "failure_rate": 0.xx, "success_rate": 0.xx,
                   "cache_oldest_at": "2026-..." | None}
         """
-        # Reuse the same filtering logic — just count instead of return
-        jobs = self.get_jobs_json(params)
+        # Reuse the same filtering logic — just count instead of return.
+        # Only the status fields are needed, so skip loading and parsing
+        # every row's steps.
+        jobs = self.get_jobs_json(params, columns=("conclusion", "status"))
         counts = {}
         for job in jobs:
             c = job.get("conclusion") or job.get("status", "unknown")
@@ -3548,8 +3576,26 @@ class WorkflowExporter:
 # ---------------------------------------------------------------------------
 class ExporterHandler(BaseHTTPRequestHandler):
     exporter = None  # set after instantiation
+    _api_slots = threading.BoundedSemaphore(MAX_CONCURRENT_API_REQUESTS)
 
     def do_GET(self):
+        if not self.path.startswith("/api/"):
+            self._dispatch()
+            return
+        if not self._api_slots.acquire(blocking=False):
+            api_rejected_requests.inc()
+            logger.warning("Rejecting %s: %d /api requests already in flight",
+                           self.path.split("?")[0], MAX_CONCURRENT_API_REQUESTS)
+            self.send_response(503)
+            self.send_header("Retry-After", "10")
+            self.end_headers()
+            return
+        try:
+            self._dispatch()
+        finally:
+            self._api_slots.release()
+
+    def _dispatch(self):
         parsed = urlparse(self.path)
 
         if parsed.path == "/metrics":
