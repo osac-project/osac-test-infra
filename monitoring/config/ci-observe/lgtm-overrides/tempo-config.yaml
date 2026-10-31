@@ -16,8 +16,11 @@
 #     binding limit (live_traces_exceeded) on a machine with 500GB of RAM.
 #   - metrics_ingestion_time_range_slack 168h (stock 30s): replayed spans
 #     carry their original timestamps; without the widened slack the metrics
-#     generator discarded them (659k spans) and the span-metrics panels
-#     stayed empty.
+#     generator discarded them (659k spans) and no traces_spanmetrics_* or
+#     traces_service_graph_* series reached Prometheus. Tempo 3.1.1 emits
+#     traces_spanmetrics_calls_total (no underscore between "span" and
+#     "metrics"); the ci-observe-runs dashboard's service panels are TraceQL
+#     queries and do not read these series.
 #
 # This is a local development stack setting, not a fleet production setting. Keep
 # the remaining defaults in sync with the pinned image when it changes.
