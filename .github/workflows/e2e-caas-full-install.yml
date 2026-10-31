@@ -605,6 +605,7 @@ jobs:
           # host-type=default) while test_worker_tenant_status holds one on a
           # different xdist worker (pytest -n 4 --dist loadfile).
           BMH_COUNT: "3"
+          BMH_DATA_DISK_SIZE: "50G"
         run: bash .github/scripts/setup-virtual-bmh.sh
 
       - name: Install OSAC
