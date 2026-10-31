@@ -94,9 +94,14 @@ runs:
         # Suite and PR are rendered into the cluster manifest as env values
         # for the gateway. Digits and lowercase alphanumerics only, so the
         # sed replacement and the manifest stay well-formed whatever the
-        # caller passed.
+        # caller passed. Both coalesce to "none" when empty: the gateway's
+        # collector config cannot expand an empty value (the resource
+        # processor rejects it at load), and "none" reads as its own filter
+        # value in Grafana.
         suite="$(printf '%s' "${SUITE_INPUT}" | tr -cd 'a-z0-9-')"
         pr="$(printf '%s' "${PR_INPUT}" | tr -cd '0-9')"
+        suite="${suite:-none}"
+        pr="${pr:-none}"
 
         # Every fallible command below carries an explicit "|| return 1":
         # this function runs inside an `if !` condition, where bash suspends

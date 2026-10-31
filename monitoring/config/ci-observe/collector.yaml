@@ -162,6 +162,10 @@ processors:
       # kubelet metrics alike -- because the test process itself knows
       # nothing about them. Empty for non-PR runs: Loki and Prometheus drop
       # empty label values, so the label is simply absent there.
+      # The coordinator always sets both variables, to "none" when there
+      # is no PR: an empty value here makes the resource processor reject
+      # the whole config at load (the env provider does not apply
+      # bash-style defaults), and an unset one fails expansion.
       - key: osac.ci.suite
         value: ${env:CI_OBSERVE_SUITE}
         action: upsert

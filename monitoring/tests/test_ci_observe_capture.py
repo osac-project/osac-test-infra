@@ -131,15 +131,16 @@ def test_render_manifest_resolves_every_token(*, capture_module: ModuleType, tmp
     capture_module.MANIFEST = source / "cluster.yaml"
 
 
-def test_render_manifest_leaves_suite_and_pr_empty_when_unset(*, capture_module: ModuleType, tmp_path: Path) -> None:
+def test_render_manifest_coalesces_suite_and_pr_to_none_when_unset(*, capture_module: ModuleType, tmp_path: Path) -> None:
     """A local capture without suite/PR context still renders: the tokens
-    resolve to empty env values, and the collector stamps empty attributes
-    (Loki and Prometheus drop empty label values)."""
+    coalesce to "none", because the gateway's collector config cannot expand
+    an empty value (its resource processor rejects it at load)."""
     rendered = capture_module.render_manifest(
         capture_id="cap123", namespace="osac-e2e-ci", cluster_uid="uid-1", kubelet_endpoint="https://192.0.2.1:10250"
     )
     assert "${CI_OBSERVE_" not in rendered
-    assert 'value: ""' in rendered
+    assert 'name: CI_OBSERVE_SUITE\n              value: "none"' in rendered
+    assert 'name: CI_OBSERVE_PR\n              value: "none"' in rendered
 
 
 def test_render_manifest_narrows_suite_and_pr_to_safe_charsets(*, capture_module: ModuleType, tmp_path: Path) -> None:

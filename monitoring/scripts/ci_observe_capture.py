@@ -167,16 +167,20 @@ def render_manifest(
     """Substitute the plain ``${...}`` tokens the coordinator owns.
 
     Suite and PR are narrowed to safe charsets (lowercase alphanumeric with
-    hyphens, and digits): the values land inside the manifest's double-quoted
-    env values, and the CI action renders the same tokens through sed.
+    hyphens, and digits) and coalesce to "none" when empty: the values land
+    inside the manifest's double-quoted env values, the CI action renders
+    the same tokens through sed, and the gateway's collector config cannot
+    expand an empty value.
     """
+    suite = re.sub(r"[^a-z0-9-]", "", suite) or "none"
+    pr = re.sub(r"[^0-9]", "", pr) or "none"
     tokens = {
         "CI_OBSERVE_CAPTURE_ID": capture_id,
         "CI_OBSERVE_NAMESPACE": namespace,
         "CI_OBSERVE_CLUSTER_UID": cluster_uid,
         "CI_OBSERVE_KUBELET_ENDPOINT": kubelet_endpoint,
-        "CI_OBSERVE_SUITE": re.sub(r"[^a-z0-9-]", "", suite),
-        "CI_OBSERVE_PR": re.sub(r"[^0-9]", "", pr),
+        "CI_OBSERVE_SUITE": suite,
+        "CI_OBSERVE_PR": pr,
     }
 
     def replace(match: re.Match[str]) -> str:

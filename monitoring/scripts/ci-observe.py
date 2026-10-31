@@ -1564,8 +1564,8 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("--kubeconfig", required=True, type=Path)
     cap.add_argument("--namespace", required=True)
     cap.add_argument("--capture-id")
-    cap.add_argument("--suite", default="", help="test suite (vmaas/caas/bmaas); stamped as osac.ci.suite")
-    cap.add_argument("--pr", default="", help="pull request number; stamped as osac.ci.pr")
+    cap.add_argument("--suite", default="none", help="test suite (vmaas/caas/bmaas); stamped as osac.ci.suite")
+    cap.add_argument("--pr", default="none", help="pull request number; stamped as osac.ci.pr")
     cap.add_argument("command", nargs=argparse.REMAINDER, metavar="-- CMD", help="test command after --")
 
     sync = sub.add_parser("sync", help="download ci-observe telemetry artifacts from GitHub and import them")
