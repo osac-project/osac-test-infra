@@ -390,19 +390,34 @@ def test_decompression_bombs_are_abandoned_at_the_limit() -> None:
             zf.writestr("big.txt", zeros)
         samples[f"{label}-member.zip"] = packed.getvalue()
     original = gate.MAX_FILE_BYTES
-    gate.MAX_FILE_BYTES = 4 * 1024 * 1024
     try:
         for name, blob in samples.items():
             with Fixture() as fx:
                 fx.write(name, blob)
                 tracemalloc.start()
                 try:
-                    fx.gate()
+                    code, _, _ = fx.gate("--max-file-mbytes", "4")
                     peak = tracemalloc.get_traced_memory()[1]
                 finally:
                     tracemalloc.stop()
+                _assert(code == 0, f"{name}: gate failed instead of withholding the archive")
+                _assert(gate.MAX_FILE_BYTES == 4 * 1024 * 1024, "CLI did not apply the 4 MiB test limit")
                 _assert(not (fx.root / name).exists(), f"{name}: oversized archive was published")
                 _assert(peak < 24 * 1024 * 1024, f"{name}: inflated {peak >> 20} MiB before giving up")
+    finally:
+        gate.MAX_FILE_BYTES = original
+
+
+def test_size_limit_cli_default_and_overrides() -> None:
+    original = gate.MAX_FILE_BYTES
+    cases = [(("--max-file-mbytes", "4"), 4), (("--max-file-mbytes", "2048"), 2048), ((), 512)]
+    try:
+        for arguments, expected in cases:
+            with Fixture() as fx:
+                fx.write("a.log", "ordinary log output\n")
+                code, _, _ = fx.gate(*arguments)
+                _assert(code == 0, "size limit configuration failed")
+                _assert(gate.MAX_FILE_BYTES == expected * 1024 * 1024, "CLI size limit was not applied")
     finally:
         gate.MAX_FILE_BYTES = original
 
@@ -459,6 +474,7 @@ def main() -> None:
     test_a_file_named_like_the_report_is_still_scanned()
     test_a_secret_file_that_is_not_utf8_is_an_error()
     test_decompression_bombs_are_abandoned_at_the_limit()
+    test_size_limit_cli_default_and_overrides()
     test_zip_entries_with_unbounded_methods_are_refused()
     print("release_gate_test.py: ok")
 
