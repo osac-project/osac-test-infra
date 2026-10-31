@@ -1,0 +1,97 @@
+# Tempo override for the ci-observe local development stack.
+#
+# This is the stock grafana/otel-lgtm 0.38.1 tempo-config.yaml with raised
+# ingestion limits in overrides.defaults and live_store:
+#   - max_traces_per_user 0 (stock 10000): one capture already holds more
+#     traces than the stock per-user cap, so a single import discarded every
+#     trace beyond the first ten thousand (9.6M discarded spans observed on
+#     the first batch import) and the Tests panels showed nothing.
+#   - rate_limit_bytes/burst 300MB (stock 30MB): a capture replay pushes
+#     around 1 GB of JSONL in under a minute and bursted past the stock
+#     limit (213k spans discarded as rate_limited).
+#   - max_bytes_per_trace 100MB (stock 5MB): the pytest session traces
+#     exceed the stock per-trace cap (962 spans discarded as trace_too_large).
+#   - live_store.max_live_traces_bytes 32GB (stock 250MB): the live store
+#     holds in-flight traces during a replay burst; the stock cap was the
+#     binding limit (live_traces_exceeded) on a machine with 500GB of RAM.
+#   - metrics_ingestion_time_range_slack 168h (stock 30s): replayed spans
+#     carry their original timestamps; without the widened slack the metrics
+#     generator discarded them (659k spans) and the span-metrics panels
+#     stayed empty.
+#
+# This is a local development stack setting, not a fleet production setting. Keep
+# the remaining defaults in sync with the pinned image when it changes.
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9096
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "127.0.0.1:4417"
+        http:
+          endpoint: "127.0.0.1:4418"
+
+memberlist:
+  bind_addr: [127.0.0.1]
+  bind_port: 7947
+
+querier:
+  frontend_worker:
+    frontend_address: 127.0.0.1:9096
+  search:
+    # The capture-id and pytest filters are unindexed span/resource attributes;
+    # scanning a freshly imported capture's blocks takes longer than the stock
+    # 30s budget and the search returned partial (empty) results.
+    query_timeout: 120s
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /data/tempo/wal
+    local:
+      path: /data/tempo/blocks
+    # A capture replay flushes live-store blocks continuously; with the stock
+    # 5m poll the querier did not discover them for many minutes and searches
+    # over a just-imported capture returned nothing.
+    blocklist_poll: 30s
+
+metrics_generator:
+  # Replayed captures are hours to a day old; the stock 30s slack discarded
+  # all of their spans from the metrics generator.
+  metrics_ingestion_time_range_slack: 168h
+  processor:
+    span_metrics:
+      dimensions:
+        - service_name
+        - operation
+        - status_code
+  storage:
+    path: /data/tempo/generator/wal
+    remote_write:
+      - url: http://127.0.0.1:9090/api/v1/write
+        send_exemplars: true
+
+# The live store backs in-flight traces with memory; a capture replay burst
+# is gigabytes. The machine running the backend has 500GB of RAM.
+live_store:
+  max_live_traces_bytes: 32000000000
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
+    ingestion:
+      rate_strategy: local
+      # A capture replay pushes ~1 GB per capture in well under a minute.
+      rate_limit_bytes: 300000000
+      burst_size_bytes: 300000000
+      # One capture holds more traces than the stock 10000 cap; this stack
+      # has a single tenant (the CI sync) and no competing writers.
+      max_traces_per_user: 0
+    global:
+      # The pytest session traces exceed the stock 5 MB per-trace cap.
+      max_bytes_per_trace: 100000000

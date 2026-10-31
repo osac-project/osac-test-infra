@@ -132,6 +132,7 @@ REPLAY_CONFIG = Path(__file__).resolve().parents[1] / "config" / "ci-observe" / 
 LGTM_OVERRIDES_DIR = Path(__file__).resolve().parents[1] / "config" / "ci-observe" / "lgtm-overrides"
 PROMETHEUS_OVERRIDE = LGTM_OVERRIDES_DIR / "prometheus.yaml"
 LOKI_OVERRIDE = LGTM_OVERRIDES_DIR / "loki-config.yaml"
+TEMPO_OVERRIDE = LGTM_OVERRIDES_DIR / "tempo-config.yaml"
 PYROSCOPE_STUB = LGTM_OVERRIDES_DIR / "pyroscope-stub.sh"
 STACK_VERSION = 2  # bump when the container layout changes; up refuses mismatched stacks
 OWNED_LABEL = "osac.ci-observe.owned"
@@ -566,6 +567,7 @@ def render_quadlet(state_dir: Path) -> str:
         f"Volume={QUADLET_VOLUME}:/data",
         f"Volume={config / PROMETHEUS_OVERRIDE.name}:/otel-lgtm/prometheus.yaml:ro,Z",
         f"Volume={config / LOKI_OVERRIDE.name}:/otel-lgtm/loki-config.yaml:ro,Z",
+        f"Volume={config / TEMPO_OVERRIDE.name}:/otel-lgtm/tempo-config.yaml:ro,Z",
         f"Volume={config / PYROSCOPE_STUB.name}:/otel-lgtm/run-pyroscope.sh:ro,Z",
         "",
         "[Service]",
@@ -579,13 +581,13 @@ def render_quadlet(state_dir: Path) -> str:
 
 
 def up_quadlet(state_dir: Path) -> int:
-    for override in (PROMETHEUS_OVERRIDE, LOKI_OVERRIDE, PYROSCOPE_STUB):
+    for override in (PROMETHEUS_OVERRIDE, LOKI_OVERRIDE, TEMPO_OVERRIDE, PYROSCOPE_STUB):
         if not override.is_file():
             raise ToolError(f"required LGTM override {override} is missing from this checkout")
     config = state_dir / "config"
     config.mkdir(parents=True, exist_ok=True)
     os.chmod(config, 0o700)
-    for override in (PROMETHEUS_OVERRIDE, LOKI_OVERRIDE, PYROSCOPE_STUB):
+    for override in (PROMETHEUS_OVERRIDE, LOKI_OVERRIDE, TEMPO_OVERRIDE, PYROSCOPE_STUB):
         target = config / override.name
         shutil.copyfile(override, target)
         # The stub is executed by the image's entrypoint; the image's own
@@ -641,7 +643,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     state_dir = args.state_dir
     iid = instance_id(state_dir)
     container, volume = f"ci-observe-lgtm-{iid}", f"ci-observe-lgtm-data-{iid}"
-    for override in (PROMETHEUS_OVERRIDE, LOKI_OVERRIDE, PYROSCOPE_STUB):
+    for override in (PROMETHEUS_OVERRIDE, LOKI_OVERRIDE, TEMPO_OVERRIDE, PYROSCOPE_STUB):
         if not override.is_file():
             raise ToolError(f"required LGTM override {override} is missing from this checkout")
     requested = {name: getattr(args, f"{name}_port") for name in OPTIONAL_PORTS}
