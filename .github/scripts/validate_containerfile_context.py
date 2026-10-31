@@ -83,16 +83,25 @@ def local_sources(containerfile: Path) -> list[LocalSource]:
         if len(paths) < 2:
             raise ValueError(f"line {line_number}: {command.upper()} requires at least one source and a destination")
         for path in paths[:-1]:
-            if path.startswith("<<") or (command.upper() == "ADD" and ("://" in path or path.startswith("git@"))):
+            if path.startswith("<<") or (command.upper() == "ADD" and path.startswith(("http://", "https://"))):
                 continue
             sources.append(LocalSource(path=path, line=line_number))
     return sources
 
 
 def _context_relative(source: str) -> Path:
-    # Container builders strip leading slashes and parent traversal from
-    # sources; mirror that normalization before checking the context.
-    parts = [part for part in PurePosixPath(source).parts if part not in {"/", ".", ".."}]
+    # Container builders resolve parent components lexically and clamp them at
+    # the context root.  Do not resolve against the filesystem: a preceding
+    # symlink must not change how the source path is normalized.
+    parts: list[str] = []
+    for part in PurePosixPath(source).parts:
+        if part in {"/", "."}:
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
     return Path(*parts)
 
 
