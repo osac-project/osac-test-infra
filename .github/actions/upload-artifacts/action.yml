@@ -47,6 +47,12 @@ inputs:
       have created the artifact.
     required: false
     default: "false"
+  max-file-mbytes:
+    description: >-
+      Maximum file size in MiB for release-gate inspection. Larger files are
+      withheld. Ordinary uploads use 512; telemetry captures opt into 2048.
+    required: false
+    default: "512"
 
 runs:
   using: composite
@@ -194,6 +200,7 @@ runs:
         KNOWN_SECRET_ENV: ${{ inputs.known-secret-env }}
         K8S_SECRETS_FILE: ${{ inputs.k8s-secrets-file }}
         FAIL_ON_CENSOR: ${{ inputs.fail-on-censor }}
+        MAX_FILE_MBYTES: ${{ inputs.max-file-mbytes }}
       run: |
         if [[ ! -d "${ARTIFACT_DIR}" ]]; then
           exit 0
