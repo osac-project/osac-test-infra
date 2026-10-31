@@ -150,7 +150,12 @@ the root `make e2e` does not wire up.
 
 `maas`, `caas_networking`, `maas_networking`, `storage`, `metering` and
 `references` also exist as `test-<suite>` targets. `tests/e2e/networking/vmaas/`
-is one ordered module: never pass `TEST=` (`-k`) to slice it.
+is one ordered module whose tests depend on each other: `test-vmaas` runs only
+`test_vmaas_networking.py` (`test_00` to `test_14`) with `-x` (stops at the first failure; the
+fixture finalizers clean up) and `TEST=` (`-k`) must never slice it. Every kept
+test decides the job. `external_ip/`, `references/` and
+`test_external_ip_billing.py` are outside the job: run them by hand, and the
+ExternalIP delete billing path has no CI signal meanwhile.
 
 The PR E2E commands use the same split:
 
@@ -282,8 +287,8 @@ The playbook shown is the direct backend Makefile entry point.
 | `prep-osac` | `playbooks/prep-osac.yml` | `DEPLOY_SUITE`, `KUBECONFIG`, `EXTRA_VARS`; prepares OSAC and generates `values/<profile>/netris-runtime.yaml`. |
 | `run-osac-setup` | OSAC installer (`install-infra`, then `install-osac`) | `DEPLOY_SUITE`, `OSAC_NAMESPACE`, `KUBECONFIG`; consumes the OCP EVPN values from `deploy-ocp`, the profile's `netris.yaml`, and the runtime values. |
 | `setup-vmaas` | `playbooks/setup-vmaas.yml` | `KUBECONFIG`, `EXTRA_VARS`; uses the EVPN validation and VMaaS return-path variables below. |
-| `gather-vmaas` | `playbooks/gather-infra.yml` | `KUBECONFIG`, `EXTRA_VARS`; collects infrastructure/EVPN state. |
-| `destroy-vmaas` | No-op | VMaaS setup creates no tenant resources. Cluster prerequisites are removed by `destroy-ocp`. |
+| `gather-vmaas` | `playbooks/gather-vmaas.yml` | `KUBECONFIG`, `OSAC_VM_KUBECONFIG`, `OSAC_NAMESPACE`, `EXTRA_VARS`; read-only (`oc get`, `oc logs`): writes `mgmt-cluster/vmaas/` (hub CRs, workload VMs and VMIs reduced to an allow-list without cloud-init data, UDN/NADs, SSH helper Pods, OSAC operator logs). The workflow runs `gather-infra` separately; `gather-full` runs both. |
+| `destroy-vmaas` | Makefile only | `KUBECONFIG` (hub). VMaaS setup creates no tenant resources, but the target deletes the helper Pods, Secrets and NetworkPolicies labeled `osac-e2e/ssh-helper=true` in every namespace (`kubectl delete -A`; nothing found is fine). Cluster prerequisites are removed by `destroy-ocp`. |
 | `setup-caas` | `playbooks/setup-caas.yml` | `CAAS_*`, `OSAC_TEST_TENANT_NAME`, `EXTRA_VARS`; prepares BMaaS worker VMs, registers worker types, the DiskImage, the Netris ExternalIPPool, and the catalog. Task commands use `kubeconfig_path` (default `/root/.kube/config`). |
 | `deploy-caas` | `playbooks/deploy-caas.yml` | `CAAS_*`, `OSAC_TEST_TENANT_NAME`, `EXTRA_VARS`; creates the CaaS catalog cluster with one `ci-worker` BareMetalInstanceType. Task commands use `kubeconfig_path` (default `/root/.kube/config`). |
 | `setup-bmc` | `playbooks/setup-bmc.yml` | `EXTRA_VARS`; uses `bare_metal_services`, `bmc_net_*`, and `sushy_tools_*`. |

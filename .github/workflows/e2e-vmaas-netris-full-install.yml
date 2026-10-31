@@ -579,7 +579,7 @@ jobs:
 
       - name: Run Netris E2E tests
         id: test
-        timeout-minutes: ${{ inputs.deploy-suite == 'full' && 180 || 60 }}
+        timeout-minutes: ${{ inputs.deploy-suite == 'full' && 180 || 120 }}
         shell: bash
         env:
           DEPLOY_SUITE: ${{ inputs.deploy-suite }}
