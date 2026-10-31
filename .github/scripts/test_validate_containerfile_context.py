@@ -42,7 +42,9 @@ class ContainerfileContextTests(unittest.TestCase):
         assets.mkdir()
         (assets / "one.txt").write_text("one\n")
 
-    def run_validator(self, context: str) -> subprocess.CompletedProcess[str]:
+    def run_validator(
+        self, context: str, containerfile: str = "osac-metering/adapters/Containerfile.echo-adapter"
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 "python3",
@@ -51,7 +53,7 @@ class ContainerfileContextTests(unittest.TestCase):
                 "--repo-root",
                 str(self.repo),
                 "--containerfile",
-                "osac-metering/adapters/Containerfile.echo-adapter",
+                containerfile,
                 "--context",
                 context,
                 "--label",
@@ -77,16 +79,17 @@ class ContainerfileContextTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Validated components[6]", result.stdout)
 
-    def test_accepts_remote_stage_options_json_tabs_and_globs(self) -> None:
+    def test_accepts_remote_heredoc_stage_options_json_tabs_and_globs(self) -> None:
         containerfile = self.repo / "Containerfile.semantics"
         containerfile.write_text(
             "FROM scratch AS generated\n"
             "ADD --checksum=sha256:deadbeef https://example.invalid/archive.tar /archive.tar\n"
-            "ADD git@example.invalid:team/repository.git /repository\n"
+            "ADD http://example.invalid/archive.tar /second-archive.tar\n"
             "COPY --from=generated /generated /generated\n"
             "COPY --chown=1000:1000 --chmod=0644 assets/*.txt /assets/\n"
             'COPY ["assets/one.txt", "/one.txt"]\n'
             "COPY\tassets/one.txt /tabbed.txt\n"
+            "COPY <<EOF /inline.txt\ninline\nEOF\n"
         )
 
         result = subprocess.run(
@@ -105,6 +108,76 @@ class ContainerfileContextTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_validates_local_add_source_containing_url_delimiter(self) -> None:
+        containerfile = self.repo / "Containerfile.local-url-delimiter"
+        containerfile.write_text("FROM scratch\nADD assets/data://archive /archive\n")
+        local_source = self.repo / "assets" / "data:" / "archive"
+        local_source.parent.mkdir()
+        local_source.write_text("archive\n")
+
+        existing = self.run_validator(".", containerfile.name)
+        local_source.unlink()
+        missing = self.run_validator(".", containerfile.name)
+
+        self.assertEqual(existing.returncode, 0, existing.stderr)
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("source 'assets/data://archive'", missing.stderr)
+
+    def test_validates_add_sources_not_supported_as_remote_by_buildah(self) -> None:
+        containerfile = self.repo / "Containerfile.non-http-remote"
+        containerfile.write_text("FROM scratch\nADD git@example.invalid:team/repository.git /repository\n")
+
+        result = self.run_validator(".", containerfile.name)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("source 'git@example.invalid:team/repository.git'", result.stderr)
+
+    def test_resolves_parent_component_before_checking_source(self) -> None:
+        containerfile = self.repo / "Containerfile.parent-component"
+        containerfile.write_text("FROM scratch\nCOPY dir/../file /file\n")
+        (self.repo / "file").write_text("root file\n")
+
+        result = self.run_validator(".", containerfile.name)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_does_not_match_component_removed_by_parent_traversal(self) -> None:
+        containerfile = self.repo / "Containerfile.parent-component-missing"
+        containerfile.write_text("FROM scratch\nCOPY dir/../missing /missing\n")
+        misleading = self.repo / "dir" / "missing"
+        misleading.parent.mkdir()
+        misleading.write_text("wrong file\n")
+
+        result = self.run_validator(".", containerfile.name)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("source 'dir/../missing'", result.stderr)
+
+    def test_strips_leading_slash_and_clamps_parent_traversal_to_context(self) -> None:
+        containerfile = self.repo / "Containerfile.context-root"
+        containerfile.write_text(
+            "FROM scratch\n"
+            "COPY /leading.txt /leading.txt\n"
+            "COPY ../../clamped.txt /clamped.txt\n"
+            "COPY dir/../../../mixed.txt /mixed.txt\n"
+        )
+        for filename in ("leading.txt", "clamped.txt", "mixed.txt"):
+            (self.repo / filename).write_text(f"{filename}\n")
+
+        result = self.run_validator(".", containerfile.name)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_parent_normalization_is_lexical_across_symlink(self) -> None:
+        containerfile = self.repo / "Containerfile.symlink-parent"
+        containerfile.write_text("FROM scratch\nCOPY link/../file /file\n")
+        (self.repo / "file").write_text("context root\n")
+        (self.repo / "link").symlink_to(self.repo.parent, target_is_directory=True)
+
+        result = self.run_validator(".", containerfile.name)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
