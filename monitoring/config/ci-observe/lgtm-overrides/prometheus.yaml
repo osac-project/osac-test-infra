@@ -42,6 +42,10 @@ otlp:
     - postgresql.index.name
     - database # used by otelcol/receiver/mongodb
     - kafka.cluster.alias
+    # The capture id and observed namespace select a run's metrics in the
+    # ci-observe-runs dashboard; without promotion they never become labels.
+    - osac.ci.capture_id
+    - osac.ci.observed_namespace
 storage:
   tsdb:
     out_of_order_time_window: 7d
