@@ -1,0 +1,458 @@
+{
+  "arm": "direct",
+  "schema_version": "osac-laya-stage-v2",
+  "extractor_version": "osac-laya-evidence-v1",
+  "predictions": [
+    {
+      "pr": 1279,
+      "choice": "unknown",
+      "score": 0.3684,
+      "probabilities": {
+        "aap_policy": 0.0499,
+        "build_dependency": 0.073,
+        "build_compile": 0.158,
+        "source_checkout": 0.0214,
+        "deployment_config": 0.0249,
+        "ci_environment": 0.157,
+        "app_startup": 0.0693,
+        "app_or_e2e": 0.0781,
+        "unknown": 0.3684
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 1261,
+      "choice": "unknown",
+      "score": 0.3672,
+      "probabilities": {
+        "aap_policy": 0.051,
+        "build_dependency": 0.0742,
+        "build_compile": 0.1536,
+        "source_checkout": 0.0211,
+        "deployment_config": 0.0249,
+        "ci_environment": 0.1547,
+        "app_startup": 0.0708,
+        "app_or_e2e": 0.0824,
+        "unknown": 0.3672
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 1253,
+      "choice": "unknown",
+      "score": 0.359,
+      "probabilities": {
+        "aap_policy": 0.0508,
+        "build_dependency": 0.0746,
+        "build_compile": 0.1497,
+        "source_checkout": 0.0211,
+        "deployment_config": 0.0259,
+        "ci_environment": 0.168,
+        "app_startup": 0.0697,
+        "app_or_e2e": 0.0812,
+        "unknown": 0.359
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 1217,
+      "choice": "unknown",
+      "score": 0.3649,
+      "probabilities": {
+        "aap_policy": 0.0506,
+        "build_dependency": 0.0736,
+        "build_compile": 0.1566,
+        "source_checkout": 0.0216,
+        "deployment_config": 0.0251,
+        "ci_environment": 0.1596,
+        "app_startup": 0.0692,
+        "app_or_e2e": 0.0789,
+        "unknown": 0.3649
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 1211,
+      "choice": "unknown",
+      "score": 0.3625,
+      "probabilities": {
+        "aap_policy": 0.0499,
+        "build_dependency": 0.0726,
+        "build_compile": 0.1464,
+        "source_checkout": 0.0205,
+        "deployment_config": 0.0254,
+        "ci_environment": 0.1681,
+        "app_startup": 0.0705,
+        "app_or_e2e": 0.084,
+        "unknown": 0.3625
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 889,
+      "choice": "unknown",
+      "score": 0.3697,
+      "probabilities": {
+        "aap_policy": 0.0511,
+        "build_dependency": 0.0736,
+        "build_compile": 0.1534,
+        "source_checkout": 0.0214,
+        "deployment_config": 0.0246,
+        "ci_environment": 0.1578,
+        "app_startup": 0.0685,
+        "app_or_e2e": 0.0798,
+        "unknown": 0.3697
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 1247,
+      "choice": "unknown",
+      "score": 0.365,
+      "probabilities": {
+        "aap_policy": 0.0508,
+        "build_dependency": 0.0723,
+        "build_compile": 0.1477,
+        "source_checkout": 0.0208,
+        "deployment_config": 0.0246,
+        "ci_environment": 0.1614,
+        "app_startup": 0.0705,
+        "app_or_e2e": 0.0869,
+        "unknown": 0.365
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 853,
+      "choice": "unknown",
+      "score": 0.3714,
+      "probabilities": {
+        "aap_policy": 0.0495,
+        "build_dependency": 0.0721,
+        "build_compile": 0.1513,
+        "source_checkout": 0.0209,
+        "deployment_config": 0.0247,
+        "ci_environment": 0.1584,
+        "app_startup": 0.0686,
+        "app_or_e2e": 0.0832,
+        "unknown": 0.3714
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 1249,
+      "choice": "unknown",
+      "score": 0.3694,
+      "probabilities": {
+        "aap_policy": 0.0514,
+        "build_dependency": 0.0746,
+        "build_compile": 0.1517,
+        "source_checkout": 0.0218,
+        "deployment_config": 0.0244,
+        "ci_environment": 0.1571,
+        "app_startup": 0.0696,
+        "app_or_e2e": 0.0799,
+        "unknown": 0.3694
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 1229,
+      "choice": "unknown",
+      "score": 0.4199,
+      "probabilities": {
+        "aap_policy": 0.0446,
+        "build_dependency": 0.0736,
+        "build_compile": 0.1342,
+        "source_checkout": 0.0197,
+        "deployment_config": 0.0212,
+        "ci_environment": 0.16,
+        "app_startup": 0.0515,
+        "app_or_e2e": 0.0753,
+        "unknown": 0.4199
+      },
+      "tokens": 236,
+      "method": "laya"
+    },
+    {
+      "pr": 1064,
+      "choice": "unknown",
+      "score": 0.3656,
+      "probabilities": {
+        "aap_policy": 0.0499,
+        "build_dependency": 0.073,
+        "build_compile": 0.1557,
+        "source_checkout": 0.0211,
+        "deployment_config": 0.0251,
+        "ci_environment": 0.1626,
+        "app_startup": 0.067,
+        "app_or_e2e": 0.0799,
+        "unknown": 0.3656
+      },
+      "tokens": 249,
+      "method": "laya"
+    },
+    {
+      "pr": 1269,
+      "choice": "unknown",
+      "score": 0.2662,
+      "probabilities": {
+        "aap_policy": 0.0337,
+        "build_dependency": 0.2052,
+        "build_compile": 0.2261,
+        "source_checkout": 0.011,
+        "deployment_config": 0.0259,
+        "ci_environment": 0.0656,
+        "app_startup": 0.1022,
+        "app_or_e2e": 0.0641,
+        "unknown": 0.2662
+      },
+      "tokens": 237,
+      "method": "laya"
+    },
+    {
+      "pr": 865,
+      "choice": "build_compile",
+      "score": 0.5752,
+      "probabilities": {
+        "aap_policy": 0.0149,
+        "build_dependency": 0.0393,
+        "build_compile": 0.5752,
+        "source_checkout": 0.0051,
+        "deployment_config": 0.0144,
+        "ci_environment": 0.0385,
+        "app_startup": 0.1158,
+        "app_or_e2e": 0.0374,
+        "unknown": 0.1594
+      },
+      "tokens": 238,
+      "method": "laya"
+    },
+    {
+      "pr": 943,
+      "choice": "build_dependency",
+      "score": 0.762,
+      "probabilities": {
+        "aap_policy": 0.0082,
+        "build_dependency": 0.762,
+        "build_compile": 0.0379,
+        "source_checkout": 0.004,
+        "deployment_config": 0.0078,
+        "ci_environment": 0.017,
+        "app_startup": 0.039,
+        "app_or_e2e": 0.0239,
+        "unknown": 0.1002
+      },
+      "tokens": 238,
+      "method": "laya"
+    },
+    {
+      "pr": 1018,
+      "choice": "build_dependency",
+      "score": 0.8081,
+      "probabilities": {
+        "aap_policy": 0.0069,
+        "build_dependency": 0.8081,
+        "build_compile": 0.0322,
+        "source_checkout": 0.0032,
+        "deployment_config": 0.0062,
+        "ci_environment": 0.0136,
+        "app_startup": 0.0284,
+        "app_or_e2e": 0.0204,
+        "unknown": 0.081
+      },
+      "tokens": 237,
+      "method": "laya"
+    },
+    {
+      "pr": 1126,
+      "choice": "unknown",
+      "score": 0.3472,
+      "probabilities": {
+        "aap_policy": 0.0301,
+        "build_dependency": 0.2045,
+        "build_compile": 0.1345,
+        "source_checkout": 0.0205,
+        "deployment_config": 0.0316,
+        "ci_environment": 0.057,
+        "app_startup": 0.1045,
+        "app_or_e2e": 0.0702,
+        "unknown": 0.3472
+      },
+      "tokens": 238,
+      "method": "laya"
+    },
+    {
+      "pr": 1093,
+      "choice": "unknown",
+      "score": 0.2961,
+      "probabilities": {
+        "aap_policy": 0.0416,
+        "build_dependency": 0.1583,
+        "build_compile": 0.155,
+        "source_checkout": 0.013,
+        "deployment_config": 0.039,
+        "ci_environment": 0.0811,
+        "app_startup": 0.1309,
+        "app_or_e2e": 0.0851,
+        "unknown": 0.2961
+      },
+      "tokens": 237,
+      "method": "laya"
+    },
+    {
+      "pr": 1102,
+      "choice": "unknown",
+      "score": 0.3088,
+      "probabilities": {
+        "aap_policy": 0.049,
+        "build_dependency": 0.135,
+        "build_compile": 0.0962,
+        "source_checkout": 0.0627,
+        "deployment_config": 0.0625,
+        "ci_environment": 0.0706,
+        "app_startup": 0.1348,
+        "app_or_e2e": 0.0805,
+        "unknown": 0.3088
+      },
+      "tokens": 237,
+      "method": "laya"
+    },
+    {
+      "pr": 836,
+      "choice": "unknown",
+      "score": 0.286,
+      "probabilities": {
+        "aap_policy": 0.0428,
+        "build_dependency": 0.1581,
+        "build_compile": 0.1512,
+        "source_checkout": 0.0129,
+        "deployment_config": 0.0409,
+        "ci_environment": 0.0811,
+        "app_startup": 0.13,
+        "app_or_e2e": 0.0971,
+        "unknown": 0.286
+      },
+      "tokens": 237,
+      "method": "laya"
+    },
+    {
+      "pr": 1166,
+      "choice": "unknown",
+      "score": 0.2437,
+      "probabilities": {
+        "aap_policy": 0.0578,
+        "build_dependency": 0.0985,
+        "build_compile": 0.0847,
+        "source_checkout": 0.029,
+        "deployment_config": 0.2086,
+        "ci_environment": 0.0667,
+        "app_startup": 0.1731,
+        "app_or_e2e": 0.0379,
+        "unknown": 0.2437
+      },
+      "tokens": 295,
+      "method": "laya"
+    },
+    {
+      "pr": 1240,
+      "choice": "deployment_config",
+      "score": 0.3254,
+      "probabilities": {
+        "aap_policy": 0.0834,
+        "build_dependency": 0.0891,
+        "build_compile": 0.0527,
+        "source_checkout": 0.0265,
+        "deployment_config": 0.3254,
+        "ci_environment": 0.065,
+        "app_startup": 0.0887,
+        "app_or_e2e": 0.0338,
+        "unknown": 0.2355
+      },
+      "tokens": 288,
+      "method": "laya"
+    },
+    {
+      "pr": 1233,
+      "choice": "unknown",
+      "score": 0.3729,
+      "probabilities": {
+        "aap_policy": 0.0699,
+        "build_dependency": 0.0728,
+        "build_compile": 0.0694,
+        "source_checkout": 0.0257,
+        "deployment_config": 0.0726,
+        "ci_environment": 0.0844,
+        "app_startup": 0.1877,
+        "app_or_e2e": 0.0446,
+        "unknown": 0.3729
+      },
+      "tokens": 235,
+      "method": "laya"
+    }
+  ],
+  "batches": [
+    {
+      "stage": "global",
+      "prs": [
+        1279,
+        1261,
+        1253,
+        1217,
+        1211
+      ],
+      "seconds": 2.787
+    },
+    {
+      "stage": "global",
+      "prs": [
+        889,
+        1247,
+        853,
+        1249,
+        1229
+      ],
+      "seconds": 3.029
+    },
+    {
+      "stage": "global",
+      "prs": [
+        1064,
+        1269,
+        865,
+        943,
+        1018
+      ],
+      "seconds": 2.703
+    },
+    {
+      "stage": "global",
+      "prs": [
+        1126,
+        1093,
+        1102,
+        836,
+        1166
+      ],
+      "seconds": 2.751
+    },
+    {
+      "stage": "global",
+      "prs": [
+        1240,
+        1233
+      ],
+      "seconds": 1.071
+    }
+  ],
+  "split": "holdout"
+}
