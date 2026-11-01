@@ -104,6 +104,8 @@ starts from that deploy. Every panel and the daily digest filter on
 | `workflow-exporter` | central only | 127.0.0.1:9103 | Workflow queue depth, run history/duration, failed-step counts (via GitHub API); SQLite-backed, 60-day retention |
 | `service-health-textfile.timer` | every machine | n/a | Writes `osac_service_active` textfile-collector metrics every 30s |
 | `monitoring-tunnel@<host>--<port>.service` | central only, one per agent | n/a | Persistent SSH tunnel forwarding an agent's `node_exporter:9100` and `haproxy_exporter:9104` to local ports `<port>`/`<port>+1` on the central machine |
+| `ci-observe-tempo210` | central only | 127.0.0.1:3210 (API), 14418 (OTLP) | Tempo 2.10 traces backend for ci-observe, separate from the LGTM bundle (Tempo 3.1.1's TraceQL search bug grafana/tempo#8054 drops ~1/3 of matching spans). The LGTM bundle's Tempo stays up on 3200 as the read-only archive datasource `ci-observe-traces-archive`. See [The ci-observe live OTLP ingest](#the-ci-observe-live-otlp-ingest-caddy-vhost--haproxy-route). |
+| `otelcol-router.service` | central only (host service, root) | 127.0.0.1:14318 (OTLP), 127.0.0.1:18888 (self-metrics) | Splits the runner fleet's OTLP pushes by signal: traces → `ci-observe-tempo210` on 14418, logs + metrics → the ci-observe LGTM bundle's OTLP receiver on 4318. A host process on purpose (rootless podman/pasta cross-container networking silently ate OTLP in earlier container-based router attempts); deployed as root by `scripts/deploy-otelcol-router.sh`, not by `monitoring-setup.sh`. Scraped by central Prometheus for exporter errors and accepted/sent counters. |
 
 `runner-exporter.container` exists in `quadlet/` but is **not currently
 deployed** — no published container image is available yet for it, so
@@ -277,14 +279,14 @@ them.
 ### The ci-observe live OTLP ingest (Caddy vhost + HAProxy route)
 
 The E2E runner fleet pushes ci-observe telemetry live (during the run, not
-as an artifact) to `https://osac-ci-1.redhat.com:4319`. Two pieces carry it,
-and only the first is deployed by this repository:
+as an artifact) to `https://osac-ci-1.redhat.com:4319`. Three pieces carry
+it; the first two are deployed from this repository:
 
 1. **The Caddy vhost** (`config/caddy/Caddyfile`, deployed by
    `monitoring-setup.sh` like every other config file): terminates TLS with
    Caddy's internal CA, enforces HTTP basic auth (user `ci-observe`), and
-   reverse-proxies to the ci-observe LGTM stack's OTLP receiver on
-   `127.0.0.1:4318`. The repo file carries a `CI_OBSERVE_OTLP_HASH`
+   reverse-proxies to the host otelcol-router service on
+   `127.0.0.1:14318`. The repo file carries a `CI_OBSERVE_OTLP_HASH`
    placeholder where the live file has the real bcrypt hash — a credential
    is never committed. `monitoring-setup.sh`'s `deploy_caddyfile` renders the
    placeholder at deploy time, taking the hash (in priority order) from:
@@ -326,7 +328,40 @@ and only the first is deployed by this repository:
    verifies delivery after the test and fails the job on a dead endpoint;
    see `.github/actions/ci-observe-capture/action.yml`.
 
-2. **The HAProxy SNI route** (system config, NOT deployed by this repo):
+2. **The host otelcol-router service** (`config/ci-observe/otelcol-router/`
+   + `scripts/deploy-otelcol-router.sh`): an `otelcol-contrib` binary
+   running as a plain systemd system service (not a container), listening
+   on `127.0.0.1:14318` and splitting OTLP by signal — traces to the Tempo
+   2.10 container on `127.0.0.1:14418`, logs and metrics to the LGTM
+   bundle's OTLP receiver on `127.0.0.1:4318`. It runs on the host on
+   purpose: every hop in the routing path is loopback TCP, and rootless
+   podman's (pasta) cross-container networking silently ate OTLP in the
+   earlier container-based router attempts. Because it is a system unit
+   under `/etc/systemd/system/`, the `github-runner` user that runs
+   `monitoring-setup.sh` cannot deploy it; run
+   `sudo monitoring/scripts/deploy-otelcol-router.sh` on the central
+   machine instead (it extracts the pinned otelcol-contrib 0.164.0 binary
+   from the collector image, creates the `otelcol-router` system user, and
+   installs the config and unit from this repo). Its self-metrics on
+   `127.0.0.1:18888` are scraped by central Prometheus (`job_name:
+   otelcol-router` in `config/prometheus.yml`), so a silently dropped
+   signal shows up as accepted-but-never-sent counters.
+
+   The traces backend is **Tempo 2.10** (`quadlet/ci-observe-tempo210.container`,
+   deployed by `monitoring-setup.sh` like the other central quadlets, config
+   from `config/ci-observe/tempo210/tempo.yaml`), a separate container from
+   the LGTM bundle: Tempo 3.1.1 inside the bundle has a TraceQL search bug
+   (grafana/tempo#8054) that returns only about two thirds of the matching
+   spans, which made the CI Observe dashboard undercount. The bundle's
+   Tempo 3.1.1 keeps running on port 3200 as the read-only
+   `ci-observe-traces-archive` datasource for traces ingested before the
+   2026-11-01 cutover; all new traces go to Tempo 2.10 on port 3210
+   (`ci-observe-traces`). This split is also why the central Grafana must
+   stay on **v13 or newer**: v12's Tempo datasource plugin does not support
+   backend TraceQL search against Tempo 2.10, which every panel of the CI
+   Observe dashboard depends on.
+
+3. **The HAProxy SNI route** (system config, NOT deployed by this repo):
    the runners cannot reach the machine's `:4319` directly, so the SNI route
    in `/etc/haproxy/haproxy.cfg` on osac-ci-1 (managed by hand, like the
    rest of that file) forwards `osac-ci-1.redhat.com` traffic on `:443`

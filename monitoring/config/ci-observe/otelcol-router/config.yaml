@@ -1,0 +1,81 @@
+# ci-observe OTLP signal router -- host systemd service (otelcol-router.service)
+#
+# Splits the runner fleet's OTLP pushes by signal:
+#   traces           -> Tempo 2.10   (ci-observe-tempo210 container, host port 14418)
+#   logs + metrics   -> LGTM bundle  (ci-observe-lgtm container, OTLP receiver on host port 4318)
+#
+# Ingress: Caddy terminates TLS + basic auth on https://osac-ci-1.redhat.com:4319
+# (fed by the HAProxy SNI route on :443) and reverse-proxies to this collector
+# at 127.0.0.1:14318. The collector is a host process, so the whole routing
+# path is plain loopback TCP -- no rootless podman networking between
+# containers, which is what broke the earlier container-based router attempts.
+#
+# Debugging:
+#   journalctl -u otelcol-router -f          (export errors are logged, never silent)
+#   curl -s 127.0.0.1:18888/metrics          (otelcol_* counters; scraped by central Prometheus)
+#   curl -s 127.0.0.1:14333/healthcheck      (ready check)
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:14318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+  batch:
+    timeout: 5s
+
+exporters:
+  otlphttp/tempo210:
+    endpoint: http://127.0.0.1:14418
+    sending_queue:
+      enabled: true
+      queue_size: 500
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 600s
+  otlphttp/lgtm:
+    endpoint: http://127.0.0.1:4318
+    sending_queue:
+      enabled: true
+      queue_size: 500
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 600s
+
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:14333
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: 18888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/tempo210]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/lgtm]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/lgtm]

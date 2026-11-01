@@ -52,6 +52,11 @@ BACKEND_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci-observe-backen
 CADDYFILE_PATH = REPO_ROOT / "monitoring" / "config" / "caddy" / "Caddyfile"
 MONITORING_SETUP_PATH = REPO_ROOT / "monitoring" / "scripts" / "monitoring-setup.sh"
 DATASOURCES_PATH = REPO_ROOT / "monitoring" / "config" / "grafana" / "datasources.yml"
+ROUTER_CONFIG_PATH = REPO_ROOT / "monitoring" / "config" / "ci-observe" / "otelcol-router" / "config.yaml"
+ROUTER_SERVICE_PATH = REPO_ROOT / "monitoring" / "config" / "ci-observe" / "otelcol-router" / "otelcol-router.service"
+ROUTER_DEPLOY_SCRIPT_PATH = REPO_ROOT / "monitoring" / "scripts" / "deploy-otelcol-router.sh"
+TEMPO210_QUADLET_PATH = REPO_ROOT / "monitoring" / "quadlet" / "ci-observe-tempo210.container"
+TEMPO210_CONFIG_PATH = REPO_ROOT / "monitoring" / "config" / "ci-observe" / "tempo210" / "tempo.yaml"
 SCRIPT = REPO_ROOT / "monitoring" / "scripts" / "ci-observe.py"
 _spec = importlib.util.spec_from_file_location("ci_observe_workflow_mod", SCRIPT)
 ci_observe = importlib.util.module_from_spec(_spec)
@@ -686,14 +691,21 @@ class TestSyncWorkflow:
         rendered = ci_observe.render_quadlet(Path("/home/github-runner/monitoring/ci-observe"))
         datasources = yaml.safe_load((REPO_ROOT / "monitoring" / "config" / "grafana" / "datasources.yml").read_text())
         by_uid = {ds["uid"]: ds for ds in datasources["datasources"]}
-        for uid, attr in (
-            ("ci-observe-traces", "tempo"),
-            ("ci-observe-logs", "loki"),
-            ("ci-observe-metrics", "metrics"),
-        ):
+        for uid, attr in (("ci-observe-logs", "loki"), ("ci-observe-metrics", "metrics")):
             port = ci_observe.QUADLET_PORTS[attr]
             assert by_uid[uid]["url"] == f"http://127.0.0.1:{port}", uid
             assert f"PublishPort=127.0.0.1:{port}:" in rendered, uid
+        # Since the 2026-11-01 cutover, new traces go to the separate Tempo
+        # 2.10 container, not the LGTM bundle: the traces datasource points
+        # at its 3210 API port, published by the tempo210 quadlet, and the
+        # LGTM bundle's Tempo port 3200 serves the read-only archive
+        # datasource for traces ingested before the cutover.
+        assert by_uid["ci-observe-traces"]["url"] == "http://127.0.0.1:3210"
+        assert by_uid["ci-observe-traces-archive"]["url"] == f"http://127.0.0.1:{ci_observe.QUADLET_PORTS['tempo']}"
+        assert f"PublishPort=127.0.0.1:{ci_observe.QUADLET_PORTS['tempo']}:" in rendered
+        tempo210_quadlet = (REPO_ROOT / "monitoring" / "quadlet" / "ci-observe-tempo210.container").read_text()
+        assert "PublishPort=127.0.0.1:3210:3210" in tempo210_quadlet
+        assert "PublishPort=14418:4418" in tempo210_quadlet
         # The stack record's ports are the quadlet's, so the import path and
         # the Grafana URL never drift apart.
         assert ci_observe.QUADLET_PORTS["otlp"] == 4318
@@ -778,7 +790,9 @@ class TestIngestVhost:
         text = CADDYFILE_PATH.read_text()
         assert "https://osac-ci-1.redhat.com:4319 {" in text
         assert "tls internal" in text
-        assert "reverse_proxy 127.0.0.1:4318" in text
+        # The vhost proxies to the host otelcol-router service, not directly
+        # to a backend container (see TestOtelcolRouter below).
+        assert "reverse_proxy 127.0.0.1:14318" in text
         # The basic_auth user line carries the render-time placeholder, and
         # it is the only occurrence of the token in the file.
         assert "\t\tci-observe CI_OBSERVE_OTLP_HASH\n" in text
@@ -813,13 +827,99 @@ class TestIngestVhost:
         assert "NOT deployed by this repo" in readme
 
 
-class TestCiObserveDatasources:
-    """The Grafana datasources point at the ports the sync workflow publishes."""
+class TestOtelcolRouter:
+    """The host OTLP signal router behind the :4319 vhost, and the Tempo
+    2.10 traces backend it feeds (both added live on 2026-11-01 and
+    committed here so a deploy-monitoring run cannot revert them). The
+    router is a root-managed system service, like the HAProxy route; the
+    Tempo 2.10 container is a user quadlet, like the rest of the central
+    stack."""
 
-    def test_the_three_datasources_match_the_quadlet_ports(self, datasources: dict) -> None:
+    def test_router_config_splits_the_signals_on_loopback(self) -> None:
+        config = yaml.safe_load(ROUTER_CONFIG_PATH.read_text())
+        receiver = config["receivers"]["otlp"]["protocols"]["http"]["endpoint"]
+        assert receiver == "127.0.0.1:14318", "Caddy proxies the :4319 vhost here"
+        exporters = config["exporters"]
+        # Traces -> Tempo 2.10 (14418); logs + metrics -> the LGTM bundle (4318).
+        assert exporters["otlphttp/tempo210"]["endpoint"] == "http://127.0.0.1:14418"
+        assert exporters["otlphttp/lgtm"]["endpoint"] == "http://127.0.0.1:4318"
+        pipelines = config["service"]["pipelines"]
+        assert pipelines["traces"]["exporters"] == ["otlphttp/tempo210"]
+        assert pipelines["logs"]["exporters"] == ["otlphttp/lgtm"]
+        assert pipelines["metrics"]["exporters"] == ["otlphttp/lgtm"]
+        # Retries must be on: a central deploy must not drop in-flight
+        # batches (the same contract as the gateway's live exporter).
+        for exporter in exporters.values():
+            assert exporter["retry_on_failure"]["enabled"] is True
+
+    def test_router_self_metrics_are_scraped_by_central_prometheus(self) -> None:
+        config = yaml.safe_load(ROUTER_CONFIG_PATH.read_text())
+        readers = config["service"]["telemetry"]["metrics"]["readers"]
+        prometheus = readers[0]["pull"]["exporter"]["prometheus"]
+        assert prometheus["host"] == "127.0.0.1"
+        assert prometheus["port"] == 18888
+        prometheus_config = yaml.safe_load((REPO_ROOT / "monitoring" / "config" / "prometheus.yml").read_text())
+        jobs = {job["job_name"]: job for job in prometheus_config["scrape_configs"]}
+        targets = jobs["otelcol-router"]["static_configs"][0]["targets"]
+        assert targets == ["127.0.0.1:18888"]
+
+    def test_router_service_is_a_hardened_system_unit(self) -> None:
+        text = ROUTER_SERVICE_PATH.read_text()
+        assert "ExecStart=/usr/local/bin/otelcol-contrib --config=/etc/otelcol-router/config.yaml" in text
+        assert "User=otelcol-router" in text
+        # The router needs no privileges; the hardening lines must stay.
+        for hardening in ("NoNewPrivileges=true", "ProtectSystem=strict", "ProtectHome=true"):
+            assert hardening in text, hardening
+
+    def test_router_deploy_script_extracts_the_pinned_binary(self) -> None:
+        """deploy-otelcol-router.sh installs the binary, config and unit
+        from this repo as root -- the router's only deploy path."""
+        script = ROUTER_DEPLOY_SCRIPT_PATH.read_text()
+        # The same digest ci-observe.py pins (COLLECTOR_IMAGE).
+        assert "340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b" in script
+        assert "podman cp" in script
+        assert "/usr/local/bin/otelcol-contrib" in script
+        assert "useradd --system" in script
+
+    def test_tempo210_quadlet_publishes_the_router_and_grafana_ports(self) -> None:
+        text = TEMPO210_QUADLET_PATH.read_text()
+        assert "Image=docker.io/grafana/tempo:2.10.10" in text
+        # 3210 is the API port the ci-observe-traces datasource points at;
+        # 14418 is the OTLP receiver the router exports to.
+        assert "PublishPort=127.0.0.1:3210:3210" in text
+        assert "PublishPort=14418:4418" in text
+        assert "Volume=ci-observe-tempo210-data:/data" in text
+        # The config is the repo's, deployed into the ci-observe state dir.
+        assert "Volume=%h/monitoring/ci-observe/config/tempo210/tempo.yaml:/etc/tempo.yaml:ro,Z" in text
+
+    def test_monitoring_setup_deploys_the_tempo210_unit_and_config(self) -> None:
+        """The tempo210 quadlet rides the normal central deploy paths
+        (--central and --update-central); without this, a deploy-monitoring
+        run leaves the live quadlet stale and a fresh machine without it."""
+        script = MONITORING_SETUP_PATH.read_text()
+        assert "ci-observe-tempo210.container" in script
+        assert "ci-observe-tempo210.service" in script
+        assert "deploy_tempo210_config()" in script
+        # Both deploy modes install the unit and the config.
+        assert script.count("deploy_tempo210_config") >= 3, "definition plus both deploy sites"
+        # The config the quadlet mounts is the repo's file.
+        assert "config/ci-observe/tempo210/tempo.yaml" in script
+
+    def test_tempo210_config_serves_search_and_keeps_30_days(self) -> None:
+        config = yaml.safe_load(TEMPO210_CONFIG_PATH.read_text())
+        assert config["server"]["http_listen_port"] == 3210
+        assert config["storage"]["trace"]["backend"] == "local"
+        # 720h retention: matches the 30-day window the CI Observe
+        # dashboard's default time range assumes.
+        assert config["compactor"]["compaction"]["block_retention"] == "720h"
+
+
+class TestCiObserveDatasources:
+    """The Grafana datasources point at the ports the backend publishes."""
+
+    def test_the_datasources_match_the_backend_ports(self, datasources: dict) -> None:
         entries = {ds["uid"]: ds for ds in datasources["datasources"]}
         for uid, ds_type, attr in (
-            ("ci-observe-traces", "tempo", "tempo"),
             ("ci-observe-logs", "loki", "loki"),
             ("ci-observe-metrics", "prometheus", "metrics"),
         ):
@@ -827,6 +927,16 @@ class TestCiObserveDatasources:
             assert entry["type"] == ds_type
             assert entry["url"] == f"http://127.0.0.1:{ci_observe.QUADLET_PORTS[attr]}"
             assert entry["editable"] is False
+        # Traces are split since the 2026-11-01 cutover: Tempo 2.10 (API
+        # 3210, its own container) serves new traces; the LGTM bundle's
+        # Tempo 3.1.1 keeps port 3200 as the read-only archive for traces
+        # ingested before the cutover.
+        assert entries["ci-observe-traces"]["type"] == "tempo"
+        assert entries["ci-observe-traces"]["url"] == "http://127.0.0.1:3210"
+        assert entries["ci-observe-traces"]["editable"] is False
+        assert entries["ci-observe-traces-archive"]["type"] == "tempo"
+        assert entries["ci-observe-traces-archive"]["url"] == f"http://127.0.0.1:{ci_observe.QUADLET_PORTS['tempo']}"
+        assert entries["ci-observe-traces-archive"]["editable"] is False
         assert entries["ci-observe-metrics"]["jsonData"]["timeInterval"] == "60s"
 
     def test_existing_datasources_are_unchanged(self, datasources: dict) -> None:

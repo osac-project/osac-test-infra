@@ -31,8 +31,22 @@ datasources:
   # kept in sync by the scheduled .github/workflows/ci-observe-sync.yml on
   # this machine. This Grafana runs with host networking, so it reaches the
   # backend's loopback-published ports directly.
+  #
+  # Live traces: Tempo 2.10 (ci-observe-tempo210). The otelcol-router host
+  # service has routed all new traces here since 2026-11-01 -- Tempo 3.1.1 in
+  # the LGTM bundle has a search bug (grafana/tempo#8054) that returns only
+  # ~2/3 of matching spans.
   - name: CI Observe Traces
     uid: ci-observe-traces
+    type: tempo
+    access: proxy
+    url: http://127.0.0.1:3210
+    editable: false
+
+  # Read-only archive: traces ingested into the LGTM bundle's Tempo 3.1.1
+  # before the 2026-11-01 cutover to Tempo 2.10. No new data lands here.
+  - name: CI Observe Traces Archive
+    uid: ci-observe-traces-archive
     type: tempo
     access: proxy
     url: http://127.0.0.1:3200

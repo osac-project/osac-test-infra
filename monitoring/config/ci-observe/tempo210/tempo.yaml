@@ -1,0 +1,31 @@
+server:
+  http_listen_port: 3210
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4418
+        grpc:
+          endpoint: 0.0.0.0:4417
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /data/wal
+    local:
+      path: /data/blocks
+    block:
+      version: vParquet4
+    blocklist_poll: 30s
+overrides:
+  defaults:
+    ingestion:
+      max_traces_per_user: 0
+      rate_limit_bytes: 300000000
+      burst_size_bytes: 300000000
+    global:
+      max_bytes_per_trace: 100000000
+compactor:
+  compaction:
+    block_retention: 720h

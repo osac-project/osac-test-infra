@@ -44,10 +44,25 @@ http://127.0.0.1:2021 {
 
 # ci-observe live OTLP ingest for the CI runner fleet (2026-11-01).
 # Runners push telemetry live during E2E runs; basic auth keeps anything but
-# the fleet from pushing, and the backend behind it is the ci-observe LGTM
-# stack's OTLP receiver. The credential lives in the CI_OBSERVE_OTLP_PASSWORD
+# the fleet from pushing. The credential lives in the CI_OBSERVE_OTLP_PASSWORD
 # secret of the osac and osac-test-infra repositories. The HAProxy SNI route
 # for osac-ci-1.redhat.com on :443 forwards here (see monitoring/README.md).
+#
+# Backend (2026-11-01): the host otelcol-router service
+# (otelcol-router.service, /etc/otelcol-router/config.yaml) listens on
+# 127.0.0.1:14318 and splits OTLP by signal -- traces to the Tempo 2.10
+# container (127.0.0.1:14418), logs + metrics to the LGTM bundle's OTLP
+# receiver (127.0.0.1:4318). It runs on the host on purpose: rootless podman
+# (pasta) cross-container networking silently ate OTLP in earlier router
+# attempts, so the whole routing path stays on loopback TCP.
+#
+# Applying edits: this file is bind-mounted into the caddy container as a
+# single file, so inode-replacing edits (sed -i, mv) are INVISIBLE to the
+# running container -- edit in place (cat new > Caddyfile) so the mount
+# keeps pointing at the edited inode, then
+#   sudo -u github-runner XDG_RUNTIME_DIR=/run/user/1000 podman exec caddy \
+#     caddy reload --config /etc/caddy/Caddyfile
+# (or just restart the caddy service).
 #
 # The hash on the basic_auth line below is a PLACEHOLDER, never a real
 # credential: monitoring-setup.sh renders it at deploy time -- from an
@@ -63,5 +78,5 @@ https://osac-ci-1.redhat.com:4319 {
 	basic_auth {
 		ci-observe CI_OBSERVE_OTLP_HASH
 	}
-	reverse_proxy 127.0.0.1:4318
+	reverse_proxy 127.0.0.1:14318
 }

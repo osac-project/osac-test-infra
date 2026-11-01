@@ -37,7 +37,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["count"], "fields": "duration", "values": false },
+        "reduceOptions": { "calcs": ["count"], "fields": "Duration", "values": false },
         "textMode": "auto"
       },
       "targets": [
@@ -75,7 +75,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["count"], "fields": "duration", "values": false },
+        "reduceOptions": { "calcs": ["count"], "fields": "Duration", "values": false },
         "textMode": "auto"
       },
       "targets": [
@@ -176,7 +176,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["max"], "fields": "duration", "values": false },
+        "reduceOptions": { "calcs": ["max"], "fields": "Duration", "values": false },
         "textMode": "auto"
       },
       "targets": [
@@ -420,7 +420,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["count"], "fields": "duration", "values": false },
+        "reduceOptions": { "calcs": ["count"], "fields": "Duration", "values": false },
         "textMode": "auto"
       },
       "targets": [
@@ -458,7 +458,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["count"], "fields": "duration", "values": false },
+        "reduceOptions": { "calcs": ["count"], "fields": "Duration", "values": false },
         "textMode": "auto"
       },
       "targets": [

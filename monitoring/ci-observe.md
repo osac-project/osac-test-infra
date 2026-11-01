@@ -64,8 +64,19 @@ capture identity) live to the central backend while the test runs:
 
 - The runners push to `https://osac-ci-1.redhat.com` (port 443): an HAProxy
   SNI route for that hostname forwards to Caddy, which terminates TLS with
-  its internal CA and enforces HTTP basic auth, and proxies the backend's
-  OTLP receiver on loopback. Collectors set `insecure_skip_verify` for the
+  its internal CA and enforces HTTP basic auth, and proxies the host
+  otelcol-router service on `127.0.0.1:14318`. The router
+  (`otelcol-router.service`, a plain systemd system service running
+  `otelcol-contrib` — not a container) splits the pushes by signal: traces
+  to the Tempo 2.10 backend on `127.0.0.1:14418`, logs and metrics to the
+  LGTM bundle's OTLP receiver on `127.0.0.1:4318`. It runs on the host on
+  purpose: rootless podman (pasta) cross-container networking silently ate
+  OTLP in earlier container-based router attempts, so the whole routing
+  path stays on loopback TCP. Its files live in this repository
+  (`monitoring/config/ci-observe/otelcol-router/`) and are deployed as root
+  by `monitoring/scripts/deploy-otelcol-router.sh`; central Prometheus
+  scrapes its self-metrics on `127.0.0.1:18888` so a dropped signal is
+  visible. Collectors set `insecure_skip_verify` for the
   internal CA certificate; mounting the CA into the gateway pod for real
   verification is a follow-up.
 - The credential (username `ci-observe`) lives in the
@@ -111,6 +122,19 @@ Caddy, 9090 cockpit, 9091 central Prometheus, 9100-9104 exporters). The
 deployed Grafana runs with host networking, so its provisioned `CI Observe
 Traces`, `CI Observe Logs` and `CI Observe Metrics` datasources reach those
 ports directly.
+
+Traces are the exception to that single-backend picture: since the
+2026-11-01 cutover, new traces go to a separate Tempo 2.10 container
+(`monitoring/quadlet/ci-observe-tempo210.container`, API on 3210, OTLP on
+14418, deployed by `monitoring-setup.sh`), because Tempo 3.1.1 in the LGTM
+bundle has a TraceQL search bug (grafana/tempo#8054) that returns only
+about two thirds of the matching spans. The `CI Observe Traces` datasource
+points at Tempo 2.10 (3210); the bundle's Tempo 3.1.1 keeps serving port
+3200 as the read-only `CI Observe Traces Archive` datasource for traces
+ingested before the cutover. The deployed Grafana must stay on v13 or
+newer: v12's Tempo datasource plugin does not support backend TraceQL
+search against Tempo 2.10, which the CI Observe dashboard's panels depend
+on.
 
 Sync failures fail the workflow. A silent broken sync is worse than a red
 schedule. Cached artifact ZIPs and extracted captures older than 14 days are
