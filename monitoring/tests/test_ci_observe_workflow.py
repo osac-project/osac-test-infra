@@ -394,8 +394,13 @@ class TestVerifyStep:
         # Any refused input or failed send is a hard failure.
         assert "otelcol_receiver_refused_${signal}" in script
         assert "otelcol_exporter_send_failed_${signal}" in script
-        # Accepted but never delivered.
-        assert "(( sent < accepted ))" in script
+        # Accepted but never delivered: the deficit (accepted - sent) is
+        # tolerated while small (in-flight batches) or shrinking (queue
+        # draining); a large, non-shrinking deficit is the failure.
+        assert "(( deficit = accepted - sent ))" in script
+        assert "(( tolerance = accepted / 50 + 1000 ))" in script
+        assert "(( deficit > tolerance ))" in script
+        assert "(( deficit_min < deficit_first ))" in script
         # Nothing collected during a non-trivial run.
         assert "(( total_sent == 0 ))" in script
         assert "(( duration > 60 ))" in script
