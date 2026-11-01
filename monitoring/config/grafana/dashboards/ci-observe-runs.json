@@ -24,6 +24,7 @@
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
       "fieldConfig": {
         "defaults": {
+          "unit": "none",
           "noValue": "0",
           "thresholds": {
             "mode": "absolute",
@@ -59,6 +60,7 @@
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
       "fieldConfig": {
         "defaults": {
+          "unit": "none",
           "noValue": "0",
           "thresholds": {
             "mode": "absolute",
@@ -157,7 +159,7 @@
     },
     {
       "title": "Run duration",
-      "description": "Duration of the longest pytest worker 'test run' span; the workers start together, so this is the wall-clock duration of the run.",
+      "description": "Elapsed time from the start of the test session to its end.",
       "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 1 },
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
@@ -183,7 +185,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"run\"}",
+          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && name = \"test run\"}",
           "limit": 100,
           "spss": 100,
           "tableType": "spans"
@@ -407,6 +409,7 @@
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
       "fieldConfig": {
         "defaults": {
+          "unit": "none",
           "noValue": "0",
           "thresholds": {
             "mode": "absolute",
@@ -442,6 +445,7 @@
       "datasource": { "type": "tempo", "uid": "ci-observe-traces" },
       "fieldConfig": {
         "defaults": {
+          "unit": "none",
           "noValue": "0",
           "thresholds": {
             "mode": "absolute",

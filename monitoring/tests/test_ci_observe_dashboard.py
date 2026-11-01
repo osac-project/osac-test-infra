@@ -165,12 +165,13 @@ def test_slowest_tests_is_top_20(dashboard: dict) -> None:
     assert transformations[1] == {"id": "limit", "options": {"limitField": 20}}
 
 
-def test_run_duration_is_longest_worker(dashboard: dict) -> None:
-    """Run duration reduces the pytest 'run' spans with max, the wall-clock run length."""
+def test_run_duration_selects_the_session_span(dashboard: dict) -> None:
+    """Run duration uses the one session span, not xdist worker spans."""
     panels = {p["title"]: p for p in _iter_panels(dashboard["panels"])}
     panel = panels["Run duration"]
     assert panel["options"]["reduceOptions"]["calcs"] == ["max"]
-    assert '.pytest.span_type = "run"' in panel["targets"][0]["query"]
+    assert 'name = "test run"' in panel["targets"][0]["query"]
+    assert panel["description"] == "Elapsed time from the start of the test session to its end."
 
 
 def test_cluster_row_notes_kubelet_availability(dashboard: dict) -> None:

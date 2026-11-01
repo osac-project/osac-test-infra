@@ -12,7 +12,8 @@ against the central backend on `osac-ci-1`:
   logs and kubelet metrics to the central backend while the test runs. Nothing is
   uploaded to GitHub, so the capture step needs no artifact and no gitleaks scan.
 - The dashboard shows real numbers for a finished capture: 17 tests, 24.1 minutes
-  run duration, the slowest-test table with per-test durations.
+  run duration, the slowest-test table with per-test durations. Run duration
+  uses the single `test run` session span, not the separate xdist worker spans.
 - Every E2E wait is a named span (`poll_until` in the osac repo). The 16-minute
   bmaas metering test breaks down into named waits: instance RUNNING 282 s,
   metering heartbeats 60 s, instance deletion 243 s.
