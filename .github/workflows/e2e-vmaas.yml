@@ -257,6 +257,7 @@ jobs:
           sudo python3 /usr/local/bin/cluster-tool cleanup-haproxy 2>/dev/null || true
 
       - name: Boot cluster clone
+        timeout-minutes: 15
         env:
           FLAVOR_NAME: ${{ inputs.flavor-name }}
         run: |
