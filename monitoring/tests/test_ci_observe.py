@@ -782,11 +782,13 @@ def test_sync_accepts_the_ci_capture_artifact_name_and_nested_zip(
     assert (state / "artifacts" / "101" / "1" / "artifact.zip").is_file()
 
 
-def test_capture_with_unreachable_cluster_fails_cleanly(tool: Tool, tmp_path: Path, capsys: Capsys) -> None:
+def test_capture_suspended_fails_cleanly(tool: Tool, tmp_path: Path, capsys: Capsys) -> None:
+    """Local capture is suspended (live push replaced it): a clean refusal,
+    never a traceback."""
     argv = cli(tmp_path / "state", "capture", "--kubeconfig", "/tmp/k", "--namespace", "ns", "--", "true")
     code, err = main_err(tool, argv, capsys)
     assert code == 2
-    assert "cluster access failed" in err
+    assert "suspended" in err
     assert "Traceback" not in err
 
 
