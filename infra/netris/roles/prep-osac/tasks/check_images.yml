@@ -2,6 +2,9 @@
 - name: Require branch-built OSAC images for the networking contract suites
   when:
     - deploy_suite | default('') in netris_k8s_manager_suites
+    # A main-branch deploy uses the images built from main. Only a feature
+    # branch has to carry images built from that branch.
+    - osac_branch | default('main') != 'main'
   ansible.builtin.assert:
     that:
       - item.value | default('') | length > 0
