@@ -344,6 +344,34 @@
     _caas_enabled: "{{ _profile_values.global.services.caas.enabled | default(false) | bool }}"
   no_log: true
 
+# The lab reaches the OCP routes through the socat forwarder on
+# ingress_forward_port, so Keycloak advertises its issuer with that port and
+# every token carries it. Point the issuer values the installer does not
+# override at the forwarded URL; the chart has no value for KC_HOSTNAME or the
+# UI issuer that survives the installer's --set, so the ingress-forward role
+# reconciles those after the install. bundledVault.keycloakIssuerUrl stays
+# portless on purpose: the OpenBao bootstrap Job runs during install-infra and
+# cannot get a pod host alias, while its discovery document already advertises
+# the forwarded issuer.
+- name: Build the forwarded Keycloak base URL
+  ansible.builtin.set_fact:
+    _ingress_forward_keycloak_base: >-
+      https://keycloak-keycloak.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}:{{ ingress_forward_port }}
+
+- name: Point the issuer values at the forwarded ingress
+  ansible.builtin.set_fact:
+    _values_overrides: >-
+      {{ _values_overrides | combine({
+           'service': {
+             'auth': {'issuerUrl': _ingress_forward_keycloak_base ~ '/realms/osac'},
+             'idp': {'url': _ingress_forward_keycloak_base},
+             'vault': {'keycloakIssuerUrl': _ingress_forward_keycloak_base ~ '/realms/osac'}
+           },
+           'ui': {'auth': {'oidcIssuerURL': _ingress_forward_keycloak_base ~ '/realms/osac'}},
+           'bmf': {'secretAPI': {'issuerUrl': _ingress_forward_keycloak_base ~ '/realms/osac'}}
+         }, recursive=true) }}
+  no_log: true
+
 # Keep bmf.metal3.enabled false here: it enables the BMF subchart's own Secret
 # templates. The OSAC chart's testBackend templates provide those configs instead.
 # The inventory namespace must be bmaas_bmh_namespace: setup-bmaas creates the
@@ -482,19 +510,20 @@
 
 # --- Socat forwarder for OCP ingress ---
 
-# Forwards port 9444 to OCP 443
+# Forwards the ingress port to OCP 443
 - name: Create socat env file for OCP ingress
   ansible.builtin.copy:
-    dest: /etc/netris-lab/socat/0.0.0.0-9444.env
+    dest: /etc/netris-lab/socat/0.0.0.0-{{ ingress_forward_port }}.env
+    mode: "0644"
     content: |
       BIND_IP=0.0.0.0
-      PORT=9444
+      PORT={{ ingress_forward_port }}
       TARGET_IP={{ ocp_dnat_ip }}
       TARGET_PORT=443
 
 - name: Enable and start OCP ingress socat forwarder
   ansible.builtin.systemd:
-    name: socat-forwarder@0.0.0.0-9444
+    name: socat-forwarder@0.0.0.0-{{ ingress_forward_port }}
     state: started
     enabled: true
     daemon_reload: true

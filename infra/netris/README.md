@@ -539,7 +539,7 @@ source scripts/env-mylab.sh && make deploy-jump
 | `make redeploy-fresh` | Destroy + wipe progress + full pipeline (`DEPLOY_SUITE`) |
 | `make redeploy-continue` | Resume failed redeploy from last incomplete step |
 | `make disk-setup` | Auto-detect and mount data disk |
-| `make post-install` | Generate the access document |
+| `make post-install` | Publish the forwarded endpoints and generate the access document |
 | `make access-doc` | Generate the access document only |
 | `make health-check` | Quick status verification |
 
@@ -551,23 +551,29 @@ See the PR description for known issues and workarounds specific to BM/RHEL envi
 
 ## Accessing OCP Routes
 
-After `make deploy-osac`, a socat forwarder on port 9444 provides access to OCP routes (AAP UI, OCP console, fulfillment API) from external browsers. Port 443 is intercepted by K3s svclb (Netris controller), so 9444 is used instead.
+After `make deploy-osac`, a socat forwarder on port 9444 provides access to OCP routes (OSAC UI, Keycloak, AAP UI, OCP console, fulfillment API) from external browsers. Port 443 is intercepted by K3s svclb (Netris controller), so 9444 is used instead. Keycloak advertises its issuer with `:9444` too, so the OSAC UI signs users in through the forwarded route.
 
 Add to your local `/etc/hosts`:
 ```
+<server-ip>  osac-ui-osac-devel.apps.ocp-sno.osac.local
+<server-ip>  keycloak-keycloak.apps.ocp-sno.osac.local
 <server-ip>  osac-aap-osac-devel.apps.ocp-sno.osac.local
 <server-ip>  console-openshift-console.apps.ocp-sno.osac.local
 <server-ip>  fulfillment-api-osac-devel.apps.ocp-sno.osac.local
 ```
 
-Then browse to `https://osac-aap-osac-devel.apps.ocp-sno.osac.local:9444` (accept the self-signed cert).
+Then browse to `https://osac-ui-osac-devel.apps.ocp-sno.osac.local:9444` (accept the self-signed cert).
 
 | Service | URL |
 |---------|-----|
+| OSAC UI | `https://osac-ui-osac-devel.apps.ocp-sno.osac.local:9444` |
+| Keycloak | `https://keycloak-keycloak.apps.ocp-sno.osac.local:9444` |
 | AAP UI | `https://osac-aap-osac-devel.apps.ocp-sno.osac.local:9444` |
 | OCP Console | `https://console-openshift-console.apps.ocp-sno.osac.local:9444` |
 | Assisted Installer UI | `http://<server-ip>:8080` |
 | Netris Controller | `http://<server-ip>:9443` |
+
+`make ingress-forward` reconciles the forwarded endpoints on a running cluster. It points Keycloak (`KC_HOSTNAME`) and every issuer consumer at `:9444`, adds a host alias so the UI, fulfillment and operator pods resolve the Keycloak route to the lab host, and allows the forwarded callback on the `osac-ui` Keycloak client. `make deploy-osac` and `make post-install` run it, and it is idempotent.
 
 ## How deploy-ocp Works
 
@@ -585,11 +591,13 @@ The snapshot flavor is pulled and cached during `make setup-infra` (one-time ~60
 
 ## How deploy-osac Works
 
-`make deploy-osac` runs in two phases:
+`make deploy-osac` runs in three phases:
 
-1. **`prep-osac`** (Ansible) — clones the OSAC mono-repo, validates the selected profile and its Netris overlay, resolves the OCP release CLI image, and writes the generated lab-specific values to `values/<profile>/netris-runtime.yaml`. That file includes credentials, is mode `0600`, and is ignored by Git. The `Allow HTTP Netris controller URL` task patches the cloned aap chart (`osac-aap/charts/aap/templates/config-as-code-secret.yaml`) to accept the lab's plain-HTTP controller URL. The role also copies the license and pull secret into the profile directory and sets up a socat forwarder for OCP ingress on port 9444.
+1. **`prep-osac`** (Ansible) — clones the OSAC mono-repo, validates the selected profile and its Netris overlay, resolves the OCP release CLI image, and writes the generated lab-specific values to `values/<profile>/netris-runtime.yaml`. That file includes credentials, is mode `0600`, and is ignored by Git. It points `service.auth.issuerUrl`, `service.idp.url`, `service.vault.keycloakIssuerUrl`, `ui.auth.oidcIssuerURL` and `bmf.secretAPI.issuerUrl` at the forwarded Keycloak URL. The `Allow HTTP Netris controller URL` task patches the cloned aap chart (`osac-aap/charts/aap/templates/config-as-code-secret.yaml`) to accept the lab's plain-HTTP controller URL. The role also copies the license and pull secret into the profile directory and sets up a socat forwarder for OCP ingress on port 9444.
 
 2. **`run-osac-setup`** (shell) — runs `make install-infra` and then `make install-osac` in `osac-installer`. It passes `OSAC_PROFILE` plus the profile's static `netris.yaml` and generated `netris-runtime.yaml` overlays. The infrastructure install deploys the required operators and prerequisites; the OSAC install deploys the application chart and runs its hooks.
+
+3. **`ingress-forward`** (Ansible) — reconciles what the installer's own `--set` flags override: `KC_HOSTNAME` and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` on Keycloak, the `osac-ui` ConfigMap issuer, the operator issuer ConfigMap, the fulfillment auth flags, the Keycloak host alias on the OSAC workloads, and the `osac-ui` client callback. It verifies the advertised issuer, the UI route and the aliases.
 
 ## Configuration
 

@@ -272,6 +272,8 @@ The shell-script targets have additional environment inputs:
 | `OSAC_NAMESPACE` | `osac-devel` | `health-check` | Namespace checked by the health script; this default is independent of the Makefile default. |
 | `KUBECONFIG` | `/root/.kube/config` | `health-check` | Kubeconfig used by the health script. |
 | `OCP_VM_PATTERN` | `hgx-pod00-su0-h00` | `health-check` | VM name pattern checked by the health script. |
+| `INGRESS_FORWARD_PORT` | `9444` | `health-check`, `ingress-forward` | Lab host port that forwards to the OCP ingress; reachable from pods and browsers. |
+| `LAB_HOST_IP` | first address of `hostname -I` | `health-check` | Lab host address the health script uses to reach the forwarded routes. |
 
 ## Target-by-target inputs
 
@@ -286,7 +288,8 @@ The playbook shown is the direct backend Makefile entry point.
 | `deploy-infra` | `playbooks/deploy-infra.yml` | `DEPLOY_SUITE`, `EXTRA_VARS`; `vmaas` and `full` automatically enable the OCP underlay. Uses the infrastructure/network variables below and variables from the Netris lab submodule. |
 | `deploy-ocp` | `playbooks/deploy-ocp.yml` | `DEPLOY_SUITE`, `KUBECONFIG`, `EXTRA_VARS`; `vmaas` and `full` automatically enable the underlay/EVPN setup. Uses OCP, DNS, Netris, and snapshot-restore variables below. |
 | `deploy-osac` | `install-osac`; writes `.env.infra` after a successful install | `DEPLOY_SUITE`, `OSAC_NAMESPACE`, `KUBECONFIG`, `OSAC_VM_KUBECONFIG`, `OSAC_PULL_SECRET_PATH`, `EXTRA_VARS`; installs the profile derived from `DEPLOY_SUITE`. |
-| `install-osac` | Composite: `prep-osac` then `run-osac-setup` | `DEPLOY_SUITE`, `OSAC_NAMESPACE`, `KUBECONFIG`, `EXTRA_VARS`; requires OCP to have been restored by `deploy-ocp`. |
+| `install-osac` | Composite: `prep-osac`, `run-osac-setup`, then `ingress-forward` | `DEPLOY_SUITE`, `OSAC_NAMESPACE`, `KUBECONFIG`, `EXTRA_VARS`; requires OCP to have been restored by `deploy-ocp`. |
+| `ingress-forward` | `playbooks/ingress-forward.yml` | `OSAC_NAMESPACE`, `KUBECONFIG`, `EXTRA_VARS`; points Keycloak and every issuer consumer at the forwarded ingress port, adds the Keycloak host alias to the OSAC workloads, and allows the forwarded callback on the `osac-ui` client. Idempotent; also runs inside `post-install`. |
 | `prep-osac` | `playbooks/prep-osac.yml` | `DEPLOY_SUITE`, `KUBECONFIG`, `EXTRA_VARS`; prepares OSAC and generates `values/<profile>/netris-runtime.yaml`. |
 | `run-osac-setup` | OSAC installer (`install-infra`, then `install-osac`) | `DEPLOY_SUITE`, `OSAC_NAMESPACE`, `KUBECONFIG`; consumes the OCP EVPN values from `deploy-ocp`, the profile's `netris.yaml`, and the runtime values. |
 | `setup-vmaas` | `playbooks/setup-vmaas.yml` | `KUBECONFIG`, `EXTRA_VARS`; uses the EVPN validation and VMaaS return-path variables below. |
@@ -317,7 +320,7 @@ The playbook shown is the direct backend Makefile entry point.
 | `disk-setup` | `playbooks/disk-setup.yml` | `EXTRA_VARS`; use `disk_setup_enabled` with `setup-infra` to make this step automatic. |
 | `cleanup-dns` | `playbooks/cleanup-dns.yml` | `EXTRA_VARS`; uses `lab_name`, DNS zone, OCP identity, and AWS credentials. |
 | `destroy-full` | `playbooks/destroy-full.yml` | `EXTRA_VARS`; uses lab, DNS, and AWS settings. This tears down the complete lab. |
-| `access-doc` / `post-install` | Access-document playbook | `EXTRA_VARS`; uses OCP identity and OSAC namespace. `post-install` generates the access document. Task commands use `kubeconfig_path` (default `/root/.kube/config`). |
+| `access-doc` / `post-install` | Access-document playbook | `EXTRA_VARS`; uses OCP identity and OSAC namespace. `post-install` publishes the forwarded endpoints (see `ingress-forward`) and generates the access document. Task commands use `kubeconfig_path` (default `/root/.kube/config`). |
 | `redeploy-fresh` / `redeploy-continue` | `scripts/redeploy-server.sh` | `DEPLOY_SUITE`, `EXTRA_VARS`; the script supports the `caas`, `maas`, and `bmaas` flows. `redeploy-fresh` destroys the lab and starts over; `redeploy-continue` resumes. |
 | `deploy-jump` | `scripts/deploy-jump.sh` | Requires the settings shown in [`scripts/env.sh.example`](scripts/env.sh.example); see the remote deployment section in the README. |
 | `vendor-update`, `lint`, `health-check` | Local command/script | No Ansible `EXTRA_VARS` inputs. |
@@ -402,6 +405,7 @@ catalog and `all.yml` list different keys.
 | `ocp_vm_mgmt_ip` | empty | `configure-netris`, `ocp_uplink.py` |
 | `ocp_snat_ip` | `198.51.100.1` | `configure-netris`, `prep-osac`, `setup-bmaas` |
 | `ocp_dnat_ip` | `198.51.100.2` | `access-doc`, `cleanup-dns playbook`, `configure-dns`, `configure-netris`, `destroy-full playbook`, `gather-mgmt-cluster`, `prep-osac`, `restore-ocp` |
+| `ingress_forward_port` | `9444` | `access-doc`, `ingress-forward`, `prep-osac` |
 | `ocp_underlay_enabled` | `false` | `Makefile`, `configure-cudn-evpn`, `configure-netris`, `deploy-infra`, `netris-lab`, `setup-vmaas playbook` |
 | `ocp_underlay_server_port` | `eth10` | `configure-netris`, `deploy-infra` |
 | `ocp_underlay_leaf_index` | `1` | `configure-cudn-evpn`, `deploy-infra`, `netris-lab` |

@@ -1,6 +1,7 @@
 ---
-- name: Post-install — generate access doc
+- name: Post-install — publish the forwarded endpoints and generate access doc
   hosts: all
   gather_facts: false
   roles:
+    - ingress-forward
     - access-doc

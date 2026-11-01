@@ -12,6 +12,10 @@ K3S_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 OSAC_NS="${OSAC_NAMESPACE:-osac-devel}"
 KEYCLOAK_NS="keycloak"
 OCP_VM_PATTERN="${OCP_VM_PATTERN:-hgx-pod00-su0-h00}"
+# OCP routes are published on this port by the socat forwarder, because port
+# 443 on the lab host belongs to the Netris K3s load balancer.
+INGRESS_FORWARD_PORT="${INGRESS_FORWARD_PORT:-9444}"
+LAB_HOST_IP="${LAB_HOST_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -168,12 +172,20 @@ section "Service Endpoints"
 
 APPS_DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' 2>/dev/null)
 
+# check_url NAME URL [EXPECTED] [RESOLVE]
+# RESOLVE is curl's host:port:address form, used to reach the forwarded route
+# on the lab host when DNS points the apps domain at the ingress VIP.
 check_url() {
     local name=$1
     local url=$2
     local expected=${3:-200}
+    local resolve=${4:-}
+    local args=(-sk -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10)
+    if [[ -n "$resolve" ]]; then
+        args+=(--resolve "$resolve")
+    fi
     local code
-    code=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || echo "000")
+    code=$(curl "${args[@]}" "$url" 2>/dev/null || echo "000")
     if [[ "$code" == "$expected" ]]; then
         pass "$name (HTTP $code)"
     elif [[ "$code" == "000" ]]; then
@@ -183,10 +195,15 @@ check_url() {
     fi
 }
 
-check_url "OSAC UI" "https://osac-ui-${OSAC_NS}.${APPS_DOMAIN}"
-check_url "Keycloak realm" "https://keycloak-keycloak.${APPS_DOMAIN}/realms/osac"
-check_url "OCP Console" "https://console-openshift-console.${APPS_DOMAIN}"
-check_url "AAP Gateway" "https://osac-aap-${OSAC_NS}.${APPS_DOMAIN}"
+UI_HOST="osac-ui-${OSAC_NS}.${APPS_DOMAIN}"
+KEYCLOAK_HOST="keycloak-keycloak.${APPS_DOMAIN}"
+UI_URL="https://${UI_HOST}:${INGRESS_FORWARD_PORT}"
+KEYCLOAK_URL="https://${KEYCLOAK_HOST}:${INGRESS_FORWARD_PORT}"
+
+check_url "OSAC UI" "$UI_URL" 200 "${UI_HOST}:${INGRESS_FORWARD_PORT}:${LAB_HOST_IP}"
+check_url "Keycloak realm" "${KEYCLOAK_URL}/realms/osac" 200 "${KEYCLOAK_HOST}:${INGRESS_FORWARD_PORT}:${LAB_HOST_IP}"
+check_url "OCP Console" "https://console-openshift-console.${APPS_DOMAIN}:${INGRESS_FORWARD_PORT}" 200 "console-openshift-console.${APPS_DOMAIN}:${INGRESS_FORWARD_PORT}:${LAB_HOST_IP}"
+check_url "AAP Gateway" "https://osac-aap-${OSAC_NS}.${APPS_DOMAIN}:${INGRESS_FORWARD_PORT}" 200 "osac-aap-${OSAC_NS}.${APPS_DOMAIN}:${INGRESS_FORWARD_PORT}:${LAB_HOST_IP}"
 
 HEALTHZ_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 \
     "https://fulfillment-internal-api-${OSAC_NS}.${APPS_DOMAIN}/healthz" 2>/dev/null || echo "000")
@@ -202,9 +219,9 @@ fi
 
 section "Authentication"
 
-KC_URL="https://keycloak-keycloak.${APPS_DOMAIN}"
+KC_RESOLVE="${KEYCLOAK_HOST}:${INGRESS_FORWARD_PORT}:${LAB_HOST_IP}"
 
-TOKEN_RESP=$(curl -sk -X POST "${KC_URL}/realms/osac/protocol/openid-connect/token" \
+TOKEN_RESP=$(curl -sk --resolve "$KC_RESOLVE" -X POST "${KEYCLOAK_URL}/realms/osac/protocol/openid-connect/token" \
     -d "client_id=admin-cli" \
     -d "username=admin" \
     -d "password=admin" \
@@ -225,8 +242,12 @@ section "OSAC CLI"
 if command -v osac &>/dev/null; then
     pass "osac CLI installed ($(osac version 2>/dev/null | head -1 || echo 'unknown version'))"
 
-    if osac login --insecure \
-        --issuer="${KC_URL}/realms/osac" \
+    # The CLI resolves the issuer itself, without curl's --resolve, so the
+    # forwarded route has to be in /etc/hosts on this host.
+    if [[ "$(getent hosts "$KEYCLOAK_HOST" | awk '{print $1}' | head -1)" != "$LAB_HOST_IP" ]]; then
+        warn "osac login skipped: add '$LAB_HOST_IP $KEYCLOAK_HOST' to /etc/hosts for the forwarded issuer"
+    elif osac login --insecure \
+        --issuer="${KEYCLOAK_URL}/realms/osac" \
         --flow=password --user=admin --password=admin \
         "https://fulfillment-api-${OSAC_NS}.${APPS_DOMAIN}" &>/dev/null; then
         pass "osac login (password flow)"

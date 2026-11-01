@@ -1,0 +1,390 @@
+---
+# Publish OSAC through the forwarded OCP ingress port.
+#
+# Port 443 on the lab host belongs to the Netris K3s load balancer, so browsers
+# and pods reach OCP routes through a socat forwarder on ingress_forward_port.
+# Keycloak therefore has to advertise its issuer with that port, and everything
+# that talks to Keycloak has to use the same URL:
+#
+#   * KC_HOSTNAME makes every token carry the forwarded issuer.
+#   * The UI, fulfillment and operator pods must resolve the Keycloak route
+#     hostname to the lab host, where the forwarded port is open.
+#   * The osac-ui client must allow the forwarded callback.
+#
+# The installer hardcodes the portless Keycloak hostname and UI issuer with its
+# own --set flags, and the charts have no hostAliases value, so this role
+# reconciles the running cluster after Helm finishes. It is idempotent and runs
+# on fresh installs, snapshot redeploys and existing labs.
+
+- name: Gather network facts
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+  when: ansible_default_ipv4 is not defined
+
+- name: Require the forwarded ingress address
+  ansible.builtin.assert:
+    that:
+      - ingress_forward_host | length > 0
+    fail_msg: >-
+      Cannot determine the lab host address for the forwarded ingress. Set
+      ingress_forward_host when running this role outside the Netris lab host.
+
+- name: Set the forwarded ingress host names
+  ansible.builtin.set_fact:
+    _ingress_apps_domain: "apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+    _ingress_keycloak_host: "keycloak-keycloak.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+    _ingress_ui_host: "osac-ui-{{ osac_namespace }}.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+
+- name: Set the forwarded ingress URLs
+  ansible.builtin.set_fact:
+    _ingress_keycloak_base: "https://{{ _ingress_keycloak_host }}:{{ ingress_forward_port }}"
+    _ingress_issuer: "https://{{ _ingress_keycloak_host }}:{{ ingress_forward_port }}/realms/osac"
+    _ingress_ui_base: "https://{{ _ingress_ui_host }}:{{ ingress_forward_port }}"
+    _ingress_keycloak_resolve: "{{ _ingress_keycloak_host }}:{{ ingress_forward_port }}:{{ ingress_forward_host }}"
+    _ingress_ui_resolve: "{{ _ingress_ui_host }}:{{ ingress_forward_port }}:{{ ingress_forward_host }}"
+
+- name: Require the forwarded ingress listener
+  ansible.builtin.wait_for:
+    host: "{{ ingress_forward_host }}"
+    port: "{{ ingress_forward_port }}"
+    timeout: 30
+  changed_when: false
+
+- name: Require the OSAC namespace
+  ansible.builtin.command:
+    cmd: oc get namespace {{ osac_namespace }} -o name
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  register: _ingress_namespace
+  changed_when: false
+
+# --- Keycloak issuer ---
+
+- name: Read the Keycloak hostname settings
+  ansible.builtin.command:
+    cmd: >-
+      oc -n keycloak get deployment keycloak-service -o json
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  register: _ingress_keycloak
+  changed_when: false
+
+- name: Parse the Keycloak hostname settings
+  ansible.builtin.set_fact:
+    _ingress_keycloak_hostname: >-
+      {{ (_ingress_keycloak.stdout | from_json).spec.template.spec.containers[0].env
+         | selectattr('name', 'equalto', 'KC_HOSTNAME') | map(attribute='value') | first | default('') }}
+    _ingress_keycloak_dynamic: >-
+      {{ (_ingress_keycloak.stdout | from_json).spec.template.spec.containers[0].env
+         | selectattr('name', 'equalto', 'KC_HOSTNAME_BACKCHANNEL_DYNAMIC') | map(attribute='value') | first | default('') }}
+
+- name: Point Keycloak at the forwarded issuer
+  ansible.builtin.command:
+    cmd: >-
+      oc -n keycloak set env deployment/keycloak-service
+      KC_HOSTNAME={{ _ingress_keycloak_base }}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  when: >-
+    _ingress_keycloak_hostname != _ingress_keycloak_base or
+    _ingress_keycloak_dynamic | lower != 'true'
+  register: _ingress_keycloak_patch
+
+- name: Wait for the Keycloak rollout
+  ansible.builtin.command:
+    cmd: oc -n keycloak rollout status deployment/keycloak-service --timeout=300s
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  when: _ingress_keycloak_patch is changed
+  changed_when: false
+
+- name: Wait for Keycloak discovery through the forwarded ingress
+  ansible.builtin.command:
+    cmd: >-
+      curl -sk --resolve {{ _ingress_keycloak_resolve }}
+      -o /dev/null -w '%{http_code}'
+      {{ _ingress_keycloak_base }}/realms/osac/.well-known/openid-configuration
+  register: _ingress_keycloak_ready
+  until: _ingress_keycloak_ready.stdout == '200'
+  retries: 30
+  delay: 10
+  changed_when: false
+
+# --- Keycloak client ---
+
+- name: Allow the forwarded callback on the osac-ui client
+  ansible.builtin.script:
+    cmd: >-
+      keycloak_ui_client.py
+      --keycloak-host {{ _ingress_keycloak_host }}
+      --keycloak-ip {{ ingress_forward_host }}
+      --keycloak-port {{ ingress_forward_port }}
+      --redirect-uri {{ _ingress_ui_base }}/callback
+      --redirect-glob '{{ _ingress_ui_base }}/*'
+      --origin {{ _ingress_ui_base }}
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  register: _ingress_client
+  changed_when: _ingress_client.stdout | trim == 'changed'
+
+# --- Pod routing ---
+
+- name: Resolve the Keycloak route hostname on OSAC workloads
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      if ! oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+        echo skipped
+        exit 0
+      fi
+      oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" -o json \
+        | python3 -c '
+      import json
+      import sys
+
+      deployment = json.load(sys.stdin)
+      host, address = sys.argv[1], sys.argv[2]
+      spec = deployment["spec"]["template"]["spec"]
+      aliases = spec.get("hostAliases") or []
+      for alias in aliases:
+          if alias.get("ip") == address:
+              hostnames = alias.setdefault("hostnames", [])
+              if host in hostnames:
+                  print("unchanged")
+              else:
+                  hostnames.append(host)
+                  print(json.dumps({"spec": {"template": {"spec": {"hostAliases": aliases}}}}))
+              break
+      else:
+          aliases.append({"ip": address, "hostnames": [host]})
+          print(json.dumps({"spec": {"template": {"spec": {"hostAliases": aliases}}}}))
+      ' "$KC_HOST" "$HOST_IP" > /tmp/ingress-forward-alias.json
+      if [ "$(cat /tmp/ingress-forward-alias.json)" = "unchanged" ]; then
+        echo unchanged
+      else
+        oc -n "$OSAC_NS" patch deployment "$DEPLOYMENT" --type=merge \
+          -p "$(cat /tmp/ingress-forward-alias.json)" >/dev/null
+        echo changed
+      fi
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+    OSAC_NS: "{{ osac_namespace }}"
+    DEPLOYMENT: "{{ item }}"
+    KC_HOST: "{{ _ingress_keycloak_host }}"
+    HOST_IP: "{{ ingress_forward_host }}"
+  loop: "{{ ingress_forward_alias_deployments }}"
+  register: _ingress_alias
+  changed_when: _ingress_alias.stdout | trim == 'changed'
+
+# --- Issuer consumers that read a ConfigMap or a command flag ---
+
+- name: Point the UI at the forwarded issuer
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      if ! oc -n "$OSAC_NS" get configmap osac-ui >/dev/null 2>&1; then
+        echo absent
+        exit 0
+      fi
+      current=$(oc -n "$OSAC_NS" get configmap osac-ui -o jsonpath='{.data.OIDC_ISSUER_URL}')
+      if [ "$current" = "$VALUE" ]; then
+        echo unchanged
+        exit 0
+      fi
+      patch=$(python3 -c 'import json,sys; print(json.dumps({"data": {"OIDC_ISSUER_URL": sys.argv[1]}}))' "$VALUE")
+      oc -n "$OSAC_NS" patch configmap osac-ui --type=merge -p "$patch" >/dev/null
+      echo changed
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+    OSAC_NS: "{{ osac_namespace }}"
+    VALUE: "{{ _ingress_issuer }}"
+  register: _ingress_ui_config
+  changed_when: _ingress_ui_config.stdout | trim == 'changed'
+
+- name: Point the operator at the forwarded issuer
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      configmap=$(oc -n "$OSAC_NS" get deployment osac-operator -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="OSAC_FULFILLMENT_ISSUER_URL")].valueFrom.configMapKeyRef.name}' 2>/dev/null || true)
+      if [ -z "$configmap" ]; then
+        echo absent
+        exit 0
+      fi
+      current=$(oc -n "$OSAC_NS" get configmap "$configmap" -o jsonpath='{.data.OSAC_FULFILLMENT_ISSUER_URL}')
+      if [ "$current" = "$VALUE" ]; then
+        echo unchanged
+        exit 0
+      fi
+      patch=$(python3 -c 'import json,sys; print(json.dumps({"data": {"OSAC_FULFILLMENT_ISSUER_URL": sys.argv[1]}}))' "$VALUE")
+      oc -n "$OSAC_NS" patch configmap "$configmap" --type=merge -p "$patch" >/dev/null
+      echo changed
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+    OSAC_NS: "{{ osac_namespace }}"
+    VALUE: "{{ _ingress_issuer }}"
+  register: _ingress_operator_config
+  changed_when: _ingress_operator_config.stdout | trim == 'changed'
+
+- name: Point the fulfillment auth flags at the forwarded issuer
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      if ! oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+        echo skipped
+        exit 0
+      fi
+      oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" -o json \
+        | python3 -c '
+      import json
+      import sys
+
+      deployment = json.load(sys.stdin)
+      flag, value = sys.argv[1], sys.argv[2]
+      command = deployment["spec"]["template"]["spec"]["containers"][0].get("command") or []
+      prefix = flag + "="
+      current = next((arg for arg in command if arg.startswith(prefix)), None)
+      if current is None:
+          print("absent")
+      elif current == prefix + value:
+          print("unchanged")
+      else:
+          print(json.dumps([{
+              "op": "replace",
+              "path": f"/spec/template/spec/containers/0/command/{command.index(current)}",
+              "value": prefix + value,
+          }]))
+      ' "$FLAG" "$VALUE" > /tmp/ingress-forward-arg.json
+      decision=$(cat /tmp/ingress-forward-arg.json)
+      case "$decision" in
+        absent|unchanged) echo "$decision" ;;
+        *)
+          oc -n "$OSAC_NS" patch deployment "$DEPLOYMENT" --type=json \
+            -p "$decision" >/dev/null
+          echo changed
+          ;;
+      esac
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+    OSAC_NS: "{{ osac_namespace }}"
+    DEPLOYMENT: "{{ item.deployment }}"
+    FLAG: "{{ item.flag }}"
+    VALUE: "{{ item.value }}"
+  loop:
+    - { deployment: fulfillment-grpc-server, flag: --grpc-authn-trusted-token-issuers, value: "{{ _ingress_issuer }}" }
+    - { deployment: fulfillment-grpc-server, flag: --vault-keycloak-issuer-url, value: "{{ _ingress_issuer }}" }
+    - { deployment: fulfillment-controller, flag: --auth-issuer-url, value: "{{ _ingress_issuer }}" }
+    - { deployment: fulfillment-controller, flag: --idp-url, value: "{{ _ingress_keycloak_base }}" }
+    - { deployment: fulfillment-controller, flag: --vault-keycloak-issuer-url, value: "{{ _ingress_issuer }}" }
+  register: _ingress_flags
+  changed_when: _ingress_flags.stdout | trim == 'changed'
+
+# --- Rollouts ---
+
+- name: Restart the UI after the issuer ConfigMap change
+  ansible.builtin.command:
+    cmd: oc -n {{ osac_namespace }} rollout restart deployment/osac-ui
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  when: _ingress_ui_config.stdout | trim == 'changed'
+  changed_when: true
+
+- name: Restart the operator after the issuer ConfigMap change
+  ansible.builtin.command:
+    cmd: oc -n {{ osac_namespace }} rollout restart deployment/osac-operator
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  when: _ingress_operator_config.stdout | trim == 'changed'
+  changed_when: true
+
+- name: Wait for the OSAC workloads to roll out
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      if ! oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+        echo skipped
+        exit 0
+      fi
+      oc -n "$OSAC_NS" rollout status deployment/"$DEPLOYMENT" --timeout=300s
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+    OSAC_NS: "{{ osac_namespace }}"
+    DEPLOYMENT: "{{ item }}"
+  loop: "{{ ingress_forward_alias_deployments }}"
+  changed_when: false
+
+# --- Verification ---
+
+- name: Read the forwarded discovery document
+  ansible.builtin.command:
+    cmd: >-
+      curl -sk --resolve {{ _ingress_keycloak_resolve }}
+      {{ _ingress_keycloak_base }}/realms/osac/.well-known/openid-configuration
+  register: _ingress_discovery
+  changed_when: false
+
+- name: Verify the advertised issuer
+  ansible.builtin.assert:
+    that:
+      - (_ingress_discovery.stdout | from_json).issuer == _ingress_issuer
+    fail_msg: >-
+      Keycloak advertises {{ (_ingress_discovery.stdout | from_json).issuer }},
+      expected {{ _ingress_issuer }}.
+
+- name: Verify the UI through the forwarded ingress
+  ansible.builtin.command:
+    cmd: >-
+      curl -sk --resolve {{ _ingress_ui_resolve }}
+      -o /dev/null -w '%{http_code}' {{ _ingress_ui_base }}
+  register: _ingress_ui
+  until: _ingress_ui.stdout == '200'
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Verify the Keycloak host alias on OSAC workloads
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      if ! oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+        echo skipped
+        exit 0
+      fi
+      oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" -o json | python3 -c '
+      import json
+      import sys
+
+      deployment = json.load(sys.stdin)
+      host, address = sys.argv[1], sys.argv[2]
+      aliases = deployment["spec"]["template"]["spec"].get("hostAliases") or []
+      present = any(
+          alias.get("ip") == address and host in (alias.get("hostnames") or [])
+          for alias in aliases
+      )
+      print("present" if present else "missing")
+      ' "$KC_HOST" "$HOST_IP"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+    OSAC_NS: "{{ osac_namespace }}"
+    DEPLOYMENT: "{{ item }}"
+    KC_HOST: "{{ _ingress_keycloak_host }}"
+    HOST_IP: "{{ ingress_forward_host }}"
+  loop: "{{ ingress_forward_alias_deployments }}"
+  register: _ingress_alias_check
+  changed_when: false
+  failed_when: _ingress_alias_check.stdout | trim == 'missing'
+
+- name: Report the forwarded endpoints
+  ansible.builtin.debug:
+    msg:
+      - "OSAC UI: {{ _ingress_ui_base }}"
+      - "Keycloak: {{ _ingress_keycloak_base }}/admin/"
+      - "Issuer: {{ _ingress_issuer }}"
+      - "Keycloak route resolves to {{ ingress_forward_host }} on the OSAC workloads"

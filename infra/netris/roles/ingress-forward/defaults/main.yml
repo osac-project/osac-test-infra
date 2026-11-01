@@ -1,0 +1,18 @@
+---
+# Port on the lab host that forwards to the OCP ingress router. Port 443 on the
+# lab host belongs to the Netris K3s load balancer, so every OCP route is
+# published on this port instead.
+ingress_forward_port: 9444
+
+# Address that pods and the lab host use to reach the forwarded port. The socat
+# forwarder runs on the lab host, so its primary address is the default.
+ingress_forward_host: "{{ ansible_default_ipv4.address | default('') }}"
+
+# Deployments that resolve the Keycloak route hostname and therefore need the
+# host alias. Missing deployments are skipped, so the list can name workloads a
+# smaller deployment profile does not install.
+ingress_forward_alias_deployments:
+  - osac-ui
+  - fulfillment-grpc-server
+  - fulfillment-controller
+  - osac-operator

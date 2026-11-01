@@ -121,11 +121,18 @@ All URLs below require sshuttle (or access from the BM server). They resolve to 
 | **User** | `admin` |
 | **Password** | `{{ _aap_eda_pass.stdout }}` |
 
+### OSAC UI
+
+| | |
+|---|---|
+| **URL** | `https://osac-ui-{{ osac_namespace }}.{{ _apps_domain }}:{{ ingress_forward_port }}` |
+| **Login** | Sign in with a Keycloak tenant user (for example `tenant1_admin`) |
+
 ### Keycloak (Identity Provider)
 
 | | |
 |---|---|
-| **URL** | `https://keycloak-keycloak.{{ _apps_domain }}` |
+| **URL** | `https://keycloak-keycloak.{{ _apps_domain }}:{{ ingress_forward_port }}` |
 | **User** | `{{ _keycloak_user }}` |
 | **Password** | `{{ _keycloak_pass }}` |
 
@@ -178,10 +185,12 @@ Password: {{ netris_password }}
 If sshuttle is not available:
 
 ```bash
-# OCP console via port 9444 (already exposed by socat)
+# OCP routes are published on port {{ ingress_forward_port }} by the socat forwarder.
 # Add to /etc/hosts:
+# {{ _bm_ip }}  osac-ui-{{ osac_namespace }}.{{ _apps_domain }}
+# {{ _bm_ip }}  keycloak-keycloak.{{ _apps_domain }}
 # {{ _bm_ip }}  {{ _ocp_console.stdout }}
-# Then browse: https://{{ _bm_ip }}:9444
+# Then browse: https://osac-ui-{{ osac_namespace }}.{{ _apps_domain }}:{{ ingress_forward_port }}
 
 # SSH SOCKS proxy (browser only)
 ssh -D 1080 root@{{ _bm_ip }}

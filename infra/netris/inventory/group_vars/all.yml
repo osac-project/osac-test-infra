@@ -36,6 +36,11 @@ ocp_node_ip: "192.168.40.2"
 ocp_vm_mgmt_ip: ""
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
+# Port 443 on the lab host belongs to the Netris K3s load balancer, so OCP
+# routes (UI, Keycloak, AAP, console, fulfillment API) are published on this
+# port by a socat forwarder. Keycloak and the UI advertise their URLs with this
+# port, so tokens and browser redirects use it too.
+ingress_forward_port: 9444
 
 # Netris port identity is stable; h00 Linux interface names are resolved by MAC at runtime.
 ocp_underlay_enabled: false

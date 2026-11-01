@@ -1,0 +1,6 @@
+---
+- name: Publish OSAC through the forwarded OCP ingress
+  hosts: all
+  gather_facts: false
+  roles:
+    - ingress-forward

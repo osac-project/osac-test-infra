@@ -281,11 +281,16 @@ force-destroy-maas:
 
 # ─── Internal sub-targets (deploy-osac implementation) ─────────────
 
-# Fresh install: clone mono-repo, patch Helm values, run make install
-install-osac: prep-osac run-osac-setup
+# Fresh install: clone mono-repo, patch Helm values, run make install, then
+# reconcile the forwarded ingress (the installer hardcodes the portless
+# Keycloak hostname and UI issuer with its own --set flags).
+install-osac: prep-osac run-osac-setup ingress-forward
 
 prep-osac:
 	ansible-playbook playbooks/prep-osac.yml $(OCP_ANSIBLE_EXTRA)
+
+ingress-forward:
+	ansible-playbook playbooks/ingress-forward.yml $(OCP_ANSIBLE_EXTRA)
 
 run-osac-setup:
 	@if [ -n "$(VMAAS_EVPN_VALUES_EXTRA)" ] && [ ! -s "$(EVPN_VALUES_FILE)" ]; then \
@@ -370,6 +375,6 @@ health-check:
         gather-infra gather-mgmt-cluster gather-caas \
         setup-bmc setup-bmaas deploy-bmaas destroy-bmaas gather-bmaas \
         setup-full gather-full \
-        install-osac prep-osac run-osac-setup \
+        install-osac prep-osac run-osac-setup ingress-forward \
         connectivity vendor-update lint cleanup-dns \
         redeploy-fresh redeploy-continue deploy-jump disk-setup access-doc post-install health-check
