@@ -814,48 +814,13 @@ def capture(args):
 """
 
 
-def test_capture_delegates_to_sibling_module(tmp_path: Path) -> None:
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    shutil.copy(SCRIPT, scripts / "ci-observe.py")
-    (scripts / "ci_observe_capture.py").write_text(STUB)
-    stub_out = scripts / "stub-out.json"
-    state = tmp_path / "state"
-    stub_script = scripts / "ci-observe.py"
-    proc = run_cli(
-        cli(state, "capture", "--kubeconfig", "/tmp/kube", "--namespace", "ns", "--", "sleep", "0"), script=stub_script
-    )
-    assert proc.returncode == 7
-    recorded = json.loads(stub_out.read_text())
-    assert recorded["state_dir_is_path"] is True
-    assert Path(recorded["state_dir"]) == state
-    assert (state / ".ci-observe-owner").is_file()
-    assert recorded["kubeconfig"] == "/tmp/kube"
-    assert recorded["namespace"] == "ns"
-    assert recorded["command"] == ["sleep", "0"]
-    assert recorded["capture_id"] is None
-    proc = run_cli(
-        cli(
-            state,
-            "capture",
-            "--kubeconfig",
-            "/tmp/kube",
-            "--namespace",
-            "osac",
-            "--capture-id",
-            "cap-42",
-            "--",
-            "pytest",
-            "-q",
-            "tests/x.py",
-        ),
-        script=stub_script,
-    )
-    assert proc.returncode == 7
-    recorded = json.loads(stub_out.read_text())
-    assert recorded["namespace"] == "osac"
-    assert recorded["command"] == ["pytest", "-q", "tests/x.py"]
-    assert recorded["capture_id"] == "cap-42"
+def test_capture_is_suspended_for_live_push(tool: Tool, tmp_path: Path, capsys: Capsys) -> None:
+    """Local file capture is suspended: the pipeline pushes telemetry live now."""
+    argv = cli(tmp_path, "capture", "--kubeconfig", "/tmp/k", "--namespace", "ns", "--", "true")
+    code, err = main_err(tool, argv, capsys)
+    assert code == 2
+    assert "suspended" in err
+    assert "live" in err
 
 
 def test_state_dir_refuses_symlink(tool: Tool, tmp_path: Path, capsys: Capsys) -> None:

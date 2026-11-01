@@ -98,3 +98,6 @@ jobs:
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   # checks:write; unreported check is still Expected/Waiting.
+      secrets:
+        # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+        ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}

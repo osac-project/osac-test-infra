@@ -36,6 +36,9 @@ jobs:
       notify-on-failure: false
       enable-ai-diagnostic: false
 
+      secrets:
+        # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+        ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
   caas:
     needs: plan
     if: contains(needs.plan.outputs.suites, '"caas"')
@@ -56,6 +59,9 @@ jobs:
       notify-on-failure: false
       enable-ai-diagnostic: false
 
+      secrets:
+        # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+        ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
   bmaas:
     needs: plan
     if: contains(needs.plan.outputs.suites, '"bmaas"')
@@ -79,6 +85,9 @@ jobs:
   # unit and integration tests of CI, the Jira check), writes the required E2E check at once when one of them fails, and
   # stops everything that still runs for the commit, so the entry leaves the queue instead of holding its place until
   # every suite has ended. It also writes E2E when everything passed. See osac-ci's docs/CALLERS.md.
+      secrets:
+        # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+        ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
   result:
     needs: plan
     if: always()

@@ -136,3 +136,6 @@ jobs:
 
   # Skip this required check on unreadiness so it stays pending (not red).
   # checks:write; unreported check is still Expected/Waiting.
+      secrets:
+        # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+        ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}

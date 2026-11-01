@@ -1098,6 +1098,15 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_capture(args: argparse.Namespace) -> int:
+    raise ToolError(
+        "local file capture is suspended: the capture pipeline now pushes telemetry "
+        "live to the central backend (see monitoring/ci-observe.md), and the shared "
+        "cluster manifest no longer deploys the capture volume this path read. "
+        "Run an E2E job with the ci-observe input, or use a local LGTM stack "
+        "('up') with your own OTLP exporter until the local path is reworked "
+        "onto live push",
+        code=2,
+    )
     sibling = Path(__file__).resolve().parent / "ci_observe_capture.py"
     if not sibling.is_file():
         raise ToolError(

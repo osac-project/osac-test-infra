@@ -116,3 +116,6 @@ jobs:
       pr-number: ${{ inputs.pr-number }}
       notify-on-failure: false
       enable-ai-diagnostic: false
+      secrets:
+        # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+        ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
