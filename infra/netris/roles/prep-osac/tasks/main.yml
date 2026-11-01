@@ -344,33 +344,13 @@
     _caas_enabled: "{{ _profile_values.global.services.caas.enabled | default(false) | bool }}"
   no_log: true
 
-# The lab reaches the OCP routes through the socat forwarder on
-# ingress_forward_port, so Keycloak advertises its issuer with that port and
-# every token carries it. Point the issuer values the installer does not
-# override at the forwarded URL; the chart has no value for KC_HOSTNAME or the
-# UI issuer that survives the installer's --set, so the ingress-forward role
-# reconciles those after the install. bundledVault.keycloakIssuerUrl stays
-# portless on purpose: the OpenBao bootstrap Job runs during install-infra and
-# cannot get a pod host alias, while its discovery document already advertises
-# the forwarded issuer.
-- name: Build the forwarded Keycloak base URL
-  ansible.builtin.set_fact:
-    _ingress_forward_keycloak_base: >-
-      https://keycloak-keycloak.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}:{{ ingress_forward_port }}
-
-- name: Point the issuer values at the forwarded ingress
-  ansible.builtin.set_fact:
-    _values_overrides: >-
-      {{ _values_overrides | combine({
-           'service': {
-             'auth': {'issuerUrl': _ingress_forward_keycloak_base ~ '/realms/osac'},
-             'idp': {'url': _ingress_forward_keycloak_base},
-             'vault': {'keycloakIssuerUrl': _ingress_forward_keycloak_base ~ '/realms/osac'}
-           },
-           'ui': {'auth': {'oidcIssuerURL': _ingress_forward_keycloak_base ~ '/realms/osac'}},
-           'bmf': {'secretAPI': {'issuerUrl': _ingress_forward_keycloak_base ~ '/realms/osac'}}
-         }, recursive=true) }}
-  no_log: true
+# The forwarded ingress is reconciled after the install by the
+# ingress-forward role, not from these values. The controller, the UI and the
+# AAP jobs all fetch an issuer token while they start, and no pod can reach the
+# forwarded port until the Keycloak host alias is on the Deployment. Setting
+# :9444 here would make helm --wait deadlock on those pods. The install
+# therefore starts on the chart's portless issuer, which every pod can reach,
+# and the role flips the whole cluster to :9444 once the aliases exist.
 
 # Keep bmf.metal3.enabled false here: it enables the BMF subchart's own Secret
 # templates. The OSAC chart's testBackend templates provide those configs instead.
