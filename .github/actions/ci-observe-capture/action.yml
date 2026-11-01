@@ -9,9 +9,12 @@ description: >-
   to the central backend while the test runs. No artifact, no post-test
   copy: the data is already in the CI Grafana when the job ends. The test
   command's own exit code is what this action reports. A telemetry failure
-  BEFORE the test (deploy failure) degrades to a warning so telemetry can
-  never block the test; the post-test verification step then fails the job
-  if telemetry was requested (a password was passed) but never reached the
+  never changes the job's result: a deploy failure before the test and a
+  delivery failure caught by the post-test verification step are both loud
+  (::error annotations, a red step marker, a summary line) but non-gating,
+  because ci-observe is opt-in telemetry and must never fail a test -- or
+  the required E2E check -- on its own. Default-off: nothing runs unless a
+  workflow calls this action with the password input set.he
   central backend -- a telemetry problem is always loud, never a changed
   test result. An empty password is an intentional telemetry-less run and
   stays warning-only. Default-off: nothing runs unless a workflow calls
@@ -355,10 +358,13 @@ runs:
       # endpoint stayed unnoticed under 30 green E2E runs. This step runs
       # after the test, always (a failed test is checked too: the telemetry
       # failure must be visible next to it) and never on cancellation (the
-      # cheap-cleanup path owns that), and it FAILS the job when telemetry
-      # was requested but did not reach the central backend. Its failure
-      # never implies the test failed.
+      # cheap-cleanup path owns that). Its errors are LOUD but never gating:
+      # ci-observe is opt-in telemetry, so a delivery failure leaves
+      # ::error annotations, a red step marker and a summary line, and the
+      # job's conclusion untouched (the owner's rule: never fail a test --
+      # or the required E2E check -- only for telemetry).
       if: always() && !cancelled()
+      continue-on-error: true
       shell: bash
       env:
         KUBECONFIG: ${{ inputs.kubeconfig-path }}
@@ -457,25 +463,52 @@ runs:
         done
 
         # The exporter's final batches can still sit in the 5s batch timeout
-        # or the retrying queue when the test ends; give the sent counters
-        # up to ~100s to catch up with the accepted ones before calling the
-        # shortfall a delivery failure.
+        # or the retrying queue when the test ends -- and the gateway keeps
+        # collecting after the test too (file_log tails the still-running
+        # namespace, kubelet_stats bursts every 60s), so a small accepted-
+        # sent deficit is the NORMAL steady state, not a failure. What a
+        # dead or stuck export looks like is a deficit that is large
+        # (far beyond in-flight) and never shrinks across scrapes. Poll for
+        # up to ~100s; delivered means: at some scrape every signal's
+        # deficit was zero, within tolerance, or shrinking versus the first
+        # scrape.
+        deficit_first=""
+        deficit_min=""
         delivered=false
         for _ in $(seq 1 10); do
           scrape_self_metrics || telemetry_fail "could not re-scrape the gateway's self-metrics endpoint (${metrics_url})"
-          delivered=true
+          delivered_this_scrape=true
           for signal in spans log_records metric_points; do
             accepted="$(counter_sum "otelcol_receiver_accepted_${signal}")"
             sent="$(counter_sum "otelcol_exporter_sent_${signal}")"
-            if (( sent < accepted )); then
-              delivered=false
+            (( deficit = accepted - sent ))
+            [[ "${deficit}" -lt 0 ]] && deficit=0
+            # Tolerance: in-flight batches plus a slice of the collected
+            # volume. A stuck queue holds at least the whole 5000-batch
+            # sending queue, far above this.
+            (( tolerance = accepted / 50 + 1000 ))
+            if (( deficit > tolerance )); then
+              delivered_this_scrape=false
+              if [[ -z "${deficit_first}" ]]; then
+                deficit_first="${deficit}"
+              fi
+              if [[ -z "${deficit_min}" ]] || (( deficit < deficit_min )); then
+                deficit_min="${deficit}"
+              fi
             fi
           done
-          if [[ "${delivered}" == true ]]; then
+          if [[ "${delivered_this_scrape}" == true ]]; then
+            delivered=true
             break
           fi
           sleep 10
         done
+        # A deficit that stayed beyond tolerance but is shrinking is the
+        # queue draining after an outage; only a large, non-shrinking
+        # deficit is a delivery failure.
+        if [[ "${delivered}" != true ]] && [[ -n "${deficit_min}" ]] && (( deficit_min < deficit_first )); then
+          delivered=true
+        fi
 
         sent_spans="$(counter_sum otelcol_exporter_sent_spans)"
         sent_log_records="$(counter_sum otelcol_exporter_sent_log_records)"

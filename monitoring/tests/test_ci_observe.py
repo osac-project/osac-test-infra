@@ -155,19 +155,19 @@ REPLAY_YAML = """receivers:
       - "${env:CI_OBSERVE_CAPTURE_DIR}/logs.jsonl"
     start_at: beginning
 exporters:
-  otlphttp:
+  otlp_http:
     endpoint: ${env:CI_OBSERVE_OTLP_ENDPOINT}
 service:
   pipelines:
     traces:
       receivers: [otlpjsonfile/traces]
-      exporters: [otlphttp]
+      exporters: [otlp_http]
     metrics:
       receivers: [otlpjsonfile/metrics]
-      exporters: [otlphttp]
+      exporters: [otlp_http]
     logs:
       receivers: [otlpjsonfile/logs]
-      exporters: [otlphttp]
+      exporters: [otlp_http]
 """
 
 DEAD_ENDPOINT_YAML = REPLAY_YAML.replace("endpoint: ${env:CI_OBSERVE_OTLP_ENDPOINT}", "endpoint: http://127.0.0.1:1")

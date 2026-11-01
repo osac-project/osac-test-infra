@@ -300,7 +300,7 @@ and only the first is deployed by this repository:
    untouched and the deploy warns loudly (the same policy as
    `alertmanager.yml`'s Slack webhook).
 
-   **Rotating the credential** (do all three, in any order, then redeploy):
+   **Rotating the credential** (do all four, then redeploy):
    1. regenerate the hash: `caddy hash-password` (prompts for the new
       password),
    2. write that hash to
@@ -311,6 +311,12 @@ and only the first is deployed by this repository:
       auth header from it),
    4. re-run the monitoring deploy (push to main touching `monitoring/**`,
       or `workflow_dispatch` of `deploy-monitoring.yml`).
+
+   Rotation has an unavoidable brief mismatch window: between updating the
+   hash and the repo secrets (in either order), pushes with one credential
+   hit an endpoint enforcing the other and fail with 401. The capture
+   action's verification step reports those runs loudly; finish the
+   rotation and the next runs deliver again.
 
    This vhost was originally added live on the machine and never committed
    (2026-11-01 incident): the next `deploy-monitoring` run copied the repo's

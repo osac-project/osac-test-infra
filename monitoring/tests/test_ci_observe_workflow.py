@@ -248,7 +248,10 @@ class TestAction:
         assert 'bash -e -o pipefail "${ci_dir}/command.sh" || rc=$?' in run["run"]
         assert 'exit "${rc}"' in run["run"]
         for step in steps:
-            if step.get("id") not in ("run", "verify"):
+            # The run step is the test's own outcome and stays gating;
+            # everything else, verify included, is opt-in telemetry or
+            # cleanup and never changes the job's conclusion.
+            if step.get("id") != "run":
                 assert step.get("continue-on-error") is True, step.get("name", step)
 
     def test_a_cancelled_job_takes_the_cheap_cleanup_path(self, action: dict) -> None:
@@ -324,9 +327,12 @@ class TestVerifyStep:
     def verify(self, action: dict) -> dict:
         return step_by_id(action["runs"]["steps"], "verify")
 
-    def test_runs_after_the_test_and_fails_the_job(self, verify: dict) -> None:
+    def test_runs_after_the_test_and_is_loud_but_never_gates(self, verify: dict) -> None:
         assert verify["if"] == "always() && !cancelled()"
-        assert "continue-on-error" not in verify
+        # The owner's rule: ci-observe is opt-in telemetry, so a delivery
+        # failure must be visible (::error, red step) but must never change
+        # the job's conclusion or block the required E2E check.
+        assert verify["continue-on-error"] is True
         # It needs the cluster (port-forward to the gateway), like deploy.
         assert verify["env"]["KUBECONFIG"] == "${{ inputs.kubeconfig-path }}"
 
