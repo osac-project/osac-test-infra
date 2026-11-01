@@ -49,6 +49,7 @@ jobs:
           python3 -I .github/scripts/test_upsert_pr_comment.py
           python3 -I .github/scripts/netris_catalog_test.py
           python3 -I .github/scripts/export_vm_allowlist_test.py
+          python3 -I .github/scripts/test_validate_containerfile_context.py
       - name: Shell script tests
         run: |
           set -euo pipefail
