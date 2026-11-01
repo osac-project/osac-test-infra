@@ -483,7 +483,11 @@ def exporter_ack_ok(totals: dict[str, float], needed: dict[str, bool]) -> bool:
         sent = totals.get(f"otelcol_exporter_sent_{signal}", 0)
         failed = totals.get(f"otelcol_exporter_send_failed_{signal}", 0)
         refused = totals.get(f"otelcol_receiver_refused_{signal}", 0)
-        if sent <= 0 or accepted != sent or failed or refused:
+        # Metrics: the exporter can legitimately send more points than the
+        # file receiver accepted (the collector generates points of its
+        # own), so require the sent count to cover the accepted count
+        # rather than match it exactly. Spans and log records still match.
+        if sent <= 0 or sent < accepted or failed or refused:
             return False
     return True
 

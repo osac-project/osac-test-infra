@@ -1357,6 +1357,23 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict, Path]:
     assert ci_observe.main(cli(state, "down", "--purge")) == 0, "stack fixture teardown failed"
 
 
+def test_exporter_ack_allows_generated_metric_points() -> None:
+    """The replay collector sends more metric points than the file receiver
+    accepted (it generates points of its own); the ack must accept that and
+    still require every accepted point to be sent."""
+    ok = {
+        "otelcol_receiver_accepted_metric_points": 71056,
+        "otelcol_exporter_sent_metric_points": 75303,
+        "otelcol_exporter_send_failed_metric_points": 0,
+        "otelcol_receiver_refused_metric_points": 0,
+    }
+    assert ci_observe.exporter_ack_ok(ok, {"metric_points": True}) is True
+    dropped = dict(ok, **{"otelcol_exporter_sent_metric_points": 70000})
+    assert ci_observe.exporter_ack_ok(dropped, {"metric_points": True}) is False
+    refused = dict(ok, **{"otelcol_receiver_refused_metric_points": 1})
+    assert ci_observe.exporter_ack_ok(refused, {"metric_points": True}) is False
+
+
 @requires_images
 def test_import_replays_into_stack_and_confirms_delivery(
     tool: Tool, stack: tuple[Path, dict, Path], capsys: Capsys
