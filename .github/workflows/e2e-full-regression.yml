@@ -588,40 +588,13 @@ jobs:
 
           make install-infra PLATFORM=openshift PROFILE=full-ci NS="${INSTALLER_NAMESPACE}"
 
-      - name: Create BMF secrets
+      - name: Create optional BMF resources
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
-          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
         run: |
-          # full-ci does not Helm-manage Metal3 inventory secrets the way
-          # bmaas-ci does. Match deploy-osac-env.sh: create them before
-          # install-osac so the BMF operator can reconcile.
           oc create namespace "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
 
-          INV="${RUNNER_TEMP}/osac-inventory.yaml"
-          MGMT="${RUNNER_TEMP}/osac-management.yaml"
-          cat >"${INV}" <<EOF
-          type: metal3
-          hostClass: metal3
-          networkClass: metal3
-          options:
-            metal3:
-              namespace: ${BMH_NAMESPACE}
-          EOF
-          cat >"${MGMT}" <<EOF
-          type: metal3
-          options:
-            metal3:
-              namespace: ${BMH_NAMESPACE}
-          EOF
-
-          oc create secret generic osac-inventory-config \
-            --from-file=inventory.yaml="${INV}" \
-            -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
-          oc create secret generic osac-management-config \
-            --from-file=management.yaml="${MGMT}" \
-            -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
           oc create secret generic osac-os-clouds \
             --from-literal=clouds.yaml="" \
             -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
@@ -633,6 +606,7 @@ jobs:
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+          BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
           INSTALLER_CLUSTER_TEMPLATE: ${{ inputs.cluster-template }}
           AAP_LICENSE_FILE: ${{ runner.temp }}/aap-license.zip
           IMAGE_OVERRIDES: ${{ inputs.image-overrides }}
@@ -718,6 +692,8 @@ jobs:
             yq -i '(.dependencies[] | select(.repository | test("^file://"))).version = "0.0.0"' charts/osac/Chart.yaml
             helm dependency update charts/osac/
           fi
+
+          SET_ARGS+=("--set-string" "bmf.metal3.namespace=${BMH_NAMESPACE}")
 
           make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=full-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
