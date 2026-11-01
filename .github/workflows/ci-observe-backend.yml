@@ -1,0 +1,102 @@
+---
+name: CI observe backend
+
+# Deploys the ci-observe telemetry backend (the pinned LGTM stack and its
+# quadlet) on osac-ci-1 whenever its config changes on main. This is the gap
+# the sync workflow left when its schedule was disabled (2026-11-01): the
+# schedule used to run `ci-observe.py up --quadlet` every 15 minutes, which
+# also picked up monitoring/config/ci-observe/lgtm-overrides/** changes --
+# with the schedule gone, nothing deployed the backend's own config. This
+# workflow is exactly the vault-auth + `up --quadlet` steps of
+# ci-observe-sync.yml and nothing else: no artifact sync, no prune.
+#
+# Deliberately NO schedule: a restart drops the collector gateways'
+# in-flight live-ingest batches mid-run (the same reason the sync schedule
+# was disabled), so the backend only restarts when its config actually
+# changed. Deliberately NO pull_request trigger either (same reasoning as
+# deploy-monitoring.yml): it never shows up in a PR's checks list.
+on:
+  push:
+    branches: [main]
+    paths: ["monitoring/config/ci-observe/**"]
+  workflow_dispatch: {}
+
+jobs:
+  backend:
+    # A manual dispatch lets the caller pick any branch to run against;
+    # without the ref check, an unmerged branch's ci-observe.py would run on
+    # the central machine with Vault credentials (same guard as
+    # ci-observe-sync.yml). A push only ever comes from main.
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: monitoring-central
+    permissions:
+      contents: read
+    concurrency:
+      group: ci-observe-backend
+      cancel-in-progress: false
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        id: checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # --- Secret bootstrap (same pattern as ci-observe-sync.yml) ---
+      - name: Read AppRole credentials
+        id: approle
+        run: |
+          APPROLE_DIR="${HOME}/.vault-server/.approle"
+          echo "role-id=$(cat "${APPROLE_DIR}/role-id")" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$(cat "${APPROLE_DIR}/secret-id")"
+          echo "secret-id=$(cat "${APPROLE_DIR}/secret-id")" >> "$GITHUB_OUTPUT"
+
+      - name: Retrieve secrets from Vault
+        id: vault
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.approle.outputs.role-id }}
+          secretId: ${{ steps.approle.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/monitoring/github-token token | PRIVATE_GITHUB_TOKEN ;
+
+      - name: Prepare the runner environment
+        id: prepare
+        run: |
+          # Same runner-environment handling as ci-observe-sync.yml: this
+          # machine doubles as a member of the isolated e2e runner pool, so
+          # the job may inherit a runner-scoped CONTAINERS_STORAGE_CONF that
+          # would put the LGTM container into storage nothing else on the
+          # machine sees. It must be unset INSIDE the podman-calling step's
+          # shell, not here (an empty GITHUB_ENV value stays set-to-empty,
+          # which podman treats as a config path and fails on).
+          echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" >> "$GITHUB_ENV"
+          # Persistent across runs: the stack, the import index and the
+          # artifact cache all live here, shared with the sync workflow.
+          echo "CI_OBSERVE_STATE_DIR=${HOME}/monitoring/ci-observe" >> "$GITHUB_ENV"
+
+      # ci-observe.py is stdlib-only, so python3 is all it needs. A failure
+      # here fails the workflow loudly: a silently missing backend would
+      # make every live push land on a dead endpoint. The Vault token is not
+      # consumed by `up` today; the bootstrap is kept identical to
+      # ci-observe-sync.yml so the two stay in lockstep.
+      - name: Ensure the telemetry backend is up
+        id: up
+        run: |
+          set -euo pipefail
+          unset CONTAINERS_STORAGE_CONF
+          mkdir -p "${CI_OBSERVE_STATE_DIR}"
+          chmod 700 "${CI_OBSERVE_STATE_DIR}"
+          # A quadlet, not an ad-hoc container: the runner reaps the job's
+          # process group when it ends, which kills rootless podman's port
+          # forwarder (pasta) and network-isolates an ad-hoc container (the
+          # full rationale lives in ci-observe-sync.yml). The quadlet
+          # publishes the fixed ports the provisioned Grafana datasources
+          # point at.
+          python3 monitoring/scripts/ci-observe.py --state-dir "${CI_OBSERVE_STATE_DIR}" up --quadlet

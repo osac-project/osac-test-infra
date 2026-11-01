@@ -96,7 +96,7 @@ starts from that deploy. Every panel and the daily digest filter on
 |---|---|---|---|
 | `prometheus` | central only | 127.0.0.1:9091 | Scrapes all exporters, evaluates `config/alert-rules.yml`, 30d retention |
 | `grafana` | central only | 0.0.0.0:3000 (HTTPS) | Dashboards, GitHub OAuth login (org: `osac-project`) |
-| `caddy` | central only | 0.0.0.0:3443 (HTTPS) | Reverse proxy to Grafana with an on-demand, self-signed cert matching whatever hostname/IP the client used — avoids the certificate-name-mismatch warning `grafana`'s own fixed-hostname cert (needed for OAuth callback matching) gives on any other address. See caveat below. |
+| `caddy` | central only | 0.0.0.0:3443 (HTTPS) | Reverse proxy to Grafana with an on-demand, self-signed cert matching whatever hostname/IP the client used — avoids the certificate-name-mismatch warning `grafana`'s own fixed-hostname cert (needed for OAuth callback matching) gives on any other address. See caveat below. Also serves the ci-observe live OTLP ingest on :4319 (see [The ci-observe live OTLP ingest](#the-ci-observe-live-otlp-ingest-caddy-vhost--haproxy-route)). |
 | `alertmanager` | central only | 127.0.0.1:9093 | Routes alerts to Slack `#osac-ci` |
 | `node-exporter` | every machine | 127.0.0.1:9100 | Host-level metrics (CPU, memory, disk, filesystem) |
 | `haproxy-exporter` | every machine | 127.0.0.1:9104 | HAProxy request rate / backend health / error rate, via a Unix stats socket (no TCP stats port -- zero new network exposure) |
@@ -238,13 +238,17 @@ agent.
 `--update-central`/`--update-agent` refresh config, quadlets, and scripts
 from git and `restart` (not reload) the affected services — they're safe to
 re-run repeatedly and are what keeps a manually-provisioned central/agent in
-sync with git going forward. Two things they deliberately do *not*
+sync with git going forward. Three things they deliberately do *not*
 overwrite with the git template: the deployed `alertmanager.yml`'s Slack
-webhook and `prometheus.yml`'s remote-targets block, both of which only
-exist on the live host and would otherwise get silently clobbered on every
-deploy — this happened in production during the first automated rollout
-and broke both Alertmanager's Slack routing and Grafana's HTTPS/OAuth
-config; see PRs
+webhook, `prometheus.yml`'s remote-targets block, and the deployed
+Caddyfile's ci-observe basic-auth hash (rendered from a machine-local
+secret instead — see
+[The ci-observe live OTLP ingest](#the-ci-observe-live-otlp-ingest-caddy-vhost--haproxy-route)),
+all of which only exist on the live host and would otherwise get silently
+clobbered on every deploy — the first two happened in production during the
+first automated rollout and broke both Alertmanager's Slack routing and
+Grafana's HTTPS/OAuth config, and the third wiped the live OTLP ingest
+vhost entirely (2026-11-01 incident); see PRs
 [#167](https://github.com/osac-project/osac-test-infra/pull/167),
 [#168](https://github.com/osac-project/osac-test-infra/pull/168), and
 [#169](https://github.com/osac-project/osac-test-infra/pull/169) for the
@@ -269,6 +273,80 @@ Each path is granted individually in the `osac-e2e` policy
 (`vault/scripts/vault-setup.sh`), not as a wildcard, so adding unrelated
 monitoring secrets later doesn't implicitly grant this AppRole access to
 them.
+
+### The ci-observe live OTLP ingest (Caddy vhost + HAProxy route)
+
+The E2E runner fleet pushes ci-observe telemetry live (during the run, not
+as an artifact) to `https://osac-ci-1.redhat.com:4319`. Two pieces carry it,
+and only the first is deployed by this repository:
+
+1. **The Caddy vhost** (`config/caddy/Caddyfile`, deployed by
+   `monitoring-setup.sh` like every other config file): terminates TLS with
+   Caddy's internal CA, enforces HTTP basic auth (user `ci-observe`), and
+   reverse-proxies to the ci-observe LGTM stack's OTLP receiver on
+   `127.0.0.1:4318`. The repo file carries a `CI_OBSERVE_OTLP_HASH`
+   placeholder where the live file has the real bcrypt hash — a credential
+   is never committed. `monitoring-setup.sh`'s `deploy_caddyfile` renders the
+   placeholder at deploy time, taking the hash (in priority order) from:
+
+   - the `CI_OBSERVE_OTLP_HASH` environment variable,
+   - the machine-local secret file
+     `~/.monitoring-server/secrets/ci-observe-otlp-hash` (one line: the
+     bcrypt hash; create it root- or `github-runner`-readable, mode 600),
+   - the hash already present in the deployed live Caddyfile — so a
+     re-deploy keeps the live credential instead of clobbering it.
+
+   With no valid hash available at all, the deployed Caddyfile is left
+   untouched and the deploy warns loudly (the same policy as
+   `alertmanager.yml`'s Slack webhook).
+
+   **Rotating the credential** (do all three, in any order, then redeploy):
+   1. regenerate the hash: `caddy hash-password` (prompts for the new
+      password),
+   2. write that hash to
+      `~/.monitoring-server/secrets/ci-observe-otlp-hash` on osac-ci-1,
+   3. set the same *password* (not the hash) as the
+      `CI_OBSERVE_OTLP_PASSWORD` secret in **both** the `osac` and
+      `osac-test-infra` repositories (the capture action builds the basic
+      auth header from it),
+   4. re-run the monitoring deploy (push to main touching `monitoring/**`,
+      or `workflow_dispatch` of `deploy-monitoring.yml`).
+
+   This vhost was originally added live on the machine and never committed
+   (2026-11-01 incident): the next `deploy-monitoring` run copied the repo's
+   Caddyfile over the live one, wiping the vhost, and 30 E2E runs pushed
+   into a dead endpoint that no one noticed — every telemetry failure in the
+   capture action used to degrade to a warning. The capture action now
+   verifies delivery after the test and fails the job on a dead endpoint;
+   see `.github/actions/ci-observe-capture/action.yml`.
+
+2. **The HAProxy SNI route** (system config, NOT deployed by this repo):
+   the runners cannot reach the machine's `:4319` directly, so the SNI route
+   in `/etc/haproxy/haproxy.cfg` on osac-ci-1 (managed by hand, like the
+   rest of that file) forwards `osac-ci-1.redhat.com` traffic on `:443`
+   there. The ci-observe-relevant part of that file, reproduced so a new
+   central machine can be set up:
+
+   ```
+   # ci-observe live OTLP ingest: the runner fleet's collectors push to
+   # https://osac-ci-1.redhat.com (443); Caddy on 4319 does TLS + basic
+   # auth and proxies to the LGTM stack's OTLP receiver on 4318.
+   backend otlp-ci-observe
+       mode tcp
+       server otlp-ci-observe 127.0.0.1:4319 check
+
+   # Inside the existing *:443 frontend (merge with what is already there;
+   # the frontend's bind and default_backend are that machine's own):
+   frontend https
+       bind *:443
+       tcp-request inspect-delay 5s
+       tcp-request content accept if { req.ssl_hello_type 1 }
+       use_backend otlp-ci-observe if { req.ssl_sni -i osac-ci-1.redhat.com }
+   ```
+
+   The `use_backend` line must come before the frontend's existing
+   catch-all/default routing so the SNI match wins. After editing, reload
+   with `systemctl reload haproxy` (system service, root).
 
 ### Unit tests
 

@@ -251,6 +251,71 @@ reload_prometheus() {
     fi
 }
 
+# Deploy the repo's Caddyfile, rendering the ci-observe OTLP ingest vhost's
+# CI_OBSERVE_OTLP_HASH placeholder (a credential, never committed) into a real
+# bcrypt hash. The hash comes, in priority order, from:
+#   1. the CI_OBSERVE_OTLP_HASH environment variable,
+#   2. the machine-local secret file ${MONITORING_HOME}/secrets/ci-observe-otlp-hash
+#      (one line, the bcrypt hash, readable by the deploying user),
+#   3. the hash already in the deployed live Caddyfile -- a re-deploy must
+#      never clobber the live credential.
+# This is the 2026-11-01 incident's other half: the vhost was added live on
+# osac-ci-1 but not committed, so a --update-central run copied the repo's
+# (vhost-less) Caddyfile over the live one and killed live ingest for 30 E2E
+# runs. Live config must live in the repo, credentials must not -- so the
+# repo file carries the placeholder and only this function ever deploys it.
+# With no valid hash available at all, the deployed file is left untouched
+# rather than overwritten with the placeholder (same policy as alertmanager.yml's
+# SLACK_WEBHOOK_URL): a Caddyfile containing the placeholder would fail Caddy's
+# config load and take down the whole proxy, not just the OTLP vhost.
+deploy_caddyfile() {
+    local repo_caddyfile="${MONITORING_REPO_DIR}/config/caddy/Caddyfile"
+    local live_caddyfile="${MONITORING_HOME}/config/caddy/Caddyfile"
+    local secret_file="${MONITORING_HOME}/secrets/ci-observe-otlp-hash"
+
+    local hash=""
+    if [[ -n "${CI_OBSERVE_OTLP_HASH:-}" ]]; then
+        hash="${CI_OBSERVE_OTLP_HASH}"
+    elif [[ -r "${secret_file}" ]]; then
+        hash="$(head -n1 "${secret_file}")"
+    elif [[ -f "${live_caddyfile}" ]]; then
+        # The live vhost's own credential line: "ci-observe <hash>".
+        hash="$(awk '$1 == "ci-observe" { print $2; exit }' "${live_caddyfile}")"
+    fi
+
+    if [[ -z "${hash}" ]]; then
+        echo "  WARNING: no ci-observe OTLP hash available (CI_OBSERVE_OTLP_HASH env," \
+             "${secret_file}, or the deployed Caddyfile) -- leaving the deployed Caddyfile" \
+             "untouched; deploying the placeholder would break Caddy's config load."
+        return 0
+    fi
+    # A bcrypt hash is $2[aby]$<cost>$<53 chars of [./A-Za-z0-9] -- none of
+    # sed's special replacement characters (&, |, backslash), so it can go
+    # straight into the replacement side.
+    if ! [[ "${hash}" =~ ^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$ ]]; then
+        echo "  WARNING: the ci-observe OTLP hash is not a valid bcrypt hash -- leaving the" \
+             "deployed Caddyfile untouched. Rotate with 'caddy hash-password' (see" \
+             "monitoring/README.md)."
+        return 0
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    # cp -f, not mv -- the Caddyfile is bind-mounted as a single file into
+    # the Caddy container, which follows the inode, not the path (see the
+    # regenerate_remote_targets comment on prometheus.yml).
+    sed "s|CI_OBSERVE_OTLP_HASH|${hash}|" "${repo_caddyfile}" > "${tmp}"
+    if grep -qF "CI_OBSERVE_OTLP_HASH" "${tmp}"; then
+        echo "  ERROR: rendering the Caddyfile left an unresolved CI_OBSERVE_OTLP_HASH placeholder." >&2
+        rm -f "${tmp}"
+        return 1
+    fi
+    mkdir -p "${MONITORING_HOME}/config/caddy"
+    cp -f "${tmp}" "${live_caddyfile}"
+    rm -f "${tmp}"
+    info "Caddyfile deployed (ci-observe OTLP ingest vhost rendered with the machine's hash)."
+}
+
 ###############################################################################
 # Parse arguments
 ###############################################################################
@@ -456,8 +521,7 @@ if [[ "${MODE}" == "update-central" ]]; then
     fi
     cp "${MONITORING_REPO_DIR}/config/grafana/datasources.yml" "${MONITORING_HOME}/config/grafana/datasources.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
-    mkdir -p "${MONITORING_HOME}/config/caddy"
-    cp "${MONITORING_REPO_DIR}/config/caddy/Caddyfile" "${MONITORING_HOME}/config/caddy/Caddyfile"
+    deploy_caddyfile
     # Remove stale dashboards first -- a plain cp only adds/overwrites, so a
     # dashboard removed from the repo would otherwise linger here and keep
     # being provisioned by Grafana indefinitely.
@@ -594,7 +658,7 @@ if [[ "${MODE}" == "central" ]]; then
     cp "${MONITORING_REPO_DIR}/config/alertmanager.yml" "${MONITORING_HOME}/config/alertmanager.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/datasources.yml" "${MONITORING_HOME}/config/grafana/datasources.yml"
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
-    cp "${MONITORING_REPO_DIR}/config/caddy/Caddyfile" "${MONITORING_HOME}/config/caddy/Caddyfile"
+    deploy_caddyfile
 
     # Copy dashboards
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards/"*.json "${MONITORING_HOME}/dashboards/"

@@ -11,15 +11,25 @@ the contract that makes the telemetry safe to turn on for a real E2E job:
   OTLP/HTTP from the collector gateway) and uploads no artifact,
 - the test command's exit code is preserved: the run step has no
   continue-on-error and exits with the captured return code, while every
-  telemetry-side step degrades to a warning instead of failing the job,
+  telemetry-side step before the test degrades to a warning instead of
+  failing the job,
 - an empty OTLP password degrades to running the test without telemetry,
-  never to an unauthenticated push.
+  never to an unauthenticated push,
+- the post-test verification step makes a telemetry failure impossible to
+  miss: when telemetry was requested (a password was passed), it scrapes the
+  gateway's self-metrics and FAILS the job on refused input, failed sends,
+  undelivered data or nothing-collected -- the 2026-11-01 incident (a dead
+  central endpoint under 30 green runs) must not repeat.
 
 The backend wiring is pinned too: the ci-observe-sync.yml workflow on the
 central monitoring machine (manual dispatch only -- the schedule is
 disabled because live pushes made the artifact sync unnecessary and its
-backend restart would drop in-flight live-ingest batches) and the Grafana
-datasources that point at its fixed ports.
+backend restart would drop in-flight live-ingest batches), the new
+ci-observe-backend.yml that redeploys the backend on config changes (never
+on a schedule, same reason), the Grafana datasources that point at its
+fixed ports, and the Caddy ingest vhost whose basic-auth hash is rendered
+at deploy time from a machine-local secret (a credential is never
+committed).
 
 Runtime behavior (deploy, live push) is exercised on a live cluster by the
 capture supervisor's own validation; see monitoring/ci-observe.md.
@@ -38,6 +48,9 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ACTION_PATH = REPO_ROOT / ".github" / "actions" / "ci-observe-capture" / "action.yml"
 SYNC_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci-observe-sync.yml"
+BACKEND_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci-observe-backend.yml"
+CADDYFILE_PATH = REPO_ROOT / "monitoring" / "config" / "caddy" / "Caddyfile"
+MONITORING_SETUP_PATH = REPO_ROOT / "monitoring" / "scripts" / "monitoring-setup.sh"
 DATASOURCES_PATH = REPO_ROOT / "monitoring" / "config" / "grafana" / "datasources.yml"
 SCRIPT = REPO_ROOT / "monitoring" / "scripts" / "ci-observe.py"
 _spec = importlib.util.spec_from_file_location("ci_observe_workflow_mod", SCRIPT)
@@ -88,6 +101,11 @@ def pr_starter(request: pytest.FixtureRequest) -> dict:
 @pytest.fixture(scope="module")
 def sync_workflow() -> dict:
     return yaml.safe_load(SYNC_WORKFLOW_PATH.read_text())
+
+
+@pytest.fixture(scope="module")
+def backend_workflow() -> dict:
+    return yaml.safe_load(BACKEND_WORKFLOW_PATH.read_text())
 
 
 @pytest.fixture(scope="module")
@@ -223,13 +241,14 @@ class TestAction:
     def test_test_exit_code_is_preserved(self, action: dict) -> None:
         steps = action["runs"]["steps"]
         run = step_by_id(steps, "run")
-        # The run step is the only one without continue-on-error: its outcome
-        # is the test's own outcome.
+        # The run step is the test's own outcome, and the verify step's
+        # failure is the telemetry's own outcome: neither may be softened.
+        # Every other step is a warning-only side show.
         assert "continue-on-error" not in run
         assert 'bash -e -o pipefail "${ci_dir}/command.sh" || rc=$?' in run["run"]
         assert 'exit "${rc}"' in run["run"]
         for step in steps:
-            if step.get("id") != "run":
+            if step.get("id") not in ("run", "verify"):
                 assert step.get("continue-on-error") is True, step.get("name", step)
 
     def test_a_cancelled_job_takes_the_cheap_cleanup_path(self, action: dict) -> None:
@@ -238,37 +257,48 @@ class TestAction:
         assert quick["if"] == "cancelled() && env.CI_OBSERVE_DEPLOYED == '1'"
         script = quick["run"]
         assert "--wait=false" in script
-        assert "delete deployment/ci-observe-gateway" in script
-        assert "delete daemonset/ci-observe-beyla" in script
+        assert "deployment/ci-observe-gateway" in script
+        assert "daemonset/ci-observe-beyla" in script
+        # Best-effort cleanup, but never silent: every failure warns.
+        assert "|| true" not in script
+        assert script.count("::warning::") == 2
 
     def test_there_is_no_post_test_artifact_tail(self, action: dict) -> None:
-        """The action is deploy, run, cheap cleanup, summary -- nothing
-        else. The old file-capture tail (close and copy, readout pod,
-        staging, AAP license preparation, artifact upload, staged-file
+        """The action is deploy, run, cheap cleanup, summary, verify --
+        nothing else. The old file-capture tail (close and copy, readout
+        pod, staging, AAP license preparation, artifact upload, staged-file
         cleanup) is gone entirely: telemetry is pushed live during the run."""
         steps = action["runs"]["steps"]
         ids = {step["id"] for step in steps if step.get("id")}
         names = {step.get("name") for step in steps}
-        assert ids == {"deploy", "run", "quick-cancelled-cleanup"}
+        assert ids == {"deploy", "run", "quick-cancelled-cleanup", "verify"}
         assert names == {
             "Deploy collectors",
             "Run test command",
             "Quick cleanup (job cancelled)",
             "Write capture summary",
+            "Verify telemetry delivery",
         }
         assert not any(step.get("uses") for step in steps), "no nested actions: every step is inline"
         for gone in ("readout", "metadata.json", "osac-artifacts", "aap-license", "ci-observe-capture-"):
             for step in steps:
                 assert gone not in step.get("run", ""), (gone, step.get("name"))
 
-    def test_summary_notes_the_live_push_and_no_artifact(self, action: dict) -> None:
-        summary = next(step for step in action["runs"]["steps"] if step.get("name") == "Write capture summary")
+    def test_summary_defers_the_delivery_verdict_to_the_verify_step(self, action: dict) -> None:
+        """The summary step writes the header and the capture id, and never
+        claims delivery: that claim is the verify step's to make (or
+        refute), so a green summary line can no longer sit on top of a dead
+        endpoint."""
+        steps = action["runs"]["steps"]
+        summary = next(step for step in steps if step.get("name") == "Write capture summary")
         script = summary["run"]
-        assert "telemetry pushed live to the central backend" in script
+        assert "capture id" in script
         assert "artifact" in script
-        assert "deploy-failed" in script
-        # No metadata file is written anymore.
-        assert "metadata" not in script
+        assert "telemetry not requested" in script
+        assert "Verify telemetry delivery" in script
+        # The old unconditional success line is exactly what hid the
+        # 2026-11-01 incident; it must not come back.
+        assert "telemetry pushed live to the central backend" not in script
 
     def test_run_step_sets_the_otel_environment(self, action: dict) -> None:
         run = step_by_id(action["runs"]["steps"], "run")
@@ -279,6 +309,109 @@ class TestAction:
         # Only when the collectors came up: a failed deployment must leave
         # the command's environment untouched.
         assert 'if [[ -n "${CI_OBSERVE_OTLP_PORT:-}" ]]' in script
+        # The verify step reads the run's duration to tell a dead capture
+        # from a command that ended within seconds.
+        assert "CI_OBSERVE_TEST_DURATION" in script
+
+
+class TestVerifyStep:
+    """The post-test verification: the loud backstop that makes a telemetry
+    failure impossible to miss (2026-11-01: 30 green runs pushed into a dead
+    central endpoint because every telemetry failure degraded to a
+    warning)."""
+
+    @pytest.fixture(scope="class")
+    def verify(self, action: dict) -> dict:
+        return step_by_id(action["runs"]["steps"], "verify")
+
+    def test_runs_after_the_test_and_fails_the_job(self, verify: dict) -> None:
+        assert verify["if"] == "always() && !cancelled()"
+        assert "continue-on-error" not in verify
+        # It needs the cluster (port-forward to the gateway), like deploy.
+        assert verify["env"]["KUBECONFIG"] == "${{ inputs.kubeconfig-path }}"
+
+    def test_error_message_never_implies_the_test_failed(self, verify: dict) -> None:
+        script = verify["run"]
+        assert "telemetry was requested but did not reach the central backend" in script
+        assert "the test result above is unaffected" in script
+        assert "::error::" in script
+        assert "${GITHUB_STEP_SUMMARY}" in script
+
+    def test_fails_when_telemetry_was_requested_but_never_started(self, verify: dict, action: dict) -> None:
+        """An empty OTLP password is an intentional telemetry-less run and
+        exits success; a password that was passed (telemetry-requested
+        marker) followed by a failed deployment fails the job."""
+        script = verify["run"]
+        assert '[[ ! -f "${ci_dir}/telemetry-requested" ]]' in script
+        assert '[[ -f "${ci_dir}/deploy-failed" ]]' in script
+        deploy = step_by_id(action["runs"]["steps"], "deploy")
+        # The marker is written from the password input alone, BEFORE any
+        # validation can fail (an invalid capture id with a password set is
+        # a requested-but-never-started run, not a telemetry-less one).
+        marker = deploy["run"].index('touch "${ci_dir}/telemetry-requested"')
+        password_guard = deploy["run"].index('if [[ -n "${OTLP_PASSWORD_INPUT}" ]]; then')
+        capture_id_assignment = deploy["run"].index('capture_id="${CAPTURE_ID_INPUT:-')
+        assert marker > password_guard
+        assert marker < capture_id_assignment
+
+    def test_reads_the_gateway_self_metrics_over_the_standard_port(self, verify: dict) -> None:
+        script = verify["run"]
+        assert "svc/ci-observe-gateway :8888" in script
+        assert "curl -sf" in script
+        # The parser tolerates the optional _total suffix a manually
+        # configured prometheus reader appends (collector v0.119+).
+        assert 'sub(/_total$/, "", name)' in script
+
+    def test_reads_every_delivery_counter_family(self, verify: dict) -> None:
+        """The four counter families, one per signal: receiver
+        accepted/refused and exporter sent/send_failed."""
+        script = verify["run"]
+        assert "for signal in spans log_records metric_points; do" in script
+        for family in (
+            "otelcol_receiver_accepted_${signal}",
+            "otelcol_receiver_refused_${signal}",
+            "otelcol_exporter_sent_${signal}",
+            "otelcol_exporter_send_failed_${signal}",
+        ):
+            assert f'"{family}"' in script, family
+        # The per-signal sent values for the summary line are read by their
+        # full names.
+        for counter in (
+            "otelcol_exporter_sent_spans",
+            "otelcol_exporter_sent_log_records",
+            "otelcol_exporter_sent_metric_points",
+        ):
+            assert f"counter_sum {counter}" in script, counter
+
+    def test_failure_conditions(self, verify: dict) -> None:
+        script = verify["run"]
+        # Any refused input or failed send is a hard failure.
+        assert "otelcol_receiver_refused_${signal}" in script
+        assert "otelcol_exporter_send_failed_${signal}" in script
+        # Accepted but never delivered.
+        assert "(( sent < accepted ))" in script
+        # Nothing collected during a non-trivial run.
+        assert "(( total_sent == 0 ))" in script
+        assert "(( duration > 60 ))" in script
+        # The dead local path (the deploy step's port-forward) is caught too.
+        assert "kill -0" in script
+
+    def test_green_path_writes_the_delivered_line_to_the_summary(self, verify: dict) -> None:
+        script = verify["run"]
+        delivered = "telemetry delivered: ${sent_spans} spans, ${sent_log_records} logs, ${sent_metric_points} metrics"
+        assert delivered in script
+
+    def test_no_swallowed_failures(self, verify: dict) -> None:
+        """The verify step itself must never swallow an error: no `|| true`,
+        no stderr to /dev/null, every command's output lands in the log."""
+        script = verify["run"]
+        assert "|| true" not in script
+        assert "2>/dev/null" not in script
+
+    def test_stops_its_own_port_forward_with_a_warning_on_failure(self, verify: dict) -> None:
+        script = verify["run"]
+        assert "trap cleanup_verify_port_forward EXIT" in script
+        assert "::warning::ci-observe: failed to stop the verify port-forward" in script
 
 
 def _shell_scripts() -> list[tuple[str, str]]:
@@ -301,7 +434,13 @@ def _shell_scripts() -> list[tuple[str, str]]:
             for value in node:
                 walk(value, origin)
 
-    origins = [ACTION_PATH, SYNC_WORKFLOW_PATH, *FULL_INSTALL_WORKFLOWS.values(), *PR_SUITE_STARTERS.values()]
+    origins = [
+        ACTION_PATH,
+        SYNC_WORKFLOW_PATH,
+        BACKEND_WORKFLOW_PATH,
+        *FULL_INSTALL_WORKFLOWS.values(),
+        *PR_SUITE_STARTERS.values(),
+    ]
     for origin in origins:
         for doc in (d for d in yaml.safe_load_all(origin.read_text()) if d):
             walk(doc, str(origin))
@@ -572,6 +711,95 @@ class TestSyncWorkflow:
         assert summary["if"] == "always()"
         assert "$GITHUB_STEP_SUMMARY" in summary["run"]
         assert "osac-project/${repo}" in summary["run"]
+
+
+class TestBackendWorkflow:
+    """ci-observe-backend.yml: the backend's deploy path, left open when the
+    sync workflow's schedule was disabled. Exactly the sync workflow's
+    vault-auth + `up --quadlet` steps, on the central machine, and nothing
+    else."""
+
+    def test_triggers_on_config_changes_and_manual_dispatch_only(self, backend_workflow: dict) -> None:
+        """Never a schedule: a backend restart drops in-flight live-ingest
+        batches (the same reason the sync schedule was disabled). No
+        pull_request trigger either, so it never shows in a PR's checks."""
+        triggers = backend_workflow.get("on") or backend_workflow.get(True)
+        assert set(triggers) == {"push", "workflow_dispatch"}
+        assert triggers["push"]["branches"] == ["main"]
+        assert triggers["push"]["paths"] == ["monitoring/config/ci-observe/**"]
+        text = BACKEND_WORKFLOW_PATH.read_text()
+        assert "NO schedule" in text, "the missing schedule must say why"
+
+    def test_single_job_on_the_central_machine(self, backend_workflow: dict) -> None:
+        assert set(backend_workflow["jobs"]) == {"backend"}
+        job = backend_workflow["jobs"]["backend"]
+        assert job["runs-on"] == "monitoring-central"
+        assert job["permissions"] == {"contents": "read"}
+        assert job["concurrency"] == {"group": "ci-observe-backend", "cancel-in-progress": False}
+        assert job["timeout-minutes"] == 15
+        # A dispatch from any branch but main must not touch the machine.
+        assert "github.event_name == 'push'" in job["if"]
+        assert "github.ref == 'refs/heads/main'" in job["if"]
+
+    def test_does_the_vault_auth_and_up_quadlet_and_nothing_else(self, backend_workflow: dict) -> None:
+        steps = backend_workflow["jobs"]["backend"]["steps"]
+        ids = [step.get("id") for step in steps]
+        assert ids == ["checkout", "approle", "vault", "prepare", "up"]
+        approle = step_by_id(steps, "approle")["run"]
+        assert "${HOME}/.vault-server/.approle" in approle
+        vault = step_by_id(steps, "vault")
+        assert vault["uses"].startswith("hashicorp/vault-action@")
+        up = step_by_id(steps, "up")["run"]
+        assert 'python3 monitoring/scripts/ci-observe.py --state-dir "${CI_OBSERVE_STATE_DIR}" up --quadlet' in up
+        assert "unset CONTAINERS_STORAGE_CONF" in up
+        # The sync workflow's other work must not be here.
+        for absent in ("sync --repository", "prune", "-mtime", "GITHUB_STEP_SUMMARY"):
+            assert absent not in up, absent
+
+
+class TestIngestVhost:
+    """The Caddy vhost that terminates the runner fleet's live OTLP push
+    (2026-11-01 incident: it existed only live on the machine, a deploy
+    wiped it, and 30 runs pushed into a dead endpoint). The vhost lives in
+    the repo; the credential never does."""
+
+    def test_vhost_is_committed_with_a_placeholder_hash(self) -> None:
+        text = CADDYFILE_PATH.read_text()
+        assert "https://osac-ci-1.redhat.com:4319 {" in text
+        assert "tls internal" in text
+        assert "reverse_proxy 127.0.0.1:4318" in text
+        # The basic_auth user line carries the render-time placeholder, and
+        # it is the only occurrence of the token in the file.
+        assert "\t\tci-observe CI_OBSERVE_OTLP_HASH\n" in text
+        assert text.count("CI_OBSERVE_OTLP_HASH") == 1
+        # Rotation is documented on the vhost itself.
+        assert "caddy hash-password" in text
+        assert "CI_OBSERVE_OTLP_PASSWORD" in text
+
+    def test_the_deploy_renders_the_hash_and_never_clobbers_the_live_one(self) -> None:
+        """monitoring-setup.sh's deploy_caddyfile: env var or machine-local
+        secret file, falling back to the hash already deployed live; with
+        no hash at all the deployed file stays untouched (deploying the
+        placeholder would break Caddy's config load)."""
+        script = MONITORING_SETUP_PATH.read_text()
+        assert "deploy_caddyfile()" in script
+        # The three hash sources.
+        assert "CI_OBSERVE_OTLP_HASH:-" in script
+        assert "secrets/ci-observe-otlp-hash" in script
+        assert "'$1 == \"ci-observe\" { print $2; exit }'" in script
+        # The placeholder is validated as a bcrypt hash before rendering.
+        assert "bcrypt" in script
+        # Both deploy paths go through the renderer, never a plain cp.
+        assert 'cp "${MONITORING_REPO_DIR}/config/caddy/Caddyfile"' not in script
+        assert script.count("deploy_caddyfile") >= 3, "definition plus both deploy sites (central + update-central)"
+
+    def test_haproxy_route_is_documented_as_system_config(self) -> None:
+        readme = (REPO_ROOT / "monitoring" / "README.md").read_text()
+        assert "otlp-ci-observe" in readme
+        assert "127.0.0.1:4319" in readme
+        assert "req.ssl_sni -i osac-ci-1.redhat.com" in readme
+        # The README must say this route is NOT deployed by the repo.
+        assert "NOT deployed by this repo" in readme
 
 
 class TestCiObserveDatasources:

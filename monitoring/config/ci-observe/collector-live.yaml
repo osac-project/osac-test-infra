@@ -10,7 +10,7 @@
 # @sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b;
 # component names verified with that binary: otlp, k8s_objects, file_log,
 # kubelet_stats, resource, transform, batch, memory_limiter, health_check,
-# file_storage, otlphttp).
+# file_storage, otlp_http).
 #
 # The gateway receives OTLP on 4317/4318 (pytest traces from the test
 # container through the port-forward, Beyla traces in-cluster), watches
@@ -261,8 +261,9 @@ processors:
 exporters:
   # Live push to the central backend's OTLP ingest (an HAProxy SNI route on
   # osac-ci-1.redhat.com that forwards to the LGTM stack's OTLP receiver
-  # behind basic auth). All three pipelines export here.
-  otlphttp/live:
+  # behind basic auth). All three pipelines export here. The key is the
+  # 0.164.0 component name: "otlphttp" is only a deprecated alias for it.
+  otlp_http/live:
     endpoint: ${env:CI_OBSERVE_OTLP_ENDPOINT}
     tls:
       # The endpoint serves a certificate from an internal CA. Follow-up:
@@ -292,23 +293,27 @@ service:
       # otelcol_receiver_accepted/refused_* and otelcol_exporter_sent/send_failed_*
       # per signal. An expected source with zero accepted records is a
       # coverage gap; a rising send_failed count means the central endpoint
-      # is refusing the live push.
+      # is refusing the live push. The capture action's verify step reads
+      # exactly these counters, so their names are a contract: a manually
+      # configured prometheus reader appends _total to counters unless
+      # without_type_suffix is set, which would break that contract.
       readers:
         - pull:
             exporter:
               prometheus:
                 host: 0.0.0.0
                 port: 8888
+                without_type_suffix: true
   pipelines:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource/capture, transform/sanitize_traces, batch]
-      exporters: [otlphttp/live]
+      exporters: [otlp_http/live]
     metrics:
       receivers: [otlp, kubelet_stats]
       processors: [memory_limiter, resource/capture, batch]
-      exporters: [otlphttp/live]
+      exporters: [otlp_http/live]
     logs:
       receivers: [otlp, k8s_objects, file_log]
       processors: [memory_limiter, resource/capture, transform/k8s_objects, batch]
-      exporters: [otlphttp/live]
+      exporters: [otlp_http/live]

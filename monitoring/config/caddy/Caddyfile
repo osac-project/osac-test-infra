@@ -41,3 +41,27 @@ http://127.0.0.1:2021 {
 		}
 	}
 }
+
+# ci-observe live OTLP ingest for the CI runner fleet (2026-11-01).
+# Runners push telemetry live during E2E runs; basic auth keeps anything but
+# the fleet from pushing, and the backend behind it is the ci-observe LGTM
+# stack's OTLP receiver. The credential lives in the CI_OBSERVE_OTLP_PASSWORD
+# secret of the osac and osac-test-infra repositories. The HAProxy SNI route
+# for osac-ci-1.redhat.com on :443 forwards here (see monitoring/README.md).
+#
+# The hash on the basic_auth line below is a PLACEHOLDER, never a real
+# credential: monitoring-setup.sh renders it at deploy time -- from an
+# environment variable, the machine's
+# ~/.monitoring-server/secrets/ci-observe-otlp-hash file, or the hash already
+# in the deployed Caddyfile -- so a deploy never clobbers the live credential
+# with the placeholder. Rotation: regenerate the bcrypt hash with
+# `caddy hash-password`, write it to the machine's secret file, update the
+# CI_OBSERVE_OTLP_PASSWORD secret in the osac and osac-test-infra
+# repositories, then redeploy the monitoring stack.
+https://osac-ci-1.redhat.com:4319 {
+	tls internal
+	basic_auth {
+		ci-observe CI_OBSERVE_OTLP_HASH
+	}
+	reverse_proxy 127.0.0.1:4318
+}

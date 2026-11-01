@@ -326,6 +326,7 @@ shows up, even as "skipped", on a PR that only touches monitoring config):
 - `.github/workflows/validate-monitoring.yml` — runs on PRs touching `monitoring/**`; config/rules/dashboard sanity checks, no secrets needed
 - `.github/workflows/monitoring-unit-tests.yml` — runs on PRs touching `monitoring/scripts/**` or `monitoring/tests/**`; the `monitoring/tests/` unit tests for the exporter and digest scripts, with an 80% coverage floor
 - `.github/workflows/deploy-monitoring.yml` — runs on push to `main` (or manual dispatch) on the dedicated `monitoring-central` self-hosted runner; refreshes the live stack and fans out to registered remote runners
+- `.github/workflows/ci-observe-backend.yml` — runs on push to `main` touching `monitoring/config/ci-observe/**` (or manual dispatch) on `monitoring-central`; redeploys the ci-observe LGTM backend (`ci-observe.py up --quadlet`), the deploy path the sync workflow's disabled schedule used to provide. Never scheduled: a backend restart drops in-flight live-ingest batches
 
 ### Slack On-Call Rotation
 

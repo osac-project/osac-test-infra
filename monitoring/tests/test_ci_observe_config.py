@@ -235,15 +235,18 @@ class TestLiveGateway:
     of appending to capture files."""
 
     def test_file_capture_paths_are_gone(self, collector_live: dict[str, Any]) -> None:
-        assert set(collector_live["exporters"]) == {"otlphttp/live"}
+        assert set(collector_live["exporters"]) == {"otlp_http/live"}
         for signal in SIGNALS:
-            assert collector_live["service"]["pipelines"][signal]["exporters"] == ["otlphttp/live"]
+            assert collector_live["service"]["pipelines"][signal]["exporters"] == ["otlp_http/live"]
         dumped = yaml.safe_dump(collector_live)
         assert "/capture/" not in dumped, "the live config must not write to the capture volume"
         assert not re.search(r"\bfile/", dumped), "the live config must not use file exporters"
+        # 0.164.0 renamed the exporter component: "otlphttp" is only a
+        # deprecated alias and logs a deprecation warning on every start.
+        assert "otlphttp" not in dumped, 'use the "otlp_http" component name, not the deprecated "otlphttp" alias'
 
     def test_exports_live_with_auth_and_insecure_tls(self, collector_live: dict[str, Any]) -> None:
-        exporter = collector_live["exporters"]["otlphttp/live"]
+        exporter = collector_live["exporters"]["otlp_http/live"]
         assert exporter["endpoint"] == "${env:CI_OBSERVE_OTLP_ENDPOINT}"
         assert exporter["headers"]["Authorization"] == "${env:CI_OBSERVE_OTLP_AUTH}"
         # The central endpoint serves an internal-CA certificate; the
@@ -253,9 +256,20 @@ class TestLiveGateway:
     def test_queue_and_retry_survive_a_brief_central_outage(self, collector_live: dict[str, Any]) -> None:
         """A central deploy or restart must not drop in-flight batches: the
         sending queue holds them and the exporter keeps retrying."""
-        exporter = collector_live["exporters"]["otlphttp/live"]
+        exporter = collector_live["exporters"]["otlp_http/live"]
         assert exporter["sending_queue"]["queue_size"] >= 5000
         assert exporter["retry_on_failure"]["enabled"] is True
+
+    def test_self_metrics_keep_the_undocumented_raw_counter_names(self, collector_live: dict[str, Any]) -> None:
+        """The capture action's verify step reads
+        otelcol_receiver_accepted/refused_* and otelcol_exporter_sent/
+        send_failed_* off :8888, so the counter names are a contract. A
+        manually configured prometheus reader appends _total to counters
+        (collector v0.119+); without_type_suffix keeps the raw names the
+        verify step's parser (and this repo's dashboards) expect."""
+        reader = collector_live["service"]["telemetry"]["metrics"]["readers"][0]["pull"]["exporter"]["prometheus"]
+        assert reader["port"] == 8888
+        assert reader["without_type_suffix"] is True
 
     def test_collects_and_stamps_the_same_signals(
         self, collector_live: dict[str, Any], collector: dict[str, Any]

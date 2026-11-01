@@ -89,6 +89,21 @@ historical `ci-observe-capture-*` artifacts:
    imports them.
 3. Each repository's sync report is posted to the job summary.
 
+With the schedule gone, the backend's own config
+(`monitoring/config/ci-observe/lgtm-overrides/`) had no deploy path left;
+`ci-observe-backend.yml` fills that gap: on a push to main touching
+`monitoring/config/ci-observe/**` (or a manual dispatch) it runs exactly the
+sync workflow's vault-auth and `ci-observe.py up --quadlet` steps on the
+monitoring-central runner, and nothing else. It deliberately has no
+schedule, for the same batch-dropping reason.
+
+The capture action verifies delivery after the test: it scrapes the gateway
+collector's self-metrics (`:8888`) and fails the job when telemetry was
+requested but never reached the central backend (deployment failed, receiver
+refused data, exporter send failures, sent less than accepted, or nothing
+collected at all). The failure message always says the test result above is
+unaffected — the test's own exit code stays the run step's outcome.
+
 The backend uses the persistent state directory `~/monitoring/ci-observe` and
 fixed loopback ports: UI 3300, OTLP 4318, Tempo 3200, Loki 3100 and Prometheus
 9092. The other ports on that machine are taken (3000 deployed Grafana, 3443
