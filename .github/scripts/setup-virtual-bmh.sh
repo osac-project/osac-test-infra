@@ -14,6 +14,7 @@
 # Optional env:
 #   BMH_NAMESPACE  — namespace for BMH resources (default: host-inventory)
 #   BMH_COUNT      — number of virtual BMHs to create (default: 2)
+#   BMH_DATA_DISK_SIZE — optional blank data disk size, e.g. 50G (default: disabled)
 #   SUSHY_PORT     — sushy-tools listen port (default: 8000)
 #   SUSHY_CACHE_PORT — nginx ISO cache listen port (default: 8080)
 #   VM_DISK_DIR     — parent directory for clone-specific BMH disks (default: /tmp)
@@ -26,6 +27,11 @@ set -euo pipefail
 
 BMH_NAMESPACE="${BMH_NAMESPACE:-host-inventory}"
 BMH_COUNT="${BMH_COUNT:-2}"
+BMH_DATA_DISK_SIZE="${BMH_DATA_DISK_SIZE:-}"
+if [[ -n "${BMH_DATA_DISK_SIZE}" && ! "${BMH_DATA_DISK_SIZE}" =~ ^[1-9][0-9]*[kMGT]?$ ]]; then
+  echo "ERROR: BMH_DATA_DISK_SIZE must be a positive integer with optional k/M/G/T suffix." >&2
+  exit 1
+fi
 SUSHY_PORT="${SUSHY_PORT:-8000}"
 SUSHY_CACHE_PORT="${SUSHY_CACHE_PORT:-8080}"
 SUSHY_CONFIG_DIR="${HOME}/sushy-${CLONE_NAME}"
@@ -52,23 +58,30 @@ sushy_process_matches() {
 }
 
 vm_storage_matches() {
-  local vm_name="$1" expected_disk="$2" expected_nvram="$3"
+  local vm_name="$1" expected_disk="$2" expected_nvram="$3" expected_data="${4:-}"
   ${VIRSH} dumpxml "${vm_name}" | python3 -c '
 import sys
 import xml.etree.ElementTree as ET
 
-expected_disk, expected_nvram = sys.argv[1:]
+expected_disk, expected_nvram, expected_data = sys.argv[1:]
 root = ET.fromstring(sys.stdin.read())
-disk = ""
+disk = None
+data_disks = []
 for device in root.findall("./devices/disk"):
     target = device.find("target")
     source = device.find("source")
-    if target is not None and target.get("dev") == "vda" and source is not None:
+    if disk is None and target is not None and target.get("dev") == "vda" and source is not None:
         disk = source.get("file", "")
-        break
+    if target is not None and target.get("dev") == "vdb":
+        driver = device.find("driver")
+        compatible = (target.get("bus") == "virtio" and device.get("type") == "file"
+                      and device.get("device") == "disk" and driver is not None
+                      and driver.get("type") == "qcow2" and source is not None)
+        data_disks.append(source.get("file", "") if compatible else "")
 nvram = root.findtext("./os/nvram", "")
-raise SystemExit(0 if disk == expected_disk and nvram == expected_nvram else 1)
-' "${expected_disk}" "${expected_nvram}"
+raise SystemExit(0 if disk == expected_disk and nvram == expected_nvram
+                 and (not expected_data or data_disks == [expected_data]) else 1)
+' "${expected_disk}" "${expected_nvram}" "${expected_data}"
 }
 
 # --- Step 1: Activate Ironic via Provisioning CR ---
@@ -346,16 +359,21 @@ for i in $(seq 1 "${BMH_COUNT}"); do
   VM_NAME="virtual-bmh-${CLONE_NAME}-${i}"
   MAC="52:54:00:bb:cc:$(printf '%02x' "${i}")"
   DISK_PATH="${VM_DISK_DIR}/${VM_NAME}.qcow2"
+  DATA_DISK_PATH="${VM_DISK_DIR}/${VM_NAME}-data.qcow2"
   VARS_PATH="${VM_DISK_DIR}/${VM_NAME}-VARS.fd"
 
   echo "  Preparing VM: ${VM_NAME} (MAC: ${MAC})..."
   if ${VIRSH} dominfo "${VM_NAME}" &>/dev/null; then
-    if ! vm_storage_matches "${VM_NAME}" "${DISK_PATH}" "${VARS_PATH}"; then
-      echo "ERROR: VM '${VM_NAME}' references unexpected disk/NVRAM files." >&2
+    if ! vm_storage_matches "${VM_NAME}" "${DISK_PATH}" "${VARS_PATH}" "${BMH_DATA_DISK_SIZE:+${DATA_DISK_PATH}}"; then
+      echo "ERROR: VM '${VM_NAME}' references unexpected disk/NVRAM/data disk files." >&2
       exit 1
     fi
     if [[ ! -e "${DISK_PATH}" || ! -e "${VARS_PATH}" ]]; then
       echo "ERROR: VM '${VM_NAME}' exists without its disk/NVRAM files." >&2
+      exit 1
+    fi
+    if [[ -n "${BMH_DATA_DISK_SIZE}" && ! -f "${DATA_DISK_PATH}" ]]; then
+      echo "ERROR: VM '${VM_NAME}' exists without its data disk file." >&2
       exit 1
     fi
     VM_STATE=$(${VIRSH} domstate "${VM_NAME}")
@@ -367,12 +385,24 @@ for i in $(seq 1 "${BMH_COUNT}"); do
       echo "ERROR: VM '${VM_NAME}' is in unsupported state '${VM_STATE}'." >&2
       exit 1
     fi
-  elif [[ -e "${DISK_PATH}" || -e "${VARS_PATH}" ]]; then
-    echo "ERROR: Disk/NVRAM files for '${VM_NAME}' exist without their VM." >&2
+  elif [[ -e "${DISK_PATH}" || -e "${VARS_PATH}" || -e "${DATA_DISK_PATH}" || -L "${DATA_DISK_PATH}" ]]; then
+    echo "ERROR: Disk/NVRAM/data disk files for '${VM_NAME}' exist without their VM." >&2
     exit 1
   else
     # Assisted needs at least 100 GB; 150 GB was verified locally for worker installs.
     qemu-img create -f qcow2 "${DISK_PATH}" 150G
+    DATA_DISK_XML=""
+    if [[ -n "${BMH_DATA_DISK_SIZE}" ]]; then
+      qemu-img create -f qcow2 "${DATA_DISK_PATH}" "${BMH_DATA_DISK_SIZE}"
+      DATA_DISK_XML=$(cat <<DATA_DISK
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='${DATA_DISK_PATH}'/>
+      <target dev='vdb' bus='virtio'/>
+    </disk>
+DATA_DISK
+)
+    fi
     cp "${OVMF_VARS}" "${VARS_PATH}"
 
     # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails with
@@ -400,6 +430,7 @@ for i in $(seq 1 "${BMH_COUNT}"); do
       <source file='${DISK_PATH}'/>
       <target dev='vda' bus='virtio'/>
     </disk>
+${DATA_DISK_XML}
     <interface type='network'>
       <mac address='${MAC}'/>
       <source network='${CT_NETWORK}'/>
