@@ -55,12 +55,33 @@ signal is killed with SIGKILL; descendants that ignore a forwarded signal while 
 leader already exited are not reaped, and that gap is accepted.
 
 
-## Automatic sync
+## Live telemetry push
 
-An E2E workflow run with the `ci-observe` input uploads its capture as a
-`ci-observe-capture-<run>-attempt-<attempt>` artifact. The scheduled
-`ci-observe-sync.yml` workflow (every 15 minutes, on the central monitoring
-machine osac-ci-1) then keeps the backend current without manual steps:
+An E2E workflow run with the `ci-observe` input deploys the collector
+gateway into the cluster it tests, and the gateway streams every signal
+(pytest and Beyla traces, cluster logs, kubelet metrics, stamped with the
+capture identity) live to the central backend while the test runs:
+
+- The runners push to `https://osac-ci-1.redhat.com` (port 443): an HAProxy
+  SNI route for that hostname forwards to Caddy, which terminates TLS with
+  its internal CA and enforces HTTP basic auth, and proxies the backend's
+  OTLP receiver on loopback. Collectors set `insecure_skip_verify` for the
+  internal CA certificate; mounting the CA into the gateway pod for real
+  verification is a follow-up.
+- The credential (username `ci-observe`) lives in the
+  `CI_OBSERVE_OTLP_PASSWORD` secret of the `osac` and `osac-test-infra`
+  repositories; the callers pass it to the reusable workflows as
+  `ci-observe-otlp-password`, and the capture action renders it into the
+  gateway as a precomputed `Authorization` header. An empty password or
+  endpoint degrades to running the test without telemetry — never an
+  unauthenticated push.
+- Nothing touches GitHub: no capture artifact, no upload gate, no scan.
+  Telemetry is visible in the CI Grafana during the run.
+
+The `ci-observe-sync.yml` workflow is no longer scheduled: live pushes made
+it unnecessary for new runs, and its 15-minute backend restart would drop
+in-flight live-ingest batches. It remains dispatchable by hand to backfill
+historical `ci-observe-capture-*` artifacts:
 
 1. `ci-observe.py up` ensures the pinned LGTM stack is running.
 2. `ci-observe.py sync` downloads new artifacts from `osac-project/osac` and
