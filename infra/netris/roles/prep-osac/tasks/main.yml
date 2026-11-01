@@ -252,8 +252,9 @@
 # profile and installed CNV on BMaaS, whose golden-image DataVolumes filled the LVMS
 # pool and starved the AAP postgres PVC. lvms/bundledPostgres stay overridden because
 # every profile needs them.
-# The lab has a real Netris controller, so provider networking is enabled for
-# every suite. values/<profile>/netris.yaml selects the managers for vmaas,
+# The OSAC chart's shared networking provisioning setting defaults to true, so
+# leave that flag to the chart. The lab has a real Netris controller.
+# values/<profile>/netris.yaml selects the managers for vmaas,
 # bmaas and full; caas-ci and its maas alias have no overlay and keep their
 # k8sManager. These overrides hold what only the lab knows: the excluded ranges,
 # the tenant defaults, and the manager settings and secrets in
@@ -267,15 +268,23 @@
           'bundledPostgres': {'enabled': true},
           'lvms': {'enabled': true},
           'global': {'networking': {
-              'provisioningEnabled': true,
               'fabricManager': 'netris',
+              'netris': {
+                'controllerUrl': _netris_ctl_url,
+                'credentials': {'username': netris_username, 'externalSecret': true},
+                'siteId': _netris_site_id | string,
+                'tenantId': '1',
+                'tenantName': 'Admin',
+                'mgmtVpcId': _netris_mgmt_vpc_id | string,
+                'mgmtVpcName': ocp_vpc_name,
+                'resourceClassMap': _netris_resource_class_map | to_json
+              },
               'excludedIpv4Cidrs': _netris_excluded_ipv4_cidrs,
               'networkClass': {'defaults': {
                 'virtualNetworkIPv4CIDR': netris_tenant_network_cidr,
                 'subnetIPv4CIDR': netris_tenant_subnet_cidr}}
             }},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
-          'bmf': {'env': {'enableNetworkingProvisioning': 'true'}},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
               'NETRIS_USERNAME': netris_username,
               'NETRIS_SITE_ID': _netris_site_id | string,
@@ -388,7 +397,6 @@
 - name: Validate the networking contract of the final values
   ansible.builtin.assert:
     that:
-      - _final_values.global.networking.provisioningEnabled | bool
       - _final_values.global.networking.fabricManager == 'netris'
       - deploy_suite | default('') not in netris_k8s_manager_suites or _final_values.global.networking.k8sManager == 'cudn_evpn'
       - _final_values.global.networking.excludedIpv4Cidrs | length > 0
