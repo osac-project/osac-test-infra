@@ -576,14 +576,14 @@ jobs:
             values/full-ci/instance.yaml "${OVERLAY_DIR}/full-ci-instance.yaml" \
             > values/full-ci/instance.yaml.merged
           mv values/full-ci/instance.yaml.merged values/full-ci/instance.yaml
-          echo "::group::Merged full-ci values"
-          echo "--- infra.yaml (keycloak) ---"
-          yq '.keycloak' values/full-ci/infra.yaml
-          echo "--- instance.yaml (networking, AAP group enabled flags, lvms, metering.echoAdapter) ---"
-          yq '.global.networking | pick(["provisioningEnabled", "fabricManager", "k8sManager"])' values/full-ci/instance.yaml
-          yq '.aap.instanceGroups | pick(["clusterFulfillment", "networkFulfillment", "storageFulfillment"]) | with_entries(.value = (.value.enabled == true))' values/full-ci/instance.yaml
-          yq '.lvms' values/full-ci/instance.yaml
-          yq '.metering.echoAdapter' values/full-ci/instance.yaml
+          echo "::group::Merged full-ci values (structure only — no credentials)"
+          echo "--- infra.yaml (keycloak keys; JSON) ---"
+          yq -e -o=json '(.keycloak | select(tag == "!!null") = {}) | select(tag == "!!map") | keys' values/full-ci/infra.yaml
+          echo "--- instance.yaml (networking keys, AAP enabled flags, lvms keys, metering.echoAdapter keys; JSON) ---"
+          yq -e -o=json '(.global.networking | select(tag == "!!null") = {}) | select(tag == "!!map") | keys' values/full-ci/instance.yaml
+          yq -e -o=json '(.aap.instanceGroups | select(tag == "!!null") = {}) | select(tag == "!!map") | pick(["clusterFulfillment", "networkFulfillment", "storageFulfillment"]) | with_entries(.value = (.value | (select(tag == "!!null") = {}) | pick(["enabled"]) | .enabled == true))' values/full-ci/instance.yaml
+          yq -e -o=json '(.lvms | select(tag == "!!null") = {}) | select(tag == "!!map") | keys' values/full-ci/instance.yaml
+          yq -e -o=json '(.metering.echoAdapter | select(tag == "!!null") = {}) | select(tag == "!!map") | keys' values/full-ci/instance.yaml
           echo "::endgroup::"
 
           make install-infra PLATFORM=openshift PROFILE=full-ci NS="${INSTALLER_NAMESPACE}"
