@@ -119,19 +119,38 @@ def test_render_manifest_resolves_every_token(*, capture_module: ModuleType, tmp
         kubelet_endpoint="https://192.0.2.1:10250",
         suite="vmaas",
         pr="2051",
+        otlp_endpoint="https://osac-ci-1.redhat.com",
+        otlp_auth="Basic dXNlcjpwYXNz",
     )
     assert "${CI_OBSERVE_" not in rendered
-    assert "ci-observe-capture-cap123" in rendered
     assert "namespace: osac-e2e-ci" in rendered
     assert "k8s_namespace: osac-e2e-ci" in rendered
     # Suite and PR become the gateway env values the collector's
     # ${env:...} placeholders read.
     assert 'name: CI_OBSERVE_SUITE\n              value: "vmaas"' in rendered
     assert 'name: CI_OBSERVE_PR\n              value: "2051"' in rendered
+    # The live-push tokens become the gateway env values collector-live.yaml
+    # reads for the central OTLP export.
+    assert 'name: CI_OBSERVE_OTLP_ENDPOINT\n              value: "https://osac-ci-1.redhat.com"' in rendered
+    assert 'name: CI_OBSERVE_OTLP_AUTH\n              value: "Basic dXNlcjpwYXNz"' in rendered
     capture_module.MANIFEST = source / "cluster.yaml"
 
 
-def test_render_manifest_coalesces_suite_and_pr_to_none_when_unset(*, capture_module: ModuleType, tmp_path: Path) -> None:
+def test_render_manifest_leaves_the_live_tokens_empty_by_default(*, capture_module: ModuleType) -> None:
+    """The local file-capture path renders the shared manifest without live
+    push: the endpoint and auth tokens coalesce to empty values, which the
+    local collector config (collector.yaml) never reads."""
+    rendered = capture_module.render_manifest(
+        capture_id="cap123", namespace="osac-e2e-ci", cluster_uid="uid-1", kubelet_endpoint="https://192.0.2.1:10250"
+    )
+    assert "${CI_OBSERVE_" not in rendered
+    assert 'name: CI_OBSERVE_OTLP_ENDPOINT\n              value: ""' in rendered
+    assert 'name: CI_OBSERVE_OTLP_AUTH\n              value: ""' in rendered
+
+
+def test_render_manifest_coalesces_suite_and_pr_to_none_when_unset(
+    *, capture_module: ModuleType, tmp_path: Path
+) -> None:
     """A local capture without suite/PR context still renders: the tokens
     coalesce to "none", because the gateway's collector config cannot expand
     an empty value (its resource processor rejects it at load)."""

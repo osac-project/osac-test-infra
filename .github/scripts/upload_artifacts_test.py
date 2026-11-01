@@ -86,41 +86,6 @@ class UploadArtifactsTest(unittest.TestCase):
     def test_explicit_override_is_forwarded(self) -> None:
         self.assert_size("2048", {"max-file-mbytes": "2048"})
 
-    def test_capture_yaml_passes_size_override(self) -> None:
-        capture = load_action("ci-observe-capture")
-        upload = next(step for step in capture["runs"]["steps"] if step.get("id") == "upload")
-        self.assertEqual(upload["uses"], "./.github/actions/upload-artifacts")
-        self.assertEqual(upload["with"]["max-file-mbytes"], "2048")
-        self.assertEqual(upload["with"]["overwrite"], "true")
-        # The capture opts out of the gitleaks pre-scan: ~1 GB of telemetry
-        # JSONL costs ~24 minutes of pattern scanning. The release gate and
-        # the upload still run for it.
-        self.assertEqual(upload["with"]["gitleaks"], "false")
-        # The gate's secret list replaces its pull-secret-only default, so
-        # the capture lists the pull secret and the extracted AAP license
-        # contents explicitly; absent files are skipped.
-        self.assertEqual(
-            [line.strip() for line in upload["with"]["known-secret-files"].splitlines() if line.strip()],
-            ["${{ runner.temp }}/pull-secret.json", "${{ runner.temp }}/aap-license-contents.txt"],
-        )
-        # Fail-closed: the upload runs only when the license inventory was
-        # prepared completely (outcome keeps the raw result under
-        # continue-on-error).
-        self.assertIn("steps.license_prep.outcome == 'success'", upload["if"])
-        self.assert_size("2048", {"max-file-mbytes": upload["with"]["max-file-mbytes"]})
-
-    def test_capture_license_prep_is_private_fail_closed_and_recursive(self) -> None:
-        capture = load_action("ci-observe-capture")
-        steps = capture["runs"]["steps"]
-        prep = next(step for step in steps if step.get("id") == "license_prep")
-        # The plaintext license stays as private as its 0600 zip.
-        self.assertIn("umask 077", prep["run"])
-        # Nested license archives are extracted, not appended as binary.
-        self.assertIn('endswith(".zip")', prep["run"])
-        # The plaintext inventory does not outlive the job.
-        cleanup = next(step for step in steps if step.get("name") == "Clean staged capture files")
-        self.assertIn("aap-license-contents.txt", cleanup["run"])
-
     def test_gitleaks_scan_runs_by_default(self) -> None:
         # Default true, so every caller that does not pass the input keeps
         # the full scan.

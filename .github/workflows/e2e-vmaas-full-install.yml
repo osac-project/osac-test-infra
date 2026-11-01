@@ -170,14 +170,21 @@ on:
         default: "osac-project/osac"
       ci-observe:
         description: >-
-          Capture ci-observe telemetry (OTel collector gateway plus Beyla in
-          the ci-observability-canary namespace) around the E2E test run and
-          upload it as its own workflow artifact. Opt-in, default off: the
-          plain test step runs unchanged when false. A capture problem is a
-          warning in the job summary and never changes the test result.
+          Run the E2E test under ci-observe telemetry (OTel collector gateway
+          plus Beyla in the ci-observability-canary namespace) and push it
+          live to the central backend during the run. Opt-in, default off:
+          the plain test step runs unchanged when false. A telemetry problem
+          is a warning in the job summary and never changes the test result.
         required: false
         type: boolean
         default: false
+    secrets:
+      ci-observe-otlp-password:
+        description: >-
+          Password for the central ci-observe OTLP ingest (basic auth user
+          ci-observe). Passed through to the capture action when ci-observe
+          is on; empty degrades to running the test without telemetry.
+        required: false
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -1261,11 +1268,10 @@ jobs:
       # command below mirrors the plain step's script -- keep the two in
       # sync. The action deploys the collector gateway and Beyla before the
       # command, runs it with the OTEL exporter environment pointed at the
-      # gateway (the three pass-through -e flags below), and afterwards --
-      # always, even after a failure or cancellation -- closes the capture,
-      # copies it off its PVC and uploads it as an artifact through the
-      # gitleaks-scanning upload path. The command's own exit code is the
-      # step's outcome; capture problems surface as warnings only.
+      # gateway (the three pass-through -e flags below), and the gateway
+      # pushes all telemetry live to the central backend during the run --
+      # no artifact, no post-test copy. The command's own exit code is the
+      # step's outcome; telemetry problems surface as warnings only.
       - name: Run E2E tests (ci-observe capture)
         id: test-observed
         if: ${{ inputs.ci-observe }}
@@ -1290,11 +1296,13 @@ jobs:
           # are promoted to labels. Every component is DNS-1123 by
           # construction (fixed suite word, digits, "main"), and the full run
           # id keeps the id unique; the total stays under 30 characters, so
-          # the PVC and readout pod names built from it fit the 63-character
-          # pod-name cap.
+          # it stays a short, readable label value in the backend.
           capture-id: ${{ format('vmaas-{0}-{1}-a{2}', inputs.pr-number != '' && format('pr{0}', inputs.pr-number) || 'main', github.run_id, github.run_attempt) }}
           suite: vmaas
           pr: ${{ inputs.pr-number }}
+          # The central ingest password reaches the action as a secret, the
+          # same data-only channel as every other input.
+          otlp-password: ${{ secrets.ci-observe-otlp-password }}
           command: |
 
             KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"

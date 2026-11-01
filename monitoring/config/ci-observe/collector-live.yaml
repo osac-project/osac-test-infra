@@ -1,0 +1,312 @@
+# ci-observe gateway, LIVE PUSH PATH: this config is deployed by the CI
+# capture action (.github/actions/ci-observe-capture/action.yml). The
+# gateway receives the same signals as the local file-capture config
+# (collector.yaml, deployed by monitoring/scripts/ci_observe_capture.py)
+# but exports them live, over OTLP/HTTP, to the central backend while the
+# test is still running -- no capture PVC, no artifact, no post-test copy.
+#
+# Stock OpenTelemetry Collector Contrib 0.164.0
+# (ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
+# @sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b;
+# component names verified with that binary: otlp, k8s_objects, file_log,
+# kubelet_stats, resource, transform, batch, memory_limiter, health_check,
+# file_storage, otlphttp).
+#
+# The gateway receives OTLP on 4317/4318 (pytest traces from the test
+# container through the port-forward, Beyla traces in-cluster), watches
+# selected Kubernetes objects and events in the OSAC namespace, tails that
+# namespace's pod logs, scrapes kubelet stats, stamps every signal with the
+# capture identity and pushes all three signals to the central backend.
+#
+# Placeholders use the collector's native ${env:...} expansion; the capture
+# action sets these on the gateway container:
+#   CI_OBSERVE_CAPTURE_ID        capture identity, one active capture per cluster
+#   CI_OBSERVE_NAMESPACE         observed OSAC namespace, e.g. osac-e2e-ci
+#   CI_OBSERVE_CLUSTER_UID       cluster identity
+#   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250 (single-node canary)
+#   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
+#   CI_OBSERVE_PR                pull request number; empty for non-PR runs
+#   CI_OBSERVE_OTLP_ENDPOINT     central ingest, e.g. https://osac-ci-1.redhat.com
+#   CI_OBSERVE_OTLP_AUTH         precomputed "Basic <base64>" authorization header
+#
+# Watch resourceVersions and filelog offsets live on the gateway pod's
+# state volume (an emptyDir): they only need to survive container restarts,
+# not pod deletion -- a deleted pod is a lost capture either way.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  # Separate storage instances: components must not share a file_storage
+  # directory. Both live on the pod-local state volume so a container
+  # restart keeps watch resourceVersions and filelog offsets.
+  file_storage/k8sobjects:
+    directory: /state/k8sobjects
+    create_directory: true
+  file_storage/filelog:
+    directory: /state/filelog
+    create_directory: true
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  k8s_objects:
+    auth_type: serviceAccount
+    # A missing CRD degrades coverage; it must not kill the gateway.
+    error_mode: ignore
+    # Persisted resourceVersions prevent duplicate watch events after a
+    # gateway restart.
+    storage: file_storage/k8sobjects
+    # One snapshot of every watched object at startup, then the watches.
+    include_initial_state: true
+    objects:
+      - name: pods
+        mode: watch
+        namespaces: ["${env:CI_OBSERVE_NAMESPACE}"]
+      - name: events
+        mode: watch
+        namespaces: ["${env:CI_OBSERVE_NAMESPACE}"]
+      - name: computeinstances
+        group: osac.openshift.io
+        mode: watch
+        namespaces: ["${env:CI_OBSERVE_NAMESPACE}"]
+      - name: virtualnetworks
+        group: osac.openshift.io
+        mode: watch
+        namespaces: ["${env:CI_OBSERVE_NAMESPACE}"]
+      - name: subnets
+        group: osac.openshift.io
+        mode: watch
+        namespaces: ["${env:CI_OBSERVE_NAMESPACE}"]
+      - name: clusterorders
+        group: osac.openshift.io
+        mode: watch
+        namespaces: ["${env:CI_OBSERVE_NAMESPACE}"]
+
+  # Pod logs of the observed namespace only. The node path pattern is
+  # /var/log/pods/<namespace>_<pod>_<uid>/<container>/<n>.log, so the env
+  # placeholder inside the glob keeps collection namespaced. Raw log bodies
+  # are NOT proven secret-free; the transform processors below scrub the two
+  # long-lived secrets before anything leaves the cluster. Unmatched and CRI
+  # partial lines are dropped, not recombined.
+  file_log:
+    include:
+      - /var/log/pods/${env:CI_OBSERVE_NAMESPACE}_*/*/*.log
+    start_at: beginning
+    include_file_path: true
+    storage: file_storage/filelog
+    operators:
+      - type: router
+        id: get-format
+        routes:
+          # Route expressions use the stanza variable `body` without any
+          # dollar prefix. The older `$$body` form from widely copied docs
+          # never matches at 0.164.0 and drops every line silently.
+          - output: parse-docker
+            expr: 'body matches "^{"'
+          - output: parse-crio
+            expr: 'body matches "^[^ ]+ (stdout|stderr) "'
+      - type: json_parser
+        id: parse-docker
+        output: extract-metadata-from-filepath
+        timestamp:
+          parse_from: attributes.time
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
+      - type: regex_parser
+        id: parse-crio
+        output: extract-metadata-from-filepath
+        regex: '^(?P<time>[^ ]+) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) ?(?P<log>.*)$'
+        timestamp:
+          parse_from: attributes.time
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
+      - type: regex_parser
+        id: extract-metadata-from-filepath
+        parse_from: attributes["log.file.path"]
+        regex: '^/var/log/pods/(?P<namespace>[^_/]+)_(?P<pod>[^_/]+)_(?P<uid>[^/]+)/(?P<container>[^/]+)/[^/]+$'
+      - type: move
+        from: attributes.log
+        to: body
+
+  # Node, pod and container CPU/memory/filesystem/network metrics from the
+  # kubelet summary API. Requires the narrow read-only nodes/stats
+  # ClusterRole in cluster.yaml. If the kubelet refuses the service account,
+  # this degrades to a named metrics gap.
+  #
+  # No extra_metadata_labels, ever: any entry makes every scrape call the
+  # kubelet /pods endpoint first (kubeletstats 0.164, scraper.go), which the
+  # kubelet authorizes as the nodes/proxy subresource -- outside the
+  # nodes/stats grant -- and a /pods failure aborts the whole scrape, so not
+  # one metric reaches the backend. That is exactly how every capture so
+  # far lost its cluster metrics. Pod and container identity (k8s.pod.name,
+  # k8s.namespace.name, k8s.pod.uid, k8s.container.name) comes from
+  # /stats/summary itself and needs no extra call; only container.id would
+  # need /pods, and it is not worth the wider grant.
+  kubelet_stats:
+    auth_type: serviceAccount
+    endpoint: ${env:CI_OBSERVE_KUBELET_ENDPOINT}
+    collection_interval: 60s
+    insecure_skip_verify: true
+
+processors:
+  resource/capture:
+    attributes:
+      - key: osac.ci.capture_id
+        value: ${env:CI_OBSERVE_CAPTURE_ID}
+        action: upsert
+      - key: osac.ci.observed_namespace
+        value: ${env:CI_OBSERVE_NAMESPACE}
+        action: upsert
+      - key: osac.ci.cluster_uid
+        value: ${env:CI_OBSERVE_CLUSTER_UID}
+        action: upsert
+      # Suite and PR make captures filterable in Grafana (osac.ci.suite,
+      # osac.ci.pr). They are upserted here, on every signal the gateway
+      # exports -- pytest and Beyla traces, k8sobjects/filelog logs and
+      # kubelet metrics alike -- because the test process itself knows
+      # nothing about them. Empty for non-PR runs: Loki and Prometheus drop
+      # empty label values, so the label is simply absent there.
+      # The coordinator always sets both variables, to "none" when there
+      # is no PR: an empty value here makes the resource processor reject
+      # the whole config at load (the env provider does not apply
+      # bash-style defaults), and an unset one fails expansion.
+      - key: osac.ci.suite
+        value: ${env:CI_OBSERVE_SUITE}
+        action: upsert
+      - key: osac.ci.pr
+        value: ${env:CI_OBSERVE_PR}
+        action: upsert
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+  # One exporter request is one batch. 256 records keeps requests small
+  # enough for the central HAProxy/Caddy hop while not spending a full
+  # HTTP round trip per record.
+  batch:
+    timeout: 5s
+    send_batch_size: 256
+    send_batch_max_size: 256
+  # Sender-side secret scrubbing. Policy (user decision, 2026-10-30):
+  # debuggability first. Telemetry lands in the internal CI-team Grafana on
+  # ephemeral per-job clusters, so raw parameter values, exception text,
+  # stack traces and command lines are KEPT for investigation. Exactly two
+  # long-lived secrets are scrubbed, wherever they appear in trace fields and
+  # pod log bodies: the container registry pull secret and the AAP license.
+  # On the live path this scrubbing is the only layer: there is no artifact,
+  # so no release gate and no gitleaks scan ever sees the data.
+  #
+  # Rule 1, registry pull secret, both known dockerconfigjson shapes: a
+  # JSON "auth" field holding base64 registry credentials, and a base64
+  # blob whose decoded form starts with {"auths": (fixed base64 prefix
+  # eyJhdXRocyI6). Rule 2, AAP license: a license/entitlement/subscription
+  # keyword followed by a 200+ character base64 run. Known gaps, accepted
+  # here: PEM entitlement certificates with embedded newlines, plain
+  # "password" fields, and structured fields nested inside k8s object
+  # bodies (string log bodies are scrubbed below in transform/k8s_objects).
+  #
+  # The attribute deletions in the span context are network protocol
+  # hygiene (authorization headers, URLs with credentials, query text,
+  # request bodies), not test-data redaction, and stay as they are.
+  transform/sanitize_traces:
+    error_mode: ignore
+    trace_statements:
+      - context: resource
+        statements:
+          - 'replace_all_patterns(attributes, "value", "(\"auth\"\\s*:\\s*\")[A-Za-z0-9+/=]{8,}(\")|eyJhdXRocyI6[A-Za-z0-9+/=]{40,}", "$1[registry-secret]$2")'
+          - 'replace_all_patterns(attributes, "value", "(?i)(license|entitlement|subscription)([^A-Za-z0-9+/=]{0,8})[A-Za-z0-9+/=]{200,}", "$1$2[aap-license]")'
+      - context: span
+        statements:
+          - delete_matching_keys(attributes, "http.request.header.*")
+          - delete_matching_keys(attributes, "http.response.header.*")
+          - delete_key(attributes, "http.request.body")
+          - delete_key(attributes, "http.response.body")
+          - delete_key(attributes, "db.query.text")
+          - delete_key(attributes, "db.statement")
+          - delete_key(attributes, "url.query")
+          - delete_key(attributes, "url.full")
+          - 'replace_all_patterns(attributes, "value", "(\"auth\"\\s*:\\s*\")[A-Za-z0-9+/=]{8,}(\")|eyJhdXRocyI6[A-Za-z0-9+/=]{40,}", "$1[registry-secret]$2")'
+          - 'replace_all_patterns(attributes, "value", "(?i)(license|entitlement|subscription)([^A-Za-z0-9+/=]{0,8})[A-Za-z0-9+/=]{200,}", "$1$2[aap-license]")'
+          - 'replace_pattern(name, "(\"auth\"\\s*:\\s*\")[A-Za-z0-9+/=]{8,}(\")|eyJhdXRocyI6[A-Za-z0-9+/=]{40,}", "$1[registry-secret]$2")'
+          - 'replace_pattern(name, "(?i)(license|entitlement|subscription)([^A-Za-z0-9+/=]{0,8})[A-Za-z0-9+/=]{200,}", "$1$2[aap-license]")'
+          - 'replace_pattern(status.message, "(\"auth\"\\s*:\\s*\")[A-Za-z0-9+/=]{8,}(\")|eyJhdXRocyI6[A-Za-z0-9+/=]{40,}", "$1[registry-secret]$2") where status.message != nil'
+          - 'replace_pattern(status.message, "(?i)(license|entitlement|subscription)([^A-Za-z0-9+/=]{0,8})[A-Za-z0-9+/=]{200,}", "$1$2[aap-license]") where status.message != nil'
+      - context: spanevent
+        statements:
+          - 'replace_all_patterns(attributes, "value", "(\"auth\"\\s*:\\s*\")[A-Za-z0-9+/=]{8,}(\")|eyJhdXRocyI6[A-Za-z0-9+/=]{40,}", "$1[registry-secret]$2")'
+          - 'replace_all_patterns(attributes, "value", "(?i)(license|entitlement|subscription)([^A-Za-z0-9+/=]{0,8})[A-Za-z0-9+/=]{200,}", "$1$2[aap-license]")'
+  transform/k8s_objects:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          # k8s_objects watch records: body = {"type": ..., "object": {...}}.
+          # Project metadata and status only; specs, env and secret refs
+          # never leave the cluster. file_log records have no
+          # k8s.resource.name attribute and skip these statements.
+          - delete_key(body["object"]["metadata"], "managedFields") where IsMap(body["object"])
+          - keep_keys(body["object"], ["metadata", "status"]) where IsMap(body["object"]) and attributes["k8s.resource.name"] != nil and attributes["k8s.resource.name"] != "events"
+          - keep_keys(body["object"], ["metadata", "involvedObject", "reason", "message", "type", "count", "firstTimestamp", "lastTimestamp", "eventTime", "reportingComponent", "reportingInstance", "source"]) where IsMap(body["object"]) and attributes["k8s.resource.name"] == "events"
+          # The same two secret rules on raw pod log bodies (string bodies
+          # only). Raw parameter values, exception text and command lines in
+          # log bodies are kept; see the policy note on
+          # transform/sanitize_traces.
+          - 'replace_pattern(body, "(\"auth\"\\s*:\\s*\")[A-Za-z0-9+/=]{8,}(\")|eyJhdXRocyI6[A-Za-z0-9+/=]{40,}", "$1[registry-secret]$2") where IsString(body)'
+          - 'replace_pattern(body, "(?i)(license|entitlement|subscription)([^A-Za-z0-9+/=]{0,8})[A-Za-z0-9+/=]{200,}", "$1$2[aap-license]") where IsString(body)'
+
+exporters:
+  # Live push to the central backend's OTLP ingest (an HAProxy SNI route on
+  # osac-ci-1.redhat.com that forwards to the LGTM stack's OTLP receiver
+  # behind basic auth). All three pipelines export here.
+  otlphttp/live:
+    endpoint: ${env:CI_OBSERVE_OTLP_ENDPOINT}
+    tls:
+      # The endpoint serves a certificate from an internal CA. Follow-up:
+      # mount the CA into the gateway pod and verify it instead of skipping
+      # verification.
+      insecure: true
+    headers:
+      # Precomputed by the capture action: "Basic <base64(user:password)>".
+      Authorization: "${env:CI_OBSERVE_OTLP_AUTH}"
+    # A brief central outage (a deploy, a restart) must not drop data: the
+    # queue holds unsent batches in memory and retry_on_failure keeps
+    # retrying with the collector's default exponential backoff (30s max
+    # per attempt). 5000 batches at 256 records each is hours of headroom
+    # for a capture; the memory_limiter above is the real ceiling.
+    sending_queue:
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+
+service:
+  extensions: [health_check, file_storage/k8sobjects, file_storage/filelog]
+  telemetry:
+    metrics:
+      # Real data counters, not only process readiness: scrape :8888 for
+      # otelcol_receiver_accepted/refused_* and otelcol_exporter_sent/send_failed_*
+      # per signal. An expected source with zero accepted records is a
+      # coverage gap; a rising send_failed count means the central endpoint
+      # is refusing the live push.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/capture, transform/sanitize_traces, batch]
+      exporters: [otlphttp/live]
+    metrics:
+      receivers: [otlp, kubelet_stats]
+      processors: [memory_limiter, resource/capture, batch]
+      exporters: [otlphttp/live]
+    logs:
+      receivers: [otlp, k8s_objects, file_log]
+      processors: [memory_limiter, resource/capture, transform/k8s_objects, batch]
+      exporters: [otlphttp/live]

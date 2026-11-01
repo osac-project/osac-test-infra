@@ -3,21 +3,26 @@
 The integration is the composite action
 .github/actions/ci-observe-capture/action.yml and its wiring into the
 reusable e2e-{vmaas,bmaas,caas}-full-install.yml workflows. These tests pin
-the contract that makes the capture safe to turn on for a real E2E job:
+the contract that makes the telemetry safe to turn on for a real E2E job:
 
-- the capture is opt-in (the workflow input defaults to false),
+- the telemetry is opt-in (the workflow input defaults to false),
 - the action reuses the repo's collector configs instead of its own copies,
-- the capture artifact name carries the run id and the attempt,
+- the action pushes telemetry live to the central backend (basic-auth
+  OTLP/HTTP from the collector gateway) and uploads no artifact,
 - the test command's exit code is preserved: the run step has no
   continue-on-error and exits with the captured return code, while every
-  capture-side step degrades to a warning instead of failing the job.
+  telemetry-side step degrades to a warning instead of failing the job,
+- an empty OTLP password degrades to running the test without telemetry,
+  never to an unauthenticated push.
 
-The automatic backend wiring is pinned too: the scheduled
-ci-observe-sync.yml workflow on the central monitoring machine and the
-Grafana datasources that point at its fixed ports.
+The backend wiring is pinned too: the ci-observe-sync.yml workflow on the
+central monitoring machine (manual dispatch only -- the schedule is
+disabled because live pushes made the artifact sync unnecessary and its
+backend restart would drop in-flight live-ingest batches) and the Grafana
+datasources that point at its fixed ports.
 
-Runtime behavior (deploy, capture, close) is exercised on a live cluster by
-the capture supervisor's own validation; see monitoring/ci-observe.md.
+Runtime behavior (deploy, live push) is exercised on a live cluster by the
+capture supervisor's own validation; see monitoring/ci-observe.md.
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ _spec = importlib.util.spec_from_file_location("ci_observe_workflow_mod", SCRIPT
 ci_observe = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ci_observe)
 CLUSTER_MANIFEST = REPO_ROOT / "monitoring" / "config" / "ci-observe" / "cluster.yaml"
-COLLECTOR_CONFIG = REPO_ROOT / "monitoring" / "config" / "ci-observe" / "collector.yaml"
+COLLECTOR_LIVE_CONFIG = REPO_ROOT / "monitoring" / "config" / "ci-observe" / "collector-live.yaml"
 
 # The three full-install reusable workflows wired for capture, and the
 # callers that own their workflow_dispatch inputs.
@@ -52,7 +57,6 @@ FULL_INSTALL_CALLERS = {
 }
 PR_SUITE_STARTERS = {suite: REPO_ROOT / ".github" / "workflows" / f"e2e-pr-{suite}.yml" for suite in SUITES}
 
-UPLOAD_ACTION = "./.github/actions/upload-artifacts"
 CAPTURE_ACTION = "./.github/actions/ci-observe-capture"
 
 # The -e flags the observed command adds so the action's OTEL exports reach
@@ -142,19 +146,23 @@ class TestAction:
         assert inputs["suite"]["default"] == ""
         assert inputs["pr"]["required"] is False
         assert inputs["pr"]["default"] == ""
-        # Self-contained: every step is an inline run or an existing repo
-        # action, never a script of its own.
+        # The ingest password is a secret callers pass; empty is valid and
+        # degrades to running the test without telemetry.
+        assert inputs["otlp-password"]["required"] is False
+        assert inputs["otlp-password"]["default"] == ""
+        # Self-contained: every step is an inline run, never a script of its
+        # own or a nested action.
         for step in action["runs"]["steps"]:
-            assert "run" in step or "uses" in step, step.get("name")
+            assert "run" in step, step.get("name")
             assert not str(step.get("run", "")).startswith("python3 "), step.get("name")
 
     def test_reuses_the_repo_collector_configs(self, action: dict) -> None:
         deploy = step_by_id(action["runs"]["steps"], "deploy")
         script = deploy["run"]
         assert "monitoring/config/ci-observe/cluster.yaml" in script
-        assert "monitoring/config/ci-observe/collector.yaml" in script
+        assert "monitoring/config/ci-observe/collector-live.yaml" in script
         assert CLUSTER_MANIFEST.is_file()
-        assert COLLECTOR_CONFIG.is_file()
+        assert COLLECTOR_LIVE_CONFIG.is_file()
 
     def test_renders_suite_and_pr_into_the_cluster_manifest(self, action: dict) -> None:
         """The suite and PR inputs become the CI_OBSERVE_SUITE / CI_OBSERVE_PR
@@ -171,11 +179,35 @@ class TestAction:
         assert "tr -cd 'a-z0-9-'" in script
         assert "tr -cd '0-9'" in script
 
+    def test_renders_the_otlp_endpoint_and_auth_into_the_cluster_manifest(self, action: dict) -> None:
+        """The deploy step computes the basic-auth header from the
+        otlp-password secret input ("Basic <base64 of ci-observe:password>",
+        so the password itself never lands in the manifest) and renders the
+        endpoint and header into the gateway env, which collector-live.yaml
+        reads for the live push."""
+        deploy = step_by_id(action["runs"]["steps"], "deploy")
+        script = deploy["run"]
+        assert deploy["env"]["OTLP_PASSWORD_INPUT"] == "${{ inputs.otlp-password }}"
+        assert 'printf \'%s:%s\' "ci-observe" "${OTLP_PASSWORD_INPUT}"' in script
+        assert "| base64)" in script
+        for token in ("CI_OBSERVE_OTLP_ENDPOINT", "CI_OBSERVE_OTLP_AUTH"):
+            assert f'-e "s|\\${{{token}}}' in script, token
+        assert "https://osac-ci-1.redhat.com" in script
+
+    def test_missing_otlp_password_degrades_to_no_telemetry(self, action: dict) -> None:
+        """An empty password (or endpoint) must never become an
+        unauthenticated push: the deploy step warns, marks the deployment
+        failed for the summary and exits success so the test still runs."""
+        deploy = step_by_id(action["runs"]["steps"], "deploy")
+        script = deploy["run"]
+        assert '-z "${OTLP_PASSWORD_INPUT}"' in script
+        assert "running the test without telemetry" in script
+        assert 'touch "${ci_dir}/deploy-failed"' in script
+
     def test_capture_id_is_a_short_dns_label(self, action: dict) -> None:
-        """The capture id names the PVC and the readout pod; the readout pod
-        prepends 19 characters to it and Kubernetes caps pod names at 63, so
-        the action must refuse anything longer than 44 characters instead of
-        losing the capture at readout-pod creation."""
+        """The capture id becomes the osac.ci.capture_id attribute and a
+        label in the central backend; the action refuses anything that is
+        not a DNS-1123 label of at most 44 characters."""
         deploy = step_by_id(action["runs"]["steps"], "deploy")
         script = deploy["run"]
         assert '"${#capture_id}" -gt 44' in script
@@ -187,28 +219,6 @@ class TestAction:
         daemonset = next(doc for doc in documents if doc.get("kind") == "DaemonSet")
         pinned = daemonset["spec"]["template"]["spec"]["containers"][0]["image"]
         assert beyla["default"] == pinned
-
-    def test_artifact_name_carries_run_id_and_attempt(self, action: dict) -> None:
-        upload = next(step for step in action["runs"]["steps"] if step.get("uses") == UPLOAD_ACTION)
-        name = upload["with"]["artifact-name"]
-        assert "ci-observe-capture" in name
-        assert "${{ github.run_id }}" in name
-        assert "${{ github.run_attempt }}" in name
-
-    def test_upload_goes_through_the_release_gate_path(self, action: dict) -> None:
-        upload = next(step for step in action["runs"]["steps"] if step.get("uses") == UPLOAD_ACTION)
-        stage = step_by_id(action["runs"]["steps"], "stage")
-        # Staged inside the standard artifact directory the upload action
-        # gates, and gated on that staging step's output.
-        assert "${RUNNER_TEMP}/osac-artifacts" in stage["run"]
-        assert (
-            upload["if"] == "always() && steps.stage.outputs.staged == 'true'"
-            " && steps.license_prep.outcome == 'success'"
-        )
-        # The gitleaks pre-scan is opted out: ~1 GB of telemetry JSONL costs
-        # ~24 minutes of pattern scanning. The release gate and the upload
-        # still run (pinned by .github/scripts/upload_artifacts_test.py).
-        assert upload["with"]["gitleaks"] == "false"
 
     def test_test_exit_code_is_preserved(self, action: dict) -> None:
         steps = action["runs"]["steps"]
@@ -222,32 +232,43 @@ class TestAction:
             if step.get("id") != "run":
                 assert step.get("continue-on-error") is True, step.get("name", step)
 
-    def test_closing_steps_run_always_and_delete_the_capture_volume(self, action: dict) -> None:
-        close = step_by_id(action["runs"]["steps"], "close")
-        # The full close runs for every non-cancelled outcome; a cancelled
-        # job takes the quick-cleanup step instead (cancellation budget).
-        assert close["if"].startswith("always() && !cancelled()")
-        script = close["run"]
-        assert "pvc/ci-observe-capture-" in script
-        assert "--ignore-not-found" in script
-        # The writers are stopped before the copy, so the capture files are
-        # closed on disk when the readout pod reads them. Foreground cascade:
-        # the delete must not return while the gateway pod still flushes.
-        assert "delete deployment/ci-observe-gateway" in script
-        assert "delete daemonset/ci-observe-beyla" in script
-        assert "--cascade=foreground" in script
-
     def test_a_cancelled_job_takes_the_cheap_cleanup_path(self, action: dict) -> None:
         steps = action["runs"]["steps"]
         quick = step_by_id(steps, "quick-cancelled-cleanup")
         assert quick["if"] == "cancelled() && env.CI_OBSERVE_DEPLOYED == '1'"
         script = quick["run"]
         assert "--wait=false" in script
-        assert "pvc/ci-observe-capture-" in script
-        # The expensive steps are skipped for a cancelled job: the full close
-        # (cluster waits, file copy) and the staged upload (artifact upload).
-        assert step_by_id(steps, "close")["if"].startswith("always() && !cancelled()")
-        assert step_by_id(steps, "stage")["if"].startswith("always() && !cancelled()")
+        assert "delete deployment/ci-observe-gateway" in script
+        assert "delete daemonset/ci-observe-beyla" in script
+
+    def test_there_is_no_post_test_artifact_tail(self, action: dict) -> None:
+        """The action is deploy, run, cheap cleanup, summary -- nothing
+        else. The old file-capture tail (close and copy, readout pod,
+        staging, AAP license preparation, artifact upload, staged-file
+        cleanup) is gone entirely: telemetry is pushed live during the run."""
+        steps = action["runs"]["steps"]
+        ids = {step["id"] for step in steps if step.get("id")}
+        names = {step.get("name") for step in steps}
+        assert ids == {"deploy", "run", "quick-cancelled-cleanup"}
+        assert names == {
+            "Deploy collectors",
+            "Run test command",
+            "Quick cleanup (job cancelled)",
+            "Write capture summary",
+        }
+        assert not any(step.get("uses") for step in steps), "no nested actions: every step is inline"
+        for gone in ("readout", "metadata.json", "osac-artifacts", "aap-license", "ci-observe-capture-"):
+            for step in steps:
+                assert gone not in step.get("run", ""), (gone, step.get("name"))
+
+    def test_summary_notes_the_live_push_and_no_artifact(self, action: dict) -> None:
+        summary = next(step for step in action["runs"]["steps"] if step.get("name") == "Write capture summary")
+        script = summary["run"]
+        assert "telemetry pushed live to the central backend" in script
+        assert "artifact" in script
+        assert "deploy-failed" in script
+        # No metadata file is written anymore.
+        assert "metadata" not in script
 
     def test_run_step_sets_the_otel_environment(self, action: dict) -> None:
         run = step_by_id(action["runs"]["steps"], "run")
@@ -258,16 +279,6 @@ class TestAction:
         # Only when the collectors came up: a failed deployment must leave
         # the command's environment untouched.
         assert 'if [[ -n "${CI_OBSERVE_OTLP_PORT:-}" ]]' in script
-
-    def test_capture_metadata_matches_the_capture_schema(self, action: dict) -> None:
-        close = step_by_id(action["runs"]["steps"], "close")
-        script = close["run"]
-        assert '"osac.ci-observe.capture"' in script
-        assert '"cluster-objects"' in script
-        assert '"cluster-metrics"' in script
-        # A capture the test command never finished is interrupted, not
-        # closed: only closed captures can be imported.
-        assert '"interrupted"' in script
 
 
 def _shell_scripts() -> list[tuple[str, str]]:
@@ -352,6 +363,15 @@ class TestWorkflowWiring:
         assert entry["type"] == "boolean"
         assert entry["required"] is False
         assert entry["default"] is False
+
+    def test_the_otlp_password_secret_is_declared_and_passed_to_the_action(self, workflow: dict) -> None:
+        """The reusable workflow declares the ingest-password secret and
+        hands it to the capture action; callers that pass nothing leave it
+        empty, which the action degrades to no telemetry."""
+        secret = workflow_call(workflow)["secrets"]["ci-observe-otlp-password"]
+        assert secret["required"] is False
+        observed = step_by_id(steps_of(workflow), "test-observed")
+        assert observed["with"]["otlp-password"] == "${{ secrets.ci-observe-otlp-password }}"
 
     def test_observed_step_passes_a_flavored_capture_identity(self, workflow: dict) -> None:
         """The capture id is <suite>-pr<N|main>-<run id>-a<attempt>: readable
@@ -471,14 +491,20 @@ class TestPrStarterWiring:
 
 
 class TestSyncWorkflow:
-    """The scheduled backend wiring: ci-observe-sync.yml on monitoring-central."""
+    """The backend wiring: ci-observe-sync.yml on monitoring-central."""
 
-    def test_runs_on_the_central_machine_every_15_minutes(self, sync_workflow: dict) -> None:
+    def test_runs_on_the_central_machine_and_is_manual_only(self, sync_workflow: dict) -> None:
+        """The schedule is disabled: live pushes made the artifact sync
+        unnecessary for new runs, and the workflow's quadlet restart would
+        drop in-flight live-ingest batches. Manual dispatch stays for
+        backfilling historical artifacts."""
         job = sync_workflow["jobs"]["sync"]
         assert job["runs-on"] == "monitoring-central"
         triggers = sync_workflow.get("on") or sync_workflow.get(True)
-        assert triggers["schedule"] == [{"cron": "*/15 * * * *"}]
+        assert "schedule" not in triggers
         assert "workflow_dispatch" in triggers
+        text = SYNC_WORKFLOW_PATH.read_text()
+        assert "Schedule disabled" in text, "the disabled schedule must say why"
 
     def test_serializes_runs_and_times_out(self, sync_workflow: dict) -> None:
         job = sync_workflow["jobs"]["sync"]

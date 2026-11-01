@@ -1,13 +1,17 @@
-# ci-observe canary manifests for namespace ci-observability-canary.
+# ci-observe canary manifests for namespace ci-observability-canary,
+# shared by both ci-observe paths: the CI live-push capture action and the
+# local file-capture supervisor.
 #
 # Render before apply: the coordinator substitutes the plain ${...} tokens
 # (envsubst-style; no custom template framework):
-#   CI_OBSERVE_CAPTURE_ID        capture identity; also names the PVC
+#   CI_OBSERVE_CAPTURE_ID        capture identity, stamped on every signal
 #   CI_OBSERVE_NAMESPACE         observed OSAC namespace, e.g. osac-e2e-ci
 #   CI_OBSERVE_CLUSTER_UID       cluster identity
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250
 #   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
 #   CI_OBSERVE_PR                pull request number; empty for non-PR runs
+#   CI_OBSERVE_OTLP_ENDPOINT     central live-ingest URL (live push only)
+#   CI_OBSERVE_OTLP_AUTH         "Basic <base64>" header (live push only)
 #
 # Images are pinned by digest (verified against the remote registries):
 #   gateway/replay: opentelemetry-collector-contrib 0.164.0
@@ -16,10 +20,11 @@
 #   Beyla 3.40.0 + Red Hat Go version-string fix: quay.io/osac-project/beyla
 #   (see .github/actions/ci-observe-capture/action.yml's beyla-image input)
 #
-# The gateway config comes from monitoring/config/ci-observe/collector.yaml;
-# create it before applying:
+# The gateway config comes from the ci-observe-collector ConfigMap; the CI
+# capture action creates it from collector-live.yaml (live push), the local
+# capture supervisor from collector.yaml (file capture):
 #   kubectl -n ci-observability-canary create configmap ci-observe-collector \
-#     --from-file=config.yaml=monitoring/config/ci-observe/collector.yaml
+#     --from-file=config.yaml=monitoring/config/ci-observe/collector-live.yaml
 # The collector expands ${env:...} placeholders itself from the container env.
 #
 # SCC GATE (parent approval before deployment): Beyla needs hostPID, UID 0 and
@@ -95,19 +100,10 @@ subjects:
     name: ci-observe-gateway
     namespace: ci-observability-canary
 ---
-# One capture volume per execution; survives gateway shutdown for the
-# parent-owned copy/readout step.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ci-observe-capture-${CI_OBSERVE_CAPTURE_ID}
-  namespace: ci-observability-canary
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 1Gi
----
+# No capture PersistentVolumeClaim: the live-push gateway streams telemetry
+# to the central backend as it is collected, and the local supervisor's
+# historical PVC flow is superseded. The only gateway volume besides the
+# config and the host pod logs is the pod-local state emptyDir below.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -116,8 +112,8 @@ metadata:
   labels:
     app: ci-observe-gateway
 spec:
-  # One replica: single writer for the capture files and one k8s_objects
-  # watch, so observations are not duplicated.
+  # One replica: a single k8s_objects watch and one sender for the live
+  # push, so observations are not duplicated.
   replicas: 1
   selector:
     matchLabels:
@@ -145,6 +141,14 @@ spec:
               value: "${CI_OBSERVE_SUITE}"
             - name: CI_OBSERVE_PR
               value: "${CI_OBSERVE_PR}"
+            # Live push only (collector-live.yaml reads them; collector.yaml
+            # ignores them). Rendered by the capture action from its
+            # otlp-password input; empty keeps the local file-capture path
+            # deployable from the same manifest.
+            - name: CI_OBSERVE_OTLP_ENDPOINT
+              value: "${CI_OBSERVE_OTLP_ENDPOINT}"
+            - name: CI_OBSERVE_OTLP_AUTH
+              value: "${CI_OBSERVE_OTLP_AUTH}"
           ports:
             - name: otlp-grpc
               containerPort: 4317
@@ -181,8 +185,11 @@ spec:
             - name: config
               mountPath: /etc/ci-observe
               readOnly: true
-            - name: capture
-              mountPath: /capture
+            # Pod-local collector state (watch resourceVersions, filelog
+            # offsets): survives container restarts, not pod deletion. The
+            # live config is the consumer; see collector-live.yaml.
+            - name: state
+              mountPath: /state
             - name: pod-logs
               mountPath: /var/log/pods
               readOnly: true
@@ -190,9 +197,8 @@ spec:
         - name: config
           configMap:
             name: ci-observe-collector
-        - name: capture
-          persistentVolumeClaim:
-            claimName: ci-observe-capture-${CI_OBSERVE_CAPTURE_ID}
+        - name: state
+          emptyDir: {}
         - name: pod-logs
           hostPath:
             path: /var/log/pods

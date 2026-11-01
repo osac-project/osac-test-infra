@@ -2,11 +2,14 @@
 collector-first CI observability plan).
 
 These are structural tests on monitoring/config/ci-observe/*.yaml: they pin
-the capture/replay interface (separate append-only OTLP JSONL files under
-/capture), the narrow read-only RBAC, the image digests and the placeholder
-conventions. Runtime behavior of the same statements and operators is
-validated against the pinned collector image in the lane A validation
-runbook; see the plan for the recorded evidence.
+both collector paths -- the live-push config the CI capture action deploys
+(OTLP/HTTP to the central backend) and the local file-capture config the
+capture supervisor deploys (separate append-only OTLP JSONL files under
+/capture) -- plus the shared cluster manifest, the narrow read-only RBAC,
+the image digests and the placeholder conventions. Runtime behavior of the
+same statements and operators is validated against the pinned collector
+image in the lane A validation runbook; see the plan for the recorded
+evidence.
 """
 
 from __future__ import annotations
@@ -41,6 +44,11 @@ UNSAFE_TRACE_KEYS = (
 @pytest.fixture(scope="module")
 def collector() -> dict[str, Any]:
     return yaml.safe_load((CONFIG_DIR / "collector.yaml").read_text())
+
+
+@pytest.fixture(scope="module")
+def collector_live() -> dict[str, Any]:
+    return yaml.safe_load((CONFIG_DIR / "collector-live.yaml").read_text())
 
 
 @pytest.fixture(scope="module")
@@ -220,6 +228,64 @@ class TestGateway:
         assert readers[0]["pull"]["exporter"]["prometheus"]["port"] == 8888
 
 
+class TestLiveGateway:
+    """The live-push config the CI capture action deploys: the same
+    collection as the local file-capture collector.yaml, but every pipeline
+    exports to the central backend over OTLP/HTTP with basic auth instead
+    of appending to capture files."""
+
+    def test_file_capture_paths_are_gone(self, collector_live: dict[str, Any]) -> None:
+        assert set(collector_live["exporters"]) == {"otlphttp/live"}
+        for signal in SIGNALS:
+            assert collector_live["service"]["pipelines"][signal]["exporters"] == ["otlphttp/live"]
+        dumped = yaml.safe_dump(collector_live)
+        assert "/capture/" not in dumped, "the live config must not write to the capture volume"
+        assert not re.search(r"\bfile/", dumped), "the live config must not use file exporters"
+
+    def test_exports_live_with_auth_and_insecure_tls(self, collector_live: dict[str, Any]) -> None:
+        exporter = collector_live["exporters"]["otlphttp/live"]
+        assert exporter["endpoint"] == "${env:CI_OBSERVE_OTLP_ENDPOINT}"
+        assert exporter["headers"]["Authorization"] == "${env:CI_OBSERVE_OTLP_AUTH}"
+        # The central endpoint serves an internal-CA certificate; the
+        # collector skips verification until the CA is mounted (follow-up).
+        assert exporter["tls"]["insecure"] is True
+
+    def test_queue_and_retry_survive_a_brief_central_outage(self, collector_live: dict[str, Any]) -> None:
+        """A central deploy or restart must not drop in-flight batches: the
+        sending queue holds them and the exporter keeps retrying."""
+        exporter = collector_live["exporters"]["otlphttp/live"]
+        assert exporter["sending_queue"]["queue_size"] >= 5000
+        assert exporter["retry_on_failure"]["enabled"] is True
+
+    def test_collects_and_stamps_the_same_signals(
+        self, collector_live: dict[str, Any], collector: dict[str, Any]
+    ) -> None:
+        """Same receivers, same capture identity processor, same memory
+        budget as the file-capture path: only the transport differs."""
+        for name in ("otlp", "k8s_objects", "file_log", "kubelet_stats"):
+            assert collector_live["receivers"][name] == collector["receivers"][name], name
+        for name in ("resource/capture", "memory_limiter", "transform/sanitize_traces", "transform/k8s_objects"):
+            assert collector_live["processors"][name] == collector["processors"][name], name
+
+    def test_state_lives_on_the_pod_local_volume(self, collector_live: dict[str, Any]) -> None:
+        """Watch resourceVersions and filelog offsets move off the capture
+        PVC to the pod-local state volume: they only need to survive
+        container restarts."""
+        extensions = collector_live["extensions"]
+        assert extensions["file_storage/k8sobjects"]["directory"] == "/state/k8sobjects"
+        assert extensions["file_storage/filelog"]["directory"] == "/state/filelog"
+        assert collector_live["receivers"]["k8s_objects"]["storage"] == "file_storage/k8sobjects"
+        assert collector_live["receivers"]["file_log"]["storage"] == "file_storage/filelog"
+
+    def test_local_file_capture_config_is_unchanged(self, collector: dict[str, Any]) -> None:
+        """collector.yaml keeps the local supervisor's append-only capture
+        contract; only its header comment changed."""
+        for signal in SIGNALS:
+            exporter = collector["exporters"][f"file/{signal}"]
+            assert exporter["path"] == f"/capture/{signal}.jsonl"
+            assert exporter["append"] is True
+
+
 class TestReplay:
     def test_reads_capture_interface_from_beginning(self, replay: dict[str, Any]) -> None:
         for signal in SIGNALS:
@@ -259,14 +325,23 @@ class TestCluster:
         for image in images:
             assert re.search(r"@sha256:[0-9a-f]{64}$", image), image
 
-    def test_owned_namespace_and_bounded_capture_volume(self, cluster_docs: list[dict[str, Any]]) -> None:
+    def test_owned_namespace_and_no_capture_volume(self, cluster_docs: list[dict[str, Any]]) -> None:
         namespaces = {doc["metadata"].get("namespace") for doc in cluster_docs if doc.get("kind")}
         namespaces.discard(None)
         assert namespaces == {NAMESPACE, "${CI_OBSERVE_NAMESPACE}"}
-        pvc = by_kind(cluster_docs, "PersistentVolumeClaim")[0]
-        assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
-        assert pvc["spec"]["resources"]["requests"]["storage"] == "1Gi"
-        assert pvc["metadata"]["name"] == "ci-observe-capture-${CI_OBSERVE_CAPTURE_ID}"
+        # Live push made the capture PVC obsolete: the gateway streams
+        # telemetry to the central backend as it is collected.
+        assert not by_kind(cluster_docs, "PersistentVolumeClaim")
+        deployment = by_kind(cluster_docs, "Deployment")[0]
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        mounts = {mount["name"] for mount in container["volumeMounts"]}
+        volumes = {volume["name"] for volume in deployment["spec"]["template"]["spec"]["volumes"]}
+        assert "capture" not in mounts and "capture" not in volumes
+        # The only extra volume is the pod-local collector state.
+        assert volumes == {"config", "state", "pod-logs"}
+        spec = deployment["spec"]["template"]["spec"]
+        state = next(volume for volume in spec["volumes"] if volume["name"] == "state")
+        assert state["emptyDir"] == {}
 
     def test_rbac_is_narrow_and_read_only(self, cluster_docs: list[dict[str, Any]]) -> None:
         read_only = {"get", "list", "watch"}
@@ -300,6 +375,8 @@ class TestCluster:
             "CI_OBSERVE_KUBELET_ENDPOINT",
             "CI_OBSERVE_SUITE",
             "CI_OBSERVE_PR",
+            "CI_OBSERVE_OTLP_ENDPOINT",
+            "CI_OBSERVE_OTLP_AUTH",
         }
         assert all(value.startswith("${CI_OBSERVE_") for value in env.values())
         security = container["securityContext"]

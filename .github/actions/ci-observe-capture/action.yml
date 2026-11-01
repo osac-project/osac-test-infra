@@ -1,18 +1,16 @@
 ---
 name: CI Observe Capture
 description: >-
-  Run a test command under ci-observe telemetry capture: deploy the collector
-  gateway and Beyla to the ci-observability-canary namespace (from the
-  repo's monitoring/config/ci-observe/ manifests), run the command with the
-  OTEL exporter environment pointed at the gateway, then -- always, even
-  after a failed or cancelled test -- stop the collectors, copy the capture
-  off its PVC, write metadata.json and upload the capture directory as a
-  workflow artifact through the upload-artifacts action. The upload skips
-  the gitleaks pre-scan (a ~1 GB telemetry JSONL costs ~24 minutes of
-  pattern scanning); the release gate still censors the job's real secret
-  values and a post-upload scanner still covers the artifact.
-  The test command's own exit code is what this action reports. A capture
-  failure degrades to a warning in the job summary, never to a changed job
+  Run a test command under ci-observe live telemetry push: deploy the
+  collector gateway and Beyla to the ci-observability-canary namespace
+  (from the repo's monitoring/config/ci-observe/ manifests), run the
+  command with the OTEL exporter environment pointed at the gateway, and
+  have the gateway push every signal live, over OTLP/HTTP with basic auth,
+  to the central backend while the test runs. No artifact, no post-test
+  copy: the data is already in the CI Grafana when the job ends. The test
+  command's own exit code is what this action reports. A telemetry failure
+  (deploy failure, missing OTLP password) degrades to a warning in the job
+  summary and the test runs without telemetry, never to a changed job
   result. Default-off: nothing runs unless a workflow calls this action.
 
 inputs:
@@ -24,11 +22,12 @@ inputs:
     required: true
   capture-id:
     description: >-
-      Capture identity; also names the capture PVC and the readout pod.
-      Defaults to run-<run id>-attempt-<run attempt>. The E2E workflows pass
-      a readable flavored id, <suite>-pr<N|main>-<run id>-a<attempt>. Must
-      stay a DNS-1123 label of at most 44 characters: the readout pod name
-      prepends 19 and Kubernetes caps pod names at 63.
+      Capture identity, stamped onto every signal as the osac.ci.capture_id
+      resource attribute by the gateway collector and promoted to a label in
+      the central backend. Defaults to run-<run id>-attempt-<run attempt>.
+      The E2E workflows pass a readable flavored id,
+      <suite>-pr<N|main>-<run id>-a<attempt>. Must stay a DNS-1123 label of
+      at most 44 characters.
     required: false
     default: ""
   suite:
@@ -46,8 +45,16 @@ inputs:
     required: false
     default: ""
   command:
-    description: "The test command to run under capture (a bash script)"
+    description: "The test command to run under telemetry (a bash script)"
     required: true
+  otlp-password:
+    description: >-
+      Password for the central OTLP ingest (basic auth user ci-observe).
+      A secret, passed by callers from CI_OBSERVE_OTLP_PASSWORD. Empty
+      degrades to running the test without telemetry: the action never
+      pushes unauthenticated.
+    required: false
+    default: ""
   beyla-image:
     description: >-
       Beyla image reference for the node agent. The default is the OSAC-pinned
@@ -63,7 +70,7 @@ runs:
   steps:
     - name: Deploy collectors
       id: deploy
-      # A capture problem must never fail the job: the deployment degrades
+      # A telemetry problem must never fail the job: the deployment degrades
       # to a warning and the test command runs without telemetry.
       continue-on-error: true
       shell: bash
@@ -73,6 +80,7 @@ runs:
         CAPTURE_ID_INPUT: ${{ inputs.capture-id }}
         SUITE_INPUT: ${{ inputs.suite }}
         PR_INPUT: ${{ inputs.pr }}
+        OTLP_PASSWORD_INPUT: ${{ inputs.otlp-password }}
         BEYLA_IMAGE_INPUT: ${{ inputs.beyla-image }}
       run: |
         set -euo pipefail
@@ -81,15 +89,29 @@ runs:
         mkdir -p "${ci_dir}"
 
         capture_id="${CAPTURE_ID_INPUT:-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}}"
-        # The capture id names the PVC and the readout pod, so it must stay a
-        # DNS-1123 label (lowercase alphanumeric and hyphens), and the readout
-        # pod name (ci-observe-readout-<id>, 19 characters of prefix) must fit
-        # the 63-character Kubernetes pod-name cap.
+        # The capture id becomes the osac.ci.capture_id attribute and a
+        # label in the central backend, so it must stay a DNS-1123 label
+        # (lowercase alphanumeric and hyphens) of at most 44 characters.
         if [[ ! "${capture_id}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || [[ "${#capture_id}" -gt 44 ]]; then
-          echo "::warning::ci-observe: invalid capture-id '${capture_id}'; running the test without capture"
+          echo "::warning::ci-observe: invalid capture-id '${capture_id}'; running the test without telemetry"
+          touch "${ci_dir}/deploy-failed"
           exit 0
         fi
         echo "CI_OBSERVE_CAPTURE_ID=${capture_id}" >> "${GITHUB_ENV}"
+
+        # The central live-ingest endpoint and its basic auth header. The
+        # password arrives as a secret input; the header is precomputed
+        # here (base64 of "ci-observe:<password>") so the manifest and the
+        # collector config never see the password itself. An empty
+        # password or endpoint degrades to running the test without
+        # telemetry: the action never pushes unauthenticated.
+        otlp_endpoint="https://osac-ci-1.redhat.com"
+        if [[ -z "${otlp_endpoint}" ]] || [[ -z "${OTLP_PASSWORD_INPUT}" ]]; then
+          echo "::warning::ci-observe: no OTLP ingest endpoint or password; running the test without telemetry"
+          touch "${ci_dir}/deploy-failed"
+          exit 0
+        fi
+        auth="Basic $(printf '%s:%s' "ci-observe" "${OTLP_PASSWORD_INPUT}" | base64)"
 
         # Suite and PR are rendered into the cluster manifest as env values
         # for the gateway. Digits and lowercase alphanumerics only, so the
@@ -113,8 +135,8 @@ runs:
           # Select the InternalIP address by type: addresses[0] is the
           # InternalDNS hostname on OpenShift, which need not resolve from
           # the gateway pod, and an unresolvable kubelet endpoint silently
-          # starves metrics.jsonl. The gateway pod shares the node network,
-          # so the IP is always reachable.
+          # starves the kubelet metrics. The gateway pod shares the node
+          # network, so the IP is always reachable.
           kubelet_address="$(oc get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')" || return 1
           if [[ -z "${kubelet_address}" ]]; then
             echo "node reports no InternalIP address" >&2
@@ -125,8 +147,8 @@ runs:
           # Render the coordinator tokens the cluster manifest expects
           # (same envsubst-style substitution as the local capture
           # supervisor, monitoring/scripts/ci_observe_capture.py). The
-          # values are a UUID, a DNS name, a URL, a suite word and a PR
-          # number, safe for sed.
+          # values are a UUID, a DNS name, a URL, a suite word, a PR
+          # number and a base64 blob, safe for sed.
           rendered="${ci_dir}/cluster-rendered.yaml"
           sed \
             -e "s|\${CI_OBSERVE_CAPTURE_ID}|${capture_id}|g" \
@@ -135,6 +157,8 @@ runs:
             -e "s|\${CI_OBSERVE_KUBELET_ENDPOINT}|${kubelet_endpoint}|g" \
             -e "s|\${CI_OBSERVE_SUITE}|${suite}|g" \
             -e "s|\${CI_OBSERVE_PR}|${pr}|g" \
+            -e "s|\${CI_OBSERVE_OTLP_ENDPOINT}|${otlp_endpoint}|g" \
+            -e "s|\${CI_OBSERVE_OTLP_AUTH}|${auth}|g" \
             "${GITHUB_WORKSPACE}/monitoring/config/ci-observe/cluster.yaml" > "${rendered}"
           if grep -qF '${CI_OBSERVE_' "${rendered}"; then
             echo "unresolved tokens in the rendered manifest" >&2
@@ -144,13 +168,14 @@ runs:
           # Manifest first: it creates the ci-observability-canary namespace
           # that the collector ConfigMap applies into. The gateway pod only
           # starts once both exist, and the readiness wait below comes after
-          # both.
+          # both. The live collector config is the one that pushes to the
+          # central backend (collector.yaml is the local file-capture path).
           oc apply -f "${rendered}" || return 1
           oc create configmap ci-observe-collector -n ci-observability-canary \
-            --from-file=config.yaml="${GITHUB_WORKSPACE}/monitoring/config/ci-observe/collector.yaml" \
+            --from-file=config.yaml="${GITHUB_WORKSPACE}/monitoring/config/ci-observe/collector-live.yaml" \
             --dry-run=client -o yaml | oc apply -f - || return 1
           oc -n ci-observability-canary set image daemonset/ci-observe-beyla beyla="${BEYLA_IMAGE_INPUT}" || return 1
-          # From here on the close step must clean up cluster resources.
+          # From here on the quick-cleanup step must clean up cluster resources.
           echo "CI_OBSERVE_DEPLOYED=1" >> "${GITHUB_ENV}"
 
           # Beyla needs hostPID, UID 0 and the BPF capabilities inside the
@@ -186,7 +211,7 @@ runs:
 
           # Local OTLP endpoint for the test command, on loopback like the
           # local pipeline. The test container reaches it because the E2E
-          # podman run uses --network=host. The close step stops it.
+          # podman run uses --network=host. The quick-cleanup step stops it.
           nohup oc port-forward -n ci-observability-canary svc/ci-observe-gateway :4317 \
             > "${ci_dir}/port-forward.log" 2>&1 &
           echo "$!" > "${ci_dir}/port-forward.pid"
@@ -206,14 +231,14 @@ runs:
         }
 
         if ! deploy_collectors; then
-          echo "::warning::ci-observe: collector deployment failed; running the test without capture"
+          echo "::warning::ci-observe: collector deployment failed; running the test without telemetry"
           touch "${ci_dir}/deploy-failed"
         fi
 
     - name: Run test command
       id: run
       # No continue-on-error here on purpose: this step's outcome is the
-      # test's own outcome, exactly as it would be without the capture.
+      # test's own outcome, exactly as it would be without the telemetry.
       shell: bash
       env:
         COMMAND_INPUT: ${{ inputs.command }}
@@ -233,7 +258,7 @@ runs:
 
         rc=0
         # Same shell flags GitHub uses for a plain run: step, so the command
-        # behaves identically with and without the capture wrapper.
+        # behaves identically with and without the telemetry wrapper.
         bash -e -o pipefail "${ci_dir}/command.sh" || rc=$?
         echo "CI_OBSERVE_TEST_EXIT_CODE=${rc}" >> "${GITHUB_ENV}"
         exit "${rc}"
@@ -242,11 +267,13 @@ runs:
       id: quick-cancelled-cleanup
       # A cancelled job gets only ~5 minutes for ALL of its always() steps,
       # which the workflow's own short-cap gather and teardown must also fit
-      # in. A cancelled capture is interrupted evidence of little value, so
-      # this path spends seconds, not minutes: stop the port-forward and
-      # fire-and-forget the cluster resources (the ephemeral cluster is
-      # destroyed by the workflow teardown anyway). No readout, no copy, no
-      # artifact.
+      # in. A cancelled capture's gateway still holds whatever batches it
+      # managed to queue; deleting it would drop them, and the ephemeral
+      # cluster is destroyed by the workflow teardown anyway, so this path
+      # spends seconds, not minutes: stop the port-forward and fire-and-forget
+      # the cluster resources. For every non-cancelled outcome the gateway is
+      # deliberately left running until the cluster teardown so its sending
+      # queue can drain to the central backend.
       if: cancelled() && env.CI_OBSERVE_DEPLOYED == '1'
       continue-on-error: true
       shell: bash
@@ -263,270 +290,6 @@ runs:
         # cancellation budget this cheap path must fit in.
         oc delete deployment/ci-observe-gateway -n ci-observability-canary --request-timeout=30s --wait=false --ignore-not-found || true
         oc delete daemonset/ci-observe-beyla -n ci-observability-canary --request-timeout=30s --wait=false --ignore-not-found || true
-        oc delete pvc/ci-observe-capture-${CI_OBSERVE_CAPTURE_ID} -n ci-observability-canary --request-timeout=30s --wait=false --ignore-not-found || true
-
-    - name: Close and copy capture
-      id: close
-      # The full close runs only while the job is alive: it waits on cluster
-      # resources and copies potentially large files, which the cancellation
-      # budget cannot afford (see the quick-cleanup step above). Every oc
-      # call carries an explicit timeout as a hang backstop.
-      if: always() && !cancelled() && env.CI_OBSERVE_DEPLOYED == '1'
-      continue-on-error: true
-      shell: bash
-      env:
-        KUBECONFIG: ${{ inputs.kubeconfig-path }}
-      run: |
-        set -u
-        capture_id="${CI_OBSERVE_CAPTURE_ID}"
-        ci_dir="${RUNNER_TEMP}/ci-observe"
-        destination="${ci_dir}/captures/${capture_id}"
-        mkdir -p "${destination}"
-
-        # Nothing exports to the gateway anymore; stop the port-forward
-        # before touching the collectors.
-        if [[ -f "${ci_dir}/port-forward.pid" ]]; then
-          kill "$(cat "${ci_dir}/port-forward.pid")" 2>/dev/null || true
-        fi
-
-        fail=0
-        # Stop the writers so the capture files close, then mount the capture
-        # volume in a short-lived readout pod and copy the files off it.
-        # Foreground cascade: the delete must not return while the gateway
-        # pod is still flushing its last batch, or the readout below can copy
-        # a truncated final JSONL line.
-        oc delete deployment/ci-observe-gateway -n ci-observability-canary \
-          --cascade=foreground --wait=true --timeout=120s --ignore-not-found || fail=1
-        oc delete daemonset/ci-observe-beyla -n ci-observability-canary \
-          --cascade=foreground --wait=true --timeout=120s --ignore-not-found || fail=1
-
-        readout_pod="ci-observe-readout-${capture_id}"
-        oc apply -f - --request-timeout=60s <<POD || fail=1
-        apiVersion: v1
-        kind: Pod
-        metadata:
-          name: ${readout_pod}
-          namespace: ci-observability-canary
-        spec:
-          restartPolicy: Never
-          containers:
-            - name: readout
-              image: docker.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
-              command: ["sleep", "600"]
-              volumeMounts:
-                - name: capture
-                  mountPath: /capture
-                  readOnly: true
-          volumes:
-            - name: capture
-              persistentVolumeClaim:
-                claimName: ci-observe-capture-${capture_id}
-        POD
-        if ! oc wait --for=condition=Ready "pod/${readout_pod}" -n ci-observability-canary --timeout=120s; then
-          fail=1
-        fi
-        for name in traces.jsonl metrics.jsonl logs.jsonl; do
-          if ! oc exec --request-timeout=60s -n ci-observability-canary "pod/${readout_pod}" -- cat "/capture/${name}" \
-            > "${destination}/${name}" 2>/dev/null; then
-            # A missing signal file is a gap, not an error: the metadata
-            # records it as a missing source.
-            rm -f "${destination}/${name}"
-          fi
-        done
-        # The capture volume must not outlive the copy: the cluster is
-        # destroyed after this job, but a leaked claim would hold its volume
-        # until then.
-        oc delete "pod/${readout_pod}" -n ci-observability-canary --wait=true --timeout=60s --ignore-not-found || true
-        oc delete "pvc/ci-observe-capture-${capture_id}" -n ci-observability-canary --wait=true --timeout=120s --ignore-not-found || true
-
-        # A capture the test command never finished (cancelled job) is
-        # interrupted, the same state the local supervisor records.
-        state="closed"
-        if [[ "${fail}" -ne 0 ]] || [[ -z "${CI_OBSERVE_TEST_EXIT_CODE:-}" ]]; then
-          state="interrupted"
-        fi
-
-        files="[]"
-        for name in traces.jsonl metrics.jsonl logs.jsonl; do
-          path="${destination}/${name}"
-          if [[ -f "${path}" ]]; then
-            files="$(jq -n --arg path "${name}" \
-              --arg size "$(stat -c '%s' "${path}")" \
-              --arg sha256 "$(sha256sum "${path}" | cut -d' ' -f1)" \
-              --argjson existing "${files}" \
-              '$existing + [{path: $path, size_bytes: ($size | tonumber), sha256: $sha256}]')"
-          fi
-        done
-
-        delivered() {
-          if [[ -s "${destination}/$1" ]]; then
-            echo true
-          else
-            echo false
-          fi
-        }
-
-        now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-        jq -n \
-          --arg id "${capture_id}" \
-          --arg state "${state}" \
-          --arg timestamp "${now}" \
-          --argjson exit_code "${CI_OBSERVE_TEST_EXIT_CODE:-null}" \
-          --argjson files "${files}" \
-          --argjson traces "$(delivered traces.jsonl)" \
-          --argjson logs "$(delivered logs.jsonl)" \
-          --argjson metrics "$(delivered metrics.jsonl)" \
-          '{schema: "osac.ci-observe.capture",
-            version: 1,
-            id: $id,
-            source_kind: "github-actions",
-            state: $state,
-            created_at: $timestamp,
-            finished_at: $timestamp,
-            child_exit_code: $exit_code,
-            sources: {
-              pytest: (if $traces then "delivered" else "missing" end),
-              beyla: (if $traces then "delivered" else "missing" end),
-              "cluster-objects": (if $logs then "delivered" else "missing" end),
-              "cluster-logs": (if $logs then "delivered" else "missing" end),
-              "cluster-metrics": (if $metrics then "delivered" else "missing" end)
-            },
-            files: $files}' > "${destination}/metadata.json"
-
-        if [[ "${state}" != "closed" ]]; then
-          echo "::warning::ci-observe: capture state is ${state}; the telemetry evidence may be incomplete"
-        fi
-
-    - name: Stage capture for upload
-      id: stage
-      # Skipped for cancelled jobs: the upload would eat the cancellation
-      # budget (see the quick-cleanup step).
-      if: always() && !cancelled() && env.CI_OBSERVE_DEPLOYED == '1'
-      continue-on-error: true
-      shell: bash
-      run: |
-        set -euo pipefail
-        capture_id="${CI_OBSERVE_CAPTURE_ID}"
-        destination="${RUNNER_TEMP}/ci-observe/captures/${capture_id}"
-        if [[ ! -f "${destination}/metadata.json" ]]; then
-          echo "::warning::ci-observe: the capture was not closed; no telemetry artifact"
-          exit 0
-        fi
-
-        # Stage inside the standard artifact directory so the upload passes
-        # through the same release gate as every other artifact of this job.
-        # The cluster-log collection owns that directory afterwards;
-        # the cleanup step below removes the staged copy once the capture
-        # has its own artifact.
-        stage_dir="${RUNNER_TEMP}/osac-artifacts/ci-observe/${capture_id}"
-        mkdir -p "${stage_dir}"
-        cp "${destination}/metadata.json" "${stage_dir}/"
-        for name in traces.jsonl metrics.jsonl logs.jsonl; do
-          if [[ -f "${destination}/${name}" ]]; then
-            cp "${destination}/${name}" "${stage_dir}/"
-          fi
-        done
-        touch "${RUNNER_TEMP}/osac-artifacts/.redaction-complete"
-        echo "staged=true" >> "${GITHUB_OUTPUT}"
-
-    - name: Prepare the AAP license for the release gate
-      # The gate reads text files; the license is a zip. Extract it --
-      # recursively, because AAP licenses nest archives (e.g.
-      # consumer_export.zip) -- and concatenate the text files into one
-      # inventory the gate censors, next to the pull secret. Tokens under
-      # 16 characters are ignored by the gate, so certificate boilerplate
-      # words censor nothing.
-      #
-      # Fail-closed: a corrupt or partially extracted license must stop
-      # the upload, not pass the gate with a partial inventory. The step
-      # stays continue-on-error so a capture problem never fails the job;
-      # the upload below checks this step's outcome instead (outcome keeps
-      # the raw result under continue-on-error).
-      id: license_prep
-      if: always() && !cancelled() && env.CI_OBSERVE_DEPLOYED == '1'
-      continue-on-error: true
-      shell: bash
-      run: |
-        set -u
-        license_zip="${RUNNER_TEMP}/aap-license.zip"
-        out="${RUNNER_TEMP}/aap-license-contents.txt"
-        # The plaintext license must be as private as its zip (0600).
-        umask 077
-        : > "${out}"
-        if [[ ! -f "${license_zip}" ]]; then
-          echo "no AAP license on this runner; the gate redacts the pull secret and cluster Secrets"
-          exit 0
-        fi
-        python3 - "${license_zip}" "${out}" <<'PY'
-        import pathlib
-        import sys
-        import zipfile
-
-        license_zip, out = sys.argv[1], sys.argv[2]
-
-        def texts(archive: pathlib.Path, depth: int = 0):
-            with zipfile.ZipFile(archive) as zf:
-                for name in zf.namelist():
-                    data = zf.read(name)
-                    if name.lower().endswith(".zip"):
-                        if depth >= 4:
-                            raise ValueError(f"license nesting too deep at {name}")
-                        inner = archive.parent / f"nested-{depth}-{name.replace('/', '_')}"
-                        inner.write_bytes(data)
-                        try:
-                            yield from texts(inner, depth + 1)
-                        finally:
-                            inner.unlink()
-                    else:
-                        try:
-                            yield data.decode("utf-8")
-                        except UnicodeDecodeError:
-                            # Binary: not text the gate could match anyway.
-                            continue
-
-        with open(out, "w") as sink:
-            for text in texts(pathlib.Path(license_zip)):
-                sink.write(text)
-                sink.write("\n")
-        PY
-
-    - name: Upload capture artifact
-      id: upload
-      # The license preparation must have succeeded: a partial inventory
-      # would pass the gate without redacting the license. (The prep step
-      # is skipped when no license exists on the runner, and staging only
-      # happens when the collectors deployed, so the two conditions agree.)
-      if: always() && steps.stage.outputs.staged == 'true' && steps.license_prep.outcome == 'success'
-      continue-on-error: true
-      uses: ./.github/actions/upload-artifacts
-      with:
-        artifact-name: ci-observe-capture-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-        overwrite: "true"
-        max-file-mbytes: "2048"
-        # The ~1 GB telemetry JSONL costs ~24 minutes of gitleaks pattern
-        # scanning; the release gate still censors the job's real secret
-        # values and a post-upload scanner still covers the artifact.
-        gitleaks: "false"
-        # The gate censors these values in any encoding. The list replaces
-        # the pull-secret-only default, so the pull secret is listed too;
-        # a file that does not exist is skipped.
-        known-secret-files: |
-          ${{ runner.temp }}/pull-secret.json
-          ${{ runner.temp }}/aap-license-contents.txt
-
-    - name: Clean staged capture files
-      if: always()
-      continue-on-error: true
-      shell: bash
-      run: |
-        # The capture has its own artifact now. Remove the staged copy so
-        # the cluster-log artifact (collected after this action) does not
-        # upload the same files twice. At this point the directory holds
-        # only the staged capture: the cluster-log collection has not run
-        # yet. The plaintext license inventory goes with it: the gate has
-        # consumed it, and the runner must not keep an unzipped license.
-        rm -rf "${RUNNER_TEMP}/osac-artifacts"
-        rm -f "${RUNNER_TEMP}/aap-license-contents.txt"
 
     - name: Write capture summary
       if: always()
@@ -538,20 +301,12 @@ runs:
         if [[ -z "${capture_id}" ]]; then
           exit 0
         fi
-        metadata="${RUNNER_TEMP}/ci-observe/captures/${capture_id}/metadata.json"
         {
           echo "## ci-observe capture"
           echo "- capture id: \`${capture_id}\`"
           if [[ -f "${RUNNER_TEMP}/ci-observe/deploy-failed" ]]; then
             echo "- :warning: collector deployment failed; the tests ran without telemetry capture"
-          fi
-          if [[ -f "${metadata}" ]]; then
-            echo "- state: $(jq -r '.state' "${metadata}")"
-            echo "- test exit code: $(jq -r '.child_exit_code' "${metadata}")"
-            echo "- files:"
-            jq -r '.files[] | "  - `\(.path)`: \(.size_bytes) bytes (\(.sha256[0:12])...)"' "${metadata}"
           else
-            echo "- :warning: the capture was not closed; no telemetry evidence"
+            echo "- telemetry pushed live to the central backend (\`osac-ci-1.redhat.com\`); no artifact is uploaded"
           fi
-          echo "- artifact: \`ci-observe-capture-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}\`"
         } >> "${GITHUB_STEP_SUMMARY}"

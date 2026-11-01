@@ -1,4 +1,10 @@
-# ci-observe gateway: stock OpenTelemetry Collector Contrib 0.164.0
+# ci-observe gateway, LOCAL FILE-CAPTURE PATH: this config is deployed by
+# the local capture supervisor (monitoring/scripts/ci_observe_capture.py),
+# which captures to /capture files and replays them into a local LGTM
+# stack. The CI live-push path (the ci-observe-capture action) deploys
+# collector-live.yaml instead, which pushes to the central backend live.
+#
+# Stock OpenTelemetry Collector Contrib 0.164.0
 # (ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
 # @sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b;
 # component names verified with that binary: otlp, k8s_objects, file_log,

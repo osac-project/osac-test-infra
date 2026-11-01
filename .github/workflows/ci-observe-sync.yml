@@ -10,11 +10,20 @@ name: CI observe sync
 # zero manual steps. See monitoring/ci-observe.md ("Automatic sync").
 #
 # Deliberately has NO pull_request trigger (same reasoning as
-# deploy-monitoring.yml): it only ever runs on the schedule or on a manual
-# dispatch, so it never shows up in a PR's checks list.
+# deploy-monitoring.yml): it only ever runs on a manual dispatch, so it
+# never shows up in a PR's checks list.
 on:
-  schedule:
-    - cron: "*/15 * * * *"
+  # Schedule disabled (2026-11-01), for two reasons:
+  # (a) E2E runs now push ci-observe telemetry live to the central backend
+  #     from the collector gateway, so the artifact sync is unnecessary for
+  #     new runs.
+  # (b) This workflow's "up --quadlet" step restarts the backend every 15
+  #     minutes, which would drop the gateways' in-flight live-ingest
+  #     batches mid-run.
+  # The workflow itself stays for manual dispatch: backfill of historical
+  # ci-observe-capture-* artifacts that predate the live push.
+  # schedule:
+  #   - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
 jobs:

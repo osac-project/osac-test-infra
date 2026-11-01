@@ -162,7 +162,15 @@ def _kubelet_endpoint(kubeconfig: Path) -> str:
 
 
 def render_manifest(
-    *, capture_id: str, namespace: str, cluster_uid: str, kubelet_endpoint: str, suite: str = "", pr: str = ""
+    *,
+    capture_id: str,
+    namespace: str,
+    cluster_uid: str,
+    kubelet_endpoint: str,
+    suite: str = "",
+    pr: str = "",
+    otlp_endpoint: str = "",
+    otlp_auth: str = "",
 ) -> str:
     """Substitute the plain ``${...}`` tokens the coordinator owns.
 
@@ -171,6 +179,11 @@ def render_manifest(
     inside the manifest's double-quoted env values, the CI action renders
     the same tokens through sed, and the gateway's collector config cannot
     expand an empty value.
+
+    ``otlp_endpoint`` and ``otlp_auth`` serve the live-push collector
+    config (collector-live.yaml); the local file-capture config never reads
+    them, so they default to empty and only keep the shared manifest
+    renderable.
     """
     suite = re.sub(r"[^a-z0-9-]", "", suite) or "none"
     pr = re.sub(r"[^0-9]", "", pr) or "none"
@@ -181,6 +194,8 @@ def render_manifest(
         "CI_OBSERVE_KUBELET_ENDPOINT": kubelet_endpoint,
         "CI_OBSERVE_SUITE": suite,
         "CI_OBSERVE_PR": pr,
+        "CI_OBSERVE_OTLP_ENDPOINT": otlp_endpoint,
+        "CI_OBSERVE_OTLP_AUTH": otlp_auth,
     }
 
     def replace(match: re.Match[str]) -> str:
