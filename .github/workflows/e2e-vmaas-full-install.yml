@@ -1300,13 +1300,15 @@ jobs:
           capture-id: ${{ format('vmaas-{0}-{1}-a{2}', inputs.pr-number != '' && format('pr{0}', inputs.pr-number) || 'main', github.run_id, github.run_attempt) }}
           suite: vmaas
           pr: ${{ inputs.pr-number }}
-          # The commit under test: the test-infra ref this run checked out
-          # (the PR head SHA in the PR flow, from the PR starter's sha
-          # input; empty on schedules, where the action falls back to
-          # GITHUB_SHA, the main HEAD). GITHUB_SHA is wrong in the PR flow
-          # (the dispatching repo's default-branch SHA), so it is only the
-          # fallback.
-          git-sha: ${{ inputs.test-infra-ref }}
+          # Run identity: the two git refs, each true in every flow.
+          # test-ref is the osac code under test (the osac PR head in the
+          # osac PR flow; "main" on schedules, a true statement of what
+          # ran). test-infra-ref is the harness revision (the test-infra
+          # PR head in this repo's PR flow; empty on schedules and
+          # dispatches, where the action falls back to GITHUB_SHA, the
+          # workflow's own commit, which IS the harness revision there).
+          test-ref: ${{ inputs.test-ref }}
+          test-infra-ref: ${{ inputs.test-infra-ref }}
           # The central ingest password reaches the action as a secret, the
           # same data-only channel as every other input.
           otlp-password: ${{ secrets.ci-observe-otlp-password }}

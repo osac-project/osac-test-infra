@@ -26,7 +26,11 @@
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250 (single-node canary)
 #   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
 #   CI_OBSERVE_PR                pull request number; empty for non-PR runs
-#   CI_OBSERVE_GIT_SHA           commit under test (test-ref), "unknown" if unavailable
+#   CI_OBSERVE_TEST_REF          osac code under test (test-ref input; "main"
+#                                on schedules, "unknown" if unparseable)
+#   CI_OBSERVE_TEST_INFRA_REF    test-infra harness revision (test-infra-ref
+#                                input or the workflow's own SHA; "unknown"
+#                                if unparseable)
 #   CI_OBSERVE_WORKFLOW          workflow name, "unknown" if unavailable
 #   CI_OBSERVE_RUN_ATTEMPT       run attempt number, "1" if unavailable
 #   CI_OBSERVE_OSAC_IMAGES       deployed OSAC images, "; "-separated
@@ -187,18 +191,24 @@ processors:
       - key: osac.ci.pr
         value: ${env:CI_OBSERVE_PR}
         action: upsert
-      # Run identity: what exactly ran. The commit under test (the PR head,
-      # not the dispatching repo's default-branch SHA), the workflow name,
-      # the run attempt and the OSAC images deployed on the cluster, so a
-      # span answers "what code on what cluster" without leaving the
+      # Run identity: what exactly ran. Two git refs, each true in every
+      # flow -- test_ref is the osac code under test (the osac PR head in
+      # the osac PR flow, "main" on schedules), test_infra_ref the test-
+      # infra harness revision (the test-infra PR head in this repo's PR
+      # flow, the workflow's own SHA on schedules) -- plus the workflow
+      # name, the run attempt and the OSAC images deployed on the cluster,
+      # so a span answers "what code on what cluster" without leaving the
       # backend. Like suite and PR above, the coordinator always sets the
       # variables, to "unknown" (or "1" for the attempt) when a value is
       # unavailable: an empty value makes the resource processor reject the
       # whole config at load. The images are one ";"-separated single-line
       # value because the coordinator's rendering (sed into a double-quoted
       # manifest env value) cannot carry newlines.
-      - key: osac.ci.git_sha
-        value: ${env:CI_OBSERVE_GIT_SHA}
+      - key: osac.ci.test_ref
+        value: ${env:CI_OBSERVE_TEST_REF}
+        action: upsert
+      - key: osac.ci.test_infra_ref
+        value: ${env:CI_OBSERVE_TEST_INFRA_REF}
         action: upsert
       - key: osac.ci.workflow
         value: ${env:CI_OBSERVE_WORKFLOW}

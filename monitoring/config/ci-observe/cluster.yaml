@@ -10,7 +10,11 @@
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250
 #   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
 #   CI_OBSERVE_PR                pull request number; empty for non-PR runs
-#   CI_OBSERVE_GIT_SHA           commit under test; "unknown" if unavailable
+#   CI_OBSERVE_TEST_REF          osac code under test; "main" on schedules,
+#                                "unknown" if empty or unparseable
+#   CI_OBSERVE_TEST_INFRA_REF    test-infra harness revision; the workflow's
+#                                own SHA when the input is empty, "unknown"
+#                                if unparseable
 #   CI_OBSERVE_WORKFLOW          workflow name; "local"/"unknown" fallbacks
 #   CI_OBSERVE_RUN_ATTEMPT       run attempt number; "1" if unavailable
 #   CI_OBSERVE_OSAC_IMAGES       deployed OSAC images, one "; "-separated
@@ -153,8 +157,10 @@ spec:
             # reject its config at load. The images are a single ";"-
             # separated line because neither the CI sed rendering nor a
             # double-quoted manifest value can carry a newline.
-            - name: CI_OBSERVE_GIT_SHA
-              value: "${CI_OBSERVE_GIT_SHA}"
+            - name: CI_OBSERVE_TEST_REF
+              value: "${CI_OBSERVE_TEST_REF}"
+            - name: CI_OBSERVE_TEST_INFRA_REF
+              value: "${CI_OBSERVE_TEST_INFRA_REF}"
             - name: CI_OBSERVE_WORKFLOW
               value: "${CI_OBSERVE_WORKFLOW}"
             - name: CI_OBSERVE_RUN_ATTEMPT

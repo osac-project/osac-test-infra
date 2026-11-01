@@ -133,14 +133,27 @@ capture identity) live to the central backend while the test runs:
   Telemetry is visible in the CI Grafana during the run.
 
 Every captured signal also carries the run identity as `osac.ci.*`
-resource attributes: `git_sha` (the commit under test, the PR head SHA in
-the PR flow), `workflow`, `run_attempt`, and `osac_images` (the OSAC images
-deployed on the cluster, one `deployment=image1,image2` entry per
-deployment, `;`-separated on a single line). They answer "what exactly
-ran?" next to any span in Tempo. On the spans they stay unindexed resource
-attributes, like the capture id; a value the coordinator cannot determine
-degrades to `unknown` (never empty, which the collector rejects at config
-load).
+resource attributes, so a span answers "what exactly ran?". Two of them
+are git refs, and each is true in every flow: `test_ref` is the osac code
+under test, `test_infra_ref` the test-infra harness revision (the
+workflow, scripts and actions that orchestrate the run). The others are
+`workflow`, `run_attempt`, and `osac_images` (the OSAC images deployed on
+the cluster, one `deployment=image1,image2` entry per deployment,
+`;`-separated on a single line).
+
+| Flow | `osac.ci.test_ref` | `osac.ci.test_infra_ref` |
+| --- | --- | --- |
+| osac PR flow (osac's callers pin these workflows and pass both refs) | osac PR head SHA | the test-infra ref osac passes (`main` unless the osac PR pins one) |
+| test-infra PR flow (this repo's own PRs) | `main` | test-infra PR head SHA |
+| This repo's scheduled / dispatched runs | `main` (input default) | the workflow's own SHA (`GITHUB_SHA`) |
+| osac's scheduled runs (through osac's callers) | osac main HEAD SHA (osac passes `test-ref: inputs.sha or github.sha`) | `main` (osac passes `test-infra-ref: main`) |
+| Local capture | `unknown` (no osac ref locally) | local `git rev-parse HEAD` |
+
+On the spans they stay unindexed resource attributes, like the capture
+id. A value the coordinator cannot determine degrades to `unknown` —
+never empty, which the collector rejects at config load — and a ref that
+does not parse as a git ref (characters outside letters, digits,
+`. _ / + -`) degrades to `unknown` whole rather than a mangled value.
 
 The `ci-observe-sync.yml` workflow is no longer scheduled: live pushes made
 it unnecessary for new runs, and its 15-minute backend restart would drop

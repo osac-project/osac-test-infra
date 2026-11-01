@@ -16,6 +16,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# Coverage data written by the monitoring unit tests' pytest.ini
+monitoring/.coverage
 
 # Test reports
 reports/

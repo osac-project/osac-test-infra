@@ -51,14 +51,25 @@ inputs:
       attribute by the gateway collector.
     required: false
     default: ""
-  git-sha:
+  test-ref:
     description: >-
-      Git commit under test, stamped onto every captured signal as the
-      osac.ci.git_sha resource attribute. The reusable E2E workflows pass
-      their test-infra-ref input (the PR head SHA in the PR flow; empty on
-      schedules): GITHUB_SHA is wrong there, the dispatching repo's
-      default-branch SHA, not the commit under test. Empty falls back to
-      GITHUB_SHA.
+      Git ref of the osac code under test, stamped onto every captured
+      signal as the osac.ci.test_ref resource attribute. The reusable E2E
+      workflows pass their test-ref input (the osac PR head SHA in the
+      osac PR flow, "main" on schedules -- a true statement of what ran).
+      A ref containing characters outside [a-zA-Z0-9._/+-] degrades to
+      "unknown" rather than a mangled value.
+    required: false
+    default: ""
+  test-infra-ref:
+    description: >-
+      Git ref of the test-infra harness revision, stamped onto every
+      captured signal as the osac.ci.test_infra_ref resource attribute.
+      The reusable E2E workflows pass their test-infra-ref input (the
+      test-infra PR head SHA in this repo's PR flow; empty on schedules
+      and dispatches, where the action falls back to GITHUB_SHA -- the
+      workflow's own commit, which IS the harness revision there). A ref
+      containing characters outside [a-zA-Z0-9._/+-] degrades to "unknown".
     required: false
     default: ""
   command:
@@ -100,7 +111,8 @@ runs:
         CAPTURE_ID_INPUT: ${{ inputs.capture-id }}
         SUITE_INPUT: ${{ inputs.suite }}
         PR_INPUT: ${{ inputs.pr }}
-        GIT_SHA_INPUT: ${{ inputs.git-sha }}
+        TEST_REF_INPUT: ${{ inputs.test-ref }}
+        TEST_INFRA_REF_INPUT: ${{ inputs.test-infra-ref }}
         OTLP_PASSWORD_INPUT: ${{ inputs.otlp-password }}
         BEYLA_IMAGE_INPUT: ${{ inputs.beyla-image }}
       run: |
@@ -155,20 +167,44 @@ runs:
         suite="${suite:-none}"
         pr="${pr:-none}"
 
-        # Run identity. git-sha prefers the explicit input (the reusable
-        # workflows' test-infra-ref: the PR head in the PR flow) and falls
-        # back to GITHUB_SHA, which is the dispatching repo's default-branch
-        # SHA there, not the commit under test. The allowlist (SHA hex,
-        # branch and tag characters) keeps the value safe for the sed
-        # replacement and the double-quoted manifest env value below.
-        # GITHUB_WORKFLOW and GITHUB_RUN_ATTEMPT are default runner env
-        # vars, reliable here because this step runs directly on the
-        # runner, not in a container. All three coalesce to a non-empty
-        # fallback for the same reason as suite and PR: the collector
-        # rejects an empty env value at load.
-        git_sha="${GIT_SHA_INPUT:-${GITHUB_SHA}}"
-        git_sha="$(printf '%s' "${git_sha}" | tr -cd 'a-zA-Z0-9._/+-')"
-        git_sha="${git_sha:-unknown}"
+        # Run identity. Two refs, each true in every flow: test_ref is the
+        # osac code under test (the callers' test-ref input; "main" on
+        # schedules, which is a true statement of what ran), test_infra_ref
+        # the harness revision (the callers' test-infra-ref input, the
+        # test-infra PR head in this repo's PR flow; empty on schedules
+        # and dispatches, where GITHUB_SHA -- the workflow's own commit --
+        # IS the harness revision). A ref that does not parse degrades to
+        # "unknown" rather than being silently mangled into a value that
+        # matches no real ref. GITHUB_WORKFLOW and GITHUB_RUN_ATTEMPT are
+        # default runner env vars, reliable here because this step runs
+        # directly on the runner, not in a container. Every value coalesces
+        # to a non-empty fallback for the same reason as suite and PR: the
+        # collector rejects an empty env value at load.
+        #
+        # A ref is safe only when the WHOLE string is the allowlist
+        # charset (SHA hex, branch and tag characters). The regex alone
+        # does not guarantee that: whether POSIX ERE "$" also matches just
+        # before a trailing newline is engine-dependent, and a ref like
+        # "main\n" (a YAML block scalar, a sloppy dispatch input) that
+        # slipped through would break the sed rendering below -- and, with
+        # telemetry requested, the verify step would gate the run on a
+        # caller typo, against the never-gate design. The explicit newline
+        # comparison makes the check engine-independent.
+        ref_is_safe() {
+          [[ -n "$1" && "$1" != *$'\n'* && "$1" =~ ^[a-zA-Z0-9._/+-]+$ ]]
+        }
+        if ref_is_safe "${TEST_REF_INPUT}"; then
+          test_ref="${TEST_REF_INPUT}"
+        else
+          test_ref="unknown"
+        fi
+        # An explicitly passed but invalid test-infra-ref is "unknown", not
+        # a silent fallback to GITHUB_SHA: the caller said something, and a
+        # different true value would hide that it did not parse.
+        test_infra_ref="${TEST_INFRA_REF_INPUT:-${GITHUB_SHA:-}}"
+        if ! ref_is_safe "${test_infra_ref}"; then
+          test_infra_ref="unknown"
+        fi
         workflow_name="$(printf '%s' "${GITHUB_WORKFLOW:-}" | tr -d '\n|\\&"')"
         workflow_name="${workflow_name:-unknown}"
         run_attempt="$(printf '%s' "${GITHUB_RUN_ATTEMPT:-}" | tr -cd '0-9')"
@@ -222,7 +258,8 @@ runs:
             -e "s|\${CI_OBSERVE_KUBELET_ENDPOINT}|${kubelet_endpoint}|g" \
             -e "s|\${CI_OBSERVE_SUITE}|${suite}|g" \
             -e "s|\${CI_OBSERVE_PR}|${pr}|g" \
-            -e "s|\${CI_OBSERVE_GIT_SHA}|${git_sha}|g" \
+            -e "s|\${CI_OBSERVE_TEST_REF}|${test_ref}|g" \
+            -e "s|\${CI_OBSERVE_TEST_INFRA_REF}|${test_infra_ref}|g" \
             -e "s|\${CI_OBSERVE_WORKFLOW}|${workflow_name}|g" \
             -e "s|\${CI_OBSERVE_RUN_ATTEMPT}|${run_attempt}|g" \
             -e "s|\${CI_OBSERVE_OSAC_IMAGES}|${osac_images}|g" \

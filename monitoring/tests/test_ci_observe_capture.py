@@ -181,21 +181,23 @@ def test_render_manifest_narrows_suite_and_pr_to_safe_charsets(*, capture_module
 
 def test_render_manifest_resolves_the_run_identity_tokens(*, capture_module: ModuleType) -> None:
     """The run identity values become the gateway env values the
-    collector's ${env:...} placeholders read for the osac.ci.git_sha,
-    osac.ci.workflow, osac.ci.run_attempt and osac.ci.osac_images resource
-    attributes."""
+    collector's ${env:...} placeholders read for the osac.ci.test_ref,
+    osac.ci.test_infra_ref, osac.ci.workflow, osac.ci.run_attempt and
+    osac.ci.osac_images resource attributes."""
     rendered = capture_module.render_manifest(
         capture_id="cap123",
         namespace="osac-e2e-ci",
         cluster_uid="uid-1",
         kubelet_endpoint="https://192.0.2.1:10250",
-        git_sha="9f3eeeb2c9a4b6f4e5b7f3a3b4c5d6e7f8a9b0c1",
+        test_ref="9f3eeeb2c9a4b6f4e5b7f3a3b4c5d6e7f8a9b0c1",
+        test_infra_ref="a902331b0b11c390a56381ad16ebd13914f8d5",
         workflow="local",
         run_attempt="2",
         osac_images="fulfillment-service=quay.io/osac/fulfillment@sha256:abc;osac-operator=quay.io/osac/operator:1.2",
     )
     assert "${CI_OBSERVE_" not in rendered
-    assert 'name: CI_OBSERVE_GIT_SHA\n              value: "9f3eeeb2c9a4b6f4e5b7f3a3b4c5d6e7f8a9b0c1"' in rendered
+    assert 'name: CI_OBSERVE_TEST_REF\n              value: "9f3eeeb2c9a4b6f4e5b7f3a3b4c5d6e7f8a9b0c1"' in rendered
+    assert 'name: CI_OBSERVE_TEST_INFRA_REF\n              value: "a902331b0b11c390a56381ad16ebd13914f8d5"' in rendered
     assert 'name: CI_OBSERVE_WORKFLOW\n              value: "local"' in rendered
     assert 'name: CI_OBSERVE_RUN_ATTEMPT\n              value: "2"' in rendered
     assert (
@@ -208,48 +210,55 @@ def test_render_manifest_coalesces_run_identity_to_non_empty_fallbacks(*, captur
     """A local capture without run identity context still renders: the
     tokens coalesce to "unknown" (attempt: "1"), never to an empty string,
     because the gateway's collector config cannot expand an empty value
-    (its resource processor rejects it at load)."""
+    (its resource processor rejects it at load). A local capture has no
+    osac ref, so its test_ref is always "unknown"."""
     rendered = capture_module.render_manifest(
         capture_id="cap123", namespace="osac-e2e-ci", cluster_uid="uid-1", kubelet_endpoint="https://192.0.2.1:10250"
     )
     assert "${CI_OBSERVE_" not in rendered
-    assert 'name: CI_OBSERVE_GIT_SHA\n              value: "unknown"' in rendered
+    assert 'name: CI_OBSERVE_TEST_REF\n              value: "unknown"' in rendered
+    assert 'name: CI_OBSERVE_TEST_INFRA_REF\n              value: "unknown"' in rendered
     assert 'name: CI_OBSERVE_WORKFLOW\n              value: "unknown"' in rendered
     assert 'name: CI_OBSERVE_RUN_ATTEMPT\n              value: "1"' in rendered
     assert 'name: CI_OBSERVE_OSAC_IMAGES\n              value: "unknown"' in rendered
 
 
-def test_render_manifest_narrows_run_identity_to_safe_characters(*, capture_module: ModuleType) -> None:
-    """Like suite and PR, the run identity values land inside the
-    manifest's double-quoted env values (and, in the CI action, inside a
-    sed replacement): newlines, backslashes, double quotes and the
-    sed-special | and & are dropped rather than corrupting the manifest."""
+def test_render_manifest_degrades_unparseable_refs_to_unknown_whole(*, capture_module: ModuleType) -> None:
+    """A git ref is either a real ref or "unknown": characters outside the
+    SHA/branch/tag set degrade the WHOLE ref to "unknown", never a
+    stripped remainder (like "featurex") that matches no real ref. The
+    workflow name is a display string and keeps the denylist strip:
+    newlines, backslashes, double quotes and the sed-special | and & are
+    dropped rather than corrupting the manifest."""
     rendered = capture_module.render_manifest(
         capture_id="cap123",
         namespace="osac-e2e-ci",
         cluster_uid="uid-1",
         kubelet_endpoint="https://192.0.2.1:10250",
-        git_sha="main",
+        test_ref="feature!(x)",
+        test_infra_ref="main\nsha",
         workflow='E2E "full &| install"',
         run_attempt="attempt-3",
         osac_images="a=b\nc=d",
     )
     assert "${CI_OBSERVE_" not in rendered
-    assert 'name: CI_OBSERVE_GIT_SHA\n              value: "main"' in rendered
+    assert 'name: CI_OBSERVE_TEST_REF\n              value: "unknown"' in rendered
+    assert 'name: CI_OBSERVE_TEST_INFRA_REF\n              value: "unknown"' in rendered
     assert 'name: CI_OBSERVE_WORKFLOW\n              value: "E2E full  install"' in rendered
     assert 'name: CI_OBSERVE_RUN_ATTEMPT\n              value: "3"' in rendered
     assert 'name: CI_OBSERVE_OSAC_IMAGES\n              value: "a=bc=d"' in rendered
 
 
-def test_git_sha_reads_the_repository_head(
+def test_test_infra_ref_reads_the_repository_head(
     *, capture_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The commit under test for a local capture is the repository the
-    supervisor runs in; outside a repository it degrades to "unknown"."""
-    sha = capture_module._git_sha()
-    assert len(sha) == 40 and all(char in "0123456789abcdef" for char in sha), sha
+    """The harness revision for a local capture is the commit of the
+    test-infra checkout the supervisor runs from; outside a repository it
+    degrades to "unknown"."""
+    ref = capture_module._test_infra_ref()
+    assert len(ref) == 40 and all(char in "0123456789abcdef" for char in ref), ref
     monkeypatch.chdir(tmp_path)
-    assert capture_module._git_sha() == "unknown"
+    assert capture_module._test_infra_ref() == "unknown"
 
 
 def test_osac_images_collapses_the_deployment_lines(
