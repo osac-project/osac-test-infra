@@ -28,7 +28,7 @@ ContainerName=ci-observe-tempo210
 Image=docker.io/grafana/tempo:2.10.10
 Exec=--config.file=/etc/tempo.yaml
 PublishPort=127.0.0.1:3210:3210
-PublishPort=14418:4418
+PublishPort=127.0.0.1:14418:4418
 Volume=ci-observe-tempo210-data:/data
 Volume=%h/monitoring/ci-observe/config/tempo210/tempo.yaml:/etc/tempo.yaml:ro,Z
 

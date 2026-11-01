@@ -78,5 +78,9 @@ https://osac-ci-1.redhat.com:4319 {
 	basic_auth {
 		ci-observe CI_OBSERVE_OTLP_HASH
 	}
-	reverse_proxy 127.0.0.1:14318
+	# DEPLOYMENT ORDER: the otelcol-router (systemd service on this machine,
+# deployed by monitoring/scripts/deploy-otelcol-router.sh) must be running
+# before this proxy target is applied. monitoring-setup.sh warns if the
+# router is not healthy when deploying this file (see deploy_caddyfile).
+reverse_proxy 127.0.0.1:14318
 }

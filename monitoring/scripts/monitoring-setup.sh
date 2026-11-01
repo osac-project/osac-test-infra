@@ -300,6 +300,20 @@ deploy_caddyfile() {
         return 0
     fi
 
+    # The rendered Caddyfile proxies the OTLP ingest vhost to the
+    # otelcol-router on 127.0.0.1:14318. That router is a root-managed host
+    # service installed by monitoring/scripts/deploy-otelcol-router.sh --
+    # NOT by this script. If it is not running, every authenticated OTLP
+    # request fails the moment Caddy reloads with the new file. Warn loudly
+    # instead of gating: telemetry must never block a monitoring deploy.
+    if ! curl -sf -m 5 http://127.0.0.1:14333/healthcheck >/dev/null 2>&1; then
+        echo "  WARNING: otelcol-router is NOT healthy on 127.0.0.1:14333." >&2
+        echo "           Deploying this Caddyfile anyway will break the ci-observe OTLP" >&2
+        echo "           ingest (Caddy will proxy to a dead upstream on :14318)." >&2
+        echo "           Install/recover the router first:" >&2
+        echo "             sudo monitoring/scripts/deploy-otelcol-router.sh" >&2
+    fi
+
     local tmp
     tmp="$(mktemp)"
     # cp -f, not mv -- the Caddyfile is bind-mounted as a single file into

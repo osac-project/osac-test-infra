@@ -3,6 +3,49 @@
 This prototype uses standard OpenTelemetry collection to investigate existing OSAC tests locally.
 The application and individual tests keep their current source and behavior.
 
+## Status at the 2026-11-01 cutover
+
+The collector-first prototype became the live CI path. What works now, all verified
+against the central backend on `osac-ci-1`:
+
+- Live push is the delivery path. A `ci-observe` run streams pytest traces, cluster
+  logs and kubelet metrics to the central backend while the test runs. Nothing is
+  uploaded to GitHub, so the capture step needs no artifact and no gitleaks scan.
+- The dashboard shows real numbers for a finished capture: 17 tests, 24.1 minutes
+  run duration, the slowest-test table with per-test durations.
+- Every E2E wait is a named span (`poll_until` in the osac repo). The 16-minute
+  bmaas metering test breaks down into named waits: instance RUNNING 282 s,
+  metering heartbeats 60 s, instance deletion 243 s.
+- Kubelet metrics arrive: the cluster panels show node and pod CPU and memory.
+- Capture ids are readable (`bmaas-main-<run-id>-a1`), with suite and PR promoted
+  to Loki and Prometheus labels.
+- Delivery is verified after each test: the capture action fails the job when
+  telemetry was requested but never reached the backend. The test's own exit code
+  stays the run step's outcome.
+- Traces from the batch era stay queryable through the archive datasource. The
+  31 batch session traces were migrated into Tempo 2.10.
+
+What is missing or known gaps:
+
+- Beyla service-request spans from the batch era were not migrated, only session
+  traces. Old captures show test spans in the service-request panels.
+- The Traces Drilldown app (v3.1.0) is installed and served but not yet confirmed
+  rendering in a user's browser. Explore with query type Trace ID is the working
+  path to a trace waterfall today.
+- Count stat panels render with an `ns` suffix (`17 ns`). The Tempo field carries
+  a nanosecond unit and the stat inherits it. Cosmetic, unfixed.
+- The router keeps its sending queues in memory. A router restart while a backend
+  is down discards already accepted batches. Persistent queue storage is a
+  follow-up, not part of the cutover.
+- Collectors use `insecure_skip_verify` for the internal CA. Mounting the CA into
+  the gateway pod for real verification is a follow-up.
+- Freshly flushed Tempo blocks are invisible to TraceQL search for up to 15
+  minutes (the backend search sharder skips young blocks). A just-finished run's
+  spans appear with that delay; this is Tempo 2.10 behavior, not a bug.
+- GitHub OAuth users may see a reduced sidebar without Explore. The admin account
+  sees the full navigation. Granting the OAuth users the needed org role is an
+  open task.
+
 ## Scope
 
 The first milestone collects test phases, Go service requests and selected cluster evidence.

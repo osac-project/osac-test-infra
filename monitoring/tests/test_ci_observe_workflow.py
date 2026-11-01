@@ -705,7 +705,7 @@ class TestSyncWorkflow:
         assert f"PublishPort=127.0.0.1:{ci_observe.QUADLET_PORTS['tempo']}:" in rendered
         tempo210_quadlet = (REPO_ROOT / "monitoring" / "quadlet" / "ci-observe-tempo210.container").read_text()
         assert "PublishPort=127.0.0.1:3210:3210" in tempo210_quadlet
-        assert "PublishPort=14418:4418" in tempo210_quadlet
+        assert "PublishPort=127.0.0.1:14418:4418" in tempo210_quadlet
         # The stack record's ports are the quadlet's, so the import path and
         # the Grafana URL never drift apart.
         assert ci_observe.QUADLET_PORTS["otlp"] == 4318
@@ -887,7 +887,7 @@ class TestOtelcolRouter:
         # 3210 is the API port the ci-observe-traces datasource points at;
         # 14418 is the OTLP receiver the router exports to.
         assert "PublishPort=127.0.0.1:3210:3210" in text
-        assert "PublishPort=14418:4418" in text
+        assert "PublishPort=127.0.0.1:14418:4418" in text
         assert "Volume=ci-observe-tempo210-data:/data" in text
         # The config is the repo's, deployed into the ci-observe state dir.
         assert "Volume=%h/monitoring/ci-observe/config/tempo210/tempo.yaml:/etc/tempo.yaml:ro,Z" in text
