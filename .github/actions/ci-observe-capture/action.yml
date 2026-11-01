@@ -111,7 +111,7 @@ runs:
           touch "${ci_dir}/deploy-failed"
           exit 0
         fi
-        auth="Basic $(printf '%s:%s' "ci-observe" "${OTLP_PASSWORD_INPUT}" | base64)"
+        auth="Basic $(printf '%s:%s' "ci-observe" "${OTLP_PASSWORD_INPUT}" | base64 -w0)"
 
         # Suite and PR are rendered into the cluster manifest as env values
         # for the gateway. Digits and lowercase alphanumerics only, so the

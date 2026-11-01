@@ -101,6 +101,9 @@ jobs:
       contents: read
       id-token: write  # only declared because GitHub validates a called workflow's permissions statically (as in e2e-pr.yml)
     uses: ./.github/workflows/e2e-bmaas-full-install.yml
+    secrets:
+      # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
     with:
       test-suite: bmaas/sanity
       test-filter: not TestBmaasNetworking
@@ -116,6 +119,3 @@ jobs:
       pr-number: ${{ inputs.pr-number }}
       notify-on-failure: false
       enable-ai-diagnostic: false
-      secrets:
-        # Live OTLP push credential; without it ci-observe degrades to no telemetry.
-        ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}

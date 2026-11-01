@@ -248,7 +248,7 @@ class TestLiveGateway:
         assert exporter["headers"]["Authorization"] == "${env:CI_OBSERVE_OTLP_AUTH}"
         # The central endpoint serves an internal-CA certificate; the
         # collector skips verification until the CA is mounted (follow-up).
-        assert exporter["tls"]["insecure"] is True
+        assert exporter["tls"]["insecure_skip_verify"] is True
 
     def test_queue_and_retry_survive_a_brief_central_outage(self, collector_live: dict[str, Any]) -> None:
         """A central deploy or restart must not drop in-flight batches: the

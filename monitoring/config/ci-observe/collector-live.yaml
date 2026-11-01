@@ -267,8 +267,10 @@ exporters:
     tls:
       # The endpoint serves a certificate from an internal CA. Follow-up:
       # mount the CA into the gateway pod and verify it instead of skipping
-      # verification.
-      insecure: true
+      # verification. insecure_skip_verify keeps TLS but accepts the
+      # internal certificate; "insecure" would disable TLS outright and
+      # send the auth header in cleartext.
+      insecure_skip_verify: true
     headers:
       # Precomputed by the capture action: "Basic <base64(user:password)>".
       Authorization: "${env:CI_OBSERVE_OTLP_AUTH}"

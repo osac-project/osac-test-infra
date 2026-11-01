@@ -189,7 +189,7 @@ class TestAction:
         script = deploy["run"]
         assert deploy["env"]["OTLP_PASSWORD_INPUT"] == "${{ inputs.otlp-password }}"
         assert 'printf \'%s:%s\' "ci-observe" "${OTLP_PASSWORD_INPUT}"' in script
-        assert "| base64)" in script
+        assert "| base64 -w0)" in script
         for token in ("CI_OBSERVE_OTLP_ENDPOINT", "CI_OBSERVE_OTLP_AUTH"):
             assert f'-e "s|\\${{{token}}}' in script, token
         assert "https://osac-ci-1.redhat.com" in script

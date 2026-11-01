@@ -57,7 +57,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 import posixpath
@@ -1107,27 +1106,6 @@ def cmd_capture(args: argparse.Namespace) -> int:
         "onto live push",
         code=2,
     )
-    sibling = Path(__file__).resolve().parent / "ci_observe_capture.py"
-    if not sibling.is_file():
-        raise ToolError(
-            "capture backend is not available yet: monitoring/scripts/ci_observe_capture.py "
-            "does not exist (it is supplied by the capture-backend integration, not this tool)",
-            code=2,
-        )
-    spec = importlib.util.spec_from_file_location("ci_observe_capture", sibling)
-    module = importlib.util.module_from_spec(spec)
-    # dataclass resolution looks the module up in sys.modules by __module__;
-    # without registration it crashes with 'NoneType' has no '__dict__'.
-    sys.modules[spec.name] = module
-    try:
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-    except Exception as err:
-        raise ToolError(f"failed to load capture backend {sibling}: {err}", code=2) from err
-    handler = getattr(module, "capture", None)
-    if not callable(handler):
-        raise ToolError(f"capture backend {sibling} does not define capture(args)", code=2)
-    return handler(args)
 
 
 def list_workflow_runs(repository: str, since: datetime) -> list[dict[str, Any]]:

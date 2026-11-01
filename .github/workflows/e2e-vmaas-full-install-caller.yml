@@ -100,6 +100,9 @@ jobs:
       # caller grants regardless of runtime reachability.
       id-token: write
     uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    secrets:
+      # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
     with:
       # workflow_dispatch: resolve-suite (labels via API). Else: PR labels
       # from the event, then unlabeled defaults.
@@ -136,6 +139,3 @@ jobs:
 
   # Skip this required check on unreadiness so it stays pending (not red).
   # checks:write; unreported check is still Expected/Waiting.
-      secrets:
-        # Live OTLP push credential; without it ci-observe degrades to no telemetry.
-        ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
