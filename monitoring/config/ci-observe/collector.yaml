@@ -24,6 +24,12 @@
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250 (single-node canary)
 #   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
 #   CI_OBSERVE_PR                pull request number; empty for non-PR runs
+#   CI_OBSERVE_GIT_SHA           commit under test, "unknown" if unavailable
+#   CI_OBSERVE_WORKFLOW          workflow name, "local" for local captures
+#   CI_OBSERVE_RUN_ATTEMPT       run attempt number, "1" if unavailable
+#   CI_OBSERVE_OSAC_IMAGES       deployed OSAC images, "; "-separated
+#                                deployment=image1,image2 entries, "unknown"
+#                                if unavailable
 #
 # Capture interface (shared with the other lanes): /capture holds
 # traces.jsonl, metrics.jsonl, logs.jsonl and the coordinator-owned
@@ -177,6 +183,25 @@ processors:
         action: upsert
       - key: osac.ci.pr
         value: ${env:CI_OBSERVE_PR}
+        action: upsert
+      # Run identity: what exactly ran (the commit under test, the workflow
+      # name, the run attempt and the OSAC images deployed on the cluster).
+      # Kept identical to collector-live.yaml's resource/capture: the two
+      # configs share the gateway env from cluster.yaml, and the local
+      # supervisor provides the same variables ("local"/"unknown" fallbacks
+      # for values a local capture does not have). Never empty: an empty
+      # value makes the resource processor reject the whole config at load.
+      - key: osac.ci.git_sha
+        value: ${env:CI_OBSERVE_GIT_SHA}
+        action: upsert
+      - key: osac.ci.workflow
+        value: ${env:CI_OBSERVE_WORKFLOW}
+        action: upsert
+      - key: osac.ci.run_attempt
+        value: ${env:CI_OBSERVE_RUN_ATTEMPT}
+        action: upsert
+      - key: osac.ci.osac_images
+        value: ${env:CI_OBSERVE_OSAC_IMAGES}
         action: upsert
   memory_limiter:
     check_interval: 1s

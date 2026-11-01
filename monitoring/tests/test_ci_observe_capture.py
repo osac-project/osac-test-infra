@@ -179,6 +179,110 @@ def test_render_manifest_narrows_suite_and_pr_to_safe_charsets(*, capture_module
     assert 'name: CI_OBSERVE_PR\n              value: "2051"' in rendered
 
 
+def test_render_manifest_resolves_the_run_identity_tokens(*, capture_module: ModuleType) -> None:
+    """The run identity values become the gateway env values the
+    collector's ${env:...} placeholders read for the osac.ci.git_sha,
+    osac.ci.workflow, osac.ci.run_attempt and osac.ci.osac_images resource
+    attributes."""
+    rendered = capture_module.render_manifest(
+        capture_id="cap123",
+        namespace="osac-e2e-ci",
+        cluster_uid="uid-1",
+        kubelet_endpoint="https://192.0.2.1:10250",
+        git_sha="9f3eeeb2c9a4b6f4e5b7f3a3b4c5d6e7f8a9b0c1",
+        workflow="local",
+        run_attempt="2",
+        osac_images="fulfillment-service=quay.io/osac/fulfillment@sha256:abc;osac-operator=quay.io/osac/operator:1.2",
+    )
+    assert "${CI_OBSERVE_" not in rendered
+    assert 'name: CI_OBSERVE_GIT_SHA\n              value: "9f3eeeb2c9a4b6f4e5b7f3a3b4c5d6e7f8a9b0c1"' in rendered
+    assert 'name: CI_OBSERVE_WORKFLOW\n              value: "local"' in rendered
+    assert 'name: CI_OBSERVE_RUN_ATTEMPT\n              value: "2"' in rendered
+    assert (
+        "name: CI_OBSERVE_OSAC_IMAGES\n              value: "
+        '"fulfillment-service=quay.io/osac/fulfillment@sha256:abc;osac-operator=quay.io/osac/operator:1.2"'
+    ) in rendered
+
+
+def test_render_manifest_coalesces_run_identity_to_non_empty_fallbacks(*, capture_module: ModuleType) -> None:
+    """A local capture without run identity context still renders: the
+    tokens coalesce to "unknown" (attempt: "1"), never to an empty string,
+    because the gateway's collector config cannot expand an empty value
+    (its resource processor rejects it at load)."""
+    rendered = capture_module.render_manifest(
+        capture_id="cap123", namespace="osac-e2e-ci", cluster_uid="uid-1", kubelet_endpoint="https://192.0.2.1:10250"
+    )
+    assert "${CI_OBSERVE_" not in rendered
+    assert 'name: CI_OBSERVE_GIT_SHA\n              value: "unknown"' in rendered
+    assert 'name: CI_OBSERVE_WORKFLOW\n              value: "unknown"' in rendered
+    assert 'name: CI_OBSERVE_RUN_ATTEMPT\n              value: "1"' in rendered
+    assert 'name: CI_OBSERVE_OSAC_IMAGES\n              value: "unknown"' in rendered
+
+
+def test_render_manifest_narrows_run_identity_to_safe_characters(*, capture_module: ModuleType) -> None:
+    """Like suite and PR, the run identity values land inside the
+    manifest's double-quoted env values (and, in the CI action, inside a
+    sed replacement): newlines, backslashes, double quotes and the
+    sed-special | and & are dropped rather than corrupting the manifest."""
+    rendered = capture_module.render_manifest(
+        capture_id="cap123",
+        namespace="osac-e2e-ci",
+        cluster_uid="uid-1",
+        kubelet_endpoint="https://192.0.2.1:10250",
+        git_sha="main",
+        workflow='E2E "full &| install"',
+        run_attempt="attempt-3",
+        osac_images="a=b\nc=d",
+    )
+    assert "${CI_OBSERVE_" not in rendered
+    assert 'name: CI_OBSERVE_GIT_SHA\n              value: "main"' in rendered
+    assert 'name: CI_OBSERVE_WORKFLOW\n              value: "E2E full  install"' in rendered
+    assert 'name: CI_OBSERVE_RUN_ATTEMPT\n              value: "3"' in rendered
+    assert 'name: CI_OBSERVE_OSAC_IMAGES\n              value: "a=bc=d"' in rendered
+
+
+def test_git_sha_reads_the_repository_head(
+    *, capture_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The commit under test for a local capture is the repository the
+    supervisor runs in; outside a repository it degrades to "unknown"."""
+    sha = capture_module._git_sha()
+    assert len(sha) == 40 and all(char in "0123456789abcdef" for char in sha), sha
+    monkeypatch.chdir(tmp_path)
+    assert capture_module._git_sha() == "unknown"
+
+
+def test_osac_images_collapses_the_deployment_lines(
+    *, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deployed-images read returns one deployment=image line per
+    deployment; the token value is the same lines collapsed to a single
+    ";"-separated line, because neither the manifest's double-quoted env
+    values nor the CI action's sed rendering can carry a newline."""
+    monkeypatch.setattr(
+        capture_module, "_kubectl", lambda *args, **kwargs: "fulfillment-service=img1,img2\nosac-operator=img3\n"
+    )
+    assert (
+        capture_module._osac_images(Path("/fake/kubeconfig"), "osac-e2e-ci")
+        == "fulfillment-service=img1,img2;osac-operator=img3"
+    )
+
+
+def test_osac_images_degrades_to_unknown_on_any_failure(
+    *, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A kubectl failure or an empty namespace must never render an empty
+    env value: the collector rejects an empty value at config load."""
+
+    def failing_kubectl(kubeconfig: Path, *arguments: str, stdin: str | None = None) -> str:
+        raise subprocess.CalledProcessError(1, "kubectl")
+
+    monkeypatch.setattr(capture_module, "_kubectl", failing_kubectl)
+    assert capture_module._osac_images(Path("/fake/kubeconfig"), "osac-e2e-ci") == "unknown"
+    monkeypatch.setattr(capture_module, "_kubectl", lambda *args, **kwargs: "\n")
+    assert capture_module._osac_images(Path("/fake/kubeconfig"), "osac-e2e-ci") == "unknown"
+
+
 def test_render_manifest_rejects_unresolved_tokens(*, capture_module: ModuleType, tmp_path: Path) -> None:
     capture_module.MANIFEST = tmp_path / "broken.yaml"
     (tmp_path / "broken.yaml").write_text("name: ${CI_OBSERVE_UNKNOWN_TOKEN}\n")

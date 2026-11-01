@@ -161,6 +161,41 @@ def _kubelet_endpoint(kubeconfig: Path) -> str:
     return f"https://{address}:10250"
 
 
+def _git_sha() -> str:
+    """The commit under test, from the repository the supervisor runs in."""
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "unknown"
+    sha = result.stdout.strip()
+    return sha or "unknown"
+
+
+def _manifest_safe(value: str) -> str:
+    """Drop the characters that break the manifest's double-quoted env values
+    or the CI action's sed rendering of the same tokens: newline, backslash,
+    double quote, and the sed-special ``|`` and ``&``."""
+    return re.sub(r"[\n|\\&\"]", "", value)
+
+
+def _osac_images(kubeconfig: Path, namespace: str) -> str:
+    """The OSAC images deployed in the observed namespace.
+
+    One ``deployment=image1,image2`` line per deployment, collapsed to a
+    single "; "-separated line: the value lands inside the manifest's
+    double-quoted env values (and the CI action renders the same tokens
+    through sed), neither of which can carry a newline. Any failure
+    (kubectl error, empty namespace) degrades to "unknown", never an empty
+    string: the gateway's collector config cannot expand an empty value.
+    """
+    query = 'jsonpath={range .items[*]}{.metadata.name}={.spec.template.spec.containers[*].image}{"\\n"}{end}'
+    try:
+        raw = _kubectl(kubeconfig, "get", "deployments", "-n", namespace, "-o", query)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return "unknown"
+    return _manifest_safe(raw.replace("\n", ";").strip(";")) or "unknown"
+
+
 def render_manifest(
     *,
     capture_id: str,
@@ -169,6 +204,10 @@ def render_manifest(
     kubelet_endpoint: str,
     suite: str = "",
     pr: str = "",
+    git_sha: str = "",
+    workflow: str = "",
+    run_attempt: str = "",
+    osac_images: str = "",
     otlp_endpoint: str = "",
     otlp_auth: str = "",
 ) -> str:
@@ -180,6 +219,11 @@ def render_manifest(
     the same tokens through sed, and the gateway's collector config cannot
     expand an empty value.
 
+    The run identity tokens (git_sha, workflow, run_attempt, osac_images)
+    follow the same rule with "unknown" (attempt: "1") fallbacks: they are
+    stamped onto every signal as osac.ci.* resource attributes, and an
+    empty value would make the collector reject its config at load.
+
     ``otlp_endpoint`` and ``otlp_auth`` serve the live-push collector
     config (collector-live.yaml); the local file-capture config never reads
     them, so they default to empty and only keep the shared manifest
@@ -187,6 +231,10 @@ def render_manifest(
     """
     suite = re.sub(r"[^a-z0-9-]", "", suite) or "none"
     pr = re.sub(r"[^0-9]", "", pr) or "none"
+    git_sha = _manifest_safe(git_sha) or "unknown"
+    workflow = _manifest_safe(workflow) or "unknown"
+    run_attempt = re.sub(r"[^0-9]", "", run_attempt) or "1"
+    osac_images = _manifest_safe(osac_images) or "unknown"
     tokens = {
         "CI_OBSERVE_CAPTURE_ID": capture_id,
         "CI_OBSERVE_NAMESPACE": namespace,
@@ -194,6 +242,10 @@ def render_manifest(
         "CI_OBSERVE_KUBELET_ENDPOINT": kubelet_endpoint,
         "CI_OBSERVE_SUITE": suite,
         "CI_OBSERVE_PR": pr,
+        "CI_OBSERVE_GIT_SHA": git_sha,
+        "CI_OBSERVE_WORKFLOW": workflow,
+        "CI_OBSERVE_RUN_ATTEMPT": run_attempt,
+        "CI_OBSERVE_OSAC_IMAGES": osac_images,
         "CI_OBSERVE_OTLP_ENDPOINT": otlp_endpoint,
         "CI_OBSERVE_OTLP_AUTH": otlp_auth,
     }
@@ -426,6 +478,10 @@ def capture(args: object) -> int:
             kubelet_endpoint=_kubelet_endpoint(kubeconfig),
             suite=args.suite,
             pr=args.pr,
+            git_sha=_git_sha(),
+            workflow="local",
+            run_attempt="1",
+            osac_images=_osac_images(kubeconfig, args.namespace),
         )
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or error.stdout or "").strip().splitlines()

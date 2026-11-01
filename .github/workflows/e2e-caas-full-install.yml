@@ -931,6 +931,13 @@ jobs:
           capture-id: ${{ format('caas-{0}-{1}-a{2}', inputs.pr-number != '' && format('pr{0}', inputs.pr-number) || 'main', github.run_id, github.run_attempt) }}
           suite: caas
           pr: ${{ inputs.pr-number }}
+          # The commit under test: the test-infra ref this run checked out
+          # (the PR head SHA in the PR flow, from the PR starter's sha
+          # input; empty on schedules, where the action falls back to
+          # GITHUB_SHA, the main HEAD). GITHUB_SHA is wrong in the PR flow
+          # (the dispatching repo's default-branch SHA), so it is only the
+          # fallback.
+          git-sha: ${{ inputs.test-infra-ref }}
           # The central ingest password reaches the action as a secret, the
           # same data-only channel as every other input.
           otlp-password: ${{ secrets.ci-observe-otlp-password }}

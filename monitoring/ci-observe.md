@@ -132,6 +132,16 @@ capture identity) live to the central backend while the test runs:
 - Nothing touches GitHub: no capture artifact, no upload gate, no scan.
   Telemetry is visible in the CI Grafana during the run.
 
+Every captured signal also carries the run identity as `osac.ci.*`
+resource attributes: `git_sha` (the commit under test, the PR head SHA in
+the PR flow), `workflow`, `run_attempt`, and `osac_images` (the OSAC images
+deployed on the cluster, one `deployment=image1,image2` entry per
+deployment, `;`-separated on a single line). They answer "what exactly
+ran?" next to any span in Tempo. On the spans they stay unindexed resource
+attributes, like the capture id; a value the coordinator cannot determine
+degrades to `unknown` (never empty, which the collector rejects at config
+load).
+
 The `ci-observe-sync.yml` workflow is no longer scheduled: live pushes made
 it unnecessary for new runs, and its 15-minute backend restart would drop
 in-flight live-ingest batches. It remains dispatchable by hand to backfill

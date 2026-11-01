@@ -10,6 +10,12 @@
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250
 #   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
 #   CI_OBSERVE_PR                pull request number; empty for non-PR runs
+#   CI_OBSERVE_GIT_SHA           commit under test; "unknown" if unavailable
+#   CI_OBSERVE_WORKFLOW          workflow name; "local"/"unknown" fallbacks
+#   CI_OBSERVE_RUN_ATTEMPT       run attempt number; "1" if unavailable
+#   CI_OBSERVE_OSAC_IMAGES       deployed OSAC images, one "; "-separated
+#                                single-line value (the rendering cannot
+#                                carry newlines); "unknown" if unavailable
 #   CI_OBSERVE_OTLP_ENDPOINT     central live-ingest URL (live push only)
 #   CI_OBSERVE_OTLP_AUTH         "Basic <base64>" header (live push only)
 #
@@ -141,6 +147,20 @@ spec:
               value: "${CI_OBSERVE_SUITE}"
             - name: CI_OBSERVE_PR
               value: "${CI_OBSERVE_PR}"
+            # Run identity (both collector configs read them; see their
+            # resource/capture processors). Every value coalesces to a
+            # non-empty fallback: an empty env value makes the collector
+            # reject its config at load. The images are a single ";"-
+            # separated line because neither the CI sed rendering nor a
+            # double-quoted manifest value can carry a newline.
+            - name: CI_OBSERVE_GIT_SHA
+              value: "${CI_OBSERVE_GIT_SHA}"
+            - name: CI_OBSERVE_WORKFLOW
+              value: "${CI_OBSERVE_WORKFLOW}"
+            - name: CI_OBSERVE_RUN_ATTEMPT
+              value: "${CI_OBSERVE_RUN_ATTEMPT}"
+            - name: CI_OBSERVE_OSAC_IMAGES
+              value: "${CI_OBSERVE_OSAC_IMAGES}"
             # Live push only (collector-live.yaml reads them; collector.yaml
             # ignores them). Rendered by the capture action from its
             # otlp-password input; empty keeps the local file-capture path

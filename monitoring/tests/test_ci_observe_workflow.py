@@ -40,6 +40,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,11 @@ SCRIPT = REPO_ROOT / "monitoring" / "scripts" / "ci-observe.py"
 _spec = importlib.util.spec_from_file_location("ci_observe_workflow_mod", SCRIPT)
 ci_observe = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ci_observe)
+CAPTURE_SCRIPT = REPO_ROOT / "monitoring" / "scripts" / "ci_observe_capture.py"
+_capture_spec = importlib.util.spec_from_file_location("ci_observe_capture_workflow_mod", CAPTURE_SCRIPT)
+capture_module = importlib.util.module_from_spec(_capture_spec)
+sys.modules[_capture_spec.name] = capture_module
+_capture_spec.loader.exec_module(capture_module)
 CLUSTER_MANIFEST = REPO_ROOT / "monitoring" / "config" / "ci-observe" / "cluster.yaml"
 COLLECTOR_LIVE_CONFIG = REPO_ROOT / "monitoring" / "config" / "ci-observe" / "collector-live.yaml"
 
@@ -202,6 +208,53 @@ class TestAction:
         assert "tr -cd 'a-z0-9-'" in script
         assert "tr -cd '0-9'" in script
 
+    def test_renders_the_run_identity_into_the_cluster_manifest(self, action: dict) -> None:
+        """The commit under test, the workflow name, the run attempt and the
+        deployed OSAC images become the CI_OBSERVE_GIT_SHA / _WORKFLOW /
+        _RUN_ATTEMPT / _OSAC_IMAGES env values of the gateway (the collector
+        turns them into the osac.ci.git_sha / osac.ci.workflow /
+        osac.ci.run_attempt / osac.ci.osac_images resource attributes). The
+        git SHA prefers the git-sha input -- the callers' test-infra-ref, the
+        PR head in the PR flow -- because GITHUB_SHA is the dispatching
+        repo's default-branch SHA there, not the commit under test. The
+        workflow name and attempt come from the default runner env vars (the
+        step runs directly on the runner, no container). Every value is
+        narrowed to sed- and manifest-safe characters and coalesces to a
+        non-empty fallback ("unknown", attempt "1"): an empty env value
+        makes the collector reject its config at load."""
+        deploy = step_by_id(action["runs"]["steps"], "deploy")
+        script = deploy["run"]
+        assert action["inputs"]["git-sha"]["required"] is False
+        assert action["inputs"]["git-sha"]["default"] == ""
+        assert deploy["env"]["GIT_SHA_INPUT"] == "${{ inputs.git-sha }}"
+        for token in ("CI_OBSERVE_GIT_SHA", "CI_OBSERVE_WORKFLOW", "CI_OBSERVE_RUN_ATTEMPT", "CI_OBSERVE_OSAC_IMAGES"):
+            assert f'-e "s|\\${{{token}}}' in script, token
+        assert 'git_sha="${GIT_SHA_INPUT:-${GITHUB_SHA}}"' in script
+        # Allowlist for SHA hex and branch/tag characters; strip newlines,
+        # double quotes, backslashes and the sed-special | and & from the
+        # workflow name; digits only for the attempt.
+        assert "tr -cd 'a-zA-Z0-9._/+-'" in script
+        assert "tr -d '\\n|\\\\&\"'" in script
+        assert 'git_sha="${git_sha:-unknown}"' in script
+        assert 'workflow_name="${workflow_name:-unknown}"' in script
+        assert 'run_attempt="${run_attempt:-1}"' in script
+
+    def test_reads_the_deployed_osac_images_and_degrades_to_unknown(self, action: dict) -> None:
+        """The OSAC images come from the observed namespace (one
+        deployment=image1,image2 line per deployment) and degrade to the
+        literal "unknown" on any failure -- never an empty string, which the
+        collector's resource processor rejects at config load. Newlines
+        collapse to ";" separators: the value crosses the sed replacement
+        and the double-quoted manifest env value, neither of which can
+        carry a newline."""
+        deploy = step_by_id(action["runs"]["steps"], "deploy")
+        script = deploy["run"]
+        assert 'oc get deployments -n "${OBSERVED_NAMESPACE}"' in script
+        assert "jsonpath='{range .items[*]}{.metadata.name}={.spec.template.spec.containers[*].image}" in script
+        assert '\')" || osac_images=""' in script
+        assert "tr '\\n' ';'" in script
+        assert 'osac_images="${osac_images:-unknown}"' in script
+
     def test_renders_the_otlp_endpoint_and_auth_into_the_cluster_manifest(self, action: dict) -> None:
         """The deploy step computes the basic-auth header from the
         otlp-password secret input ("Basic <base64 of ci-observe:password>",
@@ -320,6 +373,48 @@ class TestAction:
         # The verify step reads the run's duration to tell a dead capture
         # from a command that ended within seconds.
         assert "CI_OBSERVE_TEST_DURATION" in script
+
+
+class TestRunIdentityAttributes:
+    """The run identity contract across the three files that carry it: the
+    collector stamps the osac.ci.* attributes (collector-live.yaml), the
+    shared cluster manifest carries the gateway env values (cluster.yaml),
+    and the local capture supervisor must render every manifest token (its
+    rendering fails on unresolved tokens, so a token added for the CI action
+    alone would break local captures)."""
+
+    def test_collector_live_upserts_the_run_identity_attributes(self) -> None:
+        collector = yaml.safe_load(COLLECTOR_LIVE_CONFIG.read_text())
+        actions = {a["key"]: a for a in collector["processors"]["resource/capture"]["attributes"]}
+        expected = {
+            "osac.ci.git_sha": "${env:CI_OBSERVE_GIT_SHA}",
+            "osac.ci.workflow": "${env:CI_OBSERVE_WORKFLOW}",
+            "osac.ci.run_attempt": "${env:CI_OBSERVE_RUN_ATTEMPT}",
+            "osac.ci.osac_images": "${env:CI_OBSERVE_OSAC_IMAGES}",
+        }
+        for key, value in expected.items():
+            assert actions[key]["value"] == value, key
+            assert actions[key]["action"] == "upsert", key
+
+    def test_cluster_manifest_carries_the_run_identity_env_values(self) -> None:
+        documents = [doc for doc in yaml.safe_load_all(CLUSTER_MANIFEST.read_text()) if doc]
+        deployment = next(doc for doc in documents if doc.get("kind") == "Deployment")
+        env = {e["name"]: e["value"] for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+        for name in ("CI_OBSERVE_GIT_SHA", "CI_OBSERVE_WORKFLOW", "CI_OBSERVE_RUN_ATTEMPT", "CI_OBSERVE_OSAC_IMAGES"):
+            assert env[name] == "${" + name + "}", name
+
+    def test_the_local_supervisor_renders_every_manifest_token(self) -> None:
+        """render_manifest resolves every ${CI_OBSERVE_*} token in the shared
+        manifest with only its default (local) values: a token added for the
+        CI action alone would stay unresolved and fail every local
+        capture."""
+        rendered = capture_module.render_manifest(
+            capture_id="cap123",
+            namespace="osac-e2e-ci",
+            cluster_uid="uid-1",
+            kubelet_endpoint="https://192.0.2.1:10250",
+        )
+        assert "${CI_OBSERVE_" not in rendered
 
 
 class TestVerifyStep:
@@ -548,6 +643,16 @@ class TestWorkflowWiring:
         assert match.group("suite") in SUITES
         assert observed["with"]["suite"] == match.group("suite")
         assert observed["with"]["pr"] == "${{ inputs.pr-number }}"
+
+    def test_the_observed_step_passes_the_commit_under_test(self, workflow: dict) -> None:
+        """git-sha is the workflow's test-infra-ref input: the PR starter
+        dispatches with the PR head as that input ("the code under test is
+        the commit"), and scheduled callers leave it empty so the action
+        falls back to GITHUB_SHA, the main HEAD. GITHUB_SHA alone is wrong
+        in the PR flow (the dispatching repo's default-branch SHA, not the
+        commit under test)."""
+        observed = step_by_id(steps_of(workflow), "test-observed")
+        assert observed["with"]["git-sha"] == "${{ inputs.test-infra-ref }}"
 
     def test_exactly_one_test_step_runs_depending_on_the_input(self, workflow: dict) -> None:
         steps = steps_of(workflow)

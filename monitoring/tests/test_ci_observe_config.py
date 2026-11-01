@@ -203,6 +203,15 @@ class TestGateway:
         # Prometheus drop empty label values, so the labels are just absent).
         assert actions["osac.ci.suite"]["value"] == "${env:CI_OBSERVE_SUITE}"
         assert actions["osac.ci.pr"]["value"] == "${env:CI_OBSERVE_PR}"
+        # Run identity: the commit under test, the workflow name, the run
+        # attempt and the deployed OSAC images, so a span answers "what code
+        # on what cluster". The coordinator always sets the variables (to
+        # "unknown" when unavailable): an empty value would make the
+        # resource processor reject the config at load.
+        assert actions["osac.ci.git_sha"]["value"] == "${env:CI_OBSERVE_GIT_SHA}"
+        assert actions["osac.ci.workflow"]["value"] == "${env:CI_OBSERVE_WORKFLOW}"
+        assert actions["osac.ci.run_attempt"]["value"] == "${env:CI_OBSERVE_RUN_ATTEMPT}"
+        assert actions["osac.ci.osac_images"]["value"] == "${env:CI_OBSERVE_OSAC_IMAGES}"
         for action in actions.values():
             assert action["action"] == "upsert"
 
@@ -389,6 +398,10 @@ class TestCluster:
             "CI_OBSERVE_KUBELET_ENDPOINT",
             "CI_OBSERVE_SUITE",
             "CI_OBSERVE_PR",
+            "CI_OBSERVE_GIT_SHA",
+            "CI_OBSERVE_WORKFLOW",
+            "CI_OBSERVE_RUN_ATTEMPT",
+            "CI_OBSERVE_OSAC_IMAGES",
             "CI_OBSERVE_OTLP_ENDPOINT",
             "CI_OBSERVE_OTLP_AUTH",
         }

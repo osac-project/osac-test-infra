@@ -26,6 +26,12 @@
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250 (single-node canary)
 #   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
 #   CI_OBSERVE_PR                pull request number; empty for non-PR runs
+#   CI_OBSERVE_GIT_SHA           commit under test (test-ref), "unknown" if unavailable
+#   CI_OBSERVE_WORKFLOW          workflow name, "unknown" if unavailable
+#   CI_OBSERVE_RUN_ATTEMPT       run attempt number, "1" if unavailable
+#   CI_OBSERVE_OSAC_IMAGES       deployed OSAC images, "; "-separated
+#                                deployment=image1,image2 entries, "unknown"
+#                                if unavailable
 #   CI_OBSERVE_OTLP_ENDPOINT     central ingest, e.g. https://osac-ci-1.redhat.com
 #   CI_OBSERVE_OTLP_AUTH         precomputed "Basic <base64>" authorization header
 #
@@ -180,6 +186,28 @@ processors:
         action: upsert
       - key: osac.ci.pr
         value: ${env:CI_OBSERVE_PR}
+        action: upsert
+      # Run identity: what exactly ran. The commit under test (the PR head,
+      # not the dispatching repo's default-branch SHA), the workflow name,
+      # the run attempt and the OSAC images deployed on the cluster, so a
+      # span answers "what code on what cluster" without leaving the
+      # backend. Like suite and PR above, the coordinator always sets the
+      # variables, to "unknown" (or "1" for the attempt) when a value is
+      # unavailable: an empty value makes the resource processor reject the
+      # whole config at load. The images are one ";"-separated single-line
+      # value because the coordinator's rendering (sed into a double-quoted
+      # manifest env value) cannot carry newlines.
+      - key: osac.ci.git_sha
+        value: ${env:CI_OBSERVE_GIT_SHA}
+        action: upsert
+      - key: osac.ci.workflow
+        value: ${env:CI_OBSERVE_WORKFLOW}
+        action: upsert
+      - key: osac.ci.run_attempt
+        value: ${env:CI_OBSERVE_RUN_ATTEMPT}
+        action: upsert
+      - key: osac.ci.osac_images
+        value: ${env:CI_OBSERVE_OSAC_IMAGES}
         action: upsert
   memory_limiter:
     check_interval: 1s
