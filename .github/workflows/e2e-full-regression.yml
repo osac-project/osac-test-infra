@@ -576,14 +576,14 @@ jobs:
             values/full-ci/instance.yaml "${OVERLAY_DIR}/full-ci-instance.yaml" \
             > values/full-ci/instance.yaml.merged
           mv values/full-ci/instance.yaml.merged values/full-ci/instance.yaml
-          echo "::group::Merged full-ci values"
+          echo "::group::Merged full-ci values (structure only — no credentials)"
           echo "--- infra.yaml (keycloak) ---"
-          yq '.keycloak' values/full-ci/infra.yaml
+          yq -o=json '(.keycloak // {}) | keys' values/full-ci/infra.yaml
           echo "--- instance.yaml (networking, AAP group enabled flags, lvms, metering.echoAdapter) ---"
-          yq '.global.networking | pick(["provisioningEnabled", "fabricManager", "k8sManager"])' values/full-ci/instance.yaml
-          yq '.aap.instanceGroups | pick(["clusterFulfillment", "networkFulfillment", "storageFulfillment"]) | with_entries(.value = (.value.enabled == true))' values/full-ci/instance.yaml
-          yq '.lvms' values/full-ci/instance.yaml
-          yq '.metering.echoAdapter' values/full-ci/instance.yaml
+          yq -o=json '(.global.networking // {}) | keys' values/full-ci/instance.yaml
+          yq -o=json '(.aap.instanceGroups // {}) | pick(["clusterFulfillment", "networkFulfillment", "storageFulfillment"]) | with_entries(.value = (.value.enabled == true))' values/full-ci/instance.yaml
+          yq -o=json '(.lvms // {}) | keys' values/full-ci/instance.yaml
+          yq -o=json '(.metering.echoAdapter // {}) | keys' values/full-ci/instance.yaml
           echo "::endgroup::"
 
           make install-infra PLATFORM=openshift PROFILE=full-ci NS="${INSTALLER_NAMESPACE}"
