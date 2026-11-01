@@ -148,15 +148,39 @@
   failed_when: false
   no_log: true
 
+# Newer charts keep the admin credentials in the keycloak-admin-credentials
+# Secret and only reference it from the deployment; older charts set them
+# inline. Read the Secret first and fall back to the inline values.
 - name: Get Keycloak admin credentials
   ansible.builtin.shell:
     cmd: |
-      oc get deployment keycloak-service -n keycloak -o json | python3 -c "
-      import sys, json
+      oc -n keycloak get deployment keycloak-service -o json | python3 -c "
+      import base64
+      import json
+      import subprocess
+      import sys
+
       dep = json.load(sys.stdin)
-      envs = dep['spec']['template']['spec']['containers'][0]['env']
-      user = next((e['value'] for e in envs if e['name'] == 'KEYCLOAK_ADMIN'), 'admin')
-      pw = next((e['value'] for e in envs if e['name'] == 'KEYCLOAK_ADMIN_PASSWORD'), 'admin')
+      envs = dep['spec']['template']['spec']['containers'][0].get('env', [])
+
+      def env_value(name):
+          for entry in envs:
+              if entry['name'] == name and 'value' in entry:
+                  return entry['value']
+          return ''
+
+      def secret_value(key):
+          out = subprocess.run(
+              ['oc', '-n', 'keycloak', 'get', 'secret', 'keycloak-admin-credentials',
+               '-o', 'jsonpath={.data.%s}' % key],
+              capture_output=True, text=True, check=False,
+          )
+          if out.returncode != 0 or not out.stdout.strip():
+              return ''
+          return base64.b64decode(out.stdout).decode()
+
+      user = env_value('KEYCLOAK_ADMIN') or secret_value('admin-username')
+      pw = env_value('KEYCLOAK_ADMIN_PASSWORD') or secret_value('admin-password')
       print(f'{user}|{pw}')
       "
   environment:

@@ -15,6 +15,7 @@ client secret.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import subprocess
 import sys
@@ -34,6 +35,31 @@ def curl(resolve: str, args: list[str], *, stdin: str | None = None) -> str:
 
 
 def read_admin_credentials() -> tuple[str, str]:
+    """Read the admin credentials without exposing them.
+
+    Newer charts put them in the keycloak-admin-credentials Secret and only
+    reference it from the deployment env; older charts set the values inline.
+    """
+
+    def secret_value(key: str) -> str:
+        result = subprocess.run(
+            [
+                "oc", "-n", "keycloak", "get", "secret", "keycloak-admin-credentials",
+                "-o", f"jsonpath={{.data.{key}}}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return ""
+        return base64.b64decode(result.stdout).decode()
+
+    username = secret_value("admin-username")
+    password = secret_value("admin-password")
+    if username and password:
+        return username, password
+
     deployment = json.loads(
         run(["oc", "-n", "keycloak", "get", "deployment", "keycloak-service", "-o", "json"])
     )
