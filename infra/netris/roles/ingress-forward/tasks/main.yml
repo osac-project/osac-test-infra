@@ -152,6 +152,7 @@
       fi
       printf '%s\n' "$deployment_json" | python3 -c '
       import json
+      import os
       import sys
 
       deployment = json.load(sys.stdin)
@@ -171,7 +172,11 @@
           changed = True
       patch = {"hostAliases": aliases}
       if sys.argv[3]:
-          container = next(container for container in spec["containers"] if container["name"] == sys.argv[3])
+          container = next((container for container in spec["containers"] if container["name"] == sys.argv[3]), None)
+          if container is None:
+              sys.exit("Issuer container {} not found in deployment {}/{}".format(
+                  sys.argv[3], os.environ["TARGET_NS"], os.environ["DEPLOYMENT"]
+              ))
           environment = container.get("env") or []
           expected = {"name": "KEYCLOAK_ISSUER_URL", "value": sys.argv[4]}
           current = next((entry for entry in environment if entry["name"] == expected["name"]), None)
