@@ -145,12 +145,12 @@
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      if ! oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+      deployment_json=$(oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" --ignore-not-found -o json)
+      if [ -z "$deployment_json" ]; then
         echo skipped
         exit 0
       fi
-      oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" -o json \
-        | python3 -c '
+      printf '%s\n' "$deployment_json" | python3 -c '
       import json
       import sys
 
@@ -330,7 +330,8 @@
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      if ! oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+      deployment_name=$(oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" --ignore-not-found -o name)
+      if [ -z "$deployment_name" ]; then
         echo skipped
         exit 0
       fi
@@ -378,11 +379,12 @@
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      if ! oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+      deployment_json=$(oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" --ignore-not-found -o json)
+      if [ -z "$deployment_json" ]; then
         echo skipped
         exit 0
       fi
-      oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" -o json | python3 -c '
+      printf '%s\n' "$deployment_json" | python3 -c '
       import json
       import sys
 
@@ -416,7 +418,7 @@
     label: "{{ item.namespace }}/{{ item.deployment }}"
   register: _ingress_alias_check
   changed_when: false
-  failed_when: _ingress_alias_check.stdout | trim == 'missing'
+  failed_when: _ingress_alias_check.rc != 0 or _ingress_alias_check.stdout | trim == 'missing'
 
 - name: Report the forwarded endpoints
   ansible.builtin.debug:
