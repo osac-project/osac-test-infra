@@ -131,15 +131,25 @@
 
 # --- Pod routing ---
 
-- name: Resolve the Keycloak route hostname on OSAC workloads
+- name: Initialize the namespace-aware ingress targets
+  ansible.builtin.set_fact:
+    _ingress_alias_targets: "{{ ingress_forward_extra_alias_deployments }}"
+
+- name: Include the OSAC namespace deployments in the ingress targets
+  ansible.builtin.set_fact:
+    _ingress_alias_targets: >-
+      {{ _ingress_alias_targets + [{'namespace': osac_namespace, 'deployment': item}] }}
+  loop: "{{ ingress_forward_alias_deployments }}"
+
+- name: Resolve the Keycloak route hostname on issuer consumers
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      if ! oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+      if ! oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
         echo skipped
         exit 0
       fi
-      oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" -o json \
+      oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" -o json \
         | python3 -c '
       import json
       import sys
@@ -148,34 +158,48 @@
       host, address = sys.argv[1], sys.argv[2]
       spec = deployment["spec"]["template"]["spec"]
       aliases = spec.get("hostAliases") or []
+      changed = False
       for alias in aliases:
           if alias.get("ip") == address:
               hostnames = alias.setdefault("hostnames", [])
-              if host in hostnames:
-                  print("unchanged")
-              else:
+              if host not in hostnames:
                   hostnames.append(host)
-                  print(json.dumps({"spec": {"template": {"spec": {"hostAliases": aliases}}}}))
+                  changed = True
               break
       else:
           aliases.append({"ip": address, "hostnames": [host]})
-          print(json.dumps({"spec": {"template": {"spec": {"hostAliases": aliases}}}}))
-      ' "$KC_HOST" "$HOST_IP" > /tmp/ingress-forward-alias.json
+          changed = True
+      patch = {"hostAliases": aliases}
+      if sys.argv[3]:
+          container = next(container for container in spec["containers"] if container["name"] == sys.argv[3])
+          environment = container.get("env") or []
+          expected = {"name": "KEYCLOAK_ISSUER_URL", "value": sys.argv[4]}
+          current = next((entry for entry in environment if entry["name"] == expected["name"]), None)
+          if current != expected:
+              container["env"] = [entry for entry in environment if entry["name"] != expected["name"]] + [expected]
+              changed = True
+          patch["containers"] = spec["containers"]
+      print(json.dumps({"spec": {"template": {"spec": patch}}}) if changed else "unchanged")
+      ' "$KC_HOST" "$HOST_IP" "$ISSUER_CONTAINER" "$ISSUER_URL" > /tmp/ingress-forward-alias.json
       if [ "$(cat /tmp/ingress-forward-alias.json)" = "unchanged" ]; then
         echo unchanged
       else
-        oc -n "$OSAC_NS" patch deployment "$DEPLOYMENT" --type=merge \
+        oc -n "$TARGET_NS" patch deployment "$DEPLOYMENT" --type=merge \
           -p "$(cat /tmp/ingress-forward-alias.json)" >/dev/null
         echo changed
       fi
     executable: /bin/bash
   environment:
     KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
-    OSAC_NS: "{{ osac_namespace }}"
-    DEPLOYMENT: "{{ item }}"
+    TARGET_NS: "{{ item.namespace }}"
+    DEPLOYMENT: "{{ item.deployment }}"
     KC_HOST: "{{ _ingress_keycloak_host }}"
     HOST_IP: "{{ ingress_forward_host }}"
-  loop: "{{ ingress_forward_alias_deployments }}"
+    ISSUER_CONTAINER: "{{ item.keycloak_issuer_container | default('') }}"
+    ISSUER_URL: "{{ _ingress_issuer }}"
+  loop: "{{ _ingress_alias_targets }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.deployment }}"
   register: _ingress_alias
   changed_when: _ingress_alias.stdout | trim == 'changed'
 
@@ -302,21 +326,23 @@
   when: _ingress_operator_config.stdout | trim == 'changed'
   changed_when: true
 
-- name: Wait for the OSAC workloads to roll out
+- name: Wait for the issuer consumers to roll out
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      if ! oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+      if ! oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
         echo skipped
         exit 0
       fi
-      oc -n "$OSAC_NS" rollout status deployment/"$DEPLOYMENT" --timeout=300s
+      oc -n "$TARGET_NS" rollout status deployment/"$DEPLOYMENT" --timeout=300s
     executable: /bin/bash
   environment:
     KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
-    OSAC_NS: "{{ osac_namespace }}"
-    DEPLOYMENT: "{{ item }}"
-  loop: "{{ ingress_forward_alias_deployments }}"
+    TARGET_NS: "{{ item.namespace }}"
+    DEPLOYMENT: "{{ item.deployment }}"
+  loop: "{{ _ingress_alias_targets }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.deployment }}"
   changed_when: false
 
 # --- Verification ---
@@ -348,15 +374,15 @@
   delay: 10
   changed_when: false
 
-- name: Verify the Keycloak host alias on OSAC workloads
+- name: Verify the Keycloak routing and bootstrap issuer on consumers
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      if ! oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
+      if ! oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
         echo skipped
         exit 0
       fi
-      oc -n "$OSAC_NS" get deployment "$DEPLOYMENT" -o json | python3 -c '
+      oc -n "$TARGET_NS" get deployment "$DEPLOYMENT" -o json | python3 -c '
       import json
       import sys
 
@@ -367,16 +393,27 @@
           alias.get("ip") == address and host in (alias.get("hostnames") or [])
           for alias in aliases
       )
+      if sys.argv[3]:
+          containers = deployment["spec"]["template"]["spec"]["containers"]
+          present = present and any(
+              container["name"] == sys.argv[3]
+              and {"name": "KEYCLOAK_ISSUER_URL", "value": sys.argv[4]} in (container.get("env") or [])
+              for container in containers
+          )
       print("present" if present else "missing")
-      ' "$KC_HOST" "$HOST_IP"
+      ' "$KC_HOST" "$HOST_IP" "$ISSUER_CONTAINER" "$ISSUER_URL"
     executable: /bin/bash
   environment:
     KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
-    OSAC_NS: "{{ osac_namespace }}"
-    DEPLOYMENT: "{{ item }}"
+    TARGET_NS: "{{ item.namespace }}"
+    DEPLOYMENT: "{{ item.deployment }}"
     KC_HOST: "{{ _ingress_keycloak_host }}"
     HOST_IP: "{{ ingress_forward_host }}"
-  loop: "{{ ingress_forward_alias_deployments }}"
+    ISSUER_CONTAINER: "{{ item.keycloak_issuer_container | default('') }}"
+    ISSUER_URL: "{{ _ingress_issuer }}"
+  loop: "{{ _ingress_alias_targets }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.deployment }}"
   register: _ingress_alias_check
   changed_when: false
   failed_when: _ingress_alias_check.stdout | trim == 'missing'
@@ -387,4 +424,4 @@
       - "OSAC UI: {{ _ingress_ui_base }}"
       - "Keycloak: {{ _ingress_keycloak_base }}/admin/"
       - "Issuer: {{ _ingress_issuer }}"
-      - "Keycloak route resolves to {{ ingress_forward_host }} on the OSAC workloads"
+      - "Keycloak route resolves to {{ ingress_forward_host }} on the issuer consumers"

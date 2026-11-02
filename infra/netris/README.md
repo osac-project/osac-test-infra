@@ -573,7 +573,9 @@ Then browse to `https://osac-ui-osac-devel.apps.ocp-sno.osac.local:9444` (accept
 | Assisted Installer UI | `http://<server-ip>:8080` |
 | Netris Controller | `http://<server-ip>:9443` |
 
-`make ingress-forward` reconciles the forwarded endpoints on a running cluster. It points Keycloak (`KC_HOSTNAME`) and every issuer consumer at `:9444`, adds a host alias so the UI, fulfillment and operator pods resolve the Keycloak route to the lab host, and allows the forwarded callback on the `osac-ui` Keycloak client. `make deploy-osac` and `make post-install` run it, and it is idempotent.
+`make ingress-forward` reconciles the forwarded endpoints on a running cluster. It points Keycloak (`KC_HOSTNAME`) and every issuer consumer at `:9444`, adds a host alias so the UI, fulfillment, operator and bundled OpenBao pods resolve the Keycloak route to the lab host, and allows the forwarded callback on the `osac-ui` Keycloak client. `make deploy-osac` and `make post-install` run it, and it is idempotent.
+
+`ingress_forward_alias_deployments` remains a list of deployment names in `osac_namespace`. Additional namespace-aware targets are configured with `ingress_forward_extra_alias_deployments`, a list of mappings with `namespace` and `deployment` keys. Its default targets `osac-infra/openbao`; absent deployments are skipped. Set it to `[]` when no additional targets are wanted. The OpenBao entry also sets `keycloak_issuer_container: bootstrap`, which updates that container's `KEYCLOAK_ISSUER_URL` together with the host alias in one pod-template patch. This keeps OIDC discovery coherent when the bootstrap sidecar runs again after the rollout, without changing CA trust or the initial Helm installation order. Alias reconciliation, rollout waiting and verification use the same combined target list.
 
 ## How deploy-ocp Works
 

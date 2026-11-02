@@ -16,3 +16,8 @@ ingress_forward_alias_deployments:
   - fulfillment-grpc-server
   - fulfillment-controller
   - osac-operator
+
+ingress_forward_extra_alias_deployments:
+  - namespace: osac-infra
+    deployment: openbao
+    keycloak_issuer_container: bootstrap
