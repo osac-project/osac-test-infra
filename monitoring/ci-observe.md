@@ -1,7 +1,9 @@
-# Collector-first local investigation
+# ci-observe operator reference
 
-This prototype uses standard OpenTelemetry collection to investigate existing OSAC tests locally.
-The application and individual tests keep their current source and behavior.
+This is the operator reference for ci-observe, the telemetry path that records OSAC E2E runs.
+For an introduction, start with [ci-observe/README.md](ci-observe/README.md).
+
+The application and the individual tests keep their current source and behavior.
 
 ## Status at the 2026-11-01 cutover
 
@@ -20,9 +22,9 @@ against the central backend on `osac-ci-1`:
 - Kubelet metrics arrive: the cluster panels show node and pod CPU and memory.
 - Capture ids are readable (`bmaas-main-<run-id>-a1`), with suite and PR promoted
   to Loki and Prometheus labels.
-- Delivery is verified after each test: the capture action fails the job when
-  telemetry was requested but never reached the backend. The test's own exit code
-  stays the run step's outcome.
+- Delivery is verified after each test: the capture action reports a loud,
+  non-gating error when telemetry was requested but never reached the backend.
+  The job result and the test's own exit code stay unchanged.
 - Traces from the batch era stay queryable through the archive datasource. The
   31 batch session traces were migrated into Tempo 2.10.
 
@@ -49,13 +51,12 @@ What is missing or known gaps:
 
 ## Scope
 
-The first milestone collects test phases, Go service requests and selected cluster evidence.
-It saves standard telemetry files near the workload, then imports them into a local Grafana development stack.
-GitHub artifact delivery and automatic CI activation follow local acceptance.
-
-The local backend is Grafana's `otel-lgtm` development image. Beyla observes Go requests.
-A stock Pytest plugin supplies test context. OpenTelemetry Collector Contrib collects and replays the data.
+ci-observe collects test phases, Go service requests and selected cluster evidence for E2E runs.
+A pytest plugin supplies test context, Beyla observes Go requests, and OpenTelemetry Collector Contrib collects and forwards the data.
 There is no new database schema, custom exporter or per-test registration.
+
+The central backend is Grafana's `otel-lgtm` image: Grafana with Tempo, Loki and Prometheus.
+It runs on `osac-ci-1`, next to the Tempo 2.10 instance that holds the newer traces.
 
 ## Current validation
 
@@ -275,11 +276,12 @@ monitoring-central runner, and nothing else. It deliberately has no
 schedule, for the same batch-dropping reason.
 
 The capture action verifies delivery after the test: it scrapes the gateway
-collector's self-metrics (`:8888`) and fails the job when telemetry was
+collector's self-metrics (`:8888`) and reports an error when telemetry was
 requested but never reached the central backend (deployment failed, receiver
 refused data, exporter send failures, sent less than accepted, or nothing
-collected at all). The failure message always says the test result above is
-unaffected — the test's own exit code stays the run step's outcome.
+collected at all). The verify step has `continue-on-error: true`, so the error
+is loud but never gating: the job result and the test's own exit code stay
+unchanged.
 
 The backend uses the persistent state directory `~/monitoring/ci-observe` and
 fixed loopback ports: UI 3300, OTLP 4318, Tempo 3200, Loki 3100 and Prometheus
