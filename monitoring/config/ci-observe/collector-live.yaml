@@ -248,7 +248,10 @@ processors:
         action: upsert
   memory_limiter:
     check_interval: 1s
-    limit_mib: 384
+    # A Beyla burst used to fill the limiter, so the receiver refused spans.
+    # 512 MiB leaves room to drain a batch. The gateway container is limited
+    # to 512 MiB too, so that limit needs a follow-up raise.
+    limit_mib: 512
   # One exporter request is one batch. 256 records keeps requests small
   # enough for the central HAProxy/Caddy hop while not spending a full
   # HTTP round trip per record.

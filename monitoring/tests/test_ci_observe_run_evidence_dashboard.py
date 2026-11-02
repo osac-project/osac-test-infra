@@ -181,7 +181,7 @@ def test_sections_in_reading_order(dashboard: dict) -> None:
     rows = [p["title"] for p in dashboard["panels"] if p["type"] == "row"]
     assert rows == ["Run and job summary", "Job and step timing", "Native test result", "Failed tests and evidence"]
     text = [p["title"] for p in dashboard["panels"] if p["type"] == "text"]
-    assert text == ["Native evidence unavailable", "Coverage and limits"]
+    assert text == ["If the native panels are empty", "Coverage and limits"]
     positions = [(p["gridPos"]["y"], p["gridPos"]["x"]) for p in dashboard["panels"]]
     assert positions == sorted(positions)
 
@@ -192,7 +192,7 @@ def test_warning_panel_comes_first(dashboard: dict) -> None:
     for a passing or empty run."""
     warning = dashboard["panels"][0]
     assert warning["type"] == "text"
-    assert warning["title"] == "Native evidence unavailable"
+    assert warning["title"] == "If the native panels are empty"
     assert warning["gridPos"]["y"] == 0
     assert warning["gridPos"]["w"] == 24
     for panel in dashboard["panels"][1:]:
@@ -202,7 +202,7 @@ def test_warning_panel_comes_first(dashboard: dict) -> None:
     content = warning["options"]["content"]
     assert "not deployed or unreachable" in content
     assert NOT_DEPLOYED in content
-    assert "no native evidence was loaded" in content
+    assert "was not loaded" in content
     assert "not a passing result" in content
     assert "workflow-exporter endpoint" in content
     # Blank panels are part of the undeployed state too: Grafana does not
@@ -213,9 +213,15 @@ def test_warning_panel_comes_first(dashboard: dict) -> None:
 
 def test_data_panels_say_not_deployed_rather_than_na(dashboard: dict) -> None:
     """With the backend undeployed, every data panel's empty values read as
-    an unavailable backend, not a bare n/a."""
+    an unavailable backend, not a bare n/a. The failed-tests table has two
+    honest empty meanings, so it points at the JUnit Status row instead of
+    claiming either one."""
     for panel in _content_panels(dashboard):
-        assert panel["fieldConfig"]["defaults"]["noValue"] == NOT_DEPLOYED, panel["title"]
+        no_value = panel["fieldConfig"]["defaults"]["noValue"]
+        if panel["title"] == "Failed tests":
+            assert "No failed tests" in no_value and "JUnit summary Status" in no_value
+            continue
+        assert no_value == NOT_DEPLOYED, panel["title"]
 
 
 def test_null_values_that_mean_something_else_are_overridden(dashboard: dict) -> None:
@@ -268,6 +274,16 @@ def test_every_target_queries_the_run_endpoint(dashboard: dict) -> None:
         assert target["url_options"] == {"method": "GET", "data": ""}
         assert (target["type"], target["source"], target["format"]) == ("json", "url", "table")
         assert target["root_selector"], "a table target needs a root_selector"
+
+
+def test_object_roots_use_jsonpath(dashboard: dict) -> None:
+    """Infinity replaces a plain object root with its first nested array.
+    `native` contains `failed_tests` and `notes`, so the shipped
+    root_selector `native` rendered zero rows: the empty `failed_tests`
+    array became the dataset. A `$`-prefixed selector takes the JSONPath
+    branch, which keeps the object as one row."""
+    junit = _panels_by_title(dashboard)["JUnit summary"]
+    assert junit["targets"][0]["root_selector"] == "$.native"
 
 
 def test_native_status_is_never_a_green_zero(dashboard: dict) -> None:
@@ -340,7 +356,11 @@ def test_query_shape_resolves_against_the_endpoint_contract(dashboard: dict) -> 
     for panel in _content_panels(dashboard):
         for target in panel["targets"]:
             node = ENDPOINT_DOCUMENT
-            for part in target["root_selector"].split("."):
+            # Object roots use a JSONPath so Infinity keeps them as one row.
+            selector = target["root_selector"]
+            if selector.startswith("$."):
+                selector = selector[2:]
+            for part in selector.split("."):
                 node = node[part]  # KeyError means the contract drifted
             rows = node if isinstance(node, list) else [node]
             assert rows, f"{panel['title']}: {target['root_selector']} is empty"

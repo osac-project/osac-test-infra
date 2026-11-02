@@ -20,8 +20,8 @@
   ],
   "panels": [
     {
-      "title": "Native evidence unavailable",
-      "description": "Read this first when any panel shows 'Not deployed or unavailable' or a query error: the workflow-exporter endpoint that serves this dashboard's data is not deployed or unreachable.",
+      "title": "If the native panels are empty",
+      "description": "What to check when a panel on this page shows 'Not deployed or unavailable' or a query error.",
       "type": "text",
       "id": 7,
       "gridPos": {
@@ -36,7 +36,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**The native evidence backend is not deployed or unreachable.** Every panel showing \"Not deployed or unavailable\", n/a, a query error, or no content at all means no native evidence was loaded. This is not a passing result. The job, JUnit, and failed-test sections require the workflow-exporter endpoint."
+        "content": "**If a panel shows \"Not deployed or unavailable\", n/a, a query error, or no content at all**, the native evidence for this capture was not loaded. This is not a passing result.\n\nAn endpoint that is not deployed or unreachable, or a capture whose artifact is gone, produces the same empty panel. The job, JUnit and failed-test panels read the workflow-exporter endpoint on `osac-ci-1`. The **Coverage and limits** panel below states which evidence this capture can have: JUnit comes from the `osac-logs-*` GitHub artifact, which GitHub deletes after 7 days."
       }
     },
     {
@@ -710,7 +710,7 @@
     },
     {
       "title": "JUnit summary",
-      "description": "One row: the native status, the JUnit counts and total time, the artifact link, and the notes explaining any gap.",
+      "description": "One row: the native status, the JUnit counts and total time, the artifact link, and the notes explaining any gap. The root selector is a JSONPath because the Infinity parser replaces a plain object root with its first nested array.",
       "type": "table",
       "id": 4,
       "gridPos": {
@@ -857,6 +857,10 @@
               {
                 "id": "noValue",
                 "value": "no result (see Status)"
+              },
+              {
+                "id": "decimals",
+                "value": 1
               }
             ]
           },
@@ -929,7 +933,7 @@
             "method": "GET",
             "data": ""
           },
-          "root_selector": "native",
+          "root_selector": "$.native",
           "columns": [
             {
               "selector": "status",
@@ -1010,7 +1014,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not deployed or unavailable"
+          "noValue": "No failed tests, or no JUnit evidence: check the JUnit summary Status row."
         },
         "overrides": [
           {
