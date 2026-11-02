@@ -1,0 +1,1151 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Start here for ci-observe E2E runs. Recent failed tests come first, then captures that are missing their session span, then one row per run. Click a run ID to open its investigation; the same menu links the run comparison dashboard.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "type": "text",
+      "id": 1,
+      "title": "Start here",
+      "description": "How to read this page: the run ID format, the links, and the time range.",
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "ci-observe-traces"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### Start here\nOne row per E2E run that sent telemetry, newest first. **Recent failed tests** puts failures at the top: start there, click a run ID.\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt). Suite and PR are built into the ID, so runs without extra labels still appear.\n\n**Links**: a run ID opens the run investigation dashboard; the menu next to it also offers the run comparison dashboard, which ignores the individual run and asks for a cohort instead. GitHub's job conclusion stays authoritative - traces never override it.\n\n**Time range**: keep the default 7 days. A narrower range can hide a long run, because Tempo may return only the part of a trace inside the window. If a run you expect is missing, widen the range up to the 7-day maximum before concluding it never ran; the trace backend rejects anything longer."
+      },
+      "targets": []
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Runs with a session span",
+      "description": "Test runs whose pytest session span arrived in the selected time range. Captures missing their session span are counted separately to the right.",
+      "gridPos": {
+        "h": 3,
+        "w": 8,
+        "x": 0,
+        "y": 11
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "ci-observe-traces"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ],
+          "fields": "Name",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "ci-observe-traces"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "tableType": "spans",
+          "query": "{ name = \"test run\" && (status = ok || status = error) && resource.\"osac.ci.capture_id\" =~ \".+\" }",
+          "limit": 1000,
+          "spss": 100
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Failed runs",
+      "description": "Runs whose pytest session ended with an error: at least one test failed. This counts failed runs, not failed tests - see Recent failed tests for the individual failures.",
+      "gridPos": {
+        "h": 3,
+        "w": 8,
+        "x": 8,
+        "y": 11
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "ci-observe-traces"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ],
+          "fields": "Name",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "ci-observe-traces"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "tableType": "spans",
+          "query": "{ name = \"test run\" && status = error && resource.\"osac.ci.capture_id\" =~ \".+\" }",
+          "limit": 1000,
+          "spss": 100
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 8,
+      "title": "Missing session span",
+      "description": "Captures that recorded test spans but whose session span never arrived (partial telemetry). Their outcome is unknown - not passed. A capture counts as missing when none of its test spans carry the session trace name, so the session span never reached the backend. Listed in the table below.",
+      "gridPos": {
+        "h": 3,
+        "w": 8,
+        "x": 16,
+        "y": 11
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "ci-observe-traces"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ],
+          "fields": "osac.ci.capture_id",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "ci-observe-traces"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "tableType": "spans",
+          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && resource.\"osac.ci.capture_id\" =~ \".+\" }",
+          "limit": 1000,
+          "spss": 100
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "fieldName": "Trace Name",
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "value": "^$"
+                  }
+                }
+              }
+            ],
+            "match": "all",
+            "type": "include"
+          }
+        },
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "osac.ci.capture_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "time": {
+                "aggregations": [
+                  "min"
+                ],
+                "operation": "aggregate"
+              },
+              "pytest.span_type": {
+                "aggregations": [
+                  "count"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 5,
+      "title": "Recent failed tests",
+      "description": "Failed pytest test spans, newest first. A failed test fails its run, but one failed run can hold several failed tests. A capture can appear more than once when multiple tests failed. Click the run ID to investigate; the menu also offers run comparison.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "ci-observe-traces"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "No failed tests in this time range"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceIdHidden"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceService"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceName"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "spanID"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pytest.span_type"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "service.name"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed test"
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "/(?<=\\/|::|_|\\[)/g",
+                      "result": {
+                        "text": "​"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              },
+              {
+                "id": "custom.width",
+                "value": 195
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "osac.ci.suite"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "nil": {
+                        "text": "not labeled"
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "text": "not labeled",
+                      "match": "null"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "osac.ci.pr"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "osac.ci.capture_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Run"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open run investigation",
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}"
+                  },
+                  {
+                    "title": "Compare runs (choose a cohort)",
+                    "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 240
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Status"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "error": {
+                        "text": "failed",
+                        "color": "red"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration"
+              },
+              {
+                "id": "unit",
+                "value": "ns"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "ci-observe-traces"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "tableType": "spans",
+          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && status = error && resource.\"osac.ci.capture_id\" =~ \".+\" && ( resource.\"osac.ci.suite\" =~ \".+\" || name =~ \".*\" ) && ( resource.\"osac.ci.pr\" =~ \".+\" || name =~ \".*\" ) }",
+          "limit": 1000,
+          "spss": 100
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 9,
+      "title": "Captures with test spans but no session span",
+      "description": "These captures recorded test spans, but the pytest session span never arrived, so duration and pass/fail outcome are unknown - not passed. Check the GitHub job for the real result. Click the run ID to investigate what was captured.",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "ci-observe-traces"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "None: every capture with test spans also has a session span"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "osac.ci.capture_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Run"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open run investigation",
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}"
+                  },
+                  {
+                    "title": "Compare runs (choose a cohort)",
+                    "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 240
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Start time (min)"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "First test"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pytest.span_type (count)"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tests"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 195
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "First test",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "ci-observe-traces"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "tableType": "spans",
+          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && resource.\"osac.ci.capture_id\" =~ \".+\" }",
+          "limit": 1000,
+          "spss": 100
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "fieldName": "Trace Name",
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "value": "^$"
+                  }
+                }
+              }
+            ],
+            "match": "all",
+            "type": "include"
+          }
+        },
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "osac.ci.capture_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "time": {
+                "aggregations": [
+                  "min"
+                ],
+                "operation": "aggregate"
+              },
+              "pytest.span_type": {
+                "aggregations": [
+                  "count"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 2,
+      "title": "Recent test runs",
+      "description": "One row per run whose session span arrived, newest first: status and duration come straight from that session span. Captures with test spans but no session span (outcome unknown) are listed in the table above. Click a run ID to investigate; the menu also offers run comparison. GitHub's job conclusion stays authoritative.",
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "ci-observe-traces"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "No test runs found in this time range"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceIdHidden"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceService"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceName"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "spanID"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "name"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "osac.ci.capture_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Run"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open run investigation",
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}"
+                  },
+                  {
+                    "title": "Compare runs (choose a cohort)",
+                    "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 240
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "When"
+              },
+              {
+                "id": "custom.width",
+                "value": 195
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Status"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ok": {
+                        "text": "Passed",
+                        "color": "green"
+                      },
+                      "error": {
+                        "text": "Failed",
+                        "color": "red"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration"
+              },
+              {
+                "id": "unit",
+                "value": "ns"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "osac.ci.suite"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "nil": {
+                        "text": "not labeled"
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "text": "not labeled",
+                      "match": "null"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "osac.ci.pr"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PR"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "none": {
+                        "text": "No PR"
+                      },
+                      "nil": {
+                        "text": "not labeled"
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "text": "not labeled",
+                      "match": "null"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "count"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "ci-observe-traces"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "tableType": "spans",
+          "query": "{ name = \"test run\" && (status = ok || status = error) && resource.\"osac.ci.capture_id\" =~ \".+\" && ( resource.\"osac.ci.suite\" =~ \".+\" || name =~ \".*\" ) && ( resource.\"osac.ci.pr\" =~ \".+\" || name =~ \".*\" ) }",
+          "limit": 1000,
+          "spss": 100
+        }
+      ]
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": [
+    "osac",
+    "ci",
+    "ci-observe"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "CI Observe — Test Runs",
+  "uid": "ci-observe-runs-home",
+  "version": 1,
+  "weekStart": ""
+}
