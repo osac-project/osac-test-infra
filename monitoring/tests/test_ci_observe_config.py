@@ -30,6 +30,9 @@ CONTRIB_IMAGE = (
 BEYLA_IMAGE = "quay.io/osac-project/beyla@sha256:4896c8963342919a51dd403a7bdb8a58ad44de04bd455e9f641e91b1d9c6881b"
 NAMESPACE = "ci-observability-canary"
 SIGNALS = ("traces", "metrics", "logs")
+# The live gateway's memory limiter: 384 MiB refused pytest spans when a
+# Beyla burst arrived (run 41446977693).
+LIVE_LIMIT_MIB = 512
 UNSAFE_TRACE_KEYS = (
     "http.request.header.authorization",
     "http.request.body",
@@ -290,12 +293,37 @@ class TestLiveGateway:
     def test_collects_and_stamps_the_same_signals(
         self, collector_live: dict[str, Any], collector: dict[str, Any]
     ) -> None:
-        """Same receivers, same capture identity processor, same memory
-        budget as the file-capture path: only the transport differs."""
+        """Same receivers, same capture identity processor as the file-capture
+        path: only the transport and the memory budget differ."""
         for name in ("otlp", "k8s_objects", "file_log", "kubelet_stats"):
             assert collector_live["receivers"][name] == collector["receivers"][name], name
-        for name in ("resource/capture", "memory_limiter", "transform/sanitize_traces", "transform/k8s_objects"):
+        for name in ("resource/capture", "transform/sanitize_traces", "transform/k8s_objects"):
             assert collector_live["processors"][name] == collector["processors"][name], name
+        # The live gateway raises only limit_mib: the local file-capture path
+        # keeps its 384 MiB budget.
+        capture_limiter = collector["processors"]["memory_limiter"]
+        assert collector_live["processors"]["memory_limiter"] == {**capture_limiter, "limit_mib": LIVE_LIMIT_MIB}
+
+    def test_memory_budget_absorbs_a_beyla_burst(self, collector_live: dict[str, Any]) -> None:
+        """A full-install run filled a 384 MiB limiter with Beyla traffic and
+        the receiver refused the spans that matter (run 41446977693: 3.5M
+        refused, one pytest span delivered). 512 MiB leaves room to drain a
+        batch before the limiter starts refusing."""
+        limiter = collector_live["processors"]["memory_limiter"]
+        assert limiter["limit_mib"] == LIVE_LIMIT_MIB
+        assert limiter["check_interval"] == "1s"
+
+    def test_memory_limiter_sits_below_the_gateway_container_limit(
+        self, collector_live: dict[str, Any], cluster_docs: list[dict[str, Any]]
+    ) -> None:
+        """The limiter must refuse data before the kernel kills the gateway.
+        Equal limits let a burst OOMKill the pod, which loses queued spans
+        and the whole capture instead of dropping a batch."""
+        limiter_mib = collector_live["processors"]["memory_limiter"]["limit_mib"]
+        deployment = by_kind(cluster_docs, "Deployment")[0]
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        container_mib = int(container["resources"]["limits"]["memory"].removesuffix("Mi"))
+        assert limiter_mib < container_mib
 
     def test_state_lives_on_the_pod_local_volume(self, collector_live: dict[str, Any]) -> None:
         """Watch resourceVersions and filelog offsets move off the capture
@@ -426,7 +454,7 @@ class TestCluster:
         assert security["runAsNonRoot"] is True
         assert security["allowPrivilegeEscalation"] is False
         assert security["capabilities"]["drop"] == ["ALL"]
-        assert container["resources"]["limits"]["memory"] == "512Mi"
+        assert container["resources"]["limits"]["memory"] == "768Mi"
 
     def test_beyla_runs_in_guest_with_minimum_privileges(self, cluster_docs: list[dict[str, Any]]) -> None:
         daemonset = by_kind(cluster_docs, "DaemonSet")[0]
@@ -452,6 +480,17 @@ class TestCluster:
         beyla_config = yaml.safe_load(by_kind(cluster_docs, "ConfigMap")[0]["data"]["beyla.yml"])
         assert beyla_config["discovery"]["instrument"] == [{"k8s_namespace": "${CI_OBSERVE_NAMESPACE}"}]
         assert beyla_config["otel_traces_export"]["endpoint"].endswith(":4317")
+
+    def test_beyla_samples_ten_percent_of_traces(self, cluster_docs: list[dict[str, Any]]) -> None:
+        """Unsampled Beyla traffic fills the gateway, and the receiver then
+        refuses the pytest spans (run 41446977693: 3.5M refused spans, only
+        the ::setup span delivered). Beyla keeps 10% of traces. Pytest spans
+        reach the same receiver over OTLP on their own path, so this sampler
+        does not touch them."""
+        beyla_config = yaml.safe_load(by_kind(cluster_docs, "ConfigMap")[0]["data"]["beyla.yml"])
+        traces = beyla_config["otel_traces_export"]
+        assert traces["sampler"] == {"name": "traceidratio", "arg": "0.1"}
+        assert traces["endpoint"] == "http://ci-observe-gateway.ci-observability-canary.svc.cluster.local:4317"
 
     def test_scc_requires_explicit_parent_approval(self, cluster_docs: list[dict[str, Any]]) -> None:
         assert not by_kind(cluster_docs, "SecurityContextConstraints"), (

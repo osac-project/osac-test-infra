@@ -230,7 +230,11 @@ spec:
               memory: 256Mi
               cpu: 100m
             limits:
-              memory: 512Mi
+              # Above the collector's 512 MiB memory_limiter so the limiter
+              # refuses data before the kernel kills the gateway. At 512Mi
+              # the two were equal, and a burst could OOMKill the gateway
+              # instead of dropping batches.
+              memory: 768Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -289,12 +293,21 @@ metadata:
   namespace: ci-observability-canary
 data:
   beyla.yml: |
-    # Traces unsampled. Discovery limited to the OSAC namespace; the
-    # namespace token is rendered by the coordinator, not by Beyla.
+    # Sample 10% of Beyla traces. Beyla instruments every process in the
+    # namespace, and most of that volume is SQL and Redis polling from the
+    # fulfillment event publisher. Unsampled, that flood filled the gateway
+    # and made it refuse spans, including the pytest spans that matter most.
+    # This sampler applies to Beyla only: pytest spans arrive at the same
+    # receiver over OTLP directly and stay at 100%.
+    # Discovery limited to the OSAC namespace; the namespace token is
+    # rendered by the coordinator, not by Beyla.
     discovery:
       instrument:
         - k8s_namespace: ${CI_OBSERVE_NAMESPACE}
     otel_traces_export:
+      sampler:
+        name: traceidratio
+        arg: "0.1"
       endpoint: http://ci-observe-gateway.ci-observability-canary.svc.cluster.local:4317
 ---
 apiVersion: v1
