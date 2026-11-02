@@ -773,7 +773,11 @@ def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wf
             continue
         for target in panel["targets"]:
             node = doc
-            for part in target["root_selector"].split("."):
+            # Object roots use a JSONPath so Infinity keeps them as one row.
+            selector = target["root_selector"]
+            if selector.startswith("$."):
+                selector = selector[2:]
+            for part in selector.split("."):
                 node = node[part]  # KeyError means dashboard/endpoint drift
             rows = node if isinstance(node, list) else [node]
             assert rows, f"{panel['title']}: {target['root_selector']} is empty"
