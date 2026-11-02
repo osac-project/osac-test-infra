@@ -142,6 +142,23 @@ on:
         required: false
         type: string
         default: "osac-project/osac"
+      ci-observe:
+        description: >-
+          Run the E2E test under ci-observe telemetry (OTel collector gateway
+          plus Beyla in the ci-observability-canary namespace) and push it
+          live to the central backend during the run. Opt-in, default off:
+          the plain test step runs unchanged when false. A telemetry problem
+          is a warning in the job summary and never changes the test result.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      ci-observe-otlp-password:
+        description: >-
+          Password for the central ci-observe OTLP ingest (basic auth user
+          ci-observe). Passed through to the capture action when ci-observe
+          is on; empty degrades to running the test without telemetry.
+        required: false
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -155,7 +172,9 @@ jobs:
       contents: read
       id-token: write # only exercised when enable-ai-diagnostic is true (always false for fork PR runs)
     outputs:
-      result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
+      # Considers both test steps: the plain one (ci-observe off) and the
+      # ci-observe-capture wrapper (ci-observe on); exactly one of them runs.
+      result: ${{ (steps.test.outcome == 'success' || steps.test-observed.outcome == 'success') && 'PASSED' || 'FAILED' }}
 
     env:
       FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
@@ -173,6 +192,7 @@ jobs:
           persist-credentials: false
 
       - name: Overlay tests from osac mono-repo
+        id: overlay-tests
         env:
           TEST_REF: ${{ inputs.test-ref }}
           TEST_REPOSITORY: ${{ inputs.test-repository }}
@@ -188,6 +208,13 @@ jobs:
           git -C "$OSAC_CLONE_DIR" fetch --depth 1 \
             "https://github.com/${TEST_REPOSITORY}.git" "${TEST_REF}"
           git -C "$OSAC_CLONE_DIR" checkout FETCH_HEAD
+          # The resolved osac commit, for the capture action's test-sha
+          # input: TEST_REF can be a moving branch ("main" on schedules),
+          # so the requested ref alone does not say what ran. Best effort
+          # only -- telemetry must never gate the test: an empty output
+          # makes the action record "unknown", never a guess.
+          overlay_test_sha="$(git -C "$OSAC_CLONE_DIR" rev-parse HEAD 2>/dev/null || true)"
+          echo "test-sha=${overlay_test_sha}" >> "$GITHUB_OUTPUT"
           # Overlay tests/ only. Do not copy pyproject.toml: osac's is named
           # osac-e2e and has no uv.lock, which breaks uv sync --frozen.
           rm -rf tests/
@@ -717,8 +744,36 @@ jobs:
             sleep 2
           done
 
+      # Telemetry-only: computes the recorded test selection for the
+      # ci-observe capture (BMaaS has no suite fallback step -- the raw
+      # test-suite input is exactly what the test steps run). Pure string
+      # computation over the same env the test steps read; it cannot fail
+      # and never touches the test command. monitoring/tests/
+      # test_ci_observe_workflow.py pins its result to the test steps' own
+      # TEST_ARGS block so the recorded value cannot drift from what pytest
+      # collected.
+      - name: Resolve effective test selection
+        id: resolve-test-selection
+        env:
+          TEST_SUITE: ${{ inputs.test-suite }}
+          TEST_MARKER: ${{ inputs.test-marker }}
+        run: |
+          TEST_PATHS="tests/e2e/"
+          if [ -n "${TEST_SUITE}" ]; then
+            TEST_PATHS="tests/e2e/${TEST_SUITE}/"
+            if [ -n "${TEST_MARKER}" ]; then
+              case "${TEST_SUITE}" in
+                bmaas|bmaas/*) TEST_PATHS="${TEST_PATHS} tests/e2e/references/" ;;
+              esac
+            fi
+          fi
+          echo "test-selection=${TEST_PATHS}" >> "$GITHUB_OUTPUT"
+
       - name: Run E2E tests
         id: test
+        # The ci-observe-capture wrapper below runs the tests instead when
+        # the ci-observe input is set; exactly one of the two steps runs.
+        if: ${{ !inputs.ci-observe }}
         env:
           TEST_SUITE: ${{ inputs.test-suite }}
           TEST_FILTER: ${{ inputs.test-filter }}
@@ -773,6 +828,105 @@ jobs:
             pytest "${TEST_ARGS[@]}" "${FILTER_ARGS[@]}" "${MARKER_ARGS[@]}" \
               ${XDIST_ARGS} \
               --junitxml=/tmp/test-output/junit.xml -v
+
+      # ci-observe variant of "Run E2E tests" (opt-in via the ci-observe
+      # input; the plain step above keeps running when it is false). The
+      # command below mirrors the plain step's script -- keep the two in
+      # sync. The action deploys the collector gateway and Beyla before the
+      # command, runs it with the OTEL exporter environment pointed at the
+      # gateway (the three pass-through -e flags below), and the gateway
+      # pushes all telemetry live to the central backend during the run --
+      # no artifact, no post-test copy. The command's own exit code is the
+      # step's outcome; telemetry problems surface as warnings only.
+      - name: Run E2E tests (ci-observe capture)
+        id: test-observed
+        if: ${{ inputs.ci-observe }}
+        uses: ./.github/actions/ci-observe-capture
+        # The suite inputs reach the generated script as environment
+        # variables, never as interpolated script text -- the same data-only
+        # channel the plain step uses (an interpolated value would be shell
+        # source on the self-hosted runner).
+        env:
+          TEST_SUITE: ${{ inputs.test-suite }}
+          TEST_FILTER: ${{ inputs.test-filter }}
+          TEST_MARKER: ${{ inputs.test-marker }}
+          OSAC_NAMESPACE: ${{ inputs.namespace }}
+          OSAC_BMI_TEMPLATE: ${{ inputs.bmi-template }}
+          OSAC_BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
+          E2E_IMAGE: osac-e2e-tests:${{ github.run_id }}
+        with:
+          kubeconfig-path: ${{ runner.temp }}/kubeconfig
+          namespace: ${{ inputs.namespace }}
+          # <suite>-pr<N|main>-<run id>-a<attempt>: readable in the Grafana
+          # capture dropdown and filterable once the suite and PR attributes
+          # are promoted to labels. Every component is DNS-1123 by
+          # construction (fixed suite word, digits, "main"), and the full run
+          # id keeps the id unique; the total stays under 30 characters, so
+          # it stays a short, readable label value in the backend.
+          capture-id: ${{ format('bmaas-{0}-{1}-a{2}', inputs.pr-number != '' && format('pr{0}', inputs.pr-number) || 'main', github.run_id, github.run_attempt) }}
+          suite: bmaas
+          pr: ${{ inputs.pr-number }}
+          # Requested refs stay distinct from immutable resolved SHAs.
+          test-ref: ${{ inputs.test-ref }}
+          test-sha: ${{ steps.overlay-tests.outputs.test-sha }}
+          test-infra-ref: ${{ inputs.test-infra-ref }}
+          test-infra-workflow-sha: ${{ job.workflow_sha }}
+          test-suite: ${{ steps.resolve-test-selection.outputs.test-selection }}
+          test-filter: ${{ inputs.test-filter }}
+          test-marker: ${{ inputs.test-marker }}
+          # The central ingest password reaches the action as a secret, the
+          # same data-only channel as every other input.
+          otlp-password: ${{ secrets.ci-observe-otlp-password }}
+          command: |
+
+            KUBECONFIG_PATH="$RUNNER_TEMP/kubeconfig"
+
+            TEST_ARGS=("tests/e2e/")
+            if [ -n "${TEST_SUITE}" ]; then
+              TEST_ARGS=("tests/e2e/${TEST_SUITE}/")
+              if [ -n "${TEST_MARKER}" ]; then
+                case "${TEST_SUITE}" in
+                  bmaas|bmaas/*) TEST_ARGS+=("tests/e2e/references/") ;;
+                esac
+              fi
+            fi
+
+            FILTER_ARGS=()
+            if [ -n "${TEST_FILTER}" ]; then
+              FILTER_ARGS=(-k "${TEST_FILTER}")
+            fi
+
+            MARKER_ARGS=()
+            if [ -n "${TEST_MARKER}" ]; then
+              MARKER_ARGS=(-m "${TEST_MARKER}")
+            fi
+
+            # Single marker cohort (sanity XOR regression) → one BMH-consuming path → -n 4.
+            # Full suite (no marker) can run lifecycle + inventory together → -n 0.
+            XDIST_ARGS="-n 4"
+            if [ -z "${TEST_MARKER}" ]; then
+              XDIST_ARGS="-n 0"
+            fi
+
+            mkdir -p "$RUNNER_TEMP/test-output"
+
+            podman run --rm --network=host \
+              -v "${KUBECONFIG_PATH}":/root/.kube/config:ro,Z \
+              -v "${RUNNER_TEMP}/pull-secret.json":/root/pull-secret:ro,Z \
+              -v "${RUNNER_TEMP}/aap-license.zip":/root/aap-license.zip:ro,Z \
+              -v "${RUNNER_TEMP}/test-output":/tmp/test-output:Z \
+              -e KUBECONFIG=/root/.kube/config \
+              -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
+              -e OSAC_BMI_TEMPLATE="${OSAC_BMI_TEMPLATE}" \
+              -e OSAC_BMH_NAMESPACE="${OSAC_BMH_NAMESPACE}" \
+              -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
+              -e OTEL_EXPORTER_OTLP_ENDPOINT \
+              -e OTEL_EXPORTER_OTLP_TIMEOUT \
+              -e PYTEST_ADDOPTS \
+              "${E2E_IMAGE}" \
+              pytest "${TEST_ARGS[@]}" "${FILTER_ARGS[@]}" "${MARKER_ARGS[@]}" \
+                ${XDIST_ARGS} \
+                --junitxml=/tmp/test-output/junit.xml -v
 
       # Teardown comes right after the collection, ahead of the slow scan and
       # upload: a cancelled job gets only 5 minutes for its always() steps.

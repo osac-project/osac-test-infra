@@ -1,6 +1,6 @@
 ---
-# destroy-bmaas is the exact inverse of setup-bmaas: it undoes everything
-# setup-bmaas creates, and nothing it doesn't. In particular it does NOT touch
+# destroy-bmaas undoes setup-bmaas and the persistent BMIs created by deploy-bmaas.
+# It keeps the reusable BMaaS DiskImage and BareMetalInstanceType. It does not touch
 # osac-inventory-config / osac-management-config (those are created by prep-osac,
 # not setup-bmaas) and does NOT remove the shared osac CLI config
 # (/root/.config/osac/config.json), which is a generic CLI convenience, not a
@@ -34,6 +34,50 @@
         KUBECONFIG: /root/.kube/config
       register: _sa_token
       changed_when: false
+
+    # Release the named deploy-bmaas instances before removing their catalog
+    # or BMHs. Let the controller finish deprovisioning and Ironic deregistration.
+    - name: List BMIs before BMaaS teardown
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instances"
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+        validate_certs: false
+        status_code: 200
+      register: _bmaas_all_bmis
+
+    - name: Delete persistent BMIs from each test tenant
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instances/{{ item.id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+        validate_certs: false
+        status_code: [200, 202, 204, 404]
+      loop: "{{ _bmaas_all_bmis.json.get('items', []) }}"
+      when:
+        - item.metadata.tenant in bmaas_deploy_tenants
+        - item.metadata.name == (bmaas_deploy_bmi_name_prefix ~ '-' ~ item.metadata.tenant)
+
+    - name: Wait for persistent BMIs to release their BMHs
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instances"
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+        validate_certs: false
+        status_code: 200
+      register: _bmaas_remaining_bmis
+      until: >-
+        (_bmaas_remaining_bmis.json.get('items', [])
+         | selectattr('metadata.tenant', 'in', bmaas_deploy_tenants)
+         | selectattr('metadata.name', 'in', _bmaas_deploy_names)
+         | list | length) == 0
+      vars:
+        _bmaas_deploy_names: >-
+          {{ bmaas_deploy_tenants
+             | map('regex_replace', '^', bmaas_deploy_bmi_name_prefix ~ '-') | list }}
+      retries: 120
+      delay: 5
 
     # Delete BMI catalog item (reverse of setup "Create BMI catalog item").
     # Resources are addressed by id; setup created it by metadata.name, so
@@ -82,49 +126,6 @@
         status_code: [200, 204, 404]
       when: _auto_eip_ci_id | length > 0
 
-    # Unlink the template from the instance type before deleting the type.
-    - name: Unlink BMI template from BareMetalInstanceType
-      ansible.builtin.uri:
-        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=instance_type"
-        method: PATCH
-        headers:
-          Authorization: "Bearer {{ _sa_token.stdout }}"
-          Content-Type: "application/json"
-        body_format: json
-        body:
-          id: "{{ bmaas_bmi_template }}"
-          instance_type: null
-        validate_certs: false
-        status_code: [200, 404]
-
-    # Delete the shared instance type (reverse of setup).
-    - name: List BareMetalInstanceTypes
-      ansible.builtin.uri:
-        url: "{{ _fulfillment_api }}/api/private/v1/bare_metal_instance_types"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ _sa_token.stdout }}"
-        validate_certs: false
-        status_code: [200]
-      register: _instance_type_list
-
-    - name: Resolve BareMetalInstanceType id
-      ansible.builtin.set_fact:
-        _instance_type_id: >-
-          {{ (_instance_type_list.json.get('items', [])
-              | selectattr('metadata.name', 'equalto', bmaas_instance_type)
-              | map(attribute='id') | list | first) | default('') }}
-
-    - name: Delete BareMetalInstanceType
-      ansible.builtin.uri:
-        url: "{{ _fulfillment_api }}/api/private/v1/bare_metal_instance_types/{{ _instance_type_id }}"
-        method: DELETE
-        headers:
-          Authorization: "Bearer {{ _sa_token.stdout }}"
-        validate_certs: false
-        status_code: [200, 204, 404]
-      when: _instance_type_id | length > 0
-
 - name: Remove BMaaS instance type from E2E environment
   ansible.builtin.lineinfile:
     path: "{{ inventory_dir }}/../.env.infra"
@@ -151,9 +152,8 @@
     bmaas_vms: "{{ _bmaas_vm_lookup.results | selectattr('stdout', 'ne', '') | map(attribute='stdout_lines') | map('first') | list }}"
 
 # ── Phase 2: BMHs, secrets, namespace (reverse of setup Phases 3–5) ──
-# Delete BMH CRs and wait for Metal3 to deprovision (host still powered on so
-# IPA can run). Force-clear finalizers on anything that gets stuck so teardown
-# always completes.
+# Delete BMH CRs and wait for Metal3 to deprovision and deregister them.
+# Keep BMO finalizers intact; failure must stop teardown before VM disks vanish.
 - name: Delete BareMetalHost CRs (wait for deprovision)
   ansible.builtin.command:
     cmd: oc delete bmh {{ item }} -n {{ bmaas_bmh_namespace }} --ignore-not-found --wait=true --timeout=600s
@@ -161,24 +161,7 @@
     KUBECONFIG: /root/.kube/config
   loop: "{{ bmaas_vms }}"
   register: _bmh_delete
-  failed_when: false
   changed_when: "'deleted' in _bmh_delete.stdout"
-
-- name: Force-clear finalizers on any lingering BareMetalHost
-  ansible.builtin.shell:
-    cmd: |
-      if oc get bmh {{ item }} -n {{ bmaas_bmh_namespace }} >/dev/null 2>&1; then
-        oc patch bmh {{ item }} -n {{ bmaas_bmh_namespace }} --type=merge \
-          -p '{"metadata":{"finalizers":[]}}'
-        echo "force-cleared"
-      else
-        echo "gone"
-      fi
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop: "{{ bmaas_vms }}"
-  register: _bmh_finalizer
-  changed_when: "'force-cleared' in _bmh_finalizer.stdout"
 
 - name: Delete BMC credential secrets
   ansible.builtin.command:

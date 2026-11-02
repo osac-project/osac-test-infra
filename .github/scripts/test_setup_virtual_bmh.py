@@ -31,6 +31,26 @@ def _top_level_spec(manifest: str) -> dict[str, str]:
 
 
 class SetupVirtualBmhTests(unittest.TestCase):
+    def test_host_compatibility_and_retry_guards(self) -> None:
+        """Check the disk paths, cgroup manager, and retry guard ordering."""
+        setup = SETUP_SCRIPT.read_text()
+        teardown = (ROOT / ".github/scripts/teardown.sh").read_text()
+
+        self.assertIn('if [[ "${VM_DISK_ROOT}" != /* ]]', setup)
+        self.assertIn('VM_DISK_DIR="${VM_DISK_ROOT%/}/virtual-bmh-disks-${CLONE_NAME}"', setup)
+        self.assertIn('if [[ "${BMH_DISK_ROOT}" != /* ]]', teardown)
+        self.assertIn('BMH_DISK_DIR="${BMH_DISK_ROOT%/}/virtual-bmh-disks-${CLONE_NAME}"', teardown)
+        self.assertIn("podman --cgroup-manager=cgroupfs run --detach", setup)
+        self.assertIn("raise SystemExit(0 if disk ==", setup)
+        self.assertLess(
+            setup.index('if ${VIRSH} dominfo "${VM_NAME}"'),
+            setup.index("qemu-img create -f qcow2"),
+        )
+        self.assertLess(
+            setup.index('if [[ -f "${SUSHY_PID_FILE}" ]]'),
+            setup.index("nohup env"),
+        )
+
     def test_virtual_media_downloads_are_published_over_http(self) -> None:
         """The generated Provisioning CR must disable virtual-media TLS."""
         with tempfile.TemporaryDirectory() as temp_dir:

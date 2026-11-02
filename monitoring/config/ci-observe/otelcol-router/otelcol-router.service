@@ -1,0 +1,42 @@
+# ci-observe OTLP signal router (host service, no container).
+#
+# Splits the runner fleet's OTLP traffic: traces -> Tempo 2.10 (127.0.0.1:14418),
+# logs + metrics -> the LGTM bundle's OTLP receiver (127.0.0.1:4318). Runs on
+# the host on purpose: every hop in the routing path is loopback TCP, which
+# keeps it out of rootless podman (pasta) networking entirely -- cross-container
+# pasta routes were the failure mode of the earlier router container attempts.
+#
+# Config: /etc/otelcol-router/config.yaml
+# Binary: /usr/local/bin/otelcol-contrib (extracted from the pinned
+#         ghcr.io/open-telemetry/opentelemetry-collector-releases image,
+#         contrib 0.164.0, statically linked)
+# Ingress: Caddy https://osac-ci-1.redhat.com:4319 -> 127.0.0.1:14318
+
+[Unit]
+Description=ci-observe OTLP signal router (otelcol-contrib)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=otelcol-router
+Group=otelcol-router
+ExecStart=/usr/local/bin/otelcol-contrib --config=/etc/otelcol-router/config.yaml
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+
+# Hardening: the router needs no privileges, no filesystem writes, no home access.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

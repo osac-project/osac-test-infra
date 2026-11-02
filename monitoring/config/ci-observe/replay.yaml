@@ -1,0 +1,84 @@
+# ci-observe replay: stock OTLP JSON file replay into a local OTLP backend
+# (grafana/otel-lgtm). Reads the closed capture files written by the gateway
+# (collector.yaml) and exports them unchanged, preserving original timestamps
+# and trace IDs. Validated with the pinned contrib 0.164.0 image; the
+# component names there are otlp_json_file, file_storage and otlp_http.
+#
+# Coordinator sets:
+#   CI_OBSERVE_OTLP_ENDPOINT  OTLP HTTP backend, e.g.
+#                             http://host.containers.internal:4318 for a
+#                             local grafana/otel-lgtm container
+#   CI_OBSERVE_REPLAY_STATE   directory for persistent file offsets; give
+#                             each replay run its own directory so a re-run
+#                             never re-imports already replayed lines
+#
+# Mount the private capture directory at /capture. Import only closed files:
+# a partially written last line can be parsed and rejected. One storage
+# extension per signal: a single file_storage client cannot back the same
+# receiver in three pipelines (the extra Start() calls time out).
+
+extensions:
+  file_storage/traces:
+    directory: ${env:CI_OBSERVE_REPLAY_STATE}/traces
+    create_directory: true
+  file_storage/metrics:
+    directory: ${env:CI_OBSERVE_REPLAY_STATE}/metrics
+    create_directory: true
+  file_storage/logs:
+    directory: ${env:CI_OBSERVE_REPLAY_STATE}/logs
+    create_directory: true
+
+receivers:
+  otlp_json_file/traces:
+    include:
+      - /capture/traces.jsonl
+    # Begin at start, then track offsets in the storage extension.
+    start_at: beginning
+    storage: file_storage/traces
+    # Match the capture-side line budget. Truncate (drop the remainder of an
+    # oversized line, which then fails OTLP parsing) rather than split one
+    # JSON record into fake entries. There is no hard reject option.
+    max_log_size: 16MiB
+    max_log_size_behavior: truncate
+    include_file_name: true
+    include_file_path: true
+    # compression stays unset: capture files are uncompressed JSONL
+  otlp_json_file/metrics:
+    include:
+      - /capture/metrics.jsonl
+    start_at: beginning
+    storage: file_storage/metrics
+    max_log_size: 16MiB
+    max_log_size_behavior: truncate
+    include_file_name: true
+    include_file_path: true
+  otlp_json_file/logs:
+    include:
+      - /capture/logs.jsonl
+    start_at: beginning
+    storage: file_storage/logs
+    max_log_size: 16MiB
+    max_log_size_behavior: truncate
+    include_file_name: true
+    include_file_path: true
+
+exporters:
+  otlp_http:
+    endpoint: ${env:CI_OBSERVE_OTLP_ENDPOINT}
+
+service:
+  extensions: [file_storage/traces, file_storage/metrics, file_storage/logs]
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    # No processors: the data is exported exactly as captured.
+    traces:
+      receivers: [otlp_json_file/traces]
+      exporters: [otlp_http]
+    metrics:
+      receivers: [otlp_json_file/metrics]
+      exporters: [otlp_http]
+    logs:
+      receivers: [otlp_json_file/logs]
+      exporters: [otlp_http]

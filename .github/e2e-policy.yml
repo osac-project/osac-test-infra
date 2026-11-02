@@ -43,13 +43,13 @@ jobs:
     manual_only: true
   e2e-vmaas-netris:
     kind: e2e
-    check: "E2E / VMaaS Networking Netris Full Install"
+    check: "E2E / VMaaS Netris Full Install"
     suite: vmaas-netris
     workflow: e2e-pr-vmaas-netris.yml  # a run of its own, started by the decision
     manual_only: true
   e2e-stretched-netris:
     kind: e2e
-    check: "E2E / Stretched Networking Netris Full Install"
+    check: "E2E / Stretched Netris Full Install"
     suite: stretched-netris
     workflow: e2e-pr-stretched-netris.yml  # a run of its own, started by the decision
     manual_only: true

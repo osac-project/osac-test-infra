@@ -8,6 +8,10 @@ dependencies = [
     "pytest-xdist>=3.0",
     "pyyaml>=6.0",
     "websocket-client>=1.6",
+    # ci-observe: records test/fixture spans as OTLP when the pytest
+    # --export-traces flag is set (set only by the ci-observe capture path).
+    # Inert without the flag, so normal runs are unaffected.
+    "pytest-opentelemetry>=1.1.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,0 +1,718 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "One ci-observe capture, minute by minute: how many pods existed, what each pod used in CPU and memory, what the node used, and which pods existed when. Pick a capture in the Run box and set the time range to cover it: the collector samples every 60 seconds and Prometheus keeps 15 days.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "What this page shows",
+      "description": "Reading guide: what the panels measure, the 60-second sample interval, the 15-day retention, and why the dashboard time range has to cover the capture.",
+      "type": "text",
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ci-observe-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "mode": "markdown",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "**One capture, minute by minute.** Pick a run in the **Run** box, then read top to bottom: how many pods existed, what each pod used in CPU and memory, what the node used, and the table of every pod with its first and last sample.\n\n**Samples are 60 seconds.** The collector scrapes the kubelet summary API once a minute, so one point is one minute and the charts cannot show anything faster. Prometheus keeps **15 days** of samples.\n\n**The time range must cover the capture.** A finished capture has no samples in \"now\", so a range that ends before the capture starts, or begins after it ends, renders empty. Set the range to the capture's start and end, or a little wider. The page opens on the last 24 hours, which covers today's runs at close to the real one-minute resolution.\n\n**The table keeps working after the capture ends; a plain instant query does not.** The table reads its values with range functions over the dashboard range (`max_over_time(...[$__range])`), so a finished capture still renders it. A bare instant query of a metric stops returning anything about **five minutes** after the last sample: that is Prometheus's lookback window, not missing data.\n\nThe pod series carry no node label, so this page cannot say which node a pod ran on. Node metrics are cluster-wide: one line per node."
+      }
+    },
+    {
+      "id": 2,
+      "title": "Pod count",
+      "description": "Number of distinct pods that reported a CPU sample at each 60-second step. Counted from k8s_pod_cpu_usage, so a pod that exists but reports no CPU sample is not counted. A gap means no samples were collected in that minute, not an empty cluster.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ci-observe-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "No pod samples in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by (k8s_pod_name) (k8s_pod_cpu_usage{osac_ci_capture_id=\"$capture_id\"}))",
+          "legendFormat": "pods",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "CPU by pod",
+      "description": "CPU used by each pod, in cores, one line per pod at each 60-second step. Only the ten pods with the highest mean CPU over the dashboard time range are drawn; the ranking is fixed at the end of the range, so the lines do not swap in and out. A pod that ran for part of the capture has a shorter line.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ci-observe-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "axisLabel": "cores",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "No pod CPU samples in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ],
+          "showLegend": true,
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (k8s_pod_name) (k8s_pod_cpu_usage{osac_ci_capture_id=\"$capture_id\"}) and on (k8s_pod_name) topk(10, sum by (k8s_pod_name) (avg_over_time(k8s_pod_cpu_usage{osac_ci_capture_id=\"$capture_id\"}[$__range] @ end())))",
+          "legendFormat": "{{k8s_pod_name}}",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Memory by pod",
+      "description": "Memory used by each pod, from the kubelet's working set, one line per pod at each 60-second step. Only the ten pods with the highest mean working set over the dashboard time range are drawn. Working set counts the pages the pod is actually using, so it is the number to compare against a memory limit; the container usage metric also counts reclaimable cache.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ci-observe-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "bytes",
+          "min": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "No pod memory samples in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ],
+          "showLegend": true,
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (k8s_pod_name) (k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"}) and on (k8s_pod_name) topk(10, sum by (k8s_pod_name) (avg_over_time(k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"}[$__range] @ end())))",
+          "legendFormat": "{{k8s_pod_name}}",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Node CPU",
+      "description": "CPU used by each node of the cluster, in cores, at each 60-second step. One line per node. This is the whole node, so it is always larger than the sum of the pod lines above: the difference is system work and pods that the collector did not sample.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ci-observe-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "axisLabel": "cores",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "No node CPU samples in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ],
+          "showLegend": true,
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (k8s_node_name) (k8s_node_cpu_usage{osac_ci_capture_id=\"$capture_id\"})",
+          "legendFormat": "{{k8s_node_name}}",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Node memory",
+      "description": "Memory used by each node of the cluster, as the kubelet reports it, one line per node at each 60-second step. This is the node total, not the sum of the pod working sets: page cache and system processes are included.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ci-observe-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "bytes",
+          "min": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "No node memory samples in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ],
+          "showLegend": true,
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (k8s_node_name) (k8s_node_memory_usage_bytes{osac_ci_capture_id=\"$capture_id\"})",
+          "legendFormat": "{{k8s_node_name}}",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Pods seen",
+      "description": "Every pod that produced any sample during the dashboard time range, with its namespace, its first and last sample time, and its peak CPU and peak memory. This is the answer to 'which pods existed, and when': a pod whose first sample is late was created late, and a pod whose last sample is early was deleted early. The sample times come from the pod working-set metric, which every scraped pod reports. A blank Peak CPU means the pod has no CPU sample: CPU usage is a rate, so a pod scraped only once cannot have one. There is no node column because the pod series carry no node label.",
+      "type": "table",
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ci-observe-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "no sample"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pod"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 420
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Namespace"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 260
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "First sample"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              },
+              {
+                "id": "custom.width",
+                "value": 210
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last sample"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              },
+              {
+                "id": "custom.width",
+                "value": 210
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Peak CPU"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Peak memory"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Peak CPU",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "__name__": true
+            },
+            "indexByName": {
+              "k8s_pod_name": 0,
+              "k8s_namespace_name": 1,
+              "Value #C": 2,
+              "Value #D": 3,
+              "Value #A": 4,
+              "Value #B": 5
+            },
+            "renameByName": {
+              "k8s_pod_name": "Pod",
+              "k8s_namespace_name": "Namespace",
+              "Value #A": "Peak CPU",
+              "Value #B": "Peak memory",
+              "Value #C": "First sample",
+              "Value #D": "Last sample"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (k8s_pod_name, k8s_namespace_name, k8s_node_name) (max_over_time(k8s_pod_cpu_usage{osac_ci_capture_id=\"$capture_id\"}[$__range]))",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "max by (k8s_pod_name, k8s_namespace_name, k8s_node_name) (max_over_time(k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"}[$__range]))",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "C",
+          "expr": "min by (k8s_pod_name, k8s_namespace_name, k8s_node_name) (min_over_time(timestamp(k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"})[$__range:60s])) * 1000",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "D",
+          "expr": "max by (k8s_pod_name, k8s_namespace_name, k8s_node_name) (max_over_time(timestamp(k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"})[$__range:60s])) * 1000",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ]
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "osac",
+    "ci",
+    "ci-observe",
+    "cluster",
+    "metrics"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "capture_id",
+        "label": "Run",
+        "type": "textbox",
+        "hide": 0,
+        "query": "",
+        "refresh": 0,
+        "current": {
+          "text": "",
+          "value": "",
+          "selected": true
+        },
+        "options": [],
+        "description": "A ci-observe capture id, for example caas-main-41446977693-a1. Every panel filters on it with osac_ci_capture_id."
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "CI Observe — Cluster",
+  "uid": "ci-observe-cluster",
+  "version": 1,
+  "weekStart": ""
+}

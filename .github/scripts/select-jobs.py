@@ -620,7 +620,7 @@ evidence (markers, names, graphify connections, or diff content) that a
 suite NOT marked "clearly relevant" is actually affected, say so -- do
 not default to "skip" just because the path-based check didn't flag it.
 
-Separately, judge whether this PR looks relevant to VMaaS Networking Netris / BMaaS
+Separately, judge whether this PR looks relevant to VMaaS Netris / BMaaS
 Netris -- suite variants that provision real cloud infrastructure through
 Netris (SDN) or Agentless-Net (IPAM/L2/L3 networking automation) instead
 of the standard path, run manually via a PR label rather than
@@ -962,7 +962,7 @@ def _build_netris_note(netris_files, gemini_netris):
     Gemini's own independent judgment (if it ran) into one short,
     informational note -- or None if neither signal says anything. Never
     changes any vmaas/caas/bmaas decision; this is purely "you may also
-    want to run VMaaS Networking Netris / BMaaS Netris manually" advisory text,
+    want to run VMaaS Netris / BMaaS Netris manually" advisory text,
     consistent with the rollout plan's Phase 3 sequencing (these suites
     aren't wired into gating, or even this POC's own decision table, at
     all yet).
@@ -1043,7 +1043,7 @@ def render_decision_table(decision, confidence, ai_status, jobs, jobs_available,
     else:
         lines.append("_No AI validation needed -- nothing in this PR was recognized as relevant to any E2E suite._")
     if netris_note:
-        lines.append(f"\n🔌 **Netris/Agentless-Net signal**: {netris_note} -- consider running VMaaS Networking Netris / BMaaS Netris manually (not gated by this comment).")
+        lines.append(f"\n🔌 **Netris/Agentless-Net signal**: {netris_note} -- consider running VMaaS Netris / BMaaS Netris manually (not gated by this comment).")
     if cost_line:
         lines.append(f"<sub>{cost_line}</sub>")
     lines.append("")

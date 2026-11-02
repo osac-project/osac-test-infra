@@ -8,16 +8,25 @@ import requests
 class FakeResponse:
     """The subset of requests.Response the scripts use."""
 
-    def __init__(self, status=200, payload=None, headers=None, next_url=None, text=""):
+    def __init__(self, status=200, payload=None, headers=None, next_url=None, text="", content=None):
         self.status_code = status
         self.ok = 200 <= status < 300
         self._payload = payload
         self.headers = headers or {}
         self.links = {"next": {"url": next_url}} if next_url else {}
         self.text = text
+        # Binary body for streamed downloads (artifact zips); defaults to
+        # the text so a FakeResponse built either way reads the same.
+        self.content = content if content is not None else text.encode()
 
     def json(self):
         return self._payload
+
+    def iter_content(self, chunk_size=None):
+        yield self.content
+
+    def close(self):
+        pass
 
     def raise_for_status(self):
         if not self.ok:
@@ -38,7 +47,7 @@ class FakeGitHub:
     def add(self, path, *responses):
         self.routes[path] = list(responses)
 
-    def get(self, url, headers=None, timeout=None):
+    def get(self, url, headers=None, timeout=None, stream=False):
         path = url.removeprefix(self.api_url)
         self.calls.append(path)
         queue = self.routes.get(path)

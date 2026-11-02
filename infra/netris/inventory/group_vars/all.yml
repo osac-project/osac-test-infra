@@ -1,7 +1,10 @@
 # Netris Lab
 netris_lab_dir: "{{ inventory_dir }}/../netris-lab"
 ew_fabric_enable: 0
-# Public upstream resolver; override where public DNS is blocked.
+# Installation-level resolver for bare metal: configure-netris writes it to the
+# Netris default DHCP option set (the lab's copy of the provider install step).
+# VMs do not use it. Public upstream resolver; override where public DNS is
+# blocked.
 dns_server: "8.8.8.8"
 
 # Netris Controller (URL is discovered dynamically by configure-netris role)
@@ -33,6 +36,11 @@ ocp_node_ip: "192.168.40.2"
 ocp_vm_mgmt_ip: ""
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
+# Port 443 on the lab host belongs to the Netris K3s load balancer, so OCP
+# routes (UI, Keycloak, AAP, console, fulfillment API) are published on this
+# port by a socat forwarder. Keycloak and the UI advertise their URLs with this
+# port, so tokens and browser redirects use it too.
+ingress_forward_port: 9444
 
 # Netris port identity is stable; h00 Linux interface names are resolved by MAC at runtime.
 ocp_underlay_enabled: false
@@ -42,9 +50,12 @@ ocp_underlay_leaf_port: "swp1s0"
 ocp_underlay_p2p_cidr: "192.0.2.0/31"
 ocp_underlay_ocp_asn: 4209999999
 
-# VMaaS's ExternalIP fixtures allocate from this separate test-only range.
-# The VMaaS route is deliberately not installed until the OCP/Netris/ISP path
-# has a narrow, verified policy for this RFC1918 prefix.
+# Only the external_ip/ and references/ tests of tests/e2e/networking/vmaas
+# allocate from this separate test-only range. The NAT and ExternalIP tests of
+# the main VMaaS networking module use the routed 198.51.100.24/29 pool and run
+# without ocp_vmaas_external_ip_*. The route for this RFC1918 prefix is
+# deliberately not installed until the OCP/Netris/ISP path has a narrow,
+# verified policy for it.
 osac_vmaas_external_ip_pool_cidr: "172.27.0.0/16"
 
 # OSAC tenant ExternalIPPool CIDR. The host routes this toward the softgate/ISP
@@ -53,6 +64,7 @@ osac_vmaas_external_ip_pool_cidr: "172.27.0.0/16"
 # l4lb 198.51.100.16/29). OSAC creates the Netris allocation itself when a
 # tenant ExternalIP is requested; the lab only prepares host routing/masquerade.
 osac_external_ip_pool_cidr: "198.51.100.24/29"
+osac_external_ip_pool_name: "netris-lab-public"
 
 # Configuration file (INI format, optional — values fall back to env vars)
 config_path: "{{ inventory_dir }}/../config"
@@ -66,6 +78,8 @@ ocp_version: "4.22"
 ocp_cluster_name: "ocp-sno"
 ocp_base_domain: "{{ lab_name }}.{{ dns_hosted_zone }}"
 pull_secret_path: "/root/pull-secret"
+# Shared by Netris Ansible targets that run oc/kubectl; the Makefile passes KUBECONFIG here.
+kubeconfig_path: "/root/.kube/config"
 ssh_public_key_path: "/root/.ssh/id_rsa.pub"
 
 # OSAC mono-repo
@@ -74,7 +88,8 @@ osac_branch: "main"
 osac_dir: "/opt/osac"
 osac_installer_dir: "{{ osac_dir }}/osac-installer"
 osac_namespace: "osac-e2e-ci"
-osac_values_file: "values/caas-ci/values.yaml"
+osac_test_tenant_name: "tenant1"
+osac_values_file: "values/caas-ci/instance.yaml"
 osac_license_path: "{{ inventory_dir }}/../license.zip"
 
 # Container image overrides (leave empty to use installer defaults)
@@ -91,23 +106,11 @@ bmf_operator_image: ""
 aap_project_git_uri: ""
 aap_project_git_branch: ""
 
-# Snapshot-based deployment (fast path)
-# Deploy mode: "fresh" (OCP-only snapshot + Helm install) or
-# "snapshot" (CaaS snapshot with baked OSAC + refresh)
-osac_deploy_mode: "fresh"
-
-# Snapshot flavor — derived from deploy mode, overrideable directly
-snapshot_flavor_image: >-
-  {{ (osac_deploy_mode == 'snapshot')
-     | ternary('quay.io/osac-project/cluster-flavors:caas-4-22',
-               'quay.io/osac-project/cluster-flavors:sno-4-22') }}
-snapshot_flavor_dir: >-
-  {{ (osac_deploy_mode == 'snapshot')
-     | ternary('/var/cache/netris-lab/cluster-flavors/caas-4-22',
-               '/var/cache/netris-lab/cluster-flavors/sno-4-22') }}
+# OCP snapshot restore. OSAC itself is always a fresh Helm install; the
+# snapshot only provides the single-node OCP cluster.
+snapshot_flavor_image: "quay.io/osac-project/cluster-flavors:sno-4-22"
+snapshot_flavor_dir: "/var/cache/netris-lab/cluster-flavors/sno-4-22"
 snapshot_recert_image: "quay.io/osac-project/recert:latest"
-snapshot_osac_namespace: "osac-e2e-ci"
-snapshot_osac_values_file: "values/caas-ci/values.yaml"
 # Target OS disk size for every snapshot restore.
 ocp_snapshot_disk_gb: 300
 
@@ -120,59 +123,53 @@ aws_region: "{{ lookup('ini', 'aws_region section=default file=' + config_path, 
 # deployed fulfillment-service (metadata.name or spec.version).
 caas_cluster_version: "{{ ocp_version }}.0"
 
-# CaaS Discovery (boot remaining servers with discovery ISO)
-caas_discovery_vm_patterns:
+# CaaS BMaaS worker pool and VM sizing
+caas_worker_vm_patterns:
   - "hgx-pod00-su0-h01"
   - "hgx-pod00-su0-h02"
   - "hgx-pod00-su0-h03"
-caas_discovery_vcpu: 4
-# Optional per-VM vCPU overrides (VM name → count). Empty = use caas_discovery_vcpu for all.
-caas_discovery_vcpu_overrides: {}
-caas_discovery_memory_mb: 16384
-# Optional per-VM memory overrides (VM name → MB). Empty = use caas_discovery_memory_mb for all.
-caas_discovery_memory_mb_overrides: {}
-caas_discovery_disk_gb: 100
-caas_discovery_infraenv_name: "infraenv"
-caas_discovery_infraenv_namespace: "hardware-inventory"
+caas_worker_vcpu: 4
+caas_worker_memory_mb: 16384
+caas_worker_disk_gb: 100
 
-# CaaS agent flow: "hot-pool" (default, legacy) or "cluster-namespace" (Option C).
-# hot-pool: agents live in hardware-inventory, test-infra labels and approves them.
-# cluster-namespace: agents live in the ClusterOrder namespace (created by
-#   osac-operator after ClusterOrder submission), test-infra labels but does NOT
-#   approve agents — osac.service.cluster_infra ci_create owns approval.
-# Temporary compatibility bridge for osac PR #1264 rollout.
-caas_agent_flow: "hot-pool"
-
-# CaaS setup (resource-class label, agent annotations, cluster creation)
-caas_agent_namespace: "{{ caas_discovery_infraenv_namespace }}"
 caas_server_cluster_template_name: "ns-only"
 caas_server_cluster_template_gateway: "192.168.101.1/24"
-caas_host_type_id: "ci-worker"
+# CaaS Setup (BMaaS instance type, DiskImage and cluster creation)
+# NetworkClass defaults for newly onboarded tenants (including plain BMaaS).
+netris_tenant_network_cidr: "192.168.101.0/24"
+netris_tenant_subnet_cidr: "192.168.101.0/24"
+# One CaaS cluster per tenant subnet; keep the ingress VIP outside DHCP.
+caas_netris_ingress_ip: "192.168.101.28"
+caas_tenant_dhcp_start: "192.168.101.100"
+caas_tenant_dhcp_end: "192.168.101.254"
+caas_baremetal_instance_type: "ci-worker"
+caas_baremetal_instance_type_profiles:
+  - name: "ci-worker"
+    title: "CI Worker"
+    description: "4 vCPU / 16 GiB worker"
+    cpu_cores: 4
+    memory_total_gb: 16
+  - name: "g5"
+    title: "Simulated G5 Worker"
+    description: "10 vCPU / 20 GiB worker"
+    cpu_cores: 10
+    memory_total_gb: 20
+caas_baremetal_instance_type_fabric_port:
+  name: "eth9"
+  type: "Ethernet"
+  speed: "100Gbps"
 # Netris per-resource-class entry merged into cluster-fulfillment-ig
 # NETRIS_RESOURCE_CLASS_MAP when the resource-class key is missing (setup-caas / setup-maas).
 caas_netris_server_cluster_template_id: 2
 caas_netris_mgmt_interface: "ens4"
 caas_netris_vpc_interfaces:
   - "ens6"
-caas_cluster_template: "osac.templates.ocp_ci_small"
-caas_catalog_item: "ci-ocp-small"
-caas_catalog_item_title: "CI OCP Small"
-caas_catalog_item_description: "Small OCP cluster for CI testing"
+caas_cluster_template: "osac.templates.ocp_small"
+caas_catalog_item: "netris-ocp-small"
+caas_catalog_item_title: "Netris OpenShift Small"
+caas_catalog_item_description: "OpenShift cluster for CaaS testing on Netris"
 caas_cluster_name: "caas-ci-cluster"
-# When non-empty, osac create uses --pull-secret-file / --ssh-public-key-file and
-# -p for each entry instead of -f pull_secret= / -f ssh_public_key= (MaaS templates).
-caas_cluster_params: []
-# Empty = label/approve every discovered agent with resource_class (setup-caas).
-# Non-empty = only these inventory hostnames get osac.openshift.io/resource_class
-# (others are unlabeled). setup-maas defaults to h02+h03 so MaaS claims those workers.
-caas_resource_class_hostnames: []
-caas_agents:
-  - vm_pattern: "hgx-pod00-su0-h01"
-    netris_server_name: "hgx-pod00-su0-h01"
-  - vm_pattern: "hgx-pod00-su0-h02"
-    netris_server_name: "hgx-pod00-su0-h02"
-  - vm_pattern: "hgx-pod00-su0-h03"
-    netris_server_name: "hgx-pod00-su0-h03"
+caas_worker_count: 1
 
 # ── Bare metal services ──────────────────────────────────────────────
 # Enables BMC network, sushy-tools, and BMF operator secrets.
@@ -215,13 +212,15 @@ bmaas_vm_vcpu: 4
 bmaas_vm_memory_mb: 8192
 bmaas_vm_disk_gb: 50
 bmaas_bmh_namespace: "host-inventory"
-bmaas_instance_type: "default"
-bmaas_instance_type_description: "CI bare metal instance type for BMaaS testing"
-# Hardware ports advertised by the shared BareMetalInstanceType. Tenants select
-# fabric ports by name in network attachments. eth9 is the tenant data NIC on
-# the sim-lab BMH VMs (see the Netris V-Net port); eth0 is reserved for
-# lifecycle traffic.
-bmaas_instance_type_network_ports:
+# Stable BMH profile label; the default BMIT selects hosts with this value.
+bmaas_bmit_name: "default"
+# Standalone BMaaS setup keeps creating its own BMI template catalog by default.
+bmaas_create_catalog_items: true
+# Physical network interfaces of each simulated BM host. Tenants select a
+# fabric interface by name in the BMI network attachment. Roles: fabric =
+# tenant east-west data, lifecycle = PXE/BMC (not tenant-attachable). eth9 is
+# the tenant data NIC on the sim-lab BMH VMs (see the Netris V-Net port).
+bmaas_vm_interfaces:
   - name: eth9
     role: fabric
     type: Ethernet
@@ -241,6 +240,13 @@ bmaas_catalog_item_description: "Bare metal instance for CI testing"
 bmaas_auto_eip_catalog_item: "ci-bm-auto-eip"
 bmaas_auto_eip_catalog_item_title: "CI Bare Metal Instance with Auto External IP"
 bmaas_auto_eip_catalog_item_description: "Bare metal instance with automatic ExternalIP attachment for CI testing"
+# Persistent deploy-bmaas uses the same Fedora image as the BMaaS E2E tests.
+bmaas_deploy_disk_image_name: "test-infra-fedora-bmi-44"
+bmaas_deploy_disk_image_source_ref: "oci://quay.io/osac-project/fedora-cloud-bmi:44"
+bmaas_deploy_tenants:
+  - tenant1
+  - tenant2
+bmaas_deploy_bmi_name_prefix: "test-infra-bmi"
 
 # ── BM provisioning V-Net ────────────────────────────────────────────
 # Unassigned BM servers' fabric NIC (eth9) sits on this Netris V-Net, which has
@@ -258,7 +264,7 @@ bmaas_provisioning_dhcp_start: "10.98.0.2"
 # per-host 1:1 DNATs (sequential from dhcp_start) always match. A wider range
 # lets stale leases push new VMs past the DNAT targets after destroy/recreate.
 bmaas_provisioning_dhcp_end: "10.98.0.4"
-bmaas_provisioning_fabric_iface: "eth9"   # must match bmaas_instance_type_network_ports fabric NIC
+bmaas_provisioning_fabric_iface: "eth9"   # must match bmaas_vm_interfaces fabric NIC
 # External IP the provisioning SNAT maps egress to. Must be host-routed to the
 # ISP (see deploy-infra) and not overlap the other 198.51.100.0/24 pools
 # (nat .0/29, bgp .8/29, l4lb .16/29, tenant .24/29, ocp .1/.2, assisted .9).
@@ -274,7 +280,6 @@ bmaas_provisioning_snat_vpc_id: 1
 # OVNKubernetes cluster and the single-node underlay, then writes private
 # installer values. osac-installer configures the OpenShift-side resources.
 # The OCP cluster may use the virtualized `None` platform.
-ocp_evpn_kubeconfig_path: "/root/.kube/config"
 ocp_evpn_required_version: "4.22"
 
 # The Netris underlay peer uses IPv4 unicast for PodNetwork advertisements;
@@ -290,3 +295,20 @@ ocp_vmaas_external_ip_tests_enabled: false
 ocp_evpn_vtep_cidr: "198.18.0.0/24"
 ocp_evpn_vtep_node_ip_cidr: "198.18.0.1/32"
 ocp_evpn_vtep_dummy_interface: "evpn-vtep0"
+
+# ── Netris Fabric Manager (VMaaS, OSAC networking contract) ──────────
+# Suites whose NetworkClass selects the cudn_evpn Kubernetes Manager. The
+# values/<profile>/netris.yaml overlay sets it (cudn_evpn for vmaas and full,
+# "" for bmaas); caas-ci keeps its profile value. This list only feeds the
+# prep-osac asserts.
+netris_k8s_manager_suites: [vmaas, full]
+# Netris private allocation of the lab; always in excludedIpv4Cidrs.
+netris_private_allocation_cidr: "10.0.0.0/8"
+# Extra IPv4 CIDRs for global.networking.excludedIpv4Cidrs. prep-osac always
+# excludes all of 10.0.0.0/8 (the Netris private allocation of the lab, so
+# tenant CIDRs must come from elsewhere: the E2E suites use 172.16-172.31
+# except 172.27 and 172.30), the bare-metal DNS resolver, the node, management
+# and BMC networks,
+# the provisioning SNAT range, the VTEP CIDR, the Netris loopbacks and the node
+# uplinks.
+netris_extra_excluded_cidrs: []

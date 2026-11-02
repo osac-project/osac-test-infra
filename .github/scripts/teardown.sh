@@ -142,33 +142,55 @@ if ${VIRSH} pool-info "${BMH_POOL_NAME}" &>/dev/null; then
   ${VIRSH} pool-undefine "${BMH_POOL_NAME}" 2>/dev/null || true
 fi
 
-BMH_DISK_DIR="/tmp/virtual-bmh-disks-${CLONE_NAME}"
+BMH_DISK_ROOT="${VM_DISK_DIR:-/tmp}"
+if [[ "${BMH_DISK_ROOT}" != /* ]]; then
+  echo "ERROR: VM_DISK_DIR must be an absolute path." >&2
+  exit 1
+fi
+BMH_DISK_DIR="${BMH_DISK_ROOT%/}/virtual-bmh-disks-${CLONE_NAME}"
 if [[ -d "${BMH_DISK_DIR}" ]]; then
   rm -rf "${BMH_DISK_DIR}"
 fi
 
 SUSHY_CONFIG_DIR="${HOME}/sushy-${CLONE_NAME}"
 SUSHY_PID_FILE="${SUSHY_CONFIG_DIR}/sushy.pid"
+SUSHY_IDENTITY_FILE="${SUSHY_CONFIG_DIR}/sushy.identity"
 SUSHY_CACHE_CONTAINER="sushy-cache-${CLONE_NAME}"
 SUSHY_CACHE_VOLUME="sushy-cache-${CLONE_NAME}"
 # NOTE: must match setup-virtual-bmh.sh's SUSHY_VMEDIA_TMP exactly.
 SUSHY_VMEDIA_TMP="${HOME}/sushy-vmedia-tmp-${CLONE_NAME}"
 SUSHY_PID=""
+SUSHY_IDENTITY=""
+SUSHY_CLEANUP_FAILED=false
+sushy_process_matches() {
+  [[ -n "${SUSHY_PID}" && -n "${SUSHY_IDENTITY}" \
+    && "$(ps -p "${SUSHY_PID}" -o lstart= 2>/dev/null)" == "${SUSHY_IDENTITY}" ]]
+}
+
 if [[ -f "${SUSHY_PID_FILE}" ]]; then
-  SUSHY_PID=$(cat "${SUSHY_PID_FILE}")
-  echo "Stopping sushy-emulator (PID ${SUSHY_PID})..."
-  kill "${SUSHY_PID}" 2>/dev/null || true
-  for i in $(seq 1 10); do
-    if ! kill -0 "${SUSHY_PID}" 2>/dev/null; then
-      break
-    fi
-    if [[ "${i}" -eq 10 ]]; then
-      echo "  SIGTERM did not stop sushy-emulator, sending SIGKILL..."
-      kill -9 "${SUSHY_PID}" 2>/dev/null || true
-    fi
-    sleep 1
-  done
-  rm -f "${SUSHY_PID_FILE}"
+  SUSHY_PID=$(<"${SUSHY_PID_FILE}")
+  if [[ -f "${SUSHY_IDENTITY_FILE}" ]]; then
+    SUSHY_IDENTITY=$(<"${SUSHY_IDENTITY_FILE}")
+  fi
+  if [[ -z "${SUSHY_IDENTITY}" ]] \
+    && [[ -n "$(ps -p "${SUSHY_PID}" -o pid= 2>/dev/null)" ]]; then
+    echo "ERROR: live sushy-emulator PID ${SUSHY_PID} has no identity; preserving cleanup state." >&2
+    SUSHY_CLEANUP_FAILED=true
+  elif sushy_process_matches; then
+    echo "Stopping sushy-emulator (PID ${SUSHY_PID})..."
+    kill "${SUSHY_PID}" 2>/dev/null || true
+    for i in $(seq 1 10); do
+      sushy_process_matches || break
+      if [[ "${i}" -eq 10 ]]; then
+        echo "  SIGTERM did not stop sushy-emulator, sending SIGKILL..."
+        kill -9 "${SUSHY_PID}" 2>/dev/null || true
+      fi
+      sleep 1
+    done
+  fi
+  if [[ "${SUSHY_CLEANUP_FAILED}" != "true" ]]; then
+    rm -f "${SUSHY_PID_FILE}" "${SUSHY_IDENTITY_FILE}"
+  fi
 fi
 
 if podman container exists "${SUSHY_CACHE_CONTAINER}"; then
@@ -195,13 +217,16 @@ if [[ -d "${SUSHY_VMEDIA_TMP}" ]]; then
   rm -rf "${SUSHY_VMEDIA_TMP}"
 fi
 
-if [[ -d "${SUSHY_CONFIG_DIR}" ]]; then
+if [[ "${SUSHY_CLEANUP_FAILED}" != "true" && -d "${SUSHY_CONFIG_DIR}" ]]; then
   rm -rf "${SUSHY_CONFIG_DIR}"
 fi
 
 # --- Verify BMaaS cleanup ---
 # Fail the job if critical resources leaked so we're notified early.
 BMH_LEAKED=false
+if [[ "${SUSHY_CLEANUP_FAILED}" == "true" ]]; then
+  BMH_LEAKED=true
+fi
 REMAINING_VMS=$(${VIRSH} list --all --name 2>/dev/null | grep "^${BMH_VM_PREFIX}" || true)
 if [[ -n "${REMAINING_VMS}" ]]; then
   echo "ERROR: VMs still present after cleanup:" >&2
@@ -212,7 +237,7 @@ if ${VIRSH} pool-info "${BMH_POOL_NAME}" &>/dev/null; then
   echo "ERROR: Storage pool '${BMH_POOL_NAME}' still present after cleanup" >&2
   BMH_LEAKED=true
 fi
-if [[ -n "${SUSHY_PID}" ]] && kill -0 "${SUSHY_PID}" 2>/dev/null; then
+if sushy_process_matches; then
   echo "ERROR: sushy-emulator process still running (PID ${SUSHY_PID})" >&2
   BMH_LEAKED=true
 fi

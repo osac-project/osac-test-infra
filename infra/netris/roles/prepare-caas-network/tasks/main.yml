@@ -1,0 +1,64 @@
+---
+# An existing ClusterOrder may still have workers using the previous DHCP DNS
+# setting. Defer DNS cleanup until no orders remain.
+- name: Read existing ClusterOrders before changing worker DHCP DNS
+  ansible.builtin.command: >-
+    oc get clusterorders -n {{ osac_namespace | quote }} -o json
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_existing_orders_for_dhcp
+  changed_when: false
+
+# Only remove the DNS overrides this role added. The base configure-dns role
+# owns the hypervisor's SNO records; Route 53 remains authoritative.
+- name: Remove CaaS-only dnsmasq listener settings from the hypervisor
+  ansible.builtin.lineinfile:
+    path: /etc/dnsmasq.d/ocp-sno.conf
+    line: "{{ item }}"
+    state: absent
+  loop:
+    - "interface=br-mgmt"
+    - "no-dhcp-interface=br-mgmt"
+    - "bind-interfaces"
+  register: _caas_hypervisor_dns_removed
+  when: (_caas_existing_orders_for_dhcp.stdout | from_json).get('items', []) | length == 0
+
+- name: Apply removal of CaaS-only hypervisor DNS listener settings
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: restarted
+  when: _caas_hypervisor_dns_removed is changed
+
+- name: Remove CaaS-only management VM DNS configuration
+  delegate_to: 192.168.16.1
+  vars:
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_remote_tmp: /etc/dhcp/.ansible/tmp
+  block:
+    - name: Remove the CaaS API/apps records from the management VM
+      ansible.builtin.file:
+        path: /etc/dnsmasq.d/ocp-sno.conf
+        state: absent
+      register: _caas_management_dns_removed
+
+    - name: Restart management VM dnsmasq after removing CaaS records
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: restarted
+      when: _caas_management_dns_removed is changed
+
+    - name: Restore worker DHCP DNS to the configured lab resolver
+      ansible.builtin.replace:
+        path: /etc/dhcp/dhcpd.conf
+        regexp: '(?m)^([ \t]*option[ \t]+domain-name-servers[ \t]+)192\.168\.16\.1, [^;\n]+;$'
+        replace: '\g<1>{{ dns_server }};'
+        validate: /usr/sbin/dhcpd -t -cf %s
+      register: _caas_management_dhcp_dns_removed
+
+    - name: Apply removal of legacy worker management DNS override
+      ansible.builtin.systemd:
+        name: isc-dhcp-server
+        state: restarted
+      when: _caas_management_dhcp_dns_removed is changed
+  when: (_caas_existing_orders_for_dhcp.stdout | from_json).get('items', []) | length == 0

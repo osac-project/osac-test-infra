@@ -48,19 +48,62 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: osac-project/osac-ci/.github/workflows/suite-inputs.yml@5aad6bfd62a151d0527c1d6274c440dcaa443eb3  # v1.3.5
+    uses: osac-project/osac-ci/.github/workflows/suite-inputs.yml@c5ad0858e6a30ea99c7a2a4b0d4869580b3b655e  # v1.3.7
     with:
       repo: ${{ inputs.repo }}
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}
 
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
+  # The pull request's ci-observe label, read from the pull request itself: this run
+  # is a dispatch, so its event carries no labels. Labelling needs write access to
+  # this repository, like every other way of starting the suite. The flag only adds
+  # telemetry capture; it never changes the test outcome. Note that the reusable
+  # workflow comes from the default branch, so a pull request's own workflow edits
+  # (including this wiring) only take effect once merged.
+  labels:
+    permissions:
+      pull-requests: read
+    runs-on: ubuntu-latest
+    outputs:
+      ci-observe: ${{ steps.read.outputs.ci-observe }}
+    steps:
+      - name: Read the ci-observe label
+        id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          # Every input reaches the shell through an environment variable, never
+          # through the script text (the convention of the osac-ci e2e dispatch).
+          case "${PR_NUMBER}" in
+            "" | *[!0-9]*)
+              echo 'ci-observe=false' >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          if ! labels_json="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.labels[].name')"; then
+            # An API failure must be visible, not silent: without this warning
+            # a labeled pull request would quietly run without telemetry.
+            echo "::warning::ci-observe: could not read the pull request labels; running without capture"
+            echo 'ci-observe=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -qx 'ci-observe' <<<"${labels_json}"; then
+            echo 'ci-observe=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ci-observe=false' >> "$GITHUB_OUTPUT"
+          fi
+
   bmaas:
-    needs: verify
+    needs: [verify, labels]
     permissions:
       contents: read
       id-token: write  # only declared because GitHub validates a called workflow's permissions statically (as in e2e-pr.yml)
     uses: ./.github/workflows/e2e-bmaas-full-install.yml
+    secrets:
+      # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
     with:
       test-suite: bmaas/sanity
       test-filter: not TestBmaasNetworking
@@ -71,6 +114,7 @@ jobs:
       test-infra-ref: ${{ inputs.sha }}
       runner-label: osac-ci
       fork-pr-author-association: ${{ needs.verify.outputs.fork-association }}
+      ci-observe: ${{ needs.labels.outputs.ci-observe == 'true' }}
       fork-pr-author: ${{ needs.verify.outputs.fork-author }}
       pr-number: ${{ inputs.pr-number }}
       notify-on-failure: false

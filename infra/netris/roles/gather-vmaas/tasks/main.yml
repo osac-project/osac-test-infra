@@ -1,0 +1,110 @@
+---
+# Read-only collection for the VMaaS suite: oc get and oc logs only.
+# Nothing here creates, patches or deletes a resource, and no Kubernetes Secret
+# is read. Every task is non-fatal so a partial cluster still yields the rest.
+# gather-osac-logs.sh already writes the e2e namespace's computeinstances,
+# virtualnetworks and subnets and the hub's clusteruserdefinednetwork; the hub
+# dumps below cover all namespaces, and the CUDN is repeated only for a
+# separate workload cluster.
+- name: Set VMaaS gather paths
+  ansible.builtin.set_fact:
+    _gather_dir: "{{ lookup('env', 'ARTIFACT_DIR') | default(playbook_dir + '/../logs', true) }}"
+    _vmaas_hub_kubeconfig: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+    _vmaas_vm_kubeconfig: "{{ osac_vm_kubeconfig | default(kubeconfig_path | default('/root/.kube/config'), true) }}"
+
+- name: Create VMaaS gather subdirectory
+  ansible.builtin.file:
+    path: "{{ _gather_dir }}/mgmt-cluster/vmaas"
+    state: directory
+    mode: "0755"
+  failed_when: false
+
+# ── Hub: OSAC custom resources (names from the osac-operator CRDs) ──
+- name: Gather OSAC networking and compute CRs from the hub
+  ansible.builtin.shell:
+    cmd: >-
+      oc --request-timeout=30s get {{ item }} -A -o yaml
+      > "{{ _gather_dir }}/mgmt-cluster/vmaas/{{ item }}.yaml" 2>&1
+  environment:
+    KUBECONFIG: "{{ _vmaas_hub_kubeconfig }}"
+  loop:
+    - computeinstances
+    - virtualnetworks
+    - subnets
+    - securitygroups
+    - natgateways
+    - externalips
+    - externalipattachments
+    - externalippools
+    - networkclasses
+  failed_when: false
+  changed_when: false
+
+- name: Gather the OSAC operator logs
+  ansible.builtin.shell:
+    cmd: |
+      for ns in $(oc --request-timeout=30s get pods -A -l control-plane=controller-manager,app.kubernetes.io/name=osac-operator \
+          -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' | sort -u); do
+        oc --request-timeout=30s logs -n "$ns" -l control-plane=controller-manager,app.kubernetes.io/name=osac-operator \
+          --all-containers --timestamps --tail={{ gather_vmaas_operator_tail_lines }}
+      done > "{{ _gather_dir }}/mgmt-cluster/vmaas/osac-operator.log" 2>&1
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ _vmaas_hub_kubeconfig }}"
+  failed_when: false
+  changed_when: false
+
+# ── Workload cluster (OSAC_VM_KUBECONFIG; the hub itself unless it differs) ──
+# A VM spec can hold cloud-init user data with passwords, so VMs and VMIs go
+# through an allow-list (files/export_vm_allowlist.py). The file is moved into
+# place only if the filter succeeded; otherwise nothing is written.
+- name: Gather VirtualMachines and instances from the workload cluster
+  ansible.builtin.shell:
+    cmd: |
+      out="{{ _gather_dir }}/mgmt-cluster/vmaas/vm-cluster-{{ item.file }}.json"
+      oc --request-timeout=30s get {{ item.resource }} -A -o json 2>/dev/null \
+        | python3 "{{ role_path }}/files/export_vm_allowlist.py" > "${out}.tmp" 2>/dev/null \
+        && mv -f "${out}.tmp" "${out}" || rm -f "${out}.tmp"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ _vmaas_vm_kubeconfig }}"
+  loop:
+    - { resource: virtualmachines.kubevirt.io, file: vms }
+    - { resource: virtualmachineinstances.kubevirt.io, file: vmis }
+  failed_when: false
+  changed_when: false
+
+- name: Gather networks from the workload cluster
+  ansible.builtin.shell:
+    cmd: >-
+      oc --request-timeout=30s get {{ item.resource }} -A -o yaml
+      > "{{ _gather_dir }}/mgmt-cluster/vmaas/vm-cluster-{{ item.file }}.yaml" 2>&1
+  environment:
+    KUBECONFIG: "{{ _vmaas_vm_kubeconfig }}"
+  loop:
+    - { resource: userdefinednetworks.k8s.ovn.org, file: udn }
+    - { resource: network-attachment-definitions.k8s.cni.cncf.io, file: nads }
+  failed_when: false
+  changed_when: false
+
+# gather-osac-logs.sh writes the hub's CUDN; only a separate workload cluster is new.
+- name: Gather ClusterUserDefinedNetworks from a separate workload cluster
+  ansible.builtin.shell:
+    cmd: >-
+      oc --request-timeout=30s get clusteruserdefinednetworks.k8s.ovn.org -o yaml
+      > "{{ _gather_dir }}/mgmt-cluster/vmaas/vm-cluster-cudn.yaml" 2>&1
+  environment:
+    KUBECONFIG: "{{ _vmaas_vm_kubeconfig }}"
+  when: _vmaas_vm_kubeconfig != _vmaas_hub_kubeconfig
+  failed_when: false
+  changed_when: false
+
+- name: Gather the SSH helper Pods
+  ansible.builtin.shell:
+    cmd: >-
+      oc --request-timeout=30s get pods -A -l osac-e2e/ssh-helper=true -o yaml
+      > "{{ _gather_dir }}/mgmt-cluster/vmaas/ssh-helper-pods.yaml" 2>&1
+  environment:
+    KUBECONFIG: "{{ _vmaas_vm_kubeconfig }}"
+  failed_when: false
+  changed_when: false

@@ -1,0 +1,39 @@
+# Podman Quadlet unit file for the ci-observe Tempo 2.10 traces backend
+# Installed by monitoring-setup.sh to ~/.config/containers/systemd/ci-observe-tempo210.container
+#
+# Deployed on the CENTRAL machine only, next to the ci-observe LGTM bundle
+# (ci-observe-backend.container). Tempo 2.10 (classic architecture) serves
+# all NEW traces: Tempo 3.1.1 inside the LGTM bundle has a TraceQL search
+# bug (grafana/tempo#8054) that returns only ~2/3 of matching spans, so
+# live ingest was cut over to this separate 2.10 instance on 2026-11-01.
+# The LGTM bundle's Tempo 3.1.1 stays up as a read-only archive (Grafana
+# datasource ci-observe-traces-archive, port 3200).
+#
+# The otelcol-router host service (otelcol-router.service) exports traces
+# here on 127.0.0.1:14418 -> container 4418. Port 3210 (search/API) is
+# loopback-only; 14418 is published on all interfaces because firewalld
+# already blocks external access to it (and the router only needs
+# loopback). Config: monitoring/config/ci-observe/tempo210/tempo.yaml,
+# deployed to ~/monitoring/ci-observe/config/tempo210/tempo.yaml (the
+# ci-observe state dir) by monitoring-setup.sh.
+#
+# Quadlet generates a systemd unit (ci-observe-tempo210.service) from this
+# file. See: man podman-systemd.unit(5)
+
+[Unit]
+Description=ci-observe traces backend (Tempo 2.10, classic architecture)
+
+[Container]
+ContainerName=ci-observe-tempo210
+Image=docker.io/grafana/tempo:2.10.10
+Exec=--config.file=/etc/tempo.yaml
+PublishPort=127.0.0.1:3210:3210
+PublishPort=127.0.0.1:14418:4418
+Volume=ci-observe-tempo210-data:/data
+Volume=%h/monitoring/ci-observe/config/tempo210/tempo.yaml:/etc/tempo.yaml:ro,Z
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

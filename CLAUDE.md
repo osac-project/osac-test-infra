@@ -18,15 +18,8 @@ This repository contains pytest-based E2E test infrastructure for OSAC. Tests ex
 
 ### Directory Structure
 
-- `tests/` - Pytest test suites
-  - `vmaas/` - ComputeInstance lifecycle tests
-  - `caas/` - ClusterOrder lifecycle tests
-  - `storage/` - Tenant storage tests
-  - `catalog/` - CatalogItem tests
-  - `bmaas/` - BareMetalInstance lifecycle tests
-  - `bmaas_networking/` - BMaaS networking E2E
-  - `core/` - Client wrappers (grpc_client, k8s_client, osac_cli) and helpers
-  - `conftest.py` - Session fixtures (cli, grpc, k8s_hub_client, jwt tokens)
+- `tests/` - E2E suites have moved to `osac/tests/e2e/`; this repo keeps a
+  sentinel test to prevent adding suite tests here.
 
 ### Core Components
 
@@ -67,7 +60,7 @@ make test-vmaas
 make test-caas
 make test-storage
 make test-bmaas
-make test-bmaas-networking
+make test-stretched
 
 # Run single test by name
 TEST=test_compute_instance_lifecycle make test-vmaas
@@ -84,7 +77,7 @@ All configuration via environment variables. Works identically in local dev and 
 |----------|---------|-------------|
 | `OSAC_NAMESPACE` | `osac-devel` | Namespace where OSAC is deployed |
 | `KUBECONFIG` | `~/.kube/config` | Kubeconfig for the hub (management cluster) |
-| `OSAC_VM_KUBECONFIG` | *(required for vmaas tests)* | Kubeconfig for the VM cluster (where VirtualMachines run). In single-cluster setups, set this to the same value as `KUBECONFIG`. Used by both VMaaS selectors, `vmaas` and `vmaas_networking`. |
+| `OSAC_VM_KUBECONFIG` | *(required for vmaas tests)* | Kubeconfig for the VM cluster (where VirtualMachines run). In single-cluster setups, set this to the same value as `KUBECONFIG`. Required by the VMaaS deployment and its networking test scope. |
 | `OSAC_FULFILLMENT_ADDRESS` | auto-derived | Fulfillment API address (`host:port`) |
 | `OSAC_VM_TEMPLATE` | `ocp-virt-vm` | ComputeInstance template to use |
 | `OSAC_SERVICE_ACCOUNT` | `admin` | ServiceAccount for token generation |

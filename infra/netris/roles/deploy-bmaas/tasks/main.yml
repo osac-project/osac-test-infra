@@ -1,0 +1,103 @@
+---
+- name: Require BMaaS catalog and enough host capacity
+  ansible.builtin.assert:
+    that:
+      - bmaas_create_catalog_items | bool
+      - bmaas_deploy_tenants | length > 0
+      - (bmaas_deploy_tenants | unique | list | length) == (bmaas_deploy_tenants | length)
+      - (bmaas_deploy_tenants | length) <= (bmaas_vm_patterns | length)
+    fail_msg: "BMaaS deployment needs its catalog and one configured BMH per tenant."
+
+- name: Wait for each tenant's default subnet
+  ansible.builtin.shell: |
+    set -euo pipefail
+    osac --tenant "$TENANT" get subnets -o json | jq -r '
+      (if type == "array" then . elif (.items? | type) == "array" then .items
+       elif .metadata? then [.] else [] end)
+      | .[] | select(.metadata.name == "default-ipv4") | .status.state // empty'
+  args:
+    executable: /bin/bash
+  environment:
+    TENANT: "{{ item }}"
+  loop: "{{ bmaas_deploy_tenants }}"
+  register: _bmaas_default_subnet
+  changed_when: false
+  until: _bmaas_default_subnet.rc == 0 and _bmaas_default_subnet.stdout == 'SUBNET_STATE_READY'
+  retries: 60
+  delay: 5
+
+- name: Wait for each tenant's default security group
+  ansible.builtin.shell: |
+    set -euo pipefail
+    subnets=$(osac --tenant "$TENANT" get subnets -o json)
+    vnet_id=$(jq -r '
+      (if type == "array" then . elif (.items? | type) == "array" then .items
+       elif .metadata? then [.] else [] end)
+      | .[] | select(.metadata.name == "default-ipv4" and (.metadata.project // "") == "")
+      | .spec.virtual_network.id // empty' <<< "$subnets")
+    osac --tenant "$TENANT" get securitygroups -o json | jq -r --arg tenant "$TENANT" --arg vnet_id "$vnet_id" '
+      (if type == "array" then . elif (.items? | type) == "array" then .items
+       elif .metadata? then [.] else [] end)
+      | any(.[]; .metadata.name == "default"
+        and .metadata.tenant == $tenant
+        and (.metadata.project // "") == ""
+        and .metadata.labels["osac.openshift.io/default"] == "true"
+        and .spec.virtual_network.id == $vnet_id
+        and .status.state == "SECURITY_GROUP_STATE_READY")'
+  args:
+    executable: /bin/bash
+  environment:
+    TENANT: "{{ item }}"
+  loop: "{{ bmaas_deploy_tenants }}"
+  register: _bmaas_default_security_group
+  changed_when: false
+  until: _bmaas_default_security_group.rc == 0 and _bmaas_default_security_group.stdout == 'true'
+  retries: 60
+  delay: 5
+
+- name: Ensure one persistent BMI per tenant
+  ansible.builtin.shell: |
+    set -euo pipefail
+    instances=$(osac --tenant "$TENANT" get baremetalinstances -o json)
+    exists=$(jq -r --arg name "$BMI_NAME" '
+      (if type == "array" then . elif (.items? | type) == "array" then .items
+       elif .metadata? then [.] else [] end)
+      | any(.metadata.name == $name)' <<< "$instances")
+    if [[ "$exists" == false ]]; then
+      osac --tenant "$TENANT" create baremetalinstance --name "$BMI_NAME" \
+        --catalog-item "$CATALOG" --disk-image "$DISK_NAME" \
+        --set disk_image.shared=true \
+        --ssh-key "$SSH_KEY" --instance-type "$TYPE_NAME" --run-strategy always
+      echo created
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    TENANT: "{{ item }}"
+    BMI_NAME: "{{ bmaas_deploy_bmi_name_prefix }}-{{ item }}"
+    CATALOG: "{{ bmaas_catalog_item }}"
+    DISK_NAME: "{{ bmaas_deploy_disk_image_name }}"
+    SSH_KEY: "{{ lookup('file', ssh_public_key_path) | trim }}"
+    TYPE_NAME: "{{ bmaas_bmit_name }}"
+  loop: "{{ bmaas_deploy_tenants }}"
+  register: _bmaas_bmis
+  changed_when: "'created' in _bmaas_bmis.stdout_lines"
+
+- name: Wait for persistent BMIs to run
+  ansible.builtin.shell: |
+    set -euo pipefail
+    osac --tenant "$TENANT" get baremetalinstances -o json | jq -r --arg name "$BMI_NAME" '
+      (if type == "array" then . elif (.items? | type) == "array" then .items
+       elif .metadata? then [.] else [] end)
+      | .[] | select(.metadata.name == $name) | .status.state // empty'
+  args:
+    executable: /bin/bash
+  environment:
+    TENANT: "{{ item }}"
+    BMI_NAME: "{{ bmaas_deploy_bmi_name_prefix }}-{{ item }}"
+  loop: "{{ bmaas_deploy_tenants }}"
+  register: _bmaas_bmi_state
+  changed_when: false
+  until: _bmaas_bmi_state.rc == 0 and _bmaas_bmi_state.stdout == 'BARE_METAL_INSTANCE_STATE_RUNNING'
+  retries: 240
+  delay: 5

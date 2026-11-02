@@ -48,6 +48,11 @@ on:
         description: "Self-hosted runner label to target"
         required: false
         default: ""
+      ci-observe:
+        description: "Run under ci-observe telemetry capture (collectors + trace/log/metric artifact). The capture lands in the CI Grafana after the run."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-caas-full-install-${{ github.run_id }}
@@ -61,6 +66,9 @@ jobs:
       # this is needed.
       id-token: write
     uses: ./.github/workflows/e2e-caas-full-install.yml
+    secrets:
+      # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
     with:
       # PR/merge_group runs are sanity-only,
       # regardless of tier labels or inputs. Periodics include the full suite.
@@ -85,6 +93,7 @@ jobs:
       osac-cli-version: ${{ inputs.osac-cli-version || '' }}
       caas-agent-flow: ${{ inputs.caas-agent-flow || 'hot-pool' }}
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
+      ci-observe: ${{ inputs.ci-observe || false }}
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number || inputs.pr-number }}

@@ -91,7 +91,7 @@
         + ([] if (ocp_underlay_ocp_asn | int != (_ocp_underlay_leaf_asn | int)) else ['ocp_underlay_ocp_asn must differ from the selected Netris leaf ASN ' + (_ocp_underlay_leaf_asn | string)])
         + ([] if (ocp_vm_name_pattern == (gpu_server_hostname ~ '-pod00-su0-h00')) else ['ocp_vm_name_pattern must match the first generated Netris server (' + gpu_server_hostname + '-pod00-su0-h00) for this underlay link'])
         + ([] if (gpu_server_count | int > 0) else ['gpu_server_count must include the OCP VM before enabling the OCP underlay link'])
-        + ([] if not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool) else ['VMaaS ExternalIP tests are enabled but ocp_vmaas_external_ip_return_path_acknowledged is false; independently provision and verify a narrow route/return policy for the 172.27.0.0/16 range'])
+        + ([] if not (ocp_vmaas_external_ip_tests_enabled | default(false) | bool) or (ocp_vmaas_external_ip_return_path_acknowledged | default(false) | bool) else ['VMaaS external_ip/references tests are enabled but ocp_vmaas_external_ip_return_path_acknowledged is false; independently provision and verify a narrow route/return policy for the 172.27.0.0/16 range'])
       }}
   when: ocp_underlay_enabled | bool
 

@@ -22,7 +22,7 @@ Description=Grafana (OSAC CI Monitoring)
 After=prometheus.service
 
 [Container]
-Image=docker.io/grafana/grafana-oss:12.0.1
+Image=docker.io/grafana/grafana:13.2.4
 ContainerName=grafana
 
 # Use host network so Grafana can reach Prometheus at 127.0.0.1:9091

@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """Remove orphan Netris order-* server clusters / VPCs / NAT / vnets.
 
-Args: <netris_url> <cookie_jar> <user> <password> [force_order ...]
-Env:  NETRIS_LIVE_ORDERS_FILE — newline-separated live ClusterOrder/HC names
+Args: <netris_url> <cookie_jar> <user> <password> <order> [order ...] --orphan-nat-order <name-or-empty>
 """
 import json
-import os
+import re
 import subprocess
 import sys
 
 url, jar, user, password = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-force = [x for x in sys.argv[5:] if x]
+arguments = sys.argv[5:]
+if len(arguments) < 2 or arguments[-2] != "--orphan-nat-order":
+    raise SystemExit("Expected --orphan-nat-order <name> after the targeted orders")
+force = [x for x in arguments[:-2] if x]
+orphan_nat_order = arguments[-1]
+if orphan_nat_order and not re.fullmatch(r"order-[a-z0-9]+", orphan_nat_order):
+    raise SystemExit("The orphan NAT order must be an order-* name")
+if not force and not orphan_nat_order:
+    raise SystemExit("Refusing unscoped Netris cleanup: provide a targeted order")
 
 
-def curl(method, path, body=None, fail_ok=False):
+def curl(method, path, body=None):
     cmd = [
         "curl", "-sk", "--connect-timeout", "15",
         "-b", jar, "-c", jar,
@@ -22,12 +29,7 @@ def curl(method, path, body=None, fail_ok=False):
     ]
     if body is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
-    try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode()
-    except subprocess.CalledProcessError:
-        if fail_ok:
-            return "000", ""
-        raise
+    out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode()
     body_out, _, code = out.rpartition("HTTP:")
     return code.strip(), body_out
 
@@ -38,30 +40,33 @@ subprocess.run(
         "-H", "Content-Type: application/json",
         "-d", json.dumps({"user": user, "password": password, "auth_scheme_id": 1}),
     ],
-    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 )
 
 
 def get_list(path):
-    code, raw = curl("GET", path, fail_ok=True)
+    code, raw = curl("GET", path)
     if code != "200":
-        print(f"  ! GET {path} HTTP {code} — skip", file=sys.stderr)
-        return []
-    try:
-        return json.loads(raw).get("data") or []
-    except Exception:
-        return []
+        raise SystemExit(f"Netris GET {path} failed (HTTP {code})")
+    result = json.loads(raw)
+    if not result.get("isSuccess") or not isinstance(result.get("data"), list):
+        raise SystemExit(f"Netris GET {path} returned an invalid response")
+    return result["data"]
 
-
-live = set()
-live_file = os.environ.get("NETRIS_LIVE_ORDERS_FILE", "")
-if live_file and os.path.isfile(live_file):
-    with open(live_file) as f:
-        live = {ln.strip() for ln in f if ln.strip()}
 
 scs = get_list("/api/v2/server-cluster")
 vpcs = get_list("/api/v2/vpc")
 nats = get_list("/api/v2/nat")
+if orphan_nat_order:
+    active_orders = {
+        item["metadata"]["name"]
+        for resource in ("clusterorders", "hostedclusters")
+        for item in json.loads(subprocess.check_output(
+            ["oc", "get", resource, "-A", "-o", "json"]
+        ))["items"]
+    }
+    if orphan_nat_order in active_orders:
+        raise SystemExit(f"Refusing to remove NAT for active order {orphan_nat_order}")
 
 
 def is_order_name(name):
@@ -69,11 +74,7 @@ def is_order_name(name):
 
 
 def should_delete(name):
-    if not is_order_name(name):
-        return False
-    if force:
-        return name in force
-    return name not in live
+    return is_order_name(name) and name in force
 
 
 targets_sc = [c for c in scs if should_delete(c.get("name"))]
@@ -85,18 +86,13 @@ targets_vpc = [
     and v.get("name") not in ("Default", "ocp-sno")
 ]
 
-print(f"  · live OSAC orders: {sorted(live) or '(none)'}")
-if force:
-    print(f"  · forced: {force}")
+print(f"  · targeted orders: {force}")
 print(f"  · server clusters to delete: {[c.get('name') for c in targets_sc] or '(none)'}")
 print(f"  · VPCs to delete: {[v.get('name') for v in targets_vpc] or '(none)'}")
 
-if not targets_sc and not targets_vpc and not force:
-    print("  ✓ nothing to clean")
-    sys.exit(0)
-
 deleted = 0
 orphan_names = {c.get("name") for c in targets_sc} | {v.get("name") for v in targets_vpc} | set(force)
+nat_orders = set(force) | ({orphan_nat_order} if orphan_nat_order else set())
 orphan_vpc_ids = set()
 for v in targets_vpc:
     if v.get("id") is not None:
@@ -112,7 +108,7 @@ for n in nats:
     name = n.get("name") or ""
     vpc = n.get("vpc") or {}
     hit = (
-        any(o and o in name for o in orphan_names)
+        any(name.startswith(f"{order}-") for order in nat_orders)
         or vpc.get("id") in orphan_vpc_ids
         or vpc.get("name") in orphan_names
     )
@@ -120,21 +116,23 @@ for n in nats:
         continue
     nid = n.get("id")
     print(f"  · delete NAT {nid} ({name})")
-    code, _ = curl("DELETE", f"/api/v2/nat/{nid}", fail_ok=True)
+    code, _ = curl("DELETE", f"/api/v2/nat/{nid}")
     print(f"    HTTP {code}")
-    if code.startswith("2"):
+    if code.startswith("2") or code == "404":
         deleted += 1
+    else:
+        raise SystemExit(f"Netris NAT deletion failed for {name} (HTTP {code})")
 
 for c in targets_sc:
     cid, name = c.get("id"), c.get("name")
     servers = c.get("servers") or []
     print(f"  · delete server-cluster {cid} ({name}) servers={servers}")
-    code, raw = curl("DELETE", f"/api/v2/server-cluster/{cid}", fail_ok=True)
+    code, _ = curl("DELETE", f"/api/v2/server-cluster/{cid}")
     print(f"    HTTP {code}")
     if code.startswith("2"):
         deleted += 1
     else:
-        print(f"    body: {raw[:240]}", file=sys.stderr)
+        raise SystemExit(f"Netris server-cluster deletion failed for {name} (HTTP {code})")
 
 vnets = get_list("/api/v2/vnet")
 for vn in vnets:
@@ -149,10 +147,12 @@ for vn in vnets:
         continue
     vid = vn.get("id")
     print(f"  · delete vnet {vid} ({name})")
-    code, _ = curl("DELETE", f"/api/v2/vnet/{vid}", fail_ok=True)
+    code, _ = curl("DELETE", f"/api/v2/vnet/{vid}")
     print(f"    HTTP {code}")
-    if code.startswith("2"):
+    if code.startswith("2") or code == "404":
         deleted += 1
+    else:
+        raise SystemExit(f"Netris V-Net deletion failed for {name} (HTTP {code})")
 
 vpcs = get_list("/api/v2/vpc")
 for v in vpcs:
@@ -163,11 +163,16 @@ for v in vpcs:
         continue
     vid = v.get("id")
     print(f"  · delete VPC {vid} ({name})")
-    code, raw = curl("DELETE", f"/api/v2/vpc/{vid}", fail_ok=True)
+    code, _ = curl("DELETE", f"/api/v2/vpc/{vid}")
     print(f"    HTTP {code}")
     if code.startswith("2"):
         deleted += 1
     else:
-        print(f"    body: {raw[:240]}", file=sys.stderr)
+        raise SystemExit(f"Netris VPC deletion failed for {name} (HTTP {code})")
+
+remaining = [n["name"] for n in get_list("/api/v2/nat")
+             if any(n.get("name", "").startswith(f"{order}-") for order in nat_orders)]
+if remaining:
+    raise SystemExit(f"Netris NAT cleanup incomplete: {remaining}")
 
 print(f"  ✓ Netris orphan cleanup done ({deleted} deletes)")

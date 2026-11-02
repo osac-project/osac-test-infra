@@ -1,0 +1,178 @@
+---
+name: CI observe sync
+
+# Keeps the ci-observe telemetry backend on osac-ci-1 (runner label
+# monitoring-central) in sync with the artifacts E2E workflows upload when
+# they run with the ci-observe input: ensures the pinned LGTM stack is up on
+# fixed loopback ports, downloads new ci-observe-capture-* artifacts from both
+# repositories through the authenticated gh CLI and replays them into the
+# backend, so the Grafana already deployed on that machine has the data with
+# zero manual steps. See monitoring/ci-observe.md ("Automatic sync").
+#
+# Deliberately has NO pull_request trigger (same reasoning as
+# deploy-monitoring.yml): it only ever runs on a manual dispatch, so it
+# never shows up in a PR's checks list.
+on:
+  # Schedule disabled (2026-11-01), for two reasons:
+  # (a) E2E runs now push ci-observe telemetry live to the central backend
+  #     from the collector gateway, so the artifact sync is unnecessary for
+  #     new runs.
+  # (b) This workflow's "up --quadlet" step restarts the backend every 15
+  #     minutes, which would drop the gateways' in-flight live-ingest
+  #     batches mid-run.
+  # The workflow itself stays for manual dispatch: backfill of historical
+  # ci-observe-capture-* artifacts that predate the live push.
+  # schedule:
+  #   - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    # A manual dispatch lets the caller pick any branch to run against; without
+    # the ref check, an unmerged branch's ci-observe.py would run on the
+    # central machine with Vault credentials (same guard as
+    # deploy-monitoring.yml). The schedule always runs main.
+    if: |
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: monitoring-central
+    permissions:
+      contents: read
+    concurrency:
+      group: ci-observe-sync
+      cancel-in-progress: false
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        id: checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # --- Secret bootstrap (same pattern as deploy-monitoring.yml) ---
+      - name: Read AppRole credentials
+        id: approle
+        run: |
+          APPROLE_DIR="${HOME}/.vault-server/.approle"
+          echo "role-id=$(cat "${APPROLE_DIR}/role-id")" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$(cat "${APPROLE_DIR}/secret-id")"
+          echo "secret-id=$(cat "${APPROLE_DIR}/secret-id")" >> "$GITHUB_OUTPUT"
+
+      - name: Retrieve secrets from Vault
+        id: vault
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.approle.outputs.role-id }}
+          secretId: ${{ steps.approle.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/monitoring/github-token token | PRIVATE_GITHUB_TOKEN ;
+
+      - name: Prepare the runner environment
+        id: prepare
+        run: |
+          # This machine doubles as a member of the isolated e2e runner pool,
+          # so the job may inherit a runner-scoped CONTAINERS_STORAGE_CONF that
+          # would put the LGTM container into storage nothing else on the
+          # machine sees (see the longer rationale in monitoring-setup.sh).
+          # It must be unset INSIDE the podman-calling steps' shells: writing
+          # an empty value through GITHUB_ENV leaves the variable set-to-empty,
+          # which podman treats as a (nonexistent) config path and fails on
+          # ("Failed to obtain podman configuration"). The XDG_RUNTIME_DIR
+          # default matches monitoring-setup.sh.
+          echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" >> "$GITHUB_ENV"
+          # Persistent across runs: the stack, the import index and the
+          # artifact cache all live here so nothing is re-downloaded or
+          # re-imported on the next 15-minute pass.
+          echo "CI_OBSERVE_STATE_DIR=${HOME}/monitoring/ci-observe" >> "$GITHUB_ENV"
+
+      # ci-observe.py is stdlib-only, so python3 is all it needs. A failure
+      # here fails the workflow loudly: a silently missing backend would make
+      # every later sync a no-op.
+      - name: Ensure the telemetry backend is up
+        id: up
+        run: |
+          set -euo pipefail
+          unset CONTAINERS_STORAGE_CONF
+          mkdir -p "${CI_OBSERVE_STATE_DIR}"
+          chmod 700 "${CI_OBSERVE_STATE_DIR}"
+          # A quadlet, not an ad-hoc container: the runner reaps the job's
+          # process group when it ends, which kills rootless podman's port
+          # forwarder (pasta) and network-isolates an ad-hoc container. Under
+          # systemd the backend outlives the job. The quadlet publishes fixed
+          # ports so the provisioned Grafana datasources
+          # (monitoring/config/grafana/datasources.yml) keep pointing at the
+          # same backend: 3300 UI, 4318 OTLP, 3200 Tempo, 3100 Loki, 9092
+          # metrics, chosen around the ports monitoring-setup.sh already
+          # occupies on this machine (3000 Grafana, 3443 Caddy, 9090 cockpit,
+          # 9091 central Prometheus, 9100-9104 exporters).
+          python3 monitoring/scripts/ci-observe.py --state-dir "${CI_OBSERVE_STATE_DIR}" up --quadlet
+
+      # gh reads GH_TOKEN. The variable is step-scoped, so it never reaches
+      # any later step. Sync failures fail the workflow: an honest red
+      # schedule beats a silently broken sync.
+      - name: Sync osac-project/osac
+        id: sync_osac
+        env:
+          GH_TOKEN: ${{ steps.vault.outputs.PRIVATE_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          unset CONTAINERS_STORAGE_CONF
+          python3 monitoring/scripts/ci-observe.py --state-dir "${CI_OBSERVE_STATE_DIR}" \
+            sync --repository osac-project/osac --since 24h \
+            | tee "${RUNNER_TEMP}/ci-observe-sync-osac.json"
+
+      - name: Sync osac-project/osac-test-infra
+        id: sync_osac_test_infra
+        # Runs even when the first repository's sync failed: one bad capture
+        # in osac must not block every osac-test-infra import for the window.
+        # The job still reports the first failure.
+        if: always() && !cancelled()
+        env:
+          GH_TOKEN: ${{ steps.vault.outputs.PRIVATE_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          unset CONTAINERS_STORAGE_CONF
+          python3 monitoring/scripts/ci-observe.py --state-dir "${CI_OBSERVE_STATE_DIR}" \
+            sync --repository osac-project/osac-test-infra --since 24h \
+            | tee "${RUNNER_TEMP}/ci-observe-sync-osac-test-infra.json"
+
+      # The imported data already lives in the backend; captures are only
+      # needed for a re-import and artifact ZIPs/records only until their run
+      # leaves the 24h sync window, so 14 days prunes nothing a sync still
+      # matches. ci-observe.py has no cleanup logic of its own.
+      - name: Prune cached artifacts and captures older than 14 days
+        id: prune
+        if: always()
+        run: |
+          if [ -d "${CI_OBSERVE_STATE_DIR}/captures" ]; then
+            find "${CI_OBSERVE_STATE_DIR}/captures" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} +
+          fi
+          if [ -d "${CI_OBSERVE_STATE_DIR}/artifacts" ]; then
+            find "${CI_OBSERVE_STATE_DIR}/artifacts" -type f -mtime +14 -delete
+            find "${CI_OBSERVE_STATE_DIR}/artifacts" -mindepth 1 -type d -empty -delete
+          fi
+
+      - name: Write the sync reports to the job summary
+        id: summary
+        if: always()
+        run: |
+          {
+            echo "## CI observe sync"
+            echo ""
+            for repo in osac osac-test-infra; do
+              echo "### osac-project/${repo}"
+              echo ""
+              echo '```json'
+              if [ -f "${RUNNER_TEMP}/ci-observe-sync-${repo}.json" ]; then
+                cat "${RUNNER_TEMP}/ci-observe-sync-${repo}.json"
+              else
+                echo '{"error": "sync produced no report"}'
+              fi
+              echo '```'
+              echo ""
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

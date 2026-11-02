@@ -1,0 +1,8 @@
+---
+- name: Deploy persistent BMaaS instances
+  hosts: all
+  gather_facts: false
+  become: true
+  roles:
+    - prepare-osac-e2e-tenant
+    - deploy-bmaas

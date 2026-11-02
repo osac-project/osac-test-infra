@@ -33,8 +33,9 @@ Environment=REPOS=osac,osac-test-infra
 Environment=JOBS_HISTORY_DAYS=60
 Environment=JOBS_HISTORY_MAX_COUNT=100000
 
-# Mount the exporter script into the container
+# Mount the exporter and its sibling run-evidence module into the container
 Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z
+Volume=%h/.monitoring-server/scripts/ci_observe_run_evidence.py:/app/ci_observe_run_evidence.py:ro,Z
 # Mount data directory for cache persistence across restarts
 Volume=%h/.monitoring-server/data:/data:Z
 Environment=CACHE_DIR=/data

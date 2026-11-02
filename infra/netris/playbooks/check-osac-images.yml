@@ -1,0 +1,12 @@
+---
+# Early guard for the Netris VMaaS suites: the profile's operator,
+# fulfillment-service and AAP bootstrap images are ghcr :latest/:main, which do
+# not contain the networking contract of the branch under test. The AAP
+# bootstrap job runs osac.config_as_code.configure from aap.bootstrap.image, so
+# a main image would register main's job templates.
+- name: Require branch-built OSAC images for the VMaaS suites
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check the image overrides
+      ansible.builtin.include_tasks: ../roles/prep-osac/tasks/check_images.yml

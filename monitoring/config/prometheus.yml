@@ -67,6 +67,18 @@ scrape_configs:
       - targets:
           - 127.0.0.1:9091
 
+  # ci-observe OTLP signal router (host service otelcol-router.service,
+  # /etc/otelcol-router/config.yaml). Exporter errors, queue depth and
+  # accepted/sent signal counters -- this is how a silently dropped signal
+  # becomes visible.
+  - job_name: otelcol-router
+    static_configs:
+      - targets:
+          - 127.0.0.1:18888
+        labels:
+          instance: central
+          role: central
+
   # ---------------------------------------------------------------------------
   # Remote runner exporters (via SSH tunnels)
   #

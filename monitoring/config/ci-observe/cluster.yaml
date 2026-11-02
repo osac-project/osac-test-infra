@@ -1,0 +1,424 @@
+# ci-observe canary manifests for namespace ci-observability-canary,
+# shared by both ci-observe paths: the CI live-push capture action and the
+# local file-capture supervisor.
+#
+# Render before apply: the coordinator substitutes the plain ${...} tokens
+# (envsubst-style; no custom template framework):
+#   CI_OBSERVE_CAPTURE_ID        capture identity, stamped on every signal
+#   CI_OBSERVE_NAMESPACE         observed OSAC namespace, e.g. osac-e2e-ci
+#   CI_OBSERVE_CLUSTER_UID       cluster identity
+#   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250
+#   CI_OBSERVE_SUITE             test suite (vmaas/caas/bmaas); may be empty
+#   CI_OBSERVE_PR                pull request number; empty for non-PR runs
+#   CI_OBSERVE_TEST_REF          requested osac ref; "main" on schedules,
+#                                "unknown" if empty or unparseable
+#   CI_OBSERVE_TEST_SHA          resolved commit of the osac test source
+#                                checkout (the overlay step's rev-parse
+#                                HEAD), "unknown" if not a 40/64 hex SHA
+#   CI_OBSERVE_TEST_INFRA_REF    requested test-infra ref, "unspecified" if
+#                                the caller did not request one
+#   CI_OBSERVE_TEST_INFRA_SHA    resolved checkout SHA for scripts/actions,
+#                                "unknown" unless the checkout proves it
+#   CI_OBSERVE_TEST_INFRA_WORKFLOW_SHA  immutable reusable-workflow file SHA
+#                                from job.workflow_sha, "unknown" if absent
+#   CI_OBSERVE_WORKFLOW          workflow name; "local"/"unknown" fallbacks
+#   CI_OBSERVE_RUN_ATTEMPT       run attempt number; "1" if unavailable
+#   CI_OBSERVE_OSAC_IMAGES       deployed OSAC images, one "; "-separated
+#                                single-line value (the rendering cannot
+#                                carry newlines); "unknown" if unavailable
+#   CI_OBSERVE_OSAC_IMAGE_IDS    running OSAC deployment container IDs,
+#                                deployment/container=imageID entries;
+#                                missing IDs use "unknown", truncated lists
+#                                end in "...[truncated]"
+#   CI_OBSERVE_OSAC_IMAGE_IDS_COMPLETE  "true" only if every desired replica
+#                                had an image ID and the list was not truncated
+#   CI_OBSERVE_TEST_SUITE        exact pytest path arguments, "unknown" when
+#                                no selection was reported
+#   CI_OBSERVE_TEST_FILTER       pytest -k expression or "none"
+#   CI_OBSERVE_TEST_MARKER       pytest -m expression or "none"
+#   CI_OBSERVE_OTLP_ENDPOINT     central live-ingest URL (live push only)
+#   CI_OBSERVE_OTLP_AUTH         "Basic <base64>" header (live push only)
+#
+# Images are pinned by digest (verified against the remote registries):
+#   gateway/replay: opentelemetry-collector-contrib 0.164.0
+#     ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
+#     @sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+#   Beyla 3.40.0 + Red Hat Go version-string fix: quay.io/osac-project/beyla
+#   (see .github/actions/ci-observe-capture/action.yml's beyla-image input)
+#
+# The gateway config comes from the ci-observe-collector ConfigMap; the CI
+# capture action creates it from collector-live.yaml (live push), the local
+# capture supervisor from collector.yaml (file capture):
+#   kubectl -n ci-observability-canary create configmap ci-observe-collector \
+#     --from-file=config.yaml=monitoring/config/ci-observe/collector-live.yaml
+# The collector expands ${env:...} placeholders itself from the container env.
+#
+# SCC GATE (parent approval before deployment): Beyla needs hostPID, UID 0 and
+# BPF capabilities inside the OpenShift guest; the required SCC is commented
+# out at the bottom of this file. Apply and bind it only after approval. The
+# gateway also reads hostPath /var/log/pods; if the node denies that read to
+# the unprivileged collector UID, pod log collection stays empty (named gap).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ci-observability-canary
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-observe-gateway
+  namespace: ci-observability-canary
+---
+# Read-only, namespaced, in the observed namespace. No Secrets or
+# ConfigMaps are readable; object specs are removed by the collector
+# transform before capture.
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ci-observe-gateway
+  namespace: ${CI_OBSERVE_NAMESPACE}
+rules:
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list, watch]
+  - apiGroups: [osac.openshift.io]
+    resources: [computeinstances, virtualnetworks, subnets, clusterorders]
+    verbs: [get, list, watch]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ci-observe-gateway
+  namespace: ${CI_OBSERVE_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ci-observe-gateway
+subjects:
+  - kind: ServiceAccount
+    name: ci-observe-gateway
+    namespace: ci-observability-canary
+---
+# Kubelet stats only (CPU/memory/pressure metrics). Read-only, single
+# subresource, nothing else. Do NOT add nodes/proxy for kubelet metadata:
+# collector.yaml must stay free of extra_metadata_labels (see its
+# kubelet_stats comment), so nothing the gateway runs ever needs it.
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ci-observe-kubelet-stats
+rules:
+  - apiGroups: [""]
+    resources: [nodes/stats]
+    verbs: [get]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ci-observe-kubelet-stats
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ci-observe-kubelet-stats
+subjects:
+  - kind: ServiceAccount
+    name: ci-observe-gateway
+    namespace: ci-observability-canary
+---
+# No capture PersistentVolumeClaim: the live-push gateway streams telemetry
+# to the central backend as it is collected, and the local supervisor's
+# historical PVC flow is superseded. The only gateway volume besides the
+# config and the host pod logs is the pod-local state emptyDir below.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ci-observe-gateway
+  namespace: ci-observability-canary
+  labels:
+    app: ci-observe-gateway
+spec:
+  # One replica: a single k8s_objects watch and one sender for the live
+  # push, so observations are not duplicated.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ci-observe-gateway
+  template:
+    metadata:
+      labels:
+        app: ci-observe-gateway
+    spec:
+      serviceAccountName: ci-observe-gateway
+      containers:
+        - name: gateway
+          image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+          args: ["--config=/etc/ci-observe/config.yaml"]
+          env:
+            - name: CI_OBSERVE_CAPTURE_ID
+              value: "${CI_OBSERVE_CAPTURE_ID}"
+            - name: CI_OBSERVE_NAMESPACE
+              value: "${CI_OBSERVE_NAMESPACE}"
+            - name: CI_OBSERVE_CLUSTER_UID
+              value: "${CI_OBSERVE_CLUSTER_UID}"
+            - name: CI_OBSERVE_KUBELET_ENDPOINT
+              value: "${CI_OBSERVE_KUBELET_ENDPOINT}"
+            - name: CI_OBSERVE_SUITE
+              value: "${CI_OBSERVE_SUITE}"
+            - name: CI_OBSERVE_PR
+              value: "${CI_OBSERVE_PR}"
+            # Run identity and selection (both collector configs read these;
+            # see their resource/capture processors). Every value has a
+            # non-empty fallback. The selection values are rendered as
+            # JSON-quoted YAML scalars by the coordinator.
+            - name: CI_OBSERVE_TEST_REF
+              value: "${CI_OBSERVE_TEST_REF}"
+            - name: CI_OBSERVE_TEST_SHA
+              value: "${CI_OBSERVE_TEST_SHA}"
+            - name: CI_OBSERVE_TEST_INFRA_REF
+              value: "${CI_OBSERVE_TEST_INFRA_REF}"
+            - name: CI_OBSERVE_TEST_INFRA_SHA
+              value: "${CI_OBSERVE_TEST_INFRA_SHA}"
+            - name: CI_OBSERVE_TEST_INFRA_WORKFLOW_SHA
+              value: "${CI_OBSERVE_TEST_INFRA_WORKFLOW_SHA}"
+            - name: CI_OBSERVE_WORKFLOW
+              value: "${CI_OBSERVE_WORKFLOW}"
+            - name: CI_OBSERVE_RUN_ATTEMPT
+              value: "${CI_OBSERVE_RUN_ATTEMPT}"
+            - name: CI_OBSERVE_OSAC_IMAGES
+              value: "${CI_OBSERVE_OSAC_IMAGES}"
+            - name: CI_OBSERVE_OSAC_IMAGE_IDS
+              value: "${CI_OBSERVE_OSAC_IMAGE_IDS}"
+            - name: CI_OBSERVE_OSAC_IMAGE_IDS_COMPLETE
+              value: "${CI_OBSERVE_OSAC_IMAGE_IDS_COMPLETE}"
+            - name: CI_OBSERVE_TEST_SUITE
+              value: ${CI_OBSERVE_TEST_SUITE}
+            - name: CI_OBSERVE_TEST_FILTER
+              value: ${CI_OBSERVE_TEST_FILTER}
+            - name: CI_OBSERVE_TEST_MARKER
+              value: ${CI_OBSERVE_TEST_MARKER}
+            # Live push only (collector-live.yaml reads them; collector.yaml
+            # ignores them). Rendered by the capture action from its
+            # otlp-password input; empty keeps the local file-capture path
+            # deployable from the same manifest.
+            - name: CI_OBSERVE_OTLP_ENDPOINT
+              value: "${CI_OBSERVE_OTLP_ENDPOINT}"
+            - name: CI_OBSERVE_OTLP_AUTH
+              value: "${CI_OBSERVE_OTLP_AUTH}"
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+            - name: self-metrics
+              containerPort: 8888
+            - name: health
+              containerPort: 13133
+          # Liveness only proves the process. Real data counters are the
+          # otelcol_receiver_accepted/refused and otelcol_exporter_sent
+          # metrics on :8888.
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              # Above the collector's 512 MiB memory_limiter so the limiter
+              # refuses data before the kernel kills the gateway. At 512Mi
+              # the two were equal, and a burst could OOMKill the gateway
+              # instead of dropping batches.
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ci-observe
+              readOnly: true
+            # Pod-local collector state (watch resourceVersions, filelog
+            # offsets): survives container restarts, not pod deletion. The
+            # live config is the consumer; see collector-live.yaml.
+            - name: state
+              mountPath: /state
+            - name: pod-logs
+              mountPath: /var/log/pods
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: ci-observe-collector
+        - name: state
+          emptyDir: {}
+        - name: pod-logs
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ci-observe-gateway
+  namespace: ci-observability-canary
+spec:
+  selector:
+    app: ci-observe-gateway
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+    - name: self-metrics
+      port: 8888
+      targetPort: self-metrics
+    - name: health
+      port: 13133
+      targetPort: health
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ci-observe-beyla
+  namespace: ci-observability-canary
+data:
+  beyla.yml: |
+    # Sample 10% of Beyla traces. Beyla instruments every process in the
+    # namespace, and most of that volume is SQL and Redis polling from the
+    # fulfillment event publisher. Unsampled, that flood filled the gateway
+    # and made it refuse spans, including the pytest spans that matter most.
+    # This sampler applies to Beyla only: pytest spans arrive at the same
+    # receiver over OTLP directly and stay at 100%.
+    # Discovery limited to the OSAC namespace; the namespace token is
+    # rendered by the coordinator, not by Beyla.
+    discovery:
+      instrument:
+        - k8s_namespace: ${CI_OBSERVE_NAMESPACE}
+    otel_traces_export:
+      sampler:
+        name: traceidratio
+        arg: "0.1"
+      endpoint: http://ci-observe-gateway.ci-observability-canary.svc.cluster.local:4317
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-observe-beyla
+  namespace: ci-observability-canary
+---
+# Read-only, list/watch only; needed for Kubernetes metadata decoration on
+# Beyla spans.
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ci-observe-beyla
+rules:
+  - apiGroups: [""]
+    resources: [pods, services]
+    verbs: [list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [list, watch]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ci-observe-beyla
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ci-observe-beyla
+subjects:
+  - kind: ServiceAccount
+    name: ci-observe-beyla
+    namespace: ci-observability-canary
+---
+# Node agent inside the OpenShift guest (where the OSAC processes run), not
+# on the baremetal host. hostPID and the capability list are the minimum
+# Beyla reports it needs for eBPF discovery; no privileged: true.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ci-observe-beyla
+  namespace: ci-observability-canary
+spec:
+  selector:
+    matchLabels:
+      app: ci-observe-beyla
+  template:
+    metadata:
+      labels:
+        app: ci-observe-beyla
+    spec:
+      serviceAccountName: ci-observe-beyla
+      hostPID: true
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: beyla
+          image: quay.io/osac-project/beyla@sha256:4896c8963342919a51dd403a7bdb8a58ad44de04bd455e9f641e91b1d9c6881b
+          env:
+            - name: BEYLA_CONFIG_PATH
+              value: /etc/beyla/beyla.yml
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            capabilities:
+              add: [BPF, SYS_PTRACE, NET_RAW, CHECKPOINT_RESTORE, DAC_READ_SEARCH, PERFMON, SYS_ADMIN]
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/beyla
+              readOnly: true
+            - name: var-run-beyla
+              mountPath: /var/run/beyla
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+              readOnly: true
+            - name: tracefs
+              mountPath: /sys/kernel/tracing
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: ci-observe-beyla
+        - name: var-run-beyla
+          emptyDir: {}
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/tracing
+# ---
+# SCC GATE: requires parent approval before deployment. Uncomment, apply and
+# bind ONLY after that approval (Beyla 3.40 docs, OpenShift section):
+#   oc adm policy add-scc-to-user ci-observe-beyla -z ci-observe-beyla -n ci-observability-canary
+# apiVersion: security.openshift.io/v1
+# kind: SecurityContextConstraints
+# metadata:
+#   name: ci-observe-beyla
+# allowHostDirVolumePlugin: true
+# allowHostPID: true
+# allowPrivilegedContainer: false
+# allowedCapabilities: [BPF, SYS_PTRACE, NET_RAW, CHECKPOINT_RESTORE, DAC_READ_SEARCH, PERFMON, SYS_ADMIN]
+# readOnlyRootFilesystem: true
+# runAsUser:
+#   type: MustRunAs
+#   uid: 0
+# seLinuxContext:
+#   type: RunAsAny
+# fsGroup:
+#   type: RunAsAny
+# supplementalGroups:
+#   type: RunAsAny

@@ -10,3 +10,5 @@ matplotlib==3.10.3
 numpy==2.2.4
 # pyparsing 3.3 deprecates names matplotlib still calls.
 pyparsing==3.2.3
+# ci-observe collector config tests (test_ci_observe_config.py).
+pyyaml==6.0.3

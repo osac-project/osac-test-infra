@@ -1,0 +1,784 @@
+---
+name: CI Observe Capture
+description: >-
+  Run a test command under ci-observe live telemetry push: deploy the
+  collector gateway and Beyla to the ci-observability-canary namespace
+  (from the repo's monitoring/config/ci-observe/ manifests), run the
+  command with the OTEL exporter environment pointed at the gateway, and
+  have the gateway push every signal live, over OTLP/HTTP with basic auth,
+  to the central backend while the test runs. No artifact, no post-test
+  copy: the data is already in the CI Grafana when the job ends. The test
+  command's own exit code is what this action reports. A telemetry failure
+  never changes the job's result: a deploy failure before the test and a
+  delivery failure caught by the post-test verification step are both loud
+  (::error annotations, a red step marker, a summary line) but non-gating,
+  because ci-observe is opt-in telemetry and must never fail a test -- or
+  the required E2E check -- on its own. An empty password is an
+  intentional telemetry-less run and stays warning-only. Default-off:
+  nothing runs unless a workflow calls this action with the password input
+  set.
+
+inputs:
+  kubeconfig-path:
+    description: "Path to the cluster kubeconfig (the collectors deploy there)"
+    required: true
+  namespace:
+    description: "Observed OSAC namespace (the namespace under test, e.g. osac-e2e-ci)"
+    required: true
+  capture-id:
+    description: >-
+      Capture identity, stamped onto every signal as the osac.ci.capture_id
+      resource attribute by the gateway collector and promoted to a label in
+      the central backend. Defaults to run-<run id>-attempt-<run attempt>.
+      The E2E workflows pass a readable flavored id,
+      <suite>-pr<N|main>-<run id>-a<attempt>. Must stay a DNS-1123 label of
+      at most 44 characters.
+    required: false
+    default: ""
+  suite:
+    description: >-
+      Test suite (vmaas/caas/bmaas). Stamped onto every captured signal as
+      the osac.ci.suite resource attribute by the gateway collector. Empty
+      leaves the attribute empty.
+    required: false
+    default: ""
+  pr:
+    description: >-
+      Pull request number, empty for non-PR runs (scheduled, merge queue).
+      Stamped onto every captured signal as the osac.ci.pr resource
+      attribute by the gateway collector.
+    required: false
+    default: ""
+  test-ref:
+    description: >-
+      Requested git ref of the osac code under test, stamped onto every
+      captured signal as the osac.ci.test_ref resource attribute. The
+      reusable E2E workflows pass their test-ref input (the osac PR head
+      SHA in the osac PR flow, "main" on schedules). This is the requested
+      ref, not the resolved commit: a moving ref can advance between the
+      dispatch and the checkout. A ref containing characters outside
+      [a-zA-Z0-9._/+-] degrades to "unknown" rather than a mangled value.
+    required: false
+    default: ""
+  test-sha:
+    description: >-
+      Resolved commit of the osac test source checkout (the overlay step's
+      git rev-parse HEAD), stamped onto every captured signal as the
+      osac.ci.test_sha resource attribute. Must be a 40- or 64-character
+      lowercase hex SHA; empty or invalid values become "unknown" and never
+      fall back to the requested test-ref.
+    required: false
+    default: ""
+  test-infra-ref:
+    description: >-
+      Requested Git ref of the test-infra checkout, stamped onto every
+      captured signal as the osac.ci.test_infra_ref resource attribute.
+      Empty means "unspecified". This is not the resolved checkout SHA.
+    required: false
+    default: ""
+  test-infra-workflow-sha:
+    description: >-
+      Immutable SHA of the reusable workflow file that defines this job,
+      from job.workflow_sha. Empty or invalid values become "unknown".
+    required: false
+    default: ""
+  test-suite:
+    description: Exact pytest path arguments the test command ran (for example "tests/e2e/vmaas/ tests/e2e/references/"), or empty when the caller reported none (recorded as unknown). Values over 256 UTF-8 bytes are recorded as unknown.
+    required: false
+    default: ""
+  test-filter:
+    description: Exact pytest -k expression, or empty when no -k filter is selected. Values over 512 UTF-8 bytes are recorded as unknown.
+    required: false
+    default: ""
+  test-marker:
+    description: Exact pytest -m expression, or empty when no marker is selected. Values over 512 UTF-8 bytes are recorded as unknown.
+    required: false
+    default: ""
+  command:
+    description: "The test command to run under telemetry (a bash script)"
+    required: true
+  otlp-password:
+    description: >-
+      Password for the central OTLP ingest (basic auth user ci-observe).
+      A secret, passed by callers from CI_OBSERVE_OTLP_PASSWORD. Empty
+      degrades to running the test without telemetry: the action never
+      pushes unauthenticated.
+    required: false
+    default: ""
+  beyla-image:
+    description: >-
+      Beyla image reference for the node agent. The default is the OSAC-pinned
+      build (Beyla 3.40.0 plus the Red Hat Go version-string fix in OBI's
+      internal/goversion; without it Beyla skips Go instrumentation of the
+      Red Hat toolchain binaries). Revert to the official
+      docker.io/grafana/beyla image once that fix lands upstream.
+    required: false
+    default: "quay.io/osac-project/beyla@sha256:4896c8963342919a51dd403a7bdb8a58ad44de04bd455e9f641e91b1d9c6881b"
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy collectors
+      id: deploy
+      # A telemetry problem must never fail the job BEFORE the test: the
+      # deployment degrades to a warning and the test command runs without
+      # telemetry. The Verify telemetry delivery step after the test then
+      # fails the job when telemetry was requested and never delivered, so
+      # the degradation can never stay silent.
+      continue-on-error: true
+      shell: bash
+      env:
+        KUBECONFIG: ${{ inputs.kubeconfig-path }}
+        OBSERVED_NAMESPACE: ${{ inputs.namespace }}
+        CAPTURE_ID_INPUT: ${{ inputs.capture-id }}
+        SUITE_INPUT: ${{ inputs.suite }}
+        PR_INPUT: ${{ inputs.pr }}
+        TEST_REF_INPUT: ${{ inputs.test-ref }}
+        TEST_SHA_INPUT: ${{ inputs.test-sha }}
+        TEST_INFRA_REF_INPUT: ${{ inputs.test-infra-ref }}
+        TEST_INFRA_WORKFLOW_SHA_INPUT: ${{ inputs.test-infra-workflow-sha }}
+        TEST_SUITE_INPUT: ${{ inputs.test-suite }}
+        TEST_FILTER_INPUT: ${{ inputs.test-filter }}
+        TEST_MARKER_INPUT: ${{ inputs.test-marker }}
+        OTLP_PASSWORD_INPUT: ${{ inputs.otlp-password }}
+        BEYLA_IMAGE_INPUT: ${{ inputs.beyla-image }}
+      run: |
+        set -euo pipefail
+
+        ci_dir="${RUNNER_TEMP}/ci-observe"
+        mkdir -p "${ci_dir}"
+
+        # Telemetry was requested the moment a password was passed, before
+        # any validation below can fail: the verify step after the test
+        # fails the job for a requested-but-undelivered run. An empty
+        # password is an intentional telemetry-less run and stays
+        # warning-only.
+        if [[ -n "${OTLP_PASSWORD_INPUT}" ]]; then
+          touch "${ci_dir}/telemetry-requested"
+        fi
+
+        capture_id="${CAPTURE_ID_INPUT:-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}}"
+        # The capture id becomes the osac.ci.capture_id attribute and a
+        # label in the central backend, so it must stay a DNS-1123 label
+        # (lowercase alphanumeric and hyphens) of at most 44 characters.
+        if [[ ! "${capture_id}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || [[ "${#capture_id}" -gt 44 ]]; then
+          echo "::warning::ci-observe: invalid capture-id '${capture_id}'; running the test without telemetry"
+          touch "${ci_dir}/deploy-failed"
+          exit 0
+        fi
+        echo "CI_OBSERVE_CAPTURE_ID=${capture_id}" >> "${GITHUB_ENV}"
+
+        # The central live-ingest endpoint and its basic auth header. The
+        # password arrives as a secret input; the header is precomputed
+        # here (base64 of "ci-observe:<password>") so the manifest and the
+        # collector config never see the password itself. An empty
+        # password or endpoint degrades to running the test without
+        # telemetry: the action never pushes unauthenticated.
+        otlp_endpoint="https://osac-ci-1.redhat.com"
+        if [[ -z "${otlp_endpoint}" ]] || [[ -z "${OTLP_PASSWORD_INPUT}" ]]; then
+          echo "::warning::ci-observe: no OTLP ingest endpoint or password; running the test without telemetry"
+          touch "${ci_dir}/deploy-failed"
+          exit 0
+        fi
+        auth="Basic $(printf '%s:%s' "ci-observe" "${OTLP_PASSWORD_INPUT}" | base64 -w0)"
+
+        # Suite and PR are rendered into the cluster manifest as env values
+        # for the gateway. Digits and lowercase alphanumerics only, so the
+        # sed replacement and the manifest stay well-formed whatever the
+        # caller passed. Both coalesce to "none" when empty: the gateway's
+        # collector config cannot expand an empty value (the resource
+        # processor rejects it at load), and "none" reads as its own filter
+        # value in Grafana.
+        suite="$(printf '%s' "${SUITE_INPUT}" | tr -cd 'a-z0-9-')"
+        pr="$(printf '%s' "${PR_INPUT}" | tr -cd '0-9')"
+        suite="${suite:-none}"
+        pr="${pr:-none}"
+
+        # Run identity: one requested ref, three resolved SHAs, each true in
+        # every flow. test_ref is the requested osac ref; test_sha is the
+        # commit the overlay step actually checked out (a moving ref can
+        # advance between dispatch and checkout). test_infra_sha is the
+        # workspace commit whose harness files this job runs. job.workflow_sha
+        # (passed through as test-infra-workflow-sha) is the commit of the
+        # reusable workflow file that defines this job. GITHUB_SHA is only the
+        # triggering event's commit and is none of these.
+        #
+        # A ref is safe only when the WHOLE string is the allowlist
+        # charset (SHA hex, branch and tag characters). The regex alone
+        # does not guarantee that: whether POSIX ERE "$" also matches just
+        # before a trailing newline is engine-dependent, and a ref like
+        # "main\n" (a YAML block scalar, a sloppy dispatch input) that
+        # slipped through would break the sed rendering below -- and, with
+        # telemetry requested, the verify step would gate the run on a
+        # caller typo, against the never-gate design. The explicit newline
+        # comparison makes the check engine-independent.
+        ref_is_safe() {
+          [[ -n "$1" && "$1" != *$'\n'* && "$1" =~ ^[a-zA-Z0-9._/+-]+$ ]]
+        }
+        sha_is_safe() {
+          [[ "$1" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]
+        }
+        # Byte length, not ${#value} character count: the local supervisor
+        # bounds the same values by UTF-8 bytes, and a multibyte dispatch
+        # input must not pass here what the supervisor would reject.
+        selection_is_bounded() {
+          local byte_length
+          byte_length="$(LC_ALL=C printf '%s' "$1" | wc -c)"
+          (( byte_length <= $2 ))
+        }
+        if ref_is_safe "${TEST_REF_INPUT}"; then
+          test_ref="${TEST_REF_INPUT}"
+        else
+          test_ref="unknown"
+        fi
+        # The resolved osac commit is a SHA or "unknown" -- never the
+        # requested ref, which names a moving target and would claim a
+        # revision nothing verified.
+        test_sha="${TEST_SHA_INPUT}"
+        if ! sha_is_safe "${test_sha}"; then
+          if [[ -n "${test_sha}" ]]; then
+            echo "::warning::ci-observe: test-sha input is not a 40/64-character lowercase hex SHA (${#test_sha} characters); recording unknown"
+          fi
+          test_sha="unknown"
+        fi
+        test_infra_ref="${TEST_INFRA_REF_INPUT:-unspecified}"
+        if ! ref_is_safe "${test_infra_ref}"; then
+          test_infra_ref="unknown"
+        fi
+        # The harness files this job actually runs: the composite action,
+        # the capture supervisor and the three collector configs. HEAD is
+        # recorded only when every listed path is tracked at HEAD and
+        # byte-identical to the worktree copy. git diff alone stays quiet
+        # for a path HEAD does not contain (an untracked replacement would
+        # run instead of the committed file), and the overlay step's
+        # tests/ replacement must not matter: only these paths are checked.
+        # git itself missing or refusing the workspace (dubious ownership)
+        # keeps the conservative "unknown".
+        harness_paths=(
+          ".github/actions/ci-observe-capture/action.yml"
+          "monitoring/scripts/ci_observe_capture.py"
+          "monitoring/config/ci-observe/cluster.yaml"
+          "monitoring/config/ci-observe/collector.yaml"
+          "monitoring/config/ci-observe/collector-live.yaml"
+        )
+        harness_matches_head() {
+          local path
+          for path in "${harness_paths[@]}"; do
+            git -C "${GITHUB_WORKSPACE}" cat-file -e "HEAD:${path}" || return 1
+          done
+          git -C "${GITHUB_WORKSPACE}" diff --quiet HEAD -- "${harness_paths[@]}"
+        }
+        test_infra_sha="unknown"
+        if harness_matches_head; then
+          checked_out_sha="$(git -C "${GITHUB_WORKSPACE}" rev-parse --verify HEAD 2>/dev/null)" || checked_out_sha=""
+          if sha_is_safe "${checked_out_sha}"; then
+            test_infra_sha="${checked_out_sha}"
+          fi
+        fi
+        test_infra_workflow_sha="${TEST_INFRA_WORKFLOW_SHA_INPUT}"
+        if ! sha_is_safe "${test_infra_workflow_sha}"; then
+          test_infra_workflow_sha="unknown"
+        fi
+        # Empty selection inputs mean the caller reported nothing, not that
+        # every suite ran: the three wired workflows always pass the exact
+        # path list their test steps used, so an empty value is a wiring
+        # break and records "unknown" rather than a guess.
+        if [[ -n "${TEST_SUITE_INPUT}" ]]; then
+          if selection_is_bounded "${TEST_SUITE_INPUT}" 256; then
+            test_suite="${TEST_SUITE_INPUT}"
+          else
+            echo "::warning::ci-observe: test-suite is over 256 UTF-8 bytes; recording unknown"
+            test_suite="unknown"
+          fi
+        else
+          test_suite="unknown"
+        fi
+        test_filter_input="${TEST_FILTER_INPUT:-none}"
+        if selection_is_bounded "${test_filter_input}" 512; then
+          test_filter="${test_filter_input}"
+        else
+          echo "::warning::ci-observe: test-filter is over 512 UTF-8 bytes; recording unknown"
+          test_filter="unknown"
+        fi
+        test_marker_input="${TEST_MARKER_INPUT:-none}"
+        if selection_is_bounded "${test_marker_input}" 512; then
+          test_marker="${test_marker_input}"
+        else
+          echo "::warning::ci-observe: test-marker is over 512 UTF-8 bytes; recording unknown"
+          test_marker="unknown"
+        fi
+        # JSON-quoting makes any selection value a valid double-quoted YAML
+        # scalar. "$" is escaped to the JSON \u0024 form so the rendered
+        # text can never contain a literal ${CI_OBSERVE_...} sequence: the
+        # sed chain below replaces tokens sequentially, and a later token's
+        # substitution would otherwise rewrite a caller-controlled value
+        # that embeds an earlier-unsubstituted token (the Python renderer
+        # is immune because its single-pass regex never rescans).
+        yaml_quote() {
+          printf '%s' "$1" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read()).replace("$", "\\u0024"), end="")'
+        }
+        sed_escape() {
+          printf '%s' "$1" | sed 's/[\\&|]/\\&/g'
+        }
+        test_suite_yaml="$(yaml_quote "${test_suite}")"
+        test_filter_yaml="$(yaml_quote "${test_filter}")"
+        test_marker_yaml="$(yaml_quote "${test_marker}")"
+        test_suite_sed="$(sed_escape "${test_suite_yaml}")"
+        test_filter_sed="$(sed_escape "${test_filter_yaml}")"
+        test_marker_sed="$(sed_escape "${test_marker_yaml}")"
+        # The workflow name is a display string and keeps the denylist
+        # strip (newline, backslash, double quote, the sed-special | and &,
+        # and $ so an embedded ${CI_OBSERVE_...} token cannot be rewritten
+        # by a later substitution in the sed chain below).
+        workflow_name="$(printf '%s' "${GITHUB_WORKFLOW:-}" | tr -d '\n|\\&"$')"
+        workflow_name="${workflow_name:-unknown}"
+        run_attempt="$(printf '%s' "${GITHUB_RUN_ATTEMPT:-}" | tr -cd '0-9')"
+        run_attempt="${run_attempt:-1}"
+
+        # Every fallible command below carries an explicit "|| return 1":
+        # this function runs inside an `if !` condition, where bash suspends
+        # errexit for the whole call, so an unguarded failure would be
+        # swallowed and the function would return the status of its last
+        # command (success) -- a partial deployment reported as deployed.
+        deploy_collectors() {
+          cluster_uid="$(oc get namespace kube-system -o jsonpath='{.metadata.uid}')" || return 1
+          # Select the InternalIP address by type: addresses[0] is the
+          # InternalDNS hostname on OpenShift, which need not resolve from
+          # the gateway pod, and an unresolvable kubelet endpoint silently
+          # starves the kubelet metrics. The gateway pod shares the node
+          # network, so the IP is always reachable.
+          kubelet_address="$(oc get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')" || return 1
+          if [[ -z "${kubelet_address}" ]]; then
+            echo "node reports no InternalIP address" >&2
+            return 1
+          fi
+          kubelet_endpoint="https://${kubelet_address}:10250"
+
+          # The OSAC images deployed in the observed namespace, one
+          # deployment=image1,image2 line per deployment. Any failure (oc
+          # error, empty namespace) degrades to "unknown", never an empty
+          # string: the collector rejects an empty env value at load.
+          # Newlines collapse to ";" separators and sed/YAML-unsafe
+          # characters are stripped: the value crosses the sed replacement
+          # and the double-quoted manifest env value below, neither of
+          # which can carry a newline.
+          osac_images="$(oc get deployments -n "${OBSERVED_NAMESPACE}" \
+            -o jsonpath='{range .items[*]}{.metadata.name}={.spec.template.spec.containers[*].image}{"\n"}{end}')" || osac_images=""
+          osac_images="$(printf '%s' "${osac_images}" | tr '\n' ';' | tr -d '|\\&"')"
+          osac_images="${osac_images%;}"
+          osac_images="${osac_images:-unknown}"
+
+          # Read runtime image IDs from Running OSAC Deployment pods. The
+          # shared helper follows Pod -> ReplicaSet -> Deployment ownership,
+          # requires the OSAC part-of label, and bounds/sanitizes the output.
+          image_id_capture="$(PYTHONPATH="${GITHUB_WORKSPACE}/monitoring/scripts" python3 - "${OBSERVED_NAMESPACE}" <<'PY'
+        import os
+        import sys
+        from pathlib import Path
+
+        from ci_observe_capture import osac_image_ids
+
+        capture = osac_image_ids(Path(os.environ["KUBECONFIG"]), sys.argv[1])
+        print(f"{capture.complete}|{capture.image_ids}")
+        PY
+          )" || image_id_capture=""
+          if [[ "${image_id_capture}" == *"|"* ]]; then
+            osac_image_ids_complete="${image_id_capture%%|*}"
+            osac_image_ids="${image_id_capture#*|}"
+          else
+            osac_image_ids_complete="unknown"
+            osac_image_ids="unknown"
+          fi
+          if [[ "${osac_image_ids_complete}" != "true" \
+              && "${osac_image_ids_complete}" != "false" \
+              && "${osac_image_ids_complete}" != "unknown" ]]; then
+            osac_image_ids_complete="unknown"
+            osac_image_ids="unknown"
+          fi
+          osac_image_ids="${osac_image_ids:-unknown}"
+
+          # Render the coordinator tokens the cluster manifest expects
+          # (same envsubst-style substitution as the local capture
+          # supervisor, monitoring/scripts/ci_observe_capture.py). The
+          # selection values are JSON-quoted YAML scalars with sed
+          # replacement characters escaped and $ defused. Spec image refs,
+          # runtime image IDs and the resolved test SHA remain separate
+          # values from the requested refs.
+          rendered="${ci_dir}/cluster-rendered.yaml"
+          sed \
+            -e "s|\${CI_OBSERVE_CAPTURE_ID}|${capture_id}|g" \
+            -e "s|\${CI_OBSERVE_NAMESPACE}|${OBSERVED_NAMESPACE}|g" \
+            -e "s|\${CI_OBSERVE_CLUSTER_UID}|${cluster_uid}|g" \
+            -e "s|\${CI_OBSERVE_KUBELET_ENDPOINT}|${kubelet_endpoint}|g" \
+            -e "s|\${CI_OBSERVE_SUITE}|${suite}|g" \
+            -e "s|\${CI_OBSERVE_PR}|${pr}|g" \
+            -e "s|\${CI_OBSERVE_TEST_REF}|${test_ref}|g" \
+            -e "s|\${CI_OBSERVE_TEST_SHA}|${test_sha}|g" \
+            -e "s|\${CI_OBSERVE_TEST_INFRA_REF}|${test_infra_ref}|g" \
+            -e "s|\${CI_OBSERVE_TEST_INFRA_SHA}|${test_infra_sha}|g" \
+            -e "s|\${CI_OBSERVE_TEST_INFRA_WORKFLOW_SHA}|${test_infra_workflow_sha}|g" \
+            -e "s|\${CI_OBSERVE_WORKFLOW}|${workflow_name}|g" \
+            -e "s|\${CI_OBSERVE_RUN_ATTEMPT}|${run_attempt}|g" \
+            -e "s|\${CI_OBSERVE_OSAC_IMAGES}|${osac_images}|g" \
+            -e "s|\${CI_OBSERVE_OSAC_IMAGE_IDS}|${osac_image_ids}|g" \
+            -e "s|\${CI_OBSERVE_OSAC_IMAGE_IDS_COMPLETE}|${osac_image_ids_complete}|g" \
+            -e "s|\${CI_OBSERVE_TEST_SUITE}|${test_suite_sed}|g" \
+            -e "s|\${CI_OBSERVE_TEST_FILTER}|${test_filter_sed}|g" \
+            -e "s|\${CI_OBSERVE_TEST_MARKER}|${test_marker_sed}|g" \
+            -e "s|\${CI_OBSERVE_OTLP_ENDPOINT}|${otlp_endpoint}|g" \
+            -e "s|\${CI_OBSERVE_OTLP_AUTH}|${auth}|g" \
+            "${GITHUB_WORKSPACE}/monitoring/config/ci-observe/cluster.yaml" > "${rendered}"
+          if grep -qF '${CI_OBSERVE_' "${rendered}"; then
+            echo "unresolved tokens in the rendered manifest" >&2
+            return 1
+          fi
+
+          # Manifest first: it creates the ci-observability-canary namespace
+          # that the collector ConfigMap applies into. The gateway pod only
+          # starts once both exist, and the readiness wait below comes after
+          # both. The live collector config is the one that pushes to the
+          # central backend (collector.yaml is the local file-capture path).
+          oc apply -f "${rendered}" || return 1
+          oc create configmap ci-observe-collector -n ci-observability-canary \
+            --from-file=config.yaml="${GITHUB_WORKSPACE}/monitoring/config/ci-observe/collector-live.yaml" \
+            --dry-run=client -o yaml | oc apply -f - || return 1
+          oc -n ci-observability-canary set image daemonset/ci-observe-beyla beyla="${BEYLA_IMAGE_INPUT}" || return 1
+          # From here on the quick-cleanup step must clean up cluster resources.
+          echo "CI_OBSERVE_DEPLOYED=1" >> "${GITHUB_ENV}"
+
+          # Beyla needs hostPID, UID 0 and the BPF capabilities inside the
+          # OpenShift guest. This is the SCC that cluster.yaml keeps
+          # commented out (SCC GATE), applied here the same way the local
+          # capture supervisor applies it. The gateway reads hostPath
+          # /var/log/pods for pod logs, so it needs hostmount-anyuid.
+          oc apply -f - <<'SCC'
+          apiVersion: security.openshift.io/v1
+          kind: SecurityContextConstraints
+          metadata:
+            name: ci-observe-beyla
+          allowHostDirVolumePlugin: true
+          allowHostPID: true
+          allowPrivilegedContainer: false
+          allowedCapabilities: [BPF, SYS_PTRACE, NET_RAW, CHECKPOINT_RESTORE, DAC_READ_SEARCH, PERFMON, SYS_ADMIN]
+          readOnlyRootFilesystem: true
+          runAsUser:
+            type: MustRunAs
+            uid: 0
+          seLinuxContext:
+            type: RunAsAny
+          fsGroup:
+            type: RunAsAny
+          supplementalGroups:
+            type: RunAsAny
+        SCC
+          oc adm policy add-scc-to-user ci-observe-beyla -z ci-observe-beyla -n ci-observability-canary || return 1
+          oc adm policy add-scc-to-user hostmount-anyuid -z ci-observe-gateway -n ci-observability-canary || return 1
+
+          oc wait --for=condition=Available deployment/ci-observe-gateway \
+            -n ci-observability-canary --timeout=180s || return 1
+
+          # Local OTLP endpoint for the test command, on loopback like the
+          # local pipeline. The test container reaches it because the E2E
+          # podman run uses --network=host. The quick-cleanup step stops it.
+          nohup oc port-forward -n ci-observability-canary svc/ci-observe-gateway :4317 \
+            > "${ci_dir}/port-forward.log" 2>&1 &
+          echo "$!" > "${ci_dir}/port-forward.pid"
+          port=""
+          for _ in $(seq 1 60); do
+            if grep -oE '127\.0\.0\.1:[0-9]+' "${ci_dir}/port-forward.log" > "${ci_dir}/port-forward-port.txt"; then
+              port="$(head -n1 "${ci_dir}/port-forward-port.txt" | cut -d: -f2)"
+              break
+            fi
+            sleep 1
+          done
+          if [[ -z "${port}" ]]; then
+            echo "port-forward did not report a local port" >&2
+            return 1
+          fi
+          echo "CI_OBSERVE_OTLP_PORT=${port}" >> "${GITHUB_ENV}"
+        }
+
+        if ! deploy_collectors; then
+          echo "::warning::ci-observe: collector deployment failed; running the test without telemetry"
+          touch "${ci_dir}/deploy-failed"
+        fi
+
+    - name: Run test command
+      id: run
+      # No continue-on-error here on purpose: this step's outcome is the
+      # test's own outcome, exactly as it would be without the telemetry.
+      shell: bash
+      env:
+        COMMAND_INPUT: ${{ inputs.command }}
+      run: |
+        set -u
+        ci_dir="${RUNNER_TEMP}/ci-observe"
+        printf '%s\n' "${COMMAND_INPUT}" > "${ci_dir}/command.sh"
+
+        # The OTEL environment is only set when the collectors came up; a
+        # failed deployment above leaves it unset and the command then runs
+        # exactly as it would without this action.
+        if [[ -n "${CI_OBSERVE_OTLP_PORT:-}" ]]; then
+          export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${CI_OBSERVE_OTLP_PORT}"
+          export OTEL_EXPORTER_OTLP_TIMEOUT="2"
+          export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} --export-traces"
+        fi
+
+        rc=0
+        test_start="$(date +%s)"
+        # Same shell flags GitHub uses for a plain run: step, so the command
+        # behaves identically with and without the telemetry wrapper.
+        bash -e -o pipefail "${ci_dir}/command.sh" || rc=$?
+        test_end="$(date +%s)"
+        # The verify step reads both: the exit code to know the test's own
+        # result, the duration to decide whether a zero-telemetry run was a
+        # real capture failure or a command that ended within seconds.
+        echo "CI_OBSERVE_TEST_EXIT_CODE=${rc}" >> "${GITHUB_ENV}"
+        echo "CI_OBSERVE_TEST_DURATION=$(( test_end - test_start ))" >> "${GITHUB_ENV}"
+        exit "${rc}"
+
+    - name: Quick cleanup (job cancelled)
+      id: quick-cancelled-cleanup
+      # A cancelled job gets only ~5 minutes for ALL of its always() steps,
+      # which the workflow's own short-cap gather and teardown must also fit
+      # in. A cancelled capture's gateway still holds whatever batches it
+      # managed to queue; deleting it would drop them, and the ephemeral
+      # cluster is destroyed by the workflow teardown anyway, so this path
+      # spends seconds, not minutes: stop the port-forward and fire-and-forget
+      # the cluster resources. For every non-cancelled outcome the gateway is
+      # deliberately left running until the cluster teardown so its sending
+      # queue can drain to the central backend.
+      if: cancelled() && env.CI_OBSERVE_DEPLOYED == '1'
+      continue-on-error: true
+      shell: bash
+      env:
+        KUBECONFIG: ${{ inputs.kubeconfig-path }}
+      run: |
+        set -u
+        ci_dir="${RUNNER_TEMP}/ci-observe"
+        if [[ -f "${ci_dir}/port-forward.pid" ]]; then
+          # Cleanup may keep going on failure, but never silently: the
+          # warning carries the underlying command's own output.
+          if ! kill "$(cat "${ci_dir}/port-forward.pid")"; then
+            echo "::warning::ci-observe: failed to stop the collector port-forward (pid $(cat "${ci_dir}/port-forward.pid"))"
+          fi
+        fi
+        # --request-timeout bounds the API request itself (a --wait timeout
+        # does not): a dying API server must not hang these past the
+        # cancellation budget this cheap path must fit in. Best-effort per
+        # resource, each failure visible as a warning.
+        for resource in deployment/ci-observe-gateway daemonset/ci-observe-beyla; do
+          if ! oc delete "${resource}" -n ci-observability-canary \
+              --request-timeout=30s --wait=false --ignore-not-found; then
+            echo "::warning::ci-observe: failed to delete ${resource} (cancelled-job cleanup is best-effort)"
+          fi
+        done
+
+    - name: Write capture summary
+      if: always()
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -u
+        capture_id="${CI_OBSERVE_CAPTURE_ID:-}"
+        if [[ -z "${capture_id}" ]]; then
+          exit 0
+        fi
+        # Header only: the Verify telemetry delivery step that follows adds
+        # the delivery outcome line (so it lands under this header), and its
+        # outcome is the authoritative one, not an assumption made here.
+        {
+          echo "## ci-observe capture"
+          echo "- capture id: \`${capture_id}\`"
+          if [[ ! -f "${RUNNER_TEMP}/ci-observe/telemetry-requested" ]]; then
+            echo "- telemetry not requested (no OTLP ingest password); the tests ran without telemetry capture"
+          elif [[ -f "${RUNNER_TEMP}/ci-observe/deploy-failed" ]]; then
+            echo "- :warning: collector deployment failed; telemetry never started (see the Verify telemetry delivery step)"
+          else
+            echo "- no artifact is uploaded; the Verify telemetry delivery step reports whether the data reached the central backend"
+          fi
+        } >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Verify telemetry delivery
+      id: verify
+      # The loud backstop for the 2026-11-01 incident: every telemetry
+      # failure in the steps above degrades to a warning so a telemetry
+      # problem can never block the test -- which is also how a dead central
+      # endpoint stayed unnoticed under 30 green E2E runs. This step runs
+      # after the test, always (a failed test is checked too: the telemetry
+      # failure must be visible next to it) and never on cancellation (the
+      # cheap-cleanup path owns that). Its errors are LOUD but never gating:
+      # ci-observe is opt-in telemetry, so a delivery failure leaves
+      # ::error annotations, a red step marker and a summary line, and the
+      # job's conclusion untouched (the owner's rule: never fail a test --
+      # or the required E2E check -- only for telemetry).
+      if: always() && !cancelled()
+      continue-on-error: true
+      shell: bash
+      env:
+        KUBECONFIG: ${{ inputs.kubeconfig-path }}
+      run: |
+        set -euo pipefail
+        ci_dir="${RUNNER_TEMP}/ci-observe"
+
+        # One message shape for every failure mode; never implies the test
+        # result was affected.
+        telemetry_fail() {
+          echo "::error::ci-observe: telemetry was requested but did not reach the central backend — the test result above is unaffected; see ${1}"
+          echo "ci-observe: telemetry was requested but did not reach the central backend — the test result above is unaffected; see ${1}" >> "${GITHUB_STEP_SUMMARY}"
+          exit 1
+        }
+
+        # Telemetry was never requested (empty OTLP password input): the run
+        # is intentionally without capture, nothing to verify.
+        if [[ ! -f "${ci_dir}/telemetry-requested" ]]; then
+          echo "telemetry not requested (no OTLP ingest password); the tests ran without telemetry capture" >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+
+        # Requested but never started.
+        if [[ -f "${ci_dir}/deploy-failed" ]]; then
+          telemetry_fail "the collector deployment failed (see the warning in the Deploy collectors step)"
+        fi
+        if [[ -z "${CI_OBSERVE_DEPLOYED:-}" ]]; then
+          telemetry_fail "the collector deployment never recorded a deployed gateway"
+        fi
+
+        # The test command pushed its OTEL signals through the deploy step's
+        # port-forward; if that process died, the test's telemetry had no
+        # path to the gateway.
+        if [[ -f "${ci_dir}/port-forward.pid" ]]; then
+          if ! kill -0 "$(cat "${ci_dir}/port-forward.pid")"; then
+            telemetry_fail "the collector port-forward from the deploy step is no longer running; the test command's OTEL endpoint was dead during the run"
+          fi
+        fi
+
+        # Self-metrics scrape: :8888 is the gateway's prometheus telemetry
+        # port, exposed by cluster.yaml's self-metrics service port and
+        # collector-live.yaml's telemetry reader.
+        verify_pf_log="${ci_dir}/verify-port-forward.log"
+        nohup oc port-forward -n ci-observability-canary svc/ci-observe-gateway :8888 \
+          > "${verify_pf_log}" 2>&1 &
+        verify_pf_pid=$!
+        cleanup_verify_port_forward() {
+          if ! kill "${verify_pf_pid}"; then
+            echo "::warning::ci-observe: failed to stop the verify port-forward (pid ${verify_pf_pid})"
+          fi
+        }
+        trap cleanup_verify_port_forward EXIT
+
+        metrics_port=""
+        for _ in $(seq 1 30); do
+          if grep -oE '127\.0\.0\.1:[0-9]+' "${verify_pf_log}" > "${ci_dir}/verify-port.txt"; then
+            metrics_port="$(head -n1 "${ci_dir}/verify-port.txt" | cut -d: -f2)"
+            break
+          fi
+          sleep 1
+        done
+        if [[ -z "${metrics_port}" ]]; then
+          telemetry_fail "the gateway's self-metrics port-forward never came up; output: $(cat "${verify_pf_log}")"
+        fi
+
+        metrics_url="http://127.0.0.1:${metrics_port}/metrics"
+        metrics_file="${ci_dir}/gateway-metrics.txt"
+        scrape_self_metrics() {
+          curl -sf --max-time 30 "${metrics_url}" -o "${metrics_file}"
+        }
+        # Sum every sample of one metric family in a Prometheus exposition
+        # dump: lines are `name{labels} value` (the labels optional), `#`
+        # comment lines never match, and an optional _total suffix (the
+        # collector's prometheus reader appends one unless
+        # without_type_suffix is set) is stripped before comparing.
+        counter_sum() {
+          awk -v n="$1" '{ split($1, a, "{"); name = a[1]; sub(/_total$/, "", name); if (name == n) sum += $NF } END { print sum + 0 }' "${metrics_file}"
+        }
+
+        scrape_self_metrics || telemetry_fail "could not scrape the gateway's self-metrics endpoint (${metrics_url}); the gateway died after the test"
+        if ! grep -q '^otelcol_' "${metrics_file}"; then
+          telemetry_fail "the gateway's self-metrics endpoint served no otelcol_* metrics (${metrics_url})"
+        fi
+
+        # Hard failures first: data the gateway refused, and batches the
+        # central backend push gave up on.
+        for signal in spans log_records metric_points; do
+          refused="$(counter_sum "otelcol_receiver_refused_${signal}")"
+          if (( refused != 0 )); then
+            telemetry_fail "the gateway refused ${refused} ${signal} (otelcol_receiver_refused_${signal}); check the gateway pod's logs"
+          fi
+          send_failed="$(counter_sum "otelcol_exporter_send_failed_${signal}")"
+          if (( send_failed != 0 )); then
+            telemetry_fail "the central backend push failed for ${send_failed} ${signal} (otelcol_exporter_send_failed_${signal}); check the https://osac-ci-1.redhat.com:4319 ingest (Caddy vhost, HAProxy route, CI_OBSERVE_OTLP_PASSWORD secret)"
+          fi
+        done
+
+        # The exporter's final batches can still sit in the 5s batch timeout
+        # or the retrying queue when the test ends -- and the gateway keeps
+        # collecting after the test too (file_log tails the still-running
+        # namespace, kubelet_stats bursts every 60s), so a small accepted-
+        # sent deficit is the NORMAL steady state, not a failure. What a
+        # dead or stuck export looks like is a deficit that is large
+        # (far beyond in-flight) and never shrinks across scrapes. Poll for
+        # up to ~100s; delivered means: at some scrape every signal's
+        # deficit was zero, within tolerance, or shrinking versus the first
+        # scrape.
+        deficit_first=""
+        deficit_min=""
+        delivered=false
+        for _ in $(seq 1 10); do
+          scrape_self_metrics || telemetry_fail "could not re-scrape the gateway's self-metrics endpoint (${metrics_url})"
+          delivered_this_scrape=true
+          for signal in spans log_records metric_points; do
+            accepted="$(counter_sum "otelcol_receiver_accepted_${signal}")"
+            sent="$(counter_sum "otelcol_exporter_sent_${signal}")"
+            (( deficit = accepted - sent ))
+            [[ "${deficit}" -lt 0 ]] && deficit=0
+            # Tolerance: in-flight batches plus a slice of the collected
+            # volume. A stuck queue holds at least the whole 5000-batch
+            # sending queue, far above this.
+            (( tolerance = accepted / 50 + 1000 ))
+            if (( deficit > tolerance )); then
+              delivered_this_scrape=false
+              if [[ -z "${deficit_first}" ]]; then
+                deficit_first="${deficit}"
+              fi
+              if [[ -z "${deficit_min}" ]] || (( deficit < deficit_min )); then
+                deficit_min="${deficit}"
+              fi
+            fi
+          done
+          if [[ "${delivered_this_scrape}" == true ]]; then
+            delivered=true
+            break
+          fi
+          sleep 10
+        done
+        # A deficit that stayed beyond tolerance but is shrinking is the
+        # queue draining after an outage; only a large, non-shrinking
+        # deficit is a delivery failure.
+        if [[ "${delivered}" != true ]] && [[ -n "${deficit_min}" ]] && (( deficit_min < deficit_first )); then
+          delivered=true
+        fi
+
+        sent_spans="$(counter_sum otelcol_exporter_sent_spans)"
+        sent_log_records="$(counter_sum otelcol_exporter_sent_log_records)"
+        sent_metric_points="$(counter_sum otelcol_exporter_sent_metric_points)"
+
+        if [[ "${delivered}" != true ]]; then
+          accepted_spans="$(counter_sum otelcol_receiver_accepted_spans)"
+          accepted_log_records="$(counter_sum otelcol_receiver_accepted_log_records)"
+          accepted_metric_points="$(counter_sum otelcol_receiver_accepted_metric_points)"
+          telemetry_fail "the gateway accepted more than it exported (accepted ${accepted_spans} spans, ${accepted_log_records} log records, ${accepted_metric_points} metric points; exported ${sent_spans}, ${sent_log_records}, ${sent_metric_points}); data was collected but never delivered to the central backend"
+        fi
+
+        # A run long enough for real telemetry that exported nothing at all
+        # means nothing was collected (dead receiver path), not an empty
+        # test: E2E commands run for minutes, so 60s is safely past any
+        # trivial command.
+        duration="${CI_OBSERVE_TEST_DURATION:-0}"
+        total_sent=$(( sent_spans + sent_log_records + sent_metric_points ))
+        if (( total_sent == 0 )) && (( duration > 60 )); then
+          telemetry_fail "nothing was collected: the gateway exported 0 spans, 0 logs and 0 metrics during a ${duration}s test run"
+        fi
+
+        echo "telemetry delivered: ${sent_spans} spans, ${sent_log_records} logs, ${sent_metric_points} metrics"
+        echo "telemetry delivered: ${sent_spans} spans, ${sent_log_records} logs, ${sent_metric_points} metrics" >> "${GITHUB_STEP_SUMMARY}"

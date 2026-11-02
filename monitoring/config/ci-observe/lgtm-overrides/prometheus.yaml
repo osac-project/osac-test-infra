@@ -1,0 +1,54 @@
+# Prometheus override for the ci-observe local development stack.
+#
+# This is the stock grafana/otel-lgtm 0.38.1 prometheus.yaml with one change: the
+# out-of-order time window is widened from 10m to 7d so post-run CI captures, which
+# arrive hours to a day after collection, replay with their original timestamps
+# instead of being silently dropped as out-of-order samples (the stock 10m window
+# only absorbs retries and network delays). 7d matches the local detail retention
+# budget in the collector-first plan; older samples are still rejected and reported.
+#
+# This is a local development stack setting, not a fleet production setting. Keep
+# the remaining defaults in sync with the pinned image when it changes.
+global:
+  scrape_native_histograms: true
+otlp:
+  keep_identifying_resource_attributes: true
+  # Recommended attributes to be promoted to labels.
+  promote_resource_attributes:
+    - service.instance.id
+    - service.name
+    - service.namespace
+    - service.version
+    - cloud.availability_zone
+    - cloud.region
+    - container.name
+    - deployment.environment # backward compatibility
+    - deployment.environment.name
+    - k8s.cluster.name
+    - k8s.container.name
+    - k8s.cronjob.name
+    - k8s.daemonset.name
+    - k8s.deployment.name
+    - k8s.job.name
+    - k8s.namespace.name
+    - k8s.node.name
+    - k8s.pod.name
+    - k8s.replicaset.name
+    - k8s.statefulset.name
+    - host.name
+    - postgresql.database.name
+    - postgresql.schema.name
+    - postgresql.table.name
+    - postgresql.index.name
+    - database # used by otelcol/receiver/mongodb
+    - kafka.cluster.alias
+    # The capture id and observed namespace select a run's metrics in the
+    # ci-observe-runs dashboard; without promotion they never become labels.
+    # The suite and PR labels make runs filterable by flavor and pull request.
+    - osac.ci.capture_id
+    - osac.ci.observed_namespace
+    - osac.ci.suite
+    - osac.ci.pr
+storage:
+  tsdb:
+    out_of_order_time_window: 7d

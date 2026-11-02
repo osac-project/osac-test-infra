@@ -75,8 +75,7 @@ jobs:
       || github.event.label.name == 'e2e-bmaas-netris'
     uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
     with:
-      suite: bmaas_networking
-      osac-profile: bmaas-ci
+      deploy-suite: bmaas
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
       tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman' }}

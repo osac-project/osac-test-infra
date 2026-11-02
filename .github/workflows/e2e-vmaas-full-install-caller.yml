@@ -43,6 +43,11 @@ on:
         description: "Self-hosted runner label to target (e.g. osac-ci-1 to pin to one machine for verification/debugging). Defaults to the shared fleet-wide label."
         required: false
         default: ""
+      ci-observe:
+        description: "Run under ci-observe telemetry capture (collectors + trace/log/metric artifact). The capture lands in the CI Grafana after the run."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-vmaas-full-install-${{ github.run_id }}
@@ -95,6 +100,9 @@ jobs:
       # caller grants regardless of runtime reachability.
       id-token: write
     uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    secrets:
+      # Live OTLP push credential; without it ci-observe degrades to no telemetry.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
     with:
       # workflow_dispatch: resolve-suite (labels via API). Else: PR labels
       # from the event, then unlabeled defaults.
@@ -121,6 +129,7 @@ jobs:
         inputs.installer-ref || 'main') }}
       osac-cli-version: ${{ inputs.osac-cli-version || '' }}
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
+      ci-observe: ${{ inputs.ci-observe || false }}
       # Pass author_association and login for fork PR authorization (empty for non-fork PRs)
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}

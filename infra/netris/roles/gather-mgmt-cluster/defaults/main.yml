@@ -1,0 +1,14 @@
+---
+# Lines of each container log to keep. A long run writes far more than the old
+# 5000-line tail, which kept only the end of it.
+gather_pod_log_tail_lines: 100000
+# Namespaces that get the long tail above; every other diagnostic namespace
+# keeps the short one, so the artifact and the 10 minute step stay bounded.
+gather_pod_log_tail_namespaces:
+  - "{{ osac_namespace }}"
+  - osac-operators
+  - osac-kafka
+  - ansible-aap
+gather_pod_log_tail_lines_other: 5000
+# Log fetches running at the same time.
+gather_pod_log_parallel: 8

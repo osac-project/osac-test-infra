@@ -1,6 +1,6 @@
 ---
-name: E2E VMaaS Networking Netris Full Install
-run-name: "E2E VMaaS Networking Netris Full Install${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
+name: E2E VMaaS Netris Full Install
+run-name: "${{ inputs.deploy-suite == 'full' && 'E2E Netris Full Suite' || 'E2E VMaaS Netris Full Install' }}${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
 
 permissions:
   contents: read
@@ -14,6 +14,14 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
+      deploy-suite:
+        description: "Deployment scenario to run"
+        required: true
+        type: choice
+        options:
+          - "vmaas"
+          - "full"
+        default: "vmaas"
       pr-number:
         description: "PR number being tested"
         required: false
@@ -80,8 +88,7 @@ jobs:
       tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make podman; /usr/bin/python3 -m pip install --ignore-installed ansible; command -v ansible-playbook; command -v make; command -v podman' }}
       osac-repo: ${{ inputs.osac-repo || '' }}
       osac-branch: ${{ inputs.osac-branch || '' }}
-      suite: vmaas_networking
-      osac-profile: cudn-evpn-netris-test
+      deploy-suite: ${{ inputs.deploy-suite == 'full' && 'full' || 'vmaas' }}
       test-infra-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}
       test-infra-ref: ${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref }}
       test-infra-sha: ${{ inputs.pr-sha || github.event.pull_request.head.sha || '' }}

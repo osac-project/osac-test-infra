@@ -32,6 +32,15 @@ from prometheus_client import (
     Histogram,
 )
 
+# ci_observe_run_evidence.py is a sibling module: the run-evidence half of
+# /api/ci-observe/run (CIObserveRunEvidence, wired in below). This
+# script's file name has a hyphen, so it is run directly or loaded from
+# its path by the tests (monitoring/tests/conftest.py) -- neither puts
+# this directory on sys.path the way a package import would, so the
+# directory is added here before importing the sibling.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ci_observe_run_evidence import CIObserveRunEvidence
+
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(message)s",
@@ -589,6 +598,13 @@ class WorkflowExporter:
         self._pr_map = {}
         self._pr_map_ts = 0
         self._pr_backfill_done = False
+        # Run-evidence lookup for /api/ci-observe/run (see
+        # get_ci_observe_run_json and ci_observe_run_evidence.py): parsed
+        # native JUnit results and run metadata fetched on demand from
+        # GitHub, keyed by (kind, run id[, run attempt]), bounded and
+        # cached. It holds this exporter as the shared DB, GitHub API and
+        # headers -- no second poller, no new artifact.
+        self._run_evidence = CIObserveRunEvidence(self)
         self._init_db()
 
     # -- SQLite persistence ---------------------------------------------------
@@ -3542,6 +3558,53 @@ class WorkflowExporter:
         ]
         return result
 
+    # -- ci-observe run evidence --------------------------------------------
+    #
+    # GET /api/ci-observe/run?capture_id=<id> backs the "CI Observe — Run
+    # evidence" dashboard. The implementation lives in the sibling
+    # ci_observe_run_evidence module (CIObserveRunEvidence, held as
+    # self._run_evidence): a capture id embeds a GitHub run id and attempt,
+    # and the evidence ties the capture to the GitHub-side data this
+    # exporter already stores (job history in SQLite) and to the native
+    # JUnit results inside the run's osac-logs-[<suite>-]full-install-<run
+    # id> artifact, downloaded from GitHub on demand, bounded and cached.
+    # Same exporter, same token, same data -- no second poller, no new
+    # artifact.
+
+    # The four run-evidence bounds the tests read on WorkflowExporter
+    # (monitoring/tests/test_exporter_ci_observe_run.py), re-exported from
+    # their canonical home on CIObserveRunEvidence. The download bound is
+    # additionally monkeypatched there by the tests, so the evidence code
+    # reads it through the exporter at call time -- see
+    # CIObserveRunEvidence._download_artifact.
+    NATIVE_MAX_DOWNLOAD_BYTES = CIObserveRunEvidence.NATIVE_MAX_DOWNLOAD_BYTES
+    NATIVE_MAX_MESSAGE_CHARS = CIObserveRunEvidence.NATIVE_MAX_MESSAGE_CHARS
+    NATIVE_MAX_FAILED_TESTS = CIObserveRunEvidence.NATIVE_MAX_FAILED_TESTS
+    NATIVE_FAILURE_CACHE_TTL_SECONDS = CIObserveRunEvidence.NATIVE_FAILURE_CACHE_TTL_SECONDS
+
+    def _github_token(self):
+        """The GitHub token as of right now. TOKEN is a module-level global
+        the tests patch after constructing the exporter, so the run-evidence
+        module reads it through this method instead of keeping a copy (a
+        value captured at construction, like self.headers, would go stale)."""
+        return TOKEN
+
+    @staticmethod
+    def _parse_capture_id(capture_id):
+        """Split a capture id into (parsed, run_id, run_attempt) -- thin
+        wrapper over CIObserveRunEvidence._parse_capture_id, kept here
+        because the tests call it on WorkflowExporter."""
+        return CIObserveRunEvidence._parse_capture_id(capture_id)
+
+    def get_ci_observe_run_json(self, params):
+        """The /api/ci-observe/run document: everything known about one
+        ci-observe capture's GitHub run -- the run summary, its stored
+        jobs and steps, and the native JUnit evidence from the run's
+        osac-logs-[<suite>-]full-install-<run id> artifact. Thin wrapper
+        over CIObserveRunEvidence.get_ci_observe_run_json, which also
+        documents the query params and the response shape."""
+        return self._run_evidence.get_ci_observe_run_json(params)
+
 
 # ---------------------------------------------------------------------------
 # Custom HTTP handler: /metrics + /api/jobs
@@ -3716,6 +3779,21 @@ class ExporterHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/categories":
             categories = list(WorkflowExporter.WORKFLOW_CATEGORIES.keys())
             payload = json.dumps(categories, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
+        elif parsed.path == "/api/ci-observe/run":
+            params = parse_qs(parsed.query)
+            # Always 200 with a document that says what is missing: a
+            # malformed capture id or an unknown run is a data gap the
+            # dashboard must show, not an error it would hide. The native
+            # lookup inside is bounded and cached; it can add a few seconds
+            # on the first request for a run, never on repeat loads.
+            data = self.exporter.get_ci_observe_run_json(params)
+            payload = json.dumps(data, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")

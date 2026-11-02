@@ -16,8 +16,9 @@
 #   BMH_COUNT      — number of virtual BMHs to create (default: 2)
 #   SUSHY_PORT     — sushy-tools listen port (default: 8000)
 #   SUSHY_CACHE_PORT — nginx ISO cache listen port (default: 8080)
+#   VM_DISK_DIR     — parent directory for clone-specific BMH disks (default: /tmp)
 #
-# Teardown derives all paths from CLONE_NAME — no GITHUB_ENV exports needed.
+# If VM_DISK_DIR is overridden, pass the same value to teardown.
 set -euo pipefail
 
 : "${CLONE_NAME:?CLONE_NAME is required}"
@@ -29,14 +30,46 @@ SUSHY_PORT="${SUSHY_PORT:-8000}"
 SUSHY_CACHE_PORT="${SUSHY_CACHE_PORT:-8080}"
 SUSHY_CONFIG_DIR="${HOME}/sushy-${CLONE_NAME}"
 SUSHY_PID_FILE="${SUSHY_CONFIG_DIR}/sushy.pid"
+SUSHY_IDENTITY_FILE="${SUSHY_CONFIG_DIR}/sushy.identity"
 SUSHY_CACHE_CONTAINER="sushy-cache-${CLONE_NAME}"
 SUSHY_CACHE_VOLUME="sushy-cache-${CLONE_NAME}"
 SUSHY_CACHE_IMAGE="docker.io/library/nginx:1.29-alpine"
 SUSHY_CACHE_IMAGE+="@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"
 CT_NETWORK="test-infra-net-${CLONE_NAME}"
 VIRSH="virsh -c qemu:///system"
-VM_DISK_DIR="/tmp/virtual-bmh-disks-${CLONE_NAME}"
+VM_DISK_ROOT="${VM_DISK_DIR:-/tmp}"
+if [[ "${VM_DISK_ROOT}" != /* ]]; then
+  echo "ERROR: VM_DISK_DIR must be an absolute path." >&2
+  exit 1
+fi
+VM_DISK_DIR="${VM_DISK_ROOT%/}/virtual-bmh-disks-${CLONE_NAME}"
 POOL_NAME="bmh-${CLONE_NAME}"
+
+sushy_process_matches() {
+  local pid="$1" identity="$2"
+  [[ -n "${pid}" && -n "${identity}" \
+    && "$(ps -p "${pid}" -o lstart= 2>/dev/null)" == "${identity}" ]]
+}
+
+vm_storage_matches() {
+  local vm_name="$1" expected_disk="$2" expected_nvram="$3"
+  ${VIRSH} dumpxml "${vm_name}" | python3 -c '
+import sys
+import xml.etree.ElementTree as ET
+
+expected_disk, expected_nvram = sys.argv[1:]
+root = ET.fromstring(sys.stdin.read())
+disk = ""
+for device in root.findall("./devices/disk"):
+    target = device.find("target")
+    source = device.find("source")
+    if target is not None and target.get("dev") == "vda" and source is not None:
+        disk = source.get("file", "")
+        break
+nvram = root.findtext("./os/nvram", "")
+raise SystemExit(0 if disk == expected_disk and nvram == expected_nvram else 1)
+' "${expected_disk}" "${expected_nvram}"
+}
 
 # --- Step 1: Activate Ironic via Provisioning CR ---
 echo "==> Activating Ironic (Provisioning CR)..."
@@ -79,11 +112,23 @@ print(root.find('.//ip').get('address'))
 echo "Gateway IP (host): ${GW_IP}"
 
 # --- Step 3: Create libvirt storage pool for sushy-tools ---
-echo "==> Creating libvirt storage pool '${POOL_NAME}'..."
+echo "==> Preparing libvirt storage pool '${POOL_NAME}'..."
 mkdir -p "${VM_DISK_DIR}"
 chmod 777 "${VM_DISK_DIR}"
-${VIRSH} pool-define-as "${POOL_NAME}" dir --target "${VM_DISK_DIR}"
-${VIRSH} pool-start "${POOL_NAME}"
+# Reuse a pool from a partial run only when its target matches.
+if ${VIRSH} pool-info "${POOL_NAME}" &>/dev/null; then
+  EXISTING_POOL_TARGET=$(${VIRSH} pool-dumpxml "${POOL_NAME}" \
+    | sed -n 's:.*<path>\(.*\)</path>.*:\1:p')
+  if [[ "${EXISTING_POOL_TARGET%/}" != "${VM_DISK_DIR%/}" ]]; then
+    echo "ERROR: libvirt pool '${POOL_NAME}' already targets '${EXISTING_POOL_TARGET}', not '${VM_DISK_DIR}'." >&2
+    exit 1
+  fi
+else
+  ${VIRSH} pool-define-as "${POOL_NAME}" dir --target "${VM_DISK_DIR}"
+fi
+if ! ${VIRSH} pool-info "${POOL_NAME}" | grep -q '^State:[[:space:]]*running'; then
+  ${VIRSH} pool-start "${POOL_NAME}"
+fi
 
 # --- Step 4: Install and start the virtual-media services ---
 echo "==> Installing sushy-tools..."
@@ -176,7 +221,8 @@ NGINX_EOF
 podman rm --force "${SUSHY_CACHE_CONTAINER}" >/dev/null 2>&1 || true
 podman volume rm --force "${SUSHY_CACHE_VOLUME}" >/dev/null 2>&1 || true
 podman volume create "${SUSHY_CACHE_VOLUME}" >/dev/null
-podman run --detach \
+# Avoid systemd's eBPF device filter, which is denied on some hosts.
+podman --cgroup-manager=cgroupfs run --detach \
   --name "${SUSHY_CACHE_CONTAINER}" \
   --network host \
   --read-only \
@@ -210,6 +256,31 @@ if [[ "${SUSHY_CACHE_READY}" != "true" ]]; then
 fi
 echo "nginx virtual-media cache is ready."
 
+if [[ -f "${SUSHY_PID_FILE}" ]]; then
+  SUSHY_PID=$(<"${SUSHY_PID_FILE}")
+  if [[ ! -f "${SUSHY_IDENTITY_FILE}" ]]; then
+    if [[ -n "$(ps -p "${SUSHY_PID}" -o pid= 2>/dev/null)" ]]; then
+      echo "ERROR: sushy-emulator PID file exists without an identity record." >&2
+      exit 1
+    fi
+    rm -f "${SUSHY_PID_FILE}"
+  else
+    SUSHY_IDENTITY=$(<"${SUSHY_IDENTITY_FILE}")
+    if sushy_process_matches "${SUSHY_PID}" "${SUSHY_IDENTITY}"; then
+      echo "Stopping existing sushy-emulator (PID ${SUSHY_PID})..."
+      kill "${SUSHY_PID}" || true
+      for _ in $(seq 1 10); do
+        sushy_process_matches "${SUSHY_PID}" "${SUSHY_IDENTITY}" || break
+        sleep 1
+      done
+      if sushy_process_matches "${SUSHY_PID}" "${SUSHY_IDENTITY}"; then
+        kill -9 "${SUSHY_PID}" 2>/dev/null || true
+      fi
+    fi
+    rm -f "${SUSHY_PID_FILE}" "${SUSHY_IDENTITY_FILE}"
+  fi
+fi
+
 echo "Starting sushy-emulator on ${GW_IP}:${SUSHY_PORT}..."
 SUSHY_MAX_ATTEMPTS=3
 for sushy_attempt in $(seq 1 "${SUSHY_MAX_ATTEMPTS}"); do
@@ -220,12 +291,15 @@ for sushy_attempt in $(seq 1 "${SUSHY_MAX_ATTEMPTS}"); do
     NO_PROXY="127.0.0.1,localhost" \
     sushy-emulator --config "${SUSHY_CONFIG_DIR}/sushy-emulator.conf" \
     > "${SUSHY_CONFIG_DIR}/sushy.log" 2>&1 &
-  echo $! > "${SUSHY_PID_FILE}"
+  SUSHY_PID=$!
+  echo "${SUSHY_PID}" > "${SUSHY_PID_FILE}"
+  SUSHY_IDENTITY=$(ps -p "${SUSHY_PID}" -o lstart= 2>/dev/null || true)
+  printf '%s\n' "${SUSHY_IDENTITY}" > "${SUSHY_IDENTITY_FILE}"
 
   echo "  Waiting for sushy-emulator HTTP endpoint (attempt ${sushy_attempt}/${SUSHY_MAX_ATTEMPTS})..."
   SUSHY_READY=false
   for i in $(seq 1 15); do
-    if ! kill -0 "$(cat "${SUSHY_PID_FILE}")" 2>/dev/null; then
+    if ! sushy_process_matches "${SUSHY_PID}" "${SUSHY_IDENTITY}"; then
       echo "  Process died. Log:"
       cat "${SUSHY_CONFIG_DIR}/sushy.log"
       break
@@ -241,14 +315,17 @@ for sushy_attempt in $(seq 1 "${SUSHY_MAX_ATTEMPTS}"); do
     break
   fi
 
-  SUSHY_PID=$(cat "${SUSHY_PID_FILE}")
   echo "  sushy-emulator not responding, killing PID ${SUSHY_PID}..."
-  kill "${SUSHY_PID}" || true
+  if sushy_process_matches "${SUSHY_PID}" "${SUSHY_IDENTITY}"; then
+    kill "${SUSHY_PID}" || true
+  fi
   for _ in $(seq 1 10); do
-    kill -0 "${SUSHY_PID}" 2>/dev/null || break
+    sushy_process_matches "${SUSHY_PID}" "${SUSHY_IDENTITY}" || break
     sleep 1
   done
-  kill -9 "${SUSHY_PID}" || true
+  if sushy_process_matches "${SUSHY_PID}" "${SUSHY_IDENTITY}"; then
+    kill -9 "${SUSHY_PID}" 2>/dev/null || true
+  fi
 
   if [[ "${sushy_attempt}" -eq "${SUSHY_MAX_ATTEMPTS}" ]]; then
     echo "ERROR: sushy-emulator failed after ${SUSHY_MAX_ATTEMPTS} attempts. Log:"
@@ -271,14 +348,36 @@ for i in $(seq 1 "${BMH_COUNT}"); do
   DISK_PATH="${VM_DISK_DIR}/${VM_NAME}.qcow2"
   VARS_PATH="${VM_DISK_DIR}/${VM_NAME}-VARS.fd"
 
-  echo "  Creating VM: ${VM_NAME} (MAC: ${MAC})..."
-  # Assisted needs at least 100 GB; 150 GB was verified locally for worker installs.
-  qemu-img create -f qcow2 "${DISK_PATH}" 150G
-  cp "${OVMF_VARS}" "${VARS_PATH}"
+  echo "  Preparing VM: ${VM_NAME} (MAC: ${MAC})..."
+  if ${VIRSH} dominfo "${VM_NAME}" &>/dev/null; then
+    if ! vm_storage_matches "${VM_NAME}" "${DISK_PATH}" "${VARS_PATH}"; then
+      echo "ERROR: VM '${VM_NAME}' references unexpected disk/NVRAM files." >&2
+      exit 1
+    fi
+    if [[ ! -e "${DISK_PATH}" || ! -e "${VARS_PATH}" ]]; then
+      echo "ERROR: VM '${VM_NAME}' exists without its disk/NVRAM files." >&2
+      exit 1
+    fi
+    VM_STATE=$(${VIRSH} domstate "${VM_NAME}")
+    if [[ "${VM_STATE}" == "running" ]]; then
+      echo "  Reusing running VM: ${VM_NAME}"
+    elif [[ "${VM_STATE}" == "shut off" ]]; then
+      ${VIRSH} start "${VM_NAME}"
+    else
+      echo "ERROR: VM '${VM_NAME}' is in unsupported state '${VM_STATE}'." >&2
+      exit 1
+    fi
+  elif [[ -e "${DISK_PATH}" || -e "${VARS_PATH}" ]]; then
+    echo "ERROR: Disk/NVRAM files for '${VM_NAME}' exist without their VM." >&2
+    exit 1
+  else
+    # Assisted needs at least 100 GB; 150 GB was verified locally for worker installs.
+    qemu-img create -f qcow2 "${DISK_PATH}" 150G
+    cp "${OVMF_VARS}" "${VARS_PATH}"
 
-  # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails with
-  # "Unable to find 'efi' firmware". The pflash paths already select UEFI.
-  ${VIRSH} define /dev/stdin <<VMXML
+    # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails with
+    # "Unable to find 'efi' firmware". The pflash paths already select UEFI.
+    ${VIRSH} define /dev/stdin <<VMXML
 <domain type='kvm'>
   <name>${VM_NAME}</name>
   <memory unit='MiB'>8192</memory>
@@ -312,7 +411,8 @@ for i in $(seq 1 "${BMH_COUNT}"); do
 </domain>
 VMXML
 
-  ${VIRSH} start "${VM_NAME}"
+    ${VIRSH} start "${VM_NAME}"
+  fi
   VM_NAMES="${VM_NAMES:+${VM_NAMES} }${VM_NAME}"
 done
 

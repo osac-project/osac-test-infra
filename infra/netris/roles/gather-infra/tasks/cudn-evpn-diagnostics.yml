@@ -13,7 +13,7 @@
   ansible.builtin.command:
     argv: "{{ item.argv }}"
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _gather_cudn_evpn_resources
   changed_when: false
   failed_when: false
@@ -192,7 +192,7 @@
         oc --request-timeout=15s logs -n openshift-frr-k8s "$pod" --all-containers=true --tail=500 2>&1 || true
       done
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _gather_cudn_evpn_frr_logs
   changed_when: false
   failed_when: false
@@ -270,7 +270,7 @@
         echo
       done
   environment:
-    KUBECONFIG: "{{ ocp_evpn_kubeconfig_path | default('/root/.kube/config') }}"
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
   register: _gather_cudn_evpn_frr_bgp
   changed_when: false
   failed_when: false

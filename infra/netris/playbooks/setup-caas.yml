@@ -1,7 +1,8 @@
 ---
-- name: Set up CaaS — discover hosts, label agents, configure resource class
+- name: Set up CaaS cluster prerequisites
   hosts: all
   gather_facts: false
   roles:
-    - discover-caas
+    - prepare-caas-network
+    - prepare-caas-bmaas
     - setup-caas

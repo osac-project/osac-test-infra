@@ -1,0 +1,7 @@
+---
+# Read-only: oc get and oc logs only.
+- name: Gather VMaaS diagnostic artifacts
+  hosts: all
+  gather_facts: false
+  roles:
+    - gather-vmaas

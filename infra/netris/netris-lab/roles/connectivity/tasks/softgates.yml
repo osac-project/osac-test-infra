@@ -7,7 +7,8 @@
         {%- set _ = result.append({
           'name': 'ns-softgate-' ~ i,
           'mgmt_ip': '10.3.3.' ~ (i + 1),
-          'main_ip': '10.2.3.' ~ (i + 1)
+          'main_ip': '10.2.3.' ~ (i + 1),
+          'role': (ns_fabric.softgate_roles | from_json)[i]
         }) -%}
       {%- endfor -%}
       {{ result }}
@@ -107,6 +108,57 @@
   until: _sg_wait.rc == 0
   retries: 20
   delay: 15
+  changed_when: false
+
+- name: Wait for XDP on general SoftGates
+  ansible.builtin.shell: &xdp_check |
+    set -euo pipefail
+    macs=$(virsh domiflist {{ item.name }} | awk '$2 == "udp" {print tolower($5)}') || exit 2
+    [[ -n "$macs" ]] || { echo "No UDP data interfaces found for {{ item.name }}" >&2; exit 2; }
+    links=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+      root@{{ item.mgmt_ip }} 'ip -j link show')
+    jq -e --arg macs "$macs" '
+      . as $links |
+      ($macs | split("\n") | map(select(length > 0))) as $expected |
+      all($expected[]; . as $mac |
+        any($links[]; ((.address // "") | ascii_downcase) == $mac and .xdp.prog.name == "xdp_router"))
+    ' <<< "$links"
+  args:
+    executable: /bin/bash
+  loop: "{{ softgates | selectattr('role', 'equalto', 'general') | list }}"
+  register: _xdp_wait
+  until: _xdp_wait.rc in [0, 2]
+  retries: 18
+  delay: 10
+  failed_when: false
+  changed_when: false
+
+- name: Restart XDP on general SoftGates that did not become ready
+  ansible.builtin.command: >-
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5
+    root@{{ item.item.mgmt_ip }} systemctl restart netris-xdp
+  loop: >-
+    {{ _xdp_wait.results
+       | rejectattr('rc', 'equalto', 0)
+       | rejectattr('rc', 'equalto', 2)
+       | list }}
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Confirm XDP after restart
+  ansible.builtin.shell: *xdp_check
+  args:
+    executable: /bin/bash
+  loop: >-
+    {{ _xdp_wait.results
+       | rejectattr('rc', 'equalto', 0)
+       | map(attribute='item')
+       | list }}
+  register: _xdp_recheck
+  until: _xdp_recheck.rc in [0, 2]
+  retries: 18
+  delay: 10
+  failed_when: _xdp_recheck.rc != 0
   changed_when: false
 
 - name: Wait for E-BGP sessions to establish

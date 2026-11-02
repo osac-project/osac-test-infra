@@ -1,127 +1,175 @@
 # ─── Variables ──────────────────────────────────────────────────────
 
-OSAC_DEPLOY_MODE ?= fresh
+ifneq ($(origin SUITE),undefined)
+$(error SUITE was replaced: use DEPLOY_SUITE and TEST_SUITE, see targets.md)
+endif
+ifneq ($(origin OSAC_DEPLOY_MODE),undefined)
+$(error OSAC_DEPLOY_MODE was removed: every OSAC install is fresh)
+endif
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e suite=$(SUITE) -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
-# Suite selects CaaS vs MaaS for redeploy-server.sh flow.
-# SUITE=caas (default) — setup-caas / deploy-caas.
-# OCP snapshot restores grow both h00 disks to their configured sizes for every suite.
-# SUITE=maas — setup-maas / deploy-maas.
-SUITE ?= caas
+# DEPLOY_SUITE selects the profile and setup. The root TEST_SUITE selects the tests.
+# DEPLOY_SUITE=caas (default) — setup-caas / deploy-caas.
+# DEPLOY_SUITE=maas — setup-maas / deploy-maas.
+DEPLOY_SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci
 KUBECONFIG ?= /root/.kube/config
 OSAC_VM_KUBECONFIG ?= $(KUBECONFIG)
-OSAC_PROFILE ?= $(if $(filter vmaas vmaas_networking,$(SUITE)),cudn-evpn-netris-test,$(if $(filter full stretched_networking,$(SUITE)),full-ci,caas-ci))
+export KUBECONFIG
+ifeq ($(origin OSAC_PROFILE),command line)
+$(error OSAC_PROFILE is derived from DEPLOY_SUITE; choose the deployment scenario with DEPLOY_SUITE)
+endif
+OSAC_PROFILE = $(if $(filter vmaas,$(DEPLOY_SUITE)),vmaas-ci,$(if $(filter bmaas,$(DEPLOY_SUITE)),bmaas-ci,$(if $(filter full,$(DEPLOY_SUITE)),full-ci,caas-ci)))
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
-_KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
-_OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
+export OSAC_PULL_SECRET_PATH
+KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
+OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
 
-# VMaaS selectors and full-ci configure the OCP host as an EVPN VTEP; legacy suites keep their established root path.
-EVPN_SUITES = vmaas vmaas_networking stretched_networking full
-OCP_KUBECONFIG = $(if $(filter $(EVPN_SUITES),$(SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
-VMAAS_UNDERLAY_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-e ocp_underlay_enabled=true,)
-OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
+# Public Make inputs are translated here into Ansible variables. User
+# EXTRA_VARS comes first; backend-owned deployment context and path mappings
+# follow so each value has one canonical public input.
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') \
+	-e deploy_suite=$(DEPLOY_SUITE) \
+	-e bare_metal_services=$(BARE_METAL_SERVICES) \
+	-e osac_profile=$(OSAC_PROFILE) \
+	-e osac_namespace=$(OSAC_NAMESPACE) \
+	-e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml \
+	-e 'kubeconfig_path=$(KUBECONFIG_ABS)' \
+	-e 'pull_secret_path=$(OSAC_PULL_SECRET_PATH)'
+
+# vmaas and full configure the OCP host as an EVPN VTEP.
+EVPN_DEPLOY_SUITES = vmaas full
+VMAAS_UNDERLAY_EXTRA = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),-e ocp_underlay_enabled=true,)
+OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) $(VMAAS_UNDERLAY_EXTRA)
 EVPN_VALUES_FILE = $(abspath .evpn-values.yaml)
-VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-f $(EVPN_VALUES_FILE))
+VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),-f $(EVPN_VALUES_FILE))
+# Netris values live in the service profile directories. prep-osac always
+# generates the runtime overlay; only these three profiles have a committed
+# netris.yaml.
+NETRIS_PROFILE_VALUES = $(if $(filter vmaas-ci bmaas-ci full-ci,$(OSAC_PROFILE)),-f values/$(OSAC_PROFILE)/netris.yaml)
+NETRIS_INSTANCE_VALUES_EXTRA = $(strip $(NETRIS_PROFILE_VALUES) -f values/$(OSAC_PROFILE)/netris-runtime.yaml)
+OSAC_TEST_TENANT_NAME ?= tenant1
+CAAS_BAREMETAL_INSTANCE_TYPE ?= ci-worker
+CAAS_DISK_IMAGE_NAME ?= rhcos-4-22-amd64
+CAAS_DISK_IMAGE_SOURCE_REF ?= oci://quay.io/osac-project/rhcos:4.22.0
+CAAS_WORKER_COUNT ?= 1
+# CaaS and MaaS always provision workers through BMaaS.
+CAAS_WORKER_VCPU ?= 4
+CAAS_WORKER_MEMORY_MB ?= 16384
+# BMaaS, CaaS, MaaS and full need the BMC service infrastructure.
+BARE_METAL_SERVICES ?= $(if $(filter caas maas bmaas full,$(DEPLOY_SUITE)),true,false)
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
-#   make deploy       — full fresh install (default)
-#   make deploy-fast  — snapshot restore + OSAC refresh (~25 min)
-#
-# Both run: deploy-infra → deploy-ocp → deploy-osac
-# The difference is OSAC_DEPLOY_MODE, which controls:
-#   - deploy-ocp: which snapshot flavor to use
-#   - deploy-osac: fresh Helm install vs snapshot refresh
+#   make deploy       — full fresh install: deploy-infra → deploy-ocp → deploy-osac
 
 deploy: deploy-infra deploy-ocp deploy-osac
 
-deploy-fast: deploy-infra deploy-ocp deploy-osac
-deploy-fast: OSAC_DEPLOY_MODE = snapshot
+# Fresh VMaaS/EVPN installs must use images built from the branch under test
+# (operator, fulfillment-service, AAP bootstrap); see check_images.yml.
+# CI builds the images after deploy-ocp, so prep-osac checks them there.
+_check-osac-images:
+	@if [ -n "$$GITHUB_ACTIONS" ]; then echo "Image overrides are checked by prep-osac in CI."; else ansible-playbook playbooks/check-osac-images.yml $(ANSIBLE_EXTRA); fi
 
 # ─── Contract targets ──────────────────────────────────────────────
 #
 # Called by the root Makefile (make -C infra/netris <target>).
 # See infra/contract.md for the interface spec.
 
-deploy-setup:
+deploy-setup: _check-osac-images
 	ansible-playbook playbooks/deploy-setup.yml $(ANSIBLE_EXTRA)
 
 # Backward compatibility alias
 setup-infra: deploy-setup
 
-deploy-infra:
+deploy-infra: _check-osac-images
 	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA) $(VMAAS_UNDERLAY_EXTRA)
 
 deploy-ocp:
 	@rm -f .evpn-values.yaml
-	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(OCP_ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-ocp.yml $(OCP_ANSIBLE_EXTRA)
 
 deploy-osac:
-	@if [ "$(OSAC_DEPLOY_MODE)" = "snapshot" ]; then \
-		$(MAKE) refresh-osac OSAC_DEPLOY_MODE=snapshot; \
-	else \
-		$(MAKE) install-osac; \
-	fi
+	@$(MAKE) install-osac
 	@printf '%s\n' \
-		'KUBECONFIG=$(OCP_KUBECONFIG)' \
+		'KUBECONFIG=$(KUBECONFIG_ABS)' \
 		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
-		'OSAC_VM_KUBECONFIG=$(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),$(_OSAC_VM_KUBECONFIG_ABS),$(OCP_KUBECONFIG))' \
+		'OSAC_VM_KUBECONFIG=$(if $(filter $(EVPN_DEPLOY_SUITES),$(DEPLOY_SUITE)),$(OSAC_VM_KUBECONFIG_ABS),$(KUBECONFIG_ABS))' \
 		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
+		'OSAC_E2E_FABRIC_SNAPSHOT_CMD=$(abspath scripts/fabric-snapshot.sh)' \
 		> $(ENV_INFRA)
 
 # VMaaS setup/gather is read-only: tenant resources remain owned by the suite fixtures.
-setup-vmaas: SUITE = vmaas
+setup-vmaas: DEPLOY_SUITE = vmaas
 setup-vmaas:
 	ansible-playbook playbooks/setup-vmaas.yml $(OCP_ANSIBLE_EXTRA)
 
-gather-vmaas: SUITE = vmaas
+gather-vmaas: DEPLOY_SUITE = vmaas
 gather-vmaas:
-	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
+	ansible-playbook playbooks/gather-vmaas.yml $(ANSIBLE_EXTRA) -e 'osac_vm_kubeconfig=$(OSAC_VM_KUBECONFIG_ABS)'
 
 destroy-vmaas:
-	@echo "VMaaS setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
+	@echo "VMaaS setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp. Removing helper resources left by aborted test runs."
+	-KUBECONFIG=$(KUBECONFIG_ABS) kubectl delete pod,secret,networkpolicy -A -l osac-e2e/ssh-helper=true --ignore-not-found
 
-setup-vmaas_networking: SUITE = vmaas_networking
-setup-vmaas_networking:
-	ansible-playbook playbooks/setup-vmaas.yml $(OCP_ANSIBLE_EXTRA)
+# Keep suite teardown backend-owned: full destroys the whole lab and is not a
+# suite-level cleanup operation. The root dispatcher uses this contract target.
+ifeq ($(DEPLOY_SUITE),full)
+destroy-suite:
+	@echo "ERROR: destroy-suite DEPLOY_SUITE=full is not supported; use 'make -C infra/netris destroy-full' only when you intend to destroy the entire lab." >&2
+	@exit 2
+else
+destroy-suite:
+	$(MAKE) destroy-$(DEPLOY_SUITE) DEPLOY_SUITE=$(DEPLOY_SUITE) EXTRA_VARS='$(EXTRA_VARS)'
+endif
 
-# Stretched networking provisions the full profile and needs both BMaaS and VMaaS service prerequisites.
-setup-stretched_networking: SUITE = stretched_networking
-setup-stretched_networking:
-	$(MAKE) setup-full
+test-caas-networking test-caas_networking:
+	$(MAKE) -C ../.. run-tests INFRA=netris DEPLOY_SUITE=caas TEST_SUITE=caas_networking
 
-gather-vmaas_networking: SUITE = vmaas_networking
-gather-vmaas_networking:
-	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
+test-maas-networking test-maas_networking:
+	$(MAKE) -C ../.. run-tests INFRA=netris DEPLOY_SUITE=maas TEST_SUITE=maas_networking
 
-destroy-vmaas_networking:
-	@echo "VMaaS networking setup creates no tenant resources; cluster prerequisites are removed with destroy-ocp."
+# E2E setup stops before tenant creation; pytest fixtures provide test tenants.
+prepare-suite:
+	@case "$(DEPLOY_SUITE)" in caas|maas|bmaas|vmaas|full) ;; *) echo "Unsupported deployment suite: $(DEPLOY_SUITE)" >&2; exit 2;; esac
+	$(MAKE) setup-$(DEPLOY_SUITE) DEPLOY_SUITE=$(DEPLOY_SUITE)
 
-destroy-stretched_networking:
-	@echo "Stretched networking tests own and clean up their tenant resources; full-profile prerequisites are removed with destroy-ocp."
-
-gather-stretched_networking: SUITE = stretched_networking
-gather-stretched_networking:
-	$(MAKE) gather-full
+# Persistent deployment playbooks prepare tenants and Netris networking before workloads.
+# The target name is unrelated to the DEPLOY_SUITE variable.
+SUITE_STAGE ?= all
+deploy-suite:
+	@case "$(DEPLOY_SUITE)" in caas|maas|bmaas) ;; *) echo "Unsupported deployment suite: $(DEPLOY_SUITE)" >&2; exit 2;; esac
+	@case "$(SUITE_STAGE)" in \
+		all) $(MAKE) prepare-suite DEPLOY_SUITE=$(DEPLOY_SUITE) && $(MAKE) deploy-$(DEPLOY_SUITE) DEPLOY_SUITE=$(DEPLOY_SUITE) ;; \
+		setup) $(MAKE) setup-$(DEPLOY_SUITE) DEPLOY_SUITE=$(DEPLOY_SUITE) ;; \
+		workload) $(MAKE) deploy-$(DEPLOY_SUITE) DEPLOY_SUITE=$(DEPLOY_SUITE) ;; \
+		*) echo "Unsupported deploy-suite stage: $(SUITE_STAGE)" >&2; exit 2 ;; \
+	esac
 
 setup-caas:
-	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/setup-caas.yml \
+	  -e 'caas_baremetal_instance_type=$(CAAS_BAREMETAL_INSTANCE_TYPE)' \
+	  -e 'caas_disk_image_name=$(CAAS_DISK_IMAGE_NAME)' \
+	  -e 'caas_disk_image_source_ref=$(CAAS_DISK_IMAGE_SOURCE_REF)' \
+	  -e 'caas_worker_count=$(CAAS_WORKER_COUNT)' \
+	  -e 'caas_worker_vcpu=$(CAAS_WORKER_VCPU)' \
+	  -e 'caas_worker_memory_mb=$(CAAS_WORKER_MEMORY_MB)' \
+	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
+	  $(ANSIBLE_EXTRA)
 
 deploy-caas:
-	ansible-playbook playbooks/deploy-caas.yml $(ANSIBLE_EXTRA)
-
-# Post-ClusterOrder agent setup for cluster-namespace mode (Option C).
-# Expects caas_cluster_order_namespace in EXTRA_VARS.
-setup-caas-agents:
-	ansible-playbook playbooks/setup-caas-agents.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-caas.yml \
+	  -e 'caas_baremetal_instance_type=$(CAAS_BAREMETAL_INSTANCE_TYPE)' \
+	  -e 'caas_disk_image_name=$(CAAS_DISK_IMAGE_NAME)' \
+	  -e 'caas_worker_count=$(CAAS_WORKER_COUNT)' \
+	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
+	  $(ANSIBLE_EXTRA)
 
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make uninstall \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(KUBECONFIG_ABS) make uninstall \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE) 2>/dev/null || true
@@ -140,10 +188,14 @@ destroy-setup:
 	ansible-playbook playbooks/destroy-setup.yml $(ANSIBLE_EXTRA)
 
 destroy-caas:
-	ansible-playbook playbooks/destroy-caas.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/destroy-caas.yml \
+	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
+	  $(ANSIBLE_EXTRA)
 
 force-destroy-caas:
-	ansible-playbook playbooks/force-destroy-caas.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/force-destroy-caas.yml \
+	  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)' \
+	  $(ANSIBLE_EXTRA)
 
 gather-infra:
 	ansible-playbook playbooks/gather-infra.yml $(OCP_ANSIBLE_EXTRA)
@@ -160,11 +212,14 @@ setup-bmc:
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
-# Full profile shares CaaS and BMaaS setup and verifies the EVPN prerequisites.
+# Keep the upstream full-profile order: CaaS prerequisites, BMaaS defaults, then EVPN.
 setup-full:
-	$(MAKE) setup-caas
-	$(MAKE) setup-bmaas
-	$(MAKE) setup-vmaas SUITE=vmaas OSAC_PROFILE=$(OSAC_PROFILE)
+	$(MAKE) setup-caas DEPLOY_SUITE=caas
+	$(MAKE) setup-bmaas DEPLOY_SUITE=bmaas
+	$(MAKE) setup-vmaas DEPLOY_SUITE=vmaas
+
+deploy-bmaas:
+	ansible-playbook playbooks/deploy-bmaas.yml $(ANSIBLE_EXTRA)
 
 destroy-bmaas:
 	ansible-playbook playbooks/destroy-bmaas.yml $(ANSIBLE_EXTRA)
@@ -176,53 +231,47 @@ gather-bmaas:
 gather-full:
 	$(MAKE) gather-caas
 	$(MAKE) gather-bmaas
+	$(MAKE) gather-vmaas
 	$(MAKE) gather-infra
-
-# bmaas_networking shares infra with bmaas (same BMHs, same sushy-tools)
-setup-bmaas_networking: setup-bmaas
-destroy-bmaas_networking: destroy-bmaas
-gather-bmaas_networking: gather-bmaas
 
 # ---------------------------------------------------------------------------
 # MaaS — thin wrappers over CaaS playbooks with MaaS-specific variable overrides
-# Override any default with MAAS_CLUSTER_NAME=..., MAAS_HOST_TYPE_ID=..., etc.
+# Override defaults with MAAS_CLUSTER_NAME=... and MAAS_BAREMETAL_INSTANCE_TYPE=....
 # ---------------------------------------------------------------------------
 MAAS_CLUSTER_NAME     ?= maas-cluster
-MAAS_HOST_TYPE_ID     ?= g5
+# MaaS selects g5 workers; CaaS retains the ci-worker default.
+MAAS_BAREMETAL_INSTANCE_TYPE ?= g5
+MAAS_WORKER_COUNT ?= 2
 MAAS_CLUSTER_TEMPLATE ?= osac.templates.ocp_4_20_ai_maas
 MAAS_CATALOG_ITEM     ?= maas-ocp
-# Discovery VM sizing for setup-maas only (CaaS keeps inventory defaults: 4 vCPU / 16GiB).
-# Default MaaS: 10 vCPU / 20GiB for h02–h03; h01 stays at 4 vCPU / 16GiB (unused for MaaS workers).
-MAAS_DISCOVERY_VCPU      ?= 10
-MAAS_DISCOVERY_MEMORY_MB ?= 20480
-MAAS_DISCOVERY_VCPU_OVERRIDES ?= {"hgx-pod00-su0-h01":4}
-MAAS_DISCOVERY_MEMORY_MB_OVERRIDES ?= {"hgx-pod00-su0-h01":16384}
-# Only these inventory hostnames get resource_class=g5 (and approval). Empty = all agents.
-# Comma-separated. Keeps h01 out of the MaaS claim pool; setup-caas still labels all as ci-worker.
-MAAS_LABEL_HOSTNAMES ?= hgx-pod00-su0-h02,hgx-pod00-su0-h03
-# Template -p flags for osac create (deploy-maas only). Comma-separated key=value.
-MAAS_CLUSTER_PARAMS   ?= enable_maas=true,enable_keycloak=true,enable_observability=true,enable_dashboard=true
-MAAS_PARAMS_JSON = $(shell python3 -c 'import json; print(json.dumps([p.strip() for p in """$(MAAS_CLUSTER_PARAMS)""".split(",") if p.strip()]))')
-MAAS_LABEL_HOSTNAMES_JSON = $(shell python3 -c 'import json; print(json.dumps([h.strip() for h in """$(MAAS_LABEL_HOSTNAMES)""".split(",") if h.strip()]))')
+# MaaS currently uses the same RHCOS 4.22 DiskImage as CaaS; override independently if needed.
+MAAS_DISK_IMAGE_NAME ?= $(CAAS_DISK_IMAGE_NAME)
+MAAS_DISK_IMAGE_SOURCE_REF ?= $(CAAS_DISK_IMAGE_SOURCE_REF)
+# All three MaaS BMaaS worker VMs use the same size; MAAS_WORKER_COUNT controls the initial cluster size.
+MAAS_WORKER_VCPU      ?= 10
+MAAS_WORKER_MEMORY_MB ?= 20480
 
 MAAS_EXTRA = \
   -e 'caas_cluster_name=$(MAAS_CLUSTER_NAME)' \
-  -e 'caas_host_type_id=$(MAAS_HOST_TYPE_ID)' \
+  -e 'caas_worker_count=$(MAAS_WORKER_COUNT)' \
+  -e 'caas_disk_image_name=$(MAAS_DISK_IMAGE_NAME)' \
+  -e 'caas_baremetal_instance_type=$(MAAS_BAREMETAL_INSTANCE_TYPE)' \
   -e 'caas_cluster_template=$(MAAS_CLUSTER_TEMPLATE)' \
   -e 'caas_catalog_item=$(MAAS_CATALOG_ITEM)' \
   -e 'caas_catalog_item_title=MaaS OCP' \
   -e 'caas_catalog_item_description=OCP cluster for MaaS testing' \
-  -e 'caas_discovery_vcpu=$(MAAS_DISCOVERY_VCPU)' \
-  -e 'caas_discovery_memory_mb=$(MAAS_DISCOVERY_MEMORY_MB)' \
-  -e '{"caas_discovery_vcpu_overrides":$(MAAS_DISCOVERY_VCPU_OVERRIDES)}' \
-  -e '{"caas_discovery_memory_mb_overrides":$(MAAS_DISCOVERY_MEMORY_MB_OVERRIDES)}' \
-  -e '{"caas_resource_class_hostnames":$(MAAS_LABEL_HOSTNAMES_JSON)}'
+  -e 'caas_worker_vcpu=$(MAAS_WORKER_VCPU)' \
+  -e 'caas_worker_memory_mb=$(MAAS_WORKER_MEMORY_MB)' \
+  -e 'osac_test_tenant_name=$(OSAC_TEST_TENANT_NAME)'
 
 setup-maas:
-	ansible-playbook playbooks/setup-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/setup-caas.yml \
+	  $(MAAS_EXTRA) \
+	  -e 'caas_disk_image_source_ref=$(MAAS_DISK_IMAGE_SOURCE_REF)' \
+	  $(ANSIBLE_EXTRA)
 
 deploy-maas:
-	ansible-playbook playbooks/deploy-caas.yml $(MAAS_EXTRA) -e '{"caas_cluster_params":$(MAAS_PARAMS_JSON)}' $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
 
 destroy-maas:
 	ansible-playbook playbooks/destroy-caas.yml $(MAAS_EXTRA) $(ANSIBLE_EXTRA)
@@ -232,51 +281,34 @@ force-destroy-maas:
 
 # ─── Internal sub-targets (deploy-osac implementation) ─────────────
 
-# Fresh install: clone mono-repo, patch Helm values, run make install
-install-osac: prep-osac run-osac-setup post-osac
+# Fresh install: clone mono-repo, patch Helm values, run make install, then
+# reconcile the forwarded ingress (the installer hardcodes the portless
+# Keycloak hostname and UI issuer with its own --set flags).
+install-osac: prep-osac run-osac-setup ingress-forward
 
 prep-osac:
 	ansible-playbook playbooks/prep-osac.yml $(OCP_ANSIBLE_EXTRA)
 
+ingress-forward:
+	ansible-playbook playbooks/ingress-forward.yml $(OCP_ANSIBLE_EXTRA)
+
 run-osac-setup:
 	@if [ -n "$(VMAAS_EVPN_VALUES_EXTRA)" ] && [ ! -s "$(EVPN_VALUES_FILE)" ]; then \
-		echo "Missing $(EVPN_VALUES_FILE); run make deploy-ocp SUITE=$(SUITE) first." >&2; \
+		echo "Missing $(EVPN_VALUES_FILE); run make deploy-ocp DEPLOY_SUITE=$(DEPLOY_SUITE) first." >&2; \
 		exit 1; \
 	fi
 	@echo "=== Installing OSAC infrastructure via Helm (make install-infra) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-infra \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(KUBECONFIG_ABS) make install-infra \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
 		NS=$(OSAC_NAMESPACE) \
 		INFRA_VALUES_EXTRA="$(VMAAS_EVPN_VALUES_EXTRA)"
-	@echo "=== Creating external Netris credentials ==="
-	ansible-playbook playbooks/create-netris-credentials.yml $(OCP_ANSIBLE_EXTRA)
 	@echo "=== Installing OSAC application via Helm (make install-osac) ==="
-	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-osac \
+	cd /opt/osac/osac-installer && KUBECONFIG=$(KUBECONFIG_ABS) make install-osac \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
-		NS=$(OSAC_NAMESPACE)
-
-post-osac:
-	ansible-playbook playbooks/post-osac.yml $(OCP_ANSIBLE_EXTRA)
-
-# Snapshot refresh: clone mono-repo, patch values, run refresh-after-snapshot.py
-# post-refresh-osac → patch-osac-refresh (incl. AAP project pin sync + CaC)
-refresh-osac: prep-refresh-osac run-refresh-osac post-refresh-osac
-
-prep-refresh-osac:
-	ansible-playbook playbooks/prep-refresh-osac.yml $(OCP_ANSIBLE_EXTRA)
-
-run-refresh-osac:
-	@echo "=== Running OSAC refresh ==="
-	cd /opt/osac/osac-installer && \
-		KUBECONFIG=$(OCP_KUBECONFIG) \
-		VALUES_FILE=values/$(OSAC_PROFILE)/instance.yaml \
-		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
-		python3 -u scripts/refresh-after-snapshot.py
-
-post-refresh-osac:
-	ansible-playbook playbooks/post-refresh-osac.yml $(OCP_ANSIBLE_EXTRA)
+		NS=$(OSAC_NAMESPACE) \
+		INSTANCE_VALUES_EXTRA="$(NETRIS_INSTANCE_VALUES_EXTRA)"
 
 # ─── Utilities ─────────────────────────────────────────────────────
 
@@ -299,22 +331,20 @@ cleanup-dns:
 destroy-full:
 	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
 
-# OSAC_DEPLOY_MODE=fresh (default) or snapshot — same meaning as deploy / deploy-fast.
-# SUITE=caas (default) or maas — selects setup/deploy flow in redeploy-server.sh.
+# DEPLOY_SUITE=caas (default), maas, or bmaas — selects setup/deploy flow.
+redeploy-fresh redeploy-continue: SHELL := /bin/bash
 redeploy-fresh:
 	@echo "=== Destroying all infrastructure ==="
 	-$(MAKE) destroy-full
 	@sync
-	@echo "=== Starting deploy (SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)) ==="
-	SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+	@echo "=== Starting deploy (DEPLOY_SUITE=$(DEPLOY_SUITE)) ==="
+	@set -o pipefail; DEPLOY_SUITE=$(DEPLOY_SUITE) \
 		scripts/redeploy-server.sh --fresh \
-		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
 		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 redeploy-continue:
-	SUITE=$(SUITE) OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE) \
+	@set -o pipefail; DEPLOY_SUITE=$(DEPLOY_SUITE) \
 		scripts/redeploy-server.sh \
-		$(if $(filter snapshot,$(OSAC_DEPLOY_MODE)),--snapshot) \
 		"$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 deploy-jump:
@@ -334,18 +364,17 @@ health-check:
 
 # ─── .PHONY ────────────────────────────────────────────────────────
 
-.PHONY: deploy deploy-fast \
-        deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac \
-        setup-caas deploy-caas setup-caas-agents setup-vmaas gather-vmaas destroy-vmaas \
-		setup-vmaas_networking gather-vmaas_networking destroy-vmaas_networking \
-		setup-stretched_networking gather-stretched_networking destroy-stretched_networking \
-		destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full \
-		destroy-caas force-destroy-caas \
+.PHONY: deploy \
+        deploy-setup setup-infra deploy-infra deploy-ocp deploy-osac _check-osac-images \
+        setup-caas deploy-caas setup-vmaas gather-vmaas destroy-vmaas \
+        test-caas-networking test-caas_networking test-maas-networking test-maas_networking \
+        prepare-suite deploy-suite \
+        destroy-osac destroy-ocp destroy-infra destroy-setup destroy-full destroy-suite \
+        destroy-caas force-destroy-caas \
         setup-maas deploy-maas destroy-maas force-destroy-maas \
         gather-infra gather-mgmt-cluster gather-caas \
-        setup-bmc setup-bmaas destroy-bmaas gather-bmaas \
-        setup-bmaas_networking destroy-bmaas_networking gather-bmaas_networking \
-        install-osac prep-osac run-osac-setup post-osac \
-        refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \
+        setup-bmc setup-bmaas deploy-bmaas destroy-bmaas gather-bmaas \
+        setup-full gather-full \
+        install-osac prep-osac run-osac-setup ingress-forward \
         connectivity vendor-update lint cleanup-dns \
         redeploy-fresh redeploy-continue deploy-jump disk-setup access-doc post-install health-check
