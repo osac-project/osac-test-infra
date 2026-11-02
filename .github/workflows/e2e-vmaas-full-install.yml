@@ -50,7 +50,7 @@ on:
         type: string
         default: "{}"
       installer-ref:
-        description: "Branch/ref of osac-installer to clone for the deploy step"
+        description: "Installer Git ref; empty matches published chart releases, otherwise falls back to main"
         required: false
         type: string
         default: "main"
@@ -886,17 +886,21 @@ jobs:
           INSTALLER_NAMESPACE: ${{ inputs.namespace }}
           INSTALLER_REF: ${{ inputs.installer-ref }}
           INSTALLER_REPO: ${{ inputs.installer-repo }}
+          CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
+          CHART_OCI_TAG: ${{ inputs.chart-oci-tag }}
+          CHART_VERSION: ${{ steps.chart-version.outputs.version }}
         run: |
           set -o pipefail
           # Clone the OSAC monorepo for installer charts.  When components
           # were built from source earlier in this job, pin to the same
           # commit SHA — the branch may have moved since the component
           # clone, and a second git-clone at the branch name would race.
-          # Otherwise (e.g. nightly builds, which skip component builds),
-          # fall back to INSTALLER_REF, which may itself be a branch name
+          # Otherwise use INSTALLER_REF, which may itself be a branch name
           # or a commit SHA (e.g. github.sha from the caller). `git fetch
           # <ref>` resolves both uniformly; `git clone --branch` does not
           # accept commit SHAs, only ref names, so it can't be used here.
+          # An empty ref pairs published charts with their release's installer
+          # values; main may already require a newer chart schema.
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
           MATCHING_SHAS=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r \
             --arg repo "${INSTALLER_REPO}" \
@@ -908,12 +912,27 @@ jobs:
           fi
           PINNED_SHA="${MATCHING_SHAS}"
           CLONE_REF="${PINNED_SHA:-${INSTALLER_REF}}"
+          if [[ -z "${CLONE_REF}" ]]; then
+            if [[ -n "${CHART_OCI_REPO}" && -z "${CHART_OCI_TAG}" ]]; then
+              if [[ ! "${CHART_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::A resolved semver chart version is required to select the matching installer release."
+                exit 1
+              fi
+              CLONE_REF="refs/tags/osac-charts-release/v${CHART_VERSION}"
+            else
+              CLONE_REF=main
+            fi
+          fi
 
           echo "Cloning installer at ${CLONE_REF}."
           git init "${INSTALLER_CLONE_DIR}"
-          git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 \
-            "https://github.com/${INSTALLER_REPO}.git" "${CLONE_REF}"
+          if ! git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 \
+            "https://github.com/${INSTALLER_REPO}.git" "${CLONE_REF}"; then
+            echo "::error::Could not fetch installer ref ${CLONE_REF} from ${INSTALLER_REPO}; refusing to fall back to main. Verify the release marker or set installer-ref explicitly."
+            exit 1
+          fi
           git -C "${INSTALLER_CLONE_DIR}" checkout FETCH_HEAD
+          echo "Installer revision: $(git -C "${INSTALLER_CLONE_DIR}" rev-parse HEAD)"
 
           # The actual installer content (Makefile, charts/, values/) lives one
           # level down at osac-installer/ in the monorepo. Detected by directory
