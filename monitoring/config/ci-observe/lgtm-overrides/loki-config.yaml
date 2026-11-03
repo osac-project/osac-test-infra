@@ -1,6 +1,7 @@
 # Loki override for the ci-observe local development stack.
 #
-# This is the stock grafana/otel-lgtm 0.38.1 loki-config.yaml with three changes:
+# This is the stock grafana/otel-lgtm 0.38.1 loki-config.yaml (Loki 3.7.9) with
+# four changes:
 #   - max_chunk_age 168h: Loki accepts out-of-order entries at most max_chunk_age/2
 #     behind the newest entry in a stream; the stock 2h (1h window) silently
 #     discarded replayed day-old logs that shared stream labels with newer logs.
@@ -15,6 +16,10 @@
 #     on an empty variable and showed no data. The list below replaces the
 #     defaults, so it repeats them and adds the osac.ci attributes (capture id,
 #     observed namespace, suite and PR).
+#   - server.grpc_server_max_recv_msg_size and grpc_server_max_send_msg_size 32 MiB
+#     (stock 4 MiB): a query over a whole 20-minute capture returns a response
+#     larger than 4 MiB and Loki failed with ResourceExhausted (4505394 vs.
+#     4194304); a 5-minute window or a line filter fit under the stock limit.
 #
 # This is a local development stack setting, not a fleet production setting. Keep
 # the remaining defaults in sync with the pinned image when it changes.
@@ -22,6 +27,12 @@ auth_enabled: false
 
 server:
   http_listen_port: 3100
+  # A query over a whole 20-minute capture failed with ResourceExhausted
+  # (4505394 vs. 4194304). The response crosses the internal gRPC 4 MiB message
+  # limit, not a query-length limit; a 5-minute window or a line filter stays
+  # under it. 32 MiB accepts the full-capture response.
+  grpc_server_max_recv_msg_size: 33554432
+  grpc_server_max_send_msg_size: 33554432
 
 common:
   instance_addr: 127.0.0.1

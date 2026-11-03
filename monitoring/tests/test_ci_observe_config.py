@@ -543,6 +543,15 @@ class TestLgtmOverrides:
         for name in ("osac.ci.capture_id", "osac.ci.observed_namespace", "osac.ci.suite", "osac.ci.pr"):
             assert name in attributes, name
 
+    def test_loki_grpc_message_limit_fits_a_full_capture_response(self) -> None:
+        """A query over a whole 20-minute capture returned more than Loki's stock
+        4 MiB gRPC message limit and failed with ResourceExhausted
+        (4505394 vs. 4194304). Both directions are raised to 32 MiB."""
+        config = yaml.safe_load((CONFIG_DIR / "lgtm-overrides" / "loki-config.yaml").read_text())
+        server = config["server"]
+        assert server["grpc_server_max_recv_msg_size"] == 33554432
+        assert server["grpc_server_max_send_msg_size"] == 33554432
+
     def test_prometheus_promotes_the_osac_ci_attributes(self) -> None:
         config = yaml.safe_load((CONFIG_DIR / "lgtm-overrides" / "prometheus.yaml").read_text())
         promoted = config["otlp"]["promote_resource_attributes"]
