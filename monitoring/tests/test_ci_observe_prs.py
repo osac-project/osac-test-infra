@@ -334,6 +334,23 @@ class TestBackfill:
         assert summary["prs_failed"] == 1
         assert [row["number"] for row in rows(service, "SELECT number FROM pr_events ORDER BY number")] == [101, 103]
 
+    def test_failed_merge_group_query_leaves_pull_requests_unstored(self, service, github):
+        """A transient failure on the runs query must not be written down as
+        'no queue history'; the next run retries it."""
+        healthy = FakeResponse(payload={"total_count": 7, "workflow_runs": load_fixture("merge_group_runs")["runs"]})
+        github.add(merge_runs_path(), FakeResponse(500, text="boom"))
+
+        summary = run_backfill(service)
+
+        assert summary["prs_stored"] == 0
+        assert summary["prs_failed"] == 3
+        assert rows(service, "SELECT number FROM pr_events") == []
+
+        github.add(merge_runs_path(), healthy)
+        retry = run_backfill(service)
+        assert retry["prs_stored"] == 3
+        assert retry["attempts_stored"] == 5
+
     def test_merge_group_window_is_split_at_the_result_cap(self, service, github):
         """A busy window is split until each query fits, so runs past
         GitHub's list cap are not silently dropped."""
@@ -488,6 +505,7 @@ class TestEndpointDocument:
         assert doc["pr"]["final_stage"] == "merged"
         assert doc["pr"]["queue_history"] == "present"
         assert doc["pr"]["queue_attempt_count"] == 3
+        assert doc["pr"]["age_seconds"] == doc["pr"]["total_seconds"] == 2 * 60 * 60
         states = {stage["stage"]: stage["state"] for stage in doc["stages"]}
         assert states == {stage: "measured" for stage in ("authoring", "review", "waiting", "queue", "merged")}
         assert [attempt["run_id"] for attempt in doc["attempts"]] == [5101, 5102, 5103]

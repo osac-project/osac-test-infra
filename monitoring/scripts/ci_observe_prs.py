@@ -526,20 +526,24 @@ class CIObservePRs:
                 break
         return prs
 
-    def _fetch_merge_group_runs(self, repo, cutoff_iso, until=None) -> list[dict]:
+    def _fetch_merge_group_runs(self, repo, cutoff_iso, until=None) -> list[dict] | None:
         """Every merge_group run created in the window, once per repo.
 
         The runs list stops near 1000 results, so a window with more runs is
         split in half until each query fits. Without that split, runs past
         the cap would be dropped and their pull requests would lose queue
         attempts without any error.
+
+        None means the fetch failed. The caller then leaves every affected
+        pull request unstored instead of writing "no queue history" over a
+        transient error.
         """
         cutoff = parse_iso(cutoff_iso)
         if cutoff is None:
-            return []
+            return None
         return self._fetch_merge_group_range(repo, cutoff, until or datetime.now(UTC))
 
-    def _fetch_merge_group_range(self, repo, since_dt, until_dt) -> list[dict]:
+    def _fetch_merge_group_range(self, repo, since_dt, until_dt) -> list[dict] | None:
         since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         until_iso = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         url = (
@@ -550,10 +554,10 @@ class CIObservePRs:
             probe = self._get(url)
         except requests.RequestException as exc:
             logger.warning("GitHub request failed for %s: %s", url, exc)
-            return []
+            return None
         if not probe.ok:
             logger.warning("GitHub %s returned %s for %s", probe.status_code, probe.text[:200], url)
-            return []
+            return None
         payload = probe.json()
         total_count = payload.get("total_count") or 0
         if total_count > MERGE_GROUP_SAFE_RESULT_LIMIT and (until_dt - since_dt) > timedelta(hours=1):
@@ -566,16 +570,18 @@ class CIObservePRs:
                 total_count,
                 mid.isoformat(),
             )
-            runs = self._fetch_merge_group_range(repo, since_dt, mid)
-            runs += self._fetch_merge_group_range(repo, mid, until_dt)
-            return _unique_runs(runs)
+            left = self._fetch_merge_group_range(repo, since_dt, mid)
+            right = self._fetch_merge_group_range(repo, mid, until_dt)
+            if left is None or right is None:
+                return None
+            return _unique_runs(left + right)
 
         runs = payload.get("workflow_runs") or []
         next_url = probe.links.get("next", {}).get("url")
         while next_url:
             page, next_url = self._get_page(next_url)
             if page is None:
-                break
+                return None
             runs.extend(page.get("workflow_runs") or [])
         return [run for run in runs if run.get("event") == "merge_group"]
 
@@ -589,6 +595,11 @@ class CIObservePRs:
         write its row and its queue attempts. Returns the attempt count, or
         None when a page failed and nothing was written."""
         number = pr["number"]
+        if merge_runs is None:
+            # Writing the PR with zero attempts would turn a transient
+            # GitHub error into "no queue history" forever.
+            logger.warning("Skipping %s#%s: merge_group runs could not be fetched", repo, number)
+            return None
         timeline = self._get_all(f"{API_URL}/repos/{ORG}/{repo}/issues/{number}/timeline?per_page={PAGE_SIZE}")
         reviews = self._get_all(f"{API_URL}/repos/{ORG}/{repo}/pulls/{number}/reviews?per_page={PAGE_SIZE}")
         commits = self._get_all(f"{API_URL}/repos/{ORG}/{repo}/pulls/{number}/commits?per_page={PAGE_SIZE}")
@@ -955,7 +966,9 @@ class CIObservePRs:
         pr = dict(row) if row is not None else None
         if pr is not None:
             pr["url"] = pr.get("url") or pr_url(pr["repo"], pr["number"])
-            pr["age_seconds"] = seconds_between(pr["opened_at"], now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            pr["age_seconds"] = pr.get("total_seconds")
+            if pr["age_seconds"] is None:
+                pr["age_seconds"] = seconds_between(pr["opened_at"], now.strftime("%Y-%m-%dT%H:%M:%SZ"))
             pr["queue_attempt_count"] = len(attempts)
             pr["queue_history"] = "present" if attempts else "none"
             if not attempts:
