@@ -46,6 +46,10 @@ The three SHAs are facts, not keys: source (`test_sha`, and the exporter's `head
 
 The exporter is the workflow-exporter service on the central machine. It polls GitHub and keeps job and step history in SQLite for 60 days.
 
+## The sources
+
+Each question has one authoritative store. [sources.md](sources.md) maps every question to its source, its retention and whether it covers a single run or the whole population. When two stores can answer, that table says which one wins.
+
 ## The two populations
 
 Trends reads two populations, and they are never drawn on one axis:

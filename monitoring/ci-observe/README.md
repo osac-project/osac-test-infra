@@ -140,6 +140,7 @@ For debugging, ci-observe stores more than numbers: raw request parameters, exce
 ## Where the details are
 
 - [`monitoring/ci-observe/model.md`](model.md): the product model. Three units, three dashboards, the shared keys and the rule for new panels.
+- [`monitoring/ci-observe/sources.md`](sources.md): which store answers which question, its retention, and whether it covers one run or the whole population.
 - [`monitoring/ci-observe.md`](../ci-observe.md): the operator reference. Architecture, deployment, validation and known backend gaps.
 - [`monitoring/README.md`](../README.md): the whole monitoring stack, including how to deploy it and how to reach Grafana.
 - [`monitoring/config/ci-observe/`](../config/ci-observe/): the cluster manifests for the gateway and Beyla.
