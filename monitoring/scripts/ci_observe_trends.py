@@ -520,6 +520,16 @@ def main(argv=None):
     try:
         for day in sorted(listed):
             day_runs = [run for run in runs if run["day"] == day]
+            # Never replace a stored day with a thinner pass. Artifacts expire
+            # after 7 days, so a later run for the same day reads fewer of
+            # them; rewriting would delete rows that are the only copy.
+            previous = conn.execute("SELECT runs_parsed FROM rollup_days WHERE day = ?", (day,)).fetchone()
+            if previous and previous["runs_parsed"] > parsed.get(day, 0):
+                logger.warning(
+                    "%s: only %d run(s) readable now, %d were rolled up before; keeping the stored rollup",
+                    day, parsed.get(day, 0), previous["runs_parsed"],
+                )
+                continue
             rows = rollup_rows(day_runs)
             write_day(conn, day, rows, {
                 "day": day,

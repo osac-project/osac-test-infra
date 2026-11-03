@@ -426,6 +426,21 @@ class TestMain:
         assert len(second) == 1
         assert (second[0]["runs"], second[0]["passes"], second[0]["failures"]) == (1, 1, 0)
 
+    def test_a_thinner_pass_keeps_the_stored_day(self, wired, exporter, github):
+        """Artifacts expire after 7 days. A later pass for the same day reads
+        fewer runs; replacing the day would delete the only copy."""
+        exporter._upsert_job(run_row())
+        assert wired.main(["--days", "7"]) == 0
+        first = self.rows(wired)
+        assert len(first) == 3
+
+        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        assert wired.main(["--days", "7"]) == 0
+
+        assert self.rows(wired) == first, "the stored day must survive a thinner pass"
+        coverage = self.coverage(wired)
+        assert coverage["runs_parsed"] == 1, "coverage still describes the stored rows"
+
     def test_a_run_without_an_artifact_is_counted_unavailable(self, wired, exporter, github):
         exporter._upsert_job(run_row())
         github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
@@ -468,23 +483,24 @@ def rollup(trends, exporter, tmp_path):
     """A trends.db in the exporter fixture's CACHE_DIR, with two tests on
     one day so a filter test means something."""
     path = str(tmp_path / "trends.db")
+    day = today()
     conn = trends.open_trends_db(path)
     try:
-        trends.write_day(conn, "2026-11-01", [
+        trends.write_day(conn, day, [
             {
-                "day": "2026-11-01", "repo": "osac", "workflow": "E2E VMaaS Full Install",
+                "day": day, "repo": "osac", "workflow": "E2E VMaaS Full Install",
                 "suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas/test_vm::test_restart",
                 "source_sha": SHA, "runs": 4, "passes": 3, "failures": 1,
                 "p50_duration_s": 12.0, "p95_duration_s": 30.0,
             },
             {
-                "day": "2026-11-01", "repo": "osac", "workflow": "E2E VMaaS Full Install",
+                "day": day, "repo": "osac", "workflow": "E2E VMaaS Full Install",
                 "suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas/test_vm::test_create",
                 "source_sha": SHA, "runs": 4, "passes": 4, "failures": 0,
                 "p50_duration_s": 5.0, "p95_duration_s": 9.0,
             },
         ], {
-            "day": "2026-11-01", "runs_listed": 4, "runs_parsed": 3,
+            "day": day, "runs_listed": 4, "runs_parsed": 3,
             "runs_unavailable": 1, "generated_at": "2026-11-02T00:00:00Z",
         })
     finally:
@@ -493,6 +509,36 @@ def rollup(trends, exporter, tmp_path):
 
 
 class TestEndpoint:
+    def test_the_row_cap_keeps_the_newest_days(self, exporter, rollup, trends, monkeypatch):
+        """The cap is rows, not days. It must drop the oldest rows, or the
+        chart silently ends days before today."""
+        conn = trends.open_trends_db(rollup)
+        try:
+            for offset in (1, 2):
+                day = (datetime.now(timezone.utc).date() - timedelta(days=offset)).isoformat()
+                trends.write_day(
+                    conn,
+                    day,
+                    [{
+                        "day": day, "repo": "osac", "workflow": "E2E VMaaS Full Install",
+                        "suite": "tests/e2e/vmaas", "test_id": f"tests/e2e/vmaas/test_vm::test_{offset}",
+                        "source_sha": SHA, "runs": 1, "passes": 1, "failures": 0,
+                        "p50_duration_s": 1.0, "p95_duration_s": 1.0,
+                    }],
+                    {"day": day, "runs_listed": 1, "runs_parsed": 1, "runs_unavailable": 0,
+                     "generated_at": "2026-11-02T00:00:00Z"},
+                )
+        finally:
+            conn.close()
+
+        monkeypatch.setattr(exporter, "CIOBS_TRENDS_MAX_ROWS", 3)
+        doc = exporter.get_ci_observe_trends_json({"days": ["30"]})
+
+        days = [row["day"] for row in doc["rows"]]
+        assert len(days) == 3
+        assert days == sorted(days), "rows stay in chronological order for the chart"
+        assert days[-1] == today(), "the newest day must survive the cap"
+
     def test_rows_and_coverage(self, exporter, rollup):
         doc = exporter.get_ci_observe_trends_json({"days": [str(100000)]})
 

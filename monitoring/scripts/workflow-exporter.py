@@ -3679,9 +3679,12 @@ class WorkflowExporter:
             if test:
                 query += " AND test_id LIKE ?"
                 args.append(f"%{test}%")
-            query += " ORDER BY day, repo, workflow, suite, test_id, source_sha LIMIT ?"
+            # Newest days first, so the cap drops the oldest rows, not the
+            # most recent days; restore chronological order for the chart.
+            query += " ORDER BY day DESC, repo, workflow, suite, test_id, source_sha LIMIT ?"
             args.append(self.CIOBS_TRENDS_MAX_ROWS)
             doc["rows"] = [dict(row) for row in conn.execute(query, args)]
+            doc["rows"].sort(key=lambda r: (r["day"], r["repo"], r["workflow"], r["suite"], r["test_id"], r["source_sha"]))
             doc["coverage"] = [
                 dict(row) for row in conn.execute(
                     "SELECT day, runs_listed, runs_parsed, runs_unavailable, generated_at"
