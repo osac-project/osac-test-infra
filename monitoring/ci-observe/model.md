@@ -103,7 +103,7 @@ For each stage: duration, the attempts inside it, and why an attempt was ejected
 
 A pull request needs an index, a list of recent pull requests with stage and age. Without it the Pull requests dashboard is reachable only by already knowing the PR number.
 
-The queue stage needs its own unit. One `merge_group` run can carry up to four pull requests, and today a queue run has neither a PR number nor a capture. The run is the unit; the PR links come from the squash trailers; queue runs must enable `ci-observe` before the stage has telemetry.
+The queue stage needs its own unit. One `merge_group` run can carry up to four pull requests, and today a queue run has neither a PR number nor a capture. The run is the unit; the PR links come from the `gh-readonly-queue` branch name and from queue comments that name a run; queue runs must enable `ci-observe` before the stage has telemetry.
 
 ## Trends: comparisons, trends, overall
 

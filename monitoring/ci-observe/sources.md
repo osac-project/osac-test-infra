@@ -21,8 +21,8 @@ The split is deliberate:
 | How long did each job and step take? | Workflow exporter SQLite | 60 days | single run |
 | Overall job pass rate, duration, MTTR | Central Prometheus `github_actions_*` and the exporter SQLite | 30 days metrics, 60 days SQLite | overall, every run |
 | Overall per-test pass rate, flake and duration | Per-run JUnit artifacts, rolled up daily into `trends.db` by `ci_observe_trends.py` | as long as each day is rolled up while its 7-day artifact exists | overall, every run |
-| The life of one pull request | Exporter `pr_merges` plus `pr_events` (not built yet) | 60 days | single PR |
-| Merge-queue attempts and ejections | `merge_group` workflow runs, linked by squash trailers; ejections derived from a failed run and the PR comment | GitHub retention | single PR |
+| The life of one pull request | Exporter `pr_merges` plus `pr_events` and `pr_queue_attempts` in `prs.db`, from the one-shot backfill | 60 days | single PR |
+| Merge-queue attempts and ejections | `merge_group` workflow runs, linked by the `gh-readonly-queue` branch name and queue comments that name a run; ejections derived from a failed run and the comment | GitHub retention | single PR |
 | Which hop dropped a connection? | Router access log (to be gathered) for the router hop; the adapter request log for the server hop | 7 days artifact | single run |
 | Runner, machine and queue health | CI Fleet: central Prometheus and the runner exporters | 30 days | overall, fleet |
 
@@ -46,6 +46,6 @@ The split is deliberate:
 ## Gaps this table exposes
 
 - **Per-test history across all jobs**: the daily rollup exists and `ci-observe-trends.timer` runs it, but the first run can only cover the 7 days GitHub still holds. Older history cannot be reconstructed.
-- **PR events and ejections**: `pr_events` does not exist, and GitHub keeps no merge-queue history.
-- **Router access logs**: not gathered, so the network hop has no recorded evidence.
+- **PR events and ejections**: `prs.db` now holds the events, but ejections remain derived because GitHub keeps no merge-queue history. Queue runs still carry no PR number and no capture.
+- **Router access logs**: gathered when the IngressController logs to Container; otherwise the artifact says access logging is disabled.
 - **Pod logs in Loki**: blocked by the collector's permissions.
