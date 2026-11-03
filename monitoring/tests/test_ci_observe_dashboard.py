@@ -185,7 +185,7 @@ def test_required_uid_and_title(dashboard: dict) -> None:
 
 def test_home_required_uid_and_title(home: dict) -> None:
     assert home["uid"] == "ci-observe-runs-home"
-    assert home["title"] == "CI Observe — Test Runs"
+    assert home["title"] == "CI Observe — Start here"
     assert home["schemaVersion"] == 39
 
 
@@ -820,6 +820,20 @@ def test_home_panels_are_in_reading_order(home: dict) -> None:
     assert titles.index("Recent failed tests") < titles.index("Recent test runs"), (
         "failed tests must be listed before the full run list"
     )
+
+
+def test_home_narrows_every_query_on_the_find_box(home: dict) -> None:
+    """One textbox narrows the cards and all three tables.
+
+    The box matches the capture id, which contains the GitHub run id, so a
+    run id from Slack finds its capture without a separate lookup.
+    """
+    variables = {v["name"]: v for v in home["templating"]["list"]}
+    assert variables["find"]["type"] == "textbox"
+    assert "run id" in variables["find"]["label"].lower()
+    for panel in _iter_panels(home["panels"]):
+        for target in panel.get("targets", []):
+            assert '${find:regex}' in target["query"], f"{panel['title']}: query ignores the Find box"
 
 
 def test_home_explains_capture_id_and_time_range(home: dict) -> None:

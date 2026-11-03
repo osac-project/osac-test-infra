@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Start here for ci-observe E2E runs. Recent failed tests come first, then captures that are missing their session span, then one row per run. Click a run ID to open its investigation; the same menu links the run comparison dashboard.",
+  "description": "The entry page. Type a run id or part of a capture id to narrow the cards and tables, then click a row to open the run. The four words are defined in the first panel.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -29,7 +29,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Start here\nOne row per E2E run whose test spans arrived, newest first. Click a run id to open it.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id is the run id in the tables below. A **cohort** is a set of captures that differ only in what you want to compare.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| What happened inside one run | [**CI Observe — Run Investigation**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | [**CI Observe — Run evidence**](/d/ci-observe-run-evidence/ci-observe-run-evidence) |\n| What the cluster did during a run | [**CI Observe — Cluster**](/d/ci-observe-cluster/ci-observe-cluster) |\n| Did two runs get slower | [**CI Observe — Compare runs**](/d/ci-observe-compare-runs/ci-observe-compare-runs) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Missing session span** means the run's summary span never arrived. The tests may still have passed; the table lists what did arrive. A run that is completely absent never sent any telemetry.\n\n**Time range**: keep the default 7 days. A narrow range can hide a long run. If a run you expect is missing, widen the range up to the 7-day maximum before concluding it never ran."
+        "content": "### Start here\nOne row per E2E run whose test spans arrived, newest first. Click a run id to open it.\n\nType a run id or part of a capture id in the **Find** box above to narrow the cards and tables.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id is the run id in the tables below. A **cohort** is a set of captures that differ only in what you want to compare.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| What happened inside one run | [**CI Observe — Run Investigation**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | [**CI Observe — Run evidence**](/d/ci-observe-run-evidence/ci-observe-run-evidence) |\n| What the cluster did during a run | [**CI Observe — Cluster**](/d/ci-observe-cluster/ci-observe-cluster) |\n| Did two runs get slower | [**CI Observe — Compare runs**](/d/ci-observe-compare-runs/ci-observe-compare-runs) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Missing session span** means the run's summary span never arrived. The tests may still have passed; the table lists what did arrive. A run that is completely absent never sent any telemetry.\n\n**Time range**: keep the default 7 days. A narrow range can hide a long run. If a run you expect is missing, widen the range up to the 7-day maximum before concluding it never ran."
       },
       "targets": []
     },
@@ -100,7 +100,7 @@
           "refId": "A",
           "queryType": "traceql",
           "tableType": "spans",
-          "query": "{ name = \"test run\" && (status = ok || status = error) && resource.\"osac.ci.capture_id\" =~ \".+\" }",
+          "query": "{ name = \"test run\" && (status = ok || status = error) && resource.\"osac.ci.capture_id\" =~ \".*${find:regex}.*\" }",
           "limit": 1000,
           "spss": 100
         }
@@ -177,7 +177,7 @@
           "refId": "A",
           "queryType": "traceql",
           "tableType": "spans",
-          "query": "{ name = \"test run\" && status = error && resource.\"osac.ci.capture_id\" =~ \".+\" }",
+          "query": "{ name = \"test run\" && status = error && resource.\"osac.ci.capture_id\" =~ \".*${find:regex}.*\" }",
           "limit": 1000,
           "spss": 100
         }
@@ -254,7 +254,7 @@
           "refId": "A",
           "queryType": "traceql",
           "tableType": "spans",
-          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && resource.\"osac.ci.capture_id\" =~ \".+\" }",
+          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && resource.\"osac.ci.capture_id\" =~ \".*${find:regex}.*\" }",
           "limit": 1000,
           "spss": 100
         }
@@ -620,7 +620,7 @@
           "refId": "A",
           "queryType": "traceql",
           "tableType": "spans",
-          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && status = error && resource.\"osac.ci.capture_id\" =~ \".+\" && ( resource.\"osac.ci.suite\" =~ \".+\" || name =~ \".*\" ) && ( resource.\"osac.ci.pr\" =~ \".+\" || name =~ \".*\" ) }",
+          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && status = error && resource.\"osac.ci.capture_id\" =~ \".*${find:regex}.*\" && ( resource.\"osac.ci.suite\" =~ \".+\" || name =~ \".*\" ) && ( resource.\"osac.ci.pr\" =~ \".+\" || name =~ \".*\" ) }",
           "limit": 1000,
           "spss": 100
         }
@@ -757,7 +757,7 @@
           "refId": "A",
           "queryType": "traceql",
           "tableType": "spans",
-          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && resource.\"osac.ci.capture_id\" =~ \".+\" }",
+          "query": "{ resource.service.name = \"tests\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && resource.\"osac.ci.capture_id\" =~ \".*${find:regex}.*\" }",
           "limit": 1000,
           "spss": 100
         }
@@ -1109,7 +1109,7 @@
           "refId": "A",
           "queryType": "traceql",
           "tableType": "spans",
-          "query": "{ name = \"test run\" && (status = ok || status = error) && resource.\"osac.ci.capture_id\" =~ \".+\" && ( resource.\"osac.ci.suite\" =~ \".+\" || name =~ \".*\" ) && ( resource.\"osac.ci.pr\" =~ \".+\" || name =~ \".*\" ) }",
+          "query": "{ name = \"test run\" && (status = ok || status = error) && resource.\"osac.ci.capture_id\" =~ \".*${find:regex}.*\" && ( resource.\"osac.ci.suite\" =~ \".+\" || name =~ \".*\" ) && ( resource.\"osac.ci.pr\" =~ \".+\" || name =~ \".*\" ) }",
           "limit": 1000,
           "spss": 100
         }
@@ -1124,7 +1124,23 @@
     "ci-observe"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "find",
+        "label": "Find by run id or capture id",
+        "description": "Type part of a capture id, such as the GitHub run id. The cards and tables narrow to matching runs. Empty shows every run in the time range.",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": "",
+          "selected": false
+        },
+        "options": [],
+        "query": "",
+        "refresh": 0,
+        "hide": 0
+      }
+    ]
   },
   "time": {
     "from": "now-7d",
@@ -1132,7 +1148,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "CI Observe — Test Runs",
+  "title": "CI Observe — Start here",
   "uid": "ci-observe-runs-home",
   "version": 1,
   "weekStart": ""

@@ -13,7 +13,7 @@
       "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?var-capture_id=${capture_id}"
     },
     {
-      "title": "Test runs (home)",
+      "title": "Start here",
       "type": "link",
       "url": "/d/ci-observe-runs-home/ci-observe-e28094-test-runs"
     }

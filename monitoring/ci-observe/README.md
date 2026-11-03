@@ -11,7 +11,7 @@ If Grafana will not load, or you see no data for a run you know finished, read [
 
 ## Start here
 
-Open the **ci-observe** folder in Grafana and pick **CI Observe — Test Runs**. This page lists recent runs. Every row is one capture, and the run id links to its detail page.
+Open the **ci-observe** folder in Grafana and pick **CI Observe — Start here**. This page lists recent runs. Every row is one capture, and the run id links to its detail page. To find one run, type its GitHub run id into the **Find** box; it narrows the cards and tables to matching captures.
 
 A capture is one E2E workflow run that had ci-observe enabled. Its id has three parts: `bmaas-main-41318528583-a1` is the suite, the GitHub run id, and the run attempt.
 
@@ -21,7 +21,7 @@ There are five dashboards today. The [model](model.md) sets the target of three;
 
 | Dashboard | Question it answers | When to open it |
 | --- | --- | --- |
-| **CI Observe — Test Runs** | Which runs exist, which failed, which are missing data? | Always start here. |
+| **CI Observe — Start here** | Which runs exist, which failed, which are missing data? | Always start here. |
 | **CI Observe — Run Investigation** | What happened inside one run? | After you pick a run. |
 | **CI Observe — Run evidence** | Where did the run's time go, and what did CI gather? | When you need step timings or the JUnit result. |
 | **CI Observe — Compare runs** | Did these runs get slower, and which tests dominate the time? | When you have two or more runs of the same revision. |
@@ -31,7 +31,7 @@ There are five dashboards today. The [model](model.md) sets the target of three;
 
 ## Read one run in four steps
 
-1. **Find the run.** On **Test Runs**, the three cards at the top count the runs. `Runs with a session span` counts complete runs. `Failed runs` counts runs that ended in failure. `Missing session span` counts captures that sent test data but no run summary. The tables below list the runs.
+1. **Find the run.** On **Start here**, the three cards at the top count the runs. `Runs with a session span` counts complete runs. `Failed runs` counts runs that ended in failure. `Missing session span` counts captures that sent test data but no run summary. The tables below list the runs.
 2. **Open the detail page.** Click a run id. The top row of the detail page is the summary: `Tests`, `Failed`, `Result`, `Session`, `Test time`, `Suite`, `PR`. Read `Result` first. If it says `Incomplete`, the run summary never arrived and the other cards describe only what did arrive.
 3. **Read the timeline.** `Test timeline` lists every test with its start time and duration. `Slowest tests` and `Failed tests, longest first` put the expensive and broken tests at the top. `Longest waits` shows the named waits inside tests, so a 16-minute test can turn into "instance RUNNING 282 s, metering heartbeats 60 s, deletion 243 s".
 4. **Compare, if you can.** If a second run has the same source revision, harness revision and test selection, open **Compare runs** and pick that cohort. The page shows the sample size before any table, because one run is not a comparison.
@@ -131,7 +131,7 @@ For debugging, ci-observe stores more than numbers: raw request parameters, exce
 
 | What you see | Likely cause | What to do |
 | --- | --- | --- |
-| No run on **Test Runs** | ci-observe was not enabled, or the data is still inside the 15-minute window | Check the workflow inputs, then wait and refresh. |
+| No run on **Start here** | ci-observe was not enabled, or the data is still inside the 15-minute window | Check the workflow inputs, then wait and refresh. |
 | `Missing session span` includes the run | The session span never reached the backend | Open the run. The test data is still usable. Check the workflow's capture step for a delivery error. |
 | All identity fields say `not collected` | The capture predates identity stamping | Use a capture from after 2026-11-01, or ask the monitoring owner. |
 | **Compare runs** says `No baseline` | Fewer than two comparable captures | Run the same suite again with the same source and harness revisions. |
