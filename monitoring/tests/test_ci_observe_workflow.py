@@ -560,7 +560,7 @@ printf 'filter: ${CI_OBSERVE_TEST_FILTER}\nmarker: ${CI_OBSERVE_TEST_MARKER}\n' 
         run = step_by_id(action["runs"]["steps"], "run")
         script = run["run"]
         assert 'OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${CI_OBSERVE_OTLP_PORT}"' in script
-        assert 'OTEL_EXPORTER_OTLP_TIMEOUT="2"' in script
+        assert 'OTEL_EXPORTER_OTLP_TIMEOUT="15"' in script
         assert "--export-traces" in script
         # Only when the collectors came up: a failed deployment must leave
         # the command's environment untouched.
@@ -1290,6 +1290,12 @@ class TestOtelcolRouter:
         exporters = config["exporters"]
         # Traces -> Tempo 2.10 (14418); logs + metrics -> the LGTM bundle (4318).
         assert exporters["otlphttp/tempo210"]["endpoint"] == "http://127.0.0.1:14418"
+        # One push must stay under the ingester limit. The default 8192
+        # exceeded 16 MiB and blocked the whole ingest path.
+        batch = config["processors"]["batch"]
+        assert batch["send_batch_size"] == 1024
+        assert batch["send_batch_max_size"] == 2048
+        assert batch["send_batch_size"] <= batch["send_batch_max_size"]
         assert exporters["otlphttp/lgtm"]["endpoint"] == "http://127.0.0.1:4318"
         pipelines = config["service"]["pipelines"]
         assert pipelines["traces"]["exporters"] == ["otlphttp/tempo210"]
@@ -1356,6 +1362,9 @@ class TestOtelcolRouter:
     def test_tempo210_config_serves_search_and_keeps_30_days(self) -> None:
         config = yaml.safe_load(TEMPO210_CONFIG_PATH.read_text())
         assert config["server"]["http_listen_port"] == 3210
+        # The 16 MiB default rejected full-install trace batches, which
+        # backed up the router and the gateway and lost the pytest spans.
+        assert config["server"]["grpc_server_max_recv_msg_size"] == 67108864
         assert config["storage"]["trace"]["backend"] == "local"
         # 720h retention: matches the 30-day window the CI Observe
         # dashboard's default time range assumes.

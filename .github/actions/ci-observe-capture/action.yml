@@ -520,7 +520,11 @@ runs:
         # exactly as it would without this action.
         if [[ -n "${CI_OBSERVE_OTLP_PORT:-}" ]]; then
           export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${CI_OBSERVE_OTLP_PORT}"
-          export OTEL_EXPORTER_OTLP_TIMEOUT="2"
+          # The parent test span and the session span are exported at the
+          # end of a test. A two-second timeout dropped that last batch
+          # whenever the gateway was busy, which is why captures kept the
+          # phase spans but lost the parent spans and the session span.
+          export OTEL_EXPORTER_OTLP_TIMEOUT="15"
           export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} --export-traces"
         fi
 
@@ -624,8 +628,8 @@ runs:
         # One message shape for every failure mode; never implies the test
         # result was affected.
         telemetry_fail() {
-          echo "::error::ci-observe: telemetry was requested but did not reach the central backend — the test result above is unaffected; see ${1}"
-          echo "ci-observe: telemetry was requested but did not reach the central backend — the test result above is unaffected; see ${1}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "::error::ci-observe: telemetry was requested but did not reach the central backend — the test result above is unaffected, and the Grafana run page will be incomplete; see ${1}"
+          echo "ci-observe: telemetry was requested but did not reach the central backend — the test result above is unaffected, and the Grafana run page will be incomplete; see ${1}" >> "${GITHUB_STEP_SUMMARY}"
           exit 1
         }
 

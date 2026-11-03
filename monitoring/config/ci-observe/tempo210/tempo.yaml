@@ -1,5 +1,11 @@
 server:
   http_listen_port: 3210
+  # A full-install capture pushes trace batches large enough to exceed the
+  # 16 MiB default. The distributor then failed to hand them to the
+  # ingester ("ResourceExhausted ... larger than max 16777216"), which
+  # backed up the router and the gateway and cost the capture its pytest
+  # spans. 64 MiB accepts the batch; the router also caps its batch size.
+  grpc_server_max_recv_msg_size: 67108864
 distributor:
   receivers:
     otlp:
