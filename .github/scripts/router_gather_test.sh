@@ -34,25 +34,12 @@ cat > "${WORK}/fixtures/routes.json" <<JSON
 {"items": [
   {"metadata": {"name": "fulfillment-api", "namespace": "osac-e2e-ci",
                 "annotations": {"haproxy.router.openshift.io/timeout": "30s"}},
-   "spec": {"host": "${HOST}"}},
+   "spec": {"host": "${HOST}", "tls": {"termination": "edge", "certificate": "CERT",
+            "key": "-----BEGIN PRIVATE KEY-----SEKRIT-----END PRIVATE KEY-----"}}},
   {"metadata": {"name": "echo-adapter", "namespace": "osac-e2e-ci", "annotations": {}},
    "spec": {"host": "echo-adapter-osac-e2e-ci.apps.canary.test"}}
 ]}
 JSON
-cat > "${WORK}/fixtures/routes.yaml" <<'YAML'
-apiVersion: v1
-items:
-- apiVersion: route.openshift.io/v1
-  kind: Route
-  metadata:
-    annotations:
-      haproxy.router.openshift.io/timeout: 30s
-    name: fulfillment-api
-    namespace: osac-e2e-ci
-  spec:
-    host: fulfillment-api-osac-e2e-ci.apps.canary.test
-kind: List
-YAML
 cat > "${WORK}/fixtures/endpoints.yaml" <<'YAML'
 apiVersion: v1
 items:
@@ -100,13 +87,13 @@ YAML
     printf '2026-11-03T10:00:00.500000Z router-default-bbb %s GET /api/v1/y HTTP/1.1 503 req-bbb-%05d\n' "${HOST}" "${i}"
   done
   printf '2026-11-03T10:00:01.500000Z router-default-bbb %s GET /api/v1/y HTTP/1.1 503 req-bbb-extra\n' "${HOST}"
+  printf '2026-11-03T10:00:01.600000Z router-default-bbb %s GET /api/v1/z?id_token=SEKRIT-ID HTTP/1.1 200 req-bbb-id\n' "${HOST}"
 } > "${WORK}/fixtures/router-bbb.log"
 
 cat > "${WORK}/bin/oc" <<'STUB'
 #!/usr/bin/env bash
 echo "oc $*" >> "${STUB_LOG}"
 case "$*" in
-  *"get route -n osac-e2e-ci -o yaml"*) cat "${FIXTURES}/routes.yaml" ;;
   *"get route -n osac-e2e-ci -o json"*) cat "${FIXTURES}/routes.json" ;;
   *"get endpoints -n osac-e2e-ci -o yaml"*) cat "${FIXTURES}/endpoints.yaml" ;;
   *"get endpointslices -n osac-e2e-ci -o yaml"*) cat "${FIXTURES}/endpointslices.yaml" ;;
@@ -152,8 +139,12 @@ done
 
 grep -q "${HOST}" "${ART}/${NS_DIR}/routes.yaml" \
   || { echo "FAIL: routes.yaml does not hold the observed route"; exit 1; }
-grep -q 'haproxy.router.openshift.io/timeout: 30s' "${ART}/${NS_DIR}/routes.yaml" \
+grep -q '"haproxy.router.openshift.io/timeout": "30s"' "${ART}/${NS_DIR}/routes.yaml" \
   || { echo "FAIL: routes.yaml does not hold the timeout annotation"; exit 1; }
+grep -q 'PRIVATE KEY' "${ART}/${NS_DIR}/routes.yaml" \
+  && { echo "FAIL: routes.yaml leaked a TLS private key"; exit 1; }
+grep -q '"key":' "${ART}/${NS_DIR}/routes.yaml" \
+  && { echo "FAIL: routes.yaml kept spec.tls.key"; exit 1; }
 grep -q '10.128.0.42' "${ART}/${NS_DIR}/endpoints.yaml" \
   || { echo "FAIL: endpoints.yaml does not hold the ready address"; exit 1; }
 grep -q 'fulfillment-api-abc12' "${ART}/${NS_DIR}/endpointslices.yaml" \
@@ -180,6 +171,10 @@ grep -q 'token=REDACTED' "${LOG}" \
   || { echo "FAIL: the query-string credential was not redacted"; exit 1; }
 grep -q 'SEKRIT-QUERY' "${LOG}" \
   && { echo "FAIL: the query-string credential leaked"; exit 1; }
+grep -q 'id_token=REDACTED' "${LOG}" \
+  || { echo "FAIL: id_token was not redacted"; exit 1; }
+grep -q 'SEKRIT-ID' "${LOG}" \
+  && { echo "FAIL: id_token leaked"; exit 1; }
 grep -q 'REDACTED_JWT' "${LOG}" \
   || { echo "FAIL: the JWT was not redacted"; exit 1; }
 

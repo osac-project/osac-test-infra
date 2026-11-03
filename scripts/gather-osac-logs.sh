@@ -95,12 +95,16 @@ collect_router_evidence() {
     local dir="$MGMT_CLUSTER_DIR/namespaces/$ns"
     mkdir -p "${dir}"
 
-    timeout 30s oc get route -n "${ns}" -o yaml > "${dir}/routes.yaml" 2>&1 || true
-    timeout 30s oc get endpoints -n "${ns}" -o yaml > "${dir}/endpoints.yaml" 2>&1 || true
-    timeout 30s oc get endpointslices -n "${ns}" -o yaml > "${dir}/endpointslices.yaml" 2>&1 || true
-
     local routes_json
     routes_json=$(timeout 30s oc get route -n "${ns}" -o json 2>/dev/null) || routes_json='{"items":[]}'
+    # Route objects can carry a TLS private key. Delete it before the file is
+    # written; the artifact must never hold a key, and no redaction pass can
+    # reliably match a PEM block.
+    jq '.items |= map(if .spec.tls then .spec.tls |= del(.key) else . end)' \
+        <<<"${routes_json}" > "${dir}/routes.yaml" 2>/dev/null \
+        || printf '%s\n' "${routes_json}" > "${dir}/routes.yaml"
+    timeout 30s oc get endpoints -n "${ns}" -o yaml > "${dir}/endpoints.yaml" 2>&1 || true
+    timeout 30s oc get endpointslices -n "${ns}" -o yaml > "${dir}/endpointslices.yaml" 2>&1 || true
 
     # A HAProxy timeout annotation cuts a slow response at the router before
     # the test's own client timeout would fire, so it belongs with the routes.
@@ -567,7 +571,7 @@ find "${ARTIFACT_DIR}" \( -name "pods-describe.txt" -o -name "*.log" -o -name "*
 # credential passed as a query parameter is not in the JSON shapes below, so
 # keep the parameter name and drop its value.
 find "${ARTIFACT_DIR}" -name "router-access.log" -print0 \
-    | xargs -0 sed -i -E 's/([?&](access_token|token|code|password|secret|sig)=)[^&[:space:]"]+/\1REDACTED/gI' || true
+    | xargs -0 -r sed -i -E 's/([?&](access_token|id_token|refresh_token|token|code|password|passwd|secret|client_secret|api_?key|auth|authorization|signature|sig|x-amz-signature)=)[^&[:space:]"]+/\1REDACTED/gI' || true
 
 # Base64-encoded database passwords and API tokens (operator logs, AAP job stdout)
 # [^"]+ (not [A-Za-z0-9+/=]) so passwords with punctuation (@/%/#) are covered too.
