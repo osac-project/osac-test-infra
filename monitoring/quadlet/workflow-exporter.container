@@ -37,6 +37,7 @@ Environment=JOBS_HISTORY_MAX_COUNT=100000
 Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_run_evidence.py:/app/ci_observe_run_evidence.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_trends.py:/app/ci_observe_trends.py:ro,Z
+Volume=%h/.monitoring-server/scripts/ci_observe_prs.py:/app/ci_observe_prs.py:ro,Z
 # Mount data directory for cache persistence across restarts
 Volume=%h/.monitoring-server/data:/data:Z
 Environment=CACHE_DIR=/data

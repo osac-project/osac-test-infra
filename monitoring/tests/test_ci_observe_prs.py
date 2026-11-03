@@ -555,3 +555,25 @@ def test_dashboard_selectors_resolve_against_the_real_response(service):
                 )
             checked += 1
     assert checked >= 5
+
+
+def test_backfill_is_mounted_in_the_exporter_and_scheduled_daily():
+    """The backfill runs inside the exporter container: that is where the
+    token, requests and the /data volume live. One pass a day is enough; a
+    stored pull request is never refetched without --force."""
+    monitoring = Path(__file__).resolve().parents[1]
+    quadlet = (monitoring / "quadlet" / "workflow-exporter.container").read_text()
+    assert "ci_observe_prs.py:/app/ci_observe_prs.py" in quadlet
+
+    service = (monitoring / "systemd" / "ci-observe-prs.service").read_text()
+    assert "podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 60" in service
+
+    timer = (monitoring / "systemd" / "ci-observe-prs.timer").read_text()
+    assert "OnCalendar=*-*-* 04:45:00" in timer
+    assert "Persistent=true" in timer
+
+    setup = (monitoring / "scripts" / "monitoring-setup.sh").read_text()
+    assert "systemd/ci-observe-prs.service" in setup
+    assert "systemd/ci-observe-prs.timer" in setup
+    assert "systemctl --user enable --now ci-observe-prs.timer" in setup
+    assert "systemctl --user enable ci-observe-prs.timer" in setup
