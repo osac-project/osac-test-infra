@@ -47,6 +47,7 @@ def test_known_dashboards_are_in_the_expected_folder() -> None:
         "ci-observe-runs.json": "ci-observe",
         "ci-observe-comparison.json": "ci-observe",
         "ci-observe-trends.json": "ci-observe",
+        "ci-observe-pull-requests.json": "ci-observe",
         "runner-health.json": "CI Fleet",
         "runner-status.json": "CI Fleet",
         "workflow-jobs.json": "CI Fleet",

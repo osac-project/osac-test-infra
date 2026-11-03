@@ -44,6 +44,12 @@ def trends():
     return _load("ci_observe_trends", "ci_observe_trends.py")
 
 
+@pytest.fixture(scope="session")
+def prs():
+    """The pull-request backfill module (a plain module, no metrics)."""
+    return _load("ci_observe_prs", "ci_observe_prs.py")
+
+
 @pytest.fixture
 def github(wfe, monkeypatch):
     fake = FakeGitHub(wfe.API_URL)

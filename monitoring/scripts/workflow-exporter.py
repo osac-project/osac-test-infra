@@ -3920,6 +3920,31 @@ class ExporterHandler(BaseHTTPRequestHandler):
             self.wfile.write(payload.encode())
         # -- ci-observe trends (end) --
 
+        # --- ci-observe pull requests: begin (single additive block) --------
+        # GET /api/ci-observe/prs?number=<n>&repo=<name>  one PR's life and
+        #                                                 its queue attempts
+        # GET /api/ci-observe/prs?days=<n>                recent PRs + stage
+        #                                                 funnel
+        # Read-only over prs.db, which the one-shot backfill in
+        # ci_observe_prs.py writes. This handler never calls GitHub and the
+        # 90-second collect() loop never reads or writes this data. The DB
+        # path is derived from DB_FILE at request time (tests patch it); a
+        # missing file returns an empty document that says the backfill has
+        # not run, never an error the dashboard would hide.
+        elif parsed.path == "/api/ci-observe/prs":
+            import ci_observe_prs
+
+            prs_db_file = os.path.join(os.path.dirname(DB_FILE), "prs.db")
+            data = ci_observe_prs.CIObservePRs(db_file=prs_db_file, api=self.exporter).get_json(
+                parse_qs(parsed.query)
+            )
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+        # --- ci-observe pull requests: end ---------------------------------
         else:
             self.send_response(404)
             self.end_headers()

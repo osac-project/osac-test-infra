@@ -1,0 +1,71 @@
+{
+  "pr": {
+    "number": 101,
+    "title": "Add VM restart coverage",
+    "user": {"login": "author1", "type": "User"},
+    "html_url": "https://github.com/osac-project/osac/pull/101",
+    "state": "closed",
+    "created_at": "2026-10-01T10:00:00Z",
+    "updated_at": "2026-10-01T11:36:00Z",
+    "closed_at": "2026-10-01T11:35:00Z",
+    "merged_at": "2026-10-01T11:35:00Z",
+    "labels": [{"name": "ok-to-test"}]
+  },
+  "timeline": [
+    {
+      "event": "review_requested",
+      "created_at": "2026-10-01T10:05:00Z",
+      "requested_reviewer": {"login": "reviewer1"}
+    },
+    {
+      "event": "reviewed",
+      "created_at": "2026-10-01T10:20:00Z",
+      "user": {"login": "reviewer1", "type": "User"}
+    },
+    {
+      "event": "labeled",
+      "created_at": "2026-10-01T10:25:00Z",
+      "label": {"name": "ok-to-test"}
+    },
+    {
+      "event": "commented",
+      "created_at": "2026-10-01T10:40:00Z",
+      "user": {"login": "reviewer1", "type": "User"},
+      "html_url": "https://github.com/osac-project/osac/pull/101#issuecomment-1",
+      "body": "Looks good to me."
+    },
+    {
+      "event": "commented",
+      "created_at": "2026-10-01T11:07:00Z",
+      "user": {"login": "github-actions[bot]", "type": "Bot"},
+      "html_url": "https://github.com/osac-project/osac/pull/101#issuecomment-2",
+      "body": "The merge queue failed for this pull request. The merge group run https://github.com/osac-project/osac/actions/runs/5001 failed because the check `e2e / vmaas` failed. Re-add the pull request to the merge queue to retry."
+    },
+    {
+      "event": "merged",
+      "created_at": "2026-10-01T11:35:00Z"
+    }
+  ],
+  "reviews": [
+    {
+      "user": {"login": "coderabbitai[bot]", "type": "Bot"},
+      "state": "COMMENTED",
+      "submitted_at": "2026-10-01T10:05:00Z"
+    },
+    {
+      "user": {"login": "reviewer1", "type": "User"},
+      "state": "COMMENTED",
+      "submitted_at": "2026-10-01T10:20:00Z"
+    },
+    {
+      "user": {"login": "reviewer1", "type": "User"},
+      "state": "APPROVED",
+      "submitted_at": "2026-10-01T10:50:00Z"
+    }
+  ],
+  "commits": [
+    {"sha": "aaa1111"},
+    {"sha": "bbb2222"},
+    {"sha": "ccc3333"}
+  ]
+}
