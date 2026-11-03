@@ -655,6 +655,18 @@ class TestCacheAndSecrets:
         evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
         assert github.count(RUN_PATH) == 1
 
+    def test_stored_head_sha_needs_no_github_call(self, evidence, github):
+        """The run payload stored the SHA on the job row, so the endpoint
+        serves it without the live metadata fetch. Nothing is routed for
+        RUN_PATH here: a fetch would 404 and blank the field."""
+        seed_direct_run(evidence, head_sha="c" * 40)
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
+
+        assert doc["run"]["head_sha"] == "c" * 40
+        assert github.count(RUN_PATH) == 0
+
     def test_no_token_leakage(self, evidence, github, wfe):
         seed_direct_run(evidence)
         github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))

@@ -242,9 +242,11 @@ class CIObserveRunEvidence:
             "duration_s": max((r.get("duration_s") or 0 for r in rows), default=0),
             "url": url or f"https://github.com/{ORG}/{repo}/actions/runs/{run_id}",
             "runner_name": ", ".join(runners),
-            # Not stored in SQLite; filled in from the GitHub API by the
-            # caller (see _ci_observe_head_sha).
-            "head_sha": "",
+            # Stored with the job row (the exporter's run payload carries
+            # it), so most runs need no extra GitHub call. The caller falls
+            # back to the API when it is empty (a row stored before the
+            # column existed).
+            "head_sha": next((r.get("head_sha") for r in rows if r.get("head_sha")), ""),
             # Same for every row of one run; first non-empty wins because
             # the pull-request flow's own row never resolves a PR while its
             # suite rows do.
@@ -257,8 +259,9 @@ class CIObserveRunEvidence:
         }
 
     def _ci_observe_head_sha(self, repo, run_id):
-        """A run's head_sha from the GitHub API (not stored in SQLite), ""
-        when the fetch fails -- the endpoint must still serve the job data.
+        """A run's head_sha from the GitHub API, used when the stored job
+        row has none (a row stored before the column existed), "" when the
+        fetch fails -- the endpoint must still serve the job data.
         Cached like the native data: failures briefly, successes for the
         full TTL."""
         key = ("head_sha", run_id)
@@ -709,7 +712,8 @@ class CIObserveRunEvidence:
         summary_rows = jobs or ([run_row] if run_row is not None else [])
         if summary_rows:
             doc["run"] = self._ci_observe_run_summary(summary_rows, run_id, run_attempt)
-            doc["run"]["head_sha"] = self._ci_observe_head_sha(doc["run"]["repo"], run_id)
+            if not doc["run"]["head_sha"]:
+                doc["run"]["head_sha"] = self._ci_observe_head_sha(doc["run"]["repo"], run_id)
             if not doc["run"]["head_sha"]:
                 notes.append("head_sha could not be fetched from GitHub")
 

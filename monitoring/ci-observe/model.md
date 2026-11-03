@@ -39,10 +39,10 @@ Only three keys cross stores. Everything else is a fact owned by one store and r
 | Key | Where it exists today | What is missing |
 |---|---|---|
 | capture id | Tempo, Loki, Prometheus | not stored in the exporter's SQLite |
-| run id | SQLite, and inside the capture id | no `osac.ci.run_id` span attribute, so every trace join parses a string |
+| run id | SQLite `jobs.id`, every span as `osac.ci.run_id`, and inside the capture id | nothing: a trace joins its job row by `osac.ci.run_id` without parsing the capture id |
 | PR number | SQLite `pr_display`, Loki and Prometheus `osac_ci_pr`, Tempo `osac.ci.pr` | queue runs carry no PR number at all |
 
-The three SHAs are facts, not keys: source (`test_sha`), harness (`test_infra_sha`) and workflow (`test_infra_workflow_sha`). Suite has three different meanings in three stores and must not be a join key.
+The three SHAs are facts, not keys: source (`test_sha`, and the exporter's `head_sha` for the commit a job really ran), harness (`test_infra_sha`) and workflow (`test_infra_workflow_sha`). Suite has three different meanings in three stores and must not be a join key.
 
 The exporter is the workflow-exporter service on the central machine. It polls GitHub and keeps job and step history in SQLite for 60 days.
 

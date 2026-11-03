@@ -226,6 +226,7 @@ class TestAction:
         assert deploy["env"]["TEST_SHA_INPUT"] == "${{ inputs.test-sha }}"
         assert deploy["env"]["TEST_INFRA_REF_INPUT"] == "${{ inputs.test-infra-ref }}"
         for token in (
+            "CI_OBSERVE_RUN_ID",
             "CI_OBSERVE_TEST_REF",
             "CI_OBSERVE_TEST_SHA",
             "CI_OBSERVE_TEST_INFRA_REF",
@@ -296,6 +297,11 @@ class TestAction:
         assert "tr -d '\\n|\\\\&\"$'" in script
         assert 'workflow_name="${workflow_name:-unknown}"' in script
         assert 'run_attempt="${run_attempt:-1}"' in script
+        # The run id is GitHub's numeric run id, stamped on every signal so a
+        # trace joins the exporter's jobs table without parsing the capture
+        # id string. Digits only, "unknown" when GitHub provides none.
+        assert '"${GITHUB_RUN_ID:-}"' in script
+        assert 'run_id="${run_id:-unknown}"' in script
 
     def test_selection_length_check_rejects_overlong_values(self, action: dict) -> None:
         """Runs the deploy step's actual selection_is_bounded. The bound is
@@ -582,6 +588,9 @@ class TestRunIdentityAttributes:
         collector = yaml.safe_load(COLLECTOR_LIVE_CONFIG.read_text())
         actions = {a["key"]: a for a in collector["processors"]["resource/capture"]["attributes"]}
         expected = {
+            # The run id as its own key: joins a span to the exporter's jobs
+            # table without parsing the capture id string.
+            "osac.ci.run_id": "${env:CI_OBSERVE_RUN_ID}",
             "osac.ci.test_ref": "${env:CI_OBSERVE_TEST_REF}",
             "osac.ci.test_sha": "${env:CI_OBSERVE_TEST_SHA}",
             "osac.ci.test_infra_ref": "${env:CI_OBSERVE_TEST_INFRA_REF}",
@@ -605,6 +614,7 @@ class TestRunIdentityAttributes:
         deployment = next(doc for doc in documents if doc.get("kind") == "Deployment")
         env = {e["name"]: e["value"] for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
         for name in (
+            "CI_OBSERVE_RUN_ID",
             "CI_OBSERVE_TEST_REF",
             "CI_OBSERVE_TEST_SHA",
             "CI_OBSERVE_TEST_INFRA_REF",

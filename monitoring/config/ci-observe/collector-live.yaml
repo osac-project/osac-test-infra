@@ -21,6 +21,8 @@
 # Placeholders use the collector's native ${env:...} expansion; the capture
 # action sets these on the gateway container:
 #   CI_OBSERVE_CAPTURE_ID        capture identity, one active capture per cluster
+#   CI_OBSERVE_RUN_ID            GitHub workflow run id, stamped as
+#                                osac.ci.run_id; "unknown" if unavailable
 #   CI_OBSERVE_NAMESPACE         observed OSAC namespace, e.g. osac-e2e-ci
 #   CI_OBSERVE_CLUSTER_UID       cluster identity
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250 (single-node canary)
@@ -180,6 +182,13 @@ processors:
     attributes:
       - key: osac.ci.capture_id
         value: ${env:CI_OBSERVE_CAPTURE_ID}
+        action: upsert
+      # The run id also appears inside the capture id, as text. Stamped on
+      # its own so a trace joins the exporter's SQLite jobs table by run id
+      # without parsing that string (ci-observe/model.md, "The keys"). Live
+      # path only: a local capture wraps no GitHub run.
+      - key: osac.ci.run_id
+        value: ${env:CI_OBSERVE_RUN_ID}
         action: upsert
       - key: osac.ci.observed_namespace
         value: ${env:CI_OBSERVE_NAMESPACE}

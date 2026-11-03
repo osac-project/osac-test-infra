@@ -87,7 +87,7 @@ JOB_COLUMNS = [
     "pr_url", "pr_display", "status",
     "conclusion", "event", "trigger", "duration_s", "duration", "actor",
     "url", "created_at", "updated_at", "run_number", "run_attempt",
-    "failed_step", "steps_json", "failure_reason", "runner_name",
+    "failed_step", "steps_json", "failure_reason", "runner_name", "head_sha",
 ]
 
 # ---------------------------------------------------------------------------
@@ -643,7 +643,7 @@ class WorkflowExporter:
             # schema, so a DB from before pr_url/pr_display existed needs
             # an explicit migration.
             existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
-            for col in ("pr_url", "pr_display", "failure_reason", "runner_name"):
+            for col in ("pr_url", "pr_display", "failure_reason", "runner_name", "head_sha"):
                 if col not in existing_cols:
                     conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT DEFAULT ''")
             conn.execute("""
@@ -1642,6 +1642,11 @@ class WorkflowExporter:
             "run_number": run.get("run_number", 0),
             "run_attempt": run.get("run_attempt", 1),
             "runner_name": "",
+            # The commit the run checked out, from the run object itself: the
+            # polling list already carries it, so storing it costs no extra
+            # GitHub call. It joins a capture's spans (osac.ci.run_id) to the
+            # source SHA without a live metadata fetch per query.
+            "head_sha": run.get("head_sha", ""),
         }
 
     @staticmethod

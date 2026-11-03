@@ -297,7 +297,13 @@ class TestLiveGateway:
         path: only the transport and the memory budget differ."""
         for name in ("otlp", "k8s_objects", "file_log", "kubelet_stats"):
             assert collector_live["receivers"][name] == collector["receivers"][name], name
-        for name in ("resource/capture", "transform/sanitize_traces", "transform/k8s_objects"):
+        # The one intentional difference in resource/capture: osac.ci.run_id
+        # is live-only, because a local capture wraps an arbitrary command
+        # rather than a GitHub workflow run and has no run id to stamp.
+        live_attributes = collector_live["processors"]["resource/capture"]["attributes"]
+        local_attributes = collector["processors"]["resource/capture"]["attributes"]
+        assert [a for a in live_attributes if a["key"] != "osac.ci.run_id"] == local_attributes
+        for name in ("transform/sanitize_traces", "transform/k8s_objects"):
             assert collector_live["processors"][name] == collector["processors"][name], name
         # The live gateway raises only limit_mib: the local file-capture path
         # keeps its 384 MiB budget.
@@ -428,6 +434,7 @@ class TestCluster:
         env = {e["name"]: e["value"] for e in container["env"]}
         assert set(env) == {
             "CI_OBSERVE_CAPTURE_ID",
+            "CI_OBSERVE_RUN_ID",
             "CI_OBSERVE_NAMESPACE",
             "CI_OBSERVE_CLUSTER_UID",
             "CI_OBSERVE_KUBELET_ENDPOINT",

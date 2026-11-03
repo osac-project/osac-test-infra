@@ -334,6 +334,12 @@ runs:
         workflow_name="${workflow_name:-unknown}"
         run_attempt="$(printf '%s' "${GITHUB_RUN_ATTEMPT:-}" | tr -cd '0-9')"
         run_attempt="${run_attempt:-1}"
+        # The numeric run id, stamped as osac.ci.run_id so a trace joins the
+        # exporter's jobs table without parsing it back out of the capture
+        # id. Digits only for the same sed and manifest reasons as run
+        # attempt; "unknown" when GitHub does not provide one.
+        run_id="$(printf '%s' "${GITHUB_RUN_ID:-}" | tr -cd '0-9')"
+        run_id="${run_id:-unknown}"
 
         # Every fallible command below carries an explicit "|| return 1":
         # this function runs inside an `if !` condition, where bash suspends
@@ -407,6 +413,7 @@ runs:
           rendered="${ci_dir}/cluster-rendered.yaml"
           sed \
             -e "s|\${CI_OBSERVE_CAPTURE_ID}|${capture_id}|g" \
+            -e "s|\${CI_OBSERVE_RUN_ID}|${run_id}|g" \
             -e "s|\${CI_OBSERVE_NAMESPACE}|${OBSERVED_NAMESPACE}|g" \
             -e "s|\${CI_OBSERVE_CLUSTER_UID}|${cluster_uid}|g" \
             -e "s|\${CI_OBSERVE_KUBELET_ENDPOINT}|${kubelet_endpoint}|g" \

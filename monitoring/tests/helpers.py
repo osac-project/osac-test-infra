@@ -92,6 +92,7 @@ def make_job(**overrides):
         "failed_step": "",
         "failure_reason": None,
         "runner_name": "",
+        "head_sha": "",
         "steps": [],
     }
     job.update(overrides)
@@ -107,6 +108,7 @@ def make_run(**overrides):
         "status": "completed",
         "conclusion": "success",
         "head_branch": "feature",
+        "head_sha": "9f1c2ab37d54e6f0a1b2c3d4e5f60718293a4b5c",
         "pull_requests": [{"number": 7}],
         "actor": {"login": "dev"},
         "html_url": "https://github.com/osac-project/osac/actions/runs/100",
