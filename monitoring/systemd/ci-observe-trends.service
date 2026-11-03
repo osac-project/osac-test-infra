@@ -1,0 +1,15 @@
+# Daily ci-observe per-test rollup.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-trends.service
+#
+# Triggered by ci-observe-trends.timer. The rollup runs inside the
+# workflow-exporter container because that container already has the GitHub
+# token, the `requests` dependency and the /data volume where trends.db lives.
+# Do not enable or start this unit directly.
+
+[Unit]
+Description=ci-observe per-test JUnit rollup
+After=workflow-exporter.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_trends.py --days 7

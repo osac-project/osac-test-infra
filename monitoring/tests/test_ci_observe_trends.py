@@ -617,3 +617,24 @@ def test_deployment_copies_the_rollup_script():
 
     assert "scripts/ci_observe_trends.py" in setup
     assert "ci_observe_run_evidence.py" in setup
+
+
+def test_rollup_is_mounted_in_the_exporter_and_scheduled_daily():
+    """The rollup runs inside the exporter container: that is where the token,
+    requests and the /data volume live. A timer runs it daily while the 7-day
+    artifact window still has the previous day."""
+    quadlet = (MONITORING / "quadlet" / "workflow-exporter.container").read_text()
+    assert "ci_observe_trends.py:/app/ci_observe_trends.py" in quadlet
+
+    service = (MONITORING / "systemd" / "ci-observe-trends.service").read_text()
+    assert "podman exec workflow-exporter python3 /app/ci_observe_trends.py --days 7" in service
+
+    timer = (MONITORING / "systemd" / "ci-observe-trends.timer").read_text()
+    assert "OnCalendar=*-*-* 04:15:00" in timer
+    assert "Persistent=true" in timer, "a missed day is a permanent hole in per-test history"
+
+    setup = (MONITORING / "scripts" / "monitoring-setup.sh").read_text()
+    assert "systemd/ci-observe-trends.service" in setup
+    assert "systemd/ci-observe-trends.timer" in setup
+    assert "systemctl --user enable --now ci-observe-trends.timer" in setup
+    assert "systemctl --user enable ci-observe-trends.timer" in setup
