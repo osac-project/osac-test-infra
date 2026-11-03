@@ -19,8 +19,8 @@ The split is deliberate:
 | What happened in the cluster: events? | Loki, Kubernetes events labelled by capture id | Loki image default | single run, captured only |
 | What did a pod log? | The run artifact (GitHub) | 7 days | single run |
 | How long did each job and step take? | Workflow exporter SQLite | 60 days | single run |
-| Overall job pass rate, duration, flake, MTTR | Central Prometheus `github_actions_*` and the exporter SQLite | 30 days metrics, 60 days SQLite | overall, every run |
-| Overall per-test pass rate and duration | Daily JUnit rollup (not built yet) | long | overall, every run |
+| Overall job pass rate, duration, MTTR | Central Prometheus `github_actions_*` and the exporter SQLite | 30 days metrics, 60 days SQLite | overall, every run |
+| Overall per-test pass rate, flake and duration | Per-run JUnit artifacts, rolled up daily into `trends.db` by `ci_observe_trends.py` | as long as each day is rolled up while its 7-day artifact exists | overall, every run |
 | The life of one pull request | Exporter `pr_merges` plus `pr_events` (not built yet) | 60 days | single PR |
 | Merge-queue attempts and ejections | `merge_group` workflow runs, linked by squash trailers; ejections derived from a failed run and the PR comment | GitHub retention | single PR |
 | Which hop dropped a connection? | Router access log (to be gathered) for the router hop; the adapter request log for the server hop | 7 days artifact | single run |
@@ -29,7 +29,7 @@ The split is deliberate:
 ## Rules
 
 1. **A rate names its population and its window.** "Pass rate, all jobs, 60 days" and "pass rate, captured runs, 30 days" are different numbers. They never share an axis.
-2. **Flake comes from all jobs.** A failure without telemetry still counts. Per-test flake needs the daily JUnit rollup, because the exporter stores job results, not test results.
+2. **Flake comes from all jobs.** A failure without telemetry still counts. Per-test flake reads `trends.db`, the daily JUnit rollup, because the exporter stores job results, not test results. A day that was never rolled up while its artifact existed is a permanent gap, never a green zero.
 3. **A single run's detail comes from its capture and artifact.** If the capture is missing, the artifact and the job history still answer what failed and when.
 4. **The session span is a cross-check, not the verdict.** A missing session span means "incomplete", never "failed".
 5. **The artifact is the only pod-log source today.** The collector is configured for `/var/log/pods` but cannot read it as an unprivileged user. When that changes, Loki becomes the source and the artifact stays the snapshot.
@@ -40,11 +40,12 @@ The split is deliberate:
 - Tempo is not the pass/fail record. It holds the run's own spans.
 - Prometheus is not a test record. It holds the cluster at 60-second resolution.
 - The exporter SQLite is not a per-test record. It holds jobs and steps; test outcomes come from JUnit.
+- `trends.db` is not a run record. It holds daily counts per test and source SHA, with no run id and no spans.
 - The GitHub artifact is not long-term history. It disappears after 7 days, so anything needed beyond that must be rolled up first.
 
 ## Gaps this table exposes
 
-- **Per-test history across all jobs**: a daily JUnit rollup does not exist yet. Until it does, per-test trends describe captured runs only.
+- **Per-test history across all jobs**: the daily rollup exists and `ci-observe-trends.timer` runs it, but the first run can only cover the 7 days GitHub still holds. Older history cannot be reconstructed.
 - **PR events and ejections**: `pr_events` does not exist, and GitHub keeps no merge-queue history.
 - **Router access logs**: not gathered, so the network hop has no recorded evidence.
 - **Pod logs in Loki**: blocked by the collector's permissions.
