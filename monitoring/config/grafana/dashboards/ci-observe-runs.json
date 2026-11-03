@@ -6,7 +6,23 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    {
+      "title": "Run evidence (steps, JUnit)",
+      "type": "link",
+      "url": "/d/ci-observe-run-evidence/ci-observe-run-evidence?var-capture_id=${capture_id}"
+    },
+    {
+      "title": "Cluster view",
+      "type": "link",
+      "url": "/d/ci-observe-cluster/ci-observe-cluster?var-capture_id=${capture_id}"
+    },
+    {
+      "title": "Compare runs",
+      "type": "link",
+      "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs"
+    }
+  ],
   "panels": [
     {
       "title": "Run overview",
@@ -803,7 +819,7 @@
       "targets": []
     },
     {
-      "title": "Run identity (expand - mostly 'not collected' on current captures)",
+      "title": "Run identity (source commit, harness commit, selection)",
       "description": "What exactly ran: the code under test, the harness revision, the workflow and the cluster. Fields stamped by newer ci-observe captures; older captures show 'not collected' for anything they predate.",
       "type": "row",
       "gridPos": {
@@ -1623,7 +1639,7 @@
             },
             "inspect": false
           },
-          "noValue": "No test spans in this capture"
+          "noValue": "No parent test spans for this capture. If the Tests card shows a number, this panel is still loading."
         },
         "overrides": [
           {
@@ -1941,7 +1957,7 @@
             },
             "inspect": false
           },
-          "noValue": "No test spans in this capture"
+          "noValue": "No parent test spans for this capture. If the Tests card shows a number, this panel is still loading."
         },
         "overrides": [
           {
@@ -2154,7 +2170,7 @@
             },
             "inspect": false
           },
-          "noValue": "No failed tests"
+          "noValue": "No parent test spans for this capture. If the Tests card shows a number, this panel is still loading."
         },
         "overrides": [
           {

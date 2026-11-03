@@ -228,7 +228,7 @@ def test_rows_present(dashboard: dict) -> None:
     assert titles == [
         "Run overview",
         "Collection coverage",
-        "Run identity (expand - mostly 'not collected' on current captures)",
+        "Run identity (source commit, harness commit, selection)",
         "Tests and workers",
         "Fixture work",
         "Waits",
@@ -1003,7 +1003,11 @@ def test_identity_row_collapsed_but_present(dashboard: dict) -> None:
     rows = [p for p in dashboard["panels"] if p.get("type") == "row"]
     identity = next(r for r in rows if "Run identity" in r["title"])
     assert identity["collapsed"] is True
-    assert "not collected" in identity["title"], "the collapsed title must summarize what is inside"
+    # The old title said the contents were "mostly not collected", which told
+    # a newcomer to skip the row. Name the fields instead.
+    assert "source commit" in identity["title"]
+    assert "harness commit" in identity["title"]
+    assert "not collected" not in identity["title"]
     children = identity.get("panels") or []
     assert len(children) == len(IDENTITY_ATTRIBUTES), "every identity stat must stay inside the row"
     assert all(c.get("title") in IDENTITY_ATTRIBUTES.values() for c in children)

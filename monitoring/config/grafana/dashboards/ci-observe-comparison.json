@@ -29,14 +29,14 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Exact cohorts require resolved source and harness SHAs; they appear once the Q1 identity fields reach live captures. Source-only cohorts are grouped by osac commit and suite word; they are **not exact** and are **not a baseline**, because the harness revision was not captured for them.\n\n**The sample rule:** a comparison needs at least 2 captures in the cohort, and a stable median needs 3. The **Sample status** line under the cohort tables states where the current selection stands. When it says \"No baseline\", the tables below show a single run's tests, not a comparison.\n\n**Observed time is not runner time.** Test spans include each test's setup and call time, tests run in parallel and overlap, and the total cannot be converted into runner minutes.\n\n**Loading:** panels can take up to two minutes to load; a blank body while loading is not an empty result. Each panel runs one TraceQL search against a slow trace backend, and a loaded panel states its own result: a number, a verdict, or an explicit empty message.\n\nFailed-test evidence is collapsed at the bottom of the page; expand that row to inspect it. You pick the cohort here. The run detail page links to this page but does not preselect a capture."
+        "content": "Exact cohorts require resolved source and harness SHAs; they appear once the Q1 identity fields reach live captures. Source-only cohorts are grouped by osac commit and suite word; they are **not exact** and are **not a baseline**, because the harness revision was not captured for them.\n\n**The sample rule:** a comparison needs at least 2 captures in the cohort, and a stable median needs 3. The **Sample status** line under the cohort tables states where the current selection stands. When it says \"No baseline\", the tables below show a single run's tests, not a comparison.\n\n**Observed time is not runner time.** Test spans include each test's setup and call time, tests run in parallel and overlap, and the total cannot be converted into runner minutes.\n\n**Loading:** panels can take up to two minutes to load; a blank body while loading is not an empty result. Each panel runs one TraceQL search against a slow trace backend, and a loaded panel states its own result: a number, a verdict, or an explicit empty message.\n\nFailed-test evidence is collapsed at the bottom of the page; expand that row to inspect it. Click the OSAC commit value in a cohort row to load that cohort. You pick the cohort here. The run detail page links to this page but does not preselect a capture."
       },
       "targets": []
     },
     {
       "id": 2,
       "title": "Exact cohorts",
-      "description": "Captures that share the full resolved run identity: osac commit (test_sha), harness checkout SHA, reusable workflow SHA and the exact pytest selection. Only cohorts with at least 2 captures are listed. The suite, filter, marker and requested ref travel with the link but stay hidden to keep the SHA columns readable. Click the resolved osac commit to open the comparison with every variable set.",
+      "description": "Captures that share the full resolved run identity: osac commit (test_sha), harness checkout SHA, reusable workflow SHA and the exact pytest selection. Only cohorts with at least 2 captures are listed. The suite, filter, marker and requested ref travel with the link but stay hidden to keep the SHA columns readable. Click the resolved osac commit to open the comparison with every variable set. Click the commit value in a row to load that cohort; clicking elsewhere in the row does nothing.",
       "type": "table",
       "gridPos": {
         "h": 6,
@@ -351,7 +351,7 @@
     {
       "id": 3,
       "title": "Source-revision cohorts (not exact)",
-      "description": "Captures grouped by requested osac commit and suite word. Captures whose harness checkout or workflow SHA resolved to a real commit are excluded, so exact and source rows never mix. The harness revision was not captured for these runs, so this is not an exact comparison and must not be used as a regression baseline. Click the osac commit to open the comparison.",
+      "description": "Captures grouped by requested osac commit and suite word. Captures whose harness checkout or workflow SHA resolved to a real commit are excluded, so exact and source rows never mix. The harness revision was not captured for these runs, so this is not an exact comparison and must not be used as a regression baseline. Click the osac commit to open the comparison. Click the commit value in a row to load that cohort; clicking elsewhere in the row does nothing.",
       "type": "table",
       "gridPos": {
         "h": 6,

@@ -6,7 +6,18 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    {
+      "title": "Run Investigation",
+      "type": "link",
+      "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?var-capture_id=${capture_id}"
+    },
+    {
+      "title": "Run evidence",
+      "type": "link",
+      "url": "/d/ci-observe-run-evidence/ci-observe-run-evidence?var-capture_id=${capture_id}"
+    }
+  ],
   "panels": [
     {
       "id": 1,
@@ -99,7 +110,10 @@
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "calcs": [],
+          "calcs": [
+            "max",
+            "last"
+          ],
           "showLegend": true
         },
         "tooltip": {
@@ -557,6 +571,10 @@
               "options": "Peak CPU"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "Peak CPU (cores)"
+              },
               {
                 "id": "unit",
                 "value": "short"
