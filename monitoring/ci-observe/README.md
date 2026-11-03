@@ -122,6 +122,7 @@ For debugging, ci-observe stores more than numbers: raw request parameters, exce
 - **Traces appear late.** Tempo hides freshly written data from search for up to 15 minutes. A run that just finished can be missing from a query and appear later.
 - **JUnit evidence expires.** The workflow exporter keeps native JUnit results for 7 days. Older captures have traces but no native pass/fail detail.
 - **One query per panel.** Each panel runs a single trace query. A page can take up to two minutes on a cold backend. A blank panel while loading is not an empty result.
+- **Tables below the fold load when you scroll to them.** An empty table you have not scrolled into view is not an empty result. Scroll the panel into view and wait.
 
 ## What to do when data is missing
 
