@@ -15,12 +15,15 @@ Open the **OSAC CI** folder in Grafana and pick **CI Observe — Test Runs**. Th
 
 A capture is one E2E workflow run that had ci-observe enabled. Its id has three parts: `bmaas-main-41318528583-a1` is the suite, the GitHub run id, and the run attempt.
 
-There are four dashboards. They answer different questions, and you normally read them in this order.
+The [model](model.md) explains the three units behind these pages: one run, one pull request, and many runs over time.
+
+There are five dashboards today. They answer different questions, and you normally read them in this order.
 
 | Dashboard | Question it answers | When to open it |
 | --- | --- | --- |
 | **CI Observe — Test Runs** | Which runs exist, which failed, which are missing data? | Always start here. |
 | **CI Observe — Run Investigation** | What happened inside one run? | After you pick a run. |
+| **CI Observe — Run evidence** | Where did the run's time go, and what did CI gather? | When you need step timings or the JUnit result. |
 | **CI Observe — Compare runs** | Did these runs get slower, and which tests dominate the time? | When you have two or more runs of the same revision. |
 | **CI Observe — Cluster** | How many pods existed, and what did they use in CPU and memory? | When a run looks slow and you suspect the cluster. |
 
@@ -136,6 +139,7 @@ For debugging, ci-observe stores more than numbers: raw request parameters, exce
 
 ## Where the details are
 
+- [`monitoring/ci-observe/model.md`](model.md): the product model. Three units, three surfaces, the shared keys and the rule for new panels.
 - [`monitoring/ci-observe.md`](../ci-observe.md): the operator reference. Architecture, deployment, validation and known backend gaps.
 - [`monitoring/README.md`](../README.md): the whole monitoring stack, including how to deploy it and how to reach Grafana.
 - [`monitoring/config/ci-observe/`](../config/ci-observe/): the cluster manifests for the gateway and Beyla.
