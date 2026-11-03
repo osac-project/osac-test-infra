@@ -438,15 +438,30 @@ their own, so they stay until deleted.
 
 Direct HTTPS on the central machine, GitHub OAuth login restricted to the
 `osac-project` org: `https://<central-host>:3000`. Dashboards are
-auto-provisioned into two folders. **CI Fleet** holds Runner Health, Runner
-Status, Workflow Jobs, Workflow Metrics, and Health Overview (a team-facing
-summary -- pass rate trend, flake rate, MTTR -- for standups and sprint reviews,
-see OSAC-2064). **ci-observe** holds the run, pull request and trend dashboards;
-see [`ci-observe/README.md`](ci-observe/README.md).
+auto-provisioned into two folders. **CI Fleet** holds five: **CI Fleet —
+Runner Health**, **CI Fleet — Runner Status**, **CI Fleet — Workflow Jobs**,
+**CI Fleet — Workflow Metrics**, and **CI Fleet — Health Overview** (a
+team-facing summary -- pass rate trend, flake rate, MTTR -- for standups and
+sprint reviews, see OSAC-2064). **ci-observe** holds the run, pull request and
+trend dashboards; see [`ci-observe/README.md`](ci-observe/README.md).
 
 Also reachable via an internal relay machine instead of the central host's
 public IP -- see [`vpn-relay-access.md`](vpn-relay-access.md) for why and
 how to set one up.
+
+## Retention
+
+Each store drops its data on its own schedule. A Grafana time range wider than
+the shortest store shows gaps, not zeros.
+
+| Data | Store | Kept for |
+|---|---|---|
+| Traces | Tempo 2.10 | 30 days; queries over 7 days are rejected |
+| ci-observe metrics (one sample per 60 seconds) | ci-observe Prometheus | 15 days |
+| Run artifact and JUnit XML | GitHub | 7 days |
+| Job history | workflow exporter SQLite | 60 days |
+| Logs | Loki | the image default |
+| Fleet metrics | central Prometheus | 30 days |
 
 ## Troubleshooting
 

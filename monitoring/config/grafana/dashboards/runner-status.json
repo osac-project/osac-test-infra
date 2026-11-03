@@ -477,7 +477,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "OSAC CI - Runner Status",
+  "title": "CI Fleet — Runner Status",
   "uid": "osac-runner-status",
   "version": 1
 }

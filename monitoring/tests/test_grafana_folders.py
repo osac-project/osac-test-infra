@@ -7,6 +7,7 @@ stays flat and every dashboard test keeps reading its file at one path.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -59,11 +60,21 @@ def test_known_dashboards_are_in_the_expected_folder() -> None:
         assert actual == folder, f"{name} belongs to {folder}"
 
 
+def test_dashboard_titles_name_their_folder() -> None:
+    """A dashboard titled "OSAC CI - ..." in CI Fleet reads as a different product."""
+    for path in sorted(DASHBOARDS.glob("*.json")):
+        dashboard = json.loads(path.read_text())
+        prefix = "CI Observe — " if path.name.startswith("ci-observe-") else "CI Fleet — "
+        assert dashboard["title"].startswith(prefix), (
+            f"{path.name} is titled {dashboard['title']!r}, expected it to start with {prefix!r}"
+        )
+
+
 def test_setup_script_splits_the_files_by_name() -> None:
     script = SETUP.read_text()
     assert "deploy_dashboards()" in script, "the dashboard copy step has no single function"
     assert script.count("deploy_dashboards\n") >= 2, "both deploy paths must call deploy_dashboards"
     assert "ci-observe-*)" in script, "the split needs a ci-observe prefix branch"
-    assert 'ci-fleet/${base}' in script, "everything else must go to CI Fleet"
+    assert "ci-fleet/${base}" in script, "everything else must go to CI Fleet"
     assert 'ci-fleet"/*.json' in script, "stale Fleet dashboards must be removed"
     assert 'ci-observe"/*.json' in script, "stale ci-observe dashboards must be removed"
