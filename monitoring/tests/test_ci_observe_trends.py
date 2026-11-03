@@ -508,6 +508,15 @@ def rollup(trends, exporter, tmp_path):
     return path
 
 
+def test_a_day_may_only_be_replaced_when_every_stored_run_is_still_readable(trends):
+    """Counts are not enough. If A parsed and B did not, then A expires and B
+    becomes readable, the count stays 1 while A's only copy would be lost."""
+    assert trends.day_is_superset([], [1]) is True
+    assert trends.day_is_superset([1], [1, 2]) is True
+    assert trends.day_is_superset([1], [2]) is False
+    assert trends.day_is_superset([1, 2], [1]) is False
+
+
 class TestEndpoint:
     def test_the_row_cap_keeps_the_newest_days(self, exporter, rollup, trends, monkeypatch):
         """The cap is rows, not days. It must drop the oldest rows, or the

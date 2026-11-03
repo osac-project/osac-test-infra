@@ -33,6 +33,7 @@ one run's page and wrong for a per-test time series.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import os
@@ -111,7 +112,10 @@ CREATE TABLE IF NOT EXISTS rollup_days (
     runs_listed INTEGER NOT NULL,
     runs_parsed INTEGER NOT NULL,
     runs_unavailable INTEGER NOT NULL,
-    generated_at TEXT NOT NULL
+    generated_at TEXT NOT NULL,
+    -- The run ids whose outcomes are stored for this day. A replacement
+    -- must include every one of them; counts are not enough.
+    parsed_run_ids TEXT NOT NULL DEFAULT '[]'
 );
 """
 
@@ -427,7 +431,22 @@ def open_trends_db(path):
     conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(rollup_days)")}
+    if "parsed_run_ids" not in columns:
+        conn.execute("ALTER TABLE rollup_days ADD COLUMN parsed_run_ids TEXT NOT NULL DEFAULT '[]'")
+        conn.commit()
     return conn
+
+
+def day_is_superset(previous_ids, current_ids):
+    """Can this pass replace the stored day?
+
+    Every run whose outcomes are stored must still be represented in this
+    pass. A count is not enough: if A parsed and B was unavailable on one
+    pass, then A expires and B becomes readable, the count stays 1 while
+    A's outcomes, the only copy, would be deleted.
+    """
+    return set(previous_ids) <= set(current_ids)
 
 
 def write_day(conn, day, rows, coverage):
@@ -446,9 +465,10 @@ def write_day(conn, day, rows, coverage):
         )
         conn.execute("DELETE FROM rollup_days WHERE day = ?", (day,))
         conn.execute(
-            "INSERT INTO rollup_days (day, runs_listed, runs_parsed, runs_unavailable, generated_at)"
-            " VALUES (:day, :runs_listed, :runs_parsed, :runs_unavailable, :generated_at)",
-            coverage,
+            "INSERT INTO rollup_days"
+            " (day, runs_listed, runs_parsed, runs_unavailable, generated_at, parsed_run_ids)"
+            " VALUES (:day, :runs_listed, :runs_parsed, :runs_unavailable, :generated_at, :parsed_run_ids)",
+            {**coverage, "parsed_run_ids": json.dumps(coverage.get("parsed_run_ids", []))},
         )
 
 
@@ -503,12 +523,14 @@ def main(argv=None):
     fetcher = ArtifactFetcher()
     listed = {}
     parsed = {}
+    parsed_ids = {}
     for position, run in enumerate(runs, 1):
         cases, reason = fetcher.fetch(run["repo"], run["run_id"])
         run["cases"] = cases or []
         listed[run["day"]] = listed.get(run["day"], 0) + 1
         if cases:
             parsed[run["day"]] = parsed.get(run["day"], 0) + 1
+            parsed_ids.setdefault(run["day"], []).append(run["run_id"])
             logger.info("  [%d/%d] %s run %s: %d test(s)", position, len(runs), run["repo"], run["run_id"], len(cases))
         else:
             logger.info(
@@ -523,13 +545,24 @@ def main(argv=None):
             # Never replace a stored day with a thinner pass. Artifacts expire
             # after 7 days, so a later run for the same day reads fewer of
             # them; rewriting would delete rows that are the only copy.
-            previous = conn.execute("SELECT runs_parsed FROM rollup_days WHERE day = ?", (day,)).fetchone()
-            if previous and previous["runs_parsed"] > parsed.get(day, 0):
-                logger.warning(
-                    "%s: only %d run(s) readable now, %d were rolled up before; keeping the stored rollup",
-                    day, parsed.get(day, 0), previous["runs_parsed"],
-                )
-                continue
+            previous = conn.execute(
+                "SELECT runs_parsed, parsed_run_ids FROM rollup_days WHERE day = ?", (day,)
+            ).fetchone()
+            current_ids = sorted(parsed_ids.get(day, []))
+            if previous:
+                previous_ids = json.loads(previous["parsed_run_ids"] or "[]")
+                if not day_is_superset(previous_ids, current_ids):
+                    logger.warning(
+                        "%s: stored run(s) %s are not all readable now %s; keeping the stored rollup",
+                        day, sorted(set(previous_ids) - set(current_ids)), current_ids,
+                    )
+                    continue
+                if previous["runs_parsed"] > parsed.get(day, 0):
+                    logger.warning(
+                        "%s: only %d run(s) readable now, %d were rolled up before; keeping the stored rollup",
+                        day, parsed.get(day, 0), previous["runs_parsed"],
+                    )
+                    continue
             rows = rollup_rows(day_runs)
             write_day(conn, day, rows, {
                 "day": day,
@@ -537,6 +570,7 @@ def main(argv=None):
                 "runs_parsed": parsed.get(day, 0),
                 "runs_unavailable": listed[day] - parsed.get(day, 0),
                 "generated_at": generated_at,
+                "parsed_run_ids": current_ids,
             })
             logger.info(
                 "%s: %d run(s) listed, %d parsed, %d without readable test data, %d rollup row(s)",
