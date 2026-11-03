@@ -166,12 +166,39 @@ receivers:
   # far lost its cluster metrics. Pod and container identity (k8s.pod.name,
   # k8s.namespace.name, k8s.pod.uid, k8s.container.name) comes from
   # /stats/summary itself and needs no extra call; only container.id would
-  # need /pods, and it is not worth the wider grant.
+  # need /pods, and it is not worth the wider grant. The
+  # *_limit_utilization and *_request_utilization metrics are off by default
+  # and stay off: enabling them makes the scraper fetch /pods as well
+  # (needsResources, scraper.go), the exact call above that aborts a scrape.
+  #
+  # Restarts, ready state and the last termination reason are not metrics in
+  # kubeletstats 0.164: metadata.yaml lists no such metric, and the summary
+  # API has no field for them, so no metric name enabled here produces them.
+  # The k8s_objects pods watch already sends the pod object, whose
+  # status.containerStatuses carries restartCount, ready and
+  # lastState.terminated.reason, to Loki. container.uptime is the one
+  # restart signal reachable without /pods: the kubelet resets it when a
+  # container restarts, so a drop is a restart and the value is the time
+  # since the container started. It is off by default, so it is enabled
+  # here. k8s.pod.uptime stays off: a recreated pod already arrives as a new
+  # k8s.pod.uid.
+  #
+  # k8s.node.name: node and system-container metrics carry it from the
+  # summary API's node name, with no extra call. Pod and container metrics
+  # cannot, because /stats/summary identifies a pod by name, namespace and
+  # uid only. A pod's node name is spec.nodeName on the pod object, so the
+  # pods watch copies it to k8s.node.name (transform/k8s_objects below). It
+  # arrives in Loki as structured metadata under the name k8s_node_name,
+  # filtered with `| k8s_node_name="..."`, so the pod-to-node mapping is a
+  # Loki fact and never a Prometheus label on pod series.
   kubelet_stats:
     auth_type: serviceAccount
     endpoint: ${env:CI_OBSERVE_KUBELET_ENDPOINT}
     collection_interval: 60s
     insecure_skip_verify: true
+    metrics:
+      container.uptime:
+        enabled: true
 
 processors:
   resource/capture:
@@ -312,6 +339,10 @@ processors:
           # never reach the capture file. file_log records have no
           # k8s.resource.name attribute and skip these statements.
           - delete_key(body["object"]["metadata"], "managedFields") where IsMap(body["object"])
+          # Pod-to-node mapping: the node name is in spec, which the next
+          # statement drops. Copy it to an attribute first, so a pod record
+          # still says which node the pod ran on.
+          - set(attributes["k8s.node.name"], body["object"]["spec"]["nodeName"]) where attributes["k8s.resource.name"] == "pods" and IsMap(body["object"]["spec"])
           - keep_keys(body["object"], ["metadata", "status"]) where IsMap(body["object"]) and attributes["k8s.resource.name"] != nil and attributes["k8s.resource.name"] != "events"
           - keep_keys(body["object"], ["metadata", "involvedObject", "reason", "message", "type", "count", "firstTimestamp", "lastTimestamp", "eventTime", "reportingComponent", "reportingInstance", "source"]) where IsMap(body["object"]) and attributes["k8s.resource.name"] == "events"
           # The same two secret rules on raw pod log bodies (string bodies
