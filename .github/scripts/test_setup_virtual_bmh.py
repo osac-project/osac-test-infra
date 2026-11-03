@@ -23,7 +23,14 @@ TEARDOWN_SCRIPT = ROOT / ".github/scripts/teardown.sh"
 
 
 class SetupVirtualBmhTests(unittest.TestCase):
-    def _run_setup(self, size: str | None, *, invalid_inventory: bool = False) -> tuple:
+    def _run_setup(
+        self,
+        size: str | None,
+        *,
+        invalid_inventory: bool = False,
+        orphan_inventory: str | None = None,
+        dangling: bool = False,
+    ) -> tuple:
         """Execute real orchestration, VM CLI and reconciliation without services."""
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
@@ -40,6 +47,17 @@ class SetupVirtualBmhTests(unittest.TestCase):
             inventory = temp / "virtual-bmh-inventory-contract.json"
             if invalid_inventory:
                 inventory.write_text("invalid inventory")
+            disks = temp / "custom" / "virtual-bmh-disks-contract"
+            if orphan_inventory:
+                disks.mkdir(parents=True)
+                orphan = disks / "virtual-bmh-1234abcd-01-data.qcow2"
+                if dangling:
+                    orphan.symlink_to(temp / "absent")
+                else:
+                    orphan.write_bytes(b"keep")
+                if orphan_inventory == "empty":
+                    inventory.write_text(json.dumps({"name_prefix": "virtual-bmh-1234abcd", "hosts": []}))
+                inventory_before = inventory.read_bytes() if inventory.exists() else None
             env = fakes.env(
                 HOME=str(temp),
                 CLONE_NAME="contract",
@@ -59,6 +77,13 @@ class SetupVirtualBmhTests(unittest.TestCase):
             if invalid_inventory:
                 self.assertEqual(inventory.read_text(), "invalid inventory")
                 self.assertFalse((temp / "custom").exists())
+            if orphan_inventory and size:
+                self.assertEqual(inventory.read_bytes() if inventory.exists() else None, inventory_before)
+                self.assertEqual(list(disks.iterdir()), [orphan])
+                if dangling:
+                    self.assertEqual(orphan.readlink(), temp / "absent")
+                else:
+                    self.assertEqual(orphan.read_bytes(), b"keep")
             return result, calls, domains, manifests
 
     def test_workflow_option_reaches_actual_vm_consumer(self) -> None:
@@ -94,6 +119,25 @@ class SetupVirtualBmhTests(unittest.TestCase):
         self.assertEqual(len(domains), 2)
         for domain in domains:
             self.assertEqual(len(domain.findall("./devices/disk")), 2)
+
+    def test_orphans_fail_before_services_and_reconciliation(self) -> None:
+        """The thin consumer must reject even dangling remnants before external commands."""
+        for state in ("missing", "empty"):
+            for dangling in (False, True):
+                with self.subTest(state=state, dangling=dangling):
+                    result, calls, domains, manifests = self._run_setup(
+                        "50G", orphan_inventory=state, dangling=dangling
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(calls, "")
+                    self.assertEqual(domains, [])
+                    self.assertEqual(manifests, [])
+
+    def test_disabled_data_mode_keeps_upstream_creation_with_remnants(self) -> None:
+        result, _, domains, _ = self._run_setup(None, orphan_inventory="empty")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(domains), 2)
+        self.assertTrue(all(len(domain.findall("./devices/disk")) == 1 for domain in domains))
 
     def test_invalid_option_and_inventory_fail_before_services(self) -> None:
         for size in ("0G", "-1G", "1.5G", "50GB", " 50G", "50G\n", "$(false)"):
