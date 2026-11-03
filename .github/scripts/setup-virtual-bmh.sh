@@ -21,6 +21,7 @@
 #   BMH_COUNT        — number of virtual BMHs to create (default: 2)
 #   BMH_CPU          — vCPUs per virtual BMH (default: 4)
 #   BMH_MEMORY_MIB   — memory per virtual BMH in MiB (default: 8192)
+#   BMH_DATA_DISK_SIZE — optional blank data disk, e.g. 50G (default: disabled)
 #   SUSHY_PORT       — sushy-tools listen port (default: 8000)
 #   SUSHY_CACHE_PORT — nginx ISO cache listen port (default: 8080)
 #   VM_DISK_DIR      — parent directory for the clone's BMH disks
@@ -38,6 +39,11 @@ BMH_NAMESPACE="${BMH_NAMESPACE:-host-inventory}"
 BMH_COUNT="${BMH_COUNT:-2}"
 BMH_CPU="${BMH_CPU:-4}"
 BMH_MEMORY_MIB="${BMH_MEMORY_MIB:-8192}"
+BMH_DATA_DISK_SIZE="${BMH_DATA_DISK_SIZE:-}"
+if [[ -n "${BMH_DATA_DISK_SIZE}" && ! "${BMH_DATA_DISK_SIZE}" =~ ^[1-9][0-9]*[kMGT]?$ ]]; then
+  echo "ERROR: BMH_DATA_DISK_SIZE must be a positive integer with optional k/M/G/T suffix." >&2
+  exit 1
+fi
 SUSHY_PORT="${SUSHY_PORT:-8000}"
 SUSHY_CACHE_PORT="${SUSHY_CACHE_PORT:-8080}"
 
@@ -66,6 +72,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VIRSH="virsh -c qemu:///system"
+
+if [[ -n "${BMH_DATA_DISK_SIZE}" ]]; then
+  python3 "${SCRIPT_DIR}/manage-virtual-bmh-vms.py" validate-data-storage \
+    --inventory-file "${INVENTORY_FILE}" --disk-dir "${VM_DISK_DIR}"
+fi
 
 # --- Discover the clone's libvirt network and its gateway IP ---
 echo "==> Discovering cluster-tool network..."
@@ -108,6 +119,9 @@ VM_ARGS=(
   --cpu "${BMH_CPU}"
   --memory-mib "${BMH_MEMORY_MIB}"
 )
+if [[ -n "${BMH_DATA_DISK_SIZE}" ]]; then
+  VM_ARGS+=(--data-disk-size "${BMH_DATA_DISK_SIZE}")
+fi
 python3 "${SCRIPT_DIR}/manage-virtual-bmh-vms.py" create "${VM_ARGS[@]}"
 
 # --- Reconcile the BareMetalHosts with the raw inventory ---
