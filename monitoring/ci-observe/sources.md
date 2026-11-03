@@ -22,7 +22,7 @@ The split is deliberate:
 | Overall job pass rate, duration, MTTR | Central Prometheus `github_actions_*` and the exporter SQLite | 30 days metrics, 60 days SQLite | overall, every run |
 | Overall per-test pass rate, flake and duration | Per-run JUnit artifacts, rolled up daily into `trends.db` by `ci_observe_trends.py` | as long as each day is rolled up while its 7-day artifact exists | overall, every run |
 | The life of one pull request | Exporter `pr_merges` plus `pr_events` and `pr_queue_attempts` in `prs.db`, from the one-shot backfill | 60 days | single PR |
-| Merge-queue attempts and ejections | `merge_group` workflow runs, linked by the `gh-readonly-queue` branch name and queue comments that name a run; ejections derived from a failed run and the comment | GitHub retention | single PR |
+| Merge-queue attempts and ejections | `merge_group` workflow runs, linked by the `gh-readonly-queue` branch name and queue comments that name a run; runs that share `head_branch` and `head_sha` are one attempt; ejections derived from a failed attempt and the comment | GitHub retention | single PR |
 | Which hop dropped a connection? | Router access log (to be gathered) for the router hop; the adapter request log for the server hop | 7 days artifact | single run |
 | Runner, machine and queue health | CI Fleet: central Prometheus and the runner exporters | 30 days | overall, fleet |
 

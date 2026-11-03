@@ -102,6 +102,12 @@ PR_DOCUMENT = {
             "number": 101,
             "run_id": 5001,
             "run_attempt": 1,
+            "run_ids": [5001, 5003],
+            "run_count": 2,
+            "run_urls": [
+                "https://github.com/osac-project/osac/actions/runs/5001",
+                "https://github.com/osac-project/osac/actions/runs/5003",
+            ],
             "conclusion": "failure",
             "started_at": "2026-10-01T11:00:00Z",
             "completed_at": "2026-10-01T11:05:00Z",

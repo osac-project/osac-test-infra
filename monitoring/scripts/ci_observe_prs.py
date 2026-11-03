@@ -17,11 +17,15 @@ What is fetched, per pull request (one pass, no repeats):
   - the commits (commit count)
 
 Merge-queue runs are fetched once per repository, not per pull request:
-`GET /repos/{org}/{repo}/actions/runs?event=merge_group&created=>=<cutoff>`.
-Each run's head branch is `gh-readonly-queue/<base>/pr-<N>-<sha>`, the only
-place GitHub exposes the PR number of a queue run. A comment on a PR that
-links a run id adds that run to the PR as well, because one merge group can
-carry up to four pull requests while its branch names only one.
+`GET /repos/{org}/{repo}/actions/runs?event=merge_group&created=<cutoff>..<now>`.
+The runs list stops near 1000 results, so a busy window is split in half
+until each query fits. Each run's head branch is
+`gh-readonly-queue/<base>/pr-<N>-<sha>`, the only place GitHub exposes the
+PR number of a queue run. A comment on a PR that links a run id adds that
+run to the PR as well, because one merge group can carry up to four pull
+requests while its branch names only one. One queue entry starts several
+workflows that share (head_branch, head_sha); those runs become one queue
+attempt, so a clean multi-workflow pass is not counted as ejections.
 
 GitHub keeps no merge-queue history: an ejected entry disappears. An
 ejection is therefore derived from a failed (or cancelled) merge_group run
@@ -50,7 +54,6 @@ import re
 import sqlite3
 import sys
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote
 
 import requests
 
@@ -66,6 +69,9 @@ PRS_DB_FILE = os.path.join(CACHE_DIR, "prs.db")
 PRS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "60"))
 DEFAULT_INDEX_DAYS = 30
 PAGE_SIZE = 100
+# GitHub's actions/runs list stops near 1000 results. Split a merge-group
+# window before it reaches that, the same safe limit the exporter uses.
+MERGE_GROUP_SAFE_RESULT_LIMIT = 900
 # Stop a run before it drains the token: 5000 requests/hour is the shared
 # budget of the exporter and every interactive GitHub call. A stopped run
 # leaves the remaining pull requests unstored, and the next run resumes.
@@ -178,6 +184,15 @@ def pr_url(repo, number):
     return f"https://github.com/{ORG}/{repo}/pull/{number}"
 
 
+def _unique_runs(runs):
+    """One entry per run id. Bisected windows share their midpoint, so the
+    same run can come back from both halves."""
+    unique = {}
+    for run in runs:
+        unique.setdefault(run["id"], run)
+    return list(unique.values())
+
+
 def is_bot(user):
     if not user:
         return False
@@ -227,6 +242,20 @@ def ejection_kind(conclusion, reason):
     if "removed from the merge queue" in text:
         return "removed"
     return "unknown"
+
+
+def _entry_conclusion(runs):
+    """One conclusion for a queue entry. Several workflows start on the same
+    entry; a real failure outranks the cancellations it caused."""
+    conclusions = {run.get("conclusion") or "" for run in runs}
+    for conclusion in ("failure", "timed_out", "startup_failure", "action_required"):
+        if conclusion in conclusions:
+            return conclusion
+    if "cancelled" in conclusions:
+        return "cancelled"
+    if conclusions and all(conclusion == "success" for conclusion in conclusions):
+        return "success"
+    return ""
 
 
 def final_stage(state, first_review_at, first_approval_at, queued_at):
@@ -332,6 +361,7 @@ class CIObservePRs:
                     run_attempt INTEGER,
                     branch TEXT,
                     head_sha TEXT,
+                    run_ids TEXT,
                     conclusion TEXT,
                     started_at TEXT,
                     completed_at TEXT,
@@ -351,6 +381,11 @@ class CIObservePRs:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_events_merged_at ON pr_events(merged_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_events_closed_at ON pr_events(closed_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_queue_attempts_pr ON pr_queue_attempts(repo, number)")
+            # A database written before `run_ids` existed keeps every other
+            # column; add the new one in place instead of dropping the file.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(pr_queue_attempts)")}
+            if "run_ids" not in columns:
+                conn.execute("ALTER TABLE pr_queue_attempts ADD COLUMN run_ids TEXT")
 
     # -- GitHub plumbing ----------------------------------------------------
 
@@ -364,11 +399,15 @@ class CIObservePRs:
             self.rate_limit_remaining = int(remaining)
         return resp
 
-    def _get_page(self, url):
-        """One page: (items, next_url or None). A non-2xx page is a gap in
-        the pass, not a crash -- the caller records the affected pull
-        request as incomplete so the next run retries it."""
-        resp = self._get(url)
+    def _get_page(self, url) -> tuple[list | dict | None, str | None]:
+        """One page: (items, next_url or None). A non-2xx page or a network
+        error is a gap in the pass, not a crash -- the caller records the
+        affected pull request as incomplete so the next run retries it."""
+        try:
+            resp = self._get(url)
+        except requests.RequestException as exc:
+            logger.warning("GitHub request failed for %s: %s", url, exc)
+            return None, None
         if not resp.ok:
             logger.warning("GitHub %s returned %s for %s", resp.status_code, resp.text[:200], url)
             return None, None
@@ -424,7 +463,7 @@ class CIObservePRs:
 
         for repo in self._list_repos():
             repo_summary = {"repo": repo, "prs_stored": 0, "prs_skipped": 0, "prs_failed": 0, "attempts_stored": 0}
-            merge_runs = self._fetch_merge_group_runs(repo, cutoff_iso)
+            merge_runs = self._fetch_merge_group_runs(repo, cutoff_iso, now)
             prs = self._fetch_closed_prs(repo, cutoff)
             stored = 0
             for pr in prs:
@@ -486,17 +525,56 @@ class CIObservePRs:
                 break
         return prs
 
-    def _fetch_merge_group_runs(self, repo, cutoff_iso):
-        """Every merge_group run created in the window, once per repo. The
-        runs API filters by creation date server-side, so this is a few
-        pages, not the repo's whole run history."""
-        created = quote(f">={cutoff_iso}", safe="")
-        url = f"{API_URL}/repos/{ORG}/{repo}/actions/runs?event=merge_group&created={created}&per_page={PAGE_SIZE}"
-        runs = []
-        while url:
-            page, url = self._get_page(url)
+    def _fetch_merge_group_runs(self, repo, cutoff_iso, until=None) -> list[dict]:
+        """Every merge_group run created in the window, once per repo.
+
+        The runs list stops near 1000 results, so a window with more runs is
+        split in half until each query fits. Without that split, runs past
+        the cap would be dropped and their pull requests would lose queue
+        attempts without any error.
+        """
+        cutoff = parse_iso(cutoff_iso)
+        if cutoff is None:
+            return []
+        return self._fetch_merge_group_range(repo, cutoff, until or datetime.now(UTC))
+
+    def _fetch_merge_group_range(self, repo, since_dt, until_dt) -> list[dict]:
+        since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        until_iso = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        url = (
+            f"{API_URL}/repos/{ORG}/{repo}/actions/runs?event=merge_group"
+            f"&created={since_iso}..{until_iso}&per_page={PAGE_SIZE}"
+        )
+        try:
+            probe = self._get(url)
+        except requests.RequestException as exc:
+            logger.warning("GitHub request failed for %s: %s", url, exc)
+            return []
+        if not probe.ok:
+            logger.warning("GitHub %s returned %s for %s", probe.status_code, probe.text[:200], url)
+            return []
+        payload = probe.json()
+        total_count = payload.get("total_count") or 0
+        if total_count > MERGE_GROUP_SAFE_RESULT_LIMIT and (until_dt - since_dt) > timedelta(hours=1):
+            mid = since_dt + (until_dt - since_dt) / 2
+            logger.info(
+                "%s [%s..%s]: %d merge_group runs, splitting at %s",
+                repo,
+                since_iso,
+                until_iso,
+                total_count,
+                mid.isoformat(),
+            )
+            runs = self._fetch_merge_group_range(repo, since_dt, mid)
+            runs += self._fetch_merge_group_range(repo, mid, until_dt)
+            return _unique_runs(runs)
+
+        runs = payload.get("workflow_runs") or []
+        next_url = probe.links.get("next", {}).get("url")
+        while next_url:
+            page, next_url = self._get_page(next_url)
             if page is None:
-                return runs
+                break
             runs.extend(page.get("workflow_runs") or [])
         return [run for run in runs if run.get("event") == "merge_group"]
 
@@ -591,8 +669,13 @@ class CIObservePRs:
             "fetched_at": fetched_at,
         }
 
-    def _build_attempts(self, repo, number, merge_runs, timeline):
-        """One row per merge_group run this pull request took part in.
+    def _build_attempts(self, repo, number, merge_runs, timeline) -> list[dict]:
+        """One row per merge-queue entry this pull request took part in.
+
+        One queue entry starts several workflows (CI, E2E, jira-reference,
+        and so on). Those runs share (head_branch, head_sha), so grouping by
+        that pair turns them into one attempt instead of N attempts and N-1
+        false ejections.
 
         A run joins the PR by (a) its gh-readonly-queue branch, which names
         one PR, or (b) a PR comment that links the run id, which is how the
@@ -614,24 +697,46 @@ class CIObservePRs:
         ]
         mine.sort(key=lambda run: run.get("created_at") or "")
 
+        entries = {}
+        for run in mine:
+            branch = run.get("head_branch") or ""
+            head_sha = run.get("head_sha") or ""
+            # A run without both keys cannot be grouped with another run.
+            key = (branch, head_sha) if branch and head_sha else (branch, head_sha, run["id"])
+            entries.setdefault(key, []).append(run)
+        ordered = sorted(entries.values(), key=lambda group: min(run.get("created_at") or "" for run in group))
+
         comments = [event for event in timeline if event.get("event") == "commented" and event.get("created_at")]
         fetched_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         attempts = []
-        for index, run in enumerate(mine):
-            next_start = mine[index + 1].get("created_at") if index + 1 < len(mine) else None
-            attempts.append(self._build_attempt(repo, number, run, comments, next_start, fetched_at))
+        for index, group in enumerate(ordered):
+            next_start = None
+            if index + 1 < len(ordered):
+                next_start = min(run.get("created_at") or "" for run in ordered[index + 1])
+            attempts.append(self._build_attempt(repo, number, group, comments, next_start, fetched_at))
         return attempts
 
-    def _build_attempt(self, repo, number, run, comments, next_start, fetched_at):
-        conclusion = run.get("conclusion") or ""
-        started_at = run.get("run_started_at") or run.get("created_at")
-        completed_at = run.get("updated_at") if run.get("status") == "completed" else None
+    def _build_attempt(self, repo, number, runs, comments, next_start, fetched_at) -> dict:
+        runs = sorted(runs, key=lambda run: run.get("created_at") or "")
+        primary = runs[0]
+        conclusion = _entry_conclusion(runs)
+
+        starts = [run.get("run_started_at") or run.get("created_at") for run in runs]
+        starts = [start for start in starts if start]
+        started_at = min(starts) if starts else None
+        # An entry is complete only when every one of its workflows is.
+        completed_at = None
+        if all(run.get("status") == "completed" for run in runs):
+            completed = [run.get("updated_at") for run in runs if run.get("updated_at")]
+            completed_at = max(completed) if completed else None
+
+        failed = conclusion not in ("", "success")
         has_successor = next_start is not None
-        ejected = bool(has_successor) or conclusion not in ("", "success")
+        ejected = failed or has_successor
 
         reason, source, comment_url, comment_author, comment_at = ("", "", "", "", "")
-        if ejected and conclusion != "success":
-            comment = self._queue_comment(comments, run, next_start)
+        if ejected and failed:
+            comment = self._queue_comment(comments, primary, next_start)
             if comment is not None:
                 reason = clean_comment_body(comment.get("body"))
                 source = "comment"
@@ -639,22 +744,23 @@ class CIObservePRs:
                 comment_author = (comment.get("user") or {}).get("login") or ""
                 comment_at = comment.get("created_at") or ""
             if not reason:
-                reason = f"merge_group run {run['id']} concluded {conclusion or 'no conclusion'}"
+                reason = f"merge_group entry (run {primary['id']}) concluded {conclusion or 'no conclusion'}"
                 source = "run"
 
         return {
             "repo": repo,
             "number": number,
-            "run_id": run["id"],
-            "run_number": run.get("run_number"),
-            "run_attempt": run.get("run_attempt"),
-            "branch": run.get("head_branch") or "",
-            "head_sha": run.get("head_sha") or "",
+            "run_id": primary["id"],
+            "run_number": primary.get("run_number"),
+            "run_attempt": primary.get("run_attempt"),
+            "branch": primary.get("head_branch") or "",
+            "head_sha": primary.get("head_sha") or "",
+            "run_ids": json.dumps([run["id"] for run in runs]),
             "conclusion": conclusion,
             "started_at": started_at,
             "completed_at": completed_at,
             "duration_seconds": seconds_between(started_at, completed_at),
-            "url": run.get("html_url") or "",
+            "url": primary.get("html_url") or "",
             "ejected": 1 if ejected else 0,
             "ejection_reason": reason,
             "ejection_kind": ejection_kind(conclusion, reason) if ejected else "",
@@ -891,7 +997,9 @@ class CIObservePRs:
         for row in rows:
             row_attempts = attempts.get((row["repo"], row["number"]), [])
             row["url"] = row.get("url") or pr_url(row["repo"], row["number"])
-            row["age_seconds"] = seconds_between(row["opened_at"], _utc_now())
+            row["age_seconds"] = row.get("total_seconds")
+            if row["age_seconds"] is None:
+                row["age_seconds"] = seconds_between(row["opened_at"], _utc_now())
             row["queue_attempt_count"] = len(row_attempts)
             row["ejected_attempt_count"] = sum(1 for a in row_attempts if a["ejected"])
             row["age_display"] = human_duration(row["age_seconds"])
@@ -995,6 +1103,11 @@ def _funnel(rows):
 def _attempt_out(row):
     """The queue-attempt row as the dashboard reads it."""
     attempt = dict(row)
+    attempt["run_ids"] = _stored_run_ids(attempt.get("run_ids"), attempt.get("run_id"))
+    attempt["run_count"] = len(attempt["run_ids"])
+    attempt["run_urls"] = [
+        f"https://github.com/{ORG}/{attempt['repo']}/actions/runs/{run_id}" for run_id in attempt["run_ids"]
+    ]
     attempt["run_url"] = attempt.get("url") or ""
     attempt["duration_display"] = human_duration(attempt.get("duration_seconds"))
     attempt["ejected"] = bool(attempt.get("ejected"))
@@ -1003,6 +1116,18 @@ def _attempt_out(row):
     # link explicit instead of leaving the column off the dashboard.
     attempt["capture_url"] = ""
     return attempt
+
+
+def _stored_run_ids(value, run_id):
+    """The workflow run ids of one queue attempt. A row written before the
+    grouping carries only its primary run id."""
+    try:
+        ids = json.loads(value) if value else []
+    except (TypeError, ValueError):
+        ids = []
+    if not ids and run_id is not None:
+        ids = [run_id]
+    return ids
 
 
 # ---------------------------------------------------------------------------

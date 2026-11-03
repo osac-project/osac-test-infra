@@ -32,9 +32,9 @@ import urllib.request
 from datetime import UTC, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote
 
 import pytest
+import requests
 from helpers import FakeGitHub, FakeResponse
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ci_observe_prs"
@@ -56,10 +56,13 @@ def load_fixture(name):
 
 
 def merge_runs_path(now=NOW, days=DAYS):
-    cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return runs_window_path(now - timedelta(days=days), now)
+
+
+def runs_window_path(since, until):
     return (
         f"/repos/osac-project/{REPO}/actions/runs?event=merge_group"
-        f"&created={quote(f'>={cutoff}', safe='')}&per_page=100"
+        f"&created={since.strftime('%Y-%m-%dT%H:%M:%SZ')}..{until.strftime('%Y-%m-%dT%H:%M:%SZ')}&per_page=100"
     )
 
 
@@ -104,7 +107,7 @@ def github(wfe):
     )
     fake.add(
         merge_runs_path(),
-        FakeResponse(payload={"total_count": 6, "workflow_runs": load_fixture("merge_group_runs")["runs"]}),
+        FakeResponse(payload={"total_count": 7, "workflow_runs": load_fixture("merge_group_runs")["runs"]}),
     )
     return fake
 
@@ -178,6 +181,21 @@ class TestParser:
         assert second["ejection_reason"] == ""
         assert second["reason_source"] == ""
 
+    def test_two_workflows_on_one_queue_entry_are_one_attempt(self, service):
+        """One queue entry starts several workflows at one head_sha. Grouping
+        them keeps a clean pass from looking like an ejection."""
+        run_backfill(service)
+        first, second = attempts(service, 101)
+
+        assert first["run_id"] == 5001
+        assert json.loads(first["run_ids"]) == [5001, 5003]
+        assert first["conclusion"] == "failure"
+        assert first["started_at"] == "2026-10-01T11:00:00Z"
+        assert first["completed_at"] == "2026-10-01T11:05:00Z"
+
+        assert second["run_id"] == 5002
+        assert json.loads(second["run_ids"]) == [5002]
+
     def test_closed_pull_request_has_no_queue_history(self, service):
         run_backfill(service)
         row = pr_row(service, 102)
@@ -204,7 +222,7 @@ class TestParser:
         assert ejected[1]["conclusion"] == "cancelled"
         assert ejected[1]["ejection_kind"] == "cancelled"
         assert ejected[1]["reason_source"] == "run"
-        assert ejected[1]["ejection_reason"] == "merge_group run 5102 concluded cancelled"
+        assert ejected[1]["ejection_reason"] == "merge_group entry (run 5102) concluded cancelled"
         assert ejected[2]["ejected"] == 0
 
     def test_unrelated_merge_group_run_is_not_attached(self, service):
@@ -304,6 +322,53 @@ class TestBackfill:
         assert second["prs_stored"] == 1
         assert pr_row(service, 102)["state"] == "closed"
 
+    def test_network_timeout_is_a_gap_not_a_crash(self, service, github):
+        """One timeout must not end the daily run before the other pull
+        requests are stored; the affected one is retried next time."""
+        broken = f"/repos/osac-project/{REPO}/issues/102/timeline?per_page=100"
+        github.add(broken, requests.Timeout("timed out"))
+
+        summary = run_backfill(service)
+
+        assert summary["prs_stored"] == 2
+        assert summary["prs_failed"] == 1
+        assert [row["number"] for row in rows(service, "SELECT number FROM pr_events ORDER BY number")] == [101, 103]
+
+    def test_merge_group_window_is_split_at_the_result_cap(self, service, github):
+        """A busy window is split until each query fits, so runs past
+        GitHub's list cap are not silently dropped."""
+        cutoff = NOW - timedelta(days=DAYS)
+        middle = cutoff + (NOW - cutoff) / 2
+        top = runs_window_path(cutoff, NOW)
+        left = runs_window_path(cutoff, middle)
+        right = runs_window_path(middle, NOW)
+        github.add(top, FakeResponse(payload={"total_count": 950, "workflow_runs": []}))
+        github.add(
+            left, FakeResponse(payload={"total_count": 7, "workflow_runs": load_fixture("merge_group_runs")["runs"]})
+        )
+        github.add(right, FakeResponse(payload={"total_count": 0, "workflow_runs": []}))
+
+        summary = run_backfill(service)
+
+        assert github.count(top) == 1
+        assert github.count(left) == 1
+        assert github.count(right) == 1
+        assert summary["attempts_stored"] == 5
+
+    def test_an_existing_attempt_table_gains_run_ids(self, prs, github, tmp_path):
+        """A database written before grouping keeps its rows and gains the
+        new column in place."""
+        db_file = tmp_path / "prs.db"
+        with sqlite3.connect(db_file) as conn:
+            conn.execute("CREATE TABLE pr_queue_attempts (repo TEXT, number INTEGER, run_id INTEGER)")
+
+        service = prs.CIObservePRs(db_file=str(db_file), api=FakeAPI(github))
+        service._init_db()
+
+        with sqlite3.connect(db_file) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(pr_queue_attempts)")}
+        assert "run_ids" in columns
+
     def test_rate_limit_budget_stops_the_run(self, service, github):
         limit = {"remaining": "50"}
         original_get = github.get
@@ -385,6 +450,15 @@ class TestEndpointDocument:
         assert first["ejected_attempt_count"] == 2
         assert first["age_display"]
         assert "derived, not recorded by GitHub" in doc["derivation"]["ejections"]
+
+    def test_index_age_is_the_lifetime_not_the_time_since_opened(self, filled):
+        """The column says "opened to merge or close", so a pull request
+        merged 95 minutes after it opened is 95 minutes old, however long
+        ago that was."""
+        by_number = {pr["number"]: pr for pr in filled.get_json({"days": [str(DAYS)]})["prs"]}
+
+        assert by_number[101]["age_seconds"] == by_number[101]["total_seconds"] == 95 * 60
+        assert by_number[101]["age_display"] == "1h 35m"
 
     def test_index_funnel_median_and_p95(self, filled):
         funnel = {row["stage"]: row for row in filled.get_json({"days": [str(DAYS)]})["funnel"]}
