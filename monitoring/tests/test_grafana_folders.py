@@ -45,9 +45,7 @@ def test_known_dashboards_are_in_the_expected_folder() -> None:
     expected = {
         "ci-observe-runs-home.json": "ci-observe",
         "ci-observe-runs.json": "ci-observe",
-        "ci-observe-run-evidence.json": "ci-observe",
         "ci-observe-comparison.json": "ci-observe",
-        "ci-observe-cluster.json": "ci-observe",
         "runner-health.json": "CI Fleet",
         "runner-status.json": "CI Fleet",
         "workflow-jobs.json": "CI Fleet",
@@ -58,6 +56,11 @@ def test_known_dashboards_are_in_the_expected_folder() -> None:
         assert (DASHBOARDS / name).exists(), f"{name} is missing"
         actual = "ci-observe" if name.startswith("ci-observe-") else "CI Fleet"
         assert actual == folder, f"{name} belongs to {folder}"
+
+    # The Cluster and Run evidence dashboards are sections of the Capture
+    # dashboard now, not dashboards of their own.
+    for merged in ("ci-observe-cluster.json", "ci-observe-run-evidence.json"):
+        assert not (DASHBOARDS / merged).exists(), f"{merged} was merged into ci-observe-runs.json"
 
 
 def test_dashboard_titles_name_their_folder() -> None:

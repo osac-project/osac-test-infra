@@ -3,8 +3,8 @@ parsing, run evidence from the SQLite job history, and the native JUnit
 lookup against the run's osac-logs-[<suite>-]full-install-<run id> artifact
 (missing, expired, too large, invalid, and the cached happy path). The
 last test is the backend half of the dashboard contract: it resolves the
-real endpoint response against the run-evidence dashboard's queries, and
-skips in a tree where that dashboard has not landed yet."""
+real endpoint response against the CI evidence row of the Capture
+dashboard."""
 
 from __future__ import annotations
 
@@ -742,26 +742,30 @@ class TestHTTP:
         assert json.loads(body)["parsed"] == "invalid"
 
 
-# The run-evidence dashboard ships in its own PR (dashboard JSON + its own
-# structural test, which pins the response contract with a static
-# document). This is the other half of that contract: the real endpoint's
-# response must resolve every root_selector/columns pair the dashboard
-# queries. It skips in a tree without the dashboard, and runs once both
-# have landed.
+# The run-evidence panels live in the CI evidence row of the Capture
+# dashboard (dashboard JSON + its own structural test, which pins the response
+# contract with a static document). This is the other half of that contract:
+# the real endpoint's response must resolve every root_selector/columns pair
+# the row queries.
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
-RUN_EVIDENCE_DASHBOARD = DASHBOARDS_DIR / "ci-observe-run-evidence.json"
-
-requires_run_evidence_dashboard = pytest.mark.skipif(
-    not RUN_EVIDENCE_DASHBOARD.exists(), reason="ci-observe-run-evidence.json ships in the dashboard PR"
-)
+CAPTURE_DASHBOARD = DASHBOARDS_DIR / "ci-observe-runs.json"
+CI_EVIDENCE_ROW = "CI evidence"
 
 
-@requires_run_evidence_dashboard
+def _iter_panels(panels):
+    for panel in panels:
+        yield panel
+        yield from _iter_panels(panel.get("panels", []))
+
+
 def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wfe):
     """The real /api/ci-observe/run response must resolve every
-    root_selector and column the run-evidence dashboard queries, so the
-    endpoint and the dashboard cannot drift apart."""
-    dashboard = json.loads(RUN_EVIDENCE_DASHBOARD.read_text())
+    root_selector and column the CI evidence row queries, so the endpoint and
+    the dashboard cannot drift apart."""
+    dashboard = json.loads(CAPTURE_DASHBOARD.read_text())
+    (row,) = [p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == CI_EVIDENCE_ROW]
+    panels = [p for p in _iter_panels(row["panels"]) if p["type"] not in ("row", "text")]
+    assert panels, "the CI evidence row has no data panels"
     seed_direct_run(
         evidence,
         steps=[{"name": "Run E2E tests", "duration_s": 500}],
@@ -780,9 +784,7 @@ def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wf
     assert doc["native"]["status"] == "available"
     assert doc["native"]["failed_tests"]
 
-    for panel in dashboard["panels"]:
-        if panel["type"] in ("row", "text"):
-            continue
+    for panel in panels:
         for target in panel["targets"]:
             node = doc
             # Object roots use a JSONPath so Infinity keeps them as one row.

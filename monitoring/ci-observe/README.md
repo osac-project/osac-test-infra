@@ -15,26 +15,30 @@ Open the **ci-observe** folder in Grafana and pick **CI Observe — Start here**
 
 A capture is one E2E workflow run that had ci-observe enabled. Its id has three parts: `bmaas-main-41318528583-a1` is the suite, the GitHub run id, and the run attempt.
 
-The [model](model.md) explains the three units behind these pages: one run, one pull request, and many runs over time.
-
-There are five dashboards today. The [model](model.md) sets the target of three; until that change lands, use this table.
+Three dashboards are in use today: the entry page, the capture page and the comparison page. The [model](model.md) explains the three units behind them: one run, one pull request, and many runs over time.
 
 | Dashboard | Question it answers | When to open it |
 | --- | --- | --- |
 | **CI Observe — Start here** | Which runs exist, which failed, which are missing data? | Always start here. |
-| **CI Observe — Run Investigation** | What happened inside one run? | After you pick a run. |
-| **CI Observe — Run evidence** | Where did the run's time go, and what did CI gather? | When you need step timings or the JUnit result. |
+| **CI Observe — Capture** | What happened inside one run? | After you pick a run. |
 | **CI Observe — Compare runs** | Did these runs get slower, and which tests dominate the time? | When you have two or more runs of the same revision. |
-| **CI Observe — Cluster** | How many pods existed, and what did they use in CPU and memory? | When a run looks slow and you suspect the cluster. |
 
-**CI Observe — Cluster** reads metrics, not spans. Set its time range to cover the capture, because a finished capture has no samples in "now". Samples are one minute apart and kept for 15 days.
+The run page holds the whole capture, in collapsed sections:
 
-## Read one run in four steps
+| Section | Question it answers |
+| --- | --- |
+| **CI evidence** | Where did the run's time go, and what did CI gather? GitHub jobs, step timing, and the JUnit result. |
+| **Environment** | How many pods existed, and what did they use in CPU and memory? |
+
+**Environment** reads metrics, not spans. Set the time range to cover the capture, because a finished capture has no samples in "now". Samples are one minute apart and kept for 15 days.
+
+## Read one run in five steps
 
 1. **Find the run.** On **Start here**, the three cards at the top count the runs. `Runs with a session span` counts complete runs. `Failed runs` counts runs that ended in failure. `Missing session span` counts captures that sent test data but no run summary. The tables below list the runs.
 2. **Open the detail page.** Click a run id. The top row of the detail page is the summary: `Tests`, `Failed`, `Result`, `Session`, `Test time`, `Suite`, `PR`. Read `Result` first. If it says `Incomplete`, the run summary never arrived and the other cards describe only what did arrive.
 3. **Read the timeline.** `Test timeline` lists every test with its start time and duration. `Slowest tests` and `Failed tests, longest first` put the expensive and broken tests at the top. `Longest waits` shows the named waits inside tests, so a 16-minute test can turn into "instance RUNNING 282 s, metering heartbeats 60 s, deletion 243 s".
-4. **Compare, if you can.** If a second run has the same source revision, harness revision and test selection, open **Compare runs** and pick that cohort. The page shows the sample size before any table, because one run is not a comparison.
+4. **Open the evidence and the cluster.** Expand **CI evidence** for the GitHub job, step timings and the JUnit result of the run. Expand **Environment** for the pods, their CPU and memory, and the node totals.
+5. **Compare, if you can.** If a second run has the same source revision, harness revision and test selection, open **Compare runs** and pick that cohort. The page shows the sample size before any table, because one run is not a comparison.
 
 ## How the data is structured
 
@@ -101,7 +105,7 @@ The four core words are defined under [How the data is structured](#how-the-data
 
 These gaps are known and deliberate for now.
 
-- **It does not show a cluster event timeline yet.** The Cluster dashboard shows pods, CPU and memory. Kubernetes events are stored but have no readable view. Pod logs are not collected; after a failure they are in the GitHub artifact.
+- **It does not show a cluster event timeline yet.** The **Environment** section of the run page shows pods, CPU and memory. Kubernetes events are stored but have no readable view. Pod logs are not collected; after a failure they are in the GitHub artifact.
 - **It does not make tests faster or slower.** ci-observe is opt-in telemetry. A delivery failure shows a red step marker and an error annotation, and leaves the job result unchanged.
 - **It does not cover production.** It runs only in the disposable E2E test cluster.
 

@@ -72,10 +72,17 @@ IDENTITY_ATTRIBUTES = {
 }
 
 # Links to dashboards owned by other workstreams. The UIDs and slugs are the
-# contract; the target dashboards may not exist yet.
-EVIDENCE_LINK = "/d/ci-observe-run-evidence/ci-observe-run-evidence?orgId=1&var-capture_id=$capture_id"
+# contract; the target dashboards may not exist yet. The GitHub job and JUnit
+# evidence and the cluster metrics are sections of this dashboard now, so the
+# only outbound links are the entry page and the comparison page.
 COMPARE_LINK = "/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1"
+HOME_LINK_PREFIX = "/d/ci-observe-runs-home/ci-observe-e28094-test-runs"
 DETAIL_LINK_PREFIX = "/d/ci-observe-runs/ci-observe-e28094-run-investigation"
+
+# The two collapsed sections that absorbed the deleted Cluster and Run
+# evidence dashboards.
+CI_EVIDENCE_ROW = "CI evidence"
+ENVIRONMENT_ROW = "Environment"
 
 
 @pytest.fixture(scope="module")
@@ -178,7 +185,7 @@ def test_home_json_is_valid_and_parses(home: dict) -> None:
 
 def test_required_uid_and_title(dashboard: dict) -> None:
     assert dashboard["uid"] == "ci-observe-runs"
-    assert dashboard["title"] == "CI Observe — Run Investigation"
+    assert dashboard["title"] == "CI Observe — Capture"
     assert dashboard["schemaVersion"] == 39
     assert dashboard["version"] == 1
 
@@ -190,12 +197,13 @@ def test_home_required_uid_and_title(home: dict) -> None:
 
 
 def test_datasources_referenced(dashboard: dict) -> None:
-    """Tempo and Loki are used; the Prometheus datasource must not be, because
-    cluster evidence is deferred and an empty kubelet chart would mislead."""
+    """Tempo and Loki carry the capture, Infinity carries the GitHub evidence,
+    and Prometheus carries the cluster metrics in the Environment row."""
     raw = DASHBOARD_FILE.read_text()
     assert "ci-observe-traces" in raw, "datasource uid ci-observe-traces is not referenced anywhere"
     assert "ci-observe-logs" in raw, "datasource uid ci-observe-logs is not referenced anywhere"
-    assert "ci-observe-metrics" not in raw, "cluster evidence is deferred: no Prometheus panels may exist"
+    assert "ci-observe-metrics" in raw, "datasource uid ci-observe-metrics is not referenced anywhere"
+    assert "workflow-api" in raw, "datasource uid workflow-api is not referenced anywhere"
 
 
 def test_capture_id_variable_exists(dashboard: dict) -> None:
@@ -228,11 +236,13 @@ def test_rows_present(dashboard: dict) -> None:
     assert titles == [
         "Run overview",
         "Collection coverage",
+        "CI evidence",
         "Run identity (source commit, harness commit, selection)",
         "Tests and workers",
         "Fixture work",
         "Waits",
         "Service requests",
+        "Environment",
     ]
 
 
@@ -261,15 +271,18 @@ def test_dashboard_description_explains_reading_order(dashboard: dict) -> None:
         "Run overview",
         "Run identity",
         "Collection coverage",
+        "CI evidence",
         "Tests and workers",
         "Fixture work",
         "Waits",
         "Service requests",
+        "Environment",
     ]
     for row in rows:
         assert row in description, f"dashboard description does not mention the {row} row"
     assert "collapsed Run identity" in description
-    assert "not built yet" in description, "description must say cluster evidence is deferred"
+    assert "collapsed CI evidence" in description
+    assert "collapsed Environment" in description
     assert "narrower range can hide" in description, "description must warn about narrow time ranges"
 
 
@@ -620,29 +633,39 @@ def test_grpc_errors_panel_queries_beyla_attributes(dashboard: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Q5 out of scope: no cluster evidence panels
+# Cluster evidence: one section, metrics only
 # ---------------------------------------------------------------------------
 
 
-def test_no_cluster_evidence_panels(dashboard: dict) -> None:
-    """Cluster evidence (logs, events, kubelet metrics) is deferred: no panels may imply it."""
+def _row(dashboard: dict, title: str) -> dict:
+    (row,) = [p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == title]
+    return row
+
+
+def test_cluster_panels_live_only_in_the_environment_row(dashboard: dict) -> None:
+    """Cluster evidence is metrics, not logs or events: kubelet series belong
+    to the Environment row and nowhere else."""
+    environment = {id(panel) for panel in _iter_panels(_row(dashboard, ENVIRONMENT_ROW)["panels"])}
     for panel in _iter_panels(dashboard["panels"]):
-        assert panel["type"] != "logs", f"{panel['title']}: logs panels are deferred with Q5"
-        assert panel["type"] != "timeseries", f"{panel['title']}: metric charts are deferred with Q5"
+        assert panel["type"] != "logs", f"{panel['title']}: pod logs have no readable view yet"
         for target in panel.get("targets", []):
             expr = target.get("expr", "")
-            assert "k8s_" not in expr, f"{panel['title']}: kubelet metrics are deferred with Q5"
+            if "k8s_" in expr:
+                assert id(panel) in environment, f"{panel['title']}: kubelet metrics belong to Environment"
+        if panel["type"] == "timeseries":
+            assert id(panel) in environment, f"{panel['title']}: metric charts belong to Environment"
 
 
-def test_cluster_evidence_deferral_is_explained(dashboard: dict) -> None:
-    panels = _panels_by_title(dashboard)
-    panel = panels["Where is the rest of the evidence?"]
+def test_where_the_evidence_lives_is_explained(dashboard: dict) -> None:
+    """The link panel names the two sections that absorbed the deleted
+    dashboards, and keeps the captured logs reachable through Explore."""
+    panel = _panels_by_title(dashboard)["Where is the rest of the evidence?"]
     content = panel["options"]["content"]
-    assert "deliberately deferred" in content
-    assert "not built" in content
-    assert EVIDENCE_LINK in content
+    assert CI_EVIDENCE_ROW in content
+    assert ENVIRONMENT_ROW in content
     assert COMPARE_LINK in content, "the comparison link must not pass a capture id the target ignores"
     assert "osac_ci_capture_id" in content, "the captured logs must stay reachable through a link"
+    assert "no readable view" in content, "cluster events and pod logs are still not shown"
 
 
 # ---------------------------------------------------------------------------
@@ -1230,8 +1253,8 @@ def test_stat_titles_are_short_enough_to_render(dashboard: dict) -> None:
         "Test time": (0, 5, 8),
         "Suite": (8, 5, 8),
         "PR": (16, 5, 8),
-        "Calls": (0, 74, 5),
-        "Call errors": (5, 74, 5),
+        "Calls": (0, 107, 5),
+        "Call errors": (5, 107, 5),
     }
     for title, (x, y, w) in expected.items():
         p = panels[title]

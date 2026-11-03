@@ -75,6 +75,8 @@ The unit is one capture. The axis is time inside the run, bounded by the capture
 | Service | Beyla spans | What did the OSAC services do? |
 | Environment | pod and node metrics, events, pod lifecycle | What was the cluster doing? |
 
+The Capture page holds one section per layer: Run overview and Collection coverage for the verdict, CI evidence for the CI layer (GitHub jobs, steps and the JUnit result), Tests and workers, Fixture work and Waits for the test layer, Service requests for the service layer, and Environment for the pod and node metrics.
+
 The moment of failure is one vertical marker on every chart. It is derived from the end of the failed span, not stored, so it is exact on trace panels and within one minute on cluster panels.
 
 Evidence links to the artifact sit in the CI layer, next to the failure that needs them. The artifact keeps the pod logs, the per-test `failure.json` and the cluster snapshots, and GitHub deletes it after 7 days.
@@ -199,6 +201,6 @@ Data that only describes the fleet is not admitted.
 
 1. Split the Grafana folder: `CI Fleet` and `ci-observe`.
 2. Make the entry page a router with the run index behind an empty input.
-3. Rebuild Capture as one page from the panels that exist today: five sections, one timeline, no new data.
+3. Rebuild Capture as one page from the panels that exist today: one section per layer, one timeline, no new data.
 
 Then add the missing layers one at a time, and build Pull requests once the PR data exists.

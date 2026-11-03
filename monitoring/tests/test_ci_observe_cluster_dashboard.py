@@ -1,13 +1,14 @@
-"""Structural tests for the CI Observe cluster dashboard.
+"""Structural tests for the CI Observe cluster panels.
 
-monitoring/config/grafana/dashboards/ci-observe-cluster.json answers the
-cluster question for one capture: at every minute of the run, how many pods
-existed, what each pod used in CPU and in memory, what each node used, and
-which pods existed when. It is provisioned by
-monitoring/config/grafana/dashboards.yml into the ci-observe folder next to the
-other dashboards and reads the ci-observe Prometheus backend (uid
-ci-observe-metrics, the otel-lgtm bundle on port 9092), which scrapes the
-kubelet summary API every 60 seconds and keeps 15 days.
+The cluster panels live in the Environment row of
+monitoring/config/grafana/dashboards/ci-observe-runs.json, the Capture
+dashboard, which is provisioned by monitoring/config/grafana/dashboards.yml
+into the ci-observe folder. The row answers the cluster question for one
+capture: at every minute of the run, how many pods existed, what each pod used
+in CPU and in memory, what each node used, and which pods existed when. It
+reads the ci-observe Prometheus backend (uid ci-observe-metrics, the
+otel-lgtm bundle on port 9092), which scrapes the kubelet summary API every 60
+seconds and keeps 15 days.
 
 Live-verified against that backend on 2026-11-02 with capture
 caas-main-41446977693-a1 (samples 13:31:38Z to 13:50:38Z, 243 pod CPU series,
@@ -44,8 +45,16 @@ import yaml
 
 GRAFANA_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana"
 DASHBOARDS_DIR = GRAFANA_DIR / "dashboards"
-DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-cluster.json"
+DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-runs.json"
 DATASOURCES_FILE = GRAFANA_DIR / "datasources.yml"
+
+# The row that holds the cluster panels on the Capture dashboard.
+ROW_TITLE = "Environment"
+
+# The panels the row must hold, in reading order. The reading guide that was
+# a text panel on the old cluster dashboard is now the row description, so the
+# row has data panels only.
+ROW_PANELS = ["Pod count", "CPU by pod", "Memory by pod", "Node CPU", "Node memory", "Pods seen"]
 
 # The Prometheus datasource the ci-observe backend provisions on port 9092
 # with a 60-second collection interval. The default `prometheus` datasource
@@ -93,25 +102,40 @@ def datasources() -> dict:
     return yaml.safe_load(DATASOURCES_FILE.read_text())
 
 
+@pytest.fixture(scope="module")
+def row(dashboard: dict) -> dict:
+    return _row(dashboard)
+
+
 def _iter_panels(panels: list[dict]) -> Iterator[dict]:
     for panel in panels:
         yield panel
         yield from _iter_panels(panel.get("panels", []))
 
 
-def _content_panels(dash: dict) -> list[dict]:
-    return [panel for panel in _iter_panels(dash["panels"]) if panel.get("type") != "row"]
+def _row(dashboard: dict) -> dict:
+    rows = [panel for panel in dashboard["panels"] if panel["type"] == "row" and panel["title"] == ROW_TITLE]
+    assert len(rows) == 1, f"expected one {ROW_TITLE!r} row in the Capture dashboard"
+    return rows[0]
 
 
-def _panels_by_title(dash: dict) -> dict[str, dict]:
-    return {panel["title"]: panel for panel in _iter_panels(dash["panels"])}
+def _row_panels(dashboard: dict) -> list[dict]:
+    return list(_iter_panels(_row(dashboard)["panels"]))
+
+
+def _content_panels(dashboard: dict) -> list[dict]:
+    return [panel for panel in _row_panels(dashboard) if panel.get("type") != "row"]
+
+
+def _panels_by_title(dashboard: dict) -> dict[str, dict]:
+    return {panel["title"]: panel for panel in _iter_panels(dashboard["panels"])}
 
 
 def _expressions(dash: dict) -> list[tuple[str, str]]:
-    """(panel title, PromQL expression) for every target in the dashboard."""
+    """(panel title, PromQL expression) for every target in the cluster row."""
     return [
         (panel["title"], target["expr"])
-        for panel in _iter_panels(dash["panels"])
+        for panel in _row_panels(dash)
         for target in panel.get("targets", [])
         if target.get("expr")
     ]
@@ -147,26 +171,34 @@ def _walk_strings(value: object) -> Iterator[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_json_is_valid_and_parses(dashboard: dict) -> None:
+def test_json_is_valid_and_parses(dashboard: dict, row: dict) -> None:
     assert DASHBOARD_FILE.exists()
     assert isinstance(dashboard, dict)
+    assert row["collapsed"] is True, "the cluster panels sit in a collapsed section"
+    assert row["gridPos"] == {"h": 1, "w": 24, "x": 0, "y": 132}, "the Environment row ends the page"
 
 
-def test_required_uid_and_title(dashboard: dict) -> None:
-    assert dashboard["uid"] == "ci-observe-cluster"
-    assert dashboard["title"] == "CI Observe — Cluster"
+def test_required_uid_and_title(dashboard: dict, row: dict) -> None:
+    assert dashboard["uid"] == "ci-observe-runs"
+    assert dashboard["title"] == "CI Observe — Capture"
     assert dashboard["schemaVersion"] == 39
     assert dashboard["version"] == 1
-    assert dashboard["description"], "the dashboard needs a description"
-    assert "60 seconds" in dashboard["description"]
-    assert "15 days" in dashboard["description"]
+    assert row["description"], "the row needs a description"
+    assert "60 seconds" in row["description"]
+    assert "15 days" in row["description"]
 
 
-def test_dashboard_is_prometheus_only(dashboard: dict) -> None:
+def test_the_row_holds_exactly_the_cluster_panels(dashboard: dict, row: dict) -> None:
+    assert [panel["title"] for panel in row["panels"]] == ROW_PANELS
+    assert [panel["type"] for panel in row["panels"]] == ["timeseries"] * 5 + ["table"]
+
+
+def test_environment_row_is_prometheus_only(dashboard: dict) -> None:
     """Cluster evidence is the Prometheus backend; traces and logs are elsewhere."""
-    raw = DASHBOARD_FILE.read_text()
+    row = next(p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == ROW_TITLE)
+    raw = json.dumps(row)
     for foreign in ("ci-observe-traces", "ci-observe-logs", "workflow-api"):
-        assert foreign not in raw, f"{foreign} does not belong on the cluster dashboard"
+        assert foreign not in raw, f"{foreign} does not belong in the cluster row"
 
 
 def test_every_panel_uses_the_provisioned_prometheus_uid(dashboard: dict, datasources: dict) -> None:
@@ -179,7 +211,7 @@ def test_every_panel_uses_the_provisioned_prometheus_uid(dashboard: dict, dataso
     assert provisioned["jsonData"]["timeInterval"] == "60s"
 
     panels = _content_panels(dashboard)
-    assert panels, "dashboard has no content panels"
+    assert panels, "the cluster row has no content panels"
     for panel in panels:
         datasources_used = [panel.get("datasource")] + [t.get("datasource") for t in panel.get("targets", [])]
         for datasource in datasources_used:
@@ -193,6 +225,10 @@ def test_panels_are_in_reading_order(dashboard: dict) -> None:
     positions = [(panel["gridPos"]["y"], panel["gridPos"]["x"]) for panel in dashboard["panels"]]
     assert positions == sorted(positions)
 
+    row = next(p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == ROW_TITLE)
+    positions = [(panel["gridPos"]["y"], panel["gridPos"]["x"]) for panel in row["panels"]]
+    assert positions == sorted(positions)
+
 
 def test_every_panel_has_title_and_description(dashboard: dict) -> None:
     for panel in _iter_panels(dashboard["panels"]):
@@ -200,25 +236,24 @@ def test_every_panel_has_title_and_description(dashboard: dict) -> None:
         assert panel.get("description"), f"panel without a description: {panel['title']}"
 
 
+def test_panel_ids_are_unique(dashboard: dict) -> None:
+    ids = [panel["id"] for panel in _iter_panels(dashboard["panels"])]
+    assert len(ids) == len(set(ids)), "two panels share an id"
+
+
 # ---------------------------------------------------------------------------
 # Variables and scoping
 # ---------------------------------------------------------------------------
 
 
-def test_capture_id_is_a_textbox_variable(dashboard: dict) -> None:
+def test_capture_id_is_the_only_variable(dashboard: dict) -> None:
     variables = dashboard["templating"]["list"]
-    assert [v["name"] for v in variables] == ["capture_id"]
-
-    capture_var = variables[0]
-    assert capture_var["type"] == "textbox"
-    assert capture_var["hide"] == 0
-    assert capture_var["label"] == "Run"
-    assert "datasource" not in capture_var, "a textbox reads no datasource"
+    assert [v["name"] for v in variables] == ["capture_id"], "the merged page keeps one variable"
 
 
 def test_every_query_filters_on_the_capture(dashboard: dict) -> None:
     expressions = _expressions(dashboard)
-    assert len(expressions) >= 5, "the dashboard lost most of its queries"
+    assert len(expressions) >= 5, "the cluster row lost most of its queries"
     for title, expr in expressions:
         assert CAPTURE_FILTER in expr, f"{title}: query is not scoped to the capture: {expr}"
 
@@ -244,7 +279,7 @@ def test_no_aggregation_hides_the_pod_label(dashboard: dict) -> None:
     """A pod panel must aggregate *by pod*, never across pods.
 
     A bare sum()/max()/count() over a pod metric collapses every pod into one
-    nameless line, which is the exact question this dashboard must answer.
+    nameless line, which is the exact question this row must answer.
     """
     pod_expressions = [(title, expr) for title, expr in _expressions(dashboard) if any(m in expr for m in POD_METRICS)]
     assert pod_expressions, "no panel reads a pod-level metric"
@@ -376,13 +411,13 @@ def test_pods_seen_table_sample_times_are_milliseconds(dashboard: dict) -> None:
 
 def test_pods_seen_table_has_no_node_column(dashboard: dict) -> None:
     """Pod series carry no k8s_node_name label, so a Node column would render
-    empty on every row. The table omits it and the description says why."""
+    empty on every row. The table omits it and the row description says why."""
     panel = _panels_by_title(dashboard)["Pods seen"]
     assert "Node" not in panel["transformations"][1]["options"]["renameByName"].values()
     assert "k8s_node_name" not in panel["transformations"][1]["options"]["indexByName"]
     assert "no node label" in panel["description"]
-    intro = _panels_by_title(dashboard)["What this page shows"]["options"]["content"]
-    assert "Node metrics are cluster-wide" in intro
+    row = next(p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == ROW_TITLE)
+    assert "Node metrics are cluster-wide" in row["description"]
 
 
 # ---------------------------------------------------------------------------
@@ -390,10 +425,10 @@ def test_pods_seen_table_has_no_node_column(dashboard: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_intro_panel_states_the_limits(dashboard: dict) -> None:
-    first = dashboard["panels"][0]
-    assert first["type"] == "text"
-    content = first["options"]["content"]
+def test_row_description_states_the_limits(dashboard: dict) -> None:
+    """The old reading-guide text panel is gone; its limits live on the row."""
+    row = next(p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == ROW_TITLE)
+    content = row["description"]
 
     assert "60 seconds" in content, "the sample interval must be stated"
     assert "15 days" in content, "the retention must be stated"
@@ -403,4 +438,8 @@ def test_intro_panel_states_the_limits(dashboard: dict) -> None:
 
 
 def test_default_time_range_covers_a_capture(dashboard: dict) -> None:
-    assert dashboard["time"] == {"from": "now-24h", "to": "now"}
+    """The Capture page keeps its 7-day default; the row description tells the
+    reader to set the range to the capture."""
+    assert dashboard["time"] == {"from": "now-7d", "to": "now"}
+    row = next(p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == ROW_TITLE)
+    assert "time range must cover the capture" in row["description"]
