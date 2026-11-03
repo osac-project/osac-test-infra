@@ -57,6 +57,22 @@ jq -r '.name_prefix, (.hosts[] | "\(.name)  \(.boot_mac)  \(.bmc_address)")' \
 
 ## 3. Add and remove VMs
 
+Optionally pass `--data-disk-size 50G` to `create` to attach a separate sparse,
+unbacked qcow2 disk at `vdb`. The default is disabled; the OS disk remains
+150G at `vda`. Sizes are positive integers with an optional `k`, `M`, `G`, or
+`T` suffix. CI forwards `BMH_DATA_DISK_SIZE` to this option; only CaaS enables
+it, with `50G`. BMaaS keeps its single-disk default.
+
+Creation remains additive: each call adds `--count` fresh VMs, even when an
+inventory already exists. Enabled creation first checks every existing host's
+owned OS disk, data disk and NVRAM. An old single-disk inventory or incompatible
+storage is rejected without repairing, attaching, or deleting anything.
+`validate-data-storage --inventory-file FILE --disk-dir ABSOLUTE_DIRECTORY`
+runs this read-only preflight separately; CI runs it before starting services.
+Enabled creation also rejects name or storage collisions, including dangling
+symlinks, rather than overwriting them. Data files are removed by the normal
+owned-storage deletion path after domain deletion is verified.
+
 ```bash
 # add one more
 python3 .github/scripts/manage-virtual-bmh-vms.py create \
