@@ -6,15 +6,15 @@ That sentence decides where every panel, query and dataset belongs. Without it, 
 
 The readers are test owners, the monitoring owner and release managers. They ask different questions, and they share the same three units.
 
-## What a surface is
+## What a dashboard is
 
-A surface is one Grafana dashboard in the `ci-observe` folder. There are three: **Capture**, **Pull requests** and **Trends**. The folder also holds the entry page, which is a router, not a surface.
+The `ci-observe` folder holds three dashboards: **Capture**, **Pull requests** and **Trends**. It also holds the entry page, which is a router, not one of the three.
 
-A new question becomes a section on one surface, not a new dashboard.
+A new question becomes a section on one of them, not a fourth dashboard.
 
 ## Three units
 
-| Unit | What it is | Key | Surface |
+| Unit | What it is | Key | Dashboard |
 |---|---|---|---|
 | **Capture** | One CI run with telemetry | capture id, for example `vmaas-main-41554302161-a1` | Capture |
 | **Pull request** | One proposed change, from opened to merged or closed | pull request number | Pull requests |
@@ -93,9 +93,9 @@ The unit is one pull request. The axis is calendar time from open to merge or cl
 
 An **ejection** is a pull request leaving the merge queue without merging. It is derived from a failed `merge_group` run plus the comment GitHub leaves on the PR.
 
-For each stage: duration, the attempts inside it, and why an attempt was ejected. Every queue attempt links to its run. The link opens the Capture surface when a capture exists, and the GitHub job when it does not.
+For each stage: duration, the attempts inside it, and why an attempt was ejected. Every queue attempt links to its run. The link opens the Capture dashboard when a capture exists, and the GitHub job when it does not.
 
-A pull request needs an index, a list of recent pull requests with stage and age. Without it the surface is reachable only by already knowing the PR number.
+A pull request needs an index, a list of recent pull requests with stage and age. Without it the Pull requests dashboard is reachable only by already knowing the PR number.
 
 The queue stage needs its own unit. One `merge_group` run can carry up to four pull requests, and today a queue run has neither a PR number nor a capture. The run is the unit; the PR links come from the squash trailers; queue runs must enable `ci-observe` before the stage has telemetry.
 
@@ -111,15 +111,15 @@ The queue stage needs its own unit. One `merge_group` run can carry up to four p
 
 ## Compare is an action
 
-Compare is not a separate surface. It is an action on a capture (`compare with its baseline`), on a pull request (`compare this attempt with the last green one`) and on a test row (`compare the last two runs`).
+Compare is not a separate dashboard. It is an action on a capture (`compare with its baseline`), on a pull request (`compare this attempt with the last green one`) and on a test row (`compare the last two runs`).
 
 The **baseline** is the most recent cohort with the same source, harness and workflow SHAs and at least two captures. When none exists, the baseline is the last three captures of the same suite before this one. The action seeds the cohort from the unit's own identity fields, so no one types SHAs by hand. The Compare section in Trends is where a reader lands after the action.
 
 ## Entry and navigation
 
-The entry page is a router. It accepts a run id, a capture id, a pull request number, a test id, or nothing. Each resolves to one surface in one step. A run id resolves to its capture when one exists, and to its row in the index when none does. With nothing, it shows the run index, searchable by run id.
+The entry page is a router. It accepts a run id, a capture id, a pull request number, a test id, or nothing. Each resolves to one dashboard in one step. A run id resolves to its capture when one exists, and to its row in the index when none does. With nothing, it shows the run index, searchable by run id.
 
-Every link between surfaces carries the unit and the time range, so the reader never loses their place:
+Every link between dashboards carries the unit and the time range, so the reader never loses their place:
 
 - Capture to its ref, and to `compare with baseline`.
 - Capture back to the entry page with the run's time range, not "now".
@@ -150,7 +150,7 @@ Three different things, and each has a key:
 
 ## The rule
 
-A panel belongs to exactly one surface, names its unit and its population, and sits on that unit's timeline or time range.
+A panel belongs to exactly one dashboard, names its unit and its population, and sits on that unit's timeline or time range.
 
 If a panel cannot name its unit and its axis, it is not ready to be built.
 
@@ -160,16 +160,16 @@ Before adding a panel or a dataset, answer four questions:
 
 1. Which unit is this about?
 2. What is its time axis?
-3. Which surface does it join?
+3. Which dashboard does it join?
 4. Does it link to the other units?
 
 Four answers, or it is not admitted.
 
 ## What is out of scope
 
-Fleet health: runners, machines, queue infrastructure and exporter health. It is a different product with a different unit. It stays in its own Grafana folder, `CI Fleet`, and may be linked from ci-observe. Runner queue wait stays in Fleet; the Pull requests surface links to it rather than copying it.
+Fleet health: runners, machines, queue infrastructure and exporter health. It is a different product with a different unit. It stays in its own Grafana folder, `CI Fleet`, and may be linked from ci-observe. Runner queue wait stays in Fleet; the Pull requests dashboard links to it rather than copying it.
 
-In scope, and easily confused with it: the merge queue of a pull request. That is a stage of the Pull requests surface.
+In scope, and easily confused with it: the merge queue of a pull request. That is a stage of the Pull requests dashboard.
 
 ## Constraints the model must respect
 

@@ -17,7 +17,7 @@ A capture is one E2E workflow run that had ci-observe enabled. Its id has three 
 
 The [model](model.md) explains the three units behind these pages: one run, one pull request, and many runs over time.
 
-There are five dashboards today. They answer different questions, and you normally read them in this order.
+There are five dashboards today. The [model](model.md) sets the target of three; until that change lands, use this table.
 
 | Dashboard | Question it answers | When to open it |
 | --- | --- | --- |
@@ -31,8 +31,8 @@ There are five dashboards today. They answer different questions, and you normal
 
 ## Read one run in four steps
 
-1. **Find the run.** On **Test Runs**, look at the three cards at the top. `Runs with a session span` is the number of complete runs. `Failed runs` counts runs that ended in failure. `Missing session span` counts captures that sent test data but no run summary. The tables below list the runs themselves.
-2. **Open the detail page.** Click a run id. The top row of the detail page is the summary: `Tests`, `Failed`, `Result`, `Session`, `Duration`, `Suite`, `PR`. Read `Result` first. If it says `Incomplete`, the run summary never arrived and the other cards describe only what did arrive.
+1. **Find the run.** On **Test Runs**, the three cards at the top count the runs. `Runs with a session span` counts complete runs. `Failed runs` counts runs that ended in failure. `Missing session span` counts captures that sent test data but no run summary. The tables below list the runs.
+2. **Open the detail page.** Click a run id. The top row of the detail page is the summary: `Tests`, `Failed`, `Result`, `Session`, `Test time`, `Suite`, `PR`. Read `Result` first. If it says `Incomplete`, the run summary never arrived and the other cards describe only what did arrive.
 3. **Read the timeline.** `Test timeline` lists every test with its start time and duration. `Slowest tests` and `Failed tests, longest first` put the expensive and broken tests at the top. `Longest waits` shows the named waits inside tests, so a 16-minute test can turn into "instance RUNNING 282 s, metering heartbeats 60 s, deletion 243 s".
 4. **Compare, if you can.** If a second run has the same source revision, harness revision and test selection, open **Compare runs** and pick that cohort. The page shows the sample size before any table, because one run is not a comparison.
 
@@ -68,9 +68,11 @@ Beyla ──OTLP───┘                                    ├── Promet
                                                       Grafana
 ```
 
+Tempo stores spans, Prometheus stores metrics, and Loki stores logs.
+
 `pytest` writes one span per run, per test, per test phase (setup, call, teardown), per fixture and per named wait. `Beyla` writes one span per network call between services. The gateway stamps every span with the capture identity, so one field keeps two runs apart on a shared backend.
 
-A query reads those labels. This is the query behind the tests table on the comparison page:
+The dashboards read those labels with Tempo queries, written in TraceQL. This is the query behind the tests table on the comparison page:
 
 ```
 { resource."osac.ci.capture_id" = "caas-main-41446977693-a1"
@@ -82,14 +84,12 @@ In words: spans from this capture, of type test, whose name is not one of the th
 
 ## Words you will see
 
-- **Capture**: one E2E run with telemetry enabled. The run id is its name.
-- **Span**: one timed step, with a name, a start, a duration and labels.
-- **Trace**: all spans for one operation, linked by a trace id.
+The four core words are defined under [How the data is structured](#how-the-data-is-structured). These are the rest.
+
 - **Attribute**: a label on a span, such as `pytest.nodeid` or `osac.ci.test_sha`.
 - **Session span**: the single `test run` span that wraps the whole pytest session. It carries the run's start, end and result.
 - **Incomplete**: test spans exist, but the session span does not. You can still see which tests ran. You cannot see the run's overall duration or result.
 - **Not collected**: this capture does not have the field. Older captures predate identity stamping, so fields such as the resolved harness SHA are empty for them.
-- **Cohort**: the set of runs that are comparable, meaning the same resolved source commit, harness commit, workflow commit and test selection.
 - **Exact cohort**: a cohort with all three commits present.
 - **Source-revision cohort**: a fallback for old captures that lack the harness commits. The page labels it "not exact".
 - **No baseline**: the cohort has fewer than two captures. The tables show one run's numbers, and there is nothing to compare against.
@@ -101,7 +101,7 @@ In words: spans from this capture, of type test, whose name is not one of the th
 
 These gaps are known and deliberate for now.
 
-- **It does not show what happened inside the test cluster.** Logs, events, node metrics and pod metrics are collected and stored, but there is no readable event view yet. This is the deferred Q5 item.
+- **It does not show a cluster event timeline yet.** The Cluster dashboard shows pods, CPU and memory. Kubernetes events are stored but have no readable view. Pod logs are not collected; after a failure they are in the GitHub artifact.
 - **It does not make tests faster or slower.** ci-observe is opt-in telemetry. A delivery failure shows a red step marker and an error annotation, and leaves the job result unchanged.
 - **It does not cover production.** It runs only in the disposable E2E test cluster.
 
@@ -111,20 +111,20 @@ No. Nothing is injected into the fulfillment service, the operator, or any other
 
 The telemetry comes from two separate components that the capture action deploys into the test cluster, in the `ci-observability-canary` namespace:
 
-- A **collector gateway** Deployment. It receives test spans from a pytest plugin, plus pod logs, Kubernetes events and kubelet metrics from the test namespace, and forwards them to the central backend on `osac-ci-1`.
+- A **collector gateway** Deployment. It receives test spans from a pytest plugin, Kubernetes events and kubelet metrics from the test namespace, and forwards them to the central backend on `osac-ci-1`. It is configured to read pod logs, but the unprivileged collector cannot read them today.
 - A **Beyla** DaemonSet. Beyla reads network requests from the node's kernel. It runs as root and can see every process on its node, so it needs extra permissions in the test cluster. It watches processes from outside and never attaches to them.
 
 The bare-metal runner gets no privileged observer at all. So the production answer is: ci-observe is not deployed to production, and it does not alter any OSAC service. The thing to keep in mind is that Beyla is a privileged observer on the nodes of the disposable test cluster.
 
 ## Data and privacy
 
-For debugging, ci-observe stores more than numbers: raw request parameters, exception text and command lines. It scrubs the registry pull secret and the AAP license before sending. Everything stays in the test cluster and the central backend; nothing is uploaded to GitHub.
+For debugging, ci-observe stores more than numbers: raw request parameters, exception text and command lines. It scrubs the registry pull secret and the AAP license before sending. Traces, logs and metrics stay in the test cluster and the central backend, and the capture step uploads nothing to GitHub. When a run fails, the workflow's gather step uploads a redacted log artifact to GitHub, kept for 7 days.
 
 ## Limits that change what you see
 
 - **Traces appear late.** Tempo hides freshly written data from search for up to 15 minutes. A run that just finished can be missing from a query and appear later.
-- **JUnit evidence expires.** The workflow exporter keeps native JUnit results for 7 days. Older captures have traces but no native pass/fail detail.
-- **One query per panel.** Each panel runs a single trace query. A page can take up to two minutes on a cold backend. A blank panel while loading is not an empty result.
+- **JUnit evidence expires.** GitHub keeps the run artifact, which holds the JUnit file, for 7 days. Older captures have traces but no native pass/fail detail.
+- **One query per panel.** Each panel runs a single query, so a page can take up to two minutes on a cold backend. A blank panel while loading is not an empty result.
 - **Tables below the fold load when you scroll to them.** An empty table you have not scrolled into view is not an empty result. Scroll the panel into view and wait.
 
 ## What to do when data is missing
@@ -139,7 +139,7 @@ For debugging, ci-observe stores more than numbers: raw request parameters, exce
 
 ## Where the details are
 
-- [`monitoring/ci-observe/model.md`](model.md): the product model. Three units, three surfaces, the shared keys and the rule for new panels.
+- [`monitoring/ci-observe/model.md`](model.md): the product model. Three units, three dashboards, the shared keys and the rule for new panels.
 - [`monitoring/ci-observe.md`](../ci-observe.md): the operator reference. Architecture, deployment, validation and known backend gaps.
 - [`monitoring/README.md`](../README.md): the whole monitoring stack, including how to deploy it and how to reach Grafana.
 - [`monitoring/config/ci-observe/`](../config/ci-observe/): the cluster manifests for the gateway and Beyla.
