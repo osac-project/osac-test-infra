@@ -30,12 +30,17 @@ trap 'rm -rf -- "${WORK}"' EXIT
 mkdir -p "${WORK}/bin" "${WORK}/fixtures"
 : > "${WORK}/kubeconfig"
 
+KEY_BEGIN="-----BEGIN"
+KEY_END="PRIVATE KEY-----"
+KEY_MARKER="${KEY_BEGIN} ${KEY_END}"
 cat > "${WORK}/fixtures/routes.json" <<JSON
 {"items": [
   {"metadata": {"name": "fulfillment-api", "namespace": "osac-e2e-ci",
-                "annotations": {"haproxy.router.openshift.io/timeout": "30s"}},
+                "annotations": {"haproxy.router.openshift.io/timeout": "30s",
+                                "kubectl.kubernetes.io/last-applied-configuration":
+                "{\"spec\":{\"tls\":{\"key\":\"${KEY_MARKER}SEKRIT${KEY_MARKER}\"}}}"}},
    "spec": {"host": "${HOST}", "tls": {"termination": "edge", "certificate": "CERT",
-            "key": "-----BEGIN PRIVATE KEY-----SEKRIT-----END PRIVATE KEY-----"}}},
+            "key": "${KEY_MARKER}SEKRIT${KEY_MARKER}"}}},
   {"metadata": {"name": "echo-adapter", "namespace": "osac-e2e-ci", "annotations": {}},
    "spec": {"host": "echo-adapter-osac-e2e-ci.apps.canary.test"}}
 ]}
@@ -145,6 +150,8 @@ grep -q 'PRIVATE KEY' "${ART}/${NS_DIR}/routes.yaml" \
   && { echo "FAIL: routes.yaml leaked a TLS private key"; exit 1; }
 grep -q '"key":' "${ART}/${NS_DIR}/routes.yaml" \
   && { echo "FAIL: routes.yaml kept spec.tls.key"; exit 1; }
+grep -q 'last-applied-configuration' "${ART}/${NS_DIR}/routes.yaml" \
+  && { echo "FAIL: routes.yaml kept the last-applied annotation"; exit 1; }
 grep -q '10.128.0.42' "${ART}/${NS_DIR}/endpoints.yaml" \
   || { echo "FAIL: endpoints.yaml does not hold the ready address"; exit 1; }
 grep -q 'fulfillment-api-abc12' "${ART}/${NS_DIR}/endpointslices.yaml" \

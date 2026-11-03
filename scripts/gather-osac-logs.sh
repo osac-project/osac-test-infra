@@ -100,9 +100,14 @@ collect_router_evidence() {
     # Route objects can carry a TLS private key. Delete it before the file is
     # written; the artifact must never hold a key, and no redaction pass can
     # reliably match a PEM block.
-    jq '.items |= map(if .spec.tls then .spec.tls |= del(.key) else . end)' \
-        <<<"${routes_json}" > "${dir}/routes.yaml" 2>/dev/null \
-        || printf '%s\n' "${routes_json}" > "${dir}/routes.yaml"
+    # Delete the live TLS key and the last-applied annotation, which can
+    # carry the same key inside a serialized copy of the object. If jq
+    # fails, write an empty list rather than the unsanitized response.
+    jq '.items |= map(
+        (if .spec.tls then .spec.tls |= del(.key) else . end)
+        | del(.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"])
+    )' <<<"${routes_json}" > "${dir}/routes.yaml" 2>/dev/null \
+        || printf '%s\n' '{"items":[]}' > "${dir}/routes.yaml"
     timeout 30s oc get endpoints -n "${ns}" -o yaml > "${dir}/endpoints.yaml" 2>&1 || true
     timeout 30s oc get endpointslices -n "${ns}" -o yaml > "${dir}/endpointslices.yaml" 2>&1 || true
 
