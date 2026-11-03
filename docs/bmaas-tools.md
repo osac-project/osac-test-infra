@@ -36,13 +36,21 @@ Idempotent — safe to re-run.
 
 ## 2. Create VMs and the raw inventory
 
+Keep the same optional disk setting for every creation in this inventory. The
+examples use a Bash array that is empty by default (single-disk BMaaS).
+
 ```bash
+DATA_DISK_ARGS=()
+# Optional: uncomment before creating this inventory; keep for later additions.
+# DATA_DISK_ARGS=(--data-disk-size 50G)
+
 python3 .github/scripts/manage-virtual-bmh-vms.py create \
   --inventory-file "${HOME}/virtual-bmh-inventory.json" \
   --network default \
   --disk-dir "${HOME}/virtual-bmh-disks" \
   --redfish-host "${GW_IP}" \
-  --count 2
+  --count 2 \
+  "${DATA_DISK_ARGS[@]}"
 ```
 
 All hosts are named after a generated group prefix
@@ -62,6 +70,12 @@ unbacked qcow2 disk at `vdb`. The default is disabled; the OS disk remains
 150G at `vda`. Sizes are positive integers with an optional `k`, `M`, `G`, or
 `T` suffix. CI forwards `BMH_DATA_DISK_SIZE` to this option; only CaaS enables
 it, with `50G`. BMaaS keeps its single-disk default.
+
+This option is per invocation, not persisted in the inventory. Keep
+`DATA_DISK_ARGS` enabled for every later addition to a data-disk inventory:
+omitting the option adds OS-only VMs, and a later enabled creation rejects the
+mixed inventory. The add-one example reuses the array from step 2 in the same
+Bash session.
 
 Creation remains additive: each call adds `--count` fresh VMs, even when an
 inventory already exists. Enabled creation first checks every existing host's
@@ -83,10 +97,16 @@ before retrying. Default-disabled creation keeps its upstream additive behavior.
 For direct `delete`, optionally supply `--disk-dir ABSOLUTE_DIRECTORY` to authorize
 data-file cleanup. It must be an existing canonical directory without symlink or
 `..` components. Only the exact regular, non-symlink direct-child data source is
-removed, after domain absence is verified. Outside paths, aliases, and symlinks
-are retained with a warning. Without this option data files are retained with a
-warning; existing OS disk and NVRAM cleanup is unchanged. CI's separate clone-
-scoped teardown continues to clean its custom disk directory as before.
+removed, after domain absence is verified. Warnings about retained outside paths,
+aliases, symlinks or data files without this option apply only to matching data
+sources known from the domain XML. If XML is unavailable (for example, the domain
+is already absent), deletion can remove the inventory entry without identifying
+or warning about leftover data files. Before retrying enabled creation, which
+rejects orphan data remnants, inspect leftovers manually. Remove a file only
+after confirming inventory-group ownership, the owning domain's absence, and
+that no live VM references it; do not infer ownership from its basename alone.
+Existing OS disk and NVRAM cleanup is unchanged. CI's separate clone-scoped
+teardown continues to clean its custom disk directory as before.
 
 ```bash
 # add one more
@@ -95,7 +115,8 @@ python3 .github/scripts/manage-virtual-bmh-vms.py create \
   --network default \
   --disk-dir "${HOME}/virtual-bmh-disks" \
   --redfish-host "${GW_IP}" \
-  --count 1
+  --count 1 \
+  "${DATA_DISK_ARGS[@]}"
 
 # remove one by name
 python3 .github/scripts/manage-virtual-bmh-vms.py delete \
