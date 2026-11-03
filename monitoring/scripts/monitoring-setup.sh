@@ -352,6 +352,26 @@ deploy_tempo210_config() {
     info "Tempo 2.10 config deployed to ${target_dir}/tempo.yaml."
 }
 
+# Deploy the provisioned dashboards into their two Grafana folders. The
+# split is by filename, so the repo stays flat and every dashboard test keeps
+# reading its file at one path. Remove stale files first: a plain cp only
+# adds and overwrites, so a dashboard removed from the repo would otherwise
+# linger here and keep being provisioned.
+deploy_dashboards() {
+    local dest="${MONITORING_HOME}/dashboards"
+    local f base
+    mkdir -p "${dest}/ci-fleet" "${dest}/ci-observe"
+    rm -f "${dest}"/*.json "${dest}/ci-fleet"/*.json "${dest}/ci-observe"/*.json
+    for f in "${MONITORING_REPO_DIR}/config/grafana/dashboards/"*.json; do
+        base="$(basename "${f}")"
+        case "${base}" in
+            ci-observe-*) cp "${f}" "${dest}/ci-observe/${base}" ;;
+            *)            cp "${f}" "${dest}/ci-fleet/${base}" ;;
+        esac
+    done
+    info "Dashboards deployed to ${dest}/ci-fleet and ${dest}/ci-observe."
+}
+
 ###############################################################################
 # Parse arguments
 ###############################################################################
@@ -559,11 +579,7 @@ if [[ "${MODE}" == "update-central" ]]; then
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
     deploy_tempo210_config
     deploy_caddyfile
-    # Remove stale dashboards first -- a plain cp only adds/overwrites, so a
-    # dashboard removed from the repo would otherwise linger here and keep
-    # being provisioned by Grafana indefinitely.
-    rm -f "${MONITORING_HOME}/dashboards/"*.json
-    cp "${MONITORING_REPO_DIR}/config/grafana/dashboards/"*.json "${MONITORING_HOME}/dashboards/"
+    deploy_dashboards
     cp "${MONITORING_REPO_DIR}/scripts/service-health-textfile.sh" \
        "${MONITORING_HOME}/scripts/service-health-textfile.sh"
     chmod +x "${MONITORING_HOME}/scripts/service-health-textfile.sh"
@@ -700,8 +716,7 @@ if [[ "${MODE}" == "central" ]]; then
     deploy_tempo210_config
     deploy_caddyfile
 
-    # Copy dashboards
-    cp "${MONITORING_REPO_DIR}/config/grafana/dashboards/"*.json "${MONITORING_HOME}/dashboards/"
+    deploy_dashboards
 
     info "Config files copied for central deployment."
 

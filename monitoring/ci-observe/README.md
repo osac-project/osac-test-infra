@@ -11,7 +11,7 @@ If Grafana will not load, or you see no data for a run you know finished, read [
 
 ## Start here
 
-Open the **OSAC CI** folder in Grafana and pick **CI Observe — Test Runs**. This page lists recent runs. Every row is one capture, and the run id links to its detail page.
+Open the **ci-observe** folder in Grafana and pick **CI Observe — Test Runs**. This page lists recent runs. Every row is one capture, and the run id links to its detail page.
 
 A capture is one E2E workflow run that had ci-observe enabled. Its id has three parts: `bmaas-main-41318528583-a1` is the suite, the GitHub run id, and the run attempt.
 

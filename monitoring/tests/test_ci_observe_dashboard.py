@@ -2,7 +2,7 @@
 
 monitoring/config/grafana/dashboards/ci-observe-runs.json (one capture at a
 time) and ci-observe-runs-home.json (the run list) are provisioned by
-monitoring/config/grafana/dashboards.yml into the OSAC CI folder next to the
+monitoring/config/grafana/dashboards.yml into the ci-observe folder next to the
 other dashboards. They query the ci-observe capture backend through the Tempo
 and Loki datasources, so these tests pin the datasource uids, the capture_id
 template variable and the TraceQL/LogQL shapes that the panels depend on.

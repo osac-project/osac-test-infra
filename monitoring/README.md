@@ -437,10 +437,12 @@ their own, so they stay until deleted.
 ## Grafana access
 
 Direct HTTPS on the central machine, GitHub OAuth login restricted to the
-`osac-project` org: `https://<central-host>:3000`. Five dashboards
-(auto-provisioned into the "OSAC CI" folder): Runner Health, Runner Status,
-Workflow Jobs, Workflow Metrics, and Health Overview (a team-facing summary --
-pass rate trend, flake rate, MTTR -- for standups/sprint reviews, see OSAC-2064).
+`osac-project` org: `https://<central-host>:3000`. Dashboards are
+auto-provisioned into two folders. **CI Fleet** holds Runner Health, Runner
+Status, Workflow Jobs, Workflow Metrics, and Health Overview (a team-facing
+summary -- pass rate trend, flake rate, MTTR -- for standups and sprint reviews,
+see OSAC-2064). **ci-observe** holds the run, pull request and trend dashboards;
+see [`ci-observe/README.md`](ci-observe/README.md).
 
 Also reachable via an internal relay machine instead of the central host's
 public IP -- see [`vpn-relay-access.md`](vpn-relay-access.md) for why and

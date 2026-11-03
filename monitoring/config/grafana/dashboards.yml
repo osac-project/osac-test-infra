@@ -1,17 +1,34 @@
 # Grafana dashboard provisioning for OSAC CI monitoring
 # Deployed by monitoring-setup.sh
-# Auto-loads dashboards from the provisioned directory.
+#
+# Two folders, because they are two products:
+#   CI Fleet   -- runners, machines, jobs and queue health
+#   ci-observe -- one CI run, the pull request, and the trends
+#
+# monitoring-setup.sh copies each dashboard into the folder matching its
+# filename: ci-observe-*.json goes to ci-observe, everything else to CI Fleet.
 
 apiVersion: 1
 
 providers:
-  - name: OSAC CI
+  - name: CI Fleet
     orgId: 1
-    folder: OSAC CI
+    folder: CI Fleet
     type: file
     disableDeletion: false
     editable: true
     updateIntervalSeconds: 30
     options:
-      path: /var/lib/grafana/dashboards
+      path: /var/lib/grafana/dashboards/ci-fleet
+      foldersFromFilesStructure: false
+
+  - name: ci-observe
+    orgId: 1
+    folder: ci-observe
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/ci-observe
       foldersFromFilesStructure: false

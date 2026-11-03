@@ -4,7 +4,7 @@ monitoring/config/grafana/dashboards/ci-observe-cluster.json answers the
 cluster question for one capture: at every minute of the run, how many pods
 existed, what each pod used in CPU and in memory, what each node used, and
 which pods existed when. It is provisioned by
-monitoring/config/grafana/dashboards.yml into the OSAC CI folder next to the
+monitoring/config/grafana/dashboards.yml into the ci-observe folder next to the
 other dashboards and reads the ci-observe Prometheus backend (uid
 ci-observe-metrics, the otel-lgtm bundle on port 9092), which scrapes the
 kubelet summary API every 60 seconds and keeps 15 days.
