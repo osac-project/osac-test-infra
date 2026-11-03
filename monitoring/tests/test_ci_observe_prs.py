@@ -407,6 +407,11 @@ class TestHelpers:
         assert prs.ejection_kind("success", "removed from the merge queue") == "removed"
         assert prs.ejection_kind("", "") == "unknown"
 
+    def test_entry_conclusion_names_the_real_failure(self, prs):
+        assert prs._entry_conclusion([{"conclusion": "cancelled"}, {"conclusion": "failure"}]) == "failure"
+        assert prs._entry_conclusion([{"conclusion": "success"}, {"conclusion": "skipped"}]) == "success"
+        assert prs._entry_conclusion([{"conclusion": "success"}, {"conclusion": None}]) == ""
+
     def test_missing_boundary_is_never_zero(self, prs):
         assert prs.seconds_between(None, "2026-10-01T10:00:00Z") is None
         assert prs.seconds_between("2026-10-01T10:00:00Z", None) is None

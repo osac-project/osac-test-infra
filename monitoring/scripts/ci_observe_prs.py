@@ -246,14 +246,15 @@ def ejection_kind(conclusion, reason):
 
 def _entry_conclusion(runs):
     """One conclusion for a queue entry. Several workflows start on the same
-    entry; a real failure outranks the cancellations it caused."""
+    entry; a real failure outranks the cancellations it caused. A skipped or
+    neutral workflow does not fail an entry whose other runs passed."""
     conclusions = {run.get("conclusion") or "" for run in runs}
     for conclusion in ("failure", "timed_out", "startup_failure", "action_required"):
         if conclusion in conclusions:
             return conclusion
     if "cancelled" in conclusions:
         return "cancelled"
-    if conclusions and all(conclusion == "success" for conclusion in conclusions):
+    if conclusions and all(conclusion in ("success", "skipped", "neutral") for conclusion in conclusions):
         return "success"
     return ""
 
