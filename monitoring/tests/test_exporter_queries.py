@@ -340,3 +340,62 @@ class TestHTTP:
         with pytest.raises(urllib.error.HTTPError) as err:
             self.get(f"{base_url}/nope")
         assert err.value.code == 404
+
+
+class TestApiGuard:
+    """The /api/* concurrency cap that keeps /metrics scrapable under load."""
+
+    @pytest.fixture
+    def base_url(self, wfe, history, monkeypatch):
+        monkeypatch.setattr(wfe.ExporterHandler, "exporter", history)
+        monkeypatch.setattr(wfe.ExporterHandler, "_api_slots", threading.BoundedSemaphore(1))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), wfe.ExporterHandler)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+        server.shutdown()
+        server.server_close()
+
+    def test_rejects_api_over_the_cap_but_not_metrics(self, wfe, base_url):
+        wfe.ExporterHandler._api_slots.acquire()
+        before = wfe.api_rejected_requests._value.get()
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(f"{base_url}/api/counts", timeout=5)
+        assert err.value.code == 503
+        assert err.value.headers["Retry-After"] == "10"
+        assert wfe.api_rejected_requests._value.get() == before + 1
+        with urllib.request.urlopen(f"{base_url}/metrics", timeout=5) as resp:
+            assert resp.status == 200
+
+    def test_slot_is_released_after_each_request(self, base_url):
+        for _ in range(3):
+            with urllib.request.urlopen(f"{base_url}/api/counts", timeout=5) as resp:
+                assert resp.status == 200
+
+    def test_slot_is_released_when_the_handler_fails(self, wfe, base_url, monkeypatch):
+        def boom(params):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(wfe.ExporterHandler.exporter, "get_counts_json", boom)
+        with pytest.raises(Exception):
+            urllib.request.urlopen(f"{base_url}/api/counts", timeout=5)
+        monkeypatch.undo()
+        with urllib.request.urlopen(f"{base_url}/api/categories", timeout=5) as resp:
+            assert resp.status == 200
+
+
+class TestJobColumns:
+    def test_columns_limit_the_returned_fields(self, history):
+        jobs = history.get_jobs_json({}, columns=("conclusion", "status"))
+        assert jobs
+        assert all(set(j) == {"conclusion", "status"} for j in jobs)
+
+    def test_active_runs_stay_complete(self, history):
+        jobs = history.get_jobs_json(q(active="true"), columns=("conclusion",))
+        active = [j for j in jobs if j.get("id", 0) >= 100]
+        assert {j["id"] for j in active} == {100, 101, 103}
+        assert all("workflow" in j for j in active)
+
+    def test_unknown_column_is_rejected(self, history):
+        with pytest.raises(ValueError):
+            history.get_jobs_json({}, columns=("id; DROP TABLE jobs",))
