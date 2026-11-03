@@ -10,17 +10,17 @@
     {
       "title": "Run evidence (steps, JUnit)",
       "type": "link",
-      "url": "/d/ci-observe-run-evidence/ci-observe-run-evidence?var-capture_id=${capture_id}"
+      "url": "/d/ci-observe-run-evidence/ci-observe-run-evidence?var-capture_id=${capture_id}&from=${__from}&to=${__to}"
     },
     {
       "title": "Cluster view",
       "type": "link",
-      "url": "/d/ci-observe-cluster/ci-observe-cluster?var-capture_id=${capture_id}"
+      "url": "/d/ci-observe-cluster/ci-observe-cluster?var-capture_id=${capture_id}&from=${__from}&to=${__to}"
     },
     {
       "title": "Compare runs",
       "type": "link",
-      "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs"
+      "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs&from=${__from}&to=${__to}"
     }
   ],
   "panels": [
@@ -364,7 +364,7 @@
       ]
     },
     {
-      "title": "Duration",
+      "title": "Test time",
       "description": "Elapsed time from the start of the test session to its end. 'not recorded' means the session span never arrived.",
       "type": "stat",
       "gridPos": {

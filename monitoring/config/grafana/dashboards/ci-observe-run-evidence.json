@@ -157,7 +157,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Duration (s)"
+                "value": "Job duration (s)"
               }
             ]
           },
@@ -421,7 +421,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Duration (s)"
+                "value": "Job duration (s)"
               }
             ]
           },
@@ -608,7 +608,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Duration (s)"
+                "value": "Job duration (s)"
               }
             ]
           },

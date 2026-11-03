@@ -282,7 +282,7 @@ def test_run_overview_stat_panels(dashboard: dict) -> None:
     """Run overview holds the summary stats, before the Run identity row."""
     panels = [p for p in dashboard["panels"] if p["type"] != "row"]
     overview = [p for p in panels if p["gridPos"]["y"] < 6]
-    assert [p["title"] for p in overview] == ["Tests", "Failed", "Result", "Session", "Duration", "Suite", "PR"]
+    assert [p["title"] for p in overview] == ["Tests", "Failed", "Result", "Session", "Test time", "Suite", "PR"]
 
 
 def test_suite_and_pr_info_panels_degrade_gracefully(dashboard: dict) -> None:
@@ -309,7 +309,7 @@ def test_slowest_tests_is_top_20(dashboard: dict) -> None:
 def test_run_duration_selects_the_session_span(dashboard: dict) -> None:
     """Run duration uses the one session span, not xdist worker spans, and keeps its time unit."""
     panels = _panels_by_title(dashboard)
-    panel = panels["Duration"]
+    panel = panels["Test time"]
     assert panel["options"]["reduceOptions"]["calcs"] == ["max"]
     assert 'name = "test run"' in panel["targets"][0]["query"]
     assert panel["fieldConfig"]["defaults"].get("unit") is None
@@ -952,8 +952,12 @@ def test_home_distinguishes_failed_runs_from_failed_tests(home: dict) -> None:
     assert '.pytest.span_type = "test"' in failed_tests["targets"][0]["query"]
 
 
-def test_home_links_runs_to_detail_and_comparison(home: dict) -> None:
-    """Every run-id column links both to the investigation and the comparison dashboard."""
+def test_home_links_runs_to_detail(home: dict) -> None:
+    """Every run-id column links straight to the investigation page.
+
+    One data link makes the id a direct link. Two links turn the cell into a
+    menu, which read as "clicking does nothing" in the intern walkthrough.
+    The comparison dashboard is reachable from the Start-here map instead."""
     linked = []
     for panel in _iter_panels(home["panels"]):
         for override in panel["fieldConfig"].get("overrides", []):
@@ -964,10 +968,8 @@ def test_home_links_runs_to_detail_and_comparison(home: dict) -> None:
     assert linked, "no run-id column carries links"
     for title, links in linked:
         urls = [link["url"] for link in links]
+        assert len(urls) == 1, f"{title}: a second data link turns the cell into a menu"
         assert any(url.startswith(DETAIL_LINK_PREFIX) for url in urls), f"{title}: missing detail link"
-        assert any(COMPARE_LINK in url for url in urls), (
-            f"{title}: missing comparison link (must point at the cohort dashboard without var-capture_id)"
-        )
         assert any(url.startswith(DETAIL_LINK_PREFIX) and "var-capture_id=${__value.raw}" in url for url in urls), (
             f"{title}: the run-investigation link must keep var-capture_id"
         )
@@ -1211,7 +1213,7 @@ def test_stat_titles_are_short_enough_to_render(dashboard: dict) -> None:
         "Failed": (6, 1, 6),
         "Result": (12, 1, 6),
         "Session": (18, 1, 6),
-        "Duration": (0, 5, 8),
+        "Test time": (0, 5, 8),
         "Suite": (8, 5, 8),
         "PR": (16, 5, 8),
         "Calls": (0, 74, 5),

@@ -519,11 +519,7 @@
                 "value": [
                   {
                     "title": "Open run investigation",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}"
-                  },
-                  {
-                    "title": "Compare runs (choose a cohort)",
-                    "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1"
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}&from=${__from}&to=${__to}"
                   }
                 ]
               },
@@ -585,7 +581,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Duration"
+                "value": "Test time"
               },
               {
                 "id": "unit",
@@ -672,11 +668,7 @@
                 "value": [
                   {
                     "title": "Open run investigation",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}"
-                  },
-                  {
-                    "title": "Compare runs (choose a cohort)",
-                    "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1"
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}&from=${__from}&to=${__to}"
                   }
                 ]
               },
@@ -916,11 +908,7 @@
                 "value": [
                   {
                     "title": "Open run investigation",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}"
-                  },
-                  {
-                    "title": "Compare runs (choose a cohort)",
-                    "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1"
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}&from=${__from}&to=${__to}"
                   }
                 ]
               },
@@ -1002,7 +990,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Duration"
+                "value": "Test time"
               },
               {
                 "id": "unit",
