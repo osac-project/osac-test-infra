@@ -3610,6 +3610,103 @@ class WorkflowExporter:
         documents the query params and the response shape."""
         return self._run_evidence.get_ci_observe_run_json(params)
 
+    # -- ci-observe trends (begin) ------------------------------------------
+    #
+    # GET /api/ci-observe/trends reads the daily per-test JUnit rollup that
+    # monitoring/scripts/ci_observe_trends.py writes to trends.db, next to
+    # this exporter's own DB. Per-test outcomes do not exist in the job
+    # history, and a run's artifact is gone after 7 days, so the rollup is
+    # the only source for them. The file is opened read-only and this
+    # endpoint never touches workflow-exporter.db.
+    #
+    # Query params: days -- how many days back to read (default 60, the
+    # job-history retention), test -- substring of the test id (empty means
+    # every test).
+    CIOBS_TRENDS_FILE = "trends.db"
+    CIOBS_TRENDS_DEFAULT_DAYS = 60
+    CIOBS_TRENDS_MAX_DAYS = 400
+    CIOBS_TRENDS_MAX_ROWS = 5000
+    CIOBS_TRENDS_COLUMNS = (
+        "day", "repo", "workflow", "suite", "test_id", "source_sha",
+        "runs", "passes", "failures", "p50_duration_s", "p95_duration_s",
+    )
+
+    def get_ci_observe_trends_json(self, params):
+        """The /api/ci-observe/trends document: the rollup rows of the
+        requested window, plus one row per rolled-up day saying how many
+        runs it listed and how many still had a readable artifact.
+
+        Returns days, test, window_from, source, rows, coverage, notes.
+        Never fails the request: a missing rollup, a DB that cannot be
+        opened, or a window with no rows all come back as notes.
+        """
+        try:
+            days = int((params.get("days", [""])[0] or self.CIOBS_TRENDS_DEFAULT_DAYS))
+        except (TypeError, ValueError):
+            days = self.CIOBS_TRENDS_DEFAULT_DAYS
+        days = max(1, min(days, self.CIOBS_TRENDS_MAX_DAYS))
+        test = (params.get("test", [""])[0] or "").strip()
+        window_from = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        doc = {
+            "days": days,
+            "test": test,
+            "window_from": window_from,
+            "source": (
+                "trends.db: the daily per-test JUnit rollup written by "
+                "ci_observe_trends.py (one row per day, repo, workflow, suite, "
+                "test id and source SHA)"
+            ),
+            "rows": [],
+            "coverage": [],
+            "notes": [],
+        }
+        path = os.path.join(CACHE_DIR, self.CIOBS_TRENDS_FILE)
+        if not os.path.exists(path):
+            doc["notes"].append(
+                "no per-test rollup has been written on this machine yet, so there "
+                "are no test outcomes here; overall job numbers come from Prometheus"
+            )
+            return doc
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        except sqlite3.Error as exc:
+            doc["notes"].append(f"the rollup DB could not be opened: {exc}")
+            return doc
+        try:
+            conn.row_factory = sqlite3.Row
+            query = f"SELECT {', '.join(self.CIOBS_TRENDS_COLUMNS)} FROM test_rollup WHERE day >= ?"
+            args = [window_from]
+            if test:
+                query += " AND test_id LIKE ?"
+                args.append(f"%{test}%")
+            query += " ORDER BY day, repo, workflow, suite, test_id, source_sha LIMIT ?"
+            args.append(self.CIOBS_TRENDS_MAX_ROWS)
+            doc["rows"] = [dict(row) for row in conn.execute(query, args)]
+            doc["coverage"] = [
+                dict(row) for row in conn.execute(
+                    "SELECT day, runs_listed, runs_parsed, runs_unavailable, generated_at"
+                    " FROM rollup_days WHERE day >= ? ORDER BY day",
+                    (window_from,),
+                )
+            ]
+        except sqlite3.Error as exc:
+            doc["notes"].append(f"the rollup DB could not be read: {exc}")
+            return doc
+        finally:
+            conn.close()
+        if len(doc["rows"]) >= self.CIOBS_TRENDS_MAX_ROWS:
+            doc["notes"].append(
+                f"the row limit ({self.CIOBS_TRENDS_MAX_ROWS}) was reached; narrow the "
+                "test filter or the window"
+            )
+        if not doc["rows"]:
+            doc["notes"].append(
+                f"the rollup has no rows on or after {window_from} for this filter"
+            )
+        return doc
+
+    # -- ci-observe trends (end) --------------------------------------------
+
 
 # ---------------------------------------------------------------------------
 # Custom HTTP handler: /metrics + /api/jobs
@@ -3804,6 +3901,21 @@ class ExporterHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(payload.encode())
+
+        # -- ci-observe trends (begin) --
+        elif parsed.path == "/api/ci-observe/trends":
+            params = parse_qs(parsed.query)
+            # Reads trends.db read-only. An empty rollup, or one that was
+            # never written, is 200 with a note, so the dashboard shows
+            # "no per-test data yet" rather than a query error.
+            data = self.exporter.get_ci_observe_trends_json(params)
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+        # -- ci-observe trends (end) --
 
         else:
             self.send_response(404)

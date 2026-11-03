@@ -1,0 +1,1237 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Population trends for CI. Test history is one test over calendar days, from the daily JUnit rollup of every E2E run; the overview is pass rate, duration and failure mix for every run. Each panel names its population and its window. There is no single-run detail here: the run index and the run-evidence dashboards own that, and the source SHA in the rollup table links to the commit's runs on GitHub.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [
+    {
+      "title": "Run index (ci-observe)",
+      "type": "link",
+      "url": "/d/ci-observe-runs-home/ci-observe-e28094-test-runs"
+    },
+    {
+      "title": "One run's evidence (ci-observe)",
+      "type": "link",
+      "url": "/d/ci-observe-run-evidence/ci-observe-e28094-run-evidence"
+    },
+    {
+      "title": "GitHub Actions runs (osac)",
+      "type": "link",
+      "url": "https://github.com/osac-project/osac/actions"
+    }
+  ],
+  "panels": [
+    {
+      "type": "text",
+      "id": 1,
+      "title": "What this page answers, and which population",
+      "description": "The population each section reads, and the window each section covers. They are never drawn on one axis.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Test history reads all jobs** (every E2E run, captured or not) from the daily JUnit rollup that `ci_observe_trends.py` writes to `trends.db`. Its window is the **Days** variable, not the time picker: the rollup holds one row per day, and a day only exists for runs whose GitHub artifact still existed when the rollup ran. Artifacts live 7 days.\n\n**Overview reads all jobs** twice: overall job and run numbers come from the central Prometheus `github_actions_*` metrics, and the failure mix comes from the workflow exporter. Its window is the dashboard time range.\n\nTest history is per **test id** over calendar days. It is not a single run: to read one run, open it from the run index (linked in the header).\n\nA test counts as failed when its JUnit testcase holds `<failure>` or `<error>`. A skipped test is neither a pass nor a failure and is left out of both counts."
+      }
+    },
+    {
+      "type": "row",
+      "id": 2,
+      "title": "Test history \u2014 one test, all jobs, last $days days",
+      "description": "Is this test flaky, slower, or newly broken? Outcomes and durations for one test id, from the daily JUnit rollup.",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 3,
+      "title": "Passes and failures, all jobs, last $days days \u2014 $test",
+      "description": "One point per day for the selected test id. Population: all jobs that produced a JUnit artifact, captured or not. Window: the Days variable (the rollup's own calendar), not the time picker. Leave Test empty and every test's rows are drawn on the same day; set it to one test id for a readable line.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No per-test data yet",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "showPoints": "always"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "passes"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Passes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failures"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Failures"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "rows",
+          "columns": [
+            {
+              "selector": "day",
+              "text": "day",
+              "type": "timestamp"
+            },
+            {
+              "selector": "passes",
+              "text": "passes",
+              "type": "number"
+            },
+            {
+              "selector": "failures",
+              "text": "failures",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 4,
+      "title": "Duration p50 and p95, all jobs, last $days days \u2014 $test",
+      "description": "Per day, the median and 95th-percentile duration in seconds of the selected test, nearest-rank over the runs of that day. Population: all jobs that produced a JUnit artifact. Window: the Days variable. A day with no readable artifact has no point, never a zero.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No per-test data yet",
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "always"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50_duration_s"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "p50"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95_duration_s"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "p95"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "rows",
+          "columns": [
+            {
+              "selector": "day",
+              "text": "day",
+              "type": "timestamp"
+            },
+            {
+              "selector": "p50_duration_s",
+              "text": "p50_duration_s",
+              "type": "number"
+            },
+            {
+              "selector": "p95_duration_s",
+              "text": "p95_duration_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 5,
+      "title": "Rollup rows and their source SHA, all jobs, last $days days \u2014 $test",
+      "description": "The rows behind the two charts, one per day, repo, workflow, suite, test id and source SHA. Flaky means the same test passed and failed on the same SHA: look for a SHA with both passes and failures. Population: all jobs that produced a JUnit artifact. Window: the Days variable. The SHA links to that commit's checks on GitHub, where the individual runs are.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No per-test data yet"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "day"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Day"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "repo"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Repo"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "workflow"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Workflow"
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "JUnit suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 240
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "test_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test id"
+              },
+              {
+                "id": "custom.width",
+                "value": 380
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "source_sha"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Source SHA"
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this commit's checks on GitHub",
+                    "url": "https://github.com/osac-project/${__data.fields.repo}/commit/${__value.raw}/checks"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "runs"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Runs"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "passes"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Passes"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failures"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failures"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50_duration_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "p50 (s)"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95_duration_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "p95 (s)"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Day",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "rows",
+          "columns": [
+            {
+              "selector": "day",
+              "text": "day",
+              "type": "string"
+            },
+            {
+              "selector": "repo",
+              "text": "repo",
+              "type": "string"
+            },
+            {
+              "selector": "workflow",
+              "text": "workflow",
+              "type": "string"
+            },
+            {
+              "selector": "suite",
+              "text": "suite",
+              "type": "string"
+            },
+            {
+              "selector": "test_id",
+              "text": "test_id",
+              "type": "string"
+            },
+            {
+              "selector": "source_sha",
+              "text": "source_sha",
+              "type": "string"
+            },
+            {
+              "selector": "runs",
+              "text": "runs",
+              "type": "number"
+            },
+            {
+              "selector": "passes",
+              "text": "passes",
+              "type": "number"
+            },
+            {
+              "selector": "failures",
+              "text": "failures",
+              "type": "number"
+            },
+            {
+              "selector": "p50_duration_s",
+              "text": "p50_duration_s",
+              "type": "number"
+            },
+            {
+              "selector": "p95_duration_s",
+              "text": "p95_duration_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 6,
+      "title": "Overview \u2014 all jobs, selected range",
+      "description": "What is the pass rate, duration and failure mix? Population: every run, captured or not. Window: the dashboard time range, which each panel names.",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "id": 7,
+      "title": "Pass rate, all workflow runs, selected range (central Prometheus)",
+      "description": "Successful completed runs divided by all completed runs, captured or not. Window: the dashboard time range. Counters reset when the exporter restarts, so a range spanning a restart reads slightly low.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "decimals": 3,
+          "noValue": "no data in range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(github_actions_completed_runs_total{org=\"osac-project\", conclusion=\"success\"}[$__range])) / sum(increase(github_actions_completed_runs_total{org=\"osac-project\"}[$__range]))",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 8,
+      "title": "Completed runs, all workflow runs, selected range (central Prometheus)",
+      "description": "Every completed workflow run in the window, captured or not. This is the denominator of the pass rate beside it. Window: the dashboard time range.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "no data in range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(github_actions_completed_runs_total{org=\"osac-project\"}[$__range]))",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 9,
+      "title": "Run duration p50, all workflow runs, selected range (central Prometheus)",
+      "description": "Median completed-run duration from the exporter's histogram. Population: all workflow runs, captured or not. Window: the dashboard time range.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "no data in range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(github_actions_run_duration_seconds_bucket{org=\"osac-project\"}[$__range])))",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 10,
+      "title": "Run duration p95, all workflow runs, selected range (central Prometheus)",
+      "description": "95th-percentile completed-run duration. Population: all workflow runs, captured or not. Window: the dashboard time range.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "no data in range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(github_actions_run_duration_seconds_bucket{org=\"osac-project\"}[$__range])))",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 11,
+      "title": "Failure mix, E2E jobs, selected range (workflow exporter)",
+      "description": "Failed E2E jobs split by why they failed: infra (CI or cluster), test (the product or the suite), unattributed (no per-step detail). Population: every E2E job, captured or not. Window: the dashboard time range, passed to the exporter as since/until.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 0,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Exporter not deployed or no failures in range"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "infra_total"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Infra failures"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "test_total"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test failures"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "unattributed_total"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Unattributed"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total_failures"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Total failures"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/presubmit-infra-failures?category=e2e&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$",
+          "columns": [
+            {
+              "selector": "infra_total",
+              "text": "infra_total",
+              "type": "number"
+            },
+            {
+              "selector": "test_total",
+              "text": "test_total",
+              "type": "number"
+            },
+            {
+              "selector": "unattributed_total",
+              "text": "unattributed_total",
+              "type": "number"
+            },
+            {
+              "selector": "total_failures",
+              "text": "total_failures",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 12,
+      "title": "Infra failures by failed step, E2E jobs, selected range (workflow exporter)",
+      "description": "Which step failed in the jobs the exporter classified as infra. Population: every E2E job classified as an infra failure, captured or not. Window: the dashboard time range.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 7,
+        "x": 10,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Exporter not deployed or no infra failures in range"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed step"
+              },
+              {
+                "id": "custom.width",
+                "value": 320
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Jobs"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/presubmit-infra-failures?category=e2e&since=${__from:date:iso}&until=${__to:date:iso}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "infra_by_step",
+          "columns": [
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 13,
+      "title": "Rollup coverage per day, all jobs, last $days days",
+      "description": "For each rolled-up day: how many E2E runs it listed, how many still had a readable JUnit artifact, and how many did not. runs_unavailable above zero means that day is partial: its per-test counts miss runs whose artifact had already expired. Population: all E2E runs the exporter stored. Window: the Days variable.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 7,
+        "x": 17,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No per-test data yet"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "day"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Day"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "runs_listed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Runs listed"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "runs_parsed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "With test data"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "runs_unavailable"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Artifact gone"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "generated_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Rolled up at"
+              },
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "coverage",
+          "columns": [
+            {
+              "selector": "day",
+              "text": "day",
+              "type": "string"
+            },
+            {
+              "selector": "runs_listed",
+              "text": "runs_listed",
+              "type": "number"
+            },
+            {
+              "selector": "runs_parsed",
+              "text": "runs_parsed",
+              "type": "number"
+            },
+            {
+              "selector": "runs_unavailable",
+              "text": "runs_unavailable",
+              "type": "number"
+            },
+            {
+              "selector": "generated_at",
+              "text": "generated_at",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 14,
+      "title": "What this page cannot show",
+      "description": "The gaps that are normal, not errors.",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "panels": []
+    },
+    {
+      "type": "text",
+      "id": 15,
+      "title": "The 7-day artifact limit, and what the first rollup covers",
+      "description": "Why a per-test trend starts when it starts.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**A run's per-test result lives only in its GitHub artifact, and GitHub deletes that after 7 days.** So the rollup can only record a day while that day's runs still have artifacts. The first rollup covers the runs of the last 7 days and nothing older: history before that cannot be reconstructed, and the coverage panel above shows it as a day that was never rolled up, not as a green day.\n\nRun `ci_observe_trends.py --days 7` daily to keep the rollup complete. Missing a day leaves a permanent hole in per-test history; the job-level numbers on the Overview section are unaffected.\n\nA run that uploaded no artifact, an artifact larger than the download bound, and an artifact with no JUnit file all read as **no test data** for that run. They are counted in `runs_unavailable`, and they never contribute a pass."
+      }
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "osac",
+    "ci",
+    "ci-observe",
+    "trends"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "days",
+        "label": "Days",
+        "type": "custom",
+        "hide": 0,
+        "query": "7,30,60",
+        "options": [
+          {
+            "selected": false,
+            "text": "7",
+            "value": "7"
+          },
+          {
+            "selected": false,
+            "text": "30",
+            "value": "30"
+          },
+          {
+            "selected": true,
+            "text": "60",
+            "value": "60"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": "60",
+          "value": "60"
+        },
+        "description": "How many days back the per-test rollup panels read. They do not follow the time picker: the rollup is daily."
+      },
+      {
+        "name": "test",
+        "label": "Test",
+        "type": "textbox",
+        "hide": 0,
+        "query": "",
+        "options": [],
+        "current": {
+          "selected": true,
+          "text": "",
+          "value": ""
+        },
+        "description": "A substring of a test id, for example test_compute_instance_restart. Empty means every test."
+      }
+    ]
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "CI Observe \u2014 Trends",
+  "uid": "ci-observe-trends",
+  "version": 1
+}

@@ -39,6 +39,11 @@ def digest():
     return _load("post_ci_digest", "post-ci-digest.py")
 
 
+@pytest.fixture(scope="session")
+def trends():
+    return _load("ci_observe_trends", "ci_observe_trends.py")
+
+
 @pytest.fixture
 def github(wfe, monkeypatch):
     fake = FakeGitHub(wfe.API_URL)

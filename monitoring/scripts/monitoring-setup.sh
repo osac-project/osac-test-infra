@@ -591,6 +591,11 @@ if [[ "${MODE}" == "update-central" ]]; then
        "${MONITORING_HOME}/scripts/workflow-exporter.py"
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_run_evidence.py" \
        "${MONITORING_HOME}/scripts/ci_observe_run_evidence.py"
+    # The per-test rollup the ci-observe Trends dashboard reads (trends.db).
+    # Run from here by hand or by a timer; it is not part of the exporter.
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_trends.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_trends.py"
+    chmod +x "${MONITORING_HOME}/scripts/ci_observe_trends.py"
     info "Config files + scripts updated."
 
     # The prometheus.yml copy above just brought in the repo's template
