@@ -60,6 +60,28 @@ def data_disk_size(value: str) -> str:
     return value
 
 
+def validate_data_files(inventory: RawInventory, disk_dir: Path) -> None:
+    """Reject unrecorded data remnants and invalid owned files without commands or mutation."""
+    known_names = inventory.host_names()
+    if disk_dir.exists() or disk_dir.is_symlink():
+        if not disk_dir.is_dir():
+            fail(f"data disk directory '{disk_dir}' is not a directory")
+        for path in disk_dir.iterdir():
+            if not path.name.endswith(DATA_DISK_SUFFIX):
+                continue
+            name = path.name.removesuffix(DATA_DISK_SUFFIX)
+            if inventory.name_prefix:
+                if is_group_host_name(name, inventory.name_prefix) and name not in known_names:
+                    fail(f"unrecorded data storage '{path}'; refusing to create more VMs")
+            elif re.fullmatch(r"virtual-bmh-[0-9a-f]{8}-[0-9a-f]{2}", name):
+                fail(f"data storage '{path}' has ambiguous ownership without an inventory group")
+    for host in inventory.hosts:
+        for suffix in (DISK_SUFFIX, DATA_DISK_SUFFIX, VARS_SUFFIX):
+            path = disk_dir / f"{host.name}{suffix}"
+            if not path.is_file() or path.is_symlink():
+                fail(f"VM '{host.name}' has incompatible owned storage '{path}'")
+
+
 def validate_data_storage(host: Host, disk_dir: Path) -> None:
     result = run_virsh(["dumpxml", host.name], capture=True)
     root = ET.fromstring(result.stdout)
@@ -254,7 +276,7 @@ def create_vm(
     )
 
 
-def delete_vm(name: str) -> bool:
+def delete_vm(name: str, disk_dir: Path | None = None) -> bool:
     """Remove a VM from libvirt and delete the storage it owns.
 
     The storage paths come from the domain's own definition (virsh
@@ -262,7 +284,8 @@ def delete_vm(name: str) -> bool:
     files named after this VM following the tool's own scheme are
     removed: a group-named domain may not have been created by this
     tool, and its definition can reference shared images that must
-    survive the deletion.
+    survive the deletion. Data files additionally require an explicitly
+    authorized directory; without one they are retained.
 
     Returns True when the domain is gone from libvirt afterwards. A VM
     that is already gone is fine (mirrors teardown.sh); a deletion that
@@ -288,9 +311,25 @@ def delete_vm(name: str) -> bool:
         return False
     # --nvram removes the NVRAM file; the extra unlink covers whatever
     # libvirt left behind.
-    owned_storage = {f"{name}{DISK_SUFFIX}", f"{name}{VARS_SUFFIX}", f"{name}{DATA_DISK_SUFFIX}"}
+    owned_storage = {f"{name}{DISK_SUFFIX}", f"{name}{VARS_SUFFIX}"}
     for path in disk_paths:
-        if Path(path).name in owned_storage:
+        source = Path(path)
+        if source.name == f"{name}{DATA_DISK_SUFFIX}":
+            expected = disk_dir / source.name if disk_dir is not None else None
+            if (
+                expected is not None
+                and path == str(expected)
+                and source.resolve() == expected
+                and not source.is_symlink()
+                and source.is_file()
+            ):
+                source.unlink()
+            else:
+                print(
+                    f"WARNING: retaining data storage '{path}': no authorized regular direct-child file",
+                    file=sys.stderr,
+                )
+        elif source.name in owned_storage:
             Path(path).unlink(missing_ok=True)
     return True
 
@@ -313,6 +352,7 @@ def cmd_validate_data_storage(args: argparse.Namespace) -> None:
     if not args.disk_dir.is_absolute():
         fail("--disk-dir must be absolute when data disks are enabled")
     existing = RawInventory.load(args.inventory_file)
+    validate_data_files(existing, args.disk_dir)
     for host in existing.hosts:
         validate_data_storage(host, args.disk_dir)
 
@@ -359,6 +399,10 @@ def cmd_create(args: argparse.Namespace) -> None:
 
 
 def cmd_delete(args: argparse.Namespace) -> None:
+    if args.disk_dir is not None and (
+        not args.disk_dir.is_absolute() or not args.disk_dir.is_dir() or args.disk_dir.resolve() != args.disk_dir
+    ):
+        fail("--disk-dir must be an existing absolute directory without symlink or '..' components")
     if not args.inventory_file.exists():
         fail(f"raw inventory file '{args.inventory_file}' not found")
     inventory = RawInventory.load(args.inventory_file)
@@ -376,13 +420,13 @@ def cmd_delete(args: argparse.Namespace) -> None:
     failed_names = []
     for host in inventory.hosts:
         if host.name in args.names:
-            if delete_vm(host.name):
+            if delete_vm(host.name, args.disk_dir):
                 deleted_names.append(host.name)
             else:
                 # VM still exists: keep the entry.
                 failed_names.append(host.name)
     for name in unknown_names:
-        if not delete_vm(name):
+        if not delete_vm(name, args.disk_dir):
             failed_names.append(name)
 
     inventory.remove_hosts(deleted_names)
@@ -430,6 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     delete = subparsers.add_parser("delete", help="remove VMs from libvirt and the raw inventory")
     delete.add_argument("--inventory-file", type=Path, required=True, help="raw inventory JSON to update")
+    delete.add_argument("--disk-dir", type=Path, help="optional absolute owned directory for data-file cleanup")
     delete.add_argument("names", nargs="+", help="VM names to delete")
     delete.set_defaults(func=cmd_delete)
 

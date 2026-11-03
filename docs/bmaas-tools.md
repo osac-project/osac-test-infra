@@ -70,8 +70,23 @@ storage is rejected without repairing, attaching, or deleting anything.
 `validate-data-storage --inventory-file FILE --disk-dir ABSOLUTE_DIRECTORY`
 runs this read-only preflight separately; CI runs it before starting services.
 Enabled creation also rejects name or storage collisions, including dangling
-symlinks, rather than overwriting them. Data files are removed by the normal
-owned-storage deletion path after domain deletion is verified.
+symlinks, rather than overwriting them. Before any external commands, enabled
+creation also rejects direct data-file remnants (including dangling links) for
+unrecorded hosts of the inventory's exact group. Other groups and sibling clone
+directories are not claimed or scanned. Without an inventory group, a remnant
+matching the tool's generated VM naming convention in the supplied disk directory
+has ambiguous ownership and is rejected without mutation. An empty or nonexistent
+directory and unrelated shared files remain valid. Validation never repairs
+storage or generates an inventory prefix; resolve ambiguous leftovers explicitly
+before retrying. Default-disabled creation keeps its upstream additive behavior.
+
+For direct `delete`, optionally supply `--disk-dir ABSOLUTE_DIRECTORY` to authorize
+data-file cleanup. It must be an existing canonical directory without symlink or
+`..` components. Only the exact regular, non-symlink direct-child data source is
+removed, after domain absence is verified. Outside paths, aliases, and symlinks
+are retained with a warning. Without this option data files are retained with a
+warning; existing OS disk and NVRAM cleanup is unchanged. CI's separate clone-
+scoped teardown continues to clean its custom disk directory as before.
 
 ```bash
 # add one more
@@ -112,6 +127,7 @@ KUBECONFIG=/path/to/kubeconfig python3 .github/scripts/reconcile-bmhs.py \
 
 ```bash
 # remove every VM — this empties the inventory
+# Add --disk-dir "${HOME}/virtual-bmh-disks" to authorize opted-in data-file cleanup.
 python3 .github/scripts/manage-virtual-bmh-vms.py delete \
   --inventory-file "${HOME}/virtual-bmh-inventory.json" \
   $(jq -r '.hosts[].name' "${HOME}/virtual-bmh-inventory.json")
