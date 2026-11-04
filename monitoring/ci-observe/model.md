@@ -196,8 +196,8 @@ In scope, and easily confused with it: the merge queue of a pull request. That i
 - **Pod logs are not delivered to Loki.** The collector is configured for `/var/log/pods`, but the unprivileged UID cannot read it, so pod logs exist only in the 7-day artifact.
 - **Runtime image IDs are `unknown` in current captures.** The requested image refs are recorded; the running image bytes are not. A capture that lists an ID for every OSAC Deployment container with `osac_image_ids_complete=true` is what proves the path works.
 - **GitHub keeps no merge-queue history.** An ejected entry disappears. An ejection is derived from a failed `merge_group` run plus the pull request comment. Exact events need a webhook receiver.
-- **Tempo keeps 30 days and rejects queries over 7 days.** A 30-day per-test trend needs a daily rollup of counts and percentiles, not a longer query.
-- **The exporter is a 90-second poller with a 30-PR window.** PR history needs a daily backfill with a sentinel, not re-polling every cycle.
+- **Tempo keeps 30 days and rejects queries over 7 days.** A 30-day per-test trend needs a daily rollup of counts and percentiles, not a longer query. The run index and capture discovery read the `captures` registry, not Tempo; the Capture view uses one tight-window search and trace-by-id.
+- **The exporter polls GitHub every 90 seconds and the capture registry every 60 seconds.** PR history is an hourly incremental pass plus a daily full pass, not a re-poll of every cycle.
 - **Label and review-request history exists only in the PR timeline.** The PR object carries current state only.
 
 ## How new data is admitted
