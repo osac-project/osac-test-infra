@@ -1,53 +1,74 @@
-"""The ci-observe runs data path: /api/ci-observe/runs and the Tempo join.
+"""The ci-observe runs read path: /api/ci-observe/runs and the capture registry.
 
-The workflow exporter knows every E2E run but stores no capture id; Tempo
-knows every capture but not the runs that never sent one. This endpoint joins
-them on the GitHub run id and answers the front door's question per run:
-capture, not collected, or unknown.
+The workflow exporter knows every E2E run and, through the 60-second capture
+registry, every capture that arrived. Both live in workflow-exporter.db, so
+this endpoint is one SQL page joined on the GitHub run id and never calls
+Tempo.
 
-The capture set comes from Tempo's tag-values endpoint, one entry per capture,
-not from a span search with a trace limit. Tempo refuses a range over 168h, so
-a 30- or 60-day window is queried in seven-day chunks and merged.
+These tests pin the join, the keyset paging, the 60-day window, the three
+registry endpoints, and above all the rule that keeps a data gap from
+becoming a false verdict: a running run, a run that just ended, a registry
+with no answer, a stale answer, an answer older than the run, a run older
+than coverage, and a missing finish time are all `unknown`, never `not
+collected`.
 
-These tests pin the join, the chunking, and above all the rule that keeps a
-data problem from becoming a false verdict: Tempo down, one failed or capped
-chunk, a value that is not a capture id, a run too fresh for the last lookup,
-or a run older than the capture retention are all `unknown`, never `not
-collected`. They also pin the per-window cache, the window and limit clamps,
-and the deployment wiring the container needs to reach the host's Tempo.
+The live shapes are faked: Prometheus and Loki answer with the same
+{"status": "success", "data": [...]} documents they return, and an info
+answer is the vector `last_over_time(osac_ci_capture_info[15d])` returns.
 """
 
 from __future__ import annotations
 
 import json
 import threading
-import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qsl, urlparse
 
 import pytest
 
-from helpers import make_job
+from helpers import FakeResponse, make_job
 
 MONITORING = Path(__file__).resolve().parents[1]
 DASHBOARD = MONITORING / "config" / "grafana" / "dashboards" / "ci-observe-runs-home.json"
-RUN_ID = 41310072671
-SECOND_RUN_ID = 41310072672
+RUN_ID = 41535773459
+SECOND_RUN_ID = 41535606958
 CAPTURE = f"vmaas-main-{RUN_ID}-a1"
-TAG_PATH = "/api/v2/search/tag/resource.osac.ci.capture_id/values"
-MAX_RANGE_SECONDS = 168 * 3600
+
+# The 11 live capture ids whose Prometheus label exists while Tempo, the old
+# discovery source, did not list them (2026-11-04). Each run must resolve to
+# its capture from the label value alone.
+PROMETHEUS_ONLY_IDS = [
+    41535773459, 41535606958, 41535448226, 41535784743, 41535773459,
+    41535740828, 41535817688, 41535829377, 41535839995, 41535870771,
+    41535890452,
+]
+
+IDENTITY = {
+    "ci_run_id": str(RUN_ID),
+    "ci_run_attempt": "1",
+    "ci_suite": "vmaas",
+    "ci_pr": "main",
+    "ci_workflow": "E2E VMaaS Full Install",
+    "ci_test_ref": "main",
+    "ci_test_sha": "a" * 40,
+    "ci_test_infra_ref": "main",
+    "ci_test_infra_sha": "b" * 40,
+    "ci_test_infra_workflow_sha": "c" * 40,
+    "ci_test_suite": "tests/e2e",
+    "ci_test_filter": "",
+    "ci_test_marker": "",
+}
 
 
 def iso(minutes_ago: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run_job(run_id=RUN_ID, **overrides) -> dict:
-    """A run-level E2E row: the id is the GitHub run id and the url has no
-    /job/ segment, which is what the endpoint lists."""
+def run_job(run_id=RUN_ID, created_minutes=60, finished_minutes=50, **overrides) -> dict:
+    """A run-level E2E row: its id is the GitHub run id and its run_id is its
+    own id, which is what the run index lists."""
     row = make_job(
         id=run_id,
         workflow="E2E VMaaS Full Install",
@@ -55,187 +76,174 @@ def run_job(run_id=RUN_ID, **overrides) -> dict:
         category="e2e",
         trigger="PR #123",
         conclusion="success",
-        created_at=iso(60),
+        created_at=iso(created_minutes),
+        updated_at=iso(finished_minutes),
         url=f"https://github.com/osac-project/osac/actions/runs/{run_id}",
     )
     row.update(overrides)
     return row
 
 
-def tag_values(*capture_ids, metrics=None) -> dict:
-    """A tag-values answer as the live Tempo 2.10 returns it."""
-    document = {"tagValues": [{"type": "string", "value": value} for value in capture_ids]}
-    if metrics is not None:
-        document["metrics"] = metrics
-    return document
+class FakeSources:
+    """Stands in for Prometheus, Loki and the metrics query.
 
-
-class FakeTempo:
-    """Stands in for Tempo's tag-values endpoint.
-
-    Rejects a range over 168h exactly as Tempo does, so a window that is not
-    chunked fails here instead of passing on a permissive fake. `payload` is a
-    tag-values document, or a callable(start, end) returning one; a callable
-    may raise HTTPError to fail one chunk.
+    `prometheus`, `loki` and `info` are the values/series each source
+    returns; `failures` maps a source name to the HTTP status that source
+    should fail with. Every request is recorded so a test can prove the
+    request path never made one.
     """
 
-    def __init__(self, payload=None, status=200):
-        self.payload = tag_values() if payload is None else payload
-        self.status = status
-        self.requests: list[dict] = []
-        outer = self
+    def __init__(self):
+        self.prometheus = []
+        self.loki = []
+        self.info = []
+        self.failures = {}
+        self.calls = []
 
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                parsed = urlparse(self.path)
-                params = dict(parse_qsl(parsed.query))
-                outer.requests.append({"path": parsed.path} | params)
-                status, body = outer.answer(parsed.path, params)
-                data = json.dumps(body).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+    def get(self, url, timeout=None, headers=None):
+        self.calls.append(url)
+        if "/loki/api/v1/label/" in url:
+            source = "loki"
+        elif "/api/v1/label/" in url:
+            source = "prometheus"
+        elif "/api/v1/query" in url:
+            source = "info"
+        else:
+            return FakeResponse(404, text=f"unknown url {url}")
+        if source in self.failures:
+            return FakeResponse(self.failures[source], text=f"{source} is down")
+        if source == "info":
+            data = {
+                "resultType": "vector",
+                "result": [
+                    {"metric": labels, "value": [datetime.now(timezone.utc).timestamp(), "1"]}
+                    for labels in self.info
+                ],
+            }
+        else:
+            data = list(getattr(self, source))
+        return FakeResponse(200, payload={"status": "success", "data": data})
 
-            def log_message(self, *args):
-                pass
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
-        )
-        self.thread.start()
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
-
-    def answer(self, path, params):
-        if path != TAG_PATH:
-            return 404, {"error": f"unknown path {path}"}
-        start, end = int(params["start"]), int(params["end"])
-        if end - start > MAX_RANGE_SECONDS:
-            return 422, {"error": "range specified by start and end exceeds 168h0m0s"}
-        if self.status != 200:
-            return self.status, {"error": "unavailable"}
-        payload = self.payload
-        if callable(payload):
-            try:
-                payload = payload(start, end)
-            except ValueError as exc:
-                return 500, {"error": str(exc)}
-        return 200, payload
-
-    def close(self):
-        self.server.shutdown()
-        self.server.server_close()
+    def count(self, source):
+        needles = {
+            "prometheus": "/api/v1/label/",
+            "loki": "/loki/api/v1/label/",
+            "info": "/api/v1/query",
+        }
+        return sum(1 for url in self.calls if needles[source] in url)
 
 
 @pytest.fixture
-def tempo():
-    """Tempo answering with one capture for RUN_ID."""
-    server = FakeTempo(tag_values(CAPTURE))
-    yield server
-    server.close()
+def sources(exporter, wfe, monkeypatch):
+    """The fake sources. Depends on the exporter fixture so its patch of
+    requests.get is applied after the fake GitHub's."""
+    fake = FakeSources()
+    monkeypatch.setattr(wfe.requests, "get", fake.get)
+    return fake
 
 
 @pytest.fixture
-def client(runs, exporter, tempo):
-    """The endpoint on the exporter's real job history, pointed at the fake
-    Tempo."""
-    return runs.CIObserveRuns(exporter, tempo_url=tempo.url)
+def registry(exporter, sources):
+    return exporter._captures
+
+
+@pytest.fixture
+def client(runs, exporter):
+    return runs.CIObserveRuns(exporter)
 
 
 @pytest.fixture
 def jobs(exporter):
-    for row in (
-        run_job(RUN_ID),
-        run_job(SECOND_RUN_ID, trigger="scheduled", conclusion="failure"),
-    ):
+    for row in (run_job(RUN_ID), run_job(SECOND_RUN_ID, conclusion="failure")):
         exporter._upsert_job(row)
     return exporter
 
 
+@pytest.fixture
+def fresh(registry, sources):
+    """A registry with a complete answer from all three sources."""
+    sources.prometheus = [CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1"]
+    sources.loki = [CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1"]
+    sources.info = [
+        IDENTITY | {"osac_ci_capture_id": CAPTURE},
+        IDENTITY | {
+            "osac_ci_capture_id": f"caas-main-{SECOND_RUN_ID}-a1",
+            "ci_run_id": str(SECOND_RUN_ID),
+            "ci_suite": "caas",
+        },
+    ]
+    registry.refresh()
+    return registry
+
+
+def clear_captures(exporter):
+    """Start a test from an empty captures table (the fresh fixture seeds two
+    rows on purpose, for the common case)."""
+    with exporter._db() as conn:
+        conn.execute("DELETE FROM captures")
+
+
+def state_of(doc, run_id):
+    return next(run for run in doc["runs"] if run["id"] == str(run_id))
+
+
 # ---------------------------------------------------------------------------
-# The join
+# The join: already-known live captures
 # ---------------------------------------------------------------------------
-def test_a_capture_on_a_chunk_boundary_is_counted_once(runs, exporter, jobs):
-    """Both ends of a Tempo range are inclusive, so a capture exactly on the
-    boundary between two chunks comes back twice. The merge deduplicates it."""
-    server = FakeTempo(tag_values(CAPTURE))
-    try:
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["30"]})
-    finally:
-        server.close()
+def test_the_live_prometheus_only_captures_resolve(client, exporter, fresh, sources):
+    """The 11 live ids the old Tempo lookup missed. Each is a Prometheus label
+    value; the registry must list every one and join it to its run."""
+    clear_captures(exporter)
+    sources.prometheus = [f"vmaas-main-{run_id}-a1" for run_id in PROMETHEUS_ONLY_IDS]
+    sources.loki = []
+    sources.info = []
+    for run_id in PROMETHEUS_ONLY_IDS:
+        exporter._upsert_job(run_job(run_id, created_minutes=30, finished_minutes=20))
+    fresh.refresh()
 
-    captured = next(run for run in doc["runs"] if run["id"] == str(RUN_ID))
-    assert captured["capture_ids"] == [CAPTURE]
-    assert len(server.requests) > 1, "the fixture must really have chunked"
+    doc = client.get_json({"days": ["30"], "limit": ["2000"]})
 
-
-def test_the_pull_requests_read_side_shares_the_cache(client, jobs, tempo):
-    """workflow-exporter calls capture_ids_by_run() with its 7-day default on
-    every pull-request page load. That must reuse the entry page's map for the
-    same window instead of querying Tempo again."""
-    client.get_json({"days": ["7"]})
-    before = len(tempo.requests)
-
-    captures = client.capture_ids_by_run()
-
-    assert captures == {str(RUN_ID): [CAPTURE]}
-    assert len(tempo.requests) == before
+    got = {run["id"]: run for run in doc["runs"] if run["id"] in {str(i) for i in PROMETHEUS_ONLY_IDS}}
+    assert len(got) == len(set(PROMETHEUS_ONLY_IDS))
+    for run_id in set(PROMETHEUS_ONLY_IDS):
+        assert got[str(run_id)]["capture_state"] == "capture"
+        assert got[str(run_id)]["capture_ids"] == [f"vmaas-main-{run_id}-a1"]
+    assert doc["source"]["captures"] == len(set(PROMETHEUS_ONLY_IDS))
+    assert doc["source"]["rejected"]["count"] == 0
 
 
-def test_a_run_with_a_capture_is_marked_capture(client, jobs):
+def test_a_capture_the_info_metric_alone_carries_is_still_a_capture(client, exporter, fresh, sources):
+    """The info metric is the identity source, and it also counts as a
+    discovery source: a capture whose label values have expired is still
+    known, so its run is never `not collected`."""
+    clear_captures(exporter)
+    sources.prometheus = []
+    sources.loki = []
+    sources.info = [IDENTITY | {"osac_ci_capture_id": CAPTURE}]
+    exporter._upsert_job(run_job(RUN_ID))
+    fresh.refresh()
+
+    doc = client.get_json({"days": ["7"]})
+
+    run = state_of(doc, RUN_ID)
+    assert run["capture_state"] == "capture"
+    assert run["capture_ids"] == [CAPTURE]
+    assert run["identity_source"] == "info"
+
+
+def test_a_run_with_a_capture_is_marked_capture(client, jobs, fresh):
     doc = client.get_json({"days": ["7"]})
 
     states = {run["id"]: run["capture_state"] for run in doc["runs"]}
-    assert states == {str(RUN_ID): "capture", str(SECOND_RUN_ID): "not collected"}
-    captured = next(run for run in doc["runs"] if run["id"] == str(RUN_ID))
-    assert captured["capture_ids"] == [CAPTURE]
-    assert captured["capture_reason"] == ""
-    assert doc["tempo"]["state"] == "ok"
-    assert doc["tempo"]["captures"] == 1
+    assert states == {str(RUN_ID): "capture", str(SECOND_RUN_ID): "capture"}
+    run = state_of(doc, RUN_ID)
+    assert run["capture_ids"] == [CAPTURE]
+    assert run["capture_reason"] == ""
+    assert doc["source"]["state"] == "ok"
+    assert doc["source"]["captures"] == 2
 
 
-def test_the_run_id_comes_from_the_capture_id_pattern(client, jobs, tempo):
-    """The tag list carries capture ids only, so the join key is read out of
-    the id itself: <suite>-<prN|main>-<run id>-a<n>."""
-    tempo.payload = tag_values(f"caas-pr103-{SECOND_RUN_ID}-a2")
-
-    doc = client.get_json({"days": ["7"]})
-
-    states = {run["id"]: run["capture_state"] for run in doc["runs"]}
-    assert states[str(SECOND_RUN_ID)] == "capture"
-    assert states[str(RUN_ID)] == "not collected"
-    captured = next(run for run in doc["runs"] if run["id"] == str(SECOND_RUN_ID))
-    assert captured["capture_ids"] == [f"caas-pr103-{SECOND_RUN_ID}-a2"]
-
-
-def test_a_value_that_is_not_a_capture_id_is_ignored(client, jobs, tempo):
-    """The tag is ours, but a stray value must not invent a run."""
-    tempo.payload = tag_values("not-a-capture", CAPTURE)
-
-    doc = client.get_json({"days": ["7"]})
-
-    assert doc["tempo"]["captures"] == 1
-    assert {run["id"]: run["capture_state"] for run in doc["runs"]} == {
-        str(RUN_ID): "capture",
-        str(SECOND_RUN_ID): "not collected",
-    }
-
-
-def test_the_lookup_is_a_tag_list_not_a_span_search(runs):
-    """One capture produces hundreds of spans, so a span search needs a trace
-    limit that silently loses captures. The lookup enumerates the capture tag
-    instead: one entry per capture, and the tag name carries the resource
-    scope Tempo requires."""
-    assert runs.CAPTURE_TAG == "resource.osac.ci.capture_id"
-    assert runs.TEMPO_MAX_RANGE_HOURS == 168
-    assert not hasattr(runs.CIObserveRuns, "TEMPO_MAX_TRACES"), (
-        "a per-capture trace cap is what made long captures come back as unknown"
-    )
-
-
-def test_job_rows_are_not_listed_as_runs(client, exporter):
+def test_job_rows_are_not_listed_as_runs(client, exporter, fresh):
     """A pull-request-flow run's suite rows are jobs: their ids never appear
     in a capture id, so listing them would invent not collected rows."""
     exporter._upsert_job(run_job(RUN_ID))
@@ -244,189 +252,280 @@ def test_job_rows_are_not_listed_as_runs(client, exporter):
         workflow="E2E vmaas (pull requests)",
         category="e2e",
         created_at=iso(30),
+        updated_at=iso(20),
+        run_id=RUN_ID,
         url=f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}/job/41310072001",
     ))
 
     doc = client.get_json({"days": ["7"]})
 
     assert [run["id"] for run in doc["runs"]] == [str(RUN_ID)]
+    suite = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"]
+    assert [row["id"] for row in suite] == [str(RUN_ID)]
+
+
+def test_run_id_is_backfilled_from_the_run_url(wfe, tmp_path, monkeypatch, github):
+    """Rows stored before the column existed get their run id from the URL:
+    the run id for a run row and the parent run id for a .../job/ row."""
+    import sqlite3
+
+    db = tmp_path / "workflow-exporter.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE jobs (id INTEGER PRIMARY KEY, repo TEXT, workflow TEXT, category TEXT, "
+        "event TEXT, conclusion TEXT, failed_step TEXT, steps_json TEXT, created_at TEXT, "
+        "url TEXT, run_attempt INTEGER)"
+    )
+    conn.executemany(
+        "INSERT INTO jobs (id, repo, workflow, category, conclusion, created_at, url, run_attempt) "
+        "VALUES (?, 'osac', 'E2E VMaaS', 'e2e', 'success', '2026-11-01T10:00:00Z', ?, 1)",
+        [
+            (500, "https://github.com/osac-project/osac/actions/runs/500"),
+            (501, "https://github.com/osac-project/osac/actions/runs/500/job/501"),
+            (502, "https://github.com/osac-project/osac/actions/runs/502"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(wfe, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(wfe, "DB_FILE", str(db))
+    monkeypatch.setattr(wfe, "LEGACY_CACHE_FILE", str(tmp_path / "none.json"))
+    monkeypatch.setattr(wfe, "TOKEN", None)
+    exporter = wfe.WorkflowExporter()
+
+    with exporter._db() as conn:
+        got = {
+            row["id"]: row["run_id"]
+            for row in conn.execute("SELECT id, run_id FROM jobs")
+        }
+    assert got == {500: "500", 501: "500", 502: "502"}
 
 
 # ---------------------------------------------------------------------------
 # Never a fake verdict
 # ---------------------------------------------------------------------------
-def test_tempo_down_is_unknown_never_not_collected(runs, exporter, jobs):
-    """A refused connection, the shape a network mistake takes, must not turn
-    every run into "not collected"."""
-    client = runs.CIObserveRuns(exporter, tempo_url="http://127.0.0.1:1")
+def test_a_running_run_is_unknown(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, conclusion="", status="in_progress", updated_at=iso(1)))
 
     doc = client.get_json({"days": ["7"]})
 
+    run = state_of(doc, RUN_ID)
+    assert run["capture_state"] == "unknown"
+    assert "has not finished" in run["capture_reason"]
+    assert run["finished"] is False
+
+
+def test_a_just_ended_run_is_unknown(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, created_minutes=20, finished_minutes=5))
+
+    doc = client.get_json({"days": ["7"]})
+
+    run = state_of(doc, RUN_ID)
+    assert run["capture_state"] == "unknown"
+    assert "just ended" in run["capture_reason"]
+
+
+def test_a_run_without_a_finish_time_is_unknown(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, updated_at=""))
+
+    doc = client.get_json({"days": ["7"]})
+
+    assert "no finish time" in state_of(doc, RUN_ID)["capture_reason"]
+
+
+def test_a_registry_with_no_answer_is_unknown(client, jobs, registry):
+    doc = client.get_json({"days": ["7"]})
+
+    assert doc["source"]["state"] == "unknown"
     assert {run["capture_state"] for run in doc["runs"]} == {"unknown"}
-    assert doc["tempo"]["state"] == "unknown"
-    assert "never as not collected" in doc["tempo"]["note"]
-    assert all("did not answer" in run["capture_reason"] for run in doc["runs"])
+    assert all("no complete answer" in run["capture_reason"] for run in doc["runs"])
+    assert "never as not collected" in doc["notes"][-1]
 
 
-def test_an_http_error_from_tempo_is_unknown(runs, exporter, jobs):
-    """A tag-values answer that is too large for Tempo's byte limit comes back
-    as an error, never as a short list. It is a data gap, not a verdict."""
-    server = FakeTempo(status=422)
-    try:
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
-    finally:
-        server.close()
+def test_no_complete_discovery_since_the_run_finished_is_unknown(client, jobs, registry):
+    """A run that finished after the registry's last complete answer may have
+    sent its capture since. Its absence proves nothing."""
+    with registry.exporter._db() as conn:
+        conn.execute(
+            "INSERT INTO capture_source (source, coverage_from, last_ok_at, last_ok_count) "
+            "VALUES ('prometheus', ?, ?, 1)",
+            (iso(14 * 24 * 60), iso(60)),
+        )
 
+    doc = client.get_json({"days": ["7"]})
+
+    assert doc["source"]["state"] == "partial"
+    assert "no complete discovery since" in state_of(doc, RUN_ID)["capture_reason"]
+
+
+def test_a_stale_registry_is_unknown(client, exporter, registry):
+    exporter._upsert_job(run_job(RUN_ID, created_minutes=240, finished_minutes=200))
+    with registry.exporter._db() as conn:
+        for source in ("prometheus", "loki", "info"):
+            conn.execute(
+                "INSERT INTO capture_source (source, coverage_from, last_ok_at, last_ok_count) "
+                "VALUES (?, ?, ?, 1)",
+                (source, iso(14 * 24 * 60), iso(120)),
+            )
+
+    doc = client.get_json({"days": ["7"]})
+
+    assert doc["source"]["state"] == "partial"
+    assert "stale" in state_of(doc, RUN_ID)["capture_reason"]
+
+
+def test_a_run_older_than_coverage_is_unknown(client, exporter, fresh):
+    clear_captures(exporter)
+    """Prometheus keeps 15 days and the registry's coverage starts a day
+    inside that. An older run's capture may have expired, so its absence is
+    not evidence."""
+    exporter._upsert_job(run_job(
+        RUN_ID, created_minutes=30 * 24 * 60, finished_minutes=30 * 24 * 60 - 10
+    ))
+
+    doc = client.get_json({"days": ["60"]})
+
+    run = state_of(doc, RUN_ID)
+    assert run["capture_state"] == "unknown"
+    assert "predates capture coverage" in run["capture_reason"]
+
+
+def test_a_run_without_created_at_is_unknown(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, created_at=""))
+
+    doc = client.get_json({"days": ["7"], "run": [str(RUN_ID)]})
+
+    assert "no created_at" in state_of(doc, RUN_ID)["capture_reason"]
+
+
+def test_one_source_never_answering_is_unknown(client, jobs, registry, sources):
+    """Prometheus and Loki answered; the info source never has. The identity
+    may be missing from every capture, but more importantly the union is not
+    complete, so a missing capture is unknown."""
+    sources.failures = {"info": 503}
+    registry.refresh()
+
+    doc = client.get_json({"days": ["7"]})
+
+    assert doc["source"]["state"] == "partial"
     assert {run["capture_state"] for run in doc["runs"]} == {"unknown"}
-    assert doc["tempo"]["state"] == "unknown"
+    assert "info: " in doc["notes"][-1]
 
 
-def test_tag_values_without_a_capture_id_are_unknown(runs, exporter, jobs):
-    """Tempo answered but nothing in the answer is a capture id: the id format
-    may have changed. Reporting not collected would blame CI for our bug."""
-    server = FakeTempo(tag_values("something-else"))
-    try:
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
-    finally:
-        server.close()
+def test_every_source_failing_is_unknown(client, jobs, registry, sources):
+    sources.failures = {"prometheus": 500, "loki": 500, "info": 500}
+    registry.refresh()
 
+    doc = client.get_json({"days": ["7"]})
+
+    assert doc["source"]["state"] == "unknown"
     assert {run["capture_state"] for run in doc["runs"]} == {"unknown"}
-    assert doc["tempo"]["state"] == "unreadable"
-    assert "none of them is a capture id" in doc["tempo"]["note"]
+    assert doc["source"]["rejected"]["count"] == 0
 
 
-def test_an_incomplete_tag_values_answer_is_unknown(runs, exporter, jobs):
-    """A response whose own metrics say it finished fewer jobs than it started
-    covered only part of the window, so a missing capture proves nothing."""
-    server = FakeTempo(tag_values(CAPTURE, metrics={"totalJobs": 3, "completedJobs": 1}))
-    try:
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
-    finally:
-        server.close()
+def test_a_junk_capture_id_is_rejected_and_named(client, jobs, registry, sources):
+    sources.prometheus = ["not-a-capture", CAPTURE]
+    registry.refresh()
 
-    assert doc["tempo"]["state"] == "truncated"
-    states = {run["id"]: run["capture_state"] for run in doc["runs"]}
-    assert states == {str(RUN_ID): "capture", str(SECOND_RUN_ID): "unknown"}
+    doc = client.get_json({"days": ["7"]})
+
+    assert doc["source"]["rejected"]["count"] == 1
+    assert doc["source"]["rejected"]["ids"] == ["not-a-capture"]
+    assert state_of(doc, RUN_ID)["capture_state"] == "capture"
 
 
-def test_a_complete_metrics_answer_is_a_verdict(runs, exporter, jobs):
-    server = FakeTempo(tag_values(CAPTURE, metrics={"totalJobs": 3, "completedJobs": 3}))
-    try:
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
-    finally:
-        server.close()
-
-    assert doc["tempo"]["state"] == "ok"
-    states = {run["id"]: run["capture_state"] for run in doc["runs"]}
-    assert states == {str(RUN_ID): "capture", str(SECOND_RUN_ID): "not collected"}
-
-
-def test_a_run_newer_than_the_lookup_is_unknown(client, exporter):
+# ---------------------------------------------------------------------------
+# Paging and the 60-day window
+# ---------------------------------------------------------------------------
+def test_the_run_page_is_one_sql_statement(client, exporter, wfe, monkeypatch):
     exporter._upsert_job(run_job(RUN_ID))
-    exporter._upsert_job(run_job(SECOND_RUN_ID, created_at=iso(0.5)))
+    statements = []
+    real_db = wfe.WorkflowExporter._db
 
-    doc = client.get_json({"days": ["7"]})
+    def traced(self):
+        conn = real_db(self)
+        conn.set_trace_callback(statements.append)
+        return conn
 
-    fresh = next(run for run in doc["runs"] if run["id"] == str(SECOND_RUN_ID))
-    assert fresh["capture_state"] == "unknown"
-    assert "too early to tell" in fresh["capture_reason"]
+    monkeypatch.setattr(wfe.WorkflowExporter, "_db", traced)
+    exporter.get_ci_observe_run_page(days=7, limit=10)
 
-
-def test_a_run_older_than_the_capture_retention_is_unknown(client, exporter):
-    """Tempo keeps 30 days. A 45-day-old run's capture may have expired, so
-    its absence is not evidence."""
-    exporter._upsert_job(run_job(SECOND_RUN_ID, created_at=iso(45 * 24 * 60)))
-
-    doc = client.get_json({"days": ["60"]})
-
-    assert doc["runs"][0]["capture_state"] == "unknown"
-    assert "predates the capture retention" in doc["runs"][0]["capture_reason"]
+    queries = [sql for sql in statements if "FROM jobs" in sql]
+    assert len(queries) == 1
+    assert "LEFT JOIN captures" in queries[0]
+    assert "COUNT(*) OVER ()" in queries[0]
 
 
-def test_a_run_before_the_live_tempo_cutover_is_unknown(client, exporter):
-    """Before 2026-11-01 captures went to the archive, which this endpoint
-    does not query."""
-    exporter._upsert_job(run_job(SECOND_RUN_ID, created_at="2026-10-20T10:00:00Z"))
+def test_the_run_page_pages_by_run_id_without_gaps(client, exporter, fresh):
+    run_ids = [RUN_ID + index for index in range(25)]
+    for index, run_id in enumerate(run_ids):
+        exporter._upsert_job(run_job(
+            run_id, created_minutes=200 - index, finished_minutes=190 - index
+        ))
 
-    doc = client.get_json({"days": ["60"]})
+    first = client.get_json({"days": ["7"], "limit": ["10"]})
+    second = client.get_json({"days": ["7"], "limit": ["10"], "before": [first["next_before"]]})
+    third = client.get_json({"days": ["7"], "limit": ["10"], "before": [second["next_before"]]})
 
-    assert doc["runs"][0]["capture_state"] == "unknown"
-    assert "live Tempo cutover" in doc["runs"][0]["capture_reason"]
-
-
-# ---------------------------------------------------------------------------
-# Bounds: window, limit, one Tempo query per minute
-# ---------------------------------------------------------------------------
-def test_a_seven_day_window_is_one_tag_values_request(client, jobs, tempo):
-    before = datetime.now(timezone.utc)
-
-    client.get_json({"days": ["7"]})
-
-    assert len(tempo.requests) == 1
-    request = tempo.requests[0]
-    start = datetime.fromtimestamp(int(request["start"]), tz=timezone.utc)
-    end = datetime.fromtimestamp(int(request["end"]), tz=timezone.utc)
-    assert request["path"] == TAG_PATH
-    assert end - start <= timedelta(hours=168)
-    assert abs((before - timedelta(days=7)) - start) < timedelta(seconds=30)
-    assert abs(before - end) < timedelta(seconds=30)
+    assert first["truncated"] is True
+    assert first["counts"] == {"returned": 10, "matched": 25}
+    assert second["truncated"] is True
+    assert third["truncated"] is False
+    assert third["next_before"] is None
+    seen = [run["id"] for doc in (first, second, third) for run in doc["runs"]]
+    assert len(seen) == len(set(seen)) == 25
+    assert seen == [str(run_id) for run_id in sorted(run_ids, reverse=True)]
 
 
-def test_a_thirty_day_window_is_chunked_at_the_tempo_range_limit(client, jobs, tempo):
-    """Tempo refuses a range over 168h, and the entry page offers 30 and 60
-    days. Every request stays inside the limit, the chunks cover the window,
-    and the merged answer still yields verdicts."""
-    doc = client.get_json({"days": ["30"]})
+def test_an_invalid_before_is_ignored_with_a_note(client, jobs, fresh):
+    doc = client.get_json({"days": ["7"], "before": ["not-a-run-id"]})
 
-    spans = [
-        (int(request["start"]), int(request["end"]))
-        for request in tempo.requests
-    ]
-    assert len(spans) == 5, "30 days need five chunks of at most seven days"
-    assert all(end - start <= MAX_RANGE_SECONDS for start, end in spans)
-    assert spans[0][0] < spans[-1][1]
-    for (_, first_end), (second_start, _) in zip(spans, spans[1:]):
-        assert first_end == second_start, "chunks must be contiguous, with no gap"
-
-    assert doc["tempo"]["chunks"] == 5
-    assert doc["tempo"]["state"] == "ok"
-    assert {run["capture_state"] for run in doc["runs"]} == {"capture", "not collected"}
+    assert doc["counts"]["returned"] == 2
+    assert "is not a run id" in doc["notes"][0]
 
 
-def test_one_failed_chunk_makes_the_missing_captures_unknown(runs, exporter, jobs):
-    """A chunk that fails leaves a hole in the window. Runs found in the other
-    chunks are captures; a run with no capture anywhere is unknown, not not
-    collected."""
-    calls = {"n": 0}
+def test_a_sixty_day_window_keeps_every_day(client, exporter, fresh, wfe):
+    """The count cap used to cut a 60-day page to about 20 days. One run per
+    day for 60 days must all be listed, and the cap must be above a 60-day
+    volume."""
+    assert wfe.JOBS_HISTORY_MAX_COUNT >= 300_000
+    exporter._upsert_job(run_job(1, created_minutes=59 * 24 * 60, finished_minutes=59 * 24 * 60 - 10))
+    for day in range(1, 60):
+        exporter._upsert_job(run_job(
+            1 + day,
+            created_minutes=day * 24 * 60,
+            finished_minutes=day * 24 * 60 - 10,
+        ))
 
-    def payload(start, end):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise ValueError("HTTP 500: boom")
-        return tag_values(CAPTURE)
+    exporter._prune_jobs()
+    doc = client.get_json({"days": ["60"], "limit": ["2000"]})
 
-    server = FakeTempo(payload)
-    try:
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["30"]})
-    finally:
-        server.close()
-
-    assert doc["tempo"]["state"] == "truncated"
-    states = {run["id"]: run["capture_state"] for run in doc["runs"]}
-    assert states == {str(RUN_ID): "capture", str(SECOND_RUN_ID): "unknown"}
-    assert "did not complete" in doc["tempo"]["note"]
+    assert len(doc["runs"]) == 60
+    assert doc["counts"]["matched"] == 60
+    assert doc["truncated"] is False
 
 
-def test_every_chunk_failing_is_unknown(runs, exporter, jobs):
-    server = FakeTempo(status=500)
-    try:
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["30"]})
-    finally:
-        server.close()
+def test_run_is_an_exact_lookup_outside_the_window(client, exporter, fresh):
+    exporter._upsert_job(run_job(RUN_ID))
+    exporter._upsert_job(run_job(
+        SECOND_RUN_ID, created_minutes=45 * 24 * 60, finished_minutes=45 * 24 * 60 - 10
+    ))
 
-    assert doc["tempo"]["state"] == "unknown"
-    assert {run["capture_state"] for run in doc["runs"]} == {"unknown"}
-    assert "never as not collected" in doc["tempo"]["note"]
+    doc = client.get_json({"days": ["7"], "run": [str(SECOND_RUN_ID)]})
+
+    assert [run["id"] for run in doc["runs"]] == [str(SECOND_RUN_ID)]
+    assert doc["counts"] == {"returned": 1, "matched": 1}
+
+
+def test_an_unknown_run_id_is_an_empty_page_with_a_note(client, jobs, fresh):
+    doc = client.get_json({"days": ["7"], "run": ["999"]})
+
+    assert doc["runs"] == []
+    assert "no run with id 999" in doc["notes"][-1]
 
 
 @pytest.mark.parametrize(
@@ -441,141 +540,130 @@ def test_every_chunk_failing_is_unknown(runs, exporter, jobs):
         ({"limit": ["nonsense"]}, 7, 200),
     ],
 )
-def test_days_and_limit_are_clamped(client, jobs, params, expected_days, expected_limit):
+def test_days_and_limit_are_clamped(client, jobs, fresh, params, expected_days, expected_limit):
     doc = client.get_json(params)
 
     assert doc["days"] == expected_days
     assert 0 < len(doc["runs"]) <= expected_limit
 
 
-def test_limit_bounds_the_number_of_runs(client, exporter):
-    for index in range(5):
-        exporter._upsert_job(run_job(RUN_ID + index))
-
-    doc = client.get_json({"days": ["7"], "limit": ["2"]})
-
-    assert len(doc["runs"]) == 2
-
-
-def test_suite_rows_do_not_starve_the_run_list(client, exporter):
-    """The history returns the newest e2e rows first, and a pull-request flow
-    adds a job row per suite. Those are not runs, so the fetch asks for more
-    rows than the page needs; without that, a busy PR window would show an
-    almost empty run list."""
-    for index in range(8):
-        exporter._upsert_job(make_job(
-            id=41310072000 + index,
-            workflow="E2E vmaas (pull requests)",
-            category="e2e",
-            created_at=iso(1 + index),
-            url=f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}/job/{41310072000 + index}",
-        ))
-    exporter._upsert_job(run_job(RUN_ID, created_at=iso(30)))
-    exporter._upsert_job(run_job(SECOND_RUN_ID, created_at=iso(40)))
-
-    doc = client.get_json({"days": ["7"], "limit": ["2"]})
-
-    assert [run["id"] for run in doc["runs"]] == [str(RUN_ID), str(SECOND_RUN_ID)]
-
-
-def test_the_capture_map_is_cached_for_a_minute(client, jobs, tempo):
-    first = client.get_json({"days": ["7"]})
-    second = client.get_json({"days": ["7"]})
-
-    assert len(tempo.requests) == 1, "one Tempo query serves repeated dashboard loads"
-    assert first["tempo"]["cached"] is False
-    assert second["tempo"]["cached"] is True
-    assert second["runs"] == first["runs"]
-
-
-def test_the_cache_expires(client, jobs, tempo):
-    client.get_json({"days": ["7"]})
-    client._cache[7]["expires_at"] = 0
-
-    client.get_json({"days": ["7"]})
-
-    assert len(tempo.requests) == 2
-
-
-def test_the_cache_is_per_window(client, jobs, tempo):
-    client.get_json({"days": ["7"]})
-    after_seven = len(tempo.requests)
-    client.get_json({"days": ["30"]})
-
-    assert after_seven == 1
-    assert len(tempo.requests) == 1 + 5, (
-        "a 30-day request cannot be served by a 7-day capture map, so it pays "
-        "for its own five chunks"
-    )
-
-
-def test_alternating_7_and_30_day_readers_do_not_thrash_the_cache(client, jobs, tempo):
-    """The Pull requests read side asks for 7 days and the entry page for 30.
-    With one cache slot each call evicted the other's entry, so every
-    alternating request re-queried Tempo. One entry per window length makes
-    the repeat 7-day call free."""
-    client.get_json({"days": ["7"]})
-    after_seven = len(tempo.requests)
-    client.get_json({"days": ["30"]})
-    after_thirty = len(tempo.requests)
-    third = client.get_json({"days": ["7"]})
-
-    assert len(tempo.requests) == after_thirty, "the 7-day entry survived the 30-day lookup"
-    assert third["tempo"]["cached"] is True
-    assert after_thirty > after_seven
-
-
-def test_the_cache_keeps_only_live_windows(client, jobs, tempo):
-    """The dict is pruned on every write, so a reader that tries many window
-    lengths cannot grow it without bound."""
-    for days in ("7", "14", "21"):
-        client.get_json({"days": [days]})
-    client._cache[14]["expires_at"] = 0
-
-    client.get_json({"days": ["30"]})
-
-    assert set(client._cache) == {7, 21, 30}
-
-
-def test_one_deadline_bounds_all_chunks(client, jobs, monkeypatch):
-    """Nine chunks must share one deadline; a per-chunk timeout could park a
-    thread for 9 x 45s. A chunk that cannot start before the deadline is a
-    failure, so the verdict stays unknown/truncated, never not collected."""
-    client.TEMPO_TOTAL_TIMEOUT_SECONDS = 0.5
-    calls = []
-
-    def fake(start, end, timeout=None):
-        calls.append(timeout)
-        time.sleep(0.3)
-        return [], True
-
-    monkeypatch.setattr(client, "_tempo_capture_ids", fake)
-    doc = client.get_json({"days": ["60"]})
-
-    assert len(calls) < 9, "the deadline stopped the remaining chunks"
-    assert doc["tempo"]["state"] in ("unknown", "truncated")
-    assert doc["tempo"]["state"] != "ok"
-
-
-def test_an_empty_job_history_still_answers(client, tempo):
+def test_an_empty_job_history_still_answers(client, sources):
     doc = client.get_json({"days": ["7"]})
 
     assert doc["runs"] == []
-    assert doc["tempo"]["state"] == "ok"
-    assert tempo.requests == [], "no runs means no reason to query Tempo"
+    assert sources.calls == [], "no runs means no reason to query any source"
     assert "no E2E runs" in doc["notes"][0]
 
 
 # ---------------------------------------------------------------------------
-# Wiring: the exporter method and the HTTP route
+# No Tempo, and the Pull requests read side uses the registry
 # ---------------------------------------------------------------------------
-def test_the_exporter_exposes_the_endpoint(exporter, jobs, tempo, monkeypatch):
-    monkeypatch.setattr(exporter._runs, "tempo_url", tempo.url)
+def test_the_request_path_never_calls_any_http_source(client, jobs, fresh, sources):
+    sources.calls.clear()
 
-    doc = exporter.get_ci_observe_runs_json({"days": ["7"]})
+    doc = client.get_json({"days": ["60"]})
 
-    assert {run["id"] for run in doc["runs"]} == {str(RUN_ID), str(SECOND_RUN_ID)}
-    assert {run["capture_state"] for run in doc["runs"]} == {"capture", "not collected"}
+    assert doc["runs"]
+    assert sources.calls == [], "/runs reads SQLite only"
+
+
+def test_the_runs_module_has_no_tempo_lookup():
+    import ci_observe_runs
+
+    assert not hasattr(ci_observe_runs.CIObserveRuns, "TEMPO_TIMEOUT_SECONDS")
+    assert not hasattr(ci_observe_runs.CIObserveRuns, "_tempo_capture_ids")
+    assert not hasattr(ci_observe_runs, "CAPTURE_TAG")
+
+
+def test_capture_ids_by_run_reads_the_registry_without_tempo(client, exporter, fresh, sources):
+    sources.calls.clear()
+
+    captures = client.capture_ids_by_run(days=7)
+
+    assert captures[str(RUN_ID)] == [CAPTURE]
+    assert sources.calls == []
+
+
+# ---------------------------------------------------------------------------
+# /api/ci-observe/captures and /api/ci-observe/cohorts
+# ---------------------------------------------------------------------------
+def test_captures_are_filterable_and_counted(registry, fresh):
+    doc = registry.captures_json({"days": ["7"]})
+    assert doc["counts"] == {"returned": 2, "matched": 2}
+    assert {row["capture_id"] for row in doc["captures"]} == {
+        CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1",
+    }
+    for field in (
+        "capture_id", "run_id", "suite", "pr", "workflow", "test_ref",
+        "test_sha", "test_infra_ref", "test_infra_sha",
+        "test_infra_workflow_sha", "test_suite", "test_filter", "test_marker",
+        "session_trace_id", "identity_source", "capture_started_at",
+        "first_seen_at", "last_seen_at",
+    ):
+        assert field in doc["captures"][0], f"capture row is missing {field}"
+
+    one = registry.captures_json({"days": ["7"], "run_id": [str(RUN_ID)]})
+    assert [row["capture_id"] for row in one["captures"]] == [CAPTURE]
+
+    by_suite = registry.captures_json({"days": ["7"], "suite": ["caas"]})
+    assert [row["capture_id"] for row in by_suite["captures"]] == [f"caas-main-{SECOND_RUN_ID}-a1"]
+
+    limited = registry.captures_json({"days": ["7"], "limit": ["1"]})
+    assert limited["truncated"] is True
+    assert limited["counts"] == {"returned": 1, "matched": 2}
+
+
+def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, fresh):
+    clear_captures(exporter)
+    base = IDENTITY | {"osac_ci_capture_id": CAPTURE, "ci_run_id": str(RUN_ID)}
+    same = base | {"osac_ci_capture_id": f"caas-main-{SECOND_RUN_ID}-a1", "ci_run_id": str(SECOND_RUN_ID)}
+    other_sha = base | {"osac_ci_capture_id": "vmaas-pr7-77-a1", "ci_run_id": "77", "ci_test_sha": "d" * 40}
+    incomplete = base | {"osac_ci_capture_id": "vmaas-main-78-a1", "ci_run_id": "78", "ci_test_infra_sha": ""}
+    unknown = base | {"osac_ci_capture_id": "vmaas-main-79-a1", "ci_run_id": "79", "ci_test_ref": "unknown"}
+    sources.prometheus = [
+        CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1", "vmaas-pr7-77-a1",
+        "vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1",
+    ]
+    sources.loki = []
+    sources.info = [base, same, other_sha, incomplete, unknown]
+    registry.refresh()
+
+    doc = registry.cohorts_json({"days": ["7"]})
+
+    assert doc["group_by"] == [
+        "suite", "test_ref", "test_sha", "test_infra_ref", "test_infra_sha",
+        "test_infra_workflow_sha",
+    ]
+    assert len(doc["cohorts"]) == 2
+    first = next(row for row in doc["cohorts"] if row["test_sha"] == "a" * 40)
+    assert first["captures"] == 2
+    assert first["capture_ids"] == sorted([CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1"])
+    assert all(row["test_sha"] for row in doc["cohorts"])
+    # No cohort value is ever "unknown".
+    for row in doc["cohorts"]:
+        assert "unknown" not in row.values()
+    ungrouped = {row["capture_id"]: row for row in doc["ungrouped"]}
+    assert set(ungrouped) == {"vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1"}
+    assert {row["identity_source"] for row in doc["ungrouped"]} == {"none", "info"}
+    assert ungrouped["vmaas-main-78-a1"]["reason"] == "missing identity: test_infra_sha"
+    assert ungrouped["vmaas-main-79-a1"]["reason"] == "unknown identity: test_ref"
+    assert ungrouped["vmaas-main-80-a1"]["reason"] == "no identity from the info metric"
+    for row in doc["ungrouped"]:
+        assert {"capture_started_at", "last_seen_at"} <= set(row)
+    assert "source" in doc and "notes" in doc
+
+
+# ---------------------------------------------------------------------------
+# Wiring: the exporter methods and the HTTP routes
+# ---------------------------------------------------------------------------
+def test_the_exporter_exposes_the_endpoints(exporter, jobs, fresh):
+    runs_doc = exporter.get_ci_observe_runs_json({"days": ["7"]})
+    captures_doc = exporter.get_ci_observe_captures_json({"days": ["7"]})
+    cohorts_doc = exporter.get_ci_observe_cohorts_json({"days": ["7"]})
+
+    assert {run["id"] for run in runs_doc["runs"]} == {str(RUN_ID), str(SECOND_RUN_ID)}
+    assert captures_doc["counts"]["matched"] == 2
+    assert cohorts_doc["cohorts"]
 
 
 class TestHTTP:
@@ -594,9 +682,7 @@ class TestHTTP:
         with urllib.request.urlopen(url, timeout=5) as response:
             return response.status, response.headers, response.read()
 
-    def test_json_shape_and_cors(self, exporter, jobs, tempo, base_url, monkeypatch):
-        monkeypatch.setattr(exporter._runs, "tempo_url", tempo.url)
-
+    def test_runs_json_shape_and_cors(self, exporter, jobs, fresh, base_url):
         status, headers, body = self.get(f"{base_url}/api/ci-observe/runs?days=7&limit=10")
 
         assert status == 200
@@ -604,23 +690,50 @@ class TestHTTP:
         assert headers.get("Access-Control-Allow-Origin") == "*"
         doc = json.loads(body)
         assert doc["days"] == 7
-        assert set(doc) == {"days", "window_from", "window_to", "tempo", "runs", "notes"}
+        assert set(doc) == {
+            "days", "window_from", "window_to", "source", "runs", "truncated",
+            "shown", "total", "counts", "next_before", "notes",
+        }
+        assert doc["shown"] == 2
+        assert doc["total"] == 2
+        assert doc["truncated"] is False
+        assert set(doc["source"]) == {
+            "state", "last_ok_at", "coverage_from", "captures", "rejected", "sources",
+        }
+        first = next(run for run in doc["runs"] if run["id"] == str(RUN_ID))
+        for field in (
+            "id", "workflow", "trigger", "branch", "conclusion", "created_at",
+            "started_at", "finished_at", "url", "capture_state", "capture_ids",
+            "capture_id", "capture_reason", "identity_source",
+        ):
+            assert field in first, f"run row is missing {field}"
+        assert first["capture_id"] == CAPTURE
+        assert first["started_at"] == first["created_at"]
+        assert first["finished_at"]
+        assert "matched" not in first, "the window count is not part of a run row"
         assert {run["id"]: run["capture_state"] for run in doc["runs"]} == {
             str(RUN_ID): "capture",
-            str(SECOND_RUN_ID): "not collected",
+            str(SECOND_RUN_ID): "capture",
         }
 
-    def test_tempo_down_is_still_200(self, exporter, jobs, base_url):
-        exporter._runs.tempo_url = "http://127.0.0.1:1"
-
+    def test_an_empty_registry_is_still_200(self, exporter, jobs, base_url):
         status, _, body = self.get(f"{base_url}/api/ci-observe/runs")
 
         assert status == 200
         assert {run["capture_state"] for run in json.loads(body)["runs"]} == {"unknown"}
 
+    def test_captures_and_cohorts_routes(self, exporter, fresh, base_url):
+        status, _, body = self.get(f"{base_url}/api/ci-observe/captures?days=7")
+        assert status == 200
+        assert len(json.loads(body)["captures"]) == 2
+
+        status, _, body = self.get(f"{base_url}/api/ci-observe/cohorts?days=7")
+        assert status == 200
+        assert len(json.loads(body)["cohorts"]) == 2
+
 
 # ---------------------------------------------------------------------------
-# Deployment: the container must reach the host's Tempo
+# Deployment
 # ---------------------------------------------------------------------------
 def test_the_runs_module_is_mounted_and_copied():
     quadlet = (MONITORING / "quadlet" / "workflow-exporter.container").read_text()
@@ -630,32 +743,36 @@ def test_the_runs_module_is_mounted_and_copied():
     assert "scripts/ci_observe_runs.py" in setup
 
 
-def test_the_quadlet_reaches_the_host_tempo_without_wide_exposure():
-    """Tempo publishes its API on the host's loopback only, so the container
-    needs host networking; the API's own listen address is then pinned back to
-    loopback, because a host-network container would otherwise expose it on
-    every interface."""
+def test_the_quadlet_reaches_the_registry_sources_on_the_host():
+    """The registry polls the ci-observe Prometheus and Loki on the host's
+    loopback. Both are loopback-only, which is why the container keeps host
+    networking and pins its own API back to loopback."""
     quadlet = (MONITORING / "quadlet" / "workflow-exporter.container").read_text()
 
     assert "Network=host" in quadlet
     assert "Environment=BIND_ADDRESS=127.0.0.1" in quadlet
-    assert "Environment=CI_OBSERVE_TEMPO_URL=http://127.0.0.1:3210" in quadlet
+    assert "Environment=CI_OBSERVE_METRICS_URL=http://127.0.0.1:9092" in quadlet
+    assert "Environment=CI_OBSERVE_LOKI_URL=http://127.0.0.1:3100" in quadlet
+    assert "Environment=CAPTURE_POLL_INTERVAL=60" in quadlet
+    assert "Environment=JOBS_HISTORY_MAX_COUNT=400000" in quadlet
     assert "\nPublishPort=" not in quadlet, "host networking rejects published ports"
 
 
-def test_the_tempo_url_default_is_a_documented_constant(runs):
-    """The code must not assume host networking: the address is one env var
-    with a default that matches the deployed layout."""
-    assert runs.DEFAULT_TEMPO_URL == "http://127.0.0.1:3210"
-    assert runs.TEMPO_URL_ENV == "CI_OBSERVE_TEMPO_URL"
+def test_the_registry_defaults_are_documented_constants(wfe):
+    registry = wfe.CaptureRegistry
+    assert registry.DEFAULT_METRICS_URL == "http://127.0.0.1:9092"
+    assert registry.DEFAULT_LOKI_URL == "http://127.0.0.1:3100"
+    assert registry.POLL_SECONDS == 60
+    assert registry.CAPTURE_LABEL == "osac_ci_capture_id"
+    assert registry.PROMETHEUS_RETENTION_DAYS == 15
+    assert registry.LOKI_RETENTION_DAYS == 30
 
 
 # ---------------------------------------------------------------------------
 # Contract: the dashboard reads what the endpoint returns
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(not DASHBOARD.exists(), reason="the entry page ships with the dashboard")
-def test_the_dashboard_selectors_resolve_against_the_endpoint(exporter, jobs, tempo, monkeypatch):
-    monkeypatch.setattr(exporter._runs, "tempo_url", tempo.url)
+def test_the_dashboard_selectors_resolve_against_the_endpoint(exporter, jobs, fresh):
     dashboard = json.loads(DASHBOARD.read_text())
     panel = next(p for p in dashboard["panels"] if p["id"] == 12)
     target = panel["targets"][0]
