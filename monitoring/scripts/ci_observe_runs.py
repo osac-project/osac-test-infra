@@ -189,6 +189,17 @@ class CIObserveRuns:
             )
         return doc
 
+    def capture_ids_by_run(self, days=DEFAULT_DAYS):
+        """{run id: [capture id, ...]} for the window, from the run cache.
+
+        The Pull requests read side uses it to link a queue attempt to the
+        capture its run produced. A missing entry means Tempo has no capture
+        for that run in the window; it is not a claim that the run had none.
+        """
+        now = datetime.now(timezone.utc)
+        captures, _ = self._capture_map(days, now - timedelta(days=days), now)
+        return captures
+
     # -- run list ----------------------------------------------------------
     def _run_rows(self, window_from, until, limit):
         """One row per run, not one per job.

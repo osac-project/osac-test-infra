@@ -608,6 +608,24 @@ class TestHTTP:
         assert doc["pr"]["number"] == 101
         assert len(doc["attempts"]) == 2
 
+    def test_queue_attempt_links_to_its_capture(self, base_url, service):
+        """The store has no capture id; the exporter joins the run id to the
+        Tempo cache and fills the Capture link. A missing cache stays empty."""
+        run_backfill(service)
+
+        class FakeRuns:
+            def capture_ids_by_run(self):
+                return {"5101": ["caas-pr103-5101-a1"]}
+
+        service._runs = FakeRuns()
+        status, _, body = self.get(f"{base_url}/api/ci-observe/prs?number=103&repo=osac")
+
+        assert status == 200
+        attempt = json.loads(body)["attempts"][0]
+        assert attempt["capture_ids"] == ["caas-pr103-5101-a1"]
+        assert "var-capture_id=caas-pr103-5101-a1" in attempt["capture_url"]
+        assert attempt["capture_url"].startswith("/d/ci-observe-runs/")
+
 
 # ---------------------------------------------------------------------------
 # Dashboard contract: the real response resolves what the dashboard queries
