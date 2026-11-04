@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "One ci-observe E2E capture at a time: pick it with the Run variable (Loki label osac_ci_capture_id, newest first). Read top to bottom: Run overview says what ran and whether it passed, the collapsed Run identity row holds the exact refs when expanded, Collection coverage says how complete the telemetry is, the collapsed CI evidence row holds the GitHub job, step and JUnit evidence, then Tests and workers, Fixture work, Waits and Service requests break the run down, and the collapsed Environment row holds the pod and node metrics. Keep the default 7-day time range while picking a capture, because a narrower range can hide a run whose trace is only partly inside the window.",
+  "description": "One ci-observe E2E capture at a time: pick it with the Run variable (Loki label osac_ci_capture_id, newest first). Read top to bottom: Run overview says what ran and whether it passed, the collapsed Run identity row holds the exact refs when expanded, Collection coverage says how complete the telemetry is, the collapsed CI evidence row holds the GitHub job, step and JUnit evidence with the link to the run's artifact, then Tests and workers, Fixture work, Waits and Service requests break the run down, and the collapsed Environment row holds the pod and node metrics while the collapsed Events row holds the capture's Kubernetes events. Keep the default 7-day time range while picking a capture, because a narrower range can hide a run whose trace is only partly inside the window.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -15,7 +15,7 @@
     {
       "title": "Compare runs",
       "type": "link",
-      "url": "/d/ci-observe-compare-runs/ci-observe-compare-runs?from=${__from}&to=${__to}"
+      "url": "/d/ci-observe-trends/ci-observe-e28094-trends?from=${__from}&to=${__to}"
     }
   ],
   "panels": [
@@ -804,7 +804,7 @@
     {
       "id": 13,
       "title": "Where is the rest of the evidence?",
-      "description": "Links to the dashboards that own the evidence this one cannot show, and the deliberate scope gap for cluster evidence.",
+      "description": "Where each kind of evidence lives: the sections of this page, the run's GitHub artifact, and the Trends dashboard for a cohort comparison.",
       "type": "text",
       "gridPos": {
         "h": 6,
@@ -822,14 +822,14 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "- **GitHub job conclusion, step logs and the native pytest report**: expand the **CI evidence** row below on this page. Traces never override GitHub's job conclusion.\n- **What the cluster did during the run**: expand the **Environment** row at the bottom of this page for pod CPU, memory and pod lifetimes, from kubelet metrics sampled once a minute.\n- **Compare with another run**: open the [run comparison dashboard](/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1) and pick a cohort there; it does not take a single capture id.\n- **Cluster events and pod logs** still have no readable view here: Kubernetes events are stored but unread, and the collector cannot read pod logs. The captured pod logs are in Loki: [query them in Explore](/explore?orgId=1&left=%7B%22datasource%22%3A%22ci-observe-logs%22%2C%22queries%22%3A%5B%7B%22expr%22%3A%22%7Bosac_ci_capture_id%3D%5C%22$capture_id%5C%22%7D%22%2C%22refId%22%3A%22A%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-7d%22%2C%22to%22%3A%22now%22%7D%7D) with `{osac_ci_capture_id=\"$capture_id\"}`."
+        "content": "- **GitHub job conclusion, step logs and the native pytest report**: expand the **CI evidence** row below on this page. Traces never override GitHub's job conclusion.\n- **Pod logs and the per-test failure detail**: only in the run's GitHub artifact, because the collector cannot read `/var/log/pods` and pod logs never reach Loki. In **CI evidence**, open the **GitHub run and artifacts** cell and pick **Artifacts** (`<run url>#artifacts`). The artifact holds `failure.json` with the per-test detail, the pod logs and the cluster snapshots; GitHub deletes it after 7 days.\n- **What the cluster did during the run**: expand the **Environment** row at the bottom of this page for pod CPU, memory and pod lifetimes, from kubelet metrics sampled once a minute.\n- **Kubernetes events during the run**: expand the **Events** row at the bottom of this page for the events the capture's watch recorded, with type, reason, object and message.\n- **Compare with another run**: open the [Trends dashboard](/d/ci-observe-trends/ci-observe-e28094-trends?orgId=1) and pick a cohort in its Compare section; it does not take a single capture id."
       },
       "targets": []
     },
     {
       "id": 14,
       "title": "CI evidence",
-      "description": "GitHub-side evidence for this capture, read top to bottom: **Run** and **Jobs** say what GitHub recorded, **Steps** breaks down where the time went, **JUnit summary** is the native pytest result, and **Failed tests** lists the failures with a link to the artifact.\n\n**If a panel shows \"Not deployed or unavailable\", a query error, or no content at all**, the native evidence was not loaded. The workflow-exporter endpoint is either not deployed or unreachable, or the artifact is gone; this is not a passing result. Grafana does not replay an errored query to panels that mount after it failed, so a far-down table can render no content at all rather than an error.\n\n**Where the data comes from.** Job and step data is the workflow exporter's GitHub job history (SQLite, 60-day retention). Native test data is the JUnit XML inside the run's `osac-logs-[<suite>-]full-install-<run id>` artifact, fetched on demand and cached for 15 minutes. GitHub keeps workflow artifacts for 7 days; past that the status is `expired` and the counts stay empty, never a green zero.\n\n**States the native panels can show.** `unavailable` is a dashboard display state, not a status the endpoint returns: the workflow-exporter endpoint is not deployed or unreachable, so no native evidence was loaded at all. `available`: the JUnit file was parsed, so the counts are real. `missing`: no artifact matching the osac-logs full-install pattern exists. `expired`: the artifact passed its 7-day retention. `too_large`: the artifact is above the 64 MiB download bound. `invalid`: the artifact was downloaded but holds no readable `junit.xml`. `not_requested`: nothing was looked up.\n\n**Limits.** Step durations are the wall-clock time between a step's start and end, not runner minutes, and a skipped or cancelled job has no steps at all. No automatic root-cause diagnosis is generated: the failed-test messages are raw JUnit output. They show what failed; they are not a root-cause diagnosis. Re-runs overwrite the artifact, so an older attempt may show the newest attempt's native results.",
+      "description": "GitHub-side evidence for this capture, read top to bottom: **Run** and **Jobs** say what GitHub recorded, **Steps** breaks down where the time went, **JUnit summary** is the native pytest result, and **Failed tests** lists the failures with a link to the artifact.\n\n**If a panel shows \"Not deployed or unavailable\", a query error, or no content at all**, the native evidence was not loaded. The workflow-exporter endpoint is either not deployed or unreachable, or the artifact is gone; this is not a passing result. Grafana does not replay an errored query to panels that mount after it failed, so a far-down table can render no content at all rather than an error.\n\n**Where the data comes from.** Job and step data is the workflow exporter's GitHub job history (SQLite, 60-day retention). Native test data is the JUnit XML inside the run's `osac-logs-[<suite>-]full-install-<run id>` artifact, fetched on demand and cached for 15 minutes. GitHub keeps workflow artifacts for 7 days; past that the status is `expired` and the counts stay empty, never a green zero.\n\n**States the native panels can show.** `unavailable` is a dashboard display state, not a status the endpoint returns: the workflow-exporter endpoint is not deployed or unreachable, so no native evidence was loaded at all. `available`: the JUnit file was parsed, so the counts are real. `missing`: no artifact matching the osac-logs full-install pattern exists. `expired`: the artifact passed its 7-day retention. `too_large`: the artifact is above the 64 MiB download bound. `invalid`: the artifact was downloaded but holds no readable `junit.xml`. `not_requested`: nothing was looked up.\n\n**Limits.** Step durations are the wall-clock time between a step's start and end, not runner minutes, and a skipped or cancelled job has no steps at all. No automatic root-cause diagnosis is generated: the failed-test messages are raw JUnit output. They show what failed; they are not a root-cause diagnosis. Re-runs overwrite the artifact, so an older attempt may show the newest attempt's native results.\n\n**The artifact holds the rest.** The last cell of the **Run** table opens the GitHub run and, from the same URL with `#artifacts`, its artifacts page. The per-test `failure.json`, the pod logs and the cluster snapshots live there: the collector cannot read `/var/log/pods`, so pod logs never reach Loki, and the panels here show only what was parsed. GitHub deletes the artifact after 7 days.",
       "type": "row",
       "gridPos": {
         "h": 1,
@@ -842,7 +842,7 @@
         {
           "id": 15,
           "title": "Run",
-          "description": "The workflow run itself. Commit is fetched from GitHub on demand and can be empty when that fetch fails. Open the GitHub run from the last column.",
+          "description": "The workflow run itself. Commit is fetched from GitHub on demand and can be empty when that fetch fails. The last cell opens the GitHub run, and the same URL with `#artifacts` opens the run's artifacts page, where the per-test `failure.json`, the pod logs and the cluster snapshots live. GitHub deletes that artifact after 7 days.",
           "type": "table",
           "gridPos": {
             "h": 8,
@@ -1016,7 +1016,7 @@
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "GitHub run"
+                    "value": "GitHub run and artifacts"
                   },
                   {
                     "id": "links",
@@ -1024,6 +1024,10 @@
                       {
                         "title": "Open the GitHub run",
                         "url": "${__value.text}"
+                      },
+                      {
+                        "title": "Artifacts: failure.json, pod logs, cluster snapshots (deleted after 7 days)",
+                        "url": "${__value.text}#artifacts"
                       }
                     ]
                   }
@@ -1748,7 +1752,7 @@
         {
           "id": 19,
           "title": "Failed tests",
-          "description": "At most the first 100 failed tests are listed; messages are capped at 2000 characters and stack traces are never included. Empty when the run passed, or when the artifact is missing, expired or too large.",
+          "description": "At most the first 100 failed tests are listed; messages are capped at 2000 characters and stack traces are never included. Empty when the run passed, or when the artifact is missing, expired or too large. The untruncated per-test detail, stack traces included, is in the artifact's `failure.json`: open the artifacts link in the Run row. GitHub deletes the artifact after 7 days.",
           "type": "table",
           "gridPos": {
             "h": 9,
@@ -3530,7 +3534,7 @@
     {
       "id": 40,
       "title": "Fixture setup",
-      "description": "Fixture setup spans ('<fixture> setup', pytest.span_type = fixture) grouped by fixture, with the number of setups and their total time. A Worker column appears once captures carry osac.ci.xdist_worker (Q3); until then grouping is by fixture alone. Fixture setup time overlaps the wall clock of the test that triggered it; do not sum it into run duration. Tempo returns at most 100 spans per trace, so busy runs are truncated.",
+      "description": "Fixture setup spans ('<fixture> setup', pytest.span_type = fixture) grouped by fixture and worker, with the number of setups and their total time. 'not recorded' in Worker means the capture predates osac.ci.xdist_worker (Q3). Fixture setup time overlaps the wall clock of the test that triggered it; do not sum it into run duration. Tempo returns at most 100 spans per trace, so busy runs are truncated.",
       "type": "table",
       "gridPos": {
         "h": 9,
@@ -3731,7 +3735,7 @@
     {
       "id": 41,
       "title": "Fixture reuse",
-      "description": "How many tests reused each shared (session- or module-scoped) fixture. Counts come from pytest.span_type = fixture_use spans, one per test per shared fixture; a Worker column appears once captures carry osac.ci.xdist_worker (Q3). Empty means this capture predates the fixture-reuse instrumentation.",
+      "description": "How many tests reused each shared (session- or module-scoped) fixture. Counts come from pytest.span_type = fixture_use spans, one per test per shared fixture; 'not recorded' in Worker means the capture predates osac.ci.xdist_worker (Q3). Empty means this capture predates the fixture-reuse instrumentation.",
       "type": "table",
       "gridPos": {
         "h": 9,
@@ -3916,7 +3920,7 @@
     {
       "id": 43,
       "title": "Longest waits",
-      "description": "Every recorded wait span (pytest.span_type = 'wait', or the poll.delay attribute older captures carry), longest first. 'not recorded' in Resource, Attempts or Condition means the wait predates wait-resource identity. Tempo returns at most 100 spans per trace, so long runs are truncated here. This is not runner wall time: waits overlap the tests that waited. Raw pod logs for the run stay queryable in Explore (link under Collection coverage).",
+      "description": "Every recorded wait span (pytest.span_type = 'wait', or the poll.delay attribute older captures carry), longest first. 'not recorded' in Resource, Attempts or Condition means the wait predates wait-resource identity. The table shows the 100 longest waits: Tempo rejects more than 100 spans per span set (its default max_spans_per_span_set is 100), so a capture with more waits is cut here. This is not runner wall time: waits overlap the tests that waited. Pod logs are in the run's GitHub artifact (CI evidence), not in Loki: the collector cannot read /var/log/pods.",
       "type": "table",
       "gridPos": {
         "h": 12,
@@ -5743,6 +5747,293 @@
               "format": "table",
               "instant": true,
               "range": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 58,
+      "title": "Events",
+      "description": "Kubernetes events recorded for this capture, oldest first. The collector watches events in the observed namespace only, so events from other namespaces are not here; an empty table means no event was recorded in the capture window, not that the cluster was healthy.",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 172
+      },
+      "collapsed": true,
+      "panels": [
+        {
+          "id": 59,
+          "title": "Kubernetes events",
+          "description": "One row per event the capture's Kubernetes watch recorded: when it happened, its type (Normal or Warning), the reason and message the controller gave, and the object it is about. Type, reason and message are parsed from the watch record's object with Loki's json stage; the watch action itself (ADDED or MODIFIED) is not shown. Times are the event times inside the capture window, not the dashboard time range. The watch records the same event again when its count or last timestamp changes, so repeated rows are one event updating, not new events.",
+          "type": "table",
+          "gridPos": {
+            "h": 14,
+            "w": 24,
+            "x": 0,
+            "y": 173
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "ci-observe-logs"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false,
+                "filterable": false
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              },
+              "noValue": "No Kubernetes events in this capture"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Time"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsIso"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 210
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "k8s_namespace_name"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Namespace"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 200
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "auto",
+                      "wrapText": true,
+                      "dynamicHeight": true
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "event_type"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Type"
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "Normal": {
+                            "text": "Normal",
+                            "color": "green",
+                            "index": 0
+                          },
+                          "Warning": {
+                            "text": "Warning",
+                            "color": "orange",
+                            "index": 1
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "event_reason"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Reason"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 200
+                  },
+                  {
+                    "id": "custom.inspect",
+                    "value": true
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "auto",
+                      "wrapText": true,
+                      "dynamicHeight": true
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "object_kind"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Object kind"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 140
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "object_name"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Object"
+                  },
+                  {
+                    "id": "custom.inspect",
+                    "value": true
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "auto",
+                      "wrapText": true,
+                      "dynamicHeight": true
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "event_message"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Message"
+                  },
+                  {
+                    "id": "custom.inspect",
+                    "value": true
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "auto",
+                      "wrapText": true,
+                      "dynamicHeight": true
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "sortBy": [
+              {
+                "displayName": "Time",
+                "desc": false
+              }
+            ],
+            "footer": {
+              "show": false,
+              "reducer": [
+                "sum"
+              ],
+              "countRows": false,
+              "fields": ""
+            }
+          },
+          "transformations": [
+            {
+              "id": "merge",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Line": true,
+                  "osac_ci_capture_id": true,
+                  "osac_ci_observed_namespace": true,
+                  "osac_ci_suite": true,
+                  "osac_ci_pr": true,
+                  "service_name": true,
+                  "service_namespace": true,
+                  "service_instance_id": true
+                },
+                "indexByName": {
+                  "Time": 0,
+                  "k8s_namespace_name": 1,
+                  "event_type": 2,
+                  "event_reason": 3,
+                  "object_kind": 4,
+                  "object_name": 5,
+                  "event_message": 6
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "{osac_ci_capture_id=\"$capture_id\"} | k8s_resource_name=\"events\" | event_domain=\"k8s\" | json event_type=\"object.type\", event_reason=\"object.reason\", event_message=\"object.message\", object_kind=\"object.involvedObject.kind\", object_name=\"object.involvedObject.name\"",
+              "legendFormat": "",
+              "queryType": "range"
             }
           ]
         }
