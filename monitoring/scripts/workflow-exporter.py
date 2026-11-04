@@ -1358,6 +1358,12 @@ class WorkflowExporter:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at)")
+            # The ci-observe run index walks one category over a date range.
+            # A composite index reads those rows directly instead of scanning
+            # every workflow's jobs in the window.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_category_created ON jobs(category, created_at)"
+            )
             # Add columns introduced after the table was first created --
             # CREATE TABLE IF NOT EXISTS doesn't alter an existing table's
             # schema, so a DB from before pr_url/pr_display existed needs

@@ -42,6 +42,7 @@ import argparse
 import json
 import math
 import sys
+import re
 import threading
 import time
 import urllib.error
@@ -113,7 +114,12 @@ PAGE_BUDGETS = {
 # well inside every budget here and well above that noise.
 MAX_BUDGET_FACTOR = 2.0
 CONCURRENCY_P95_FACTOR = 2.0
-CONCURRENCY_MIN_SECONDS = 0.050
+# Four Python threads share one interpreter, so a CPU-bound endpoint costs
+# about four times its single-reader time even when nothing is slow. The
+# ratio catches real serialization (a 1s endpoint becoming 8s); this floor
+# keeps timer noise on a 10ms endpoint from failing the run. The absolute
+# ceilings that matter are the per-endpoint budgets above.
+CONCURRENCY_MIN_SECONDS = 1.00
 
 
 @dataclass
@@ -684,13 +690,30 @@ def check_superset(registry: set[str], store: set[str], name: str) -> Check:
 # ---------------------------------------------------------------------------
 # Store label values
 # ---------------------------------------------------------------------------
+# The registry stores only real capture ids; the stores' label indexes also
+# carry hand-made test values ("router-direct", "endpoint-restored"). Comparing
+# raw label values would report those as captures the registry lost. Same
+# patterns as ci_observe_capture_view.CAPTURE_ID_RE.
+CAPTURE_ID_SHAPE = re.compile(
+    r"^(?:[a-z0-9][a-z0-9-]*-(?:pr\d+|main)-\d+-a\d+|run-\d+-attempt-\d+)$"
+)
+
+
+def capture_shaped(values: set[str]) -> set[str]:
+    """Only values that can be a capture id. A store's label index keeps
+    every value ever written, including the ones a test put there."""
+    return {value for value in values if CAPTURE_ID_SHAPE.match(value)}
+
+
 def prometheus_capture_ids(base_url: str, days: int, timeout: float) -> set[str]:
     end = datetime.now(UTC)
     start = end - timedelta(days=days)
     query = urllib.parse.urlencode({"start": start.timestamp(), "end": end.timestamp()})
     url = f"{base_url.rstrip('/')}/api/v1/label/{CAPTURE_LABEL}/values?{query}"
     document = _store_json(url, timeout)
-    return {value for value in document.get("data") or [] if isinstance(value, str) and value}
+    return capture_shaped(
+        {value for value in document.get("data") or [] if isinstance(value, str) and value}
+    )
 
 
 def loki_capture_ids(base_url: str, days: int, timeout: float) -> set[str]:
@@ -699,7 +722,9 @@ def loki_capture_ids(base_url: str, days: int, timeout: float) -> set[str]:
     query = urllib.parse.urlencode({"start": int(start.timestamp() * 1e9), "end": int(end.timestamp() * 1e9)})
     url = f"{base_url.rstrip('/')}/loki/api/v1/label/{CAPTURE_LABEL}/values?{query}"
     document = _store_json(url, timeout)
-    return {value for value in document.get("data") or [] if isinstance(value, str) and value}
+    return capture_shaped(
+        {value for value in document.get("data") or [] if isinstance(value, str) and value}
+    )
 
 
 def tempo_capture_ids(base_url: str, days: int, timeout: float) -> set[str]:
@@ -721,7 +746,7 @@ def tempo_capture_ids(base_url: str, days: int, timeout: float) -> set[str]:
             if isinstance(value, str) and value:
                 ids.add(value)
         cursor = chunk_end
-    return ids
+    return capture_shaped(ids)
 
 
 def _store_json(url: str, timeout: float) -> dict:
