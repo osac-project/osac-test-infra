@@ -121,7 +121,7 @@ The four core words are defined under [How the data is structured](#how-the-data
 These gaps are known and deliberate.
 
 - **It does not show pod logs.** The collector cannot read `/var/log/pods`, so pod logs are not delivered to Loki; after a failure they are in the GitHub artifact.
-- **It does not make tests faster or slower.** ci-observe is opt-in telemetry. A delivery failure shows a red step marker and an error annotation, and leaves the job result unchanged.
+- **It does not make tests faster or slower.** ci-observe is opt-in telemetry. A delivery problem shows a warning annotation and a summary line, and leaves the job result unchanged.
 - **It does not cover production.** It runs only in the disposable E2E test cluster.
 
 ## Does it run inside the OSAC services?

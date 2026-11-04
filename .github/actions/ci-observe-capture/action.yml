@@ -10,10 +10,11 @@ description: >-
   copy: the data is already in the CI Grafana when the job ends. The test
   command's own exit code is what this action reports. A telemetry failure
   never changes the job's result: a deploy failure before the test and a
-  delivery failure caught by the post-test verification step are both loud
-  (::error annotations, a red step marker, a summary line) but non-gating,
-  because ci-observe is opt-in telemetry and must never fail a test -- or
-  the required E2E check -- on its own. An empty password is an
+  delivery problem caught by the post-test verification step are both loud
+  (::warning annotations, a summary line) but non-gating, because ci-observe
+  is opt-in telemetry and must never fail a test -- or the required E2E
+  check -- on its own. The verification step always exits 0 and reports a
+  stuck exporter queue as in flight. An empty password is an
   intentional telemetry-less run and stays warning-only. Default-off:
   nothing runs unless a workflow calls this action with the password input
   set.
@@ -452,7 +453,11 @@ runs:
             --dry-run=client -o yaml | oc apply -f - || return 1
           oc -n ci-observability-canary set image daemonset/ci-observe-beyla beyla="${BEYLA_IMAGE_INPUT}" || return 1
           # From here on the quick-cleanup step must clean up cluster resources.
+          # The shell copy is for this step's info-metric gate: values written
+          # to GITHUB_ENV only reach later steps, and this step must decide
+          # whether the post is allowed before it exits.
           echo "CI_OBSERVE_DEPLOYED=1" >> "${GITHUB_ENV}"
+          CI_OBSERVE_DEPLOYED=1
 
           # Beyla needs hostPID, UID 0 and the BPF capabilities inside the
           # OpenShift guest. This is the SCC that cluster.yaml keeps
@@ -487,28 +492,82 @@ runs:
 
           # Local OTLP endpoint for the test command, on loopback like the
           # local pipeline. The test container reaches it because the E2E
-          # podman run uses --network=host. The quick-cleanup step stops it.
-          nohup oc port-forward -n ci-observability-canary svc/ci-observe-gateway :4317 \
+          # podman run uses --network=host. The same forward also exposes the
+          # gateway's self-metrics port (:8888, collector-live.yaml's telemetry
+          # reader), so the verify step reuses this one process instead of
+          # opening a second forward. The quick-cleanup step stops it.
+          nohup oc port-forward -n ci-observability-canary svc/ci-observe-gateway :4317 :8888 \
             > "${ci_dir}/port-forward.log" 2>&1 &
-          echo "$!" > "${ci_dir}/port-forward.pid"
-          port=""
+          echo "$!" > "${ci_dir}/forwarder.pid"
+          # Read each local port from the line that names its target
+          # ("Forwarding from 127.0.0.1:PORT -> 4317"), never from line
+          # order: oc may print the two lines in either order.
+          forwarded_port() {
+            local target="$1"
+            grep -E -- "-> ${target}\$" "${ci_dir}/port-forward.log" \
+              | grep -oE '127\.0\.0\.1:[0-9]+' | head -n1 | cut -d: -f2
+          }
+          otlp_port=""
+          metrics_port=""
           for _ in $(seq 1 60); do
-            if grep -oE '127\.0\.0\.1:[0-9]+' "${ci_dir}/port-forward.log" > "${ci_dir}/port-forward-port.txt"; then
-              port="$(head -n1 "${ci_dir}/port-forward-port.txt" | cut -d: -f2)"
+            otlp_port="$(forwarded_port 4317)"
+            metrics_port="$(forwarded_port 8888)"
+            if [[ -n "${otlp_port}" && -n "${metrics_port}" ]]; then
               break
             fi
             sleep 1
           done
-          if [[ -z "${port}" ]]; then
-            echo "port-forward did not report a local port" >&2
+          if [[ -z "${otlp_port}" || -z "${metrics_port}" ]]; then
+            echo "port-forward did not report both local ports (OTLP and self-metrics)" >&2
             return 1
           fi
-          echo "CI_OBSERVE_OTLP_PORT=${port}" >> "${GITHUB_ENV}"
+          echo "CI_OBSERVE_OTLP_PORT=${otlp_port}" >> "${GITHUB_ENV}"
+          echo "CI_OBSERVE_METRICS_PORT=${metrics_port}" >> "${GITHUB_ENV}"
         }
+
+        # The identity the capture info metric carries. Written before the
+        # deploy attempt so both the deploy post and the verify post read one
+        # record; the local capture supervisor never sees this file.
+        python3 "${GITHUB_WORKSPACE}/monitoring/scripts/ci_observe_verify.py" write-identity \
+          --file "${ci_dir}/capture-identity.json" \
+          --capture-id "${capture_id}" \
+          --ci-run-id "${run_id}" \
+          --ci-run-attempt "${run_attempt}" \
+          --ci-suite "${suite}" \
+          --ci-pr "${pr}" \
+          --ci-workflow "${workflow_name}" \
+          --ci-test-ref "${test_ref}" \
+          --ci-test-sha "${test_sha}" \
+          --ci-test-infra-ref "${test_infra_ref}" \
+          --ci-test-infra-sha "${test_infra_sha}" \
+          --ci-test-infra-workflow-sha "${test_infra_workflow_sha}" \
+          --ci-test-suite "${test_suite}" \
+          --ci-test-filter "${test_filter}" \
+          --ci-test-marker "${test_marker}"
 
         if ! deploy_collectors; then
           echo "::warning::ci-observe: collector deployment failed; running the test without telemetry"
           touch "${ci_dir}/deploy-failed"
+        fi
+
+        # One identity series per capture, posted once after deploy: the
+        # central registry then knows this capture exists even when its
+        # traces and logs arrive late or not at all. The payload carries the
+        # capture id as the resource attribute and the run identity as
+        # datapoint attributes (see monitoring/scripts/ci_observe_verify.py).
+        #
+        # Posted ONLY when the gateway deployed (CI_OBSERVE_DEPLOYED=1 and no
+        # deploy-failed marker). A failed deploy posts nothing: a capture in
+        # the registry with no data would render as an empty Capture page and
+        # read as a real capture that lost its telemetry. The run is then a
+        # no-telemetry run and the registry must see no capture. The identity
+        # file stays on disk for diagnostics. A failed post is a warning,
+        # never a gate.
+        if ! CI_OBSERVE_DEPLOYED="${CI_OBSERVE_DEPLOYED:-}" CI_OBSERVE_OTLP_AUTH="${auth}" python3 \
+            "${GITHUB_WORKSPACE}/monitoring/scripts/ci_observe_verify.py" post-info \
+            --ci-dir "${ci_dir}" \
+            --identity "${ci_dir}/capture-identity.json"; then
+          echo "::warning::ci-observe: could not post the capture info metric; continuing"
         fi
 
     - name: Run test command
@@ -568,11 +627,11 @@ runs:
       run: |
         set -u
         ci_dir="${RUNNER_TEMP}/ci-observe"
-        if [[ -f "${ci_dir}/port-forward.pid" ]]; then
+        if [[ -f "${ci_dir}/forwarder.pid" ]]; then
           # Cleanup may keep going on failure, but never silently: the
           # warning carries the underlying command's own output.
-          if ! kill "$(cat "${ci_dir}/port-forward.pid")"; then
-            echo "::warning::ci-observe: failed to stop the collector port-forward (pid $(cat "${ci_dir}/port-forward.pid"))"
+          if ! kill "$(cat "${ci_dir}/forwarder.pid")"; then
+            echo "::warning::ci-observe: failed to stop the collector port-forward (pid $(cat "${ci_dir}/forwarder.pid"))"
           fi
         fi
         # --request-timeout bounds the API request itself (a --wait timeout
@@ -619,178 +678,35 @@ runs:
       # endpoint stayed unnoticed under 30 green E2E runs. This step runs
       # after the test, always (a failed test is checked too: the telemetry
       # failure must be visible next to it) and never on cancellation (the
-      # cheap-cleanup path owns that). Its errors are LOUD but never gating:
-      # ci-observe is opt-in telemetry, so a delivery failure leaves
-      # ::error annotations, a red step marker and a summary line, and the
-      # job's conclusion untouched (the owner's rule: never fail a test --
-      # or the required E2E check -- only for telemetry).
+      # cheap-cleanup path owns that). Its warnings are loud but never
+      # gating: ci-observe is opt-in telemetry, so a delivery problem leaves
+      # ::warning annotations and a summary line, and the job's conclusion
+      # untouched (the owner's rule: never fail a test -- or the required E2E
+      # check -- only for telemetry). The step ends `exit 0` on every path.
+      #
+      # The check itself lives in monitoring/scripts/ci_observe_verify.py so
+      # it can be tested: it reads the deploy step's self-metrics through the
+      # SAME port-forward (no second one), waits for the exporter queue to
+      # drain, and reports any residue as in flight rather than as a verdict.
       if: always() && !cancelled()
       continue-on-error: true
       shell: bash
       env:
-        KUBECONFIG: ${{ inputs.kubeconfig-path }}
+        OTLP_PASSWORD_INPUT: ${{ inputs.otlp-password }}
       run: |
-        set -euo pipefail
+        set -uo pipefail
         ci_dir="${RUNNER_TEMP}/ci-observe"
 
-        # One message shape for every failure mode; never implies the test
-        # result was affected.
-        telemetry_fail() {
-          echo "::error::ci-observe: telemetry was requested but did not reach the central backend — the test result above is unaffected, and the Grafana run page will be incomplete; see ${1}"
-          echo "ci-observe: telemetry was requested but did not reach the central backend — the test result above is unaffected, and the Grafana run page will be incomplete; see ${1}" >> "${GITHUB_STEP_SUMMARY}"
-          exit 1
-        }
-
-        # Telemetry was never requested (empty OTLP password input): the run
-        # is intentionally without capture, nothing to verify.
-        if [[ ! -f "${ci_dir}/telemetry-requested" ]]; then
-          echo "telemetry not requested (no OTLP ingest password); the tests ran without telemetry capture" >> "${GITHUB_STEP_SUMMARY}"
-          exit 0
+        # The info metric post reuses the existing basic auth contract: the
+        # header is computed here from the secret input and handed to the
+        # script through the environment, never through an argument.
+        auth=""
+        if [[ -n "${OTLP_PASSWORD_INPUT}" ]]; then
+          auth="Basic $(printf '%s:%s' "ci-observe" "${OTLP_PASSWORD_INPUT}" | base64 -w0)"
         fi
 
-        # Requested but never started.
-        if [[ -f "${ci_dir}/deploy-failed" ]]; then
-          telemetry_fail "the collector deployment failed (see the warning in the Deploy collectors step)"
-        fi
-        if [[ -z "${CI_OBSERVE_DEPLOYED:-}" ]]; then
-          telemetry_fail "the collector deployment never recorded a deployed gateway"
-        fi
-
-        # The test command pushed its OTEL signals through the deploy step's
-        # port-forward; if that process died, the test's telemetry had no
-        # path to the gateway.
-        if [[ -f "${ci_dir}/port-forward.pid" ]]; then
-          if ! kill -0 "$(cat "${ci_dir}/port-forward.pid")"; then
-            telemetry_fail "the collector port-forward from the deploy step is no longer running; the test command's OTEL endpoint was dead during the run"
-          fi
-        fi
-
-        # Self-metrics scrape: :8888 is the gateway's prometheus telemetry
-        # port, exposed by cluster.yaml's self-metrics service port and
-        # collector-live.yaml's telemetry reader.
-        verify_pf_log="${ci_dir}/verify-port-forward.log"
-        nohup oc port-forward -n ci-observability-canary svc/ci-observe-gateway :8888 \
-          > "${verify_pf_log}" 2>&1 &
-        verify_pf_pid=$!
-        cleanup_verify_port_forward() {
-          if ! kill "${verify_pf_pid}"; then
-            echo "::warning::ci-observe: failed to stop the verify port-forward (pid ${verify_pf_pid})"
-          fi
-        }
-        trap cleanup_verify_port_forward EXIT
-
-        metrics_port=""
-        for _ in $(seq 1 30); do
-          if grep -oE '127\.0\.0\.1:[0-9]+' "${verify_pf_log}" > "${ci_dir}/verify-port.txt"; then
-            metrics_port="$(head -n1 "${ci_dir}/verify-port.txt" | cut -d: -f2)"
-            break
-          fi
-          sleep 1
-        done
-        if [[ -z "${metrics_port}" ]]; then
-          telemetry_fail "the gateway's self-metrics port-forward never came up; output: $(cat "${verify_pf_log}")"
-        fi
-
-        metrics_url="http://127.0.0.1:${metrics_port}/metrics"
-        metrics_file="${ci_dir}/gateway-metrics.txt"
-        scrape_self_metrics() {
-          curl -sf --max-time 30 "${metrics_url}" -o "${metrics_file}"
-        }
-        # Sum every sample of one metric family in a Prometheus exposition
-        # dump: lines are `name{labels} value` (the labels optional), `#`
-        # comment lines never match, and an optional _total suffix (the
-        # collector's prometheus reader appends one unless
-        # without_type_suffix is set) is stripped before comparing.
-        counter_sum() {
-          awk -v n="$1" '{ split($1, a, "{"); name = a[1]; sub(/_total$/, "", name); if (name == n) sum += $NF } END { print sum + 0 }' "${metrics_file}"
-        }
-
-        scrape_self_metrics || telemetry_fail "could not scrape the gateway's self-metrics endpoint (${metrics_url}); the gateway died after the test"
-        if ! grep -q '^otelcol_' "${metrics_file}"; then
-          telemetry_fail "the gateway's self-metrics endpoint served no otelcol_* metrics (${metrics_url})"
-        fi
-
-        # Hard failures first: data the gateway refused, and batches the
-        # central backend push gave up on.
-        for signal in spans log_records metric_points; do
-          refused="$(counter_sum "otelcol_receiver_refused_${signal}")"
-          if (( refused != 0 )); then
-            telemetry_fail "the gateway refused ${refused} ${signal} (otelcol_receiver_refused_${signal}); check the gateway pod's logs"
-          fi
-          send_failed="$(counter_sum "otelcol_exporter_send_failed_${signal}")"
-          if (( send_failed != 0 )); then
-            telemetry_fail "the central backend push failed for ${send_failed} ${signal} (otelcol_exporter_send_failed_${signal}); check the https://osac-ci-1.redhat.com:4319 ingest (Caddy vhost, HAProxy route, CI_OBSERVE_OTLP_PASSWORD secret)"
-          fi
-        done
-
-        # The exporter's final batches can still sit in the 5s batch timeout
-        # or the retrying queue when the test ends -- and the gateway keeps
-        # collecting after the test too (file_log tails the still-running
-        # namespace, kubelet_stats bursts every 60s), so a small accepted-
-        # sent deficit is the NORMAL steady state, not a failure. What a
-        # dead or stuck export looks like is a deficit that is large
-        # (far beyond in-flight) and never shrinks across scrapes. Poll for
-        # up to ~100s; delivered means: at some scrape every signal's
-        # deficit was zero, within tolerance, or shrinking versus the first
-        # scrape.
-        deficit_first=""
-        deficit_min=""
-        delivered=false
-        for _ in $(seq 1 10); do
-          scrape_self_metrics || telemetry_fail "could not re-scrape the gateway's self-metrics endpoint (${metrics_url})"
-          delivered_this_scrape=true
-          for signal in spans log_records metric_points; do
-            accepted="$(counter_sum "otelcol_receiver_accepted_${signal}")"
-            sent="$(counter_sum "otelcol_exporter_sent_${signal}")"
-            (( deficit = accepted - sent ))
-            [[ "${deficit}" -lt 0 ]] && deficit=0
-            # Tolerance: in-flight batches plus a slice of the collected
-            # volume. A stuck queue holds at least the whole 5000-batch
-            # sending queue, far above this.
-            (( tolerance = accepted / 50 + 1000 ))
-            if (( deficit > tolerance )); then
-              delivered_this_scrape=false
-              if [[ -z "${deficit_first}" ]]; then
-                deficit_first="${deficit}"
-              fi
-              if [[ -z "${deficit_min}" ]] || (( deficit < deficit_min )); then
-                deficit_min="${deficit}"
-              fi
-            fi
-          done
-          if [[ "${delivered_this_scrape}" == true ]]; then
-            delivered=true
-            break
-          fi
-          sleep 10
-        done
-        # A deficit that stayed beyond tolerance but is shrinking is the
-        # queue draining after an outage; only a large, non-shrinking
-        # deficit is a delivery failure.
-        if [[ "${delivered}" != true ]] && [[ -n "${deficit_min}" ]] && (( deficit_min < deficit_first )); then
-          delivered=true
-        fi
-
-        sent_spans="$(counter_sum otelcol_exporter_sent_spans)"
-        sent_log_records="$(counter_sum otelcol_exporter_sent_log_records)"
-        sent_metric_points="$(counter_sum otelcol_exporter_sent_metric_points)"
-
-        if [[ "${delivered}" != true ]]; then
-          accepted_spans="$(counter_sum otelcol_receiver_accepted_spans)"
-          accepted_log_records="$(counter_sum otelcol_receiver_accepted_log_records)"
-          accepted_metric_points="$(counter_sum otelcol_receiver_accepted_metric_points)"
-          telemetry_fail "the gateway accepted more than it exported (accepted ${accepted_spans} spans, ${accepted_log_records} log records, ${accepted_metric_points} metric points; exported ${sent_spans}, ${sent_log_records}, ${sent_metric_points}); data was collected but never delivered to the central backend"
-        fi
-
-        # A run long enough for real telemetry that exported nothing at all
-        # means nothing was collected (dead receiver path), not an empty
-        # test: E2E commands run for minutes, so 60s is safely past any
-        # trivial command.
-        duration="${CI_OBSERVE_TEST_DURATION:-0}"
-        total_sent=$(( sent_spans + sent_log_records + sent_metric_points ))
-        if (( total_sent == 0 )) && (( duration > 60 )); then
-          telemetry_fail "nothing was collected: the gateway exported 0 spans, 0 logs and 0 metrics during a ${duration}s test run"
-        fi
-
-        echo "telemetry delivered: ${sent_spans} spans, ${sent_log_records} logs, ${sent_metric_points} metrics"
-        echo "telemetry delivered: ${sent_spans} spans, ${sent_log_records} logs, ${sent_metric_points} metrics" >> "${GITHUB_STEP_SUMMARY}"
+        CI_OBSERVE_OTLP_AUTH="${auth}" python3 \
+          "${GITHUB_WORKSPACE}/monitoring/scripts/ci_observe_verify.py" verify \
+          --ci-dir "${ci_dir}" || \
+          echo "::warning::ci-observe: the delivery check failed unexpectedly; the test result is unaffected"
+        exit 0
