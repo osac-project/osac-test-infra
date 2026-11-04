@@ -17,13 +17,28 @@ Description=Workflow Exporter (OSAC CI Monitoring)
 Image=localhost/osac-workflow-exporter:latest
 ContainerName=workflow-exporter
 
-PublishPort=127.0.0.1:9103:9103
+# Host networking, for two reasons. The ci-observe Tempo 2.10 publishes its
+# search API on the host's loopback only (127.0.0.1:3210), so a bridged
+# container cannot reach it and /api/ci-observe/runs would answer "unknown"
+# forever. And this exporter is itself reached on the host's loopback
+# (Grafana's Infinity datasource and Prometheus both use 127.0.0.1:9103).
+# With host networking the API would listen on every interface, which is what
+# the old PublishPort=127.0.0.1:9103:9103 prevented, so BIND_ADDRESS pins it
+# back to loopback. If the exporter ever moves to a bridge network, set
+# CI_OBSERVE_TEMPO_URL to an address the container can reach and drop
+# Network=host; the code never assumes host networking.
+Network=host
+Environment=BIND_ADDRESS=127.0.0.1
 
 # Token from shared .env, org name set explicitly
 EnvironmentFile=%h/.monitoring-server/.env
 Environment=GITHUB_ORG=osac-project
 Environment=PORT=9103
 Environment=POLL_INTERVAL=90
+# The ci-observe Tempo 2.10 search API. Override when the container does not
+# share the host's loopback. Empty means "use the built-in default", which is
+# this same address.
+Environment=CI_OBSERVE_TEMPO_URL=http://127.0.0.1:3210
 # Only the two active repos -- osac-aap, osac-operator, fulfillment-service,
 # osac-installer, and bare-metal-fulfillment-operator are archived and no
 # longer produce CI activity worth tracking.
@@ -33,9 +48,10 @@ Environment=REPOS=osac,osac-test-infra
 Environment=JOBS_HISTORY_DAYS=60
 Environment=JOBS_HISTORY_MAX_COUNT=100000
 
-# Mount the exporter and its sibling run-evidence module into the container
+# Mount the exporter and its sibling modules into the container
 Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_run_evidence.py:/app/ci_observe_run_evidence.py:ro,Z
+Volume=%h/.monitoring-server/scripts/ci_observe_runs.py:/app/ci_observe_runs.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_trends.py:/app/ci_observe_trends.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_prs.py:/app/ci_observe_prs.py:ro,Z
 # Mount data directory for cache persistence across restarts

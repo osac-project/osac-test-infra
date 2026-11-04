@@ -590,6 +590,69 @@ class TestEndpoint:
 
         assert Path(rollup).read_bytes() == before
 
+    def test_the_test_summary_is_one_row_per_test(self, exporter, rollup):
+        """The entry page's lookup table: one row per test id, suite and
+        repository, with runs and failures summed over the window."""
+        doc = exporter.get_ci_observe_trends_json({"days": ["30"], "summary": ["test"]})
+
+        assert doc["summary"] == "test"
+        assert doc["rows"] == [], "the summary replaces the raw rows, it does not add to them"
+        assert [row["test_id"].rsplit("::", 1)[-1] for row in doc["tests"]] == [
+            "test_restart", "test_create"
+        ], "worst first: failures, then runs"
+        assert set(doc["tests"][0]) == {"test_id", "suite", "repo", "runs", "failures"}
+        assert doc["tests"][0]["runs"] == 4
+        assert doc["tests"][0]["failures"] == 1
+        assert doc["tests"][0]["suite"] == "tests/e2e/vmaas"
+
+    def test_the_test_summary_sums_the_whole_window_before_any_cap(
+        self, exporter, rollup, trends, monkeypatch
+    ):
+        """The response row cap keeps the newest days only. If the page summed
+        the returned rows, a busy window would silently total a fraction of
+        itself, so the sum runs in SQL over every row of the window."""
+        conn = trends.open_trends_db(rollup)
+        try:
+            yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+            trends.write_day(conn, yesterday, [{
+                "day": yesterday, "repo": "osac", "workflow": "E2E VMaaS Full Install",
+                "suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas/test_vm::test_restart",
+                "source_sha": OTHER_SHA, "runs": 6, "passes": 3, "failures": 3,
+                "p50_duration_s": 12.0, "p95_duration_s": 30.0,
+            }], {
+                "day": yesterday, "runs_listed": 6, "runs_parsed": 6,
+                "runs_unavailable": 0, "generated_at": "2026-11-02T00:00:00Z",
+            })
+        finally:
+            conn.close()
+        monkeypatch.setattr(exporter, "CIOBS_TRENDS_MAX_ROWS", 1)
+
+        raw = exporter.get_ci_observe_trends_json({"days": ["30"]})
+        summary = exporter.get_ci_observe_trends_json({"days": ["30"], "summary": ["test"]})
+
+        assert len(raw["rows"]) == 1, "the raw row cap really does drop a row here"
+        restart = next(row for row in summary["tests"] if row["test_id"].endswith("test_restart"))
+        assert (restart["runs"], restart["failures"]) == (10, 4)
+
+    def test_the_test_summary_honours_the_test_filter(self, exporter, rollup):
+        doc = exporter.get_ci_observe_trends_json(
+            {"days": ["30"], "summary": ["test"], "test": ["restart"]}
+        )
+
+        assert [row["test_id"].rsplit("::", 1)[-1] for row in doc["tests"]] == ["test_restart"]
+
+    def test_an_unknown_summary_returns_the_rows(self, exporter, rollup):
+        doc = exporter.get_ci_observe_trends_json({"days": ["30"], "summary": ["nope"]})
+
+        assert doc["tests"] == []
+        assert len(doc["rows"]) == 2
+
+    def test_the_test_summary_of_a_missing_rollup_is_a_note(self, exporter):
+        doc = exporter.get_ci_observe_trends_json({"days": ["30"], "summary": ["test"]})
+
+        assert doc["tests"] == []
+        assert any("no per-test rollup" in note for note in doc["notes"])
+
 
 class TestHTTP:
     @pytest.fixture
@@ -622,6 +685,17 @@ class TestHTTP:
 
         assert status == 200
         assert json.loads(body)["rows"] == []
+
+    def test_the_test_summary_is_served_for_the_entry_page(self, rollup, base_url):
+        status, _, body = self.get(f"{base_url}/api/ci-observe/trends?days=7&summary=test")
+
+        assert status == 200
+        doc = json.loads(body)
+        assert doc["summary"] == "test"
+        assert [row["test_id"].rsplit("::", 1)[-1] for row in doc["tests"]] == [
+            "test_restart", "test_create"
+        ]
+        assert doc["rows"] == []
 
 
 @pytest.mark.skipif(not DASHBOARD.exists(), reason="ci-observe-trends.json ships with the dashboard")

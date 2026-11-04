@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "The entry page. Type a run id or part of a capture id to narrow the cards and tables, then click a row to open the run. The four words are defined in the first panel.",
+  "description": "The entry page and router. It accepts a run id, a capture id, a pull request number or a test id. Find narrows the capture tables, the pull request lookup opens the Pull requests dashboard, the test id lookup opens Trends, and the last table lists every E2E run with its capture verdict, so a run with no capture cannot hide.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -29,9 +29,439 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Start here\nOne row per E2E run whose test spans arrived, newest first. Click a run id to open it.\n\nType a run id or part of a capture id in the **Find** box above to narrow the cards and tables.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id is the run id in the tables below. A **cohort** is a set of captures that differ only in what you want to compare.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| What happened inside one run | [**CI Observe \u2014 Capture**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | the same page, **CI evidence** row (GitHub jobs, steps, JUnit) |\n| What the cluster did during a run | the same page, **Environment** row (pods, CPU, memory) |\n| Did two runs get slower | [**Trends \u2014 Compare**](/d/ci-observe-trends/ci-observe-e28094-trends) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Missing session span** means the run's summary span never arrived. The tests may still have passed; the table lists what did arrive. A run that is completely absent never sent any telemetry.\n\n**Time range**: keep the default 7 days. A narrow range can hide a long run. If a run you expect is missing, widen the range up to the 7-day maximum before concluding it never ran."
+        "content": "### Start here\n\nThis page is a router. It accepts a run id or a capture id in **Find**, a pull request from **Pull request lookup**, a test id from **Test id lookup**, or nothing.\n\n**Find** narrows the cards and the three capture tables, newest first. Type a run id such as `41310072671`, or part of a capture id such as `vmaas-pr123`, then click a row to open that capture.\n\n**Pull request lookup** lists one row per pull request the exporter stored in the last $days days. Click the PR number to open that pull request, already selected, in the Pull requests dashboard.\n\n**Test id lookup** lists one row per test the daily JUnit rollup recorded in the last 7 days, with its runs and failures over that window. Click a test id to open that test, already selected, in the Trends dashboard.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id is the run id in the tables below. A **cohort** is a set of captures that differ only in what you want to compare.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| Which runs arrived with no capture | this page, the last table |\n| What happened inside one run | [**CI Observe — Capture**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | the same page, **CI evidence** row (GitHub jobs, steps, JUnit) |\n| What the cluster did during a run | the same page, **Environment** row (pods, CPU, memory) |\n| How a change moved from open to merge | [**CI Observe — Pull requests**](/d/ci-observe-pull-requests/ci-observe-pull-requests) |\n| Is this test flaky, slower, or newly broken | [**CI Observe — Trends**](/d/ci-observe-trends/ci-observe-trends) |\n| Did two runs get slower | [**CI Observe — Compare runs**](/d/ci-observe-trends/ci-observe-e28094-trends) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Runs with no capture.** The last table lists one row per E2E run the workflow exporter recorded in the last $days days, joined to Tempo's capture ids by GitHub run id. Its **Capture** column is the verdict: **capture** means at least one capture id names the run; **not collected** means GitHub has the run and no telemetry arrived; **unknown** means the page could not tell, for a data reason (Tempo was unreachable, the capture query hit its trace limit, the run is newer than the last lookup, or the run is older than Tempo's 30-day retention). **unknown** is never a claim that a capture is missing: the panel description lists what must be true before it says not collected. **not collected** is a statement about the recording, not about the result, so read the result from the Result column and the logs from GitHub, which keeps them for 7 days.\n\n**Missing session span** means the run's summary span never arrived. The tests may still have passed; the table lists what did arrive. A run that is completely absent never sent any telemetry.\n\n**Time range**: keep the default 7 days. A narrow range can hide a long run. If a run you expect is missing, widen the range up to the 7-day maximum before concluding it never ran. The pull request lookup and the run table ignore the time range and read $days days; the test lookup always reads 7 days, the age at which GitHub deletes a run's artifact."
       },
       "targets": []
+    },
+    {
+      "type": "table",
+      "id": 10,
+      "title": "Pull request lookup, one pull request per row, last $days days (workflow exporter)",
+      "description": "One row per merged or closed pull request the exporter's backfill stored in the last $days days, newest first. The unit is one pull request and its axis is its life, opened to merge or close. The PR cell opens that pull request in the Pull requests dashboard, preselected by number and repository; the GitHub cell opens it on github.com. Only merged and closed pull requests are stored.",
+      "gridPos": {
+        "h": 11,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "No pull requests stored for this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "number"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PR"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this pull request in the Pull requests dashboard",
+                    "url": "/d/ci-observe-pull-requests/ci-observe-pull-requests?var-pr_number=${__value.raw}&var-pr_repo=${__data.fields.repo}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "repo"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Repository"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "title"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Title"
+              },
+              {
+                "id": "custom.width",
+                "value": 320
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "final_stage"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last stage"
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "merged": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "merged"
+                      },
+                      "closed in queue": {
+                        "color": "orange",
+                        "index": 1,
+                        "text": "closed in queue"
+                      },
+                      "closed after approval": {
+                        "color": "orange",
+                        "index": 2,
+                        "text": "closed after approval"
+                      },
+                      "closed in review": {
+                        "color": "red",
+                        "index": 3,
+                        "text": "closed in review"
+                      },
+                      "closed in authoring": {
+                        "color": "red",
+                        "index": 4,
+                        "text": "closed in authoring"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "GitHub"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open pull request on GitHub",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.prs",
+          "columns": [
+            {
+              "selector": "number",
+              "text": "number",
+              "type": "number"
+            },
+            {
+              "selector": "repo",
+              "text": "repo",
+              "type": "string"
+            },
+            {
+              "selector": "title",
+              "text": "title",
+              "type": "string"
+            },
+            {
+              "selector": "final_stage",
+              "text": "final_stage",
+              "type": "string"
+            },
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 11,
+      "title": "Test id lookup, one test per row, last 7 days (workflow exporter)",
+      "description": "One row per test the daily JUnit rollup recorded in the last 7 days, with its runs and failures summed over those days. The unit is one test across all its runs and its axis is the 7-day window. The test id cell opens that test in the Trends dashboard, preselected. The sums come from the endpoint, over every rollup row of the window, so they are not cut short by the response row cap. The window is fixed at 7 days because the rollup is built from run artifacts, and GitHub deletes an artifact after 7 days.",
+      "gridPos": {
+        "h": 11,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "No per-test rollup rows for the last 7 days"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "test_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test id"
+              },
+              {
+                "id": "custom.width",
+                "value": 420
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this test in the Trends dashboard",
+                    "url": "/d/ci-observe-trends/ci-observe-trends?var-test=${__value.raw}&var-days=7"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "repo"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Repository"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "runs"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Runs"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failures"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failures"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=7&summary=test",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tests",
+          "columns": [
+            {
+              "selector": "test_id",
+              "text": "test_id",
+              "type": "string"
+            },
+            {
+              "selector": "suite",
+              "text": "suite",
+              "type": "string"
+            },
+            {
+              "selector": "repo",
+              "text": "repo",
+              "type": "string"
+            },
+            {
+              "selector": "runs",
+              "text": "runs",
+              "type": "number"
+            },
+            {
+              "selector": "failures",
+              "text": "failures",
+              "type": "number"
+            }
+          ]
+        }
+      ]
     },
     {
       "type": "stat",
@@ -42,7 +472,7 @@
         "h": 3,
         "w": 8,
         "x": 0,
-        "y": 11
+        "y": 22
       },
       "datasource": {
         "type": "tempo",
@@ -115,7 +545,7 @@
         "h": 3,
         "w": 8,
         "x": 8,
-        "y": 11
+        "y": 22
       },
       "datasource": {
         "type": "tempo",
@@ -192,7 +622,7 @@
         "h": 3,
         "w": 8,
         "x": 16,
-        "y": 11
+        "y": 22
       },
       "datasource": {
         "type": "tempo",
@@ -312,7 +742,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 25
       },
       "datasource": {
         "type": "tempo",
@@ -635,7 +1065,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 34
       },
       "datasource": {
         "type": "tempo",
@@ -815,7 +1245,7 @@
         "h": 16,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 39
       },
       "datasource": {
         "type": "tempo",
@@ -1114,6 +1544,348 @@
           "spss": 100
         }
       ]
+    },
+    {
+      "type": "table",
+      "id": 12,
+      "title": "Recent E2E runs and their capture, all jobs, last $days days (workflow exporter + Tempo)",
+      "description": "One row per E2E run the workflow exporter recorded in the last $days days, newest first, joined to Tempo's capture ids on the GitHub run id. Capture says whether a capture arrived: capture (at least one capture id names this run), not collected (GitHub has the run and no telemetry arrived), or unknown (the page could not tell, because Tempo was unreachable, the capture query was truncated, the run is newer than the last lookup, or the run is older than Tempo's 30-day retention). Clicking the verdict opens the run on GitHub, which is where a not collected run still has its logs for 7 days. The capture tables above follow the page time range; this table follows $days.",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "No E2E runs recorded in the selected range"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Run"
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this run: its capture when one exists, this page narrowed to it when none does",
+                    "url": "/d/ci-observe-runs-home/ci-observe-runs-home?var-find=${__value.raw}&from=${__from}&to=${__to}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "workflow"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Workflow"
+              },
+              {
+                "id": "custom.width",
+                "value": 210
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trigger"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Ref"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "branch"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Branch"
+              },
+              {
+                "id": "custom.width",
+                "value": 180
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "conclusion"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Result"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "success": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "success"
+                      },
+                      "failure": {
+                        "color": "red",
+                        "index": 1,
+                        "text": "failure"
+                      },
+                      "cancelled": {
+                        "color": "orange",
+                        "index": 2,
+                        "text": "cancelled"
+                      },
+                      "skipped": {
+                        "color": "text",
+                        "index": 3,
+                        "text": "skipped"
+                      },
+                      "timed_out": {
+                        "color": "red",
+                        "index": 4,
+                        "text": "timed out"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "capture_state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Capture"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "capture": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "capture"
+                      },
+                      "not collected": {
+                        "color": "orange",
+                        "index": 1,
+                        "text": "not collected"
+                      },
+                      "unknown": {
+                        "color": "text",
+                        "index": 2,
+                        "text": "unknown"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this run on GitHub, where a run with no capture keeps its logs for 7 days",
+                    "url": "${__data.fields.url}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "created_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "When"
+              },
+              {
+                "id": "custom.width",
+                "value": 175
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "GitHub"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open workflow run on GitHub",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/runs?days=${days}&limit=200",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.runs",
+          "columns": [
+            {
+              "selector": "id",
+              "text": "id",
+              "type": "string"
+            },
+            {
+              "selector": "workflow",
+              "text": "workflow",
+              "type": "string"
+            },
+            {
+              "selector": "trigger",
+              "text": "trigger",
+              "type": "string"
+            },
+            {
+              "selector": "branch",
+              "text": "branch",
+              "type": "string"
+            },
+            {
+              "selector": "conclusion",
+              "text": "conclusion",
+              "type": "string"
+            },
+            {
+              "selector": "capture_state",
+              "text": "capture_state",
+              "type": "string"
+            },
+            {
+              "selector": "created_at",
+              "text": "created_at",
+              "type": "string"
+            },
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
     }
   ],
   "refresh": "5m",
@@ -1128,7 +1900,7 @@
       {
         "name": "find",
         "label": "Find by run id or capture id",
-        "description": "Type part of a capture id, such as the GitHub run id. The cards and tables narrow to matching runs. Empty shows every run in the time range.",
+        "description": "Type a run id (41310072671) or part of a capture id (vmaas-pr123). The cards and the three capture tables narrow to matching runs; the lookup tables and the all-runs table read the workflow exporter and are not narrowed. Empty shows every run in the time range.",
         "type": "textbox",
         "current": {
           "text": "",
@@ -1139,6 +1911,37 @@
         "query": "",
         "refresh": 0,
         "hide": 0
+      },
+      {
+        "name": "days",
+        "label": "Pull request window (days)",
+        "type": "custom",
+        "hide": 0,
+        "query": "7,30,60",
+        "options": [
+          {
+            "text": "7",
+            "value": "7",
+            "selected": false
+          },
+          {
+            "text": "30",
+            "value": "30",
+            "selected": true
+          },
+          {
+            "text": "60",
+            "value": "60",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "30",
+          "value": "30",
+          "selected": true
+        },
+        "refresh": 0,
+        "description": "How many days of pull requests the lookup table reads. It does not affect the capture tables, which follow the dashboard time range, or the test lookup, which always reads 7 days."
       }
     ]
   },

@@ -845,18 +845,25 @@ def test_home_panels_are_in_reading_order(home: dict) -> None:
     )
 
 
-def test_home_narrows_every_query_on_the_find_box(home: dict) -> None:
-    """One textbox narrows the cards and all three tables.
+def test_home_narrows_every_capture_query_on_the_find_box(home: dict) -> None:
+    """One textbox narrows the cards and all three capture tables.
 
     The box matches the capture id, which contains the GitHub run id, so a
-    run id from Slack finds its capture without a separate lookup.
+    run id from Slack finds its capture without a separate lookup. The
+    lookup tables and the all-runs table read the workflow exporter, which
+    stores no capture id, so they are the only targets not narrowed here.
     """
     variables = {v["name"]: v for v in home["templating"]["list"]}
     assert variables["find"]["type"] == "textbox"
     assert "run id" in variables["find"]["label"].lower()
+    capture_targets = 0
     for panel in _iter_panels(home["panels"]):
         for target in panel.get("targets", []):
+            if target.get("queryType") != "traceql":
+                continue
+            capture_targets += 1
             assert '${find:regex}' in target["query"], f"{panel['title']}: query ignores the Find box"
+    assert capture_targets >= 4, "the capture stats and tables must still read Tempo"
 
 
 def test_home_explains_capture_id_and_time_range(home: dict) -> None:

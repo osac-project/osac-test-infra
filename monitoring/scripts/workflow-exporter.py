@@ -40,6 +40,7 @@ from prometheus_client import (
 # directory is added here before importing the sibling.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ci_observe_run_evidence import CIObserveRunEvidence
+from ci_observe_runs import CIObserveRuns
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -55,6 +56,11 @@ TOKEN = os.getenv("PRIVATE_GITHUB_TOKEN")
 API_URL = os.getenv("API_URL", "https://api.github.com")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "90"))
 PORT = int(os.getenv("PORT", "9103"))
+# The listen address. The quadlet runs this container with host networking (so
+# it can reach the ci-observe Tempo on the host's loopback), which would
+# otherwise expose this API on every interface; the quadlet therefore sets
+# 127.0.0.1 explicitly, matching the loopback-only PublishPort it replaces.
+BIND_ADDRESS = os.getenv("BIND_ADDRESS", "0.0.0.0")
 # A "queued" run with no jobs at all is a zombie: GitHub accepted the trigger
 # during an outage but never created its jobs, so it will never run (a real
 # backlog always has jobs waiting for a runner). Zombies are counted in
@@ -605,6 +611,11 @@ class WorkflowExporter:
         # cached. It holds this exporter as the shared DB, GitHub API and
         # headers -- no second poller, no new artifact.
         self._run_evidence = CIObserveRunEvidence(self)
+        # The E2E run list with its capture verdict, for /api/ci-observe/runs
+        # (see get_ci_observe_runs_json and ci_observe_runs.py). It reads the
+        # job history above and joins it to Tempo's capture ids on the run id,
+        # with a 60-second capture-map cache. No new poller, no new store.
+        self._runs = CIObserveRuns(self)
         self._init_db()
 
     # -- SQLite persistence ---------------------------------------------------
@@ -3610,6 +3621,28 @@ class WorkflowExporter:
         documents the query params and the response shape."""
         return self._run_evidence.get_ci_observe_run_json(params)
 
+    # -- ci-observe runs (begin) --------------------------------------------
+    #
+    # GET /api/ci-observe/runs?days=<n>&limit=<n> backs the entry page's
+    # "Recent E2E runs" table: one row per E2E run, with the per-run verdict
+    # the front door needs (capture, not collected, or unknown). The
+    # implementation lives in the sibling ci_observe_runs module
+    # (CIObserveRuns, held as self._runs). The run list is the exporter's own
+    # SQLite history and the capture ids come from one bounded, 60-second
+    # cached Tempo search, joined on the GitHub run id that the capture id
+    # embeds. Tempo being down, truncated or unreadable yields "unknown",
+    # never "not collected" -- see ci_observe_runs.py for the full rule.
+    #
+    # Query params: days -- days of runs to list (default 7, max 60),
+    # limit -- runs to list (default 200).
+    def get_ci_observe_runs_json(self, params):
+        """The /api/ci-observe/runs document: runs, days, window_from,
+        window_to, tempo and notes. Thin wrapper over
+        CIObserveRuns.get_json, which also documents the response shape."""
+        return self._runs.get_json(params)
+
+    # -- ci-observe runs (end) ----------------------------------------------
+
     # -- ci-observe trends (begin) ------------------------------------------
     #
     # GET /api/ci-observe/trends reads the daily per-test JUnit rollup that
@@ -3621,11 +3654,16 @@ class WorkflowExporter:
     #
     # Query params: days -- how many days back to read (default 60, the
     # job-history retention), test -- substring of the test id (empty means
-    # every test).
+    # every test), summary -- "test" returns one row per (test id, suite,
+    # repo) with runs and failures summed over the whole window, for the
+    # entry page's test id lookup. The sums run in SQL, over every row of the
+    # window, so the response row cap cannot make a total cover only part of
+    # its window.
     CIOBS_TRENDS_FILE = "trends.db"
     CIOBS_TRENDS_DEFAULT_DAYS = 60
     CIOBS_TRENDS_MAX_DAYS = 400
     CIOBS_TRENDS_MAX_ROWS = 5000
+    CIOBS_TRENDS_MAX_TESTS = 500
     CIOBS_TRENDS_COLUMNS = (
         "day", "repo", "workflow", "suite", "test_id", "source_sha",
         "runs", "passes", "failures", "p50_duration_s", "p95_duration_s",
@@ -3636,9 +3674,11 @@ class WorkflowExporter:
         requested window, plus one row per rolled-up day saying how many
         runs it listed and how many still had a readable artifact.
 
-        Returns days, test, window_from, source, rows, coverage, notes.
-        Never fails the request: a missing rollup, a DB that cannot be
-        opened, or a window with no rows all come back as notes.
+        Returns days, test, summary, window_from, source, rows, tests,
+        coverage, notes. With summary=test, rows stays empty and tests
+        carries one row per test id, suite and repo. Never fails the
+        request: a missing rollup, a DB that cannot be opened, or a window
+        with no rows all come back as notes.
         """
         try:
             days = int((params.get("days", [""])[0] or self.CIOBS_TRENDS_DEFAULT_DAYS))
@@ -3646,10 +3686,12 @@ class WorkflowExporter:
             days = self.CIOBS_TRENDS_DEFAULT_DAYS
         days = max(1, min(days, self.CIOBS_TRENDS_MAX_DAYS))
         test = (params.get("test", [""])[0] or "").strip()
+        summary = (params.get("summary", [""])[0] or "").strip().lower()
         window_from = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
         doc = {
             "days": days,
             "test": test,
+            "summary": summary,
             "window_from": window_from,
             "source": (
                 "trends.db: the daily per-test JUnit rollup written by "
@@ -3657,6 +3699,7 @@ class WorkflowExporter:
                 "test id and source SHA)"
             ),
             "rows": [],
+            "tests": [],
             "coverage": [],
             "notes": [],
         }
@@ -3674,17 +3717,35 @@ class WorkflowExporter:
             return doc
         try:
             conn.row_factory = sqlite3.Row
-            query = f"SELECT {', '.join(self.CIOBS_TRENDS_COLUMNS)} FROM test_rollup WHERE day >= ?"
+            where = "WHERE day >= ?"
             args = [window_from]
             if test:
-                query += " AND test_id LIKE ?"
+                where += " AND test_id LIKE ?"
                 args.append(f"%{test}%")
-            # Newest days first, so the cap drops the oldest rows, not the
-            # most recent days; restore chronological order for the chart.
-            query += " ORDER BY day DESC, repo, workflow, suite, test_id, source_sha LIMIT ?"
-            args.append(self.CIOBS_TRENDS_MAX_ROWS)
-            doc["rows"] = [dict(row) for row in conn.execute(query, args)]
-            doc["rows"].sort(key=lambda r: (r["day"], r["repo"], r["workflow"], r["suite"], r["test_id"], r["source_sha"]))
+            if summary == "test":
+                # Summed in SQL over the whole window, before any cap, so a
+                # busy window cannot make one test's total cover only part
+                # of its days. Worst first: the page is a lookup for
+                # failures, not an alphabetical list.
+                doc["tests"] = [
+                    dict(row) for row in conn.execute(
+                        "SELECT test_id, suite, repo, SUM(runs) AS runs,"
+                        " SUM(failures) AS failures"
+                        f" FROM test_rollup {where}"
+                        " GROUP BY test_id, suite, repo"
+                        " ORDER BY failures DESC, runs DESC, test_id"
+                        " LIMIT ?",
+                        [*args, self.CIOBS_TRENDS_MAX_TESTS],
+                    )
+                ]
+            else:
+                query = f"SELECT {', '.join(self.CIOBS_TRENDS_COLUMNS)} FROM test_rollup {where}"
+                # Newest days first, so the cap drops the oldest rows, not the
+                # most recent days; restore chronological order for the chart.
+                query += " ORDER BY day DESC, repo, workflow, suite, test_id, source_sha LIMIT ?"
+                doc["rows"] = [dict(row) for row in conn.execute(query, [*args, self.CIOBS_TRENDS_MAX_ROWS])]
+                order = ("day", "repo", "workflow", "suite", "test_id", "source_sha")
+                doc["rows"].sort(key=lambda row: tuple(row[field] for field in order))
             doc["coverage"] = [
                 dict(row) for row in conn.execute(
                     "SELECT day, runs_listed, runs_parsed, runs_unavailable, generated_at"
@@ -3697,6 +3758,17 @@ class WorkflowExporter:
             return doc
         finally:
             conn.close()
+        if summary == "test":
+            if len(doc["tests"]) >= self.CIOBS_TRENDS_MAX_TESTS:
+                doc["notes"].append(
+                    f"the test limit ({self.CIOBS_TRENDS_MAX_TESTS}) was reached; narrow the "
+                    "test filter or the window"
+                )
+            if not doc["tests"]:
+                doc["notes"].append(
+                    f"the rollup has no rows on or after {window_from} for this filter"
+                )
+            return doc
         if len(doc["rows"]) >= self.CIOBS_TRENDS_MAX_ROWS:
             doc["notes"].append(
                 f"the row limit ({self.CIOBS_TRENDS_MAX_ROWS}) was reached; narrow the "
@@ -3920,6 +3992,20 @@ class ExporterHandler(BaseHTTPRequestHandler):
             self.wfile.write(payload.encode())
         # -- ci-observe trends (end) --
 
+        # GET /api/ci-observe/runs?days=<n>&limit=<n>  E2E runs + capture
+        # verdict (ci_observe_runs.py). Always 200: Tempo being unreachable
+        # is a data gap the table must show as "unknown", not an error the
+        # dashboard would render as an empty panel.
+        elif parsed.path == "/api/ci-observe/runs":
+            params = parse_qs(parsed.query)
+            data = self.exporter.get_ci_observe_runs_json(params)
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
         # --- ci-observe pull requests: begin (single additive block) --------
         # GET /api/ci-observe/prs?number=<n>&repo=<name>  one PR's life and
         #                                                 its queue attempts
@@ -3976,7 +4062,7 @@ def main():
 
     logger.info("Starting workflow exporter on port %d (poll every %ds)", PORT, POLL_INTERVAL)
 
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), ExporterHandler)
+    server = ThreadingHTTPServer((BIND_ADDRESS, PORT), ExporterHandler)
     # Otherwise a client request still in flight when the process is asked
     # to exit would keep it alive -- this is a long-running daemon, not a
     # service with a graceful-drain shutdown path.
