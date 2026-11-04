@@ -339,7 +339,7 @@ def test_info_post_uses_the_central_endpoint_and_basic_auth(verify_module: Modul
     )
     assert posted is True
     assert detail == ""
-    assert sent["url"] == "https://osac-ci-1.redhat.com:4319/v1/metrics"
+    assert sent["url"] == "https://osac-ci-1.redhat.com/v1/metrics"
     assert sent["headers"] == {"Content-Type": "application/json", "Authorization": "Basic Y2k6b2JzZXJ2ZQ=="}
     assert sent["timeout"] == 10
     body = json.loads(sent["body"])

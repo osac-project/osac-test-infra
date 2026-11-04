@@ -264,12 +264,12 @@ class CaptureRegistry:
         "test_sha", "test_infra_sha", "test_infra_workflow_sha",
         "test_suite", "test_filter", "test_marker",
     )
-    # A cohort needs a known revision for the commit under test, the harness
-    # checkout and the reusable workflow. An empty suite, filter or marker is
-    # a real value ("no filter"), not a missing one.
-    COHORT_REQUIRED_FIELDS = (
-        "test_sha", "test_infra_sha", "test_infra_workflow_sha",
-    )
+    # A cohort needs all six identity fields. The action records "none" for
+    # no filter or marker and "unknown" for an unrecorded suite, so an empty
+    # value means the label never arrived. The Compare span queries require
+    # each of these to be non-empty, so an empty one would key a cohort whose
+    # tables can never return a row.
+    COHORT_REQUIRED_FIELDS = COHORT_FIELDS
 
     def __init__(self, exporter):
         self.exporter = exporter
@@ -734,9 +734,9 @@ class CaptureRegistry:
         """GET /api/ci-observe/cohorts: exact cohorts plus the ungrouped rows.
 
         A cohort is one exact combination of the six identity fields, and
-        only rows with identity_source=info and a known commit, harness and
-        workflow SHA take part (an empty suite, filter or marker is a real
-        value, not a missing one). Everything else is listed under `ungrouped`; "unknown" is never
+        only rows with identity_source=info and all six fields present and
+        not `unknown` take part. An empty field means the info metric never
+        carried it, and the Compare span queries would never match it. Everything else is listed under `ungrouped`; "unknown" is never
         used as a cohort value. The requested ref is metadata: the same
         commit can be named `main` and a tag, and that must not split a
         cohort.
@@ -745,13 +745,9 @@ class CaptureRegistry:
         days, limit = self._window(params), self._limit(params)
         window_from = self._iso(now - timedelta(days=days))
         fields = self.COHORT_FIELDS
-        selected = [field for field in fields if field not in self.COHORT_REQUIRED_FIELDS]
         complete = " AND ".join(
-            [f"LOWER(COALESCE({field}, '')) NOT IN ('', 'unknown')" for field in self.COHORT_REQUIRED_FIELDS]
-            # An empty suite, filter or marker is a real value ("no filter"),
-            # but `unknown` means the action could not record it: the Compare
-            # queries exclude it, so it must not key a cohort either.
-            + [f"LOWER(COALESCE({field}, '')) != 'unknown'" for field in selected]
+            f"LOWER(COALESCE({field}, '')) NOT IN ('', 'unknown')"
+            for field in self.COHORT_REQUIRED_FIELDS
         )
         group_by = ", ".join(fields)
         args = {"since": window_from, "fetch": limit + 1, "ungrouped_fetch": limit + 1}
@@ -4417,16 +4413,21 @@ class WorkflowExporter:
         ]
         args = {"gate_suffix": self.GATE_NAME_SUFFIX}
         if run_id:
-            where.append("CAST(j.run_id AS INTEGER) = CAST(:run_id AS INTEGER)")
-            args["run_id"] = str(run_id)
+            # Stored run ids are canonical digit strings, so a text compare
+            # uses idx_jobs_run. A non-numeric id matches nothing instead of
+            # matching a neighbouring id through a cast.
+            args["run_id"] = str(int(run_id)) if str(run_id).isdigit() else "\x00"
+            where.append("j.run_id = :run_id")
         else:
             where.append("j.created_at >= :since")
             where.append("j.created_at < :until")
             args["since"] = self._iso_utc(window_from)
             args["until"] = self._iso_utc(window_to)
             if before:
-                where.append("CAST(j.run_id AS INTEGER) < CAST(:before AS INTEGER)")
-                args["before"] = int(before)
+                # Keyset paging on the indexed text column. Run ids are
+                # fixed-length digit strings, so text order is numeric order.
+                where.append("j.run_id < :before")
+                args["before"] = str(int(before))
         return " AND ".join(where), args
 
     # A run can have several e2e rows, so every selected column states how it
@@ -4435,12 +4436,17 @@ class WorkflowExporter:
     # run is cancelled.
     CI_OBSERVE_RUN_CONCLUSION = (
         "CASE"
-        " WHEN SUM(CASE WHEN LOWER(COALESCE(j.conclusion, '')) = 'failure' THEN 1 ELSE 0 END) > 0"
+        " WHEN SUM(CASE WHEN LOWER(COALESCE(j.conclusion, ''))"
+        " IN ('failure', 'timed_out', 'startup_failure') THEN 1 ELSE 0 END) > 0"
         " THEN 'failure'"
         " WHEN SUM(CASE WHEN COALESCE(j.conclusion, '') = '' THEN 1 ELSE 0 END) > 0"
         " THEN ''"
         " WHEN SUM(CASE WHEN LOWER(COALESCE(j.conclusion, '')) = 'cancelled' THEN 1 ELSE 0 END) > 0"
         " THEN 'cancelled'"
+        # action_required, neutral, stale or anything else keeps its own name
+        # instead of being reported as a success.
+        " WHEN SUM(CASE WHEN LOWER(j.conclusion) != 'success' THEN 1 ELSE 0 END) > 0"
+        " THEN MAX(CASE WHEN LOWER(j.conclusion) != 'success' THEN j.conclusion END)"
         " ELSE 'success'"
         " END"
     )
@@ -4490,7 +4496,7 @@ class WorkflowExporter:
             LEFT JOIN captures c ON c.run_id = j.run_id
             WHERE {where}
             GROUP BY j.run_id
-            ORDER BY CAST(j.run_id AS INTEGER) DESC
+            ORDER BY j.run_id DESC
         """
         with self._db() as conn:
             rows = [dict(row) for row in conn.execute(sql, args)]
@@ -4532,7 +4538,7 @@ class WorkflowExporter:
             LEFT JOIN captures c ON c.run_id = j.run_id
             WHERE {where_sql}
             GROUP BY j.run_id
-            ORDER BY CAST(j.run_id AS INTEGER) DESC
+            ORDER BY j.run_id DESC
             LIMIT :fetch
         """
         with self._db() as conn:

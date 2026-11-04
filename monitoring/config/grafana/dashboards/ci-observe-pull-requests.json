@@ -1568,7 +1568,7 @@
     },
     {
       "title": "Pull request states",
-      "description": "What each of the five states means (stored, open, not_yet_fetched, missing, outside_window), so an empty detail panel is never a mystery. This is the legend; the state of the selected pull request is in the panel above it. Ejections shown elsewhere on this page are derived, not recorded by GitHub.",
+      "description": "What each of the four states of a pull request with no stored row means (open, not_yet_fetched, missing, outside_window), so an empty detail panel is never a mystery. This is the legend; the state of the selected pull request, and its message, are in the panel above it. A stored pull request is shown by the Pull request panel. Ejections shown elsewhere on this page are derived, not recorded by GitHub.",
       "type": "table",
       "gridPos": {
         "h": 7,

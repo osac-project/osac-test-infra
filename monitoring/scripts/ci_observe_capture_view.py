@@ -598,17 +598,40 @@ class CIObserveCaptureView:
                 records = matching
         return records, source
 
-    def _run_window(self, run_id, run_attempt, registry):
+    def _run_window(self, run_id, run_attempt, registry) -> dict | None:
         """The Tempo search window for a run, or None.
 
         The window is the run start minus five minutes to the run start plus
-        eight hours. A registry row is the fallback when the job history has
-        no row: capture_started_at is the run start, first_seen_at is only
-        when discovery saw the capture and is labelled as such.
+        eight hours. `created_at` is fixed across re-runs, so a re-run that
+        starts more than eight hours later would fall outside it; for attempt
+        2 and later the start is `updated_at - duration_s`, which is that
+        attempt's `run_started_at`. A registry row is the fallback when the
+        job history has no row: capture_started_at is the run start,
+        first_seen_at is only when discovery saw the capture and is labelled
+        as such.
         """
         rows, source = self._job_rows(run_id, run_attempt)
-        starts = [_parse_time(record.get("created_at")) for record in rows]
-        starts = [start for start in starts if start is not None]
+        attempt = None if run_attempt is None else str(run_attempt)
+        starts = []
+        for record in rows:
+            if attempt in (None, "1"):
+                created = _parse_time(record.get("created_at"))
+                if created is not None:
+                    starts.append(created)
+                continue
+            ended = _parse_time(record.get("updated_at"))
+            duration = _as_int(record.get("duration_s")) or 0
+            if str(record.get("run_attempt") or "") == attempt and ended is not None and duration > 0:
+                starts.append(ended - timedelta(seconds=duration))
+        if not starts:
+            # No stored row for the requested attempt (or no duration): the
+            # run still existed at created_at, so search from there rather
+            # than declare the capture missing.
+            starts = [
+                start
+                for start in (_parse_time(record.get("created_at")) for record in rows)
+                if start is not None
+            ]
         if starts:
             start = min(starts)
             return {

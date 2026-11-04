@@ -57,8 +57,8 @@ IDENTITY = {
     "ci_test_infra_sha": "b" * 40,
     "ci_test_infra_workflow_sha": "c" * 40,
     "ci_test_suite": "tests/e2e",
-    "ci_test_filter": "",
-    "ci_test_marker": "",
+    "ci_test_filter": "none",
+    "ci_test_marker": "none",
 }
 
 
@@ -268,6 +268,32 @@ def test_job_rows_are_not_listed_as_runs(client, exporter, fresh):
     suite = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"]
     assert [row["id"] for row in suite] == [str(RUN_ID)]
     assert "E2E vmaas (pull requests)" in suite[0]["workflow"]
+
+
+def test_the_exact_lookup_rejects_a_non_numeric_run_id(client, exporter, fresh):
+    """A cast would turn 123abc into 123 and answer for a different run."""
+    exporter._upsert_job(run_job(RUN_ID))
+
+    doc = client.get_json({"days": ["7"], "run": [f"{RUN_ID}abc"]})
+
+    assert doc["runs"] == []
+    assert any(f"no run with id {RUN_ID}abc" in note for note in doc["notes"])
+
+
+def test_unusual_conclusions_keep_their_name(client, exporter, fresh):
+    """Only failure, timed_out and startup_failure mean a failed run; the
+    rest must not be rewritten to success."""
+    cases = {"timed_out": "failure", "startup_failure": "failure", "action_required": "action_required"}
+    for offset, (stored, _) in enumerate(cases.items()):
+        row = run_job(RUN_ID + offset)
+        row["conclusion"] = stored
+        exporter._upsert_job(row)
+
+    doc = client.get_json({"days": ["7"]})
+    by_id = {run["id"]: run["conclusion"] for run in doc["runs"]}
+
+    for offset, (stored, expected) in enumerate(cases.items()):
+        assert by_id[str(RUN_ID + offset)] == expected, stored
 
 
 def test_run_id_is_backfilled_from_the_run_url(wfe, tmp_path, monkeypatch, github):
@@ -727,13 +753,14 @@ def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, f
     incomplete = base | {"osac_ci_capture_id": "vmaas-main-78-a1", "ci_run_id": "78", "ci_test_infra_sha": ""}
     unknown = base | {"osac_ci_capture_id": "vmaas-main-79-a1", "ci_run_id": "79", "ci_test_sha": "unknown"}
     unknown_suite = base | {"osac_ci_capture_id": "vmaas-main-81-a1", "ci_run_id": "81", "ci_test_suite": "unknown"}
+    empty_filter = base | {"osac_ci_capture_id": "vmaas-main-82-a1", "ci_run_id": "82", "ci_test_filter": ""}
     sources.prometheus = [
         CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1", "vmaas-pr7-77-a1",
         "vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1",
-        "vmaas-main-81-a1",
+        "vmaas-main-81-a1", "vmaas-main-82-a1",
     ]
     sources.loki = []
-    sources.info = [base, same, other_sha, incomplete, unknown, unknown_suite]
+    sources.info = [base, same, other_sha, incomplete, unknown, unknown_suite, empty_filter]
     registry.refresh()
 
     doc = registry.cohorts_json({"days": ["7"]})
@@ -754,7 +781,8 @@ def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, f
         assert "unknown" not in row.values()
     ungrouped = {row["capture_id"]: row for row in doc["ungrouped"]}
     assert set(ungrouped) == {
-        "vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1", "vmaas-main-81-a1",
+        "vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1",
+        "vmaas-main-81-a1", "vmaas-main-82-a1",
     }
     assert {row["identity_source"] for row in doc["ungrouped"]} == {"none", "info"}
     assert ungrouped["vmaas-main-78-a1"]["reason"] == "missing identity: test_infra_sha"
@@ -762,6 +790,9 @@ def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, f
     assert ungrouped["vmaas-main-80-a1"]["reason"] == "no identity from the info metric"
     # An empty filter is a real value; `unknown` is not.
     assert ungrouped["vmaas-main-81-a1"]["reason"] == "unknown identity: test_suite"
+    # An empty label means the info metric never carried it: the Compare span
+    # queries reject it, so it must not key a cohort.
+    assert ungrouped["vmaas-main-82-a1"]["reason"] == "missing identity: test_filter"
     for row in doc["ungrouped"]:
         assert {
             "capture_started_at", "last_seen_at", "capture_window_from",

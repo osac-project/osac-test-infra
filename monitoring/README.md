@@ -279,8 +279,10 @@ them.
 ### The ci-observe live OTLP ingest (Caddy vhost + HAProxy route)
 
 The E2E runner fleet pushes ci-observe telemetry live (during the run, not
-as an artifact) to `https://osac-ci-1.redhat.com:4319`. Three pieces carry
-it; the first two are deployed from this repository:
+as an artifact) to `https://osac-ci-1.redhat.com` on 443; the HAProxy SNI
+route forwards that to the Caddy vhost on `:4319`, because runners cannot
+reach `:4319` directly. Three pieces carry it; the first two are deployed
+from this repository:
 
 1. **The Caddy vhost** (`config/caddy/Caddyfile`, deployed by
    `monitoring-setup.sh` like every other config file): terminates TLS with

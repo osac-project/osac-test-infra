@@ -25,7 +25,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Any
 
-INFO_ENDPOINT = "https://osac-ci-1.redhat.com:4319/v1/metrics"
+# Runners reach the central ingest through the HAProxy SNI route on :443,
+# which forwards to the Caddy vhost on :4319. They cannot reach :4319
+# directly, so posting there would never deliver the identity.
+INFO_ENDPOINT = "https://osac-ci-1.redhat.com/v1/metrics"
 INFO_METRIC = "osac_ci_capture_info"
 INFO_TIMEOUT_SECONDS = 10
 INFO_SCOPE = "ci-observe-capture"

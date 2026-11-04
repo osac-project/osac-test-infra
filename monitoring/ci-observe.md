@@ -300,7 +300,7 @@ capture with no data would read as a capture that lost its telemetry. The
 payload is value 1, the capture id as the resource attribute, and the run
 identity (`ci_run_id`, `ci_run_attempt`, `ci_suite`, `ci_pr`,
 `ci_workflow`, the refs and SHAs, and the test selection) as datapoint
-attributes. Those identity attributes stay on this one series; the resource
+attributes. It posts to `https://osac-ci-1.redhat.com` on 443, the runner-reachable HAProxy route to the central ingest vhost; runners cannot reach the vhost's own port. Those identity attributes stay on this one series; the resource
 processor never promotes them globally. A failed post is a warning. The
 central registry then knows the capture exists even when its traces and
 logs arrive late or not at all.

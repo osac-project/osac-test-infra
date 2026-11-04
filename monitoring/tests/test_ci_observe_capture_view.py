@@ -743,6 +743,70 @@ def test_a_transient_tempo_failure_is_cached_only_briefly(tmp_path, monkeypatch)
     assert remaining <= view.NEGATIVE_CACHE_TTL_SECONDS + 1
 
 
+def test_a_rerun_searches_from_the_attempts_start(tmp_path, monkeypatch):
+    """created_at is fixed across re-runs, so a re-run that starts a day
+    later falls outside [created_at - 5m, created_at + 8h]. The window must
+    start at this attempt's run_started_at, which is updated_at - duration_s."""
+    capture_id = "vmaas-main-41709279176-a2"
+    payload = fixture_trace(VMAAS_CAPTURE)
+    tempo = FakeTempo({trace_id_for(capture_id): payload})
+    job = make_job(41709279176, iso(BASE_TIME - timedelta(days=1)), attempt=2)
+    job["updated_at"] = iso(BASE_TIME + timedelta(seconds=60))
+    job["duration_s"] = 60
+    view, _ = build_view(
+        tmp_path,
+        tempo,
+        jobs=[job],
+        captures=[make_capture(capture_id, 41709279176, attempt=2)],
+        monkeypatch=monkeypatch,
+    )
+
+    document = fetch(view, capture_id)
+
+    assert document["state"] == "ok"
+    window = tempo.query()
+    assert int(window["start"][0]) == int((BASE_TIME - view.WINDOW_BEFORE).timestamp())
+
+
+def test_the_first_attempt_searches_from_created_at(tmp_path, monkeypatch):
+    capture_id = VMAAS_CAPTURE
+    tempo = FakeTempo({trace_id_for(capture_id): fixture_trace(capture_id)})
+    job = make_job(41709279176, iso(BASE_TIME), attempt=1)
+    job["updated_at"] = iso(BASE_TIME + timedelta(days=1))
+    view, _ = build_view(
+        tmp_path,
+        tempo,
+        jobs=[job],
+        captures=[make_capture(capture_id, 41709279176, attempt=1)],
+        monkeypatch=monkeypatch,
+    )
+
+    assert fetch(view, capture_id)["state"] == "ok"
+    window = tempo.query()
+    assert int(window["start"][0]) == int((BASE_TIME - view.WINDOW_BEFORE).timestamp())
+
+
+def test_an_unknown_attempt_falls_back_to_created_at(tmp_path, monkeypatch):
+    """The job history has attempt 2, the URL asks for 3. Search from the
+    run's creation rather than declare a capture missing."""
+    capture_id = "vmaas-main-41709279176-a3"
+    tempo = FakeTempo({trace_id_for(capture_id): fixture_trace(VMAAS_CAPTURE)})
+    job = make_job(41709279176, iso(BASE_TIME), attempt=2)
+    job["updated_at"] = iso(BASE_TIME + timedelta(seconds=60))
+    job["duration_s"] = 60
+    view, _ = build_view(
+        tmp_path,
+        tempo,
+        jobs=[job],
+        captures=[make_capture(capture_id, 41709279176, attempt=3)],
+        monkeypatch=monkeypatch,
+    )
+
+    assert fetch(view, capture_id)["state"] == "ok"
+    window = tempo.query()
+    assert int(window["start"][0]) == int((BASE_TIME - view.WINDOW_BEFORE).timestamp())
+
+
 def test_response_is_deterministic(tmp_path, monkeypatch):
     payload = fixture_trace(VMAAS_41818898681)
     trace_id = trace_id_for(VMAAS_41818898681)
