@@ -3,6 +3,10 @@
 CI Fleet covers runners, machines, jobs and queue health. ci-observe covers one
 CI run, the pull request and the trends. The split is by filename so the repo
 stays flat and every dashboard test keeps reading its file at one path.
+
+The ci-observe folder holds exactly four files: the entry page (a router) and
+the three model dashboards, Capture, Pull requests and Trends. Compare is a
+section of Trends, not a dashboard of its own.
 """
 
 from __future__ import annotations
@@ -42,27 +46,34 @@ def test_every_dashboard_file_belongs_to_a_folder() -> None:
 
 
 def test_known_dashboards_are_in_the_expected_folder() -> None:
-    expected = {
-        "ci-observe-runs-home.json": "ci-observe",
-        "ci-observe-runs.json": "ci-observe",
-        "ci-observe-comparison.json": "ci-observe",
-        "ci-observe-trends.json": "ci-observe",
-        "ci-observe-pull-requests.json": "ci-observe",
-        "runner-health.json": "CI Fleet",
-        "runner-status.json": "CI Fleet",
-        "workflow-jobs.json": "CI Fleet",
-        "workflow-metrics.json": "CI Fleet",
-        "ci-health.json": "CI Fleet",
+    # The model's three content dashboards plus the entry page, which is a
+    # router and not one of the three. Compare merged into Trends.
+    ci_observe = {
+        "ci-observe-runs-home.json",  # entry page
+        "ci-observe-runs.json",  # Capture
+        "ci-observe-pull-requests.json",  # Pull requests
+        "ci-observe-trends.json",  # Trends, including the Compare section
     }
+    ci_fleet = {
+        "runner-health.json",
+        "runner-status.json",
+        "workflow-jobs.json",
+        "workflow-metrics.json",
+        "ci-health.json",
+    }
+    expected = {**{name: "ci-observe" for name in ci_observe}, **{name: "CI Fleet" for name in ci_fleet}}
     for name, folder in expected.items():
         assert (DASHBOARDS / name).exists(), f"{name} is missing"
         actual = "ci-observe" if name.startswith("ci-observe-") else "CI Fleet"
         assert actual == folder, f"{name} belongs to {folder}"
 
-    # The Cluster and Run evidence dashboards are sections of the Capture
-    # dashboard now, not dashboards of their own.
-    for merged in ("ci-observe-cluster.json", "ci-observe-run-evidence.json"):
-        assert not (DASHBOARDS / merged).exists(), f"{merged} was merged into ci-observe-runs.json"
+    assert {path.name for path in DASHBOARDS.glob("ci-observe-*.json")} == ci_observe
+    assert {path.name for path in DASHBOARDS.glob("*.json")} == set(expected)
+
+    # Compare and the Run evidence sections are rows on the model dashboards now,
+    # not dashboards of their own.
+    for merged in ("ci-observe-cluster.json", "ci-observe-run-evidence.json", "ci-observe-comparison.json"):
+        assert not (DASHBOARDS / merged).exists(), f"{merged} was merged into a model dashboard"
 
 
 def test_dashboard_titles_name_their_folder() -> None:

@@ -1,21 +1,22 @@
-"""Structural tests for the CI Observe cross-run comparison dashboard.
+"""Structural tests for the Compare section of the ci-observe Trends dashboard.
 
-monitoring/config/grafana/dashboards/ci-observe-comparison.json answers two
-questions across comparable captures: what changed versus a passing run (Q7)
-and which fixes matter most (Q8). The page opens with a short intro, the two
-cohort tables, the sample-status stat, the tests table, a collapsed row holding
-the failed-test evidence, the runs table, and the reading guide and query
-limits at the bottom. Exact cohorts key on the resolved osac commit
-(osac.ci.test_sha); the requested ref (osac.ci.test_ref) is metadata only.
+Compare is an action, not a dashboard: the model puts it as a collapsed row on
+monitoring/config/grafana/dashboards/ci-observe-trends.json. This section
+answers two questions across comparable captures: what changed versus a passing
+run (Q7) and which fixes matter most (Q8). It opens with a short intro, the two
+cohort tables, the sample-status stat, the tests table, the runs table, the
+reading guide and the query limits, and it keeps the failed-test evidence at
+the bottom. Exact cohorts key on the resolved osac commit (osac.ci.test_sha);
+the requested ref (osac.ci.test_ref) is metadata only.
 
-Every panel runs exactly one TraceQL query, and the whole page stays at seven
+Every panel runs exactly one TraceQL query, and the section stays at seven
 targets: this Grafana's Tempo plugin executes only the first query of a panel
 and overwrites every additional target with it (verified 2026-11-02 from the
 served plugin bundle and captured browser requests), and the backend's search
 queue returned 429 job-queue-full under ten concurrent queries (verified
-2026-11-02 live; seven was the load the passing visual check used). The failed
-tables therefore live in a collapsed row whose title states that empty means
-none, instead of duplicate count stats that would add queries.
+2026-11-02 live; seven was the load the passing visual check used). Keeping the
+compare panels in a collapsed row also means they are not queried until a
+reader expands the section.
 
 The TraceQL queries and the Grafana transform semantics they rely on
 (groupBy, filterByValue, sortBy, limit) were validated against the central
@@ -32,7 +33,7 @@ import re
 from pathlib import Path
 
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
-DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-comparison.json"
+DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-trends.json"
 
 SHA_PATTERN = "^[0-9a-f]{40}([0-9a-f]{24})?$"
 SHA_RE = re.compile(SHA_PATTERN)
@@ -53,14 +54,14 @@ FUNCTION_PROJECTION = '.code.function =~ ".+"'
 # Cohort discovery replaced that; the SHA must never come back.
 PROTOTYPE_SEED_SHA = "91e852e8f48b642428f3e927e93db3e2dcb3d667"
 
-COMPARISON_LINK = "/d/ci-observe-compare-runs/ci-observe-compare-runs"
+COMPARISON_LINK = "/d/ci-observe-trends/ci-observe-e28094-trends"
 RUN_INVESTIGATION_LINK = "/d/ci-observe-runs/ci-observe-e28094-run-investigation"
 
 PHASE_EXCLUSION = 'name !~ ".*::(setup|call|teardown)"'
 
-ROW_TITLE = "Failed tests and failed runs (expand; empty means none for this cohort)"
+COMPARE_ROW_TITLE = "Compare — captured runs, selected cohort, dashboard time range"
 
-PANEL_TITLES = [
+COMPARE_PANEL_TITLES = [
     "Pick a cohort",
     "Exact cohorts",
     "Source-revision cohorts (not exact)",
@@ -69,8 +70,20 @@ PANEL_TITLES = [
     "Runs in this cohort",
     "How to read this comparison",
     "Query limits (verified against this backend on 2026-11-01)",
-    ROW_TITLE,
+    "",
+    "Failed tests in this cohort",
+    "Failed runs in this cohort",
 ]
+
+COHORT_VARIABLES = {
+    "test_ref",
+    "test_sha",
+    "test_suite",
+    "test_filter",
+    "test_marker",
+    "test_infra_sha",
+    "test_infra_workflow_sha",
+}
 
 ANALYSIS_TITLES = [
     "Tests using the most time",
@@ -79,9 +92,9 @@ ANALYSIS_TITLES = [
     "Runs in this cohort",
 ]
 
-# The page must never exceed eight query targets: the backend's search queue
-# returned 429 under ten concurrent queries, and seven was the load the
-# passing visual check used.
+# The Compare section must never exceed eight query targets: the backend's
+# search queue returned 429 under ten concurrent queries, and seven was the
+# load the passing visual check used.
 MAX_TOTAL_TARGETS = 8
 
 GRAFANA_BUILTIN_VARIABLE = re.compile(r"^__")
@@ -103,6 +116,16 @@ def panel_by_title(*, dashboard: dict[str, object], title: str) -> dict[str, obj
         if panel["title"] == title:
             return panel
     raise AssertionError(f"dashboard panel {title!r} is missing")
+
+
+def compare_row(dashboard: dict[str, object]) -> dict[str, object]:
+    row = panel_by_title(dashboard=dashboard, title=COMPARE_ROW_TITLE)
+    assert row["type"] == "row", "Compare must be a row on Trends, not a panel"
+    return row
+
+
+def compare_panels(dashboard: dict[str, object]) -> list[dict[str, object]]:
+    return list(iter_panels(compare_row(dashboard)["panels"]))
 
 
 def display_names(*, panel: dict[str, object]) -> set[str]:
@@ -128,7 +151,7 @@ def transforms(*, panel: dict[str, object], transform_id: str) -> list[dict[str,
 
 
 def all_queries(dashboard: dict[str, object]) -> list[str]:
-    return [t["query"] for p in iter_panels(dashboard["panels"]) for t in p.get("targets", [])]
+    return [t["query"] for p in iter_panels(dashboard["panels"]) for t in p.get("targets", []) if "query" in t]
 
 
 def comparison_targets(dashboard: dict[str, object]) -> list[str]:
@@ -140,41 +163,45 @@ def comparison_targets(dashboard: dict[str, object]) -> list[str]:
     return queries
 
 
-def test_dashboard_identity_and_titles() -> None:
+def test_compare_section_identity_and_titles() -> None:
     dashboard = load_dashboard()
 
-    assert dashboard["uid"] == "ci-observe-compare-runs"
-    assert dashboard["title"] == "CI Observe — Compare runs"
+    assert dashboard["uid"] == "ci-observe-trends"
     assert dashboard["schemaVersion"] == 39
-    assert [panel["title"] for panel in dashboard["panels"]] == PANEL_TITLES
-    positions = [(p["gridPos"]["y"], p["gridPos"]["x"]) for p in dashboard["panels"]]
+    assert not (DASHBOARDS_DIR / "ci-observe-comparison.json").exists(), (
+        "the separate comparison dashboard was merged into Trends"
+    )
+
+    row = compare_row(dashboard)
+    assert row["collapsed"] is True
+    assert [panel["title"] for panel in row["panels"]] == COMPARE_PANEL_TITLES
+    positions = [(p["gridPos"]["y"], p["gridPos"]["x"]) for p in row["panels"]]
     assert positions == sorted(positions)
-    for panel in iter_panels(dashboard["panels"]):
+    for panel in compare_panels(dashboard):
         if panel["type"] == "row" or panel["title"] == "":
             continue
         assert panel["description"], f"panel {panel['title']!r} has no description"
 
 
-def test_every_panel_has_at_most_one_target_and_page_stays_within_eight() -> None:
+def test_every_panel_has_at_most_one_target_and_section_stays_within_eight() -> None:
     """Two hard limits. Per panel: this Grafana's Tempo plugin overwrites every
     target after the first with the first query's text, so panels must be
-    single-query. Page-wide: the backend's search queue returned 429 under ten
-    concurrent queries, so the page must stay at eight targets at most (it
-    ships seven)."""
+    single-query. Section-wide: the backend's search queue returned 429 under
+    ten concurrent queries, so the section must stay at eight targets at most
+    (it ships seven)."""
     dashboard = load_dashboard()
     total = 0
-    for panel in iter_panels(dashboard["panels"]):
+    for panel in compare_panels(dashboard):
         target_count = len(panel.get("targets", []))
         total += target_count
         assert target_count <= 1, (
             f"{panel['title']} has {target_count} targets; the Tempo plugin executes only the"
             " first and overwrites the rest, so panels must have at most one target"
         )
-    assert total <= MAX_TOTAL_TARGETS, f"the page runs {total} concurrent searches; keep it at {MAX_TOTAL_TARGETS}"
-    assert total == 7, "the page should ship exactly seven targets: two discoveries, the sample stat and four tables"
+    assert total <= MAX_TOTAL_TARGETS, f"the section runs {total} concurrent searches; keep it at {MAX_TOTAL_TARGETS}"
+    assert total == 7, "the section should ship exactly seven targets: two discoveries, the sample stat and four tables"
 
-    with_targets = [p["title"] for p in iter_panels(dashboard["panels"]) if p.get("targets")]
-    # Top-level panels first, then the panels nested in the collapsed row.
+    with_targets = [p["title"] for p in compare_panels(dashboard) if p.get("targets")]
     assert with_targets == [
         "Exact cohorts",
         "Source-revision cohorts (not exact)",
@@ -188,40 +215,41 @@ def test_every_panel_has_at_most_one_target_and_page_stays_within_eight() -> Non
 
 def test_no_duplicate_count_stats_remain() -> None:
     """The count stats that doubled the query load are gone; the sample status is
-    the page's only stat."""
+    the section's only stat."""
     dashboard = load_dashboard()
-    titles = {p["title"] for p in iter_panels(dashboard["panels"])}
+    titles = {p["title"] for p in compare_panels(dashboard)}
     for removed in ("Captures in cohort", "Failed tests in cohort", "Failed runs in cohort"):
         assert removed not in titles, f"{removed} was removed to cut the query load"
-    stats = [p for p in iter_panels(dashboard["panels"]) if p["type"] == "stat"]
+    stats = [p for p in compare_panels(dashboard) if p["type"] == "stat"]
     assert [p["title"] for p in stats] == ["Sample status"]
 
 
-def test_failed_evidence_lives_in_a_collapsed_row() -> None:
-    """The failed tables render headers-only when empty, so they sit in a collapsed
-    row whose title says empty means none, with an explanatory text panel inside."""
+def test_failed_evidence_lives_at_the_bottom_of_the_collapsed_row() -> None:
+    """The failed tables render headers-only when empty, so they stay last inside
+    the collapsed Compare row, behind an explanatory text panel."""
     dashboard = load_dashboard()
-    row = panel_by_title(dashboard=dashboard, title=ROW_TITLE)
-    assert row["type"] == "row"
+    row = compare_row(dashboard)
     assert row["collapsed"] is True
     nested = row["panels"]
-    assert [p["title"] for p in nested if p["type"] == "table"] == [
+    assert [p["title"] for p in nested if p["type"] == "table"][-2:] == [
         "Failed tests in this cohort",
         "Failed runs in this cohort",
     ]
-    note = next(p for p in nested if p["type"] == "text")
+    assert [p["title"] for p in nested[-2:]] == ["Failed tests in this cohort", "Failed runs in this cohort"], (
+        "the failed evidence stays at the end of the section"
+    )
+    note = next(p for p in nested if p["type"] == "text" and p["title"] == "")
     content = note["options"]["content"]
     assert "If either table is empty, no failed tests or failed runs were recorded for this cohort" in content
     assert "sample status above shows the cohort size" in content
-    # The row title itself states the empty meaning, so a collapsed first load
-    # never shows a header-only box.
-    assert "empty means none for this cohort" in row["title"]
+    intro = panel_by_title(dashboard=dashboard, title="Pick a cohort")["options"]["content"]
+    assert "bottom of this section" in intro
 
 
 def test_page_opens_with_the_sample_rule_before_the_analysis_tables() -> None:
     """A newcomer sees the intro, the cohort pickers, the sample status, the tests
-    table, the collapsed failed row and the runs table. The sample rule, the
-    observed-time warning and the loading note are in the top intro."""
+    table, the runs table, the guides and the failed evidence. The sample rule,
+    the observed-time warning and the loading note are in the top intro."""
     dashboard = load_dashboard()
     intro = panel_by_title(dashboard=dashboard, title="Pick a cohort")
     content = intro["options"]["content"]
@@ -236,21 +264,24 @@ def test_page_opens_with_the_sample_rule_before_the_analysis_tables() -> None:
     assert "cannot be converted into runner minutes" in content
     assert "up to two minutes to load" in content, "the intro must set loading expectations"
     assert "not an empty result" in content
-    assert "collapsed at the bottom of the page" in content, "the intro must explain the collapsed row"
+    assert "bottom of this section" in content, "the intro must explain where the failed evidence is"
     assert "You pick the cohort here" in content
     assert "does not preselect a capture" in content
 
-    # Reading order: intro, cohort tables, stat, tests, runs, guides, row last.
-    # Grafana hides every panel after a collapsed row, so the row must be last.
-    titles = [p["title"] for p in dashboard["panels"]]
+    # Reading order inside the row.
+    titles = [p["title"] for p in compare_row(dashboard)["panels"]]
     assert titles.index("Pick a cohort") < titles.index("Exact cohorts")
     assert titles.index("Source-revision cohorts (not exact)") < titles.index("Sample status")
     assert titles.index("Sample status") < titles.index("Tests using the most time")
     assert titles.index("Tests using the most time") < titles.index("Runs in this cohort")
     assert titles.index("Runs in this cohort") < titles.index("How to read this comparison")
-    assert titles.index("How to read this comparison") < titles.index("Query limits (verified against this backend on 2026-11-01)")
-    assert titles.index("Query limits (verified against this backend on 2026-11-01)") < titles.index(ROW_TITLE)
-    assert titles[-1] == ROW_TITLE, "a collapsed row hides every later panel"
+    assert titles.index("How to read this comparison") < titles.index(
+        "Query limits (verified against this backend on 2026-11-01)"
+    )
+    assert titles.index("Query limits (verified against this backend on 2026-11-01)") < titles.index(
+        "Failed tests in this cohort"
+    )
+    assert titles[-1] == "Failed runs in this cohort"
     # The text panels get enough height to avoid clipping (measured via DOM:
     # 330px, 702px and 626px of content at 1280).
     for title, min_height in [
@@ -299,8 +330,8 @@ def test_sample_status_is_the_only_stat_and_maps_verdicts() -> None:
 
 def test_every_analysis_panel_explains_an_empty_state() -> None:
     """No analysis panel may render an unexplained headers-only box: each has a
-    noValue message pointing at the sample status, and the failed tables sit in
-    a collapsed row whose title already says empty means none."""
+    noValue message pointing at the sample status, and the failed tables stay at
+    the bottom of the collapsed row."""
     dashboard = load_dashboard()
     for title in ANALYSIS_TITLES:
         panel = panel_by_title(dashboard=dashboard, title=title)
@@ -320,7 +351,8 @@ def test_every_analysis_panel_explains_an_empty_state() -> None:
 
 
 def test_dashboard_time_range_fits_the_backend_window() -> None:
-    """Tempo on this backend rejects ranges over 168 hours, so the default range is 7 days."""
+    """Tempo on this backend rejects ranges over 168 hours, so the dashboard's
+    default range is 7 days and the Compare section shares it."""
     assert load_dashboard()["time"] == {"from": "now-7d", "to": "now"}
 
 
@@ -328,17 +360,10 @@ def test_variables_are_the_cohort_link_state() -> None:
     dashboard = load_dashboard()
     variables = {v["name"]: v for v in dashboard["templating"]["list"]}
 
-    assert set(variables) == {
-        "test_ref",
-        "test_sha",
-        "test_suite",
-        "test_filter",
-        "test_marker",
-        "test_infra_sha",
-        "test_infra_workflow_sha",
-    }
-    for name, variable in variables.items():
-        assert variable["type"] == "textbox", f"{name} must be a textbox set by the cohort links"
+    # The cohort variables are added next to the existing days and test pair.
+    assert set(variables) == {"days", "test"} | COHORT_VARIABLES
+    for name in COHORT_VARIABLES:
+        assert variables[name]["type"] == "textbox", f"{name} must be a textbox set by the cohort links"
 
     # Defaults: empty SHA fields, all/none selection. Nothing is prefilled with a
     # real SHA, so the dashboard starts without a seeded cohort.
@@ -351,19 +376,20 @@ def test_variables_are_the_cohort_link_state() -> None:
 
 
 def test_no_dead_dropdown_dead_links_or_capture_preselection() -> None:
-    """The cohort_mode dropdown and the run-evidence link are gone, and this page
-    does not pretend to accept a capture selection from elsewhere."""
-    raw = DASHBOARD_FILE.read_text()
+    """The cohort_mode dropdown and the run-evidence link are gone, and this
+    section does not pretend to accept a capture selection from elsewhere."""
+    dashboard = load_dashboard()
+    raw = json.dumps(compare_row(dashboard))
     assert "cohort_mode" not in raw, "the dead cohort_mode dropdown must not come back"
     assert "var-cohort_mode" not in raw
     assert "run-evidence" not in raw, "links to the not-yet-existing run-evidence dashboard must not come back"
     assert "ci-observe-run-evidence" not in raw
     assert "links onward" not in raw, "the run investigation page has no outbound links; do not claim any"
     assert "Current mode" not in raw
-    assert '"name": "capture_id"' not in raw, "this dashboard must not add a capture_id variable"
+    assert '"name": "capture_id"' not in raw, "this section must not add a capture_id variable"
     assert "var-capture_id=" not in "".join(
         link["url"]
-        for p in iter_panels(load_dashboard()["panels"])
+        for p in compare_panels(dashboard)
         for o in p["fieldConfig"]["overrides"]
         for prop in o["properties"]
         if prop["id"] == "links"
@@ -371,8 +397,7 @@ def test_no_dead_dropdown_dead_links_or_capture_preselection() -> None:
         if link["url"].startswith(COMPARISON_LINK)
     ), "cohort links must not pass var-capture_id"
 
-    dashboard = load_dashboard()
-    for panel in iter_panels(dashboard["panels"]):
+    for panel in compare_panels(dashboard):
         for override in panel["fieldConfig"]["overrides"]:
             for field_property in override["properties"]:
                 if field_property["id"] != "links":
@@ -702,7 +727,7 @@ def test_failed_tests_table_lists_failed_tests_per_capture() -> None:
         "Longest",
     } == display_names(panel=panel)
     assert "evidence, not a diagnosis" in panel["description"]
-    assert "Failure rate" not in DASHBOARD_FILE.read_text()
+    assert "Failure rate" not in json.dumps(compare_row(dashboard))
 
 
 def test_failed_runs_table_shows_each_failed_capture_with_links() -> None:
@@ -841,14 +866,12 @@ def test_wrapped_columns_use_a_valid_cell_option() -> None:
     """Wrapping is a cell option. `custom.wrapText` is not a Grafana field option,
     so the browser ignored it and clipped long test ids."""
     dashboard = load_dashboard()
-    for panel in iter_panels(dashboard["panels"]):
+    for panel in compare_panels(dashboard):
         for override in panel.get("fieldConfig", {}).get("overrides", []):
             ids = [p["id"] for p in override["properties"]]
             assert "custom.wrapText" not in ids, f"{panel['title']}: custom.wrapText is not a field option"
     tests = panel_by_title(dashboard=dashboard, title="Tests using the most time")
-    nodeid = next(
-        o for o in tests["fieldConfig"]["overrides"] if o["matcher"]["options"] == "pytest.nodeid"
-    )
+    nodeid = next(o for o in tests["fieldConfig"]["overrides"] if o["matcher"]["options"] == "pytest.nodeid")
     cell = next(p["value"] for p in nodeid["properties"] if p["id"] == "custom.cellOptions")
     assert cell["wrapText"] is True
     assert cell["dynamicHeight"] is True
@@ -870,10 +893,10 @@ def test_observed_time_copy_and_no_waste_claim() -> None:
     assert "not a diagnosis" in guide
 
     # Observed time is never framed as recoverable time or a savings estimate.
-    whole_dashboard = DASHBOARD_FILE.read_text().lower()
-    assert "waste" not in whole_dashboard
-    assert "minutes saved" not in whole_dashboard
-    assert "time saved" not in whole_dashboard
+    whole_section = json.dumps(compare_row(dashboard)).lower()
+    assert "waste" not in whole_section
+    assert "minutes saved" not in whole_section
+    assert "time saved" not in whole_section
 
 
 def test_limits_copy_pins_the_verified_query_caps() -> None:
@@ -911,7 +934,7 @@ def test_limits_copy_pins_the_verified_query_caps() -> None:
     assert "refreshing retries" in text
 
     # Every Tempo target requests the same caps the copy states.
-    for panel in iter_panels(dashboard["panels"]):
+    for panel in compare_panels(dashboard):
         for target in panel.get("targets", []):
             assert target["limit"] == 30000, f"{panel['title']}: query limit must stay at 30,000"
             assert target["spss"] == 100, f"{panel['title']}: spans per spanset must stay at 100"

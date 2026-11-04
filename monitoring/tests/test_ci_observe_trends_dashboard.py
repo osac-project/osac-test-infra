@@ -1,11 +1,11 @@
 """Structural tests for the ci-observe Trends dashboard.
 
 monitoring/config/grafana/dashboards/ci-observe-trends.json is the Trends
-surface: one test over time from the daily JUnit rollup, and the overall
-pass rate, duration and failure mix from Prometheus and the workflow
-exporter. These tests pin what the model allows the page to be -- two
-populations, each panel naming its population and window, no single-run
-detail -- and the query shapes the panels rely on.
+surface: one test over time from the daily JUnit rollup, the Compare section
+for a cohort of captured runs, and the overall pass rate, duration and failure
+mix from Prometheus and the workflow exporter. These tests pin what the model
+allows the page to be -- two populations, each panel naming its population and
+window, no single-run detail -- and the query shapes the panels rely on.
 
 The data-path half lives in test_ci_observe_trends.py: the real
 /api/ci-observe/trends response is resolved against this dashboard's
@@ -25,13 +25,47 @@ INFINITY = {"type": "yesoreyeram-infinity-datasource", "uid": "workflow-api"}
 PROMETHEUS = {"type": "prometheus", "uid": "prometheus"}
 ROLLUP_URL = "http://127.0.0.1:9103/api/ci-observe/trends"
 
+COMPARE_ROW_TITLE = "Compare — captured runs, selected cohort, dashboard time range"
+COMPARE_TITLES = [
+    "Pick a cohort",
+    "Exact cohorts",
+    "Source-revision cohorts (not exact)",
+    "Sample status",
+    "Tests using the most time",
+    "Runs in this cohort",
+    "How to read this comparison",
+    "Query limits (verified against this backend on 2026-11-01)",
+    "Failed tests in this cohort",
+    "Failed runs in this cohort",
+]
+COMPARE_VARIABLES = {
+    "test_ref",
+    "test_sha",
+    "test_suite",
+    "test_filter",
+    "test_marker",
+    "test_infra_sha",
+    "test_infra_workflow_sha",
+}
+
 
 def panels_titled(*needles: str) -> list[dict]:
-    return [panel for panel in PANELS if all(needle in panel["title"] for needle in needles)]
+    return [panel for panel in ALL_PANELS if all(needle in panel["title"] for needle in needles)]
 
 
 def targets(panel: dict) -> list[dict]:
     return panel.get("targets") or []
+
+
+def iter_panels(panels: list[dict]) -> object:
+    for panel in panels:
+        yield panel
+        yield from iter_panels(panel.get("panels", []))
+
+
+ALL_PANELS = list(iter_panels(PANELS))
+COMPARE_ROW = next(panel for panel in PANELS if panel.get("title") == COMPARE_ROW_TITLE)
+COMPARE_PANELS = list(iter_panels(COMPARE_ROW["panels"]))
 
 
 def test_identity_and_folder() -> None:
@@ -41,17 +75,25 @@ def test_identity_and_folder() -> None:
 
 
 def test_it_is_the_third_dashboard_not_a_fourth() -> None:
-    """The model allows Capture, Pull requests and Trends. This file is
-    Trends, and it does not grow a second page with its own uid."""
+    """The model allows Capture, Pull requests and Trends, plus the entry
+    page. Compare is a section of Trends, not a page with its own uid."""
     folder = DASHBOARD_FILE.parent
     names = sorted(path.name for path in folder.glob("ci-observe-*.json"))
-    assert "ci-observe-trends.json" in names
+    assert names == [
+        "ci-observe-pull-requests.json",
+        "ci-observe-runs-home.json",
+        "ci-observe-runs.json",
+        "ci-observe-trends.json",
+    ]
+    assert "ci-observe-comparison.json" not in names
     assert len({json.loads((folder / name).read_text())["uid"] for name in names}) == len(names)
 
 
 def test_every_data_panel_names_its_population_and_window() -> None:
     """A rate, count or duration names its population (all jobs or
-    captured runs) and its window. Trends has no captured-runs panel."""
+    captured runs) and its window. The all-jobs panels sit at the top level;
+    the captured-runs panels sit in the Compare section and are checked by
+    the compare section tests."""
     for panel in DATA_PANELS:
         text = f"{panel['title']} {panel.get('description', '')}"
         assert "all jobs" in text or "all workflow runs" in text or "E2E jobs" in text, panel["title"]
@@ -161,14 +203,56 @@ def test_failure_mix_comes_from_the_exporter_and_carries_the_time_range() -> Non
             assert "until=${__to:date:iso}" in target["url"]
 
 
+def test_the_compare_section_is_a_collapsed_row_at_the_bottom() -> None:
+    """Compare is an action on a cohort of captured runs, so it is a section
+    of Trends. Grafana runs a collapsed row's queries only when it expands,
+    so the all-jobs panels above it load without the trace backend."""
+    row = COMPARE_ROW
+    assert row["type"] == "row"
+    assert row["collapsed"] is True
+    assert row["title"].startswith("Compare")
+    assert "captured runs" in row["title"]
+    assert "time range" in row["title"]
+    assert PANELS[-1] is row, "the Compare row comes after the all-jobs sections"
+
+    titles = [panel["title"] for panel in row["panels"] if panel["title"]]
+    assert titles == COMPARE_TITLES
+    positions = [(panel["gridPos"]["y"], panel["gridPos"]["x"]) for panel in row["panels"]]
+    assert positions == sorted(positions)
+
+
+def test_the_compare_section_reads_captured_runs_only() -> None:
+    """The Compare section is the only part of Trends that reads captures,
+    and it keeps to the ci-observe trace datasource."""
+    for panel in COMPARE_PANELS:
+        for target in targets(panel):
+            assert target["datasource"]["type"] == "tempo"
+            assert target["datasource"]["uid"] == "ci-observe-traces"
+        text = json.dumps(panel)
+        assert "prometheus" not in text
+        assert "workflow-api" not in text
+
+
+def test_the_compare_variables_extend_the_existing_pair() -> None:
+    """The cohort variables are appended to the dashboard; the days and test
+    variables keep their meaning and their order for the rollup URLs."""
+    variables = [variable["name"] for variable in DASHBOARD["templating"]["list"]]
+    assert variables[:2] == ["days", "test"]
+    assert set(variables) == {"days", "test"} | COMPARE_VARIABLES
+    assert len(variables) == len(set(variables))
+    by_name = {variable["name"]: variable for variable in DASHBOARD["templating"]["list"]}
+    for name in COMPARE_VARIABLES:
+        assert by_name[name]["type"] == "textbox"
+
+
 def test_there_is_no_single_run_detail() -> None:
     """One run belongs to Capture. This page links to runs, it does not
-    render one."""
+    render one, and the Compare section accepts a cohort, not a capture."""
     variables = {variable["name"] for variable in DASHBOARD["templating"]["list"]}
-    assert variables == {"days", "test"}
+    assert variables == {"days", "test"} | COMPARE_VARIABLES
 
     body = json.dumps(PANELS)
-    assert "capture_id" not in body
+    assert '"name": "capture_id"' not in body
     assert "/api/ci-observe/run" not in body
     assert "osac.ci.run_id" not in body
 
@@ -183,8 +267,8 @@ def test_links_point_at_the_run_index_and_github() -> None:
 def test_every_infinity_target_declares_columns() -> None:
     """An Infinity target with no columns renders an empty panel, which
     would look like "no data" instead of a wiring mistake."""
-    for panel in DATA_PANELS:
-        if panel["datasource"] != INFINITY:
+    for panel in ALL_PANELS:
+        if panel.get("datasource") != INFINITY:
             continue
         for target in targets(panel):
             assert target["root_selector"], panel["title"]
