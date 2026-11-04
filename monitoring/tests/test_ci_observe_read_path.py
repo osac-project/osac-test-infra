@@ -442,6 +442,25 @@ def test_a_registry_gap_names_the_missing_capture():
     assert harness.check_superset(registry, {"a"}, "prometheus").ok is True
 
 
+def test_a_registry_poll_lag_is_retried_once():
+    """Prometheus scrapes before the registry polls. A capture that arrived
+    seconds ago is not a lost capture."""
+    checks = harness.check_store_supersets({"a"}, {"loki": {"a", "b"}}, lambda: {"a", "b"})
+    assert all(check.ok for check in checks)
+
+
+def test_a_real_gap_survives_the_retry():
+    checks = harness.check_store_supersets({"a"}, {"loki": {"a", "b"}}, lambda: {"a"})
+    assert [check.ok for check in checks] == [False]
+
+
+def test_no_retry_when_every_store_is_covered():
+    calls = []
+    checks = harness.check_store_supersets({"a", "b"}, {"loki": {"a", "b"}}, lambda: calls.append(1))
+    assert all(check.ok for check in checks)
+    assert calls == []
+
+
 def test_registry_ids_are_read_from_either_row_key():
     document = {"captures": [{"capture_id": "a"}, {"id": "b"}, {"suite": "caas"}]}
 

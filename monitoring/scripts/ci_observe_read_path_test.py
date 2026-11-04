@@ -120,6 +120,9 @@ CONCURRENCY_P95_FACTOR = 2.0
 # keeps timer noise on a 10ms endpoint from failing the run. The absolute
 # ceilings that matter are the per-endpoint budgets above.
 CONCURRENCY_MIN_SECONDS = 1.00
+# The registry poller runs every 60 seconds. A completeness gap is re-read
+# once after this wait before it is called a miss.
+REGISTRY_SETTLE_SECONDS = 65.0
 
 
 @dataclass
@@ -927,13 +930,31 @@ def check_synthetic_capture(api_base: str, timeout: float) -> list[Check]:
     ]
 
 
+def check_store_supersets(registry: set[str], stores: dict[str, set[str]], reread=None) -> list[Check]:
+    """Every store's captures must be in the registry.
+
+    The registry is polled every 60 seconds, so a capture that Prometheus
+    scraped seconds ago is legitimately absent for up to a poll. `reread`
+    is the retry: it returns a fresh registry set, and the comparison is
+    repeated once. No retry when there is no gap, and no retry when the
+    caller does not supply one.
+    """
+    checks = [check_superset(registry, store, name) for name, store in stores.items()]
+    if all(check.ok for check in checks) or reread is None:
+        return checks
+    fresh = reread()
+    if fresh is None:
+        return checks
+    return [check_superset(fresh, store, name) for name, store in stores.items()]
+
+
 def check_completeness(api_base: str, args: argparse.Namespace) -> list[Check]:
     """The registry must be a superset of every store's still-held captures."""
-    registry_result = fetch(
+    url = (
         f"{api_base.rstrip('/')}/api/ci-observe/captures"
-        f"?days={args.coverage_days}&limit={args.coverage_limit}",
-        args.timeout,
+        f"?days={args.coverage_days}&limit={args.coverage_limit}"
     )
+    registry_result = fetch(url, args.timeout)
     if registry_result.status != 200:
         return [Check("completeness/registry", False, f"HTTP {registry_result.status}")]
     document = registry_result.document or {}
@@ -947,13 +968,23 @@ def check_completeness(api_base: str, args: argparse.Namespace) -> list[Check]:
         ("loki", loki_capture_ids, args.loki_url, min(args.coverage_days, 30)),
         ("tempo", tempo_capture_ids, args.tempo_url, min(args.coverage_days, 30)),
     )
+    stores: dict[str, set[str]] = {}
     for name, reader, base_url, days in readers:
         try:
-            store = reader(base_url, days, args.store_timeout)
+            stores[name] = reader(base_url, days, args.store_timeout)
         except (urllib.error.URLError, OSError, ValueError) as exc:
             checks.append(Check(f"completeness/{name}", False, f"the store did not answer: {exc}"))
-            continue
-        checks.append(check_superset(registry, store, name))
+
+    def reread() -> set[str] | None:
+        # One poll plus a margin. A capture scraped a second ago is not a
+        # lost capture; a discovery bug is still a failure a minute later.
+        time.sleep(REGISTRY_SETTLE_SECONDS)
+        result = fetch(url, args.timeout)
+        if result.status != 200 or not isinstance(result.document, dict):
+            return None
+        return capture_ids_from_registry(result.document)
+
+    checks.extend(check_store_supersets(registry, stores, reread))
     return checks
 
 
