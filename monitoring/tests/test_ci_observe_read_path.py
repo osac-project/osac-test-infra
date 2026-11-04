@@ -691,13 +691,15 @@ def test_the_capture_cache_outlives_the_dashboard_refresh():
     """The spec says a 10-minute cache; the dashboard reloads every 5
     minutes. A shorter cache makes every reload pay the cold path."""
     refresh = dashboard_refresh_seconds()
-    pattern = r"^(\s*)([A-Z][A-Z0-9_]*CACHE_TTL[A-Z0-9_]*)\s*=\s*([0-9*\s+]+)$"
+    pattern = r"^(\s*)([A-Z][A-Z0-9_]*)\s*=\s*([0-9*\s+]+)$"
     ttls = []
     for path in [EXPORTER, *sorted(SCRIPTS.glob("*.py"))]:
         text = path.read_text()
         in_capture_view = "not_indexed" in text
         for match in re.finditer(pattern, text, re.M):
             name = match.group(2)
+            if "CACHE_TTL" not in name:
+                continue
             if not in_capture_view and "CAPTURE" not in name:
                 continue
             seconds = 1
@@ -776,9 +778,17 @@ def test_the_runs_document_carries_the_registry_block(jobs, api):
             {"created_at": iso(60 * 24 * 3), "updated_at": iso(60 * 24 * 3 - 60)},
             "unknown",
         ),
-        # Every rule passes: the capture is really absent.
+        # Every rule passes: the capture is really absent. The registry
+        # requires every source that covers the window, not just one.
         (
-            [{"source": "loki", "last_ok_at": iso(5), "last_ok_count": 212}],
+            [
+                {"source": "prometheus", "last_ok_at": iso(5), "last_ok_count": 217,
+                 "coverage_from": iso(60 * 24 * 20)},
+                {"source": "loki", "last_ok_at": iso(5), "last_ok_count": 212,
+                 "coverage_from": iso(60 * 24 * 20)},
+                {"source": "info", "last_ok_at": iso(5), "last_ok_count": 217,
+                 "coverage_from": iso(60 * 24 * 20)},
+            ],
             {"updated_at": iso(120)},
             "not collected",
         ),

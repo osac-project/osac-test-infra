@@ -40,6 +40,7 @@ from prometheus_client import (
 # this directory on sys.path the way a package import would, so the
 # directory is added here before importing the sibling.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ci_observe_capture_view import CIObserveCaptureView
 from ci_observe_run_evidence import CIObserveRunEvidence
 from ci_observe_runs import CIObserveRuns
 
@@ -1247,6 +1248,10 @@ class WorkflowExporter:
         # job history and the capture registry above, both SQLite; Tempo is
         # never called.
         self._runs = CIObserveRuns(self)
+        # The Capture document: one session trace fetched by id and classified
+        # (see ci_observe_capture_view.py). Cached and single-flighted; the
+        # Capture dashboard is the only reader.
+        self._capture_view = CIObserveCaptureView(self)
         self._init_db()
 
     # -- SQLite persistence ---------------------------------------------------
@@ -4803,6 +4808,20 @@ class ExporterHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/ci-observe/runs":
             params = parse_qs(parsed.query)
             data = self.exporter.get_ci_observe_runs_json(params)
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
+        # GET /api/ci-observe/capture?capture_id=<id>
+        # One capture document for the Capture dashboard: the session trace
+        # fetched by id and classified, with the coverage invariant. Tempo is
+        # read once here; the document is cached and single-flighted.
+        elif parsed.path == "/api/ci-observe/capture":
+            params = parse_qs(parsed.query)
+            data = self.exporter._capture_view.get_json(params)
             payload = json.dumps(data, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

@@ -300,22 +300,11 @@ def test_json_is_valid_and_parses(dashboard: dict) -> None:
     assert isinstance(dashboard, dict)
 
 
-def test_home_json_is_valid_and_parses(home: dict) -> None:
-    assert HOME_FILE.exists()
-    assert isinstance(home, dict)
-
-
 def test_required_uid_and_title(dashboard: dict) -> None:
     assert dashboard["uid"] == "ci-observe-runs"
     assert dashboard["title"] == "CI Observe — Capture"
     assert dashboard["schemaVersion"] == 39
     assert dashboard["version"] == 1
-
-
-def test_home_required_uid_and_title(home: dict) -> None:
-    assert home["uid"] == "ci-observe-runs-home"
-    assert home["title"] == "CI Observe — Start here"
-    assert home["schemaVersion"] == 39
 
 
 def test_datasources_referenced(dashboard: dict) -> None:
@@ -376,12 +365,6 @@ def test_panels_are_in_reading_order(dashboard: dict) -> None:
 
 def test_every_panel_has_title_and_description(dashboard: dict) -> None:
     for panel in _iter_panels(dashboard["panels"]):
-        assert panel.get("title"), f"panel without a title: {panel.get('id')}"
-        assert panel.get("description"), f"panel without a description: {panel['title']}"
-
-
-def test_home_every_panel_has_title_and_description(home: dict) -> None:
-    for panel in _iter_panels(home["panels"]):
         assert panel.get("title"), f"panel without a title: {panel.get('id')}"
         assert panel.get("description"), f"panel without a description: {panel['title']}"
 
@@ -716,192 +699,3 @@ def test_no_leftover_template_tokens(dashboard: dict, home: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_home_panels_are_in_reading_order(home: dict) -> None:
-    positions = [(p["gridPos"]["y"], p["gridPos"]["x"]) for p in home["panels"]]
-    assert positions == sorted(positions)
-    titles = [p["title"] for p in home["panels"]]
-    assert titles.index("Recent failed tests") < titles.index("Recent test runs"), (
-        "failed tests must be listed before the full run list"
-    )
-
-
-def test_home_narrows_every_capture_query_on_the_find_box(home: dict) -> None:
-    """One textbox narrows the cards and all three capture tables.
-
-    The box matches the capture id, which contains the GitHub run id, so a
-    run id from Slack finds its capture without a separate lookup. The
-    lookup tables and the all-runs table read the workflow exporter, which
-    stores no capture id, so they are the only targets not narrowed here.
-    """
-    variables = {v["name"]: v for v in home["templating"]["list"]}
-    assert variables["find"]["type"] == "textbox"
-    assert "run id" in variables["find"]["label"].lower()
-    capture_targets = 0
-    for panel in _iter_panels(home["panels"]):
-        for target in panel.get("targets", []):
-            if target.get("queryType") != "traceql":
-                continue
-            capture_targets += 1
-            assert "${find:regex}" in target["query"], f"{panel['title']}: query ignores the Find box"
-    assert capture_targets >= 4, "the capture stats and tables must still read Tempo"
-
-
-def test_home_explains_capture_id_and_time_range(home: dict) -> None:
-    content = _panels_by_title(home)["Start here"]["options"]["content"]
-    for part in ("vmaas", "pr123", "attempt", "workflow run"):
-        assert part in content, f"intro text does not explain the ID part {part!r}"
-    assert "7 days" in content
-    assert "hide a long run" in content, "intro must warn that narrow ranges can hide runs"
-    assert "7-day maximum" in content, "intro must cap the widening advice at Tempo's 168h limit"
-
-
-def test_home_queries_do_not_require_labels(home: dict) -> None:
-    """Unlabeled runs must appear: suite/PR predicates may only exist as or-groups."""
-    for query in _traceql_queries(home):
-        if 'resource."osac.ci.suite" =~ ".+"' in query:
-            assert '( resource."osac.ci.suite" =~ ".+" || name =~ ".*" )' in query, (
-                f"suite predicate filters out unlabeled runs: {query}"
-            )
-        if 'resource."osac.ci.pr" =~ ".+"' in query:
-            assert '( resource."osac.ci.pr" =~ ".+" || name =~ ".*" )' in query, (
-                f"PR predicate filters out unlabeled runs: {query}"
-            )
-
-
-def test_home_run_list_reads_the_session_spans(home: dict) -> None:
-    """The run list shows one row per run whose session span arrived.
-
-    The live Grafana engine only ever feeds a panel's transformations the
-    first query's frame (a multi-query join silently degrades to the first
-    frame), so the run list is a single session-span query with no
-    transformations. Captures with test spans but no session span are listed
-    by the dedicated table above the run list.
-    """
-    panels = _panels_by_title(home)
-    panel = panels["Recent test runs"]
-    assert len(panel["targets"]) == 1
-    assert 'name = "test run"' in panel["targets"][0]["query"]
-    assert not panel.get("transformations"), "the run list must not depend on join transformations"
-    texts = _mapping_texts(panel, "status")
-    assert "Passed" in texts and "Failed" in texts
-
-
-def test_home_time_min_override_matches_groupby_output(home: dict) -> None:
-    """The time-min aggregate column is named from the time field's display name.
-
-    Tempo stamps displayNameFromDS "Start time" on the time field, so the
-    groupBy output column is "Start time (min)"; an override written as
-    "time (min)" matches nothing and the First test column loses its header,
-    width and sort key.
-    """
-    panels = _panels_by_title(home)
-    for title in ("Captures with test spans but no session span",):
-        matchers = {o["matcher"]["options"] for o in panels[title]["fieldConfig"]["overrides"]}
-        assert "Start time (min)" in matchers, f"{title}: missing override for the time-min output column"
-        assert "time (min)" not in matchers, f"{title}: raw-name time override never matches"
-
-
-def test_home_missing_session_marker_cannot_come_from_the_test_spans(home: dict) -> None:
-    """The missing-session marker must be a session-trace property, not span data.
-
-    The filter that selects incomplete captures runs on the RAW frame, before
-    the groupBy, and matches the intrinsic Trace Name column: the datasource
-    derives it from the trace's root span, which for a complete capture is the
-    session span ("test run") and is empty when the session span never
-    arrived. Test spans cannot populate it themselves, so a capture can never
-    be miscounted as missing because a test span carried - or failed to
-    carry - one of its own attributes. A pipeline that filters on a span
-    attribute (status, pytest.span_type, ...) or that filters after the
-    groupBy would reintroduce that class of bug.
-    """
-    panels = _panels_by_title(home)
-    for title in ("Missing session span", "Captures with test spans but no session span"):
-        panel = panels[title]
-        pipeline = panel["transformations"]
-        assert pipeline[0]["id"] == "filterByValue", f"{title}: the marker filter must run before the groupBy"
-        assert pipeline[1]["id"] == "groupBy", f"{title}: the groupBy must follow the marker filter"
-        marker = pipeline[0]["options"]["filters"][0]
-        assert marker["fieldName"] == "Trace Name", (
-            f"{title}: the marker must be the root-span-derived Trace Name, not a span attribute"
-        )
-        assert marker["config"]["options"]["value"] == "^$"
-        # the marker column must not be a span attribute the query hydrates
-        query = panel["targets"][0]["query"]
-        assert "Trace Name" not in query, "Trace Name is intrinsic; referencing it as an attribute is a wiring bug"
-
-
-def test_home_incomplete_captures_are_visible(home: dict) -> None:
-    """A stat and a table surface captures with test spans but no session span.
-
-    Live-verified pipeline: the test-span query returns every parent test span
-    with the intrinsic Trace Name column, which Grafana's Tempo datasource
-    fills from the trace's root span. The root of a complete capture's trace
-    is the session span ("test run"); a capture whose session span never
-    arrived has an empty trace name on all of its spans. Filtering the raw
-    frame for an empty Trace Name keeps exactly the orphan test spans, and the
-    groupBy then collapses them to one row per capture.
-    """
-    panels = _panels_by_title(home)
-    stat = panels["Missing session span"]
-    table = panels["Captures with test spans but no session span"]
-
-    for panel in (stat, table):
-        pipeline = [t["id"] for t in panel["transformations"]]
-        assert pipeline == ["filterByValue", "groupBy"], pipeline
-        keep = panel["transformations"][0]
-        assert keep["options"]["type"] == "include"
-        assert keep["options"]["filters"][0]["config"]["id"] == "regex"
-        assert keep["options"]["filters"][0]["fieldName"] == "Trace Name"
-        assert keep["options"]["filters"][0]["config"]["options"]["value"] == "^$"
-        group_by = panel["transformations"][1]
-        assert group_by["options"]["fields"]["osac.ci.capture_id"]["operation"] == "groupby"
-        assert group_by["options"]["fields"]["pytest.span_type"]["aggregations"] == ["count"]
-        assert group_by["options"]["fields"]["time"]["aggregations"] == ["min"]
-    assert len(stat["targets"]) == 1
-    assert ".pytest.span_type" in stat["targets"][0]["query"]
-    assert stat["options"]["reduceOptions"]["fields"] == "osac.ci.capture_id"
-    assert "unknown" in table["description"]
-    assert "not passed" in table["description"]
-    assert "session span" in table["fieldConfig"]["defaults"]["noValue"]
-
-
-def test_home_distinguishes_failed_runs_from_failed_tests(home: dict) -> None:
-    panels = _panels_by_title(home)
-    failed_runs = panels["Failed runs"]
-    assert 'name = "test run"' in failed_runs["targets"][0]["query"]
-    assert "status = error" in failed_runs["targets"][0]["query"]
-    assert "failed runs, not failed tests" in failed_runs["description"]
-    failed_tests = panels["Recent failed tests"]
-    assert failed_tests["targets"][0]["query"].count("status = error") == 1
-    assert '.pytest.span_type = "test"' in failed_tests["targets"][0]["query"]
-
-
-def test_home_links_runs_to_detail(home: dict) -> None:
-    """Every run-id column links straight to the investigation page.
-
-    One data link makes the id a direct link. Two links turn the cell into a
-    menu, which read as "clicking does nothing" in the intern walkthrough.
-    The comparison dashboard is reachable from the Start-here map instead."""
-    linked = []
-    for panel in _iter_panels(home["panels"]):
-        for override in panel["fieldConfig"].get("overrides", []):
-            if override["matcher"].get("options") == "osac.ci.capture_id":
-                for prop in override["properties"]:
-                    if prop["id"] == "links":
-                        linked.append((panel["title"], prop["value"]))
-    assert linked, "no run-id column carries links"
-    for title, links in linked:
-        urls = [link["url"] for link in links]
-        assert len(urls) == 1, f"{title}: a second data link turns the cell into a menu"
-        assert any(url.startswith(DETAIL_LINK_PREFIX) for url in urls), f"{title}: missing detail link"
-        assert any(url.startswith(DETAIL_LINK_PREFIX) and "var-capture_id=${__value.raw}" in url for url in urls), (
-            f"{title}: the run-investigation link must keep var-capture_id"
-        )
-
-
-def test_home_stat_titles_are_honest(home: dict) -> None:
-    panels = _panels_by_title(home)
-    assert "Runs with a session span" in panels
-    assert panels["Runs with a session span"]["description"]
-    assert "Missing session span" in panels
-    assert "unknown - not passed" in panels["Missing session span"]["description"]

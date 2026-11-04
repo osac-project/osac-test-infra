@@ -332,10 +332,17 @@ def check_shape(name: str, document: dict | None) -> list[Check]:
                 )
             )
         sources = normalize_sources(document)
+        def _count(value):
+            if isinstance(value, int):
+                return value
+            if isinstance(value, dict) and isinstance(value.get("count"), int):
+                return value["count"]
+            return None
+
         incomplete = [
             name
             for name, row in sources.items()
-            if not isinstance(row.get("captures"), int) or not isinstance(row.get("rejected"), int)
+            if _count(row.get("captures")) is None or _count(row.get("rejected")) is None
         ]
         checks.append(
             Check(
