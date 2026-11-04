@@ -70,6 +70,8 @@ COMPARE_PANEL_TITLES = [
     "Runs in this cohort",
     "How to read this comparison",
     "Query limits (verified against this backend on 2026-11-01)",
+    "Compare two revisions",
+    "Test deltas between two source revisions",
     "",
     "Failed tests in this cohort",
     "Failed runs in this cohort",
@@ -83,6 +85,8 @@ COHORT_VARIABLES = {
     "test_marker",
     "test_infra_sha",
     "test_infra_workflow_sha",
+    "compare_base",
+    "compare_head",
 }
 
 ANALYSIS_TITLES = [
@@ -199,7 +203,7 @@ def test_every_panel_has_at_most_one_target_and_section_stays_within_eight() -> 
             " first and overwrites the rest, so panels must have at most one target"
         )
     assert total <= MAX_TOTAL_TARGETS, f"the section runs {total} concurrent searches; keep it at {MAX_TOTAL_TARGETS}"
-    assert total == 7, "the section should ship exactly seven targets: two discoveries, the sample stat and four tables"
+    assert total == 8, "the section should ship eight targets: two discoveries, the sample stat, four tables and the two-revision delta"
 
     with_targets = [p["title"] for p in compare_panels(dashboard) if p.get("targets")]
     assert with_targets == [
@@ -208,6 +212,7 @@ def test_every_panel_has_at_most_one_target_and_section_stays_within_eight() -> 
         "Sample status",
         "Tests using the most time",
         "Runs in this cohort",
+        "Test deltas between two source revisions",
         "Failed tests in this cohort",
         "Failed runs in this cohort",
     ]
@@ -390,7 +395,7 @@ def test_no_dead_dropdown_dead_links_or_capture_preselection() -> None:
     assert "var-capture_id=" not in "".join(
         link["url"]
         for p in compare_panels(dashboard)
-        for o in p["fieldConfig"]["overrides"]
+        for o in (p.get("fieldConfig") or {}).get("overrides", [])
         for prop in o["properties"]
         if prop["id"] == "links"
         for link in prop["value"]
@@ -398,7 +403,7 @@ def test_no_dead_dropdown_dead_links_or_capture_preselection() -> None:
     ), "cohort links must not pass var-capture_id"
 
     for panel in compare_panels(dashboard):
-        for override in panel["fieldConfig"]["overrides"]:
+        for override in (panel.get("fieldConfig") or {}).get("overrides", []):
             for field_property in override["properties"]:
                 if field_property["id"] != "links":
                     continue
@@ -806,7 +811,7 @@ def test_table_columns_fit_1280_and_show_full_names() -> None:
     for title, wrapped in wrap_fields.items():
         panel = panel_by_title(dashboard=dashboard, title=title)
         total = 0
-        for override in panel["fieldConfig"]["overrides"]:
+        for override in (panel.get("fieldConfig") or {}).get("overrides", []):
             field = override["matcher"]["options"]
             width = next((p["value"] for p in override["properties"] if p["id"] == "custom.width"), None)
             has_wrap = any(
@@ -936,6 +941,8 @@ def test_limits_copy_pins_the_verified_query_caps() -> None:
     # Every Tempo target requests the same caps the copy states.
     for panel in compare_panels(dashboard):
         for target in panel.get("targets", []):
+            if target.get("queryType") != "traceql":
+                continue
             assert target["limit"] == 30000, f"{panel['title']}: query limit must stay at 30,000"
             assert target["spss"] == 100, f"{panel['title']}: spans per spanset must stay at 100"
             assert target["queryType"] == "traceql"
@@ -976,3 +983,31 @@ def test_no_leftover_template_tokens() -> None:
                 walk(item)
 
     walk(dashboard)
+
+
+def test_two_revision_delta_reads_the_compare_endpoint() -> None:
+    """Q8 needs a before/after table, not only a within-cohort ranking."""
+    dashboard = load_dashboard()
+    panel = panel_by_title(dashboard=dashboard, title="Test deltas between two source revisions")
+    (target,) = panel["targets"]
+    assert target["url"] == (
+        "http://127.0.0.1:9103/api/ci-observe/trends/compare"
+        "?base=${compare_base:percentencode}&head=${compare_head:percentencode}&days=${days}"
+    )
+    assert target["root_selector"] == "rows"
+    assert [column["selector"] for column in target["columns"]] == [
+        "test_id",
+        "workflow",
+        "base_runs",
+        "base_failures",
+        "base_p50_duration_s",
+        "head_runs",
+        "head_failures",
+        "head_p50_duration_s",
+        "delta_failures",
+        "delta_p50_s",
+    ]
+    assert "all CI jobs" in panel["description"]
+    assert "head minus base" in panel["description"]
+    variables = {v["name"] for v in dashboard["templating"]["list"]}
+    assert {"compare_base", "compare_head"} <= variables

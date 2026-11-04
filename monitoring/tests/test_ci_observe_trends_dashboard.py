@@ -35,6 +35,8 @@ COMPARE_TITLES = [
     "Runs in this cohort",
     "How to read this comparison",
     "Query limits (verified against this backend on 2026-11-01)",
+    "Compare two revisions",
+    "Test deltas between two source revisions",
     "Failed tests in this cohort",
     "Failed runs in this cohort",
 ]
@@ -46,6 +48,8 @@ COMPARE_VARIABLES = {
     "test_marker",
     "test_infra_sha",
     "test_infra_workflow_sha",
+    "compare_base",
+    "compare_head",
 }
 
 
@@ -225,6 +229,13 @@ def test_the_compare_section_reads_captured_runs_only() -> None:
     """The Compare section is the only part of Trends that reads captures,
     and it keeps to the ci-observe trace datasource."""
     for panel in COMPARE_PANELS:
+        if panel["title"] == "Test deltas between two source revisions":
+            # Q8 compares two source revisions from the rollup, not captures.
+            (target,) = targets(panel)
+            assert target["url"].startswith(
+                "http://127.0.0.1:9103/api/ci-observe/trends/compare"
+            )
+            continue
         for target in targets(panel):
             assert target["datasource"]["type"] == "tempo"
             assert target["datasource"]["uid"] == "ci-observe-traces"

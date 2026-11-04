@@ -43,7 +43,7 @@
     {
       "type": "row",
       "id": 2,
-      "title": "Test history \u2014 one test, all jobs, last $days days",
+      "title": "Test history — one test, all jobs, last $days days",
       "description": "Is this test flaky, slower, or newly broken? Outcomes and durations for one test id, from the daily JUnit rollup.",
       "collapsed": false,
       "gridPos": {
@@ -57,7 +57,7 @@
     {
       "type": "timeseries",
       "id": 3,
-      "title": "Passes and failures, all jobs, last $days days \u2014 $test",
+      "title": "Passes and failures, all jobs, last $days days — $test",
       "description": "One point per day for the selected test id. Population: all jobs that produced a JUnit artifact, captured or not. Window: the Days variable (the rollup's own calendar), not the time picker. Leave Test empty and every test's rows are drawn on the same day; set it to one test id for a readable line.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -165,7 +165,7 @@
     {
       "type": "timeseries",
       "id": 4,
-      "title": "Duration p50 and p95, all jobs, last $days days \u2014 $test",
+      "title": "Duration p50 and p95, all jobs, last $days days — $test",
       "description": "Per day, the median and 95th-percentile duration in seconds of the selected test, nearest-rank over the runs of that day. Population: all jobs that produced a JUnit artifact. Window: the Days variable. A day with no readable artifact has no point, never a zero.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -273,7 +273,7 @@
     {
       "type": "table",
       "id": 5,
-      "title": "Rollup rows and their source SHA, all jobs, last $days days \u2014 $test",
+      "title": "Rollup rows and their source SHA, all jobs, last $days days — $test",
       "description": "The rows behind the two charts, one per day, repo, workflow, suite, test id and source SHA. Flaky means the same test passed and failed on the same SHA: look for a SHA with both passes and failures. Population: all jobs that produced a JUnit artifact. Window: the Days variable. The SHA links to that commit's checks on GitHub, where the individual runs are.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -565,7 +565,7 @@
     {
       "type": "row",
       "id": 6,
-      "title": "Overview \u2014 all jobs, selected range",
+      "title": "Overview — all jobs, selected range",
       "description": "What is the pass rate, duration and failure mix? Population: every run, captured or not. Window: the dashboard time range, which each panel names.",
       "collapsed": false,
       "gridPos": {
@@ -1171,7 +1171,7 @@
     {
       "type": "row",
       "id": 16,
-      "title": "Compare \u2014 captured runs, selected cohort, dashboard time range",
+      "title": "Compare — captured runs, selected cohort, dashboard time range",
       "description": "Did these captured runs differ, and by how much? Population: a cohort of captured runs. Window: the dashboard time range (7 days maximum). Pick a cohort from the tables, then read which tests used the most observed test-span time and what failed.",
       "collapsed": true,
       "gridPos": {
@@ -2321,9 +2321,176 @@
           },
           "options": {
             "mode": "markdown",
-            "content": "- The query limit is 30,000 spansets (traces), not spans: one single-capture query returned exactly 30,000 traces holding 38,902 spans.\n- Each query returns at most 100 spans per spanset; the backend rejects higher values (`spans per span set exceeds 100`). All of a capture's pytest spans sit in one trace, so a query matching more than 100 spans in a capture loses the rest: a 47-test capture returned all 47 parent test spans but only 100 of its ~190 total test spans. Parent-test-span queries are complete while a capture holds at most 100 parent tests (the most observed is 53).\n- The backend rejects time ranges longer than 168 hours (7 days). Keep the dashboard time range at or below that.\n- A live capture is not final: its spans arrive while the run is in progress, and freshly flushed blocks are invisible to search for up to 15 minutes.\n- Captures without the Q1 identity fields are excluded from exact cohorts.\n- Source-revision cohorts exclude resolved harness SHAs with structural negation (`!( attribute =~ sha )`), which this Tempo evaluates correctly: it kept all 5,382 test spans when the attribute was absent and dropped exactly the 26 spans whose osac ref is a resolved SHA. Matching absent attributes with `= nil` is not usable here: standalone it does match absent attributes, but combined with span predicates it returned nothing, and combined with other attribute predicates it overshot the backend's 16 MB response limit.\n- Every panel runs exactly one TraceQL query by design: this Grafana's Tempo plugin executes only the first query of a panel and overwrites every additional target with it (verified 2026-11-02 from the served plugin bundle and captured browser requests), so a multi-target panel would silently run its first query repeatedly.\n- Panel load time is the backend, not the page: a single query took 5 to 20 seconds when measured alone on 2026-11-02, and this page runs ten of them. Under that concurrent load the backend intermittently fails: Tempo's search returns `429 job queue full`, which Grafana surfaces as `Get \"http://\u2026/api/search\": \u2026` on the panel (both observed live on 2026-11-02). A failed panel shows a red error badge and its empty-state text; refreshing retries."
+            "content": "- The query limit is 30,000 spansets (traces), not spans: one single-capture query returned exactly 30,000 traces holding 38,902 spans.\n- Each query returns at most 100 spans per spanset; the backend rejects higher values (`spans per span set exceeds 100`). All of a capture's pytest spans sit in one trace, so a query matching more than 100 spans in a capture loses the rest: a 47-test capture returned all 47 parent test spans but only 100 of its ~190 total test spans. Parent-test-span queries are complete while a capture holds at most 100 parent tests (the most observed is 53).\n- The backend rejects time ranges longer than 168 hours (7 days). Keep the dashboard time range at or below that.\n- A live capture is not final: its spans arrive while the run is in progress, and freshly flushed blocks are invisible to search for up to 15 minutes.\n- Captures without the Q1 identity fields are excluded from exact cohorts.\n- Source-revision cohorts exclude resolved harness SHAs with structural negation (`!( attribute =~ sha )`), which this Tempo evaluates correctly: it kept all 5,382 test spans when the attribute was absent and dropped exactly the 26 spans whose osac ref is a resolved SHA. Matching absent attributes with `= nil` is not usable here: standalone it does match absent attributes, but combined with span predicates it returned nothing, and combined with other attribute predicates it overshot the backend's 16 MB response limit.\n- Every panel runs exactly one TraceQL query by design: this Grafana's Tempo plugin executes only the first query of a panel and overwrites every additional target with it (verified 2026-11-02 from the served plugin bundle and captured browser requests), so a multi-target panel would silently run its first query repeatedly.\n- Panel load time is the backend, not the page: a single query took 5 to 20 seconds when measured alone on 2026-11-02, and this page runs ten of them. Under that concurrent load the backend intermittently fails: Tempo's search returns `429 job queue full`, which Grafana surfaces as `Get \"http://…/api/search\": …` on the panel (both observed live on 2026-11-02). A failed panel shows a red error badge and its empty-state text; refreshing retries."
           },
           "targets": []
+        },
+        {
+          "id": 28,
+          "title": "Compare two revisions",
+          "type": "text",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 91
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "### Compare two revisions\n\n`Compare base SHA` and `Compare head SHA` take two resolved osac commits (40- or 64-hex). The table below joins the daily per-test rollup for those two SHAs by `(repo, workflow, suite, test id)`. Deltas are head minus base: negative failures or duration is better.\n\nThe population is every CI job whose per-test JUnit the daily rollup stored in the window; it is not a per-capture comparison. `p50_duration_s` is the median of the daily p50 values, so a day with one run weighs the same as a day with ten. Read a delta next to the run counts: one flaky run can move it. A test present in only one revision is not paired with a zero; the endpoint lists it in `only_base` or `only_head`."
+          },
+          "description": "How to compare two resolved osac commits from the daily rollup, and how to read the deltas."
+        },
+        {
+          "id": 29,
+          "title": "Test deltas between two source revisions",
+          "type": "table",
+          "description": "Deltas between two resolved osac commits from the daily per-test JUnit rollup. Population: all CI jobs in the selected window, not captured runs. Deltas are head minus base. p50 is the median of the daily p50 values.",
+          "gridPos": {
+            "h": 16,
+            "w": 24,
+            "x": 0,
+            "y": 99
+          },
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "noValue": "No test is present in both revisions for this window. Set the two SHAs above; one-sided tests are listed by the endpoint, not paired with a zero."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "base_p50_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "head_p50_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "delta_p50_s"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_id"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 460
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/trends/compare?base=${compare_base:percentencode}&head=${compare_head:percentencode}&days=${days}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "rows",
+              "columns": [
+                {
+                  "selector": "test_id",
+                  "text": "test id",
+                  "type": "string"
+                },
+                {
+                  "selector": "workflow",
+                  "text": "workflow",
+                  "type": "string"
+                },
+                {
+                  "selector": "base_runs",
+                  "text": "base runs",
+                  "type": "number"
+                },
+                {
+                  "selector": "base_failures",
+                  "text": "base failures",
+                  "type": "number"
+                },
+                {
+                  "selector": "base_p50_duration_s",
+                  "text": "base p50 (s)",
+                  "type": "number"
+                },
+                {
+                  "selector": "head_runs",
+                  "text": "head runs",
+                  "type": "number"
+                },
+                {
+                  "selector": "head_failures",
+                  "text": "head failures",
+                  "type": "number"
+                },
+                {
+                  "selector": "head_p50_duration_s",
+                  "text": "head p50 (s)",
+                  "type": "number"
+                },
+                {
+                  "selector": "delta_failures",
+                  "text": "delta failures",
+                  "type": "number"
+                },
+                {
+                  "selector": "delta_p50_s",
+                  "text": "delta p50 (s)",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
         },
         {
           "id": 25,
@@ -2334,7 +2501,7 @@
             "h": 3,
             "w": 24,
             "x": 0,
-            "y": 91
+            "y": 115
           },
           "datasource": {
             "type": "tempo",
@@ -2359,7 +2526,7 @@
             "h": 13,
             "w": 24,
             "x": 0,
-            "y": 94
+            "y": 118
           },
           "datasource": {
             "type": "tempo",
@@ -2638,7 +2805,7 @@
             "h": 13,
             "w": 24,
             "x": 0,
-            "y": 107
+            "y": 131
           },
           "datasource": {
             "type": "tempo",
@@ -2978,6 +3145,36 @@
         "query": "",
         "refresh": 0,
         "hide": 0
+      },
+      {
+        "name": "compare_base",
+        "label": "Compare base SHA",
+        "description": "Base resolved osac commit for the two-revision delta. 40- or 64-hex.",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": "",
+          "selected": false
+        },
+        "options": [],
+        "query": "",
+        "refresh": 0,
+        "hide": 0
+      },
+      {
+        "name": "compare_head",
+        "label": "Compare head SHA",
+        "description": "Head resolved osac commit for the two-revision delta. 40- or 64-hex.",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": "",
+          "selected": false
+        },
+        "options": [],
+        "query": "",
+        "refresh": 0,
+        "hide": 0
       }
     ]
   },
@@ -2987,7 +3184,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "CI Observe \u2014 Trends",
+  "title": "CI Observe — Trends",
   "uid": "ci-observe-trends",
   "version": 1
 }
