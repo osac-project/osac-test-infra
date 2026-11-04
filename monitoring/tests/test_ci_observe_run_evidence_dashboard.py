@@ -36,7 +36,7 @@ ROW_PANELS = ["Run", "Jobs", "Steps", "JUnit summary", "Failed tests"]
 DATASOURCE = {"type": "yesoreyeram-infinity-datasource", "uid": "workflow-api"}
 ENDPOINT = "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}"
 HOME_LINK = "/d/ci-observe-runs-home/ci-observe-e28094-start-here"
-COMPARE_LINK = "/d/ci-observe-compare-runs/ci-observe-compare-runs"
+COMPARE_LINK = "/d/ci-observe-trends/ci-observe-e28094-trends"
 
 # Every native status the endpoint can return, with the color it must show:
 # only "available" is green, so a missing or expired artifact can never be
@@ -344,8 +344,8 @@ def test_failed_tests_copy_is_evidence_not_diagnosis(dashboard: dict, row: dict)
 
 
 def test_back_links(dashboard: dict) -> None:
-    """The page links to the entry page and the comparison page; the two
-    dashboards it absorbed are gone, so nothing may link to them."""
+    """The page links to the entry page and to the Compare section of Trends;
+    the two dashboards it absorbed are gone, so nothing may link to them."""
     urls = [link["url"] for link in dashboard["links"]]
     assert any(url.startswith(HOME_LINK) for url in urls)
     assert any(url.startswith(COMPARE_LINK) for url in urls)
@@ -353,6 +353,7 @@ def test_back_links(dashboard: dict) -> None:
     raw = DASHBOARD_FILE.read_text()
     assert "ci-observe-run-evidence" not in raw
     assert "ci-observe-cluster" not in raw
+    assert "ci-observe-compare-runs" not in raw, "the separate comparison dashboard must not be linked"
 
 
 def test_no_raw_trace_ids_or_secrets(dashboard: dict) -> None:

@@ -43,9 +43,9 @@ DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-runs.json"
 HOME_FILE = DASHBOARDS_DIR / "ci-observe-runs-home.json"
 
 # Datasource uids owned by the ci-observe capture backend. They are created
-# outside this dashboard (datasource provisioning), never inside it. The
-# Prometheus uid is deliberately absent: cluster evidence (Q5) is deferred and
-# no panel may imply it exists.
+# outside this dashboard (datasource provisioning), never inside it.
+# ci-observe-metrics carries the cluster metrics in the Environment row and
+# ci-observe-logs carries the Kubernetes events in the Events row.
 CI_OBSERVE_DATASOURCE_UIDS = {"ci-observe-traces", "ci-observe-logs", "ci-observe-metrics"}
 
 # Grafana built-in variables ($__interval, $__value.raw, ...) are allowed
@@ -71,18 +71,24 @@ IDENTITY_ATTRIBUTES = {
     "osac.ci.cluster_uid": "Cluster UID",
 }
 
-# Links to dashboards owned by other workstreams. The UIDs and slugs are the
-# contract; the target dashboards may not exist yet. The GitHub job and JUnit
-# evidence and the cluster metrics are sections of this dashboard now, so the
-# only outbound links are the entry page and the comparison page.
-COMPARE_LINK = "/d/ci-observe-compare-runs/ci-observe-compare-runs?orgId=1"
+# Links to dashboards owned by other workstreams. The GitHub job and JUnit
+# evidence, the cluster metrics and the Kubernetes events are sections of this
+# dashboard now, so the only outbound links are the entry page and the Compare
+# section of Trends (the separate comparison dashboard is going away).
+COMPARE_LINK = "/d/ci-observe-trends/ci-observe-e28094-trends?orgId=1"
 HOME_LINK_PREFIX = "/d/ci-observe-runs-home/ci-observe-e28094-test-runs"
 DETAIL_LINK_PREFIX = "/d/ci-observe-runs/ci-observe-e28094-run-investigation"
 
-# The two collapsed sections that absorbed the deleted Cluster and Run
-# evidence dashboards.
+# The collapsed sections that absorbed the deleted Cluster and Run evidence
+# dashboards, plus the Events section that makes the stored Kubernetes events
+# readable.
 CI_EVIDENCE_ROW = "CI evidence"
 ENVIRONMENT_ROW = "Environment"
+EVENTS_ROW = "Events"
+
+# The Run table derives the artifacts link from its own run URL; no artifact id
+# is stored anywhere in the dashboard.
+ARTIFACTS_URL = "${__value.text}#artifacts"
 
 
 @pytest.fixture(scope="module")
@@ -243,6 +249,7 @@ def test_rows_present(dashboard: dict) -> None:
         "Waits",
         "Service requests",
         "Environment",
+        "Events",
     ]
 
 
@@ -277,12 +284,14 @@ def test_dashboard_description_explains_reading_order(dashboard: dict) -> None:
         "Waits",
         "Service requests",
         "Environment",
+        "Events",
     ]
     for row in rows:
         assert row in description, f"dashboard description does not mention the {row} row"
     assert "collapsed Run identity" in description
     assert "collapsed CI evidence" in description
     assert "collapsed Environment" in description
+    assert "collapsed Events" in description
     assert "narrower range can hide" in description, "description must warn about narrow time ranges"
 
 
@@ -643,29 +652,105 @@ def _row(dashboard: dict, title: str) -> dict:
 
 
 def test_cluster_panels_live_only_in_the_environment_row(dashboard: dict) -> None:
-    """Cluster evidence is metrics, not logs or events: kubelet series belong
-    to the Environment row and nowhere else."""
+    """Cluster metrics belong to the Environment row and Kubernetes events to
+    the Events row. No panel offers raw pod logs: the collector cannot read
+    /var/log/pods, so they exist only in the run's GitHub artifact."""
     environment = {id(panel) for panel in _iter_panels(_row(dashboard, ENVIRONMENT_ROW)["panels"])}
+    events = {id(panel) for panel in _iter_panels(_row(dashboard, EVENTS_ROW)["panels"])}
     for panel in _iter_panels(dashboard["panels"]):
-        assert panel["type"] != "logs", f"{panel['title']}: pod logs have no readable view yet"
+        assert panel["type"] != "logs", f"{panel['title']}: pod logs have no readable view on this page"
+        datasource = (panel.get("datasource") or {}).get("uid")
         for target in panel.get("targets", []):
             expr = target.get("expr", "")
-            if "k8s_" in expr:
+            if "k8s_" not in expr:
+                continue
+            if datasource == "ci-observe-metrics":
                 assert id(panel) in environment, f"{panel['title']}: kubelet metrics belong to Environment"
+            elif datasource == "ci-observe-logs":
+                assert id(panel) in events, f"{panel['title']}: Kubernetes events belong to Events"
         if panel["type"] == "timeseries":
             assert id(panel) in environment, f"{panel['title']}: metric charts belong to Environment"
 
 
 def test_where_the_evidence_lives_is_explained(dashboard: dict) -> None:
-    """The link panel names the two sections that absorbed the deleted
-    dashboards, and keeps the captured logs reachable through Explore."""
+    """The link panel names the sections that hold each kind of evidence and
+    sends pod logs to the artifact, because Loki never receives them."""
     panel = _panels_by_title(dashboard)["Where is the rest of the evidence?"]
     content = panel["options"]["content"]
     assert CI_EVIDENCE_ROW in content
     assert ENVIRONMENT_ROW in content
+    assert EVENTS_ROW in content
     assert COMPARE_LINK in content, "the comparison link must not pass a capture id the target ignores"
-    assert "osac_ci_capture_id" in content, "the captured logs must stay reachable through a link"
-    assert "no readable view" in content, "cluster events and pod logs are still not shown"
+    assert "Compare section" in content, "the link must say where in Trends the cohort is picked"
+    assert "ci-observe-compare-runs" not in content, "the deleted comparison dashboard must not be linked"
+    assert "explore?" not in content, "pod logs are not in Loki, so there is nothing to query in Explore"
+    assert "/var/log/pods" in content, "the panel must say why pod logs are not in Loki"
+    assert "failure.json" in content
+    assert "#artifacts" in content
+    assert "7 days" in content
+
+
+def test_run_table_links_to_the_artifacts_page(dashboard: dict) -> None:
+    """The Run table's link cell carries the artifacts link, derived from the
+    run URL it already displays. No artifact id is invented anywhere."""
+    panel = _panels_by_title(dashboard)["Run"]
+    override = _override_for(panel, "url")
+    assert override is not None, "the Run table needs a url override for its links"
+    properties = {prop["id"]: prop["value"] for prop in override["properties"]}
+    urls = [link["url"] for link in properties["links"]]
+    assert urls == ["${__value.text}", ARTIFACTS_URL]
+    titles = " ".join(link["title"] for link in properties["links"])
+    for content in ("failure.json", "pod logs", "cluster snapshots", "7 days"):
+        assert content in titles, f"the artifacts link must say what is inside: {content}"
+    assert "/artifacts/" not in DASHBOARD_FILE.read_text(), "an artifact id must never be hard-coded"
+    # The failed-tests table truncates on purpose; it must say where the
+    # untruncated per-test detail is.
+    failed = _panels_by_title(dashboard)["Failed tests"]
+    assert "failure.json" in failed["description"]
+    assert "artifacts link" in failed["description"]
+    assert "7 days" in failed["description"]
+
+
+def test_events_row_and_panel(dashboard: dict) -> None:
+    """The stored Kubernetes events are a Loki table inside a collapsed row."""
+    row = _row(dashboard, EVENTS_ROW)
+    assert row["collapsed"] is True
+    (panel,) = row["panels"]
+    assert panel["type"] == "table"
+    assert panel["datasource"] == {"type": "loki", "uid": "ci-observe-logs"}
+    (target,) = panel["targets"]
+    expr = target["expr"]
+    assert expr.startswith('{osac_ci_capture_id="$capture_id"}')
+    # Labels the k8s_objects receiver sets: k8s.resource.name and event.domain
+    # on the log record, the namespace on the resource. Structured metadata is
+    # filtered with the same label-filter syntax in Loki 3.
+    assert 'k8s_resource_name="events"' in expr
+    assert 'event_domain="k8s"' in expr
+    # The body is the watch record {"type": ..., "object": {...}}; the json
+    # stage is what turns it into columns.
+    assert "| json" in expr
+    for body_field in (
+        'event_type="object.type"',
+        'event_reason="object.reason"',
+        'event_message="object.message"',
+        'object_kind="object.involvedObject.kind"',
+        'object_name="object.involvedObject.name"',
+    ):
+        assert body_field in expr, f"the events query must extract {body_field}"
+    assert 'event_type="type"' not in expr, "the body's top-level type is the watch action (ADDED/MODIFIED)"
+    for field in ("k8s_namespace_name", "event_type", "event_reason", "object_kind", "object_name", "event_message"):
+        assert _override_for(panel, field) is not None, f"the events table must show {field}"
+    type_override = _override_for(panel, "event_type")
+    type_mappings = next(prop["value"] for prop in type_override["properties"] if prop["id"] == "mappings")
+    colors = type_mappings[0]["options"]
+    assert colors["Normal"]["color"] == "green"
+    assert colors["Warning"]["color"] == "orange", "a Warning event must be visible without reading the message"
+    assert [t["id"] for t in panel["transformations"]] == ["merge", "organize"], (
+        "per-label-set frames must merge before the column layout is applied"
+    )
+    excluded = panel["transformations"][1]["options"]["excludeByName"]
+    assert excluded["Line"] is True, "the raw watch record must not be a column of its own"
+    assert excluded["osac_ci_capture_id"] is True, "the capture id is the page variable, not a column"
 
 
 # ---------------------------------------------------------------------------
@@ -779,6 +864,11 @@ def test_waits_panel(dashboard: dict) -> None:
     texts = _mapping_texts(panel, "osac.wait.resource_kind")
     assert "not recorded" in texts
     assert "wall" in panel["description"].lower(), "waits must not be presented as runner wall time"
+    # Tempo's default max_spans_per_span_set is 100 and it rejects more, so the
+    # target stays at 100 and the description says what that cap means.
+    assert panel["targets"][0]["spss"] == 100
+    assert "100 longest waits" in panel["description"]
+    assert "artifact" in panel["description"], "pod logs are in the artifact, not in Loki"
 
 
 # ---------------------------------------------------------------------------
