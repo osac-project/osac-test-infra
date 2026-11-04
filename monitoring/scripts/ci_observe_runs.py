@@ -98,7 +98,11 @@ class CIObserveRuns:
     # error -- treated as a failed chunk, never as "no captures". A response
     # whose own metrics say it did not finish every job is treated the same
     # way (see _tag_values_complete).
-    TEMPO_TIMEOUT_SECONDS = 5
+    # The tag-values index scan is not cheap: a 7-day window took ~20s on the
+    # central Tempo while a cohort was ingesting. Five seconds turned every
+    # row into `unknown`, so leave headroom for a loaded backend. The answer
+    # is cached for 60s, and a slow first load is better than a false verdict.
+    TEMPO_TIMEOUT_SECONDS = 45
     # Tempo answers only for spans it has indexed. A capture that closed
     # seconds ago may not be searchable yet, so a run younger than this is
     # `unknown`: too new to judge.
