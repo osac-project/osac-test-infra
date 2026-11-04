@@ -13,7 +13,7 @@ If Grafana will not load, or you see no data for a run you know finished, read [
 
 Open the **ci-observe** folder in Grafana and pick **CI Observe — Start here**. The page lists recent runs. A run with a capture links to it. A run with no capture appears as `not collected` with a link to GitHub, so an ingest failure is visible instead of hidden.
 
-The page's rule is that it takes a run id, a capture id, a pull request number, a test id, or nothing. Run id and capture id work today: type either into the **Find** box and the cards and tables narrow to matching runs. The pull request number and test id lookups are being added.
+The page's rule is that it takes a run id, a capture id, a pull request number, a test id, or nothing. Run id and capture id work in the **Find** box. The pull request and test id lookups sit next to it and open the selected pull request or test.
 
 A capture is one E2E workflow run that had ci-observe enabled. Its id has three parts: `bmaas-main-41318528583-a1` is the suite, the GitHub run id, and the run attempt.
 
@@ -41,18 +41,18 @@ The capture page holds the whole run, in collapsed sections:
 | **Waits** | Which named waits dominated a slow test? |
 | **Service requests** | What did the OSAC services do? |
 | **Environment** | How many pods existed, and what did they use in CPU and memory? |
-| **Events** | What did the cluster report? (row being added) |
+| **Events** | What did the cluster report? |
 
 **Environment** reads metrics, not spans. Set the time range to cover the capture, because a finished capture has no samples in "now". Samples are one minute apart and kept for 15 days.
 
-The **Events** row reads the Kubernetes events already stored in Loki, labelled by capture id. That row is being added. Pod logs are not there: the collector cannot read `/var/log/pods`, so pod logs exist only in the GitHub artifact.
+The **Events** row reads the Kubernetes events already stored in Loki, labelled by capture id. The row reads them. Pod logs are not there: the collector cannot read `/var/log/pods`, so pod logs exist only in the GitHub artifact.
 
 ## Read one run in five steps
 
 1. **Find the run.** On **Start here**, the three cards at the top count the runs. `Runs with a session span` counts complete runs. `Failed runs` counts runs that ended in failure. `Missing session span` counts captures that sent test data but no run summary. The tables below list the runs, including `not collected` rows for runs with no capture.
 2. **Open the detail page.** Click a run id. The top row of the detail page is the summary: `Tests`, `Failed`, `Result`, `Session`, `Test time`, `Suite`, `PR`. Read `Result` first. If it says `Incomplete`, the run summary never arrived and the other cards describe only what did arrive.
 3. **Read the timeline.** `Test timeline` lists every test with its start time and duration. `Slowest tests` and `Failed tests, longest first` put the expensive and broken tests at the top. `Longest waits` shows the named waits inside tests, so a 16-minute test can turn into "instance RUNNING 282 s, metering heartbeats 60 s, deletion 243 s".
-4. **Open the evidence and the cluster.** Expand **CI evidence** for the GitHub job, step timings, the JUnit result, the failed tests and the artifact link. Expand **Environment** for the pods, their CPU and memory, and the node totals. The **Events** row (being added) shows what the cluster reported.
+4. **Open the evidence and the cluster.** Expand **CI evidence** for the GitHub job, step timings, the JUnit result, the failed tests and the artifact link. Expand **Environment** for the pods, their CPU and memory, and the node totals. The **Events** row shows what the cluster reported.
 5. **Compare, if you can.** If a second run has the same source revision, harness revision and test selection, open **Trends** and pick that cohort in **Compare**. The section shows the sample size before any table, because one run is not a comparison.
 
 ## How the data is structured

@@ -16,7 +16,7 @@ The split is deliberate:
 | What did one test do: spans, phases, waits? | Tempo capture | 30 days | single run, captured only |
 | What did the services do? | Tempo, Beyla spans | 30 days | single run, captured only |
 | What did the cluster do: pods, CPU, memory? | ci-observe Prometheus, labelled by capture id | 15 days | single run, captured only |
-| What happened in the cluster: events? | Loki, Kubernetes events labelled by capture id; read in the Capture page's Events row (being added) | Loki image default | single run, captured only |
+| What happened in the cluster: events? | Loki, Kubernetes events labelled by capture id; read in the Capture page's Events row | Loki image default | single run, captured only |
 | What did a pod log? | The run artifact (GitHub); pod logs are not delivered to Loki | 7 days | single run |
 | How long did each job and step take? | Workflow exporter SQLite | 60 days | single run |
 | Overall job pass rate, duration, MTTR | Central Prometheus `github_actions_*` and the exporter SQLite | 30 days metrics, 60 days SQLite | overall, every run |
@@ -48,6 +48,6 @@ The split is deliberate:
 - **Per-test history across all jobs**: the daily rollup exists and `ci-observe-trends.timer` runs it, but the first run can only cover the 7 days GitHub still holds. Older history cannot be reconstructed.
 - **Runtime image IDs**: current captures store `osac.ci.osac_image_ids=unknown`, so the requested image refs are recorded but the running image bytes are not. One capture with an ID for every OSAC Deployment container and `osac_image_ids_complete=true` proves the path.
 - **PR events and ejections**: `prs.db` holds the events, but ejections remain derived because GitHub keeps no merge-queue history. Queue runs carry no PR number and no capture; attaching both is a separate change to the queue workflow.
-- **Events**: the Kubernetes events are in Loki, labelled by capture id. The Capture page's readable Events row is being added.
+- **Events**: the Kubernetes events are in Loki, labelled by capture id. The Capture page's Events row reads them.
 - **Router access logs**: gathered into the artifact when the IngressController logs to Container; otherwise the artifact says access logging is disabled.
 - **Pod logs in Loki**: blocked by the collector's permissions, so pod logs stay in the 7-day artifact.

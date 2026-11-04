@@ -24,14 +24,14 @@ A run belongs to a **ref**. A ref is a branch or a pull request. `main` is a ref
 
 ## Starting a task
 
-The entry page takes a run id, a capture id, a pull request number, a test id, or nothing. Each input resolves to one dashboard in one step. Run id and capture id resolve today. The pull request number and test id lookups are being added.
+The entry page takes a run id, a capture id, a pull request number, a test id, or nothing. Each input resolves to one dashboard in one step. A run id and a capture id open their capture; a pull request number opens Pull requests; a test id opens Trends.
 
 | You have | Start at | It opens |
 |---|---|---|
 | A run id from Slack, for example `41554302161` | the entry page | that run's capture, or its row in the index marked `not collected` with a GitHub link |
 | A capture id, for example `vmaas-main-41554302161-a1` | the entry page | that capture |
-| A test id or name (being added) | the entry page | that test's history in Trends |
-| A pull request number (being added) | the entry page | that pull request's stage funnel |
+| A test id or name | the entry page | that test's history in Trends |
+| A pull request number | the entry page | that pull request's stage funnel |
 | A question about CI overall | Trends, Overview | pass rate, duration and failure mix |
 | Nothing | the entry page | the run index, searchable by run id |
 
@@ -87,13 +87,13 @@ The unit is one capture. The axis is time inside the run, bounded by the capture
 | Service | Beyla spans | What did the OSAC services do? |
 | Environment | pod and node metrics, events, pod lifecycle | What was the cluster doing? |
 
-The Capture page holds one section per layer: Run overview and Collection coverage for the verdict, CI evidence for the CI layer (GitHub jobs, steps, the JUnit result, the failed tests and the artifact link), Run identity for the SHAs and image refs, Tests and workers, Fixture work and Waits for the test layer, Service requests for the service layer, and Environment for the pod and node metrics. The Events row, which reads the Kubernetes events stored in Loki, is being added.
+The Capture page holds one section per layer: Run overview and Collection coverage for the verdict, CI evidence for the CI layer (GitHub jobs, steps, the JUnit result, the failed tests and the artifact link), Run identity for the SHAs and image refs, Tests and workers, Fixture work and Waits for the test layer, Service requests for the service layer, and Environment for the pod and node metrics. The Events row reads the Kubernetes events stored in Loki.
 
 The moment of failure is one vertical marker on every chart. It is derived from the end of the failed span, not stored, so it is exact on trace panels and within one minute on cluster panels.
 
 The CI evidence section carries the failed tests, the JUnit result and a link to the run's artifact. The artifact is the evidence bundle: the per-test `failure.json`, the pod logs and the cluster snapshots. GitHub deletes it after 7 days, so the page links to it rather than copying it. Pod logs exist only in that artifact: the collector cannot read `/var/log/pods`, so Loki holds no pod logs.
 
-Runtime image IDs are not resolved in current captures. `osac.ci.osac_image_ids` reads `unknown`, so a capture proves the requested image refs, not the running image bytes. The gap closes when a capture lists an ID for every OSAC Deployment container and `osac_image_ids_complete` is `true`; that capture is the proof.
+Runtime image IDs come from every Deployment in the observed namespace. A capture proves the running bytes when it lists an ID for every Deployment container and `osac_image_ids_complete` is `true`. Captures recorded before the namespace fix keep `unknown`; they are never rewritten.
 
 A run that produced no capture still appears in the index with verdict `not collected` and a link to GitHub. Otherwise the front door is blind exactly when ingest is broken.
 
@@ -216,7 +216,7 @@ Data that only describes the fleet is not admitted.
 ## What exists, and what is next
 
 1. The Grafana folder is split: `CI Fleet` and `ci-observe`.
-2. The entry page routes a run id or a capture id, with the run index behind an empty input. Pull request number and test id lookups are being added.
+2. The entry page routes a run id, a capture id, a pull request number or a test id, with the run index behind an empty input.
 3. Capture is one page: one section per layer, one timeline, no new data.
 
 Next: the Events row on Capture, runtime image IDs that resolve in a live capture, router access logs when the ingress controller writes them to Container, and the queue-workflow change that gives a `merge_group` run its PR number and capture.
