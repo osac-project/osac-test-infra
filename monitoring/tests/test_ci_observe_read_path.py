@@ -400,15 +400,15 @@ def test_the_harness_names_a_429_and_a_500():
 
 
 def test_four_readers_failing_the_p95_headroom_are_named():
-    single = harness.Load([harness.Result("u", 200, {}, 0.100)])
-    concurrent = harness.Load([harness.Result("u", 200, {}, 0.250)])
+    single = harness.Load([harness.Result("u", 200, {}, 0.600)])
+    concurrent = harness.Load([harness.Result("u", 200, {}, 1.500)])
 
     check = next(
         check for check in harness.check_concurrency("runs", single, concurrent)
         if check.name == "runs/4-readers p95"
     )
     assert check.ok is False
-    assert "0.250s" in check.detail
+    assert "1.500s" in check.detail
 
 
 def test_sub_millisecond_jitter_is_not_a_headroom_failure():
@@ -422,7 +422,9 @@ def test_sub_millisecond_jitter_is_not_a_headroom_failure():
         if check.name == "runs/4-readers p95"
     )
     assert check.ok is True
-    assert harness.CONCURRENCY_MIN_SECONDS == 0.050
+    # Four Python threads share one interpreter: the ratio only has to catch
+    # real serialization, and the absolute ceiling is one second.
+    assert harness.CONCURRENCY_MIN_SECONDS == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +440,25 @@ def test_a_registry_gap_names_the_missing_capture():
     assert "1 missing" in gap.detail
 
     assert harness.check_superset(registry, {"a"}, "prometheus").ok is True
+
+
+def test_a_registry_poll_lag_is_retried_once():
+    """Prometheus scrapes before the registry polls. A capture that arrived
+    seconds ago is not a lost capture."""
+    checks = harness.check_store_supersets({"a"}, {"loki": {"a", "b"}}, lambda: {"a", "b"})
+    assert all(check.ok for check in checks)
+
+
+def test_a_real_gap_survives_the_retry():
+    checks = harness.check_store_supersets({"a"}, {"loki": {"a", "b"}}, lambda: {"a"})
+    assert [check.ok for check in checks] == [False]
+
+
+def test_no_retry_when_every_store_is_covered():
+    calls = []
+    checks = harness.check_store_supersets({"a", "b"}, {"loki": {"a", "b"}}, lambda: calls.append(1))
+    assert all(check.ok for check in checks)
+    assert calls == []
 
 
 def test_registry_ids_are_read_from_either_row_key():

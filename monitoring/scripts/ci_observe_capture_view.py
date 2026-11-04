@@ -730,7 +730,9 @@ class CIObserveCaptureView:
         window_end = int(window["to"].timestamp())
         search_window = {"start": window_start, "end": window_end}
 
-        primary = f'resource."{CAPTURE_ATTRIBUTE}"={quoted} && name="test run"'
+        # TraceQL requires a braces-enclosed spanset selector. Without them
+        # Tempo answers 400 and the page shows unknown for every capture.
+        primary = f'{{ resource."{CAPTURE_ATTRIBUTE}"={quoted} && name="test run" }}'
         try:
             trace_ids = self._search(primary, search_window)
         except TempoBusy as error:
@@ -743,7 +745,10 @@ class CIObserveCaptureView:
                 notes.append(f"the session search returned {len(trace_ids)} traces; using the first ({trace_id})")
             return trace_id, "ok", notes
 
-        fallback = f'resource."{CAPTURE_ATTRIBUTE}"={quoted} && .pytest.span_type = "test"'
+        fallback = (
+            f'{{ resource."{CAPTURE_ATTRIBUTE}"={quoted} '
+            '&& .pytest.span_type = "test" }'
+        )
         try:
             trace_ids = self._search(fallback, search_window)
         except TempoBusy as error:
