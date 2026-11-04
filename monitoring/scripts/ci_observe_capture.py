@@ -261,7 +261,21 @@ def _osac_images(kubeconfig: Path, namespace: str) -> str:
 
 
 def osac_image_ids(kubeconfig: Path, namespace: str) -> OSACImageIDCapture:
-    """Return runtime IDs and whether each expected OSAC replica was observed."""
+    """Return runtime IDs and whether each expected OSAC replica was observed.
+
+    The population is every Deployment in the observed namespace, the same
+    population ``_osac_images`` reads. OSAC has no label shared by all of its
+    Deployments: the fulfillment services carry ``app=<name>``, the operator
+    workloads carry ``app.kubernetes.io/instance=osac`` and the Ansible
+    Automation Platform workloads carry ``app.kubernetes.io/name``. A
+    ``app.kubernetes.io/part-of=osac`` filter matches none of them, which
+    reported every live capture as unknown.
+
+    Each ID is read from ``.status.containerStatuses[].imageID`` of a Running
+    pod whose ReplicaSet the Deployment controls. Init containers are not
+    expected entries: they have exited before the main containers run, and
+    their IDs describe a start step, not the workload.
+    """
     try:
         raw = _kubectl(kubeconfig, "get", "deployments,replicasets,pods", "-n", namespace, "-o", "json")
         result = json.loads(raw)
@@ -285,9 +299,6 @@ def osac_image_ids(kubeconfig: Path, namespace: str) -> OSACImageIDCapture:
         if not isinstance(name, str):
             continue
         if resource.get("kind") == "Deployment":
-            labels = metadata.get("labels")
-            if not isinstance(labels, dict) or labels.get("app.kubernetes.io/part-of") != "osac":
-                continue
             spec = resource.get("spec")
             template = spec.get("template") if isinstance(spec, dict) else None
             pod_spec = template.get("spec") if isinstance(template, dict) else None

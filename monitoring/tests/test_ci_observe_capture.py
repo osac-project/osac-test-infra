@@ -410,13 +410,60 @@ def test_osac_images_degrades_to_unknown_on_any_failure(
     assert capture_module._osac_images(Path("/fake/kubeconfig"), "osac-e2e-ci") == "unknown"
 
 
-def test_osac_image_ids_include_only_running_osac_deployment_pods(
+def test_osac_image_ids_read_a_running_deployment_pod_without_a_part_of_label(
     *, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A live OSAC namespace has no Deployment carrying
+    app.kubernetes.io/part-of=osac: the fulfillment services carry only
+    app=<name>, the operator workloads app.kubernetes.io/instance=osac. The
+    population is every Deployment in the observed namespace -- the same
+    population osac_images lists -- so an unlabelled Deployment resolves."""
+    digest = "sha256:" + "a" * 64
     resources = [
         {
             "kind": "Deployment",
-            "metadata": {"name": "fulfillment", "labels": {"app.kubernetes.io/part-of": "osac"}},
+            "metadata": {"name": "fulfillment-grpc-server", "labels": {"app": "fulfillment-grpc-server"}},
+            "spec": {"replicas": 1, "template": {"spec": {"containers": [{"name": "grpc-server"}]}}},
+        },
+        {
+            "kind": "ReplicaSet",
+            "metadata": {
+                "name": "fulfillment-grpc-server-57b69f6588",
+                "ownerReferences": [{"kind": "Deployment", "name": "fulfillment-grpc-server", "controller": True}],
+            },
+        },
+        {
+            "kind": "Pod",
+            "metadata": {
+                "name": "fulfillment-grpc-server-57b69f6588-cwjwt",
+                "ownerReferences": [
+                    {"kind": "ReplicaSet", "name": "fulfillment-grpc-server-57b69f6588", "controller": True}
+                ],
+            },
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{"name": "grpc-server", "imageID": f"localhost/component-0-pr@{digest}"}],
+            },
+        },
+    ]
+    monkeypatch.setattr(capture_module, "_kubectl", lambda *args, **kwargs: json.dumps({"items": resources}))
+
+    result = capture_module.osac_image_ids(Path("/fake/kubeconfig"), "osac-e2e-ci")
+    assert result.image_ids == f"fulfillment-grpc-server/grpc-server=localhost/component-0-pr@{digest}"
+    assert result.complete == "true"
+
+
+def test_osac_image_ids_skip_pending_pods_and_mark_unstarted_containers(
+    *, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only Running pods count, and only for containers the Deployment
+    declares: a Pending pod contributes nothing, a container with no running
+    status is "unknown", and an image ID outside the safe charset degrades
+    that one entry instead of taking the others with it."""
+    resources = [
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "fulfillment", "labels": {"app.kubernetes.io/instance": "osac"}},
             "spec": {
                 "replicas": 1,
                 "template": {
@@ -432,21 +479,10 @@ def test_osac_image_ids_include_only_running_osac_deployment_pods(
             },
         },
         {
-            "kind": "Deployment",
-            "metadata": {"name": "metrics-adapter", "labels": {"app.kubernetes.io/part-of": "other"}},
-        },
-        {
             "kind": "ReplicaSet",
             "metadata": {
                 "name": "fulfillment-abc123",
                 "ownerReferences": [{"kind": "Deployment", "name": "fulfillment", "controller": True}],
-            },
-        },
-        {
-            "kind": "ReplicaSet",
-            "metadata": {
-                "name": "metrics-adapter-abc123",
-                "ownerReferences": [{"kind": "Deployment", "name": "metrics-adapter", "controller": True}],
             },
         },
         {
@@ -472,14 +508,6 @@ def test_osac_image_ids_include_only_running_osac_deployment_pods(
             },
             "status": {"phase": "Pending", "containerStatuses": [{"name": "grpc-server", "imageID": "pending"}]},
         },
-        {
-            "kind": "Pod",
-            "metadata": {
-                "name": "metrics-adapter-abc123-pod1",
-                "ownerReferences": [{"kind": "ReplicaSet", "name": "metrics-adapter-abc123", "controller": True}],
-            },
-            "status": {"phase": "Running", "containerStatuses": [{"name": "adapter", "imageID": "other"}]},
-        },
     ]
     monkeypatch.setattr(capture_module, "_kubectl", lambda *args, **kwargs: json.dumps({"items": resources}))
 
@@ -491,11 +519,113 @@ def test_osac_image_ids_include_only_running_osac_deployment_pods(
     assert result.complete == "false"
 
 
+def test_osac_image_ids_ignore_init_containers(*, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An init container has exited before the main containers run, so its ID
+    is not a running workload image: it is neither an expected entry nor a
+    reason to report the capture incomplete."""
+    resources = [
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "osac-aap-gateway", "labels": {"app.kubernetes.io/name": "osac-aap"}},
+            "spec": {
+                "replicas": 1,
+                "template": {
+                    "spec": {
+                        "initContainers": [{"name": "init-database"}],
+                        "containers": [{"name": "proxy"}, {"name": "api"}],
+                    }
+                },
+            },
+        },
+        {
+            "kind": "ReplicaSet",
+            "metadata": {
+                "name": "osac-aap-gateway-65946b9bdd",
+                "ownerReferences": [{"kind": "Deployment", "name": "osac-aap-gateway", "controller": True}],
+            },
+        },
+        {
+            "kind": "Pod",
+            "metadata": {
+                "name": "osac-aap-gateway-65946b9bdd-mvlh9",
+                "ownerReferences": [{"kind": "ReplicaSet", "name": "osac-aap-gateway-65946b9bdd", "controller": True}],
+            },
+            "status": {
+                "phase": "Running",
+                "initContainerStatuses": [
+                    {"name": "init-database", "imageID": "quay.io/osac/init-database@sha256:init"}
+                ],
+                "containerStatuses": [
+                    {"name": "proxy", "imageID": "quay.io/osac/gateway-proxy@sha256:proxy"},
+                    {"name": "api", "imageID": "quay.io/osac/gateway@sha256:api"},
+                ],
+            },
+        },
+    ]
+    monkeypatch.setattr(capture_module, "_kubectl", lambda *args, **kwargs: json.dumps({"items": resources}))
+
+    result = capture_module.osac_image_ids(Path("/fake/kubeconfig"), "osac-e2e-ci")
+    assert result.image_ids == (
+        "osac-aap-gateway/api=quay.io/osac/gateway@sha256:api;"
+        "osac-aap-gateway/proxy=quay.io/osac/gateway-proxy@sha256:proxy"
+    )
+    assert result.complete == "true"
+
+
+def test_osac_image_ids_mark_only_the_container_without_an_image_id(
+    *, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A container status with no imageID leaves that one entry "unknown" and
+    the other containers concrete: a runtime that reports no ID is a missing
+    fact about one image, not about the whole capture."""
+    resources = [
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "fulfillment-grpc-server", "labels": {"app": "fulfillment-grpc-server"}},
+            "spec": {
+                "replicas": 1,
+                "template": {"spec": {"containers": [{"name": "grpc-server"}, {"name": "sidecar"}]}},
+            },
+        },
+        {
+            "kind": "ReplicaSet",
+            "metadata": {
+                "name": "fulfillment-grpc-server-57b69f6588",
+                "ownerReferences": [{"kind": "Deployment", "name": "fulfillment-grpc-server", "controller": True}],
+            },
+        },
+        {
+            "kind": "Pod",
+            "metadata": {
+                "name": "fulfillment-grpc-server-57b69f6588-cwjwt",
+                "ownerReferences": [
+                    {"kind": "ReplicaSet", "name": "fulfillment-grpc-server-57b69f6588", "controller": True}
+                ],
+            },
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [
+                    {"name": "grpc-server", "imageID": "localhost/component-0-pr@sha256:abc"},
+                    {"name": "sidecar"},
+                ],
+            },
+        },
+    ]
+    monkeypatch.setattr(capture_module, "_kubectl", lambda *args, **kwargs: json.dumps({"items": resources}))
+
+    result = capture_module.osac_image_ids(Path("/fake/kubeconfig"), "osac-e2e-ci")
+    assert result.image_ids == (
+        "fulfillment-grpc-server/grpc-server=localhost/component-0-pr@sha256:abc;"
+        "fulfillment-grpc-server/sidecar=unknown"
+    )
+    assert result.complete == "false"
+
+
 def test_osac_image_ids_marks_a_missing_replica(*, capture_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     resources = [
         {
             "kind": "Deployment",
-            "metadata": {"name": "osac-api", "labels": {"app.kubernetes.io/part-of": "osac"}},
+            "metadata": {"name": "osac-api", "labels": {"app.kubernetes.io/instance": "osac"}},
             "spec": {"replicas": 2, "template": {"spec": {"containers": [{"name": "api"}]}}},
         },
         {
@@ -542,7 +672,7 @@ def test_osac_image_ids_bounds_output_and_uses_unknown_fallback(
     resources = [
         {
             "kind": "Deployment",
-            "metadata": {"name": "osac", "labels": {"app.kubernetes.io/part-of": "osac"}},
+            "metadata": {"name": "osac", "labels": {"app.kubernetes.io/instance": "osac"}},
             "spec": {
                 "replicas": 1,
                 "template": {"spec": {"containers": [{"name": f"container-{number:03d}"} for number in range(80)]}},
@@ -588,7 +718,7 @@ def test_osac_image_ids_degrade_to_unknown_for_hostile_deployment_names(
     resources = [
         {
             "kind": "Deployment",
-            "metadata": {"name": 'evil${CI_OBSERVE_TEST_REF}|&"', "labels": {"app.kubernetes.io/part-of": "osac"}},
+            "metadata": {"name": 'evil${CI_OBSERVE_TEST_REF}|&"'},
             "spec": {"replicas": 1, "template": {"spec": {"containers": [{"name": "api"}]}}},
         }
     ]
