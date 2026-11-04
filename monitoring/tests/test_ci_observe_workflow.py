@@ -649,108 +649,106 @@ class TestVerifyStep:
     """The post-test verification: the loud backstop that makes a telemetry
     failure impossible to miss (2026-11-01: 30 green runs pushed into a dead
     central endpoint because every telemetry failure degraded to a
-    warning)."""
+    warning). The checks live in monitoring/scripts/ci_observe_verify.py so
+    they can be tested; the step only supplies the secret and the exit 0."""
 
     @pytest.fixture(scope="class")
     def verify(self, action: dict) -> dict:
         return step_by_id(action["runs"]["steps"], "verify")
 
-    def test_runs_after_the_test_and_is_loud_but_never_gates(self, verify: dict) -> None:
+    def test_runs_after_the_test_and_never_gates(self, verify: dict, action: dict) -> None:
         assert verify["if"] == "always() && !cancelled()"
         # The owner's rule: ci-observe is opt-in telemetry, so a delivery
-        # failure must be visible (::error, red step) but must never change
+        # failure must be visible (::warning, summary) but must never change
         # the job's conclusion or block the required E2E check.
         assert verify["continue-on-error"] is True
-        # It needs the cluster (port-forward to the gateway), like deploy.
-        assert verify["env"]["KUBECONFIG"] == "${{ inputs.kubeconfig-path }}"
+        assert "OTLP_PASSWORD_INPUT" in verify["env"]
+        assert verify["env"]["OTLP_PASSWORD_INPUT"] == "${{ inputs.otlp-password }}"
 
-    def test_error_message_never_implies_the_test_failed(self, verify: dict) -> None:
+    def test_delegates_to_the_tested_script_and_always_exits_zero(self, verify: dict, action: dict) -> None:
         script = verify["run"]
-        assert "telemetry was requested but did not reach the central backend" in script
-        assert "the test result above is unaffected" in script
-        assert "::error::" in script
-        assert "${GITHUB_STEP_SUMMARY}" in script
+        assert "monitoring/scripts/ci_observe_verify.py" in script
+        assert "verify" in script
+        assert "--ci-dir" in script
+        # A telemetry problem must never gate the test: every path is zero,
+        # and the step has no bare arithmetic command (the old
+        # `(( deficit = accepted - sent ))` exited 1 on a perfect capture).
+        assert script.rstrip().endswith("exit 0")
+        assert "exit 1" not in script
+        assert re.search(r"(?<!\$)\(\(", script) is None
+        # One port-forward: deploy opens :4317 and :8888 together, verify
+        # reuses it through the recorded port instead of opening a second.
+        assert "port-forward" not in script
+        assert "CI_OBSERVE_METRICS_PORT" in step_by_id(action["runs"]["steps"], "deploy")["run"]
 
-    def test_fails_when_telemetry_was_requested_but_never_started(self, verify: dict, action: dict) -> None:
+    def test_warning_text_never_implies_the_test_failed(self) -> None:
+        text = (REPO_ROOT / "monitoring" / "scripts" / "ci_observe_verify.py").read_text()
+        assert "the test result is unaffected" in text
+        assert "::warning::ci-observe:" in text
+        assert "::error::" not in text
+        assert "GITHUB_STEP_SUMMARY" in text
+
+    def test_checks_the_request_and_deployment_markers(self, action: dict) -> None:
         """An empty OTLP password is an intentional telemetry-less run and
-        exits success; a password that was passed (telemetry-requested
-        marker) followed by a failed deployment fails the job."""
-        script = verify["run"]
-        assert '[[ ! -f "${ci_dir}/telemetry-requested" ]]' in script
-        assert '[[ -f "${ci_dir}/deploy-failed" ]]' in script
-        deploy = step_by_id(action["runs"]["steps"], "deploy")
-        # The marker is written from the password input alone, BEFORE any
-        # validation can fail (an invalid capture id with a password set is
-        # a requested-but-never-started run, not a telemetry-less one).
-        marker = deploy["run"].index('touch "${ci_dir}/telemetry-requested"')
-        password_guard = deploy["run"].index('if [[ -n "${OTLP_PASSWORD_INPUT}" ]]; then')
-        capture_id_assignment = deploy["run"].index('capture_id="${CAPTURE_ID_INPUT:-')
-        assert marker > password_guard
-        assert marker < capture_id_assignment
+        stays quiet; a password that was passed (telemetry-requested marker)
+        followed by a failed deployment warns. The deploy step still writes
+        the markers before any validation can fail."""
+        text = (REPO_ROOT / "monitoring" / "scripts" / "ci_observe_verify.py").read_text()
+        assert 'ci_dir / "telemetry-requested"' in text
+        assert 'ci_dir / "deploy-failed"' in text
+        assert "never recorded a deployed gateway" in text
+        deploy = step_by_id(action["runs"]["steps"], "deploy")["run"]
+        marker = deploy.index('touch "${ci_dir}/telemetry-requested"')
+        password_guard = deploy.index('if [[ -n "${OTLP_PASSWORD_INPUT}" ]]; then')
+        capture_id_assignment = deploy.index('capture_id="${CAPTURE_ID_INPUT:-')
+        assert password_guard < marker < capture_id_assignment
 
-    def test_reads_the_gateway_self_metrics_over_the_standard_port(self, verify: dict) -> None:
-        script = verify["run"]
-        assert "svc/ci-observe-gateway :8888" in script
-        assert "curl -sf" in script
+    def test_reads_the_gateway_self_metrics_through_the_deploy_forward(self) -> None:
+        text = (REPO_ROOT / "monitoring" / "scripts" / "ci_observe_verify.py").read_text()
+        assert "CI_OBSERVE_METRICS_PORT" in text
+        assert "/metrics" in text
         # The parser tolerates the optional _total suffix a manually
         # configured prometheus reader appends (collector v0.119+).
-        assert 'sub(/_total$/, "", name)' in script
+        assert 'endswith("_total")' in text
 
-    def test_reads_every_delivery_counter_family(self, verify: dict) -> None:
-        """The four counter families, one per signal: receiver
-        accepted/refused and exporter sent/send_failed."""
-        script = verify["run"]
-        assert "for signal in spans log_records metric_points; do" in script
+    def test_reads_every_delivery_counter_family(self) -> None:
+        """The counter families, one per signal: receiver accepted/refused
+        and exporter sent/send_failed, plus the queue gauges."""
+        text = (REPO_ROOT / "monitoring" / "scripts" / "ci_observe_verify.py").read_text()
         for family in (
-            "otelcol_receiver_accepted_${signal}",
-            "otelcol_receiver_refused_${signal}",
-            "otelcol_exporter_sent_${signal}",
-            "otelcol_exporter_send_failed_${signal}",
+            "otelcol_receiver_accepted_{signal}",
+            "otelcol_receiver_refused_{signal}",
+            "otelcol_exporter_sent_{signal}",
+            "otelcol_exporter_send_failed_{signal}",
         ):
-            assert f'"{family}"' in script, family
-        # The per-signal sent values for the summary line are read by their
-        # full names.
-        for counter in (
-            "otelcol_exporter_sent_spans",
-            "otelcol_exporter_sent_log_records",
-            "otelcol_exporter_sent_metric_points",
-        ):
-            assert f"counter_sum {counter}" in script, counter
+            assert family in text, family
+        assert "otelcol_exporter_enqueue_failed_{signal}" in text
+        assert "otelcol_exporter_queue_size" in text
 
-    def test_failure_conditions(self, verify: dict) -> None:
-        script = verify["run"]
-        # Any refused input or failed send is a hard failure.
-        assert "otelcol_receiver_refused_${signal}" in script
-        assert "otelcol_exporter_send_failed_${signal}" in script
-        # Accepted but never delivered: the deficit (accepted - sent) is
-        # tolerated while small (in-flight batches) or shrinking (queue
-        # draining); a large, non-shrinking deficit is the failure.
-        assert "(( deficit = accepted - sent ))" in script
-        assert "(( tolerance = accepted / 50 + 1000 ))" in script
-        assert "(( deficit > tolerance ))" in script
-        assert "(( deficit_min < deficit_first ))" in script
-        # Nothing collected during a non-trivial run.
-        assert "(( total_sent == 0 ))" in script
-        assert "(( duration > 60 ))" in script
-        # The dead local path (the deploy step's port-forward) is caught too.
-        assert "kill -0" in script
+    def test_failure_conditions_are_warnings_not_verdicts(self) -> None:
+        text = (REPO_ROOT / "monitoring" / "scripts" / "ci_observe_verify.py").read_text()
+        # Real drops: refused input and batches the exporter could not queue.
+        assert "the gateway dropped telemetry" in text
+        # send_failed is retried and reported as information.
+        assert "information rather than a drop" in text
+        # A stuck queue is residue in flight, not a failure.
+        assert "batches are still in flight" in text
+        # The deficit is reported, never used as a threshold.
+        assert "reported in flight" in text
+        assert "tolerance" not in text
 
-    def test_green_path_writes_the_delivered_line_to_the_summary(self, verify: dict) -> None:
-        script = verify["run"]
-        delivered = "telemetry delivered: ${sent_spans} spans, ${sent_log_records} logs, ${sent_metric_points} metrics"
-        assert delivered in script
+    def test_green_path_writes_the_delivered_line_to_the_summary(self) -> None:
+        text = (REPO_ROOT / "monitoring" / "scripts" / "ci_observe_verify.py").read_text()
+        assert "telemetry delivered: " in text
+        assert "spans" in text and "logs" in text and "metrics" in text
 
     def test_no_swallowed_failures(self, verify: dict) -> None:
-        """The verify step itself must never swallow an error: no `|| true`,
-        no stderr to /dev/null, every command's output lands in the log."""
+        """The verify step must not hide its own errors: no `|| true`, no
+        stderr to /dev/null. The one fallback warns."""
         script = verify["run"]
         assert "|| true" not in script
         assert "2>/dev/null" not in script
-
-    def test_stops_its_own_port_forward_with_a_warning_on_failure(self, verify: dict) -> None:
-        script = verify["run"]
-        assert "trap cleanup_verify_port_forward EXIT" in script
-        assert "::warning::ci-observe: failed to stop the verify port-forward" in script
+        assert "::warning::ci-observe:" in script
 
 
 def _shell_scripts() -> list[tuple[str, str]]:

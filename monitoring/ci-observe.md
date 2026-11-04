@@ -281,13 +281,29 @@ sync workflow's vault-auth and `ci-observe.py up --quadlet` steps on the
 monitoring-central runner, and nothing else. It deliberately has no
 schedule, for the same batch-dropping reason.
 
-The capture action verifies delivery after the test: it scrapes the gateway
-collector's self-metrics (`:8888`) and reports an error when telemetry was
-requested but never reached the central backend (deployment failed, receiver
-refused data, exporter send failures, sent less than accepted, or nothing
-collected at all). The verify step has `continue-on-error: true`, so the error
-is loud but never gating: the job result and the test's own exit code stay
-unchanged.
+The capture action verifies delivery after the test: it reads the gateway
+collector's self-metrics through the same port-forward the deploy step
+opened (one forward for `:4317` and `:8888`), and reports a warning when
+telemetry was requested but never reached the central backend (deployment
+failed, input was refused, batches could not be queued, or the exporter
+queue was still busy when a bounded wait expired). Send failures are
+information: the exporter retries them. Residue in the queue is reported as
+in flight, not as a verdict. The step always exits 0 and has
+`continue-on-error: true`, so it is loud but never gating: the job result
+and the test's own exit code stay unchanged.
+
+The action also posts one `osac_ci_capture_info` metric after deploy and
+again during verify, but only when the gateway actually deployed: both
+posts require `CI_OBSERVE_DEPLOYED=1` and no deploy-failure marker. A failed
+deploy posts nothing, because the run is a no-telemetry run and a registry
+capture with no data would read as a capture that lost its telemetry. The
+payload is value 1, the capture id as the resource attribute, and the run
+identity (`ci_run_id`, `ci_run_attempt`, `ci_suite`, `ci_pr`,
+`ci_workflow`, the refs and SHAs, and the test selection) as datapoint
+attributes. Those identity attributes stay on this one series; the resource
+processor never promotes them globally. A failed post is a warning. The
+central registry then knows the capture exists even when its traces and
+logs arrive late or not at all.
 
 The backend uses the persistent state directory `~/monitoring/ci-observe` and
 fixed loopback ports: UI 3300, OTLP 4318, Tempo 3200, Loki 3100 and Prometheus
