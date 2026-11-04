@@ -149,7 +149,7 @@ SHAs, deployment image refs, runtime image IDs and pytest selection:
 | `test_filter` | The exact pytest `-k` expression, or `none` when the run passed no filter. |
 | `test_marker` | The exact pytest `-m` expression, or `none` when the run passed no marker. |
 | `osac_images` | The Deployment spec image refs (including mutable tags) requested for the OSAC workloads. This existing attribute is unchanged. |
-| `osac_image_ids` | Runtime IDs from Running OSAC Deployment pods, plus `=unknown` entries for expected containers without enough IDs. A truncated list ends in `...[truncated]`. |
+| `osac_image_ids` | Runtime IDs from the Running pods of the namespace's Deployments, plus `=unknown` entries for expected containers without enough IDs. A truncated list ends in `...[truncated]`. |
 | `osac_image_ids_complete` | `true` only when every desired replica had an image ID and the list was not truncated. `false` marks missing IDs or truncation; `unknown` marks an unavailable query. |
 | `workflow`, `run_attempt` | GitHub workflow name and attempt number. |
 
@@ -197,12 +197,18 @@ design.
 
 `osac_images` and `osac_image_ids` answer different questions. The first
 keeps the requested Deployment spec refs, including mutable tags. The second
-reads `.status.containerStatuses[].imageID` only from Running pods owned by
-Deployments labeled `app.kubernetes.io/part-of=osac`. It compares those IDs
-with every declared OSAC Deployment container and its desired replica count.
-Missing IDs appear as `deployment/container=unknown`; the completeness
-attribute is false. The helper preserves underscores, rejects
-unsafe image ID characters and hostile deployment names (degrading the
+reads `.status.containerStatuses[].imageID` only from Running pods owned by a
+Deployment in the observed namespace, the same Deployments `osac_images`
+lists. The namespace is the population because OSAC sets no label shared by
+all of its Deployments: the fulfillment services carry `app=<name>`, the
+operator workloads carry `app.kubernetes.io/instance=osac`, and the Ansible
+Automation Platform workloads carry `app.kubernetes.io/name`. It compares
+those IDs with every declared Deployment container and its desired replica
+count. Init containers are not entries: they exit before the main containers
+run, so their IDs describe a start step, not the workload. Missing IDs appear
+as `deployment/container=unknown`; the completeness attribute is false. The
+helper preserves underscores, rejects unsafe image ID characters and hostile
+deployment names (degrading the
 whole value to `unknown`) instead of rewriting them, sorts the mappings
 and caps the value at 4 KiB. If the cap cuts the list, `...[truncated]`
 marks the end and completeness stays false. A scaled-to-zero Deployment

@@ -375,8 +375,9 @@ runs:
           osac_images="${osac_images:-unknown}"
 
           # Read runtime image IDs from Running OSAC Deployment pods. The
-          # shared helper follows Pod -> ReplicaSet -> Deployment ownership,
-          # requires the OSAC part-of label, and bounds/sanitizes the output.
+          # shared helper follows Pod -> ReplicaSet -> Deployment ownership
+          # for every Deployment in the observed namespace (OSAC sets no
+          # label shared by all of them), and bounds/sanitizes the output.
           image_id_capture="$(PYTHONPATH="${GITHUB_WORKSPACE}/monitoring/scripts" python3 - "${OBSERVED_NAMESPACE}" <<'PY'
         import os
         import sys
