@@ -3,13 +3,16 @@
 monitoring/config/grafana/dashboards/ci-observe-runs.json (one capture at a
 time) and ci-observe-runs-home.json (the run list) are provisioned by
 monitoring/config/grafana/dashboards.yml into the ci-observe folder next to the
-other dashboards. They query the ci-observe capture backend through the Tempo
-and Loki datasources, so these tests pin the datasource uids, the capture_id
-template variable and the TraceQL/LogQL shapes that the panels depend on.
+other dashboards.
 
-The queries themselves were validated against the live grafana/otel-lgtm
-stack (Tempo 2.10) with real captures; see the ci-observe plan for the
-recorded evidence. Live-verified Grafana/Tempo behaviors the dashboards rely
+The Capture page reads one document from the workflow exporter's
+/api/ci-observe/capture endpoint through Infinity. That document lists every
+classified span of the session trace, so the page shows exact counts and no
+Tempo search page size. These tests pin the endpoint URL, the document fields
+each panel selects, and the absence of TraceQL targets.
+
+The Start here page keeps its Tempo queries; its tests are at the bottom of
+this file. Live-verified Grafana/Tempo behaviors the Start here queries rely
 on:
 
 - A TraceQL search response only includes attribute columns for attributes
@@ -20,13 +23,7 @@ on:
 - The Tempo datasource stamps displayNameFromDS on every field (name ->
   "Name", duration -> "Duration", time -> "Start time", spanID -> "Span
   ID"), and the groupBy transformation names aggregated output columns
-  "<displayName> (agg)" while its config keys stay raw names. Overrides for
-  aggregated columns must therefore match "Span ID (count)", "Duration
-  (sum)", "Start time (min)" and friends, never the raw-name form.
-- Beyla (v1.47) marks gRPC spans with the span attributes
-  rpc.system.name = "grpc" and a string rpc.response.status_code ("OK",
-  "NOT_FOUND", ...); it does not set rpc.system or a numeric
-  rpc.grpc.status_code.
+  "<displayName> (agg)" while its config keys stay raw names.
 """
 
 from __future__ import annotations
@@ -42,53 +39,139 @@ DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "d
 DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-runs.json"
 HOME_FILE = DASHBOARDS_DIR / "ci-observe-runs-home.json"
 
-# Datasource uids owned by the ci-observe capture backend. They are created
-# outside this dashboard (datasource provisioning), never inside it.
-# ci-observe-metrics carries the cluster metrics in the Environment row and
-# ci-observe-logs carries the Kubernetes events in the Events row.
+# The one document every Capture panel reads. Panels may share it because the
+# endpoint caches each capture for 10 minutes.
+CAPTURE_URL = "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}"
+RUN_EVIDENCE_URL = "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}"
+
+# Datasource uids owned by the ci-observe backend. ci-observe-metrics carries
+# the cluster metrics in the Environment row, ci-observe-logs the Kubernetes
+# events in the Events row, and workflow-api the Infinity panels.
 CI_OBSERVE_DATASOURCE_UIDS = {"ci-observe-traces", "ci-observe-logs", "ci-observe-metrics"}
 
 # Grafana built-in variables ($__interval, $__value.raw, ...) are allowed
 # in queries; every other $name must be a dashboard template variable.
 GRAFANA_BUILTIN_VARIABLE = re.compile(r"^__")
 
-# Run identity attributes the Run identity row must display, mapped to plain
-# labels. Stamped by the Q1 workstream; old captures show "not collected".
-IDENTITY_ATTRIBUTES = {
-    "osac.ci.test_ref": "Test ref (requested)",
-    "osac.ci.test_sha": "Test SHA (resolved)",
-    "osac.ci.test_infra_ref": "Harness ref (requested)",
-    "osac.ci.test_infra_sha": "Harness SHA (resolved)",
-    "osac.ci.test_infra_workflow_sha": "Harness workflow SHA",
-    "osac.ci.test_suite": "Test paths",
-    "osac.ci.test_filter": "Test filter",
-    "osac.ci.test_marker": "Test marker",
-    "osac.ci.workflow": "Workflow",
-    "osac.ci.run_attempt": "Run attempt",
-    "osac.ci.osac_images": "OSAC images (specs)",
-    "osac.ci.osac_image_ids": "OSAC image IDs (running)",
-    "osac.ci.osac_image_ids_complete": "Image IDs complete",
-    "osac.ci.cluster_uid": "Cluster UID",
-}
-
-# Links to dashboards owned by other workstreams. The GitHub job and JUnit
-# evidence, the cluster metrics and the Kubernetes events are sections of this
-# dashboard now, so the only outbound links are the entry page and the Compare
-# section of Trends (the separate comparison dashboard is going away).
-COMPARE_LINK = "/d/ci-observe-trends/ci-observe-e28094-trends?orgId=1"
-HOME_LINK_PREFIX = "/d/ci-observe-runs-home/ci-observe-e28094-test-runs"
+# The Start here run-id column links into the investigation page.
 DETAIL_LINK_PREFIX = "/d/ci-observe-runs/ci-observe-e28094-run-investigation"
 
-# The collapsed sections that absorbed the deleted Cluster and Run evidence
-# dashboards, plus the Events section that makes the stored Kubernetes events
-# readable.
+# The collapsed sections that keep GitHub and cluster evidence on the page.
 CI_EVIDENCE_ROW = "CI evidence"
+IDENTITY_ROW = "Run identity (source commit, harness commit, selection)"
 ENVIRONMENT_ROW = "Environment"
 EVENTS_ROW = "Events"
 
-# The Run table derives the artifacts link from its own run URL; no artifact id
-# is stored anywhere in the dashboard.
-ARTIFACTS_URL = "${__value.text}#artifacts"
+# A capture document with exactly the keys the read-path spec defines. Every
+# Infinity column selector on the page must resolve against this document.
+CAPTURE_DOC = {
+    "capture_id": "vmaas-main-41709318840-a1",
+    "state": "ok",
+    "session": {
+        "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+        "started_at": "2026-11-04T09:12:03Z",
+        "duration_seconds": 1554.5,
+        "status": "error",
+        "tests": 148,
+        "test_attempts": 444,
+        "workers": 8,
+        "span_total": 1854,
+    },
+    "coverage": {
+        "spans_total": 1854,
+        "spans_classified": 1854,
+        "spans_unclassified": 0,
+        "session_span": True,
+        "service_calls": {"sampled": True},
+    },
+    "identity": {
+        "capture_id": "vmaas-main-41709318840-a1",
+        "run_id": "41709318840",
+        "run_attempt": "1",
+        "suite": "vmaas",
+        "pr": "752",
+        "workflow": "E2E VMaaS Full Install",
+        "test_ref": "main",
+        "test_sha": "d290a6e4f7cd2f2c7b6f1a5c1f2e3d4c5b6a7980",
+        "test_infra_ref": "main",
+        "test_infra_sha": "4cacab7a1b2c3d4e5f60718293a4b5c6d7e8f901",
+        "test_infra_workflow_sha": "d290a6e4f7cd2f2c7b6f1a5c1f2e3d4c5b6a7980",
+        "test_suite": "tests/e2e/vmaas/ tests/e2e/references/",
+        "test_filter": "none",
+        "test_marker": "not requires_caas and not requires_bmaas",
+        "session_trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+        "identity_source": "info",
+        "capture_started_at": "2026-11-04T09:12:03Z",
+    },
+    "tests": [
+        {
+            "name": "tests/e2e/vmaas/test_cluster_create.py::TestCluster::test_create",
+            "worker": "gw3",
+            "status": "error",
+            "started_at": "2026-11-04T09:13:10Z",
+            "duration_seconds": 95.2,
+        },
+        {
+            "name": "tests/e2e/vmaas/test_network.py::test_virtual_network",
+            "worker": "gw1",
+            "status": "ok",
+            "started_at": "2026-11-04T09:14:45Z",
+            "duration_seconds": 12.4,
+        },
+    ],
+    "waits": [
+        {
+            "name": "wait for ComputeInstance RUNNING",
+            "resource_kind": "ComputeInstance",
+            "resource_id": "ci-9f2d",
+            "attempts": 47,
+            "condition_met": "true",
+            "status": "ok",
+            "started_at": "2026-11-04T09:15:00Z",
+            "duration_seconds": 282.0,
+        }
+    ],
+    "fixtures": [
+        {
+            "name": "cluster",
+            "scope": "session",
+            "worker": "gw0",
+            "started_at": "2026-11-04T09:12:05Z",
+            "duration_seconds": 610.0,
+        }
+    ],
+    "fixture_uses": [
+        {
+            "fixture_name": "cluster",
+            "test": "tests/e2e/vmaas/test_cluster_create.py::TestCluster::test_create",
+            "worker": "gw3",
+            "started_at": "2026-11-04T09:13:10Z",
+            "duration_seconds": 0.4,
+        }
+    ],
+    "failed_tests": [
+        {
+            "classname": "tests.e2e.vmaas.test_cluster_create.TestCluster",
+            "name": "test_create",
+            "type": "failure",
+            "message": "AssertionError: cluster did not reach Ready",
+            "time_s": 95.2,
+        }
+    ],
+    "notes": [],
+}
+
+# Counts the page must take from the endpoint, never from a Tempo search.
+# Root selector -> selected column; a list root is counted by row, a scalar
+# root by its own count field.
+COUNT_SOURCES = {
+    "Tests": ("session", "tests", ["lastNotNull"]),
+    "Test attempts": ("session", "test_attempts", ["lastNotNull"]),
+    "Wait spans": ("waits", "name", ["count"]),
+    "Fixture setups": ("fixtures", "name", ["count"]),
+    "Fixture uses": ("fixture_uses", "fixture_name", ["count"]),
+    "Failed": ("failed_tests", "name", ["count"]),
+}
 
 
 @pytest.fixture(scope="module")
@@ -174,8 +257,41 @@ def _mapping_texts(panel: dict, field: str) -> list[str]:
     return texts
 
 
+def _row(dashboard: dict, title: str) -> dict:
+    (row,) = [p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == title]
+    return row
+
+
+def _root_value(document: object, root_selector: str) -> object:
+    """Resolve an Infinity root selector (JSONPath "$" or a dotted path)."""
+    if root_selector in ("", "$", "$."):
+        return document
+    value = document
+    for part in root_selector.removeprefix("$").strip(".").split("."):
+        assert isinstance(value, dict) and part in value, f"root selector {root_selector!r} does not resolve"
+        value = value[part]
+    return value
+
+
+def _first_row(value: object) -> dict:
+    if isinstance(value, list):
+        assert value, "the fixture document has no row for this list root"
+        return value[0]
+    assert isinstance(value, dict), f"fixture document value is not an object: {type(value)}"
+    return value
+
+
+def _capture_targets(dash: dict) -> list[tuple[dict, dict]]:
+    return [
+        (panel, target)
+        for panel in _iter_panels(dash["panels"])
+        for target in panel.get("targets", [])
+        if target.get("url") == CAPTURE_URL
+    ]
+
+
 # ---------------------------------------------------------------------------
-# Detail dashboard: file-level structure
+# Capture dashboard: file-level structure
 # ---------------------------------------------------------------------------
 
 
@@ -203,13 +319,12 @@ def test_home_required_uid_and_title(home: dict) -> None:
 
 
 def test_datasources_referenced(dashboard: dict) -> None:
-    """Tempo and Loki carry the capture, Infinity carries the GitHub evidence,
-    and Prometheus carries the cluster metrics in the Environment row."""
+    """Infinity carries the capture document and the GitHub evidence,
+    Prometheus carries the Environment metrics, Loki the Events."""
     raw = DASHBOARD_FILE.read_text()
-    assert "ci-observe-traces" in raw, "datasource uid ci-observe-traces is not referenced anywhere"
+    assert "workflow-api" in raw, "datasource uid workflow-api is not referenced anywhere"
     assert "ci-observe-logs" in raw, "datasource uid ci-observe-logs is not referenced anywhere"
     assert "ci-observe-metrics" in raw, "datasource uid ci-observe-metrics is not referenced anywhere"
-    assert "workflow-api" in raw, "datasource uid workflow-api is not referenced anywhere"
 
 
 def test_capture_id_variable_exists(dashboard: dict) -> None:
@@ -226,7 +341,7 @@ def test_capture_id_variable_exists(dashboard: dict) -> None:
 
 
 def test_every_panel_datasource_is_known(dashboard: dict) -> None:
-    allowed = CI_OBSERVE_DATASOURCE_UIDS | _existing_datasource_uids()
+    allowed = CI_OBSERVE_DATASOURCE_UIDS | {"workflow-api"} | _existing_datasource_uids()
     panels = [p for p in _iter_panels(dashboard["panels"]) if p.get("type") != "row"]
     assert panels, "dashboard has no content panels"
     for panel in panels:
@@ -243,13 +358,13 @@ def test_rows_present(dashboard: dict) -> None:
         "Run overview",
         "Collection coverage",
         "CI evidence",
-        "Run identity (source commit, harness commit, selection)",
+        IDENTITY_ROW,
         "Tests and workers",
         "Fixture work",
         "Waits",
         "Service requests",
-        "Environment",
-        "Events",
+        ENVIRONMENT_ROW,
+        EVENTS_ROW,
     ]
 
 
@@ -273,634 +388,309 @@ def test_home_every_panel_has_title_and_description(home: dict) -> None:
 
 def test_dashboard_description_explains_reading_order(dashboard: dict) -> None:
     description = dashboard["description"]
-    assert description.count(".") == 3
-    rows = [
+    for row in [
         "Run overview",
-        "Run identity",
         "Collection coverage",
         "CI evidence",
+        "Run identity",
         "Tests and workers",
         "Fixture work",
         "Waits",
         "Service requests",
         "Environment",
         "Events",
-    ]
-    for row in rows:
+    ]:
         assert row in description, f"dashboard description does not mention the {row} row"
-    assert "collapsed Run identity" in description
-    assert "collapsed CI evidence" in description
-    assert "collapsed Environment" in description
-    assert "collapsed Events" in description
-    assert "narrower range can hide" in description, "description must warn about narrow time ranges"
+    assert "capture endpoint" in description
+    assert "Tempo search page size" in description
 
 
 # ---------------------------------------------------------------------------
-# Detail dashboard: run overview
+# Capture dashboard: one endpoint, no TraceQL
 # ---------------------------------------------------------------------------
 
 
-def test_run_overview_stat_panels(dashboard: dict) -> None:
-    """Run overview holds the summary stats, before the Run identity row."""
-    panels = [p for p in dashboard["panels"] if p["type"] != "row"]
-    overview = [p for p in panels if p["gridPos"]["y"] < 6]
-    assert [p["title"] for p in overview] == ["Tests", "Failed", "Result", "Session", "Test time", "Suite", "PR"]
+def test_every_capture_panel_reads_the_capture_endpoint(dashboard: dict) -> None:
+    """Every summary, test, wait, fixture, failure and identity panel uses the
+    one endpoint URL. Panels share the endpoint's cached document."""
+    capture_panels = {
+        "Capture state",
+        "Tests",
+        "Failed",
+        "Result",
+        "Test time",
+        "Test attempts",
+        "Test paths",
+        "PR",
+        "Workflow",
+        "Wait spans",
+        "Fixture setups",
+        "Fixture uses",
+        "Unclassified spans",
+        "Test timeline",
+        "Slowest tests",
+        "Capture failures",
+        "Fixture setup",
+        "Fixture use",
+        "Longest waits",
+        "Code under test",
+        "Selection and run",
+        "Capture record",
+    }
+    targets = _capture_targets(dashboard)
+    assert {panel["title"] for panel, _ in targets} == capture_panels
+    for panel, target in targets:
+        assert len(panel["targets"]) == 1, f"{panel['title']}: one URL per panel"
+        assert target["url"] == CAPTURE_URL, f"{panel['title']}: wrong capture endpoint"
+        assert target["source"] == "url"
+        assert target["format"] == "table"
+        assert target["type"] == "json"
 
 
-def test_suite_and_pr_info_panels_degrade_gracefully(dashboard: dict) -> None:
-    """Suite/PR stats read the Loki labels and show 'not labeled' when absent (old captures)."""
-    panels = _panels_by_title(dashboard)
-    for title, label in [("Suite", "osac_ci_suite"), ("PR", "osac_ci_pr")]:
-        panel = panels[title]
-        assert panel["type"] == "stat"
-        assert panel["datasource"]["uid"] == "ci-observe-logs"
-        assert panel["options"]["textMode"] == "name"
-        assert panel["fieldConfig"]["defaults"]["noValue"] == "not labeled"
-        expr = panel["targets"][0]["expr"]
-        assert f'sum by ({label}) (count_over_time({{osac_ci_capture_id="$capture_id"}}' in expr
-
-
-def test_slowest_tests_is_top_20(dashboard: dict) -> None:
-    """The table must sort by duration server-side of the client sort, then keep 20 rows."""
-    panels = _panels_by_title(dashboard)
-    transformations = panels["Slowest tests"]["transformations"]
-    assert transformations[0] == {"id": "sortBy", "options": {"sort": [{"field": "Duration", "desc": True}]}}
-    assert transformations[1] == {"id": "limit", "options": {"limitField": 20}}
-
-
-def test_run_duration_selects_the_session_span(dashboard: dict) -> None:
-    """Run duration uses the one session span, not xdist worker spans, and keeps its time unit."""
-    panels = _panels_by_title(dashboard)
-    panel = panels["Test time"]
-    assert panel["options"]["reduceOptions"]["calcs"] == ["max"]
-    assert 'name = "test run"' in panel["targets"][0]["query"]
-    assert panel["fieldConfig"]["defaults"].get("unit") is None
-    assert _override_for(panel, "Duration") is None, "Run duration must keep the nanosecond unit"
-    assert panel["description"].startswith("Elapsed time")
-    assert panel["fieldConfig"]["defaults"]["noValue"] == "not recorded"
-    null_maps = panel["fieldConfig"]["defaults"].get("mappings", [])
-    assert any(m.get("options", {}).get("match") == "null" and m["options"]["color"] == "orange" for m in null_maps), (
-        "a missing session span must show 'not recorded' in orange"
-    )
-
-
-def test_run_result_distinguishes_missing_session_span(dashboard: dict) -> None:
-    """Run result comes from the session span status; a missing span says unknown, not passed."""
-    panels = _panels_by_title(dashboard)
-    panel = panels["Result"]
-    assert panel["options"]["textMode"] == "value"
-    assert panel["options"]["reduceOptions"]["calcs"] == ["lastNotNull"]
-    query = panel["targets"][0]["query"]
-    assert 'name = "test run"' in query
-    assert "(status = ok || status = error)" in query
-    assert panel["fieldConfig"]["defaults"]["noValue"] == "Incomplete: no session span"
-    null_maps = panel["fieldConfig"]["defaults"].get("mappings", [])
-    assert any(
-        m.get("options", {}).get("match") == "null" and m["options"]["text"] == "Incomplete: no session span"
-        for m in null_maps
-    ), "a missing session span must map to the incomplete text"
+def test_no_traceql_target_remains(dashboard: dict) -> None:
+    """The Capture page reads no Tempo target at all; service calls are an
+    Explore link, not a capped search posing as a count."""
+    for panel in _iter_panels(dashboard["panels"]):
+        datasource = (panel.get("datasource") or {}).get("uid")
+        assert datasource != "ci-observe-traces", f"{panel['title']}: Tempo datasource on the Capture page"
+        for target in panel.get("targets", []):
+            assert target.get("queryType") != "traceql", f"{panel['title']}: TraceQL target on the Capture page"
     raw = DASHBOARD_FILE.read_text()
-    assert "not passed" in raw, "a missing session span must never be presented as a pass"
+    assert "spss" not in raw, "the spans-per-span-set limit must not appear as a count or a target"
+    assert "100 spans per trace" not in raw
+    assert "30,000" not in raw
 
 
-# ---------------------------------------------------------------------------
-# Count stat panels: no time units
-# ---------------------------------------------------------------------------
+def test_every_selector_resolves_against_the_capture_document(dashboard: dict) -> None:
+    """Each Infinity column names a field the endpoint document really has.
 
-# Live-verified Tempo spans-frame schema: the intrinsic columns every TraceQL
-# spans response carries, with the display names the datasource stamps on
-# them (displayNameFromDS). Attribute columns referenced by a query are added
-# under their raw attribute name, which is also their display name.
-SPANS_INTRINSIC_COLUMNS = {
-    "traceIdHidden": "traceIdHidden",
-    "traceService": "Trace Service",
-    "traceName": "Trace Name",
-    "spanID": "Span ID",
-    "time": "Start time",
-    "name": "Name",
-    "duration": "Duration",
-}
-
-QUOTED_ATTRIBUTE = re.compile(r'\."([^"]+)"')
-DOTTED_ATTRIBUTE = re.compile(r"(?<![\w.])\.((?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*)")
-
-
-def _spans_frame_columns(query: str) -> dict[str, str]:
-    """Raw name -> display name for the columns a TraceQL spans query yields.
-
-    Tempo only includes attribute columns for attributes referenced in the
-    predicate, so the referenced attributes are extracted from the query.
+    The fixture document carries exactly the keys the read-path spec defines;
+    a selector the endpoint does not return would render an empty column.
     """
-    columns = dict(SPANS_INTRINSIC_COLUMNS)
-    referenced = QUOTED_ATTRIBUTE.findall(query) + DOTTED_ATTRIBUTE.findall(query)
-    for attribute in referenced:
-        columns[attribute] = attribute
-    if re.search(r"(?<![\w.])status(?![\w.])", query):
-        columns["status"] = "status"
-    return columns
+    assert set(CAPTURE_DOC) == {
+        "capture_id",
+        "state",
+        "session",
+        "coverage",
+        "identity",
+        "tests",
+        "waits",
+        "fixtures",
+        "fixture_uses",
+        "failed_tests",
+        "notes",
+    }
+    assert set(CAPTURE_DOC["session"]) == {
+        "trace_id",
+        "started_at",
+        "duration_seconds",
+        "status",
+        "tests",
+        "test_attempts",
+        "workers",
+        "span_total",
+    }
+    assert set(CAPTURE_DOC["coverage"]) == {
+        "spans_total",
+        "spans_classified",
+        "spans_unclassified",
+        "session_span",
+        "service_calls",
+    }
 
-
-def _groupby_output_columns(group_by: dict, source_columns: dict[str, str]) -> set[str]:
-    """Display names of the columns the groupBy transformation emits.
-
-    Live-verified naming: groupby keys keep their raw field name, aggregated
-    columns are named "<displayName> (agg)" from the source field's display
-    name, so "time" aggregates into "Start time (min)".
-    """
-    output: set[str] = set()
-    for raw_name, config in group_by["options"]["fields"].items():
-        if config["operation"] == "groupby":
-            output.add(raw_name)
-        for aggregation in config.get("aggregations", []):
-            output.add(f"{source_columns[raw_name]} ({aggregation})")
-    return output
-
-
-def _joined_columns(panel: dict) -> set[str]:
-    """Display names of the columns after the panel's transformation pipeline."""
-    columns: set[str] = set()
-    frames = [_spans_frame_columns(t["query"]) for t in panel["targets"]]
-    for frame in frames:
-        columns |= set(frame.values())
-    for transformation in panel.get("transformations", []):
-        if transformation["id"] == "groupBy":
-            for source in frames:
-                columns |= _groupby_output_columns(transformation, source)
-    return columns
-
-
-def _grafana_fields_regex(fields_value: str) -> re.Pattern:
-    """Grafana's stringToJsRegex, as applied to reduceOptions.fields.
-
-    A plain string becomes an anchored, unescaped ^value$ regex; a /pattern/
-    string is used as a free regex. Parentheses in a plain string are capture
-    groups, not literals, which is how "pytest.span_type (count)" failed to
-    match its own column.
-    """
-    if fields_value.startswith("/"):
-        match = re.fullmatch(r"/(.*)/([gimsuy]*)", fields_value)
-        assert match is not None, f"invalid regex-style fields value: {fields_value!r}"
-        return re.compile(match.group(1))
-    return re.compile("^" + fields_value + "$")
-
-
-def test_count_stats_reduce_a_unitless_field(dashboard: dict) -> None:
-    """Count stats must not render as time (the '47 ns' live defect).
-
-    The stat panel inherits the reduced field's unit, and panel defaults do
-    not override the datasource-provided nanosecond unit on Duration. So every
-    count stat reduces the unitless Name field and carries a field-level
-    Duration -> none override as well. "Name" is not a raw field name: the
-    Tempo datasource stamps displayNameFromDS "Name" on the span-name column,
-    and reduceOptions.fields is matched as ^Name$ against display names.
-    """
-    stats = [p for p in _iter_panels(dashboard["panels"]) if p["type"] == "stat"]
-    counted = [p for p in stats if p["options"]["reduceOptions"]["calcs"] == ["count"]]
-    assert counted, "dashboard has no count stats"
-    for panel in counted:
-        title = panel["title"]
-        fields = panel["options"]["reduceOptions"]["fields"]
-        assert fields == "Name", f"{title}: count stat must reduce the Name column (got {fields!r})"
-        assert panel["fieldConfig"]["defaults"]["unit"] == "none", f"{title}: count stat needs unit none"
-        override = _override_for(panel, "Duration")
-        assert override is not None, f"{title}: count stat needs a field-level Duration unit override"
-        units = [prop["value"] for prop in override["properties"] if prop["id"] == "unit"]
-        assert units == ["none"], f"{title}: Duration override must force unit none"
-
-
-def test_home_count_stats_reduce_a_unitless_field(home: dict) -> None:
-    stats = [p for p in _iter_panels(home["panels"]) if p["type"] == "stat"]
-    counted = [p for p in stats if p["options"]["reduceOptions"]["calcs"] == ["count"]]
-    assert counted, "home dashboard has no count stats"
-    for panel in counted:
-        title = panel["title"]
-        fields = panel["options"]["reduceOptions"]["fields"]
-        if title == "Missing session span":
-            # Reduces the joined capture-id column: the only column that is
-            # non-null on rows without a session span and whose name is safe
-            # for Grafana's anchored, unescaped display-name regex (the
-            # aggregate "pytest.span_type (count)" compiles to a capture
-            # group and can never match its own column).
-            assert fields == "osac.ci.capture_id", f"{title}: must count the joined capture-id column"
-        else:
-            assert fields == "Name", f"{title}: count stat must reduce the Name column (got {fields!r})"
-        assert panel["fieldConfig"]["defaults"]["unit"] == "none", f"{title}: count stat needs unit none"
-        override = _override_for(panel, "Duration")
-        assert override is not None, f"{title}: count stat needs a field-level Duration unit override"
-
-
-def test_stat_reduce_fields_match_real_columns(dashboard: dict, home: dict) -> None:
-    """Every stat's reduceOptions.fields must regex-match a column that exists.
-
-    Grafana passes reduceOptions.fields through stringToJsRegex and matches it
-    against field display names. A value whose regex form cannot match any
-    column the panel produces (for example an unescaped "(count)") leaves the
-    stat permanently empty, so each value is checked against the columns the
-    panel's queries and transformations actually yield.
-    """
-    for dash in (dashboard, home):
-        for panel in _iter_panels(dash["panels"]):
-            if panel.get("type") != "stat":
-                continue
-            fields_value = panel["options"]["reduceOptions"]["fields"]
-            if not fields_value:
-                continue  # empty reduces every numeric field
-            if panel.get("transformations"):
-                columns = _joined_columns(panel)
-            else:
-                columns = set(_spans_frame_columns(panel["targets"][0]["query"]).values())
-            pattern = _grafana_fields_regex(fields_value)
-            assert any(pattern.search(column) for column in columns), (
-                f"{panel['title']}: reduceOptions.fields {fields_value!r} matches none of {sorted(columns)}"
+    targets = _capture_targets(dashboard)
+    assert targets, "no panel reads the capture endpoint"
+    for panel, target in targets:
+        resolved = _first_row(_root_value(CAPTURE_DOC, target["root_selector"]))
+        assert target["columns"], f"{panel['title']}: target selects no column"
+        for column in target["columns"]:
+            assert column["selector"] in resolved, (
+                f"{panel['title']}: selector {column['selector']!r} is not in the capture document "
+                f"root {target['root_selector']!r}"
             )
 
 
-def test_home_missing_session_stat_counts_the_right_rows(home: dict) -> None:
-    """The missing-session stat must count exactly the orphan captures.
-
-    Simulates the panel's live pipeline on synthetic rows shaped like the raw
-    test-span frame: keep rows whose Trace Name is empty (the trace's root
-    span - the session span - never arrived), then group by capture id. The
-    reduced column must resolve through Grafana's display-name regex to a
-    column that is non-null exactly on the surviving rows.
-    """
-    panel = _panels_by_title(home)["Missing session span"]
-    fields_value = panel["options"]["reduceOptions"]["fields"]
-
-    raw_rows = {  # capture id -> trace name on that capture's test spans
-        "run-ok": "test run",
-        "run-failed": "test run",
-        "partial-1": "",
-        "partial-2": "",
-    }
-    surviving = {key for key, trace_name in raw_rows.items() if trace_name == ""}
-    assert surviving == {"partial-1", "partial-2"}
-
-    pattern = _grafana_fields_regex(fields_value)
-    matched = [column for column in _joined_columns(panel) if pattern.search(column)]
-    assert matched, f"reduceOptions.fields {fields_value!r} matches no output column"
-    for column in matched:
-        assert column == "osac.ci.capture_id" or "(count)" in column or "(min)" in column, (
-            f"{panel['title']}: reduced column {column!r} is not populated by the groupBy"
-        )
-    assert len(surviving) == 2
-
-
-def test_zero_counts_are_not_shown_as_passes(dashboard: dict) -> None:
-    """A zero from an empty result must not render as a green pass.
-
-    A zero-row TraceQL search still returns a frame with fields, so the count
-    reducer yields 0 and the noValue text never fires. Value mappings give
-    those zeros an explicit non-green meaning instead.
-    """
+def test_coverage_counts_come_from_the_endpoint(dashboard: dict) -> None:
+    """Tests, attempts, waits, fixtures and fixture uses are endpoint counts."""
     panels = _panels_by_title(dashboard)
-    expected = {
-        "Tests": ("no test spans", "orange"),
-        "Failed": ("none", "text"),
-        "Parent test spans": ("none", "orange"),
-        "Wait spans": ("none", "orange"),
-        "Service spans": ("none", "orange"),
-    }
-    for title, (text, color) in expected.items():
-        zeros = [
-            option
-            for mapping in panels[title]["fieldConfig"]["defaults"].get("mappings", [])
-            if mapping.get("type") == "value"
-            for key, option in mapping.get("options", {}).items()
-            if key == "0"
-        ]
-        assert zeros, f"{title}: missing 0 value mapping"
-        assert zeros[0].get("text") == text, f"{title}: 0 must read {text!r}"
-        assert zeros[0].get("color") == color, f"{title}: 0 must be {color}, not green"
+    for title, (root, column, calcs) in COUNT_SOURCES.items():
+        panel = panels[title]
+        (target,) = panel["targets"]
+        assert target["url"] == CAPTURE_URL, f"{title}: count must come from the capture endpoint"
+        assert target["root_selector"] == root, f"{title}: wrong document root"
+        assert [c["selector"] for c in target["columns"]] == [column], f"{title}: wrong count column"
+        assert panel["options"]["reduceOptions"]["calcs"] == calcs, f"{title}: wrong reducer"
+        assert panel["options"]["reduceOptions"]["fields"] == column, f"{title}: wrong reduced field"
+        assert panel["fieldConfig"]["defaults"]["unit"] == "none", f"{title}: a count must be unitless"
+    # The two scalar counts the endpoint computed itself.
+    assert panels["Tests"]["targets"][0]["root_selector"] == "session"
+    assert panels["Test attempts"]["targets"][0]["root_selector"] == "session"
+
+
+def test_no_search_limit_or_spss_text_remains(dashboard: dict) -> None:
+    """Tempo search page sizes must not survive as a bare count anywhere."""
+    raw = DASHBOARD_FILE.read_text()
+    assert 'limit":' not in raw.replace('"limitField"', ""), "a search limit must not remain"
+    assert "spss" not in raw.lower()
+
+
+def test_slowest_tests_keeps_the_twenty_longest(dashboard: dict) -> None:
+    panel = _panels_by_title(dashboard)["Slowest tests"]
+    pipeline = [t["id"] for t in panel["transformations"]]
+    assert pipeline == ["sortBy", "limit"], pipeline
+    assert panel["transformations"][1]["options"]["limitField"] == 20
+    assert panel["transformations"][0]["options"]["sort"] == [{"field": "duration_seconds", "desc": True}]
 
 
 # ---------------------------------------------------------------------------
-# Service panels: exclude pytest and wait spans
+# Capture dashboard: states and failures
 # ---------------------------------------------------------------------------
 
 
-def test_service_panels_exclude_wait_spans(dashboard: dict) -> None:
-    """Every 'not a pytest span' selector must also exclude wait spans.
-
-    Wait spans only gained pytest.span_type = "wait" with the Q4 change, so
-    excluding them live-compatibly requires the poll.delay predicate too.
-    """
-    selectors = [q for q in _traceql_queries(dashboard) if ".pytest.span_type = nil" in q]
-    assert selectors, "dashboard has no service-span selectors"
-    for query in selectors:
-        assert 'span."poll.delay" = nil' in query, f"service selector counts wait spans: {query}"
-        assert 'name =~ ".+"' in query, f"service selector must hydrate names: {query}"
-
-
-def test_service_panels_present(dashboard: dict) -> None:
+def test_page_states_loading_not_indexed_and_error(dashboard: dict) -> None:
     panels = _panels_by_title(dashboard)
-    for title in ["Calls", "Call errors", "Calls by service", "Slowest service calls", "gRPC errors"]:
-        assert title in panels, f"missing service panel {title}"
-    errors = panels["Call errors"]["targets"][0]["query"]
-    assert "status = error" in errors
+    state = panels["Capture state"]
+    assert state["targets"][0]["root_selector"] == "$"
+    assert [c["selector"] for c in state["targets"][0]["columns"]] == ["state"]
+    assert "Loading" in state["fieldConfig"]["defaults"]["noValue"]
+    texts = [
+        option["text"]
+        for mapping in state["fieldConfig"]["defaults"].get("mappings", [])
+        for option in mapping.get("options", {}).values()
+        if isinstance(option, dict) and "text" in option
+    ]
+    assert "indexed" in texts
+    assert "not indexed" in texts
+    assert "missing" in texts
+    assert "busy" in texts
+    assert "too large" in texts
+    assert "unknown" in texts
+
+    content = panels["How these counts are made"]["options"]["content"]
+    assert "Loading" in content
+    assert "not indexed" in content
+    assert "Error" in content
+    assert "unreachable" in content
+    assert "no zero on this page is evidence" in content
 
 
-def test_groupby_aggregate_overrides_match_output_columns(dashboard: dict) -> None:
-    """Aggregated groupBy columns are named from the source field's display name.
-
-    The Tempo datasource stamps displayNameFromDS on its fields (spanID ->
-    "Span ID", duration -> "Duration"), and Grafana's groupBy transformation
-    names aggregate output "<displayName> (agg)" while the transformation
-    config is keyed by raw field names. An override written as "spanID
-    (count)" matches nothing, so the column keeps its raw header and, for
-    durations, renders as unitless nanoseconds instead of formatted time.
-    """
-    raw_name_forms = {"spanID (count)", "duration (sum)", "duration (max)"}
-    expected = {
-        "Fixture setup": {"Span ID (count)", "Duration (sum)"},
-        "Fixture reuse": {"Span ID (count)"},
-        "Calls by service": {"Span ID (count)", "Duration (max)"},
-    }
+def test_failed_tests_panel_shows_the_failed_test(dashboard: dict) -> None:
+    """The failed test from the endpoint's list is visible with its message."""
     panels = _panels_by_title(dashboard)
-    for title, aggregate_columns in expected.items():
-        matchers = {o["matcher"]["options"] for o in panels[title]["fieldConfig"]["overrides"]}
-        for column in aggregate_columns:
-            assert column in matchers, f"{title}: missing override for groupBy output column {column!r}"
-        assert not (matchers & raw_name_forms), f"{title}: raw-name aggregate override never matches"
+    panel = panels["Capture failures"]
+    (target,) = panel["targets"]
+    assert target["url"] == CAPTURE_URL
+    assert target["root_selector"] == "failed_tests"
+    selectors = [c["selector"] for c in target["columns"]]
+    for field in ("classname", "name", "type", "message", "time_s"):
+        assert field in selectors, f"Capture failures: missing {field} column"
+    failed = CAPTURE_DOC["failed_tests"][0]
+    assert failed["name"] and failed["message"], "the fixture must carry a visible failed test"
+    assert "JUnit evidence" in panel["description"]
+    assert "failure.json" in panel["description"]
 
+    count = panels["Failed"]
+    assert count["targets"][0]["root_selector"] == "failed_tests"
+    assert "JUnit evidence" in count["description"]
 
-def test_grpc_errors_panel_queries_beyla_attributes(dashboard: dict) -> None:
-    """The gRPC panel must query attributes Beyla actually sets.
-
-    Beyla v1.47 stamps rpc.system.name = "grpc" and a string
-    rpc.response.status_code; the OTel-style numeric rpc.grpc.status_code
-    does not exist in the backend, so querying it left the panel permanently
-    empty (a false "no gRPC errors").
-    """
-    panels = _panels_by_title(dashboard)
-    panel = panels["gRPC errors"]
-    query = panel["targets"][0]["query"]
-    assert '.rpc.system.name = "grpc"' in query, "gRPC selector must use rpc.system.name"
-    assert '.rpc.response.status_code != "OK"' in query, "gRPC errors must select non-OK response codes"
-    override = _override_for(panel, "rpc.response.status_code")
-    assert override is not None, "gRPC status column override must match the hydrated attribute column"
+    # The same failure stays reachable in the CI evidence row.
+    junit = panels["Failed tests"]
+    assert junit["targets"][0]["url"] == RUN_EVIDENCE_URL
+    assert junit["targets"][0]["root_selector"] == "native.failed_tests"
 
 
 # ---------------------------------------------------------------------------
-# Cluster evidence: one section, metrics only
+# Capture dashboard: run identity
 # ---------------------------------------------------------------------------
 
 
-def _row(dashboard: dict, title: str) -> dict:
-    (row,) = [p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == title]
-    return row
+IDENTITY_SELECTORS = {
+    "Code under test": ["test_ref", "test_sha", "test_infra_ref", "test_infra_sha", "test_infra_workflow_sha"],
+    "Selection and run": [
+        "run_id",
+        "run_attempt",
+        "suite",
+        "pr",
+        "workflow",
+        "test_suite",
+        "test_filter",
+        "test_marker",
+    ],
+    "Capture record": ["session_trace_id", "identity_source", "capture_started_at"],
+}
 
 
-def test_cluster_panels_live_only_in_the_environment_row(dashboard: dict) -> None:
-    """Cluster metrics belong to the Environment row and Kubernetes events to
-    the Events row. No panel offers raw pod logs: the collector cannot read
-    /var/log/pods, so they exist only in the run's GitHub artifact."""
-    environment = {id(panel) for panel in _iter_panels(_row(dashboard, ENVIRONMENT_ROW)["panels"])}
-    events = {id(panel) for panel in _iter_panels(_row(dashboard, EVENTS_ROW)["panels"])}
+def test_identity_values_bind_to_the_endpoint_fields(dashboard: dict) -> None:
+    """Each identity table selects the registry fields by their endpoint names."""
+    panels = _panels_by_title(dashboard)
+    for title, fields in IDENTITY_SELECTORS.items():
+        panel = panels[title]
+        (target,) = panel["targets"]
+        assert target["url"] == CAPTURE_URL
+        assert target["root_selector"] == "identity", f"{title}: identity must come from the endpoint"
+        assert [c["selector"] for c in target["columns"]] == fields, f"{title}: identity binding drifted"
+        for field in fields:
+            assert field in CAPTURE_DOC["identity"], f"{title}: {field} is not a registry field"
+    identity_row = _row(dashboard, IDENTITY_ROW)
+    assert identity_row["collapsed"] is True
+    assert "identity_source" in identity_row["description"]
+    assert {c["title"] for c in identity_row["panels"]} == set(IDENTITY_SELECTORS)
+
+
+# ---------------------------------------------------------------------------
+# Capture dashboard: CI evidence, environment, events, links
+# ---------------------------------------------------------------------------
+
+
+def test_ci_evidence_row_is_kept(dashboard: dict) -> None:
+    row = _row(dashboard, CI_EVIDENCE_ROW)
+    assert row["collapsed"] is True
+    titles = {p["title"] for p in row["panels"]}
+    for title in ("Run", "Jobs", "Steps", "JUnit summary", "Failed tests"):
+        assert title in titles, f"CI evidence row lost the {title} panel"
+    for panel in row["panels"]:
+        (target,) = panel["targets"]
+        assert target["url"] == RUN_EVIDENCE_URL
+
+
+def test_environment_and_events_are_scoped_to_the_capture(dashboard: dict) -> None:
+    environment = {id(p) for p in _iter_panels(_row(dashboard, ENVIRONMENT_ROW)["panels"])}
+    events = {id(p) for p in _iter_panels(_row(dashboard, EVENTS_ROW)["panels"])}
     for panel in _iter_panels(dashboard["panels"]):
-        assert panel["type"] != "logs", f"{panel['title']}: pod logs have no readable view on this page"
-        datasource = (panel.get("datasource") or {}).get("uid")
         for target in panel.get("targets", []):
             expr = target.get("expr", "")
-            if "k8s_" not in expr:
+            if not expr:
                 continue
+            scoped = 'osac_ci_capture_id="$capture_id"' in expr
+            assert scoped, f"{panel['title']}: expression is not scoped to the capture"
+            datasource = (panel.get("datasource") or {}).get("uid")
             if datasource == "ci-observe-metrics":
                 assert id(panel) in environment, f"{panel['title']}: kubelet metrics belong to Environment"
-            elif datasource == "ci-observe-logs":
+            if datasource == "ci-observe-logs":
                 assert id(panel) in events, f"{panel['title']}: Kubernetes events belong to Events"
-        if panel["type"] == "timeseries":
-            assert id(panel) in environment, f"{panel['title']}: metric charts belong to Environment"
-
-
-def test_where_the_evidence_lives_is_explained(dashboard: dict) -> None:
-    """The link panel names the sections that hold each kind of evidence and
-    sends pod logs to the artifact, because Loki never receives them."""
-    panel = _panels_by_title(dashboard)["Where is the rest of the evidence?"]
-    content = panel["options"]["content"]
-    assert CI_EVIDENCE_ROW in content
-    assert ENVIRONMENT_ROW in content
-    assert EVENTS_ROW in content
-    assert COMPARE_LINK in content, "the comparison link must not pass a capture id the target ignores"
-    assert "Compare section" in content, "the link must say where in Trends the cohort is picked"
-    assert "ci-observe-compare-runs" not in content, "the deleted comparison dashboard must not be linked"
-    assert "explore?" not in content, "pod logs are not in Loki, so there is nothing to query in Explore"
-    assert "/var/log/pods" in content, "the panel must say why pod logs are not in Loki"
-    assert "failure.json" in content
-    assert "#artifacts" in content
-    assert "7 days" in content
-
-
-def test_run_table_links_to_the_artifacts_page(dashboard: dict) -> None:
-    """The Run table's link cell carries the artifacts link, derived from the
-    run URL it already displays. No artifact id is invented anywhere."""
-    panel = _panels_by_title(dashboard)["Run"]
-    override = _override_for(panel, "url")
-    assert override is not None, "the Run table needs a url override for its links"
-    properties = {prop["id"]: prop["value"] for prop in override["properties"]}
-    urls = [link["url"] for link in properties["links"]]
-    assert urls == ["${__value.text}", ARTIFACTS_URL]
-    titles = " ".join(link["title"] for link in properties["links"])
-    for content in ("failure.json", "pod logs", "cluster snapshots", "7 days"):
-        assert content in titles, f"the artifacts link must say what is inside: {content}"
-    assert "/artifacts/" not in DASHBOARD_FILE.read_text(), "an artifact id must never be hard-coded"
-    # The failed-tests table truncates on purpose; it must say where the
-    # untruncated per-test detail is.
-    failed = _panels_by_title(dashboard)["Failed tests"]
-    assert "failure.json" in failed["description"]
-    assert "artifacts link" in failed["description"]
-    assert "7 days" in failed["description"]
-
-
-def test_events_row_and_panel(dashboard: dict) -> None:
-    """The stored Kubernetes events are a Loki table inside a collapsed row."""
-    row = _row(dashboard, EVENTS_ROW)
-    assert row["collapsed"] is True
-    (panel,) = row["panels"]
-    assert panel["type"] == "table"
-    assert panel["datasource"] == {"type": "loki", "uid": "ci-observe-logs"}
-    (target,) = panel["targets"]
-    expr = target["expr"]
-    assert expr.startswith('{osac_ci_capture_id="$capture_id"}')
-    # Labels the k8s_objects receiver sets: k8s.resource.name and event.domain
-    # on the log record, the namespace on the resource. Structured metadata is
-    # filtered with the same label-filter syntax in Loki 3.
-    assert 'k8s_resource_name="events"' in expr
-    assert 'event_domain="k8s"' in expr
-    # The body is the watch record {"type": ..., "object": {...}}; the json
-    # stage is what turns it into columns.
-    assert "| json" in expr
-    for body_field in (
-        'event_type="object.type"',
-        'event_reason="object.reason"',
-        'event_message="object.message"',
-        'object_kind="object.involvedObject.kind"',
-        'object_name="object.involvedObject.name"',
-    ):
-        assert body_field in expr, f"the events query must extract {body_field}"
-    assert 'event_type="type"' not in expr, "the body's top-level type is the watch action (ADDED/MODIFIED)"
-    for field in ("k8s_namespace_name", "event_type", "event_reason", "object_kind", "object_name", "event_message"):
-        assert _override_for(panel, field) is not None, f"the events table must show {field}"
-    type_override = _override_for(panel, "event_type")
-    type_mappings = next(prop["value"] for prop in type_override["properties"] if prop["id"] == "mappings")
-    colors = type_mappings[0]["options"]
-    assert colors["Normal"]["color"] == "green"
-    assert colors["Warning"]["color"] == "orange", "a Warning event must be visible without reading the message"
-    assert [t["id"] for t in panel["transformations"]] == ["merge", "organize"], (
-        "per-label-set frames must merge before the column layout is applied"
-    )
-    excluded = panel["transformations"][1]["options"]["excludeByName"]
-    assert excluded["Line"] is True, "the raw watch record must not be a column of its own"
-    assert excluded["osac_ci_capture_id"] is True, "the capture id is the page variable, not a column"
-
-
-# ---------------------------------------------------------------------------
-# Run identity
-# ---------------------------------------------------------------------------
-
-
-def test_identity_stats_cover_required_attributes(dashboard: dict) -> None:
-    """Every run identity attribute has its own stat with a 'not collected' fallback."""
-    panels = _panels_by_title(dashboard)
-    for attribute, title in IDENTITY_ATTRIBUTES.items():
-        assert title in panels, f"missing identity stat for {attribute}: {title}"
-        panel = panels[title]
-        assert panel["type"] == "stat"
-        query = panel["targets"][0]["query"]
-        assert f'resource."{attribute}" != nil' in query, f"{title}: query must select {attribute}"
-        assert panel["fieldConfig"]["defaults"]["noValue"] == "not collected"
-        reduce_options = panel["options"]["reduceOptions"]
-        assert reduce_options == {"calcs": ["lastNotNull"], "fields": attribute, "values": False}
-        assert panel["options"]["textMode"] == "value"
-
-
-# ---------------------------------------------------------------------------
-# Collection coverage
-# ---------------------------------------------------------------------------
-
-
-def test_collection_coverage_stats(dashboard: dict) -> None:
-    panels = _panels_by_title(dashboard)
-    # The session-span presence stat moved into the overview as Run completeness.
-    assert "Session span" not in panels
-    completeness = panels["Session"]
-    assert 'name = "test run"' in completeness["targets"][0]["query"]
-    texts = json.dumps(completeness["fieldConfig"]["defaults"].get("mappings", []))
-    assert "Complete" in texts and "Incomplete" in texts
-    assert completeness["fieldConfig"]["defaults"]["noValue"] == "Incomplete"
-
-    tests = panels["Parent test spans"]
-    assert '.pytest.span_type = "test"' in tests["targets"][0]["query"]
-    assert "100 spans per trace" in tests["description"], "test count must note the spanset cap"
-
-    waits = panels["Wait spans"]
-    assert '( .pytest.span_type = "wait" || span."poll.delay" != nil )' in waits["targets"][0]["query"]
-    assert "100 spans per trace" in waits["description"]
-
-    service = panels["Service spans"]
-    assert '.pytest.span_type = nil && span."poll.delay" = nil' in service["targets"][0]["query"]
-    assert "30,000" in service["description"], "service count must note the search cap"
-
-
-def test_failed_tests_zero_is_contextualized(dashboard: dict) -> None:
-    """A zero in Failed tests must not read as evidence of success on its own."""
-    panels = _panels_by_title(dashboard)
-    panel = panels["Failed"]
-    assert "only meaningful" in panel["description"]
-    assert "Result" in panel["description"]
-    assert panel["fieldConfig"]["defaults"]["noValue"] != "0"
-    table = panels["Failed tests, longest first"]
-    assert "Collection coverage" in table["description"]
-
-
-# ---------------------------------------------------------------------------
-# Worker attribution and fixtures
-# ---------------------------------------------------------------------------
-
-
-def test_test_timeline_shows_worker_and_status(dashboard: dict) -> None:
-    panels = _panels_by_title(dashboard)
-    panel = panels["Test timeline"]
-    query = panel["targets"][0]["query"]
-    assert '.pytest.span_type = "test"' in query
-    assert 'span."osac.ci.xdist_worker" != nil' in query, "worker attribute must be referenced to hydrate"
-    assert "( status = ok || status = error || status = unset )" in query, "status must be referenced to hydrate"
-    texts = _mapping_texts(panel, "osac.ci.xdist_worker")
-    assert "not recorded" in texts, "worker column must map missing values to a plain-words state"
-    assert panel["options"]["sortBy"] == [{"displayName": "Start", "desc": False}]
-    assert "worker" in panel["description"].lower()
-
-
-def test_fixture_panels(dashboard: dict) -> None:
-    panels = _panels_by_title(dashboard)
-    setup = panels["Fixture setup"]
-    query = setup["targets"][0]["query"]
-    assert '.pytest.span_type = "fixture"' in query
-    assert 'name =~ ".* setup"' in query, "fixture setup table must exclude teardown spans"
-    group_by = setup["transformations"][0]["options"]["fields"]
-    assert group_by["name"]["operation"] == "groupby"
-    assert group_by["osac.ci.xdist_worker"]["operation"] == "groupby"
-    assert "wall" in setup["description"].lower(), "fixture time must not be presented as wall-clock time"
-
-    reuse = panels["Fixture reuse"]
-    reuse_query = reuse["targets"][0]["query"]
-    assert '.pytest.span_type = "fixture_use"' in reuse_query
-    assert 'span."pytest.fixture_name" != nil' in reuse_query
-    assert reuse["fieldConfig"]["defaults"]["noValue"] == "fixture reuse not instrumented yet"
-
-
-# ---------------------------------------------------------------------------
-# Waits
-# ---------------------------------------------------------------------------
-
-
-def test_waits_panel(dashboard: dict) -> None:
-    panels = _panels_by_title(dashboard)
-    panel = panels["Longest waits"]
-    query = panel["targets"][0]["query"]
-    assert '( .pytest.span_type = "wait" || span."poll.delay" != nil )' in query
-    for attribute in ("poll.attempts", "poll.condition_met", "osac.wait.resource_kind", "osac.wait.resource_id"):
-        assert f'span."{attribute}" != nil' in query, f"waits query must reference {attribute}"
-    assert panel["options"]["sortBy"] == [{"displayName": "Duration", "desc": True}]
-    texts = _mapping_texts(panel, "osac.wait.resource_kind")
-    assert "not recorded" in texts
-    assert "wall" in panel["description"].lower(), "waits must not be presented as runner wall time"
-    # Tempo's default max_spans_per_span_set is 100 and it rejects more, so the
-    # target stays at 100 and the description says what that cap means.
-    assert panel["targets"][0]["spss"] == 100
-    assert "100 longest waits" in panel["description"]
-    assert "artifact" in panel["description"], "pod logs are in the artifact, not in Loki"
-
-
-# ---------------------------------------------------------------------------
-# Cross-dashboard links and query scoping
-# ---------------------------------------------------------------------------
-
-
-def test_tempo_targets_use_traceql_search(dashboard: dict) -> None:
-    tempo_targets = [
-        (panel, target)
-        for panel in _iter_panels(dashboard["panels"])
-        for target in panel.get("targets", [])
-        if panel.get("datasource", {}).get("uid") == "ci-observe-traces"
-    ]
-    assert tempo_targets, "dashboard has no Tempo targets"
-    for panel, target in tempo_targets:
-        assert target.get("queryType") == "traceql", f"{panel['title']}: unexpected Tempo queryType"
-        assert 'resource."osac.ci.capture_id" = "$capture_id"' in target["query"], (
-            f"{panel['title']}: TraceQL query is not filtered by capture id"
+    for row, label in ((ENVIRONMENT_ROW, "Environment"), (EVENTS_ROW, "Events")):
+        assert "from and to" in _row(dashboard, row)["description"], (
+            f"{label}: the row must say that links into the page set from/to"
         )
 
 
-def test_loki_targets_are_scoped_to_capture(dashboard: dict) -> None:
-    loki_exprs = [
-        t["expr"]
-        for p in _iter_panels(dashboard["panels"])
-        for t in p.get("targets", [])
-        if p.get("datasource", {}).get("uid") == "ci-observe-logs"
-    ]
-    assert loki_exprs, "dashboard has no Loki targets"
-    for expr in loki_exprs:
-        assert 'osac_ci_capture_id="$capture_id"' in expr, f"Loki query not scoped to capture: {expr}"
+def test_links_carry_the_time_range(dashboard: dict) -> None:
+    assert dashboard["links"], "the Capture page needs links back to the entry pages"
+    for link in dashboard["links"]:
+        assert "from=${__from}" in link["url"] and "to=${__to}" in link["url"], (
+            f"{link['title']}: a link into a time-scoped page must carry from/to"
+        )
+
+
+def test_service_calls_are_sampled_and_link_to_explore(dashboard: dict) -> None:
+    panel = _panels_by_title(dashboard)["Service calls are sampled"]
+    content = panel["options"]["content"]
+    assert "/explore?" in content, "service calls must be readable in Explore"
+    assert "sampled" in content.lower()
+    assert "no total" in content.lower()
+    assert "$capture_id" in content, "the Explore query must open the current capture"
+    assert "not test failures" in content
+    assert "no count" in content.lower() or "never a complete count" in content.lower()
 
 
 def test_default_time_range_is_seven_days(dashboard: dict, home: dict) -> None:
@@ -952,7 +742,7 @@ def test_home_narrows_every_capture_query_on_the_find_box(home: dict) -> None:
             if target.get("queryType") != "traceql":
                 continue
             capture_targets += 1
-            assert '${find:regex}' in target["query"], f"{panel['title']}: query ignores the Find box"
+            assert "${find:regex}" in target["query"], f"{panel['title']}: query ignores the Find box"
     assert capture_targets >= 4, "the capture stats and tables must still read Tempo"
 
 
@@ -1115,246 +905,3 @@ def test_home_stat_titles_are_honest(home: dict) -> None:
     assert panels["Runs with a session span"]["description"]
     assert "Missing session span" in panels
     assert "unknown - not passed" in panels["Missing session span"]["description"]
-
-
-# ---------------------------------------------------------------------------
-# Round 3: partial-run visibility, service-evidence framing, layout
-# ---------------------------------------------------------------------------
-
-
-def test_run_completeness_stat_in_overview(dashboard: dict) -> None:
-    """The overview leads with whether the capture is complete."""
-    panels = _panels_by_title(dashboard)
-    panel = panels["Session"]
-    assert panel["gridPos"]["y"] < 5, "Run completeness must sit in the first overview row"
-    mappings = json.dumps(panel["fieldConfig"]["defaults"].get("mappings", []))
-    assert '"1"' in mappings and "Complete" in mappings
-    assert '"0"' in mappings and "Incomplete" in mappings
-    assert panel["fieldConfig"]["defaults"]["noValue"] == "Incomplete"
-    assert panel["options"]["reduceOptions"] == {"calcs": ["count"], "fields": "Name", "values": False}
-
-
-def test_identity_row_collapsed_but_present(dashboard: dict) -> None:
-    """The identity row starts collapsed but keeps every attribute reachable."""
-    rows = [p for p in dashboard["panels"] if p.get("type") == "row"]
-    identity = next(r for r in rows if "Run identity" in r["title"])
-    assert identity["collapsed"] is True
-    # The old title said the contents were "mostly not collected", which told
-    # a newcomer to skip the row. Name the fields instead.
-    assert "source commit" in identity["title"]
-    assert "harness commit" in identity["title"]
-    assert "not collected" not in identity["title"]
-    children = identity.get("panels") or []
-    assert len(children) == len(IDENTITY_ATTRIBUTES), "every identity stat must stay inside the row"
-    assert all(c.get("title") in IDENTITY_ATTRIBUTES.values() for c in children)
-
-
-def test_service_row_is_framed_as_evidence(dashboard: dict) -> None:
-    """Service-call errors must not read as test failures."""
-    panels = _panels_by_title(dashboard)
-    warning = panels["Service-call errors are not test failures"]
-    content = warning["options"]["content"]
-    assert "not test failures" in content
-    assert "Failed tests and Run result" in content
-    # the warning sits at the top of the service row, before the panels
-    first_panel = min(
-        (p["gridPos"]["y"] for t, p in panels.items() if t in ("Calls", "Call errors", "Calls by service"))
-    )
-    assert warning["gridPos"]["y"] < first_panel
-
-    errors = panels["Call errors"]
-    steps = errors["fieldConfig"]["defaults"]["thresholds"]["steps"]
-    assert steps[0]["color"] == "orange", "Calls with errors must be neutral/orange, not red or blue"
-    assert "service evidence" in errors["description"]
-    assert "service evidence" in panels["gRPC errors"]["description"]
-
-
-def test_key_tables_are_full_width(dashboard: dict) -> None:
-    """The wide evidence tables span the full grid so their columns are reachable."""
-    panels = _panels_by_title(dashboard)
-    for title in (
-        "Test timeline",
-        "Slowest tests",
-        "Failed tests, longest first",
-        "Longest waits",
-        "Slowest service calls",
-        "gRPC errors",
-    ):
-        assert panels[title]["gridPos"]["w"] == 24, f"{title}: key table must be full width"
-
-
-def test_home_failed_tests_fit_without_pr(home: dict) -> None:
-    """The failed-tests table hides the PR column so the rest fits at 1280."""
-    panels = _panels_by_title(home)
-    panel = panels["Recent failed tests"]
-    pr_override = _override_for(panel, "osac.ci.pr")
-    assert pr_override is not None
-    assert {"id": "custom.hidden", "value": True} in pr_override["properties"]
-
-
-# ---------------------------------------------------------------------------
-# Round 4/5: nothing truncated without a way to see it
-# ---------------------------------------------------------------------------
-
-# Long-text columns: the full value stays reachable through the cell's inspect
-# action (the eye icon opens the raw value), and the column stretches instead
-# of holding a fixed width.
-INSPECTED_NAME_COLUMNS = {
-    "Test timeline": "name",
-    "Slowest tests": "name",
-    "Failed tests, longest first": "name",
-    "Longest waits": "name",
-    "Slowest service calls": "name",
-    "gRPC errors": "name",
-    "Fixture setup": "name",
-    "Fixture reuse": "pytest.fixture_name",
-}
-# Columns whose cells wrap. Verified against the live Grafana 13.2.4 build:
-# plain `custom.wrapText` is dead code there; the working switch is
-# `custom.cellOptions: {type: "auto", wrapText: true, dynamicHeight: true}`
-# (cells become white-space: pre-line, rows size to content).
-WRAPPED_COLUMNS = {
-    **INSPECTED_NAME_COLUMNS,
-    "Longest waits": "osac.wait.resource_id",
-    "Calls by service": "traceService",
-}
-# Columns showing pytest nodeids. CSS cannot break a nodeid (no spaces, and
-# slashes do not break under pre-line), so these columns add a regex value
-# mapping that inserts U+200B (zero-width space) after "/" and "::": the cell
-# wraps invisibly where needed, and the raw value stays intact for sorting,
-# copying and the inspect modal.
-NODEID_COLUMNS = {"Test timeline": "name", "Slowest tests": "name", "Failed tests, longest first": "name"}
-# Where the invisible break points go, per column kind. pytest nodeids break
-# after "/", "::", "_" and "[" (a 57-char test function is ~470px, wider than
-# any column the layout can offer); snake_case fixture names after "_";
-# dotted gRPC method names after "/" and ".". All render as U+200B
-# (display-only).
-BREAK_POINT_MAPPINGS = {
-    **{
-        key: ("/(?<=\\/|::|_|\\[)/g",)
-        for key in [(t, "name") for t in NODEID_COLUMNS] + [("Recent failed tests", "name")]
-    },
-    ("Fixture setup", "name"): ("/(?<=_)/g",),
-    ("Fixture reuse", "pytest.fixture_name"): ("/(?<=_)/g",),
-    ("gRPC errors", "name"): ("/(?<=\\/|\\.)/g",),
-    ("Slowest service calls", "name"): ("/(?<=\\/|\\.)/g",),
-}
-NODEID_BREAK_TEXT = "\u200b"
-MIN_COLUMN_WIDTHS = {
-    "Test timeline": {"time": 195},
-    "Slowest tests": {"time": 195},
-    "Failed tests, longest first": {"time": 195},
-    "Slowest service calls": {"time": 195},
-    "gRPC errors": {"time": 195, "rpc.response.status_code": 195},
-    "Longest waits": {"status": 145},
-}
-
-
-def test_long_text_columns_stretch_and_inspect(dashboard: dict) -> None:
-    """Long values are never truncated with no way to read them.
-
-    The tables stretch the name column (no fixed width), give every cell the
-    inspect action (which opens the full raw value), and wrap the cell text;
-    see test_long_text_columns_wrap and test_nodeid_columns_have_break_points.
-    """
-    panels = _panels_by_title(dashboard)
-    for title, field in INSPECTED_NAME_COLUMNS.items():
-        override = _override_for(panels[title], field)
-        assert override is not None, f"{title}: missing override for {field}"
-        props = {pr["id"]: pr.get("value") for pr in override["properties"]}
-        assert props.get("custom.inspect") is True, f"{title}/{field}: cells need the inspect action"
-        assert "custom.width" not in props, f"{title}/{field}: long-text column must stretch, not fix width"
-        assert "custom.wrapText" not in props, f"{title}/{field}: plain custom.wrapText is dead code in Grafana 13.2"
-
-
-def test_long_text_columns_wrap(dashboard: dict, home: dict) -> None:
-    """Wrapped columns turn on the cell wrap this Grafana build supports."""
-    home_wrapped = {"Recent failed tests": "name"}
-    for title in ("Recent failed tests", "Captures with test spans but no session span", "Recent test runs"):
-        home_wrapped.setdefault(title, "osac.ci.capture_id")
-    for dash, columns, label in ((dashboard, WRAPPED_COLUMNS, "detail"), (home, home_wrapped, "home")):
-        panels = _panels_by_title(dash)
-        for title, field in columns.items():
-            override = _override_for(panels[title], field)
-            assert override is not None, f"{label} {title}: missing override for {field}"
-            props = {pr["id"]: pr.get("value") for pr in override["properties"]}
-            cell_options = props.get("custom.cellOptions")
-            assert isinstance(cell_options, dict), f"{title}/{field}: needs custom.cellOptions wrap"
-            assert cell_options.get("wrapText") is True, f"{title}/{field}: cellOptions.wrapText must be on"
-            assert cell_options.get("dynamicHeight") is True, f"{title}/{field}: rows must size to content"
-
-
-def test_nodeid_columns_have_break_points(dashboard: dict, home: dict) -> None:
-    """Long single-token cells get invisible break points so text can wrap.
-
-    A pytest nodeid has no spaces and CSS does not break after "/", a
-    snake_case fixture name does not break after "_", and a dotted gRPC
-    method breaks nowhere; an unmapped cell can never wrap no matter how the
-    column is sized. The regex value mappings insert U+200B at those seams
-    (display only: sorting, copying and inspect keep the raw value).
-    """
-    expected = {**{k: v for k, v in BREAK_POINT_MAPPINGS.items()}}
-    panels_detail = _panels_by_title(dashboard)
-    panels_home = _panels_by_title(home)
-    for (title, field), patterns in expected.items():
-        panels = panels_home if title == "Recent failed tests" else panels_detail
-        label = "home" if panels is panels_home else "detail"
-        override = _override_for(panels[title], field)
-        assert override is not None, f"{label} {title}: missing override for {field}"
-        props = {pr["id"]: pr.get("value") for pr in override["properties"]}
-        mappings = props.get("mappings") or []
-        for pattern in patterns:
-            match = any(
-                m.get("type") == "regex"
-                and m["options"].get("pattern") == pattern
-                and m["options"].get("result", {}).get("text") == NODEID_BREAK_TEXT
-                for m in mappings
-            )
-            assert match, f"{title}/{field}: needs a mapping inserting U+200B at {pattern}"
-
-
-def test_fixed_columns_fit_their_values(dashboard: dict, home: dict) -> None:
-    """Timestamps, run IDs and gRPC statuses keep full-width columns.
-
-    Live-measured needs (text width + 24px cell padding): the ms-precision
-    timestamp "2026-11-01 16:03:33.322" is 191px, FAILED_PRECONDITION is
-    ~179px, "no error recorded" is 143px, a 24-char run id is ~227px.
-    """
-    panels = _panels_by_title(dashboard)
-    for title, fields in MIN_COLUMN_WIDTHS.items():
-        for field, minimum in fields.items():
-            override = _override_for(panels[title], field)
-            assert override is not None, f"{title}: missing override for {field}"
-            widths = [pr["value"] for pr in override["properties"] if pr["id"] == "custom.width"]
-            assert widths and widths[0] >= minimum, f"{title}/{field}: column width {widths} < {minimum}"
-    for title in ("Recent test runs", "Recent failed tests", "Captures with test spans but no session span"):
-        override = _override_for(_panels_by_title(home)[title], "osac.ci.capture_id")
-        widths = [pr["value"] for pr in override["properties"] if pr["id"] == "custom.width"]
-        assert widths and widths[0] >= 240, f"{title}: run-id column must fit the full id including the attempt suffix"
-
-
-def test_stat_titles_are_short_enough_to_render(dashboard: dict) -> None:
-    """The panel-header title box gets less than half the panel width.
-
-    Live-measured: at w4 the title box is 70px at 1440 and 43px at 1280, so
-    long titles like "Run completeness" clip to "Run co...". The overview
-    therefore uses short titles (Result, Session, Duration) whose meaning the
-    descriptions carry, and stats wide enough for them.
-    """
-    panels = _panels_by_title(dashboard)
-    expected = {
-        "Tests": (0, 1, 6),
-        "Failed": (6, 1, 6),
-        "Result": (12, 1, 6),
-        "Session": (18, 1, 6),
-        "Test time": (0, 5, 8),
-        "Suite": (8, 5, 8),
-        "PR": (16, 5, 8),
-        "Calls": (0, 107, 5),
-        "Call errors": (5, 107, 5),
-    }
-    for title, (x, y, w) in expected.items():
-        p = panels[title]
-        g = p["gridPos"]
-        assert (g["x"], g["y"], g["w"]) == (x, y, w), f"{title}: grid {g}"
-        assert len(title) * 7 <= min(w * 36, 115), f"{title}: title too long for its panel width"

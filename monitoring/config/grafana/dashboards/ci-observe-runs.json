@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "One ci-observe E2E capture at a time: pick it with the Run variable (Loki label osac_ci_capture_id, newest first). Read top to bottom: Run overview says what ran and whether it passed, the collapsed Run identity row holds the exact refs when expanded, Collection coverage says how complete the telemetry is, the collapsed CI evidence row holds the GitHub job, step and JUnit evidence with the link to the run's artifact, then Tests and workers, Fixture work, Waits and Service requests break the run down, and the collapsed Environment row holds the pod and node metrics while the collapsed Events row holds the capture's Kubernetes events. Keep the default 7-day time range while picking a capture, because a narrower range can hide a run whose trace is only partly inside the window.",
+  "description": "One ci-observe E2E capture at a time: pick it with the Run variable (Loki label osac_ci_capture_id, newest first). Read top to bottom: Run overview says what the capture endpoint answered for this capture, Collection coverage gives the exact span counts, the collapsed CI evidence row holds the GitHub job, step and JUnit evidence, the collapsed Run identity row holds the registry's exact refs, then Tests and workers, Fixture work and Waits break the capture down, Service requests links Explore for the sampled service calls, and the collapsed Environment row holds the pod and node metrics while the collapsed Events row holds the capture's Kubernetes events. Every count comes from the capture endpoint's one document; no number on this page is a Tempo search page size. Keep the default 7-day time range while picking a capture, because the Environment and Events rows are read over it.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -20,9 +20,9 @@
   ],
   "panels": [
     {
-      "id": 1,
+      "id": 100,
       "title": "Run overview",
-      "description": "Read this first: what the run was, whether it passed, and how long it took. A missing session span means the outcome is unknown, not passed.",
+      "description": "Read this first: what the capture endpoint answered, and what the session recorded. Every card here reads the capture document after the endpoint classified every span in the session trace, so the counts are exact. A missing session span means the outcome is unknown, not passed.",
       "type": "row",
       "gridPos": {
         "h": 1,
@@ -34,31 +34,57 @@
       "panels": []
     },
     {
-      "id": 2,
-      "title": "Tests",
-      "description": "Parent pytest test spans (pytest.span_type = test, ::setup/::call/::teardown phase spans excluded). Tempo returns at most 100 spans per trace, so runs with more than 100 tests are undercounted here. Zero means no test spans were recorded, which is not evidence of a pass - see Run result.",
+      "id": 101,
+      "title": "Capture state",
+      "description": "What the capture endpoint answered for this capture id. `indexed` means Tempo holds the session trace and every span was classified. `not indexed` means the capture is registered but its trace is not searchable yet, so reload in a few minutes. `missing`, `busy`, `too_large` and `unknown` mean no complete document exists. Before the first answer the card reads `Loading`.",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 6,
+        "w": 4,
         "x": 0,
         "y": 1
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "No test spans in this capture",
+          "noValue": "Loading: no answer yet",
           "mappings": [
             {
               "type": "value",
               "options": {
-                "0": {
-                  "text": "no test spans",
-                  "color": "orange"
+                "ok": {
+                  "text": "indexed",
+                  "color": "green",
+                  "index": 0
+                },
+                "not_indexed": {
+                  "text": "not indexed",
+                  "color": "orange",
+                  "index": 1
+                },
+                "missing": {
+                  "text": "missing",
+                  "color": "red",
+                  "index": 2
+                },
+                "busy": {
+                  "text": "busy",
+                  "color": "orange",
+                  "index": 3
+                },
+                "too_large": {
+                  "text": "too large",
+                  "color": "red",
+                  "index": 4
+                },
+                "unknown": {
+                  "text": "unknown",
+                  "color": "orange",
+                  "index": 5
                 }
               }
             }
@@ -73,20 +99,7 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "colorMode": "background",
@@ -95,43 +108,122 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "count"
+            "lastNotNull"
           ],
-          "fields": "Name",
+          "fields": "state",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\"}",
-          "limit": 100,
-          "spss": 100,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$",
+          "columns": [
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 3,
-      "title": "Failed",
-      "description": "Test spans with status = error, set by pytest-opentelemetry on failures. A zero here is only meaningful together with a non-zero Tests count and a recorded Result; without those, zero means 'not recorded', not 'passed'. GitHub still owns the final job conclusion.",
+      "id": 102,
+      "title": "Tests",
+      "description": "Parent pytest tests in this capture's session trace, counted by the capture endpoint after classifying every span. Population: this capture. This is the trace's exact test count, never a Tempo search page size.",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 6,
+        "w": 4,
+        "x": 4,
         "y": 1
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "No failed test spans recorded",
+          "noValue": "Loading or no session span",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "tests",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "session",
+          "columns": [
+            {
+              "selector": "tests",
+              "text": "tests",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 103,
+      "title": "Failed",
+      "description": "Failed tests in the capture document's `failed_tests`, which the endpoint builds from the run's JUnit evidence. Zero is only evidence of no failures when the capture is indexed and the session span exists; GitHub still owns the job conclusion.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "Loading or no failed-test evidence",
           "mappings": [
             {
               "type": "value",
@@ -157,20 +249,7 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "colorMode": "background",
@@ -181,59 +260,65 @@
           "calcs": [
             "count"
           ],
-          "fields": "Name",
+          "fields": "name",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && status = error}",
-          "limit": 100,
-          "spss": 100,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "failed_tests",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 4,
+      "id": 104,
       "title": "Result",
-      "description": "Status of the pytest session span: error means at least one test failed during the run. 'Incomplete: no session span' means the outcome was never captured here, so it is unknown, not passed. GitHub's job conclusion stays authoritative; use the job evidence link under Collection coverage.",
+      "description": "Status of the pytest session span: error means at least one test failed. `No session span yet` means the outcome was never captured, so it is unknown, not passed.",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 6,
+        "w": 4,
         "x": 12,
         "y": 1
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Incomplete: no session span",
+          "unit": "none",
+          "noValue": "No session span yet",
           "mappings": [
-            {
-              "type": "special",
-              "options": {
-                "text": "Incomplete: no session span",
-                "color": "orange",
-                "match": "null"
-              }
-            },
             {
               "type": "value",
               "options": {
                 "ok": {
                   "text": "Passed",
-                  "color": "green"
+                  "color": "green",
+                  "index": 0
                 },
                 "error": {
                   "text": "Failed",
-                  "color": "red"
+                  "color": "red",
+                  "index": 1
                 }
               }
             }
@@ -267,72 +352,56 @@
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && name = \"test run\" && (status = ok || status = error)}",
-          "limit": 10,
-          "spss": 10,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "session",
+          "columns": [
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 5,
-      "title": "Session",
-      "description": "Whether the pytest session span arrived: 1 means Complete, 0 or no data means Incomplete - the run's outcome and duration were never captured, so Failed showing zero is not evidence of a pass. Check the GitHub job for the real result.",
+      "id": 105,
+      "title": "Test time",
+      "description": "Wall-clock duration of the pytest session from its start to its end, in seconds, as the capture endpoint reports it. Population: this capture. One session, so this is the run's test time.",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 18,
+        "w": 4,
+        "x": 16,
         "y": 1
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
-          "noValue": "Incomplete",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "Incomplete",
-                  "color": "orange"
-                },
-                "1": {
-                  "text": "Complete",
-                  "color": "green"
-                }
-              }
-            }
-          ],
+          "unit": "s",
+          "noValue": "not recorded",
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "orange",
+                "color": "blue",
                 "value": null
               }
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "colorMode": "background",
@@ -341,32 +410,107 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "count"
+            "lastNotNull"
           ],
-          "fields": "Name",
+          "fields": "duration_seconds",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value"
       },
       "targets": [
         {
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && name = \"test run\" && (status = ok || status = error)}",
-          "limit": 10,
-          "spss": 10,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "session",
+          "columns": [
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
+              "type": "number"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 6,
-      "title": "Test time",
-      "description": "Elapsed time from the start of the test session to its end. 'not recorded' means the session span never arrived.",
+      "id": 106,
+      "title": "Test attempts",
+      "description": "Setup, call and teardown phase spans behind the tests, counted by the capture endpoint from the classified spans. Population: this capture. The count is larger than the test count because each test has several phases.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "Loading or no session span",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "test_attempts",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "session",
+          "columns": [
+            {
+              "selector": "test_attempts",
+              "text": "test_attempts",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 107,
+      "title": "Test paths",
+      "description": "The exact pytest path list the run collected (`identity.test_suite`), straight from the capture registry. Population: this capture. `unknown` means the workflow reported no selection.",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -375,12 +519,14 @@
         "y": 5
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "none",
           "noValue": "not recorded",
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -389,49 +535,50 @@
                 "value": null
               }
             ]
-          },
-          "mappings": [
-            {
-              "type": "special",
-              "options": {
-                "text": "not recorded",
-                "color": "orange",
-                "match": "null"
-              }
-            }
-          ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "colorMode": "background",
+        "colorMode": "none",
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "max"
+            "lastNotNull"
           ],
-          "fields": "Duration",
+          "fields": "test_suite",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && name = \"test run\"}",
-          "limit": 100,
-          "spss": 100,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "identity",
+          "columns": [
+            {
+              "selector": "test_suite",
+              "text": "test_suite",
+              "type": "string"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 7,
-      "title": "Suite",
-      "description": "Suite label (osac_ci_suite) carried on the capture's Loki streams; shows 'not labeled' for captures imported before suite labels existed.",
+      "id": 108,
+      "title": "PR",
+      "description": "Pull request number from the capture registry (`identity.pr`). Population: this capture. `none` means the run tested a branch, not a pull request.",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -440,12 +587,14 @@
         "y": 5
       },
       "datasource": {
-        "type": "loki",
-        "uid": "ci-observe-logs"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "not labeled",
+          "unit": "none",
+          "noValue": "not recorded",
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -467,24 +616,37 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "pr",
           "values": false
         },
-        "textMode": "name"
+        "textMode": "value"
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (osac_ci_suite) (count_over_time({osac_ci_capture_id=\"$capture_id\"}[$__range]))",
-          "legendFormat": "{{osac_ci_suite}}",
-          "queryType": "range"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "identity",
+          "columns": [
+            {
+              "selector": "pr",
+              "text": "pr",
+              "type": "string"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 8,
-      "title": "PR",
-      "description": "Pull-request label from the capture's Loki streams. The value `none` is shown as `No PR`.",
+      "id": 109,
+      "title": "Workflow",
+      "description": "GitHub Actions workflow name from the capture registry (`identity.workflow`). Population: this capture.",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -493,12 +655,14 @@
         "y": 5
       },
       "datasource": {
-        "type": "loki",
-        "uid": "ci-observe-logs"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "not labeled",
+          "unit": "none",
+          "noValue": "not recorded",
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -509,20 +673,7 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "none"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "No PR"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "colorMode": "none",
@@ -533,296 +684,377 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "workflow",
           "values": false
         },
-        "textMode": "name"
+        "textMode": "value"
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (osac_ci_pr) (count_over_time({osac_ci_capture_id=\"$capture_id\"}[$__range]))",
-          "legendFormat": "{{osac_ci_pr}}",
-          "queryType": "range"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "identity",
+          "columns": [
+            {
+              "selector": "workflow",
+              "text": "workflow",
+              "type": "string"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 9,
+      "id": 110,
       "title": "Collection coverage",
-      "description": "How complete this capture's telemetry is. Counts are lower bounds: Tempo returns at most 100 spans per trace and 30,000 traces per search. The panel below links the GitHub job and native pytest evidence, which stays authoritative.",
+      "description": "How complete the capture document is: exact span counts from the endpoint, not search page sizes. The CI evidence row below carries the GitHub job and native pytest evidence, which stays authoritative.",
       "type": "row",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 9
       },
       "collapsed": false,
       "panels": []
     },
     {
-      "id": 10,
-      "title": "Parent test spans",
-      "description": "Parent pytest test spans in the capture. Zero means no test spans were recorded. Tempo returns at most 100 spans per trace, so runs with more than 100 tests in one trace are undercounted.",
-      "type": "stat",
-      "gridPos": {
-        "h": 3,
-        "w": 8,
-        "x": 0,
-        "y": 7
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "no result from Tempo",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "none",
-                  "color": "orange"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "Name",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\"}",
-          "limit": 100,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "id": 11,
+      "id": 111,
       "title": "Wait spans",
-      "description": "Spans the test suite recorded while waiting for the cluster (poll_until waits). Tempo returns at most 100 spans per trace, so long runs are undercounted.",
+      "description": "Wait spans (poll_until waits) in the capture document, counted by the endpoint after classifying every span. Population: this capture. Waits overlap the tests that waited, so they are never added to test time.",
       "type": "stat",
       "gridPos": {
-        "h": 3,
-        "w": 8,
-        "x": 8,
-        "y": 7
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "no result from Tempo",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "none",
-                  "color": "orange"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "Name",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && ( .pytest.span_type = \"wait\" || span.\"poll.delay\" != nil ) && name =~ \".+\"}",
-          "limit": 1000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "id": 12,
-      "title": "Service spans",
-      "description": "Named service operations recorded by Beyla (gRPC calls, HTTP routes, Redis and database commands), excluding pytest spans and wait spans. Busy captures exceed Tempo's 30,000-trace search cap, so this is a lower bound.",
-      "type": "stat",
-      "gridPos": {
-        "h": 3,
-        "w": 8,
-        "x": 16,
-        "y": 7
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "no result from Tempo",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "none",
-                  "color": "orange"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "Name",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil && span.\"poll.delay\" = nil && name =~ \".+\"}",
-          "limit": 30000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "id": 13,
-      "title": "Where is the rest of the evidence?",
-      "description": "Where each kind of evidence lives: the sections of this page, the run's GitHub artifact, and the Trends dashboard for a cohort comparison.",
-      "type": "text",
-      "gridPos": {
-        "h": 6,
-        "w": 24,
+        "h": 4,
+        "w": 6,
         "x": 0,
         "y": 10
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "none",
+          "noValue": "Loading or no wait spans",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "none",
+                  "color": "text"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
         "overrides": []
       },
       "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ],
+          "fields": "name",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "waits",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 112,
+      "title": "Fixture setups",
+      "description": "Fixture setup spans in the capture document, counted by the endpoint after classifying every span. Population: this capture. Fixture time overlaps the test that triggered it; it is never added to test time.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 10
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "Loading or no fixture spans",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "none",
+                  "color": "text"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ],
+          "fields": "name",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "fixtures",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 113,
+      "title": "Fixture uses",
+      "description": "One row per test that reused a shared fixture, counted by the endpoint. Population: this capture. Empty means the capture reused no shared fixture.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 10
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "Loading or no fixture reuse",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "none",
+                  "color": "text"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ],
+          "fields": "fixture_name",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "fixture_uses",
+          "columns": [
+            {
+              "selector": "fixture_name",
+              "text": "fixture_name",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 114,
+      "title": "Unclassified spans",
+      "description": "Spans the endpoint could not classify (`coverage.spans_unclassified`). The endpoint returns a document only when classified plus unclassified equals the trace total, so a non-zero value marks a span type this page does not know, not a missing count.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 10
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "Loading",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "none",
+                  "color": "text"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "spans_unclassified",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "coverage",
+          "columns": [
+            {
+              "selector": "spans_unclassified",
+              "text": "spans_unclassified",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 115,
+      "title": "How these counts are made",
+      "description": "Where each number on this page comes from, and what loading, not indexed and error look like.",
+      "type": "text",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "options": {
         "mode": "markdown",
-        "content": "- **GitHub job conclusion, step logs and the native pytest report**: expand the **CI evidence** row below on this page. Traces never override GitHub's job conclusion.\n- **Pod logs and the per-test failure detail**: only in the run's GitHub artifact, because the collector cannot read `/var/log/pods` and pod logs never reach Loki. In **CI evidence**, open the **GitHub run and artifacts** cell and pick **Artifacts** (`<run url>#artifacts`). The artifact holds `failure.json` with the per-test detail, the pod logs and the cluster snapshots; GitHub deletes it after 7 days.\n- **What the cluster did during the run**: expand the **Environment** row at the bottom of this page for pod CPU, memory and pod lifetimes, from kubelet metrics sampled once a minute.\n- **Kubernetes events during the run**: expand the **Events** row at the bottom of this page for the events the capture's watch recorded, with type, reason, object and message.\n- **Compare with another run**: open the [Trends dashboard](/d/ci-observe-trends/ci-observe-e28094-trends?orgId=1) and pick a cohort in its Compare section; it does not take a single capture id."
+        "content": "Every count here is a length of a table in the capture endpoint's document, or a count field the endpoint computed after classifying every span in the session trace. No Tempo search page size is presented as a count.\n\n**Loading.** Each panel reads one cached capture document; before the first answer it shows its loading text. **Not indexed.** State `not indexed` means the capture is registered but Tempo has no complete session trace yet; reload in a few minutes. **Error.** If `http://127.0.0.1:9103` is unreachable, the panels show an error or no data; no zero on this page is evidence that the capture is empty.\n\nThe **CI evidence** row keeps the GitHub job conclusion and the native JUnit result, which stay authoritative. Pod logs and per-test stack traces stay in the run's GitHub artifact."
       },
       "targets": []
     },
@@ -835,7 +1067,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 19
       },
       "collapsed": true,
       "panels": [
@@ -848,7 +1080,7 @@
             "h": 8,
             "w": 14,
             "x": 0,
-            "y": 17
+            "y": 20
           },
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -1123,7 +1355,7 @@
             "h": 8,
             "w": 10,
             "x": 14,
-            "y": 17
+            "y": 20
           },
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -1335,7 +1567,7 @@
             "h": 9,
             "w": 24,
             "x": 0,
-            "y": 25
+            "y": 28
           },
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -1482,7 +1714,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 34
+            "y": 37
           },
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -1758,7 +1990,7 @@
             "h": 9,
             "w": 24,
             "x": 0,
-            "y": 40
+            "y": 43
           },
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -1921,833 +2153,470 @@
       ]
     },
     {
-      "id": 20,
+      "id": 116,
       "title": "Run identity (source commit, harness commit, selection)",
-      "description": "What exactly ran: the code under test, the harness revision, the workflow and the cluster. Fields stamped by newer ci-observe captures; older captures show 'not collected' for anything they predate.",
+      "description": "Who ran what: the registry identity fields this capture is registered with, bound one-to-one to the `identity` object the capture endpoint returns. `identity_source = info` means the action's info metric supplied them; `none` means only the capture id is known and the fields are empty.",
       "type": "row",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 20
       },
       "collapsed": true,
       "panels": [
         {
-          "id": 21,
-          "title": "Test ref (requested)",
-          "description": "osac.ci.test_ref: the osac code under test, as requested (a branch like main, or a PR head SHA in the osac PR flow).",
-          "type": "stat",
+          "id": 117,
+          "title": "Code under test",
+          "description": "The requested refs and the commits they resolved to: the osac source under test and the test-infra harness that wrapped the run. Population: this capture, from the registry.",
+          "type": "table",
           "gridPos": {
-            "h": 3,
-            "w": 6,
+            "h": 4,
+            "w": 12,
             "x": 0,
-            "y": 6
+            "y": 21
           },
           "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
           },
           "fieldConfig": {
             "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "noValue": "Loading: waiting for the capture endpoint"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_ref"
+                },
+                "properties": [
                   {
-                    "color": "blue",
-                    "value": null
+                    "id": "displayName",
+                    "value": "Source ref"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_sha"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Source SHA"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_infra_ref"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Harness ref"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_infra_sha"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Harness SHA"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_infra_workflow_sha"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Harness workflow SHA"
                   }
                 ]
               }
-            },
-            "overrides": []
+            ]
           },
           "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.test_ref",
-              "values": false
-            },
-            "textMode": "value"
+            "showHeader": true,
+            "cellHeight": "sm",
+            "sortBy": [],
+            "footer": {
+              "show": false
+            }
           },
           "targets": [
             {
               "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.test_ref\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "identity",
+              "columns": [
+                {
+                  "selector": "test_ref",
+                  "text": "test_ref",
+                  "type": "string"
+                },
+                {
+                  "selector": "test_sha",
+                  "text": "test_sha",
+                  "type": "string"
+                },
+                {
+                  "selector": "test_infra_ref",
+                  "text": "test_infra_ref",
+                  "type": "string"
+                },
+                {
+                  "selector": "test_infra_sha",
+                  "text": "test_infra_sha",
+                  "type": "string"
+                },
+                {
+                  "selector": "test_infra_workflow_sha",
+                  "text": "test_infra_workflow_sha",
+                  "type": "string"
+                }
+              ]
             }
           ]
         },
         {
-          "id": 22,
-          "title": "Test SHA (resolved)",
-          "description": "osac.ci.test_sha: the exact source commit the run tested, after resolving the requested ref. 'not collected' on captures that predate this attribute.",
-          "type": "stat",
+          "id": 118,
+          "title": "Selection and run",
+          "description": "The GitHub run and the exact pytest selection: run id, attempt, suite, pull request, workflow, test paths, filter and marker. Population: this capture, from the registry.",
+          "type": "table",
           "gridPos": {
-            "h": 3,
-            "w": 6,
-            "x": 6,
-            "y": 6
-          },
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.test_sha",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.test_sha\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ]
-        },
-        {
-          "id": 23,
-          "title": "Harness ref (requested)",
-          "description": "osac.ci.test_infra_ref: the test-infra harness revision that orchestrated the run, as requested (a branch or SHA).",
-          "type": "stat",
-          "gridPos": {
-            "h": 3,
-            "w": 6,
+            "h": 4,
+            "w": 12,
             "x": 12,
-            "y": 6
+            "y": 21
           },
           "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
           },
           "fieldConfig": {
             "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "noValue": "Loading: waiting for the capture endpoint"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "run_id"
+                },
+                "properties": [
                   {
-                    "color": "blue",
-                    "value": null
+                    "id": "displayName",
+                    "value": "Run id"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "run_attempt"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Attempt"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "suite"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Suite"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "pr"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "PR"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_suite"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Test paths"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_filter"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Filter"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_marker"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Marker"
                   }
                 ]
               }
-            },
-            "overrides": []
+            ]
           },
           "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.test_infra_ref",
-              "values": false
-            },
-            "textMode": "value"
+            "showHeader": true,
+            "cellHeight": "sm",
+            "sortBy": [],
+            "footer": {
+              "show": false
+            }
           },
           "targets": [
             {
               "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.test_infra_ref\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "identity",
+              "columns": [
+                {
+                  "selector": "run_id",
+                  "text": "run_id",
+                  "type": "string"
+                },
+                {
+                  "selector": "run_attempt",
+                  "text": "run_attempt",
+                  "type": "string"
+                },
+                {
+                  "selector": "suite",
+                  "text": "suite",
+                  "type": "string"
+                },
+                {
+                  "selector": "pr",
+                  "text": "pr",
+                  "type": "string"
+                },
+                {
+                  "selector": "workflow",
+                  "text": "workflow",
+                  "type": "string"
+                },
+                {
+                  "selector": "test_suite",
+                  "text": "test_suite",
+                  "type": "string"
+                },
+                {
+                  "selector": "test_filter",
+                  "text": "test_filter",
+                  "type": "string"
+                },
+                {
+                  "selector": "test_marker",
+                  "text": "test_marker",
+                  "type": "string"
+                }
+              ]
             }
           ]
         },
         {
-          "id": 24,
-          "title": "Harness SHA (resolved)",
-          "description": "osac.ci.test_infra_sha: the exact harness commit after resolving the requested ref. 'not collected' on captures that predate this attribute.",
-          "type": "stat",
+          "id": 119,
+          "title": "Capture record",
+          "description": "How the registry holds this capture: the Tempo trace id of the session, the identity source, and when the capture started. Population: this capture, from the registry.",
+          "type": "table",
           "gridPos": {
-            "h": 3,
-            "w": 6,
-            "x": 18,
-            "y": 6
-          },
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.test_infra_sha",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.test_infra_sha\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ]
-        },
-        {
-          "id": 25,
-          "title": "Run attempt",
-          "description": "osac.ci.run_attempt: the workflow run attempt (1 for the first try; the capture ID's a1 suffix says the same).",
-          "type": "stat",
-          "gridPos": {
-            "h": 3,
-            "w": 6,
-            "x": 6,
-            "y": 9
-          },
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.run_attempt",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.run_attempt\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ]
-        },
-        {
-          "id": 26,
-          "title": "Harness workflow SHA",
-          "description": "osac.ci.test_infra_workflow_sha: the commit of the workflow definition itself. 'not collected' on captures that predate this attribute.",
-          "type": "stat",
-          "gridPos": {
-            "h": 3,
-            "w": 6,
-            "x": 12,
-            "y": 9
-          },
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.test_infra_workflow_sha",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.test_infra_workflow_sha\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ]
-        },
-        {
-          "id": 27,
-          "title": "Test filter",
-          "description": "osac.ci.test_filter: the pytest filter (-k) the workflow requested, if any. 'not collected' on captures that predate this attribute.",
-          "type": "stat",
-          "gridPos": {
-            "h": 3,
-            "w": 8,
-            "x": 8,
-            "y": 12
-          },
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.test_filter",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.test_filter\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ]
-        },
-        {
-          "id": 28,
-          "title": "Test marker",
-          "description": "osac.ci.test_marker: the pytest marker (-m) the workflow requested, if any. 'not collected' on captures that predate this attribute.",
-          "type": "stat",
-          "gridPos": {
-            "h": 3,
-            "w": 8,
-            "x": 16,
-            "y": 12
-          },
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.test_marker",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.test_marker\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ]
-        },
-        {
-          "id": 29,
-          "title": "OSAC images (specs)",
-          "description": "osac.ci.osac_images: the image each OSAC deployment was asked to run, one 'deployment=image' entry per line. 'localhost/component-N-pr:NNN' images were built from source in this run. Long values are cut off visually; open the panel's data inspector for the full text.",
-          "type": "stat",
-          "gridPos": {
-            "h": 3,
+            "h": 4,
             "w": 24,
             "x": 0,
-            "y": 15
+            "y": 25
           },
           "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
           },
           "fieldConfig": {
             "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "noValue": "Loading: waiting for the capture endpoint"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "session_trace_id"
+                },
+                "properties": [
                   {
-                    "color": "blue",
-                    "value": null
+                    "id": "displayName",
+                    "value": "Session trace id"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "identity_source"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Identity source"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "capture_started_at"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Capture started"
                   }
                 ]
               }
-            },
-            "overrides": []
+            ]
           },
           "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.osac_images",
-              "values": false
-            },
-            "textMode": "value"
+            "showHeader": true,
+            "cellHeight": "sm",
+            "sortBy": [],
+            "footer": {
+              "show": false
+            }
           },
           "targets": [
             {
               "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.osac_images\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ]
-        },
-        {
-          "id": 30,
-          "title": "OSAC image IDs (running)",
-          "description": "osac.ci.osac_image_ids: the resolved image IDs (digests) of the OSAC pods actually running during the capture. 'not collected' on captures that predate this attribute.",
-          "type": "stat",
-          "gridPos": {
-            "h": 3,
-            "w": 16,
-            "x": 0,
-            "y": 18
-          },
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.osac_image_ids",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.osac_image_ids\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ]
-        },
-        {
-          "id": 31,
-          "title": "Image IDs complete",
-          "description": "osac.ci.osac_image_ids_complete: whether every running OSAC image reported a resolved ID. 'not collected' on captures that predate this attribute.",
-          "type": "stat",
-          "gridPos": {
-            "h": 3,
-            "w": 8,
-            "x": 16,
-            "y": 18
-          },
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "mappings": [
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "identity",
+              "columns": [
                 {
-                  "type": "value",
-                  "options": {
-                    "true": {
-                      "text": "complete",
-                      "color": "green"
-                    },
-                    "false": {
-                      "text": "partial",
-                      "color": "orange"
-                    }
-                  }
+                  "selector": "session_trace_id",
+                  "text": "session_trace_id",
+                  "type": "string"
+                },
+                {
+                  "selector": "identity_source",
+                  "text": "identity_source",
+                  "type": "string"
+                },
+                {
+                  "selector": "capture_started_at",
+                  "text": "capture_started_at",
+                  "type": "string"
                 }
-              ],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.osac_image_ids_complete",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "queryType": "traceql",
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.osac_image_ids_complete\" != nil}",
-              "limit": 1,
-              "spss": 1,
-              "tableType": "spans"
+              ]
             }
           ]
-        },
-        {
-          "id": 32,
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "description": "osac.ci.test_suite: the exact pytest path list the run collected, for example tests/e2e/vmaas/ or 'tests/e2e/vmaas/ tests/e2e/references/' when references ran alongside. It is a path list, not a single suite label. 'unknown' means the workflow wiring did not report the selection; 'not collected' means the capture predates this attribute.",
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 8,
-            "x": 0,
-            "y": 12
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.test_suite",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "limit": 1,
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.test_suite\" != nil}",
-              "queryType": "traceql",
-              "refId": "A",
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ],
-          "title": "Test paths",
-          "type": "stat"
-        },
-        {
-          "id": 33,
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "description": "osac.ci.cluster_uid: the identity of the cluster the run tested, so captures can be grouped by environment.",
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 6,
-            "x": 18,
-            "y": 9
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.cluster_uid",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "limit": 1,
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.cluster_uid\" != nil}",
-              "queryType": "traceql",
-              "refId": "A",
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ],
-          "title": "Cluster UID",
-          "type": "stat"
-        },
-        {
-          "id": 34,
-          "datasource": {
-            "type": "tempo",
-            "uid": "ci-observe-traces"
-          },
-          "description": "osac.ci.workflow: the GitHub Actions workflow name that ran the capture (for example 'E2E BMaaS Full Install').",
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "not collected",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 6,
-            "x": 0,
-            "y": 9
-          },
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "osac.ci.workflow",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "limit": 1,
-              "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && resource.\"osac.ci.workflow\" != nil}",
-              "queryType": "traceql",
-              "refId": "A",
-              "spss": 1,
-              "tableType": "spans"
-            }
-          ],
-          "title": "Workflow",
-          "type": "stat"
         }
       ]
     },
     {
-      "id": 35,
+      "id": 120,
       "title": "Tests and workers",
-      "description": "The pytest test spans of the capture: every test in start order with its worker, the slowest ones, and the failures.",
+      "description": "The capture document's test table: one row per parent pytest test with its xdist worker, status, start and duration. The endpoint classifies every span before returning, so this is the complete population of this capture. Durations are span wall time and overlap across workers.",
       "type": "row",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 21
       },
       "collapsed": false,
       "panels": []
     },
     {
-      "id": 36,
+      "id": 121,
       "title": "Test timeline",
-      "description": "Parent test spans ordered by start time, with the xdist worker that ran each test. Captures older than worker attribution show no Worker column or 'not recorded' - that means the worker was not recorded, not worker zero. Tempo returns at most 100 spans per trace, so runs with more tests are truncated here.",
+      "description": "Every parent pytest test in the capture, in start order, with the xdist worker that ran it. `not recorded` in Worker means the span carried no worker attribute. Population: this capture; durations are span wall time and overlap across workers.",
       "type": "table",
       "gridPos": {
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 22
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
@@ -2758,7 +2627,7 @@
             },
             "inspect": false
           },
-          "noValue": "No parent test spans for this capture. If the Tests card shows a number, this panel is still loading."
+          "noValue": "Loading: waiting for the capture endpoint"
         },
         "overrides": [
           {
@@ -2791,7 +2660,7 @@
                     "options": {
                       "pattern": "/(?<=\\/|::|_|\\[)/g",
                       "result": {
-                        "text": "​"
+                        "text": "\u200b"
                       }
                     }
                   }
@@ -2802,34 +2671,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "osac.ci.xdist_worker"
+              "options": "worker"
             },
             "properties": [
               {
                 "id": "displayName",
                 "value": "Worker"
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "nil": {
-                        "text": "not recorded",
-                        "color": "#808080"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "text": "not recorded",
-                      "color": "#808080",
-                      "match": "null"
-                    }
-                  }
-                ]
               },
               {
                 "id": "custom.width",
@@ -2868,14 +2715,6 @@
                         "color": "red"
                       }
                     }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "text": "not recorded",
-                      "color": "#808080",
-                      "match": "null"
-                    }
                   }
                 ]
               },
@@ -2888,7 +2727,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "time"
+              "options": "started_at"
             },
             "properties": [
               {
@@ -2904,7 +2743,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "duration"
+              "options": "duration_seconds"
             },
             "properties": [
               {
@@ -2913,99 +2752,11 @@
               },
               {
                 "id": "unit",
-                "value": "ns"
+                "value": "s"
               },
               {
                 "id": "decimals",
                 "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceIdHidden"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceService"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceName"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "spanID"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "osac.ci.capture_id"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pytest.span_type"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "service.name"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
               }
             ]
           }
@@ -3013,6 +2764,7 @@
       },
       "options": {
         "showHeader": true,
+        "cellHeight": "sm",
         "sortBy": [
           {
             "displayName": "Start",
@@ -3026,48 +2778,60 @@
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && ( status = ok || status = error || status = unset ) && ( span.\"osac.ci.xdist_worker\" != nil || .pytest.span_type = \"test\" )}",
-          "limit": 100,
-          "spss": 100,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tests",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "worker",
+              "text": "worker",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "started_at",
+              "text": "started_at",
+              "type": "string"
+            },
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
+              "type": "number"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 37,
+      "id": 122,
       "title": "Slowest tests",
-      "description": "The 20 slowest test spans in the capture, longest first. The span name is the full pytest nodeid; runs with more than 100 tests are truncated by Tempo's spans-per-trace cap.",
+      "description": "The 20 slowest tests in the capture, longest first. Durations are span wall time and overlap across xdist workers, so they do not sum to test time.",
       "type": "table",
       "gridPos": {
-        "h": 10,
-        "w": 24,
+        "h": 9,
+        "w": 14,
         "x": 0,
-        "y": 63
+        "y": 34
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
-      "transformations": [
-        {
-          "id": "sortBy",
-          "options": {
-            "sort": [
-              {
-                "field": "Duration",
-                "desc": true
-              }
-            ]
-          }
-        },
-        {
-          "id": "limit",
-          "options": {
-            "limitField": 20
-          }
-        }
-      ],
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -3077,7 +2841,7 @@
             },
             "inspect": false
           },
-          "noValue": "No parent test spans for this capture. If the Tests card shows a number, this panel is still loading."
+          "noValue": "Loading: waiting for the capture endpoint"
         },
         "overrides": [
           {
@@ -3110,7 +2874,7 @@
                     "options": {
                       "pattern": "/(?<=\\/|::|_|\\[)/g",
                       "result": {
-                        "text": "​"
+                        "text": "\u200b"
                       }
                     }
                   }
@@ -3121,214 +2885,16 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "time"
+              "options": "worker"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Start"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "ns"
-              },
-              {
-                "id": "decimals",
-                "value": 1
+                "value": "Worker"
               },
               {
                 "id": "custom.width",
                 "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceIdHidden"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceService"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceName"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "spanID"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "osac.ci.capture_id"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pytest.span_type"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "service.name"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Duration",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\"}",
-          "limit": 100,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "id": 38,
-      "title": "Failed tests, longest first",
-      "description": "Test spans with status = error, longest first. Empty when the run passed. Note an RPC error can be an expected assertion inside a passing test; GitHub still owns the final job conclusion. An empty table is only evidence of no failures when test spans and the session span exist - see Collection coverage.",
-      "type": "table",
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 73
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "No parent test spans for this capture. If the Tests card shows a number, this panel is still loading."
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Test"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "regex",
-                    "options": {
-                      "pattern": "/(?<=\\/|::|_|\\[)/g",
-                      "result": {
-                        "text": "​"
-                      }
-                    }
-                  }
-                ]
               }
             ]
           },
@@ -3354,6 +2920,10 @@
                   {
                     "type": "value",
                     "options": {
+                      "ok": {
+                        "text": "passed",
+                        "color": "green"
+                      },
                       "error": {
                         "text": "failed",
                         "color": "red"
@@ -3371,7 +2941,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "time"
+              "options": "started_at"
             },
             "properties": [
               {
@@ -3387,7 +2957,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "duration"
+              "options": "duration_seconds"
             },
             "properties": [
               {
@@ -3396,99 +2966,11 @@
               },
               {
                 "id": "unit",
-                "value": "ns"
+                "value": "s"
               },
               {
                 "id": "decimals",
                 "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceIdHidden"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceService"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceName"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "spanID"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "osac.ci.capture_id"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pytest.span_type"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "service.name"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
               }
             ]
           }
@@ -3496,6 +2978,7 @@
       },
       "options": {
         "showHeader": true,
+        "cellHeight": "sm",
         "sortBy": [
           {
             "displayName": "Duration",
@@ -3509,72 +2992,79 @@
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"test\" && name !~ \".*::(setup|call|teardown)\" && status = error}",
-          "limit": 100,
-          "spss": 100,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tests",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "worker",
+              "text": "worker",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "started_at",
+              "text": "started_at",
+              "type": "string"
+            },
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "duration_seconds",
+                "desc": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "limit",
+          "options": {
+            "limitField": 20
+          }
         }
       ]
     },
     {
-      "id": 39,
-      "title": "Fixture work",
-      "description": "Shared pytest fixtures: how long each fixture's setup took per worker, and how many tests reused it. Fixture time overlaps the runner's wall time - never add it to wall-clock duration.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 80
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 40,
-      "title": "Fixture setup",
-      "description": "Fixture setup spans ('<fixture> setup', pytest.span_type = fixture) grouped by fixture and worker, with the number of setups and their total time. 'not recorded' in Worker means the capture predates osac.ci.xdist_worker (Q3). Fixture setup time overlaps the wall clock of the test that triggered it; do not sum it into run duration. Tempo returns at most 100 spans per trace, so busy runs are truncated.",
+      "id": 123,
+      "title": "Capture failures",
+      "description": "Every failed test the capture document reports under `failed_tests`. The endpoint builds this list from the run's JUnit evidence, not from span status. Messages are the raw JUnit text; open the artifact's `failure.json` for stack traces. Empty is only evidence of a pass when the capture is indexed and the JUnit status is available; GitHub owns the job conclusion.",
       "type": "table",
       "gridPos": {
         "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 81
+        "w": 10,
+        "x": 14,
+        "y": 34
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
-      "transformations": [
-        {
-          "id": "groupBy",
-          "options": {
-            "fields": {
-              "name": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "osac.ci.xdist_worker": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "spanID": {
-                "aggregations": [
-                  "count"
-                ],
-                "operation": "aggregate"
-              },
-              "duration": {
-                "aggregations": [
-                  "sum"
-                ],
-                "operation": "aggregate"
-              }
-            }
-          }
-        }
-      ],
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -3584,7 +3074,214 @@
             },
             "inspect": false
           },
-          "noValue": "No fixture setup spans in this capture"
+          "noValue": "Loading: waiting for the capture endpoint"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test"
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "/(?<=\\/|::|_|\\[)/g",
+                      "result": {
+                        "text": "\u200b"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "classname"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Class"
+              },
+              {
+                "id": "custom.width",
+                "value": 260
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "type"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Type"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Message"
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 600
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [],
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "failed_tests",
+          "columns": [
+            {
+              "selector": "classname",
+              "text": "classname",
+              "type": "string"
+            },
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "type",
+              "text": "type",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "time_s",
+              "text": "time_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 124,
+      "title": "Fixture work",
+      "description": "Shared pytest fixtures: every setup span and every reuse, as tables of the capture document. Fixture time overlaps the runner's wall time; never add it to test time.",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 125,
+      "title": "Fixture setup",
+      "description": "One row per fixture setup span in the capture document, with its pytest scope and the xdist worker that ran it. Durations are span wall time and overlap the test that triggered the setup; never add them to test time.",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "Loading: waiting for the capture endpoint"
         },
         "overrides": [
           {
@@ -3617,7 +3314,7 @@
                     "options": {
                       "pattern": "/(?<=_)/g",
                       "result": {
-                        "text": "​"
+                        "text": "\u200b"
                       }
                     }
                   }
@@ -3628,7 +3325,19 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "osac.ci.xdist_worker"
+              "options": "scope"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scope"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "worker"
             },
             "properties": [
               {
@@ -3636,74 +3345,44 @@
                 "value": "Worker"
               },
               {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "nil": {
-                        "text": "not recorded",
-                        "color": "#808080"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "text": "not recorded",
-                      "color": "#808080",
-                      "match": "null"
-                    }
-                  }
-                ]
-              },
-              {
                 "id": "custom.width",
-                "value": 80
+                "value": 90
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Span ID (count)"
+              "options": "started_at"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Setups"
-              },
-              {
-                "id": "unit",
-                "value": "none"
+                "value": "Start"
               },
               {
                 "id": "custom.width",
-                "value": 70
+                "value": 195
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Duration (sum)"
+              "options": "duration_seconds"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Total setup time"
+                "value": "Duration"
               },
               {
                 "id": "unit",
-                "value": "ns"
+                "value": "s"
               },
               {
                 "id": "decimals",
                 "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 110
               }
             ]
           }
@@ -3711,9 +3390,10 @@
       },
       "options": {
         "showHeader": true,
+        "cellHeight": "sm",
         "sortBy": [
           {
-            "displayName": "Total setup time",
+            "displayName": "Duration",
             "desc": true
           }
         ],
@@ -3724,52 +3404,60 @@
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"fixture\" && name =~ \".* setup\" && ( span.\"osac.ci.xdist_worker\" != nil || .pytest.span_type = \"fixture\" ) && ( span.\"pytest.fixture_scope\" != nil || .pytest.span_type = \"fixture\" )}",
-          "limit": 1000,
-          "spss": 100,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "fixtures",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "scope",
+              "text": "scope",
+              "type": "string"
+            },
+            {
+              "selector": "worker",
+              "text": "worker",
+              "type": "string"
+            },
+            {
+              "selector": "started_at",
+              "text": "started_at",
+              "type": "string"
+            },
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
+              "type": "number"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 41,
-      "title": "Fixture reuse",
-      "description": "How many tests reused each shared (session- or module-scoped) fixture. Counts come from pytest.span_type = fixture_use spans, one per test per shared fixture; 'not recorded' in Worker means the capture predates osac.ci.xdist_worker (Q3). Empty means this capture predates the fixture-reuse instrumentation.",
+      "id": 126,
+      "title": "Fixture use",
+      "description": "One row per test that reused a shared fixture, from the capture document. `test` is the pytest nodeid that used the fixture. Empty means the capture reused no shared fixture.",
       "type": "table",
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 81
+        "y": 44
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
-      "transformations": [
-        {
-          "id": "groupBy",
-          "options": {
-            "fields": {
-              "pytest.fixture_name": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "osac.ci.xdist_worker": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "spanID": {
-                "aggregations": [
-                  "count"
-                ],
-                "operation": "aggregate"
-              }
-            }
-          }
-        }
-      ],
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -3779,13 +3467,13 @@
             },
             "inspect": false
           },
-          "noValue": "fixture reuse not instrumented yet"
+          "noValue": "Loading: waiting for the capture endpoint"
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "pytest.fixture_name"
+              "options": "fixture_name"
             },
             "properties": [
               {
@@ -3812,7 +3500,7 @@
                     "options": {
                       "pattern": "/(?<=_)/g",
                       "result": {
-                        "text": "​"
+                        "text": "\u200b"
                       }
                     }
                   }
@@ -3823,7 +3511,31 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "osac.ci.xdist_worker"
+              "options": "test"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test"
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "worker"
             },
             "properties": [
               {
@@ -3831,50 +3543,44 @@
                 "value": "Worker"
               },
               {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "nil": {
-                        "text": "not recorded",
-                        "color": "#808080"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "text": "not recorded",
-                      "color": "#808080",
-                      "match": "null"
-                    }
-                  }
-                ]
-              },
-              {
                 "id": "custom.width",
-                "value": 80
+                "value": 90
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Span ID (count)"
+              "options": "started_at"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Tests reusing"
-              },
-              {
-                "id": "unit",
-                "value": "none"
+                "value": "Start"
               },
               {
                 "id": "custom.width",
-                "value": 90
+                "value": 195
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration_seconds"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
               }
             ]
           }
@@ -3882,10 +3588,11 @@
       },
       "options": {
         "showHeader": true,
+        "cellHeight": "sm",
         "sortBy": [
           {
-            "displayName": "Tests reusing",
-            "desc": true
+            "displayName": "Fixture",
+            "desc": false
           }
         ],
         "footer": {
@@ -3895,42 +3602,73 @@
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = \"fixture_use\" && name =~ \".+\" && ( span.\"pytest.fixture_name\" != nil || .pytest.span_type = \"fixture_use\" ) && ( span.\"osac.ci.xdist_worker\" != nil || .pytest.span_type = \"fixture_use\" )}",
-          "limit": 1000,
-          "spss": 100,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "fixture_uses",
+          "columns": [
+            {
+              "selector": "fixture_name",
+              "text": "fixture_name",
+              "type": "string"
+            },
+            {
+              "selector": "test",
+              "text": "test",
+              "type": "string"
+            },
+            {
+              "selector": "worker",
+              "text": "worker",
+              "type": "string"
+            },
+            {
+              "selector": "started_at",
+              "text": "started_at",
+              "type": "string"
+            },
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
+              "type": "number"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 42,
+      "id": 127,
       "title": "Waits",
-      "description": "What the run waited for and how long each wait took, longest first.",
+      "description": "What the run waited for and how long each wait took, longest first, from the capture document. Wait time overlaps the tests that waited; it is not runner wall time.",
       "type": "row",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 90
+        "y": 53
       },
       "collapsed": false,
       "panels": []
     },
     {
-      "id": 43,
+      "id": 128,
       "title": "Longest waits",
-      "description": "Every recorded wait span (pytest.span_type = 'wait', or the poll.delay attribute older captures carry), longest first. 'not recorded' in Resource, Attempts or Condition means the wait predates wait-resource identity. The table shows the 100 longest waits: Tempo rejects more than 100 spans per span set (its default max_spans_per_span_set is 100), so a capture with more waits is cut here. This is not runner wall time: waits overlap the tests that waited. Pod logs are in the run's GitHub artifact (CI evidence), not in Loki: the collector cannot read /var/log/pods.",
+      "description": "Every wait span in the capture document, longest first: what the run waited for, on which resource, how many poll attempts, and whether the condition was met. `not recorded` in Resource, Attempts or Condition means the span predates wait-resource identity. Wait time overlaps the tests that waited; it is not runner wall time. Pod logs stay in the run's GitHub artifact.",
       "type": "table",
       "gridPos": {
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 91
+        "y": 54
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
@@ -3941,7 +3679,7 @@
             },
             "inspect": false
           },
-          "noValue": "No wait spans in this capture"
+          "noValue": "Loading: waiting for the capture endpoint"
         },
         "overrides": [
           {
@@ -3971,45 +3709,19 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "osac.wait.resource_kind"
+              "options": "resource_kind"
             },
             "properties": [
               {
                 "id": "displayName",
                 "value": "Resource kind"
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "nil": {
-                        "text": "not recorded",
-                        "color": "#808080"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "text": "not recorded",
-                      "color": "#808080",
-                      "match": "null"
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.width",
-                "value": 110
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "osac.wait.resource_id"
+              "options": "resource_id"
             },
             "properties": [
               {
@@ -4017,30 +3729,8 @@
                 "value": "Resource"
               },
               {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "nil": {
-                        "text": "not recorded",
-                        "color": "#808080"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "text": "not recorded",
-                      "color": "#808080",
-                      "match": "null"
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.width",
-                "value": 150
+                "id": "custom.inspect",
+                "value": true
               },
               {
                 "id": "custom.cellOptions",
@@ -4055,129 +3745,24 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "time"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "ns"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "poll.attempts"
+              "options": "attempts"
             },
             "properties": [
               {
                 "id": "displayName",
                 "value": "Attempts"
-              },
-              {
-                "id": "unit",
-                "value": "none"
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "nil": {
-                        "text": "not recorded",
-                        "color": "#808080"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "text": "not recorded",
-                      "color": "#808080",
-                      "match": "null"
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.width",
-                "value": 70
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "poll.condition_met"
+              "options": "condition_met"
             },
             "properties": [
               {
                 "id": "displayName",
                 "value": "Condition met"
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "true": {
-                        "text": "met",
-                        "color": "green"
-                      },
-                      "false": {
-                        "text": "not met",
-                        "color": "red"
-                      }
-                    }
-                  },
-                  {
-                    "type": "value",
-                    "options": {
-                      "nil": {
-                        "text": "not recorded",
-                        "color": "#808080"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "text": "not recorded",
-                      "color": "#808080",
-                      "match": "null"
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.width",
-                "value": 90
               }
             ]
           },
@@ -4203,13 +3788,13 @@
                   {
                     "type": "value",
                     "options": {
-                      "error": {
-                        "text": "failed or timed out",
-                        "color": "red"
+                      "ok": {
+                        "text": "passed",
+                        "color": "green"
                       },
-                      "unset": {
-                        "text": "no error recorded",
-                        "color": "#808080"
+                      "error": {
+                        "text": "failed",
+                        "color": "red"
                       }
                     }
                   }
@@ -4217,91 +3802,43 @@
               },
               {
                 "id": "custom.width",
-                "value": 145
+                "value": 90
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "traceIdHidden"
+              "options": "started_at"
             },
             "properties": [
               {
-                "id": "custom.hidden",
-                "value": true
+                "id": "displayName",
+                "value": "Start"
+              },
+              {
+                "id": "custom.width",
+                "value": 195
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "traceService"
+              "options": "duration_seconds"
             },
             "properties": [
               {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceName"
-            },
-            "properties": [
+                "id": "displayName",
+                "value": "Duration"
+              },
               {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "spanID"
-            },
-            "properties": [
+                "id": "unit",
+                "value": "s"
+              },
               {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "osac.ci.capture_id"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pytest.span_type"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "poll.delay"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
+                "id": "decimals",
+                "value": 1
               }
             ]
           }
@@ -4309,6 +3846,7 @@
       },
       "options": {
         "showHeader": true,
+        "cellHeight": "sm",
         "sortBy": [
           {
             "displayName": "Duration",
@@ -4322,780 +3860,95 @@
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && ( .pytest.span_type = \"wait\" || span.\"poll.delay\" != nil ) && name =~ \".+\" && ( status = ok || status = error || status = unset ) && ( span.\"poll.attempts\" != nil || span.\"poll.delay\" != nil ) && ( span.\"poll.condition_met\" != nil || span.\"poll.delay\" != nil ) && ( span.\"osac.wait.resource_kind\" != nil || span.\"poll.delay\" != nil ) && ( span.\"osac.wait.resource_id\" != nil || span.\"poll.delay\" != nil )}",
-          "limit": 1000,
-          "spss": 100,
-          "tableType": "spans"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "waits",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "resource_kind",
+              "text": "resource_kind",
+              "type": "string"
+            },
+            {
+              "selector": "resource_id",
+              "text": "resource_id",
+              "type": "string"
+            },
+            {
+              "selector": "attempts",
+              "text": "attempts",
+              "type": "number"
+            },
+            {
+              "selector": "condition_met",
+              "text": "condition_met",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "started_at",
+              "text": "started_at",
+              "type": "string"
+            },
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
+              "type": "number"
+            }
+          ]
         }
       ]
     },
     {
-      "id": 44,
+      "id": 129,
       "title": "Service requests",
-      "description": "Service calls observed by Beyla inside the capture: how many, which failed, which were slowest. Service-call errors can be expected inside a passing test; use Failed tests as the run failure indicator.",
+      "description": "Sampled service evidence. The capture document has no service-call table, so this row links Explore and shows no total.",
       "type": "row",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 103
+        "y": 66
       },
       "collapsed": false,
       "panels": []
     },
     {
-      "id": 45,
-      "title": "Service-call errors are not test failures",
-      "description": "Read this row as service evidence, not the test outcome.",
+      "id": 130,
+      "title": "Service calls are sampled",
+      "description": "Where to read the sampled Beyla service calls, and why this page shows no total.",
       "type": "text",
       "gridPos": {
-        "h": 3,
+        "h": 4,
         "w": 24,
         "x": 0,
-        "y": 104
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
+        "y": 67
       },
       "options": {
         "mode": "markdown",
-        "content": "**Service-call errors are not test failures; they can be expected in passing tests.** Use Failed tests and Run result for the test outcome. Everything in this row is service evidence about the OSAC components the run exercised."
+        "content": "**Service calls are sampled and this page shows no total.** Service-call errors are not test failures; they can be expected inside a passing test. Use Capture failures and Result for the test outcome, and the CI evidence row for the job conclusion.\n\n[Open Explore with this capture's service spans](/explore?orgId=1&left=%7B%22datasource%22%3A%22ci-observe-traces%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22ci-observe-traces%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7Bresource.%5C%22osac.ci.capture_id%5C%22%20%3D%20%5C%22$capture_id%5C%22%20%26%26%20.pytest.span_type%20%3D%20nil%20%26%26%20span.%5C%22poll.delay%5C%22%20%3D%20nil%7D%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22$%7B__from%7D%22%2C%22to%22%3A%22$%7B__to%7D%22%7D%7D). The query is the capture id from this page, and Explore runs it over the capture window you set there. A TraceQL search stops at its own span limit, so any row count Explore returns is a sample for the window, never a complete count."
       },
       "targets": []
     },
     {
-      "id": 46,
-      "title": "Calls",
-      "description": "Named service operations (Beyla): gRPC calls, HTTP routes, Redis and database commands. Excludes pytest spans and wait spans, and Beyla's unnamed internal process spans. Tempo caps search at 30,000 traces and 100 spans per trace, so treat busy captures as a lower bound.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 0,
-        "y": 107
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No service calls recorded",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "Name",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil && span.\"poll.delay\" = nil && name =~ \".+\"}",
-          "limit": 30000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "id": 47,
-      "title": "Call errors",
-      "description": "Service calls with an error status. Some errors are expected inside a passing test, so this is service evidence, not the run failure indicator - see the warning above. Use Failed tests for test status.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 5,
-        "y": 107
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No service-call errors recorded",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "orange",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "Name",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil && span.\"poll.delay\" = nil && status = error && name =~ \".+\"}",
-          "limit": 30000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "id": 48,
-      "title": "Calls by service",
-      "description": "Service calls grouped by service, with the slowest call per service. Empty means no service calls were recorded in this capture. Counts are a lower bound because Tempo caps search at 30,000 traces and 100 spans per trace.",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 14,
-        "x": 10,
-        "y": 107
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "transformations": [
-        {
-          "id": "groupBy",
-          "options": {
-            "fields": {
-              "traceService": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "spanID": {
-                "aggregations": [
-                  "count"
-                ],
-                "operation": "aggregate"
-              },
-              "duration": {
-                "aggregations": [
-                  "max"
-                ],
-                "operation": "aggregate"
-              }
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "No service calls recorded in this capture"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceService"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Service"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Span ID (count)"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Calls"
-              },
-              {
-                "id": "unit",
-                "value": "none"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration (max)"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Slowest call"
-              },
-              {
-                "id": "unit",
-                "value": "ns"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Calls",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil && span.\"poll.delay\" = nil && name =~ \".+\"}",
-          "limit": 30000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "id": 49,
-      "title": "Slowest service calls",
-      "description": "Service calls sorted by duration, longest first. Empty means no service calls were recorded in this capture.",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 116
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "No service calls recorded in this capture"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Operation"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "regex",
-                    "options": {
-                      "pattern": "/(?<=\\/|\\.)/g",
-                      "result": {
-                        "text": "​"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceService"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Service"
-              },
-              {
-                "id": "custom.width",
-                "value": 150
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "time"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Start"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "ns"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceIdHidden"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "spanID"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceName"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "osac.ci.capture_id"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pytest.span_type"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "poll.delay"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Duration",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .pytest.span_type = nil && span.\"poll.delay\" = nil && name =~ \".+\"}",
-          "limit": 30000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
-      "id": 50,
-      "title": "gRPC errors",
-      "description": "gRPC calls whose response status is not OK (rpc.response.status_code, a string like NOT_FOUND or UNAVAILABLE; Beyla does not set the numeric rpc.grpc.status_code). This is service evidence, not a test outcome; some errors are expected in passing tests. Empty when the capture holds no gRPC calls or none failed.",
-      "type": "table",
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 125
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "ci-observe-traces"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "No gRPC errors in this capture"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "gRPC method"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "regex",
-                    "options": {
-                      "pattern": "/(?<=\\/|\\.)/g",
-                      "result": {
-                        "text": "​"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceService"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Service"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "time"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Start"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "rpc.response.status_code"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "gRPC status"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "ns"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceIdHidden"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "spanID"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceName"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "osac.ci.capture_id"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "rpc.system.name"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Duration",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.\"osac.ci.capture_id\" = \"$capture_id\" && .rpc.system.name = \"grpc\" && .rpc.response.status_code != \"OK\" && name =~ \".+\"}",
-          "limit": 30000,
-          "spss": 100,
-          "tableType": "spans"
-        }
-      ]
-    },
-    {
       "id": 51,
       "title": "Environment",
-      "description": "One capture, minute by minute: how many pods existed, what each pod used in CPU and memory, what each node used, and which pods existed when. The collector scrapes the kubelet summary API every 60 seconds, so one point is one minute, and Prometheus keeps 15 days of samples. The time range must cover the capture: a finished capture has no samples in \"now\", so a range that ends before the capture starts, or begins after it ends, renders empty. Set the range to the capture's start and end, or a little wider.\n\nThe **Pods seen** table keeps working after the capture ends because it reads its values with range functions over the dashboard range; a bare instant query of a metric stops returning anything about five minutes after the last sample, which is Prometheus's lookback window, not missing data. The pod series carry no node label, so this page cannot say which node a pod ran on. Node metrics are cluster-wide, one line per node.",
+      "description": "One capture, minute by minute: how many pods existed, what each pod used in CPU and memory, what each node used, and which pods existed when. Every query is scoped to this capture with the osac_ci_capture_id label. The collector scrapes the kubelet summary API every 60 seconds, so one point is one minute, and Prometheus keeps 15 days of samples. The time range must cover the capture: a finished capture has no samples in \"now\", so a range that ends before the capture starts, or begins after it ends, renders empty. Links from Start here and the Pull requests page set from and to to the run's window; arriving without them, set the range to the capture's start and end from Run overview.\n\nThe **Pods seen** table keeps working after the capture ends because it reads its values with range functions over the dashboard range; a bare instant query of a metric stops returning anything about five minutes after the last sample, which is Prometheus's lookback window, not missing data. The pod series carry no node label, so this page cannot say which node a pod ran on. Node metrics are cluster-wide, one line per node.",
       "type": "row",
       "gridPos": {
         "h": 1,
@@ -5755,7 +4608,7 @@
     {
       "id": 58,
       "title": "Events",
-      "description": "Kubernetes events recorded for this capture, oldest first. The collector watches events in the observed namespace only, so events from other namespaces are not here; an empty table means no event was recorded in the capture window, not that the cluster was healthy.",
+      "description": "Kubernetes events recorded for this capture, oldest first. The query is scoped to the capture's own osac_ci_capture_id stream. The collector watches events in the observed namespace only, so events from other namespaces are not here; an empty table means no event was recorded in the capture window, not that the cluster was healthy. Links from Start here and the Pull requests page set from and to to the run's window; a finished capture needs the range set to that window.",
       "type": "row",
       "gridPos": {
         "h": 1,
@@ -6081,7 +4934,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "CI Observe — Capture",
+  "title": "CI Observe \u2014 Capture",
   "uid": "ci-observe-runs",
   "version": 1
 }
