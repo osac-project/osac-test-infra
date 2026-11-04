@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from urllib.parse import quote
 from urllib.parse import parse_qsl, urlparse
 
 
@@ -86,7 +87,11 @@ def url_params(panel: dict, **values: str) -> dict[str, str]:
 def resolved_url(panel: dict, field: str, raw: str) -> str:
     """The link's URL with Grafana's row-value tokens filled in."""
     url = links(panel, field)[0]["url"]
-    return url.replace("${__value.raw}", raw).replace("${__data.fields.repo}", "osac")
+    return (
+        url.replace("${__value.raw:percentencode}", quote(raw, safe=""))
+        .replace("${__value.raw}", raw)
+        .replace("${__data.fields.repo}", "osac")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +159,11 @@ def test_pull_request_lookup_uses_its_own_window() -> None:
     assert days["type"] == "custom"
     assert [option["value"] for option in days["options"]] == ["7", "30", "60"]
     assert days["current"]["value"] == "30"
-    assert "pull request" in days["label"].lower()
+    label = days["label"].lower()
+    assert "lookup" in label and "run" in label
+    description = days["description"].lower()
+    assert "pull request lookup" in description
+    assert "runs table" in description
 
 
 def test_pull_request_lookup_carries_the_columns_the_endpoint_returns() -> None:
@@ -238,8 +247,17 @@ def test_test_id_lookup_opens_trends_with_the_test_selected() -> None:
     url = resolved_url(PANELS[TEST_LOOKUP], "test_id", "tests/e2e/vmaas/test_vm::test_restart")
 
     assert url.startswith("/d/ci-observe-trends/ci-observe-trends?")
-    assert "var-test=tests/e2e/vmaas/test_vm::test_restart" in url
+    assert f"var-test={quote('tests/e2e/vmaas/test_vm::test_restart', safe='')}" in url
     assert "test" in remote
+
+
+def test_test_id_lookup_percent_encodes_special_characters() -> None:
+    """A parametrized test id can contain &, #, + or spaces; raw interpolation
+    would cut the Trends filter at the first one."""
+    raw = "tests/e2e/vmaas/test_vm.py::test_x[a&b]"
+    url = resolved_url(PANELS[TEST_LOOKUP], "test_id", raw)
+    assert f"var-test={quote(raw, safe='')}" in url
+    assert "&b]" not in url
 
 
 def test_test_id_lookup_states_its_fixed_window() -> None:
@@ -376,8 +394,8 @@ RUNS_DOCUMENT = {
     "days": 7,
     "window_from": "2026-10-28T10:00:00Z",
     "window_to": "2026-11-04T10:00:00Z",
-    "tempo": {"url": "http://127.0.0.1:3210", "query": "", "cached": False,
-              "captures": 1, "state": "ok", "note": ""},
+    "tempo": {"url": "http://127.0.0.1:3210", "tag": "resource.osac.ci.capture_id",
+              "chunks": 1, "cached": False, "captures": 1, "state": "ok", "note": ""},
     "runs": [{
         "id": "41310072671",
         "workflow": "E2E VMaaS Full Install",

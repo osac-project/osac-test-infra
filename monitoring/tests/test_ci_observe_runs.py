@@ -5,11 +5,15 @@ knows every capture but not the runs that never sent one. This endpoint joins
 them on the GitHub run id and answers the front door's question per run:
 capture, not collected, or unknown.
 
-These tests pin the join (both directions), and above all the rule that keeps
-a data problem from becoming a false verdict: Tempo down, a truncated search,
-an unreadable response, a run too fresh for the last lookup, or a run older
-than the capture retention are all `unknown`, never `not collected`. They also
-pin the bounded lookup (one Tempo query per minute, window and limit clamps)
+The capture set comes from Tempo's tag-values endpoint, one entry per capture,
+not from a span search with a trace limit. Tempo refuses a range over 168h, so
+a 30- or 60-day window is queried in seven-day chunks and merged.
+
+These tests pin the join, the chunking, and above all the rule that keeps a
+data problem from becoming a false verdict: Tempo down, one failed or capped
+chunk, a value that is not a capture id, a run too fresh for the last lookup,
+or a run older than the capture retention are all `unknown`, never `not
+collected`. They also pin the per-window cache, the window and limit clamps,
 and the deployment wiring the container needs to reach the host's Tempo.
 """
 
@@ -32,6 +36,8 @@ DASHBOARD = MONITORING / "config" / "grafana" / "dashboards" / "ci-observe-runs-
 RUN_ID = 41310072671
 SECOND_RUN_ID = 41310072672
 CAPTURE = f"vmaas-main-{RUN_ID}-a1"
+TAG_PATH = "/api/v2/search/tag/resource.osac.ci.capture_id/values"
+MAX_RANGE_SECONDS = 168 * 3600
 
 
 def iso(minutes_ago: float) -> str:
@@ -55,47 +61,41 @@ def run_job(run_id=RUN_ID, **overrides) -> dict:
     return row
 
 
-def tempo_trace(capture_id=CAPTURE, run_id=RUN_ID, *, scoped=True, with_attributes=True):
-    """One /api/search hit as Tempo 2.10 returns it: matched spans under
-    spanSets, attributes as KeyValue pairs."""
-    attributes = []
-    if with_attributes:
-        prefix = "resource." if scoped else ""
-        attributes.append({
-            "key": f"{prefix}osac.ci.capture_id",
-            "value": {"stringValue": capture_id},
-        })
-        if run_id is not None:
-            attributes.append({
-                "key": f"{prefix}osac.ci.run_id",
-                "value": {"stringValue": str(run_id)},
-            })
-    return {
-        "traceID": "a" * 32,
-        "rootServiceName": "tests",
-        "rootTraceName": "test run",
-        "spanSets": [{"matched": 1, "spans": [{"spanID": "b" * 16, "attributes": attributes}]}],
-    }
+def tag_values(*capture_ids, metrics=None) -> dict:
+    """A tag-values answer as the live Tempo 2.10 returns it."""
+    document = {"tagValues": [{"type": "string", "value": value} for value in capture_ids]}
+    if metrics is not None:
+        document["metrics"] = metrics
+    return document
 
 
 class FakeTempo:
-    """Stands in for Tempo's /api/search: one payload, recorded requests."""
+    """Stands in for Tempo's tag-values endpoint.
+
+    Rejects a range over 168h exactly as Tempo does, so a window that is not
+    chunked fails here instead of passing on a permissive fake. `payload` is a
+    tag-values document, or a callable(start, end) returning one; a callable
+    may raise HTTPError to fail one chunk.
+    """
 
     def __init__(self, payload=None, status=200):
-        self.payload = {"traces": []} if payload is None else payload
+        self.payload = tag_values() if payload is None else payload
         self.status = status
         self.requests: list[dict] = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                outer.requests.append(dict(parse_qsl(urlparse(self.path).query)))
-                body = json.dumps(outer.payload).encode()
-                self.send_response(outer.status)
+                parsed = urlparse(self.path)
+                params = dict(parse_qsl(parsed.query))
+                outer.requests.append({"path": parsed.path} | params)
+                status, body = outer.answer(parsed.path, params)
+                data = json.dumps(body).encode()
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
-                self.wfile.write(body)
+                self.wfile.write(data)
 
             def log_message(self, *args):
                 pass
@@ -107,6 +107,22 @@ class FakeTempo:
         self.thread.start()
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
 
+    def answer(self, path, params):
+        if path != TAG_PATH:
+            return 404, {"error": f"unknown path {path}"}
+        start, end = int(params["start"]), int(params["end"])
+        if end - start > MAX_RANGE_SECONDS:
+            return 422, {"error": "range specified by start and end exceeds 168h0m0s"}
+        if self.status != 200:
+            return self.status, {"error": "unavailable"}
+        payload = self.payload
+        if callable(payload):
+            try:
+                payload = payload(start, end)
+            except ValueError as exc:
+                return 500, {"error": str(exc)}
+        return 200, payload
+
     def close(self):
         self.server.shutdown()
         self.server.server_close()
@@ -115,7 +131,7 @@ class FakeTempo:
 @pytest.fixture
 def tempo():
     """Tempo answering with one capture for RUN_ID."""
-    server = FakeTempo({"traces": [tempo_trace()]})
+    server = FakeTempo(tag_values(CAPTURE))
     yield server
     server.close()
 
@@ -140,6 +156,33 @@ def jobs(exporter):
 # ---------------------------------------------------------------------------
 # The join
 # ---------------------------------------------------------------------------
+def test_a_capture_on_a_chunk_boundary_is_counted_once(runs, exporter, jobs):
+    """Both ends of a Tempo range are inclusive, so a capture exactly on the
+    boundary between two chunks comes back twice. The merge deduplicates it."""
+    server = FakeTempo(tag_values(CAPTURE))
+    try:
+        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["30"]})
+    finally:
+        server.close()
+
+    captured = next(run for run in doc["runs"] if run["id"] == str(RUN_ID))
+    assert captured["capture_ids"] == [CAPTURE]
+    assert len(server.requests) > 1, "the fixture must really have chunked"
+
+
+def test_the_pull_requests_read_side_shares_the_cache(client, jobs, tempo):
+    """workflow-exporter calls capture_ids_by_run() with its 7-day default on
+    every pull-request page load. That must reuse the entry page's map for the
+    same window instead of querying Tempo again."""
+    client.get_json({"days": ["7"]})
+    before = len(tempo.requests)
+
+    captures = client.capture_ids_by_run()
+
+    assert captures == {str(RUN_ID): [CAPTURE]}
+    assert len(tempo.requests) == before
+
+
 def test_a_run_with_a_capture_is_marked_capture(client, jobs):
     doc = client.get_json({"days": ["7"]})
 
@@ -152,44 +195,43 @@ def test_a_run_with_a_capture_is_marked_capture(client, jobs):
     assert doc["tempo"]["captures"] == 1
 
 
-def test_the_run_id_attribute_wins_over_the_one_in_the_capture_id(client, jobs, tempo):
-    """The capture id embeds the run it was made for, and so does the run id
-    attribute. They agree in production; when they do not, Tempo's own
-    attribute decides which run the capture belongs to."""
-    tempo.payload = {"traces": [tempo_trace(capture_id="vmaas-main-111-a1", run_id=RUN_ID)]}
+def test_the_run_id_comes_from_the_capture_id_pattern(client, jobs, tempo):
+    """The tag list carries capture ids only, so the join key is read out of
+    the id itself: <suite>-<prN|main>-<run id>-a<n>."""
+    tempo.payload = tag_values(f"caas-pr103-{SECOND_RUN_ID}-a2")
 
     doc = client.get_json({"days": ["7"]})
 
     states = {run["id"]: run["capture_state"] for run in doc["runs"]}
-    assert states[str(RUN_ID)] == "capture"
-    assert states[str(SECOND_RUN_ID)] == "not collected"
+    assert states[str(SECOND_RUN_ID)] == "capture"
+    assert states[str(RUN_ID)] == "not collected"
+    captured = next(run for run in doc["runs"] if run["id"] == str(SECOND_RUN_ID))
+    assert captured["capture_ids"] == [f"caas-pr103-{SECOND_RUN_ID}-a2"]
 
 
-def test_a_capture_id_found_only_in_the_trace_text_still_joins(runs, exporter, jobs):
-    """Tempo's response shape varies between versions; a capture id is
-    self-describing, so it is read wherever it appears in the hit."""
-    server = FakeTempo({"traces": [{"traceID": "c" * 32, "rootTraceName": CAPTURE}]})
-    try:
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
-    finally:
-        server.close()
+def test_a_value_that_is_not_a_capture_id_is_ignored(client, jobs, tempo):
+    """The tag is ours, but a stray value must not invent a run."""
+    tempo.payload = tag_values("not-a-capture", CAPTURE)
 
-    assert next(run for run in doc["runs"] if run["id"] == str(RUN_ID))["capture_state"] == "capture"
+    doc = client.get_json({"days": ["7"]})
+
+    assert doc["tempo"]["captures"] == 1
+    assert {run["id"]: run["capture_state"] for run in doc["runs"]} == {
+        str(RUN_ID): "capture",
+        str(SECOND_RUN_ID): "not collected",
+    }
 
 
-def test_a_capture_missing_the_session_span_is_still_a_capture(runs, exporter, jobs):
-    """The query must not select only the session span: a partial capture is
-    a capture, and calling it not collected is exactly the false verdict the
-    model forbids."""
-    server = FakeTempo({"traces": [tempo_trace()]})
-    try:
-        assert runs.CIObserveRuns.CAPTURE_QUERY == '{ resource."osac.ci.capture_id" =~ ".+" }'
-        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
-    finally:
-        server.close()
-
-    states = {run["id"]: run["capture_state"] for run in doc["runs"]}
-    assert states[str(RUN_ID)] == "capture"
+def test_the_lookup_is_a_tag_list_not_a_span_search(runs):
+    """One capture produces hundreds of spans, so a span search needs a trace
+    limit that silently loses captures. The lookup enumerates the capture tag
+    instead: one entry per capture, and the tag name carries the resource
+    scope Tempo requires."""
+    assert runs.CAPTURE_TAG == "resource.osac.ci.capture_id"
+    assert runs.TEMPO_MAX_RANGE_HOURS == 168
+    assert not hasattr(runs.CIObserveRuns, "TEMPO_MAX_TRACES"), (
+        "a per-capture trace cap is what made long captures come back as unknown"
+    )
 
 
 def test_job_rows_are_not_listed_as_runs(client, exporter):
@@ -226,7 +268,9 @@ def test_tempo_down_is_unknown_never_not_collected(runs, exporter, jobs):
 
 
 def test_an_http_error_from_tempo_is_unknown(runs, exporter, jobs):
-    server = FakeTempo(status=503, payload={"error": "unavailable"})
+    """A tag-values answer that is too large for Tempo's byte limit comes back
+    as an error, never as a short list. It is a data gap, not a verdict."""
+    server = FakeTempo(status=422)
     try:
         doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
     finally:
@@ -236,10 +280,10 @@ def test_an_http_error_from_tempo_is_unknown(runs, exporter, jobs):
     assert doc["tempo"]["state"] == "unknown"
 
 
-def test_traces_without_readable_capture_ids_are_unknown(runs, exporter, jobs):
-    """Tempo answered but this code could not read the ids: a shape change.
-    Reporting not collected would blame CI for our bug."""
-    server = FakeTempo({"traces": [tempo_trace(with_attributes=False, capture_id="")]})
+def test_tag_values_without_a_capture_id_are_unknown(runs, exporter, jobs):
+    """Tempo answered but nothing in the answer is a capture id: the id format
+    may have changed. Reporting not collected would blame CI for our bug."""
+    server = FakeTempo(tag_values("something-else"))
     try:
         doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
     finally:
@@ -247,23 +291,33 @@ def test_traces_without_readable_capture_ids_are_unknown(runs, exporter, jobs):
 
     assert {run["capture_state"] for run in doc["runs"]} == {"unknown"}
     assert doc["tempo"]["state"] == "unreadable"
-    assert "response shape may have changed" in doc["tempo"]["note"]
+    assert "none of them is a capture id" in doc["tempo"]["note"]
 
 
-def test_a_truncated_capture_query_is_unknown(runs, exporter, jobs, monkeypatch):
-    """Tempo's search limit counts traces, so a full response means captures
-    may be missing. An absent capture then proves nothing."""
-    server = FakeTempo({"traces": [tempo_trace()]})
+def test_an_incomplete_tag_values_answer_is_unknown(runs, exporter, jobs):
+    """A response whose own metrics say it finished fewer jobs than it started
+    covered only part of the window, so a missing capture proves nothing."""
+    server = FakeTempo(tag_values(CAPTURE, metrics={"totalJobs": 3, "completedJobs": 1}))
     try:
-        client = runs.CIObserveRuns(exporter, tempo_url=server.url)
-        monkeypatch.setattr(client, "TEMPO_MAX_TRACES", 1)
-        doc = client.get_json({"days": ["7"]})
+        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
     finally:
         server.close()
 
     assert doc["tempo"]["state"] == "truncated"
     states = {run["id"]: run["capture_state"] for run in doc["runs"]}
     assert states == {str(RUN_ID): "capture", str(SECOND_RUN_ID): "unknown"}
+
+
+def test_a_complete_metrics_answer_is_a_verdict(runs, exporter, jobs):
+    server = FakeTempo(tag_values(CAPTURE, metrics={"totalJobs": 3, "completedJobs": 3}))
+    try:
+        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["7"]})
+    finally:
+        server.close()
+
+    assert doc["tempo"]["state"] == "ok"
+    states = {run["id"]: run["capture_state"] for run in doc["runs"]}
+    assert states == {str(RUN_ID): "capture", str(SECOND_RUN_ID): "not collected"}
 
 
 def test_a_run_newer_than_the_lookup_is_unknown(client, exporter):
@@ -302,18 +356,76 @@ def test_a_run_before_the_live_tempo_cutover_is_unknown(client, exporter):
 # ---------------------------------------------------------------------------
 # Bounds: window, limit, one Tempo query per minute
 # ---------------------------------------------------------------------------
-def test_the_window_is_sent_to_tempo(client, jobs, tempo):
+def test_a_seven_day_window_is_one_tag_values_request(client, jobs, tempo):
     before = datetime.now(timezone.utc)
 
-    client.get_json({"days": ["3"]})
+    client.get_json({"days": ["7"]})
 
+    assert len(tempo.requests) == 1
     request = tempo.requests[0]
     start = datetime.fromtimestamp(int(request["start"]), tz=timezone.utc)
     end = datetime.fromtimestamp(int(request["end"]), tz=timezone.utc)
-    assert request["q"] == client.CAPTURE_QUERY
-    assert request["limit"] == str(client.TEMPO_MAX_TRACES)
-    assert abs((before - timedelta(days=3)) - start) < timedelta(seconds=30)
+    assert request["path"] == TAG_PATH
+    assert end - start <= timedelta(hours=168)
+    assert abs((before - timedelta(days=7)) - start) < timedelta(seconds=30)
     assert abs(before - end) < timedelta(seconds=30)
+
+
+def test_a_thirty_day_window_is_chunked_at_the_tempo_range_limit(client, jobs, tempo):
+    """Tempo refuses a range over 168h, and the entry page offers 30 and 60
+    days. Every request stays inside the limit, the chunks cover the window,
+    and the merged answer still yields verdicts."""
+    doc = client.get_json({"days": ["30"]})
+
+    spans = [
+        (int(request["start"]), int(request["end"]))
+        for request in tempo.requests
+    ]
+    assert len(spans) == 5, "30 days need five chunks of at most seven days"
+    assert all(end - start <= MAX_RANGE_SECONDS for start, end in spans)
+    assert spans[0][0] < spans[-1][1]
+    for (_, first_end), (second_start, _) in zip(spans, spans[1:]):
+        assert first_end == second_start, "chunks must be contiguous, with no gap"
+
+    assert doc["tempo"]["chunks"] == 5
+    assert doc["tempo"]["state"] == "ok"
+    assert {run["capture_state"] for run in doc["runs"]} == {"capture", "not collected"}
+
+
+def test_one_failed_chunk_makes_the_missing_captures_unknown(runs, exporter, jobs):
+    """A chunk that fails leaves a hole in the window. Runs found in the other
+    chunks are captures; a run with no capture anywhere is unknown, not not
+    collected."""
+    calls = {"n": 0}
+
+    def payload(start, end):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("HTTP 500: boom")
+        return tag_values(CAPTURE)
+
+    server = FakeTempo(payload)
+    try:
+        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["30"]})
+    finally:
+        server.close()
+
+    assert doc["tempo"]["state"] == "truncated"
+    states = {run["id"]: run["capture_state"] for run in doc["runs"]}
+    assert states == {str(RUN_ID): "capture", str(SECOND_RUN_ID): "unknown"}
+    assert "did not complete" in doc["tempo"]["note"]
+
+
+def test_every_chunk_failing_is_unknown(runs, exporter, jobs):
+    server = FakeTempo(status=500)
+    try:
+        doc = runs.CIObserveRuns(exporter, tempo_url=server.url).get_json({"days": ["30"]})
+    finally:
+        server.close()
+
+    assert doc["tempo"]["state"] == "unknown"
+    assert {run["capture_state"] for run in doc["runs"]} == {"unknown"}
+    assert "never as not collected" in doc["tempo"]["note"]
 
 
 @pytest.mark.parametrize(
@@ -377,7 +489,7 @@ def test_the_capture_map_is_cached_for_a_minute(client, jobs, tempo):
 
 def test_the_cache_expires(client, jobs, tempo):
     client.get_json({"days": ["7"]})
-    client._cache["expires_at"] = 0
+    client._cache[7]["expires_at"] = 0
 
     client.get_json({"days": ["7"]})
 
@@ -386,9 +498,42 @@ def test_the_cache_expires(client, jobs, tempo):
 
 def test_the_cache_is_per_window(client, jobs, tempo):
     client.get_json({"days": ["7"]})
+    after_seven = len(tempo.requests)
     client.get_json({"days": ["30"]})
 
-    assert len(tempo.requests) == 2, "a 30-day request cannot be served by a 7-day capture map"
+    assert after_seven == 1
+    assert len(tempo.requests) == 1 + 5, (
+        "a 30-day request cannot be served by a 7-day capture map, so it pays "
+        "for its own five chunks"
+    )
+
+
+def test_alternating_7_and_30_day_readers_do_not_thrash_the_cache(client, jobs, tempo):
+    """The Pull requests read side asks for 7 days and the entry page for 30.
+    With one cache slot each call evicted the other's entry, so every
+    alternating request re-queried Tempo. One entry per window length makes
+    the repeat 7-day call free."""
+    client.get_json({"days": ["7"]})
+    after_seven = len(tempo.requests)
+    client.get_json({"days": ["30"]})
+    after_thirty = len(tempo.requests)
+    third = client.get_json({"days": ["7"]})
+
+    assert len(tempo.requests) == after_thirty, "the 7-day entry survived the 30-day lookup"
+    assert third["tempo"]["cached"] is True
+    assert after_thirty > after_seven
+
+
+def test_the_cache_keeps_only_live_windows(client, jobs, tempo):
+    """The dict is pruned on every write, so a reader that tries many window
+    lengths cannot grow it without bound."""
+    for days in ("7", "14", "21"):
+        client.get_json({"days": [days]})
+    client._cache[14]["expires_at"] = 0
+
+    client.get_json({"days": ["30"]})
+
+    assert set(client._cache) == {7, 21, 30}
 
 
 def test_an_empty_job_history_still_answers(client, tempo):

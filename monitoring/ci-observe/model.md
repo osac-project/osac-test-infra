@@ -30,7 +30,7 @@ The entry page takes a run id, a capture id, a pull request number, a test id, o
 |---|---|---|
 | A run id from Slack, for example `41554302161` | the entry page | that run's capture, or its row in the index marked `not collected` with a GitHub link |
 | A capture id, for example `vmaas-main-41554302161-a1` | the entry page | that capture |
-| A test id or name | the entry page | that test's history in Trends |
+| A test id | the entry page | that test's history in Trends |
 | A pull request number | the entry page | that pull request's stage funnel |
 | A question about CI overall | Trends, Overview | pass rate, duration and failure mix |
 | Nothing | the entry page | the run index, searchable by run id |
@@ -219,4 +219,4 @@ Data that only describes the fleet is not admitted.
 2. The entry page routes a run id, a capture id, a pull request number or a test id, with the run index behind an empty input.
 3. Capture is one page: one section per layer, one timeline, no new data.
 
-Next: the Events row on Capture, runtime image IDs that resolve in a live capture, router access logs when the ingress controller writes them to Container, and the queue-workflow change that gives a `merge_group` run its PR number and capture.
+Next: runtime image IDs that resolve in a live capture, router access logs when the ingress controller writes them to Container, and the queue-workflow change that gives a `merge_group` run its PR number and capture.

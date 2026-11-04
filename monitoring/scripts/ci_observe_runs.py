@@ -4,20 +4,30 @@ per-run capture verdict.
 The workflow exporter knows every E2E run (SQLite job history, 60 days) but
 stores no capture id. Tempo knows every capture that arrived (30 days) but
 not the runs that never sent one. Neither store can answer "which runs have
-no capture" alone, so this endpoint joins them on the GitHub run id: the
-capture id embeds it, and Tempo keeps `osac.ci.run_id` on the same spans.
+no capture" alone, so this endpoint joins them on the GitHub run id, which
+the capture id embeds.
 
-Nothing is faked. A run is `not collected` only when Tempo answered, its
-answer was complete, and the run is old enough that its capture would have
-arrived. Every other case is `unknown` with a reason: Tempo down, Tempo
-truncated by its own trace limit, a response this code could not read, a run
-newer than the cached lookup, or a run older than the capture retention.
+The capture set comes from Tempo's tag-values endpoint, which lists the
+distinct values of the `resource.osac.ci.capture_id` tag in a window. One
+capture produces hundreds of spans, so a span search needs a trace limit and
+silently loses captures past it; the tag list has one entry per capture and
+no such per-capture cap. Tempo rejects any range over 168h, and the entry
+page offers 7, 30 and 60 days, so the window is queried in chunks of at most
+seven days and the answers are merged.
 
-The capture map is cached for 60 seconds. The exporter polls GitHub every 90
-seconds and this endpoint is called on every dashboard refresh, so the cache
-keeps one Tempo query per minute instead of one per reader. The lookup is
-bounded by a trace limit and a request timeout, and is read-only: it never
-writes the job history, the rollup or Tempo.
+Nothing is faked. A run is `not collected` only when every chunk answered
+completely and the run is old enough that its capture would have arrived.
+Every other case is `unknown` with a reason: Tempo down, a chunk that failed
+or came back capped, a tag whose values are not capture ids, a run newer than
+the cached lookup, or a run older than the capture retention.
+
+The capture map is cached for 60 seconds per window length. The exporter
+polls GitHub every 90 seconds and this endpoint is called on every dashboard
+refresh, while the Pull requests page asks for 7 days and the entry page for
+30, so one cache entry per length is what keeps a reader from re-querying
+Tempo on every alternating call. The lookup is bounded by the chunk size and
+a request timeout, and is read-only: it never writes the job history, the
+rollup or Tempo.
 """
 
 from __future__ import annotations
@@ -28,9 +38,10 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -53,29 +64,26 @@ TEMPO_RETENTION_DAYS = 30
 # 2.10 instance on 2026-11-01. Traces recorded before that are in the
 # archive, which this endpoint does not query, so runs from before the
 # cutover are `unknown` rather than `not collected`.
-TEMPO_LIVE_SINCE = datetime(2026, 11, 1, tzinfo=timezone.utc)
+TEMPO_LIVE_SINCE = datetime(2026, 11, 1, tzinfo=UTC)
+
+# Tempo rejects a range longer than 168h ("range specified by start and end
+# exceeds 168h0m0s"), so a 30- or 60-day window is queried in one chunk per
+# seven days and the answers are merged. Exactly 168h is allowed; only a
+# longer range is refused.
+TEMPO_MAX_RANGE_HOURS = 168
 
 CAPTURE_ID_ATTRIBUTE = "osac.ci.capture_id"
-RUN_ID_ATTRIBUTE = "osac.ci.run_id"
+
+# The tag-values endpoint takes the scoped tag name; the bare attribute name
+# is rejected ("invalid tag name"). Scope and name are kept in one constant so
+# the endpoint path and the tests cannot drift.
+CAPTURE_TAG = f"resource.{CAPTURE_ID_ATTRIBUTE}"
 
 # A capture id is self-describing: "<suite>-<prN|main>-<run id>-a<n>" (see
-# ci_observe_run_evidence.CAPTURE_ID_RE). Matching the pattern is how the run
-# id is recovered when Tempo's response does not carry the attribute under the
-# name this code looks for first.
+# ci_observe_run_evidence.CAPTURE_ID_RE). The run id is the join key, and it
+# comes out of the id with this pattern -- the tag list carries capture ids
+# only, not their attributes.
 CAPTURE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*-(?:pr\d+|main)-(\d+)-a(\d+)$")
-
-
-def _attribute_name(key):
-    """The ci-observe attribute a Tempo key names, or "".
-
-    Tempo returns a matched span's attributes either bare
-    ("osac.ci.capture_id") or scoped ("resource.osac.ci.capture_id"), and the
-    scope prefix has changed between versions, so both are accepted.
-    """
-    for suffix in (CAPTURE_ID_ATTRIBUTE, RUN_ID_ATTRIBUTE):
-        if key == suffix or key.endswith("." + suffix):
-            return suffix
-    return ""
 
 
 class CIObserveRuns:
@@ -84,11 +92,12 @@ class CIObserveRuns:
     (get_jobs_json) and is the only source of the run list; Tempo is reached
     over HTTP with the standard library, read-only."""
 
-    # One capture produces many spans; Tempo's search limit counts traces, so
-    # 1000 is 1000 captures. A 7-day window holds a few dozen E2E runs; the
-    # headroom covers a busy merge queue. Reaching the limit is reported and
-    # turns an absent capture into `unknown`, not `not collected`.
-    TEMPO_MAX_TRACES = 1000
+    # The capture set is a tag list, not a span search: one entry per capture,
+    # so nothing caps it per capture. Tempo imposes no count limit on tag
+    # values, only a byte limit on the response, which it reports as an HTTP
+    # error -- treated as a failed chunk, never as "no captures". A response
+    # whose own metrics say it did not finish every job is treated the same
+    # way (see _tag_values_complete).
     TEMPO_TIMEOUT_SECONDS = 5
     # Tempo answers only for spans it has indexed. A capture that closed
     # seconds ago may not be searchable yet, so a run younger than this is
@@ -100,11 +109,9 @@ class CIObserveRuns:
     DEFAULT_LIMIT = 200
     MAX_LIMIT = 2000
 
-    # The query is deliberately broad. Selecting only the session span
-    # (name = "test run") would hide exactly the partial captures this page
-    # exists to show, and those are `capture`, not `not collected`. Any span
-    # carrying a capture id proves the capture arrived.
-    CAPTURE_QUERY = '{ resource."osac.ci.capture_id" =~ ".+" }'
+    # One chunk of a window is at most Tempo's 168h range limit. Chunks are
+    # whole seconds so the boundary arithmetic matches what Tempo is sent.
+    TEMPO_CHUNK_SECONDS = TEMPO_MAX_RANGE_HOURS * 3600
 
     # A pull-request-flow run adds one e2e row per suite (up to four), and each
     # of those is a job, not a run. Asking the history for five times `limit`
@@ -118,9 +125,13 @@ class CIObserveRuns:
     def __init__(self, exporter, tempo_url=None):
         self.exporter = exporter
         self.tempo_url = (tempo_url or os.getenv(TEMPO_URL_ENV) or DEFAULT_TEMPO_URL).rstrip("/")
-        # {"days": int, "expires_at": monotonic, "captures": {...}, "verdict": {...}}
-        # Replaced whole, never mutated, so a reader never sees a half-built map.
-        self._cache = None
+        # {days: {"expires_at": monotonic, "captures": {...}, "verdict": {...}}}
+        # One entry per window length, because the entry page asks for 30 days
+        # while the Pull requests read side asks for 7: a single slot would
+        # drop one of them on every alternating call and re-query Tempo.
+        # Entries are replaced whole, never mutated, so a reader never sees a
+        # half-built map.
+        self._cache = {}
         self._lock = threading.Lock()
 
     # -- public ------------------------------------------------------------
@@ -137,7 +148,7 @@ class CIObserveRuns:
         """
         days = self._int_param(params, "days", self.DEFAULT_DAYS, 1, self.MAX_DAYS)
         limit = self._int_param(params, "limit", self.DEFAULT_LIMIT, 1, self.MAX_LIMIT)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         window_from = now - timedelta(days=days)
         doc = {
             "days": days,
@@ -145,7 +156,8 @@ class CIObserveRuns:
             "window_to": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "tempo": {
                 "url": self.tempo_url,
-                "query": self.CAPTURE_QUERY,
+                "tag": CAPTURE_TAG,
+                "chunks": 0,
                 "cached": False,
                 "captures": 0,
                 "state": "ok",
@@ -164,6 +176,7 @@ class CIObserveRuns:
 
         captures, verdict = self._capture_map(days, window_from, now)
         doc["tempo"].update(
+            chunks=verdict["chunks"],
             cached=verdict["cached"],
             captures=len(captures),
             state=verdict["state"],
@@ -194,9 +207,10 @@ class CIObserveRuns:
 
         The Pull requests read side uses it to link a queue attempt to the
         capture its run produced. A missing entry means Tempo has no capture
-        for that run in the window; it is not a claim that the run had none.
+        for that run in the window, or that part of the window could not be
+        read; it is not a claim that the run had none.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         captures, _ = self._capture_map(days, now - timedelta(days=days), now)
         return captures
 
@@ -240,155 +254,170 @@ class CIObserveRuns:
     def _capture_map(self, days, window_from, until):
         """({run id: [capture id, ...]}, verdict) for the window.
 
-        The verdict says whether the map can support a `not collected` answer
-        at all. Cached for CAPTURE_CACHE_TTL_SECONDS and keyed by the window
-        length, not by the exact seconds, so repeated dashboard loads hit it.
-        A run newer than the cache's fetch time is `unknown`, never `not
-        collected` (see FRESH_SECONDS).
+        The window is queried in chunks of at most seven days, because Tempo
+        refuses a range over 168h and the entry page offers 30 and 60. The
+        answers are merged; any failed or incomplete chunk marks the answer
+        incomplete, so an absent capture is `unknown`, never `not collected`.
+
+        Cached for CAPTURE_CACHE_TTL_SECONDS under the window length, not the
+        exact seconds, so repeated dashboard loads hit it. A run newer than
+        the cache's fetch time is `unknown`, never `not collected` (see
+        FRESH_SECONDS).
         """
         with self._lock:
-            cached = self._cache
-            if cached and cached["days"] == days and time.monotonic() < cached["expires_at"]:
+            cached = self._cache.get(days)
+            if cached and time.monotonic() < cached["expires_at"]:
                 logger.debug("capture map cache hit for days=%s", days)
                 return cached["captures"], cached["verdict"] | {"cached": True}
 
         verdict = {
             "state": "ok",
             "note": "",
-            "truncated": False,
             "complete": True,
+            "chunks": 0,
             "fetched_at": until,
             "cached": False,
         }
         captures = {}
-        try:
-            traces = self._tempo_search(int(window_from.timestamp()), int(until.timestamp()))
-        except (OSError, ValueError) as exc:
-            logger.debug("Tempo search failed: %s", exc)
-            verdict.update(
-                state="unknown",
-                complete=False,
-                note=(
-                    f"Tempo at {self.tempo_url} did not answer ({exc}); every run is "
-                    "reported as unknown, never as not collected"
-                ),
-            )
-            traces = []
-        else:
-            if len(traces) >= self.TEMPO_MAX_TRACES:
+        failures = []
+        capped = []
+        values_seen = 0
+        capture_ids_seen = 0
+        for start, end in self._window_chunks(window_from, until):
+            verdict["chunks"] += 1
+            try:
+                values, complete = self._tempo_capture_ids(start, end)
+            except (OSError, ValueError) as exc:
+                logger.debug("Tempo tag values failed for %s..%s: %s", start, end, exc)
+                failures.append(f"{self._iso(start)}: {exc}")
+                continue
+            if not complete:
+                capped.append(self._iso(start))
+            values_seen += len(values)
+            for capture_id in values:
+                match = CAPTURE_ID_RE.match(capture_id)
+                if not match:
+                    continue
+                capture_ids_seen += 1
+                bucket = captures.setdefault(match.group(1), [])
+                if capture_id not in bucket:
+                    bucket.append(capture_id)
+
+        if failures or capped:
+            verdict.update(complete=False)
+            if len(failures) == verdict["chunks"]:
+                verdict.update(
+                    state="unknown",
+                    note=(
+                        f"Tempo at {self.tempo_url} did not answer ({failures[0]}); every run "
+                        "is reported as unknown, never as not collected"
+                    ),
+                )
+            else:
+                reasons = failures or [f"an incomplete answer for {', '.join(capped)}"]
                 verdict.update(
                     state="truncated",
-                    complete=False,
-                    truncated=True,
                     note=(
-                        f"the capture query reached its {self.TEMPO_MAX_TRACES}-trace limit; "
-                        "a missing capture is reported as unknown, not as not collected"
+                        f"the capture lookup did not complete ({reasons[0]}); a missing capture "
+                        "is reported as unknown, not as not collected"
                     ),
                 )
-            readable = 0
-            for trace in traces:
-                run_id, capture_ids = self._read_trace(trace)
-                if capture_ids:
-                    readable += 1
-                if not run_id:
-                    continue
-                bucket = captures.setdefault(run_id, [])
-                for capture_id in capture_ids:
-                    if capture_id not in bucket:
-                        bucket.append(capture_id)
-            if traces and not readable:
-                verdict.update(
-                    state="unreadable",
-                    complete=False,
-                    note=(
-                        "Tempo returned traces but no capture id could be read from them; "
-                        "the response shape may have changed, so a missing capture is unknown"
-                    ),
-                )
+        elif values_seen and not capture_ids_seen:
+            verdict.update(
+                state="unreadable",
+                complete=False,
+                note=(
+                    "Tempo returned capture tag values but none of them is a capture id; "
+                    "the id format may have changed, so a missing capture is unknown"
+                ),
+            )
 
         with self._lock:
+            now = time.monotonic()
             self._cache = {
-                "days": days,
-                "expires_at": time.monotonic() + self.CAPTURE_CACHE_TTL_SECONDS,
+                key: entry for key, entry in self._cache.items() if entry["expires_at"] > now
+            }
+            self._cache[days] = {
+                "expires_at": now + self.CAPTURE_CACHE_TTL_SECONDS,
                 "captures": captures,
                 "verdict": verdict,
             }
         return captures, verdict
 
-    def _tempo_search(self, start, end):
-        """GET /api/search on the live Tempo.
+    @classmethod
+    def _window_chunks(cls, window_from, until):
+        """(start, end) whole-second pairs covering the window, oldest first.
+
+        No chunk is longer than TEMPO_CHUNK_SECONDS, so every request is
+        inside Tempo's 168h limit. Boundaries are half-open on the wire (a
+        chunk's end is the next chunk's start); Tempo treats both ends as
+        inclusive, so a capture exactly on a boundary can appear in two
+        chunks, and the merge deduplicates it.
+        """
+        start = int(window_from.timestamp())
+        end = int(until.timestamp())
+        while start < end:
+            chunk_end = min(start + cls.TEMPO_CHUNK_SECONDS, end)
+            yield start, chunk_end
+            start = chunk_end
+
+    def _tempo_capture_ids(self, start, end):
+        """([capture id, ...], complete) for one chunk of the window.
 
         Raises on any transport or decoding failure so the caller can answer
-        `unknown` instead of guessing.
+        `unknown` instead of guessing. `complete` is False when Tempo's own
+        metrics say the query did not finish every job: a partial answer must
+        not become a `not collected` verdict.
         """
-        query = urllib.parse.urlencode({
-            "q": self.CAPTURE_QUERY,
-            "start": start,
-            "end": end,
-            "limit": self.TEMPO_MAX_TRACES,
-        })
-        url = f"{self.tempo_url}/api/search?{query}"
-        with urllib.request.urlopen(url, timeout=self.TEMPO_TIMEOUT_SECONDS) as response:
-            document = json.loads(response.read().decode("utf-8"))
-        traces = document.get("traces") if isinstance(document, dict) else None
-        if not isinstance(traces, list):
-            raise ValueError("the search response has no traces list")
-        return traces
-
-    def _read_trace(self, trace):
-        """(run id, capture ids) for one search hit.
-
-        Each matched span's attributes are read first, under either name
-        spelling. If no capture id is among them, the trace's own strings are
-        matched against the capture-id pattern: the id is self-describing and
-        unique, and it carries the run id.
-        """
-        run_id = ""
+        tag = urllib.parse.quote(CAPTURE_TAG, safe=".")
+        query = urllib.parse.urlencode({"start": start, "end": end})
+        url = f"{self.tempo_url}/api/v2/search/tag/{tag}/values?{query}"
+        try:
+            with urllib.request.urlopen(url, timeout=self.TEMPO_TIMEOUT_SECONDS) as response:
+                document = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # A tag-values response that is too large comes back as an error,
+            # not a truncated list. Carry the server's words into the note so
+            # the reason is visible on the page.
+            detail = exc.read().decode("utf-8", "replace").strip()[:200]
+            raise ValueError(f"HTTP {exc.code}: {detail or exc.reason}") from None
+        values = document.get("tagValues") if isinstance(document, dict) else None
+        if not isinstance(values, list):
+            raise ValueError("the tag-values response has no tagValues list")
         capture_ids = []
-        for span_set in trace.get("spanSets") or []:
-            for span in span_set.get("spans") or []:
-                for key, value in self._attributes(span):
-                    if key == RUN_ID_ATTRIBUTE and not run_id:
-                        run_id = value
-                    elif key == CAPTURE_ID_ATTRIBUTE and value not in capture_ids:
-                        capture_ids.append(value)
-        if not capture_ids:
-            for value in self._strings(trace):
-                if CAPTURE_ID_RE.match(value) and value not in capture_ids:
-                    capture_ids.append(value)
-        if not run_id and capture_ids:
-            match = CAPTURE_ID_RE.match(capture_ids[0])
-            if match:
-                run_id = match.group(1)
-        return run_id, capture_ids
+        for entry in values:
+            value = entry.get("value") if isinstance(entry, dict) else None
+            if isinstance(value, str) and value and value not in capture_ids:
+                capture_ids.append(value)
+        return capture_ids, self._tag_values_complete(document)
 
     @staticmethod
-    def _attributes(span):
-        for attribute in span.get("attributes") or []:
-            value = attribute.get("value") or {}
-            text = value.get("stringValue", value.get("string_value", ""))
-            name = _attribute_name(attribute.get("key", ""))
-            if name and text:
-                yield name, text
+    def _tag_values_complete(document):
+        """False when the response says it did not finish the query.
 
-    def _strings(self, value):
-        if isinstance(value, str):
-            yield value
-        elif isinstance(value, dict):
-            for item in value.values():
-                yield from self._strings(item)
-        elif isinstance(value, list):
-            for item in value:
-                yield from self._strings(item)
+        Tempo reports search metrics on the answer. A response that finished
+        fewer jobs than it started covered only part of the window, whatever
+        the reason (a per-tenant cap, a timeout, a byte limit), so its capture
+        list cannot prove a capture is missing.
+        """
+        metrics = document.get("metrics") if isinstance(document, dict) else None
+        if not isinstance(metrics, dict):
+            return True
+        try:
+            total = int(metrics.get("totalJobs") or 0)
+            completed = int(metrics.get("completedJobs") or 0)
+        except (TypeError, ValueError):
+            return True
+        return completed >= total
 
     # -- the verdict -------------------------------------------------------
     def _state(self, run, capture_ids, verdict, judgeable_from, judgeable_until):
         """("capture" | "not collected" | "unknown", reason).
 
-        `not collected` needs all of these: Tempo answered, the answer was not
-        truncated or unreadable, the run is inside the capture retention, the
-        run is old enough that its capture would have arrived, and the lookup
-        that produced the map was fresh enough to cover the run.
+        `not collected` needs all of these: every chunk of the window answered
+        completely, the run is inside the capture retention, the run is old
+        enough that its capture would have arrived, and the lookup that
+        produced the map was fresh enough to cover the run.
         """
         if capture_ids:
             return "capture", ""
@@ -407,6 +436,11 @@ class CIObserveRuns:
         return "not collected", ""
 
     @staticmethod
+    def _iso(seconds):
+        """The chunk boundary as the ISO string the note shows."""
+        return datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @staticmethod
     def _parse_time(value):
         if not value:
             return None
@@ -414,12 +448,12 @@ class CIObserveRuns:
             parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         except ValueError:
             return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
     @staticmethod
     def _int_param(params, name, default, low, high):
         try:
-            value = int((params.get(name, [""])[0] or default))
+            value = int(params.get(name, [""])[0] or default)
         except (TypeError, ValueError):
             value = default
         return max(low, min(value, high))

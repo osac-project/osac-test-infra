@@ -29,7 +29,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Start here\n\nThis page is a router. It accepts a run id or a capture id in **Find**, a pull request from **Pull request lookup**, a test id from **Test id lookup**, or nothing.\n\n**Find** narrows the cards and the three capture tables, newest first. Type a run id such as `41310072671`, or part of a capture id such as `vmaas-pr123`, then click a row to open that capture.\n\n**Pull request lookup** lists one row per pull request the exporter stored in the last $days days. Click the PR number to open that pull request, already selected, in the Pull requests dashboard.\n\n**Test id lookup** lists one row per test the daily JUnit rollup recorded in the last 7 days, with its runs and failures over that window. Click a test id to open that test, already selected, in the Trends dashboard.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id is the run id in the tables below. A **cohort** is a set of captures that differ only in what you want to compare.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| Which runs arrived with no capture | this page, the last table |\n| What happened inside one run | [**CI Observe — Capture**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | the same page, **CI evidence** row (GitHub jobs, steps, JUnit) |\n| What the cluster did during a run | the same page, **Environment** row (pods, CPU, memory) |\n| How a change moved from open to merge | [**CI Observe — Pull requests**](/d/ci-observe-pull-requests/ci-observe-pull-requests) |\n| Is this test flaky, slower, or newly broken | [**CI Observe — Trends**](/d/ci-observe-trends/ci-observe-trends) |\n| Did two runs get slower | [**CI Observe — Compare runs**](/d/ci-observe-trends/ci-observe-e28094-trends) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Runs with no capture.** The last table lists one row per E2E run the workflow exporter recorded in the last $days days, joined to Tempo's capture ids by GitHub run id. Its **Capture** column is the verdict: **capture** means at least one capture id names the run; **not collected** means GitHub has the run and no telemetry arrived; **unknown** means the page could not tell, for a data reason (Tempo was unreachable, the capture query hit its trace limit, the run is newer than the last lookup, or the run is older than Tempo's 30-day retention). **unknown** is never a claim that a capture is missing: the panel description lists what must be true before it says not collected. **not collected** is a statement about the recording, not about the result, so read the result from the Result column and the logs from GitHub, which keeps them for 7 days.\n\n**Missing session span** means the run's summary span never arrived. The tests may still have passed; the table lists what did arrive. A run that is completely absent never sent any telemetry.\n\n**Time range**: keep the default 7 days. A narrow range can hide a long run. If a run you expect is missing, widen the range up to the 7-day maximum before concluding it never ran. The pull request lookup and the run table ignore the time range and read $days days; the test lookup always reads 7 days, the age at which GitHub deletes a run's artifact."
+        "content": "### Start here\n\nThis page is a router. It accepts a run id or a capture id in **Find**, a pull request from **Pull request lookup**, a test id from **Test id lookup**, or nothing.\n\n**Find** narrows the cards and the three capture tables, newest first. Type a run id such as `41310072671`, or part of a capture id such as `vmaas-pr123`, then click a row to open that capture.\n\n**Pull request lookup** lists one row per pull request the exporter stored in the last $days days. Click the PR number to open that pull request, already selected, in the Pull requests dashboard.\n\n**Test id lookup** lists one row per test the daily JUnit rollup recorded in the last 7 days, with its runs and failures over that window. Click a test id to open that test, already selected, in the Trends dashboard.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id is the run id in the tables below. A **cohort** is a set of captures that differ only in what you want to compare.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| Which runs arrived with no capture | this page, the last table |\n| What happened inside one run | [**CI Observe — Capture**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | the same page, **CI evidence** row (GitHub jobs, steps, JUnit) |\n| What the cluster did during a run | the same page, **Environment** row (pods, CPU, memory) |\n| How a change moved from open to merge | [**CI Observe — Pull requests**](/d/ci-observe-pull-requests/ci-observe-pull-requests) |\n| Is this test flaky, slower, or newly broken | [**CI Observe — Trends**](/d/ci-observe-trends/ci-observe-trends) |\n| Did two runs get slower | [**CI Observe — Trends**, Compare section](/d/ci-observe-trends/ci-observe-e28094-trends) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Runs with no capture.** The last table lists one row per E2E run the workflow exporter recorded in the last $days days, joined to Tempo's capture ids by GitHub run id. Its **Capture** column is the verdict: **capture** means at least one capture id names the run; **not collected** means GitHub has the run and no telemetry arrived; **unknown** means the page could not tell, for a data reason (Tempo was unreachable, a capture lookup chunk was capped, the run is newer than the last lookup, or the run is older than Tempo's 30-day retention). **unknown** is never a claim that a capture is missing: the panel description lists what must be true before it says not collected. **not collected** is a statement about the recording, not about the result, so read the result from the Result column and the logs from GitHub, which keeps them for 7 days.\n\n**Missing session span** means the run's summary span never arrived. The tests may still have passed; the table lists what did arrive. A run that is completely absent never sent any telemetry.\n\n**Time range**: keep the default 7 days. A narrow range can hide a long run. If a run you expect is missing, widen the range up to the 7-day maximum before concluding it never ran. The pull request lookup and the run table ignore the time range and read $days days; the test lookup always reads 7 days, the age at which GitHub deletes a run's artifact."
       },
       "targets": []
     },
@@ -312,7 +312,7 @@
                 "value": [
                   {
                     "title": "Open this test in the Trends dashboard",
-                    "url": "/d/ci-observe-trends/ci-observe-trends?var-test=${__value.raw}&var-days=7"
+                    "url": "/d/ci-observe-trends/ci-observe-trends?var-test=${__value.raw:percentencode}&var-days=7"
                   }
                 ]
               }
@@ -862,7 +862,7 @@
                     "options": {
                       "pattern": "/(?<=\\/|::|_|\\[)/g",
                       "result": {
-                        "text": "\u200b"
+                        "text": "​"
                       }
                     }
                   }
@@ -1549,7 +1549,7 @@
       "type": "table",
       "id": 12,
       "title": "Recent E2E runs and their capture, all jobs, last $days days (workflow exporter + Tempo)",
-      "description": "One row per E2E run the workflow exporter recorded in the last $days days, newest first, joined to Tempo's capture ids on the GitHub run id. Capture says whether a capture arrived: capture (at least one capture id names this run), not collected (GitHub has the run and no telemetry arrived), or unknown (the page could not tell, because Tempo was unreachable, the capture query was truncated, the run is newer than the last lookup, or the run is older than Tempo's 30-day retention). Clicking the verdict opens the run on GitHub, which is where a not collected run still has its logs for 7 days. The capture tables above follow the page time range; this table follows $days.",
+      "description": "One row per E2E run the workflow exporter recorded in the last $days days, newest first, joined to Tempo's capture ids on the GitHub run id. Capture says whether a capture arrived: capture (at least one capture id names this run), not collected (GitHub has the run and no telemetry arrived), or unknown (the page could not tell, because Tempo was unreachable, a capture lookup chunk was capped, the run is newer than the last lookup, or the run is older than Tempo's 30-day retention). Clicking the verdict opens the run on GitHub, which is where a not collected run still has its logs for 7 days. The capture tables above follow the page time range; this table follows $days.",
       "gridPos": {
         "h": 12,
         "w": 24,
@@ -1569,7 +1569,7 @@
             },
             "inspect": false
           },
-          "noValue": "No E2E runs recorded in the selected range"
+          "noValue": "No E2E runs recorded in the last $days days"
         },
         "overrides": [
           {
@@ -1914,7 +1914,7 @@
       },
       {
         "name": "days",
-        "label": "Pull request window (days)",
+        "label": "Lookup and run window (days)",
         "type": "custom",
         "hide": 0,
         "query": "7,30,60",
@@ -1941,7 +1941,7 @@
           "selected": true
         },
         "refresh": 0,
-        "description": "How many days of pull requests the lookup table reads. It does not affect the capture tables, which follow the dashboard time range, or the test lookup, which always reads 7 days."
+        "description": "How many days the pull request lookup and the Recent E2E runs table read. It does not affect the capture tables, which follow the dashboard time range, or the test lookup, which always reads 7 days."
       }
     ]
   },
@@ -1951,7 +1951,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "CI Observe \u2014 Start here",
+  "title": "CI Observe — Start here",
   "uid": "ci-observe-runs-home",
   "version": 1,
   "weekStart": ""
