@@ -25,7 +25,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Start here\n\nThis page is a router. It accepts a run id or a capture id in **Find**, a pull request from **Pull request lookup**, a test id from **Test id lookup**, or nothing.\n\n**Find is an exact lookup.** A run id fills **Lookup by run id**; a capture id fills **Lookup by capture id**. A run id such as `41310072671` matches one run. A capture id such as `vmaas-main-41310072671-a1` matches one capture registry row. The table that stays empty is the form that does not apply.\n\n**Pull request lookup** lists one row per pull request the exporter stored in the last $days days. Click the PR number to open that pull request, already selected, in the Pull requests dashboard.\n\n**Test id lookup** lists one row per test the daily JUnit rollup recorded in the last 7 days, with its runs and failures over that window. Click a test id to open that test, already selected, in the Trends dashboard.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id embeds the GitHub run id. A **cohort** is a set of captures that share one run identity and differ only in what you want to compare.\n\n**Suite and OSAC.** A **suite** is the test target a run executes, such as `vmaas` or `caas`. **OSAC** is the product repository whose commit the run tests; that commit is the run's source revision.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| Which runs arrived with no capture | this page, the last table |\n| What happened inside one run | [**CI Observe — Capture**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | the same page, **CI evidence** row (GitHub jobs, steps, JUnit) |\n| What the cluster did during a run | the same page, **Environment** row (pods, CPU, memory) |\n| How a change moved from open to merge | [**CI Observe — Pull requests**](/d/ci-observe-pull-requests/ci-observe-pull-requests) |\n| Is this test flaky, slower, or newly broken | [**CI Observe — Trends**](/d/ci-observe-trends/ci-observe-trends) |\n| Did two runs get slower | [**CI Observe — Trends**, Compare section](/d/ci-observe-trends/ci-observe-e28094-trends) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Runs with no capture.** The run table lists one row per E2E run the workflow exporter recorded in the last $days days, joined to the capture registry by GitHub run id. The **Capture** column is the registry endpoint's verdict: **capture** means at least one capture id names the run; **not collected** means the run finished, the registry covered its window, and no telemetry arrived; **unknown** means the registry could not tell, and the **Why** column carries the reason. The page never infers a verdict from Tempo. **unknown** is never a claim that a capture is missing. **not collected** is a statement about the recording, not about the result, so read the result from the Result column and the logs from GitHub, which keeps them for 7 days.\n\n**Windows.** Pull request lookup reads $days days. Test id lookup always reads 7 days, the age at which GitHub deletes a run's artifact. The run table and its cards read $days days. The dashboard time range does not affect these panels.\n\n**Completeness.** The index card states the runs shown and the runs in the window. When the endpoint truncates, both counts stay visible so a page is never mistaken for the population."
+        "content": "### Start here\n\nThis page is a router. It accepts a run id or a capture id in **Find**, a pull request from **Pull request lookup**, a test id from **Test id lookup**, or nothing.\n\n**Find is an exact lookup.** A run id fills **Lookup by run id**; a capture id fills **Lookup by capture id**. A run id such as `41310072671` matches one run. A capture id such as `vmaas-main-41310072671-a1` matches one capture registry row. The table that stays empty is the form that does not apply.\n\n**Pull request lookup** lists one row per pull request the exporter stored in the last $days days. Click the PR number to open that pull request, already selected, in the Pull requests dashboard.\n\n**Test id lookup** lists one row per test the daily JUnit rollup recorded in the last 7 days, with its runs and failures over that window. Click a test id to open that test, already selected, in the Trends dashboard.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id embeds the GitHub run id. A **cohort** is a set of captures that share one run identity and differ only in what you want to compare.\n\n**Suite and OSAC.** A **suite** is the test target a run executes, such as `vmaas` or `caas`. **OSAC** is the product repository whose commit the run tests; that commit is the run's source revision.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| Which runs arrived with no capture | this page, the last table |\n| What happened inside one run | [**CI Observe \u2014 Capture**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | the same page, **CI evidence** row (GitHub jobs, steps, JUnit) |\n| What the cluster did during a run | the same page, **Environment** row (pods, CPU, memory) |\n| How a change moved from open to merge | [**CI Observe \u2014 Pull requests**](/d/ci-observe-pull-requests/ci-observe-pull-requests) |\n| Is this test flaky, slower, or newly broken | [**CI Observe \u2014 Trends**](/d/ci-observe-trends/ci-observe-trends) |\n| Did two runs get slower | [**CI Observe \u2014 Trends**, Compare section](/d/ci-observe-trends/ci-observe-e28094-trends) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Runs with no capture.** The run table lists one row per E2E run the workflow exporter recorded in the last $days days, joined to the capture registry by GitHub run id. The **Capture** column is the registry endpoint's verdict: **capture** means at least one capture id names the run; **not collected** means the run finished, the registry covered its window, and no telemetry arrived; **unknown** means the registry could not tell, and the **Why** column carries the reason. The page never infers a verdict from Tempo. **unknown** is never a claim that a capture is missing. **not collected** is a statement about the recording, not about the result, so read the result from the Result column and the logs from GitHub, which keeps them for 7 days.\n\n**Windows.** Pull request lookup reads $days days. Test id lookup always reads 7 days, the age at which GitHub deletes a run's artifact. The run table and its cards read $days days. The dashboard time range does not affect these panels.\n\n**Completeness.** The index card states the runs shown and the runs in the window. When the endpoint truncates, both counts stay visible so a page is never mistaken for the population."
       },
       "targets": []
     },
@@ -1507,7 +1507,7 @@
       "type": "stat",
       "id": 23,
       "title": "capture, all jobs, last $days days",
-      "description": "Runs whose id appears on at least one capture id in the registry. The endpoint's verdict; the page does not infer it from Tempo.",
+      "description": "Runs whose id appears on at least one capture id in the registry, counted over the whole window, not just the rows the table renders. The endpoint's verdict; the page does not infer it from Tempo.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1541,9 +1541,9 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "count"
+            "lastNotNull"
           ],
-          "fields": "capture_state",
+          "fields": "counts.capture",
           "values": false
         },
         "textMode": "auto"
@@ -1559,42 +1559,23 @@
             "method": "GET",
             "data": ""
           },
-          "root_selector": "$.runs",
+          "root_selector": "$",
           "columns": [
             {
-              "selector": "capture_state",
-              "text": "capture_state",
-              "type": "string"
+              "selector": "counts.capture",
+              "text": "counts.capture",
+              "type": "number"
             }
           ]
         }
       ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "filters": [
-              {
-                "fieldName": "capture_state",
-                "config": {
-                  "id": "equal",
-                  "options": {
-                    "value": "capture"
-                  }
-                }
-              }
-            ],
-            "match": "all",
-            "type": "include"
-          }
-        }
-      ]
+      "transformations": []
     },
     {
       "type": "stat",
       "id": 24,
       "title": "not collected, all jobs, last $days days",
-      "description": "Runs that finished, sit inside the registry's coverage, and have no capture. The endpoint returns this verdict only when every source answered completely; the page never derives it from an empty Tempo answer.",
+      "description": "Runs that finished, sit inside the registry's coverage, and have no capture, counted over the whole window. The endpoint returns this verdict only when every source answered completely; the page never derives it from an empty Tempo answer.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1628,9 +1609,9 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "count"
+            "lastNotNull"
           ],
-          "fields": "capture_state",
+          "fields": "counts.not collected",
           "values": false
         },
         "textMode": "auto"
@@ -1646,42 +1627,23 @@
             "method": "GET",
             "data": ""
           },
-          "root_selector": "$.runs",
+          "root_selector": "$",
           "columns": [
             {
-              "selector": "capture_state",
-              "text": "capture_state",
-              "type": "string"
+              "selector": "counts.not collected",
+              "text": "counts.not collected",
+              "type": "number"
             }
           ]
         }
       ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "filters": [
-              {
-                "fieldName": "capture_state",
-                "config": {
-                  "id": "equal",
-                  "options": {
-                    "value": "not collected"
-                  }
-                }
-              }
-            ],
-            "match": "all",
-            "type": "include"
-          }
-        }
-      ]
+      "transformations": []
     },
     {
       "type": "stat",
       "id": 25,
       "title": "unknown, all jobs, last $days days",
-      "description": "Runs the registry could not judge: the run has not finished, the registry has no complete answer yet, or the run sits outside capture coverage. Unknown is not a claim that a capture is missing.",
+      "description": "Runs the registry could not judge: the run has not finished, the registry has no complete answer yet, or the run sits outside capture coverage, counted over the whole window. Unknown is not a claim that a capture is missing.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1715,9 +1677,9 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "count"
+            "lastNotNull"
           ],
-          "fields": "capture_state",
+          "fields": "counts.unknown",
           "values": false
         },
         "textMode": "auto"
@@ -1733,36 +1695,17 @@
             "method": "GET",
             "data": ""
           },
-          "root_selector": "$.runs",
+          "root_selector": "$",
           "columns": [
             {
-              "selector": "capture_state",
-              "text": "capture_state",
-              "type": "string"
+              "selector": "counts.unknown",
+              "text": "counts.unknown",
+              "type": "number"
             }
           ]
         }
       ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "filters": [
-              {
-                "fieldName": "capture_state",
-                "config": {
-                  "id": "equal",
-                  "options": {
-                    "value": "unknown"
-                  }
-                }
-              }
-            ],
-            "match": "all",
-            "type": "include"
-          }
-        }
-      ]
+      "transformations": []
     },
     {
       "type": "table",
@@ -1977,7 +1920,7 @@
               "type": "number"
             },
             {
-              "selector": "source.rejected",
+              "selector": "source.rejected.count",
               "text": "source.rejected",
               "type": "number"
             }
@@ -2539,7 +2482,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "CI Observe — Start here",
+  "title": "CI Observe \u2014 Start here",
   "uid": "ci-observe-runs-home",
   "version": 1,
   "weekStart": ""

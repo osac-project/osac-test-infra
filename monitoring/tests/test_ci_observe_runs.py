@@ -472,7 +472,9 @@ def test_the_run_page_pages_by_run_id_without_gaps(client, exporter, fresh):
     third = client.get_json({"days": ["7"], "limit": ["10"], "before": [second["next_before"]]})
 
     assert first["truncated"] is True
-    assert first["counts"] == {"returned": 10, "matched": 25}
+    assert first["counts"]["returned"] == 10
+    assert first["counts"]["matched"] == 25
+    assert first["counts"]["capture"] + first["counts"]["not collected"] + first["counts"]["unknown"] == 25
     assert second["truncated"] is True
     assert third["truncated"] is False
     assert third["next_before"] is None
@@ -518,7 +520,9 @@ def test_run_is_an_exact_lookup_outside_the_window(client, exporter, fresh):
     doc = client.get_json({"days": ["7"], "run": [str(SECOND_RUN_ID)]})
 
     assert [run["id"] for run in doc["runs"]] == [str(SECOND_RUN_ID)]
-    assert doc["counts"] == {"returned": 1, "matched": 1}
+    assert doc["counts"]["returned"] == 1
+    assert doc["counts"]["matched"] == 1
+    assert doc["counts"]["capture"] + doc["counts"]["not collected"] + doc["counts"]["unknown"] == 1
 
 
 def test_an_unknown_run_id_is_an_empty_page_with_a_note(client, jobs, fresh):
@@ -613,13 +617,53 @@ def test_captures_are_filterable_and_counted(registry, fresh):
     assert limited["counts"] == {"returned": 1, "matched": 2}
 
 
+def test_an_empty_run_lookup_returns_no_rows(client, exporter, fresh):
+    """The Find box with nothing typed sends run=. That must answer "no
+    rows", not fall back to the whole window."""
+    exporter._upsert_job(run_job(RUN_ID))
+
+    doc = client.get_json({"days": ["7"], "run": [""]})
+
+    assert doc["runs"] == []
+    assert doc["total"] == 0
+    assert doc["counts"]["matched"] == 0
+    assert any("Find box is empty" in note for note in doc["notes"])
+
+
+def test_an_empty_capture_lookup_returns_no_rows(registry, exporter, sources, fresh):
+    sources.prometheus = [CAPTURE]
+    sources.loki = []
+    sources.info = [IDENTITY | {"osac_ci_capture_id": CAPTURE}]
+    registry.refresh()
+
+    doc = registry.captures_json({"days": ["7"], "capture_id": [""]})
+
+    assert doc["captures"] == []
+    assert doc["counts"] == {"returned": 0, "matched": 0}
+    assert any("lookup is empty" in note for note in doc["notes"])
+
+
+def test_the_verdict_counts_cover_the_whole_window(client, exporter, fresh):
+    """The cards must not be a page size: ten runs with limit=2 still report
+    the whole-window totals."""
+    for index in range(10):
+        exporter._upsert_job(run_job(RUN_ID + index, created_minutes=60 - index, finished_minutes=50 - index))
+
+    doc = client.get_json({"days": ["7"], "limit": ["2"]})
+
+    assert doc["shown"] == 2
+    assert doc["total"] == 10
+    assert doc["counts"]["matched"] == 10
+    assert doc["counts"]["capture"] + doc["counts"]["not collected"] + doc["counts"]["unknown"] == 10
+
+
 def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, fresh):
     clear_captures(exporter)
     base = IDENTITY | {"osac_ci_capture_id": CAPTURE, "ci_run_id": str(RUN_ID)}
     same = base | {"osac_ci_capture_id": f"caas-main-{SECOND_RUN_ID}-a1", "ci_run_id": str(SECOND_RUN_ID)}
     other_sha = base | {"osac_ci_capture_id": "vmaas-pr7-77-a1", "ci_run_id": "77", "ci_test_sha": "d" * 40}
     incomplete = base | {"osac_ci_capture_id": "vmaas-main-78-a1", "ci_run_id": "78", "ci_test_infra_sha": ""}
-    unknown = base | {"osac_ci_capture_id": "vmaas-main-79-a1", "ci_run_id": "79", "ci_test_ref": "unknown"}
+    unknown = base | {"osac_ci_capture_id": "vmaas-main-79-a1", "ci_run_id": "79", "ci_test_sha": "unknown"}
     sources.prometheus = [
         CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1", "vmaas-pr7-77-a1",
         "vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1",
@@ -631,12 +675,14 @@ def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, f
     doc = registry.cohorts_json({"days": ["7"]})
 
     assert doc["group_by"] == [
-        "suite", "test_ref", "test_sha", "test_infra_ref", "test_infra_sha",
-        "test_infra_workflow_sha",
+        "test_sha", "test_infra_sha", "test_infra_workflow_sha",
+        "test_suite", "test_filter", "test_marker",
     ]
     assert len(doc["cohorts"]) == 2
     first = next(row for row in doc["cohorts"] if row["test_sha"] == "a" * 40)
     assert first["captures"] == 2
+    # The requested ref is metadata, not a group key: one commit, one cohort.
+    assert first["test_ref"] == "main"
     assert first["capture_ids"] == sorted([CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1"])
     assert all(row["test_sha"] for row in doc["cohorts"])
     # No cohort value is ever "unknown".
@@ -646,7 +692,7 @@ def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, f
     assert set(ungrouped) == {"vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1"}
     assert {row["identity_source"] for row in doc["ungrouped"]} == {"none", "info"}
     assert ungrouped["vmaas-main-78-a1"]["reason"] == "missing identity: test_infra_sha"
-    assert ungrouped["vmaas-main-79-a1"]["reason"] == "unknown identity: test_ref"
+    assert ungrouped["vmaas-main-79-a1"]["reason"] == "unknown identity: test_sha"
     assert ungrouped["vmaas-main-80-a1"]["reason"] == "no identity from the info metric"
     for row in doc["ungrouped"]:
         assert {"capture_started_at", "last_seen_at"} <= set(row)
@@ -729,7 +775,9 @@ class TestHTTP:
 
         status, _, body = self.get(f"{base_url}/api/ci-observe/cohorts?days=7")
         assert status == 200
-        assert len(json.loads(body)["cohorts"]) == 2
+        cohorts = json.loads(body)["cohorts"]
+        assert len(cohorts) == 1
+        assert cohorts[0]["captures"] == 2
 
 
 # ---------------------------------------------------------------------------

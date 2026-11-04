@@ -777,6 +777,18 @@ def test_not_indexed_when_the_search_returns_a_trace_that_is_not_readable(tmp_pa
 
     assert document["state"] == "not_indexed"
     assert any("cannot read it yet" in note for note in document["notes"])
+    # A search can return a trace the ingester has not flushed yet. Storing
+    # it would turn the next transient 404 into a cached `missing`.
+    connection = view._connection()
+    try:
+        row = connection.execute(
+            "SELECT session_trace_id FROM captures WHERE capture_id = ?", (capture_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        row = None  # no captures table in this fixture: nothing was stored
+    finally:
+        connection.close()
+    assert row is None or row["session_trace_id"] == ""
 
 
 def test_busy_when_tempo_refuses_the_search(tmp_path, monkeypatch):
@@ -999,7 +1011,7 @@ def test_discovered_trace_id_is_persisted_in_captures(tmp_path, monkeypatch):
     row = connection.execute("SELECT session_trace_id FROM captures WHERE capture_id = ?", (capture_id,)).fetchone()
     connection.close()
     assert row["session_trace_id"] == trace_id
-    assert any("stored the session search trace id" in note for note in document["notes"])
+    assert any("stored the search trace id" in note for note in document["notes"])
 
 
 def test_search_falls_back_to_a_test_span(tmp_path, monkeypatch):

@@ -212,28 +212,33 @@ def wait_for_queue_drain(
     timeout: float = DRAIN_TIMEOUT_SECONDS,
     interval: float = DRAIN_INTERVAL_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
-) -> tuple[str, float | None, str]:
+) -> tuple[str, float | None, str, dict[str, float] | None]:
     """Poll until the exporter queue reports 0.
 
-    Returns ("drained", 0, ""), ("residue", size, "") when the bound expires,
-    ("absent", None, "") when the collector exposes no queue size, or
-    ("unreachable", None, detail) when a scrape failed.
+    Returns (state, queue size, detail, samples): ("drained", 0, "", last
+    scrape), ("residue", size, "", last scrape) when the bound expires,
+    ("absent", None, "", last scrape) when the collector exposes no queue
+    size, or ("unreachable", None, detail, last scrape) when a scrape
+    failed. The samples come back because the counters move while the queue
+    drains: judging delivery on the first scrape would report a backlog that
+    has already been delivered.
     """
     attempts = max(1, int(timeout / interval) + 1)
     latest: float | None = None
+    samples: dict[str, float] | None = None
     for attempt in range(attempts):
         try:
             samples = metric_samples(scrape(url))
         except Exception as error:  # reported as a warning
-            return "unreachable", None, str(error) or type(error).__name__
+            return "unreachable", None, str(error) or type(error).__name__, samples
         if QUEUE_SIZE not in samples:
-            return "absent", None, ""
+            return "absent", None, "", samples
         latest = samples[QUEUE_SIZE]
         if latest == 0:
-            return "drained", 0.0, ""
+            return "drained", 0.0, "", samples
         if attempt + 1 < attempts:
             sleep(interval)
-    return "residue", latest, ""
+    return "residue", latest, "", samples
 
 
 def _format_count(value: float) -> str:
@@ -298,6 +303,26 @@ def verify_delivery(
         reporter.warning(f"the gateway self-metrics endpoint served no otelcol_* metrics ({url})")
         return 0
 
+    # The queue is the only counter that moves after the test, so wait for it
+    # before reading any counter. accepted, sent and the drop counters all
+    # come from the last scrape: the first one can predate a drain that has
+    # already delivered everything.
+    if QUEUE_SIZE not in samples:
+        queue_state, residue, detail, final_samples = "absent", None, "", samples
+    elif samples[QUEUE_SIZE] == 0:
+        queue_state, residue, detail, final_samples = "drained", 0.0, "", samples
+    else:
+        queue_state, residue, detail, final_samples = wait_for_queue_drain(
+            scrape=reader, url=url, timeout=drain_timeout, interval=drain_interval, sleep=sleep
+        )
+    if queue_state == "unreachable":
+        reporter.warning(f"could not re-scrape the gateway self-metrics endpoint ({url}) while waiting: {detail}")
+        return 0
+    if final_samples:
+        samples = final_samples
+    if queue_state == "absent":
+        reporter.warning(f"the gateway exposes no {QUEUE_SIZE}; the exporter queue drain was not checked")
+
     # Real drops: input the gateway refused, and batches its exporter could not
     # even enqueue. send_failed is retried by the exporter and reported as
     # information below, never as a drop.
@@ -327,20 +352,6 @@ def verify_delivery(
                 f"(otelcol_exporter_send_failed_{signal}); the exporter retries them, so this is "
                 "information rather than a drop"
             )
-
-    if QUEUE_SIZE not in samples:
-        queue_state, residue, detail = "absent", None, ""
-    elif samples[QUEUE_SIZE] == 0:
-        queue_state, residue, detail = "drained", 0.0, ""
-    else:
-        queue_state, residue, detail = wait_for_queue_drain(
-            scrape=reader, url=url, timeout=drain_timeout, interval=drain_interval, sleep=sleep
-        )
-    if queue_state == "unreachable":
-        reporter.warning(f"could not re-scrape the gateway self-metrics endpoint ({url}) while waiting: {detail}")
-        return 0
-    if queue_state == "absent":
-        reporter.warning(f"the gateway exposes no {QUEUE_SIZE}; the exporter queue drain was not checked")
 
     accepted = {signal: samples.get(f"otelcol_receiver_accepted_{signal}", 0.0) for signal in SIGNALS}
     sent = {signal: samples.get(f"otelcol_exporter_sent_{signal}", 0.0) for signal in SIGNALS}

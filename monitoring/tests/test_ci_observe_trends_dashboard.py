@@ -29,7 +29,7 @@ COMPARE_ROW_TITLE = "Compare — captured runs, selected cohort, dashboard time 
 COMPARE_TITLES = [
     "Pick a cohort",
     "Exact cohorts",
-    "Ungrouped captures (identity source none, not a cohort)",
+    "Ungrouped captures (incomplete identity, not a cohort)",
     "Sample status",
     "Tests using the most time",
     "Runs in this cohort",
@@ -237,7 +237,7 @@ def test_the_compare_section_reads_the_registry_then_tempo_on_expand() -> None:
             assert "osac.ci.test_ref" not in query, panel["title"]
             assert ") || (" not in query, panel["title"]
 
-    for title in ("Exact cohorts", "Ungrouped captures (identity source none, not a cohort)", "Sample status"):
+    for title in ("Exact cohorts", "Ungrouped captures (incomplete identity, not a cohort)", "Sample status"):
         panel = next(p for p in COMPARE_PANELS if p["title"] == title)
         for target in targets(panel):
             assert target["url"].startswith("http://127.0.0.1:9103/api/ci-observe/cohorts")

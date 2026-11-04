@@ -1198,7 +1198,7 @@
           },
           "options": {
             "mode": "markdown",
-            "content": "**Exact cohorts** group captures by the six identity fields: the resolved osac commit, the resolved harness checkout SHA, the reusable workflow file SHA, and the exact pytest suite, filter and marker. They are the only cohorts a comparison may use as a baseline. The requested osac ref is metadata only; a moving ref never keys a cohort.\n\n**Ungrouped captures** have `identity_source=none`: the registry lacks at least one identity field. They are **not exact** and are **not a baseline**, because the harness revision or another identity field was not captured. The table lists them separately, with the reason, and never merges them into a cohort. `unknown` is never an identity value or a cohort key.\n\n**The sample rule:** a comparison needs at least 2 captures in the cohort, and a stable median needs 3. The **Sample status** line under the cohort tables states where the current selection stands. When it says \"No baseline\", the tables below show a single run's tests, not a comparison.\n\n**Observed time is not runner time.** Test spans include each test's setup and call time, tests run in parallel and overlap, and the total cannot be converted into runner minutes.\n\n**Loading:** panels can take up to two minutes to load; a blank body while loading is not an empty result. The cohort tables read the capture registry. The span tables read Tempo and start only when this collapsed row expands. Each panel states its own result: a number, a verdict, or an explicit empty message.\n\nFailed-test evidence sits at the bottom of this section; expand the section to inspect it. Click the OSAC commit value in an exact cohort row to load that cohort. You pick the cohort here. This section does not preselect a capture."
+            "content": "**Exact cohorts** group captures by the six identity fields: the resolved osac commit, the resolved harness checkout SHA, the reusable workflow file SHA, and the exact pytest suite, filter and marker. They are the only cohorts a comparison may use as a baseline. The requested osac ref is metadata only; a moving ref never keys a cohort.\n\n**Ungrouped captures** lack at least one of the six identity fields: either the registry has no info-metric identity (`identity_source=none`), or an info identity has an empty or `unknown` field. They are **not exact** and are **not a baseline**, because the harness revision or another identity field was not captured. The table lists them separately, with the identity source and the reason, and never merges them into a cohort. `unknown` is never an identity value or a cohort key.\n\n**The sample rule:** a comparison needs at least 2 captures in the cohort, and a stable median needs 3. The **Sample status** line under the cohort tables states where the current selection stands. When it says \"No baseline\", the tables below show a single run's tests, not a comparison.\n\n**Observed time is not runner time.** Test spans include each test's setup and call time, tests run in parallel and overlap, and the total cannot be converted into runner minutes.\n\n**Loading:** panels can take up to two minutes to load; a blank body while loading is not an empty result. The cohort tables read the capture registry. The span tables read Tempo and start only when this collapsed row expands. Each panel states its own result: a number, a verdict, or an explicit empty message.\n\nFailed-test evidence sits at the bottom of this section; expand the section to inspect it. Click the OSAC commit value in an exact cohort row to load that cohort. You pick the cohort here. This section does not preselect a capture."
           },
           "targets": []
         },
@@ -1523,8 +1523,8 @@
         },
         {
           "id": 19,
-          "title": "Ungrouped captures (identity source none, not a cohort)",
-          "description": "Captures whose registry row has identity_source=none. They lack at least one of the six identity fields, so they are not exact, not a baseline, and never merged into an exact cohort. The table lists each capture with its run and the reason it could not be grouped. Click the capture id to open Capture with the capture's own time range.",
+          "title": "Ungrouped captures (incomplete identity, not a cohort)",
+          "description": "Captures that lack at least one of the six identity fields: no identity from the info metric (identity_source=none), or an info identity with an empty or unknown field. They are not exact, not a baseline, and never merged into an exact cohort. The table lists each capture with its run, its identity source and the reason it could not be grouped. Click the capture id to open Capture with the capture's own time range.",
           "type": "table",
           "gridPos": {
             "h": 6,
@@ -1684,6 +1684,11 @@
                             "color": "orange",
                             "index": 0,
                             "text": "none"
+                          },
+                          "info": {
+                            "color": "yellow",
+                            "index": 1,
+                            "text": "info (incomplete)"
                           }
                         }
                       }

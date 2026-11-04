@@ -36,7 +36,7 @@ COMPARISON_LINK = "/d/ci-observe-trends/ci-observe-e28094-trends"
 RUN_INVESTIGATION_LINK = "/d/ci-observe-runs/ci-observe-e28094-run-investigation"
 
 COMPARE_ROW_TITLE = "Compare — captured runs, selected cohort, dashboard time range"
-UNGROUPED_TITLE = "Ungrouped captures (identity source none, not a cohort)"
+UNGROUPED_TITLE = "Ungrouped captures (incomplete identity, not a cohort)"
 LIMITS_TITLE = "Query limits and data sources (capture registry + Tempo on expand)"
 
 COMPARE_PANEL_TITLES = [

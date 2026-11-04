@@ -58,6 +58,9 @@ INDEX_DOCUMENT = {
         {"stage": "merged", "label": "Merged", "samples": 2, "median_seconds": 330, "p95_seconds": 573},
     ],
     "notes": [],
+    "pr_state": "no_selection",
+    "pr_state_message": "Enter a pull request number in the PR box to see its state.",
+    "source": "none",
     "states": [
         {"state": "open", "label": "Still open", "message": "The pull request is open."},
         {"state": "not_yet_fetched", "label": "Merged after the last fetch", "message": "It appears next hour."},
@@ -264,6 +267,30 @@ def test_the_four_state_messages_are_on_the_page(dashboard: dict) -> None:
         assert word in panel["description"]
 
 
+def test_the_selected_pull_request_state_is_shown(dashboard: dict) -> None:
+    """The legend says what each state means; it does not say which one
+    applies. The resolved state, its sentence and the answer source are
+    top-level keys and need a panel of their own."""
+    panel = _panels_by_title(dashboard)["Selected pull request state"]
+    target = panel["targets"][0]
+    assert target["root_selector"] == "$"
+    assert [column["selector"] for column in target["columns"]] == [
+        "pr_state", "pr_state_message", "source",
+    ]
+    assert PR_DOCUMENT["pr_state"] == "not_yet_fetched"
+    assert PR_DOCUMENT["pr_state_message"]
+    assert PR_DOCUMENT["source"] == "live"
+
+
+def test_the_selected_state_panel_resolves_with_no_number_selected(dashboard: dict) -> None:
+    panel = _panels_by_title(dashboard)["Selected pull request state"]
+    target = panel["targets"][0]
+    assert "number=" in target["url"]
+    assert INDEX_DOCUMENT["pr_state"] == "no_selection"
+    assert INDEX_DOCUMENT["pr_state_message"]
+    assert panel["fieldConfig"]["defaults"]["noValue"]
+
+
 def test_state_panel_resolves_with_no_number_selected(dashboard: dict) -> None:
     """With an empty PR number the endpoint returns the index document. The
     states panel must still resolve there instead of a root-not-found error."""
@@ -369,6 +396,8 @@ def test_every_selector_resolves_against_the_endpoint_contract(dashboard: dict) 
         for target in panel["targets"]:
             document = INDEX_DOCUMENT if "days=" in target["url"] else PR_DOCUMENT
             selector = target["root_selector"]
+            if selector == "$":
+                continue
             if selector.startswith("$."):
                 selector = selector[2:]
             node = document

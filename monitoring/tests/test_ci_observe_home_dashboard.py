@@ -393,30 +393,35 @@ def test_the_four_cards_read_the_run_index() -> None:
         "values": False,
     }
 
-    for title in CARD_TITLES[1:]:
-        panel = PANELS[title]
-        assert panel["targets"][0]["root_selector"] == "$.runs", title
-        assert panel["options"]["reduceOptions"]["calcs"] == ["count"], title
-
-
-def test_the_three_verdict_cards_filter_the_endpoint_verdict() -> None:
-    """The cards count the endpoint's verdict values; they never compute one."""
     expected = {
-        CARD_TITLES[0]: None,
-        CARD_TITLES[1]: "capture",
-        CARD_TITLES[2]: "not collected",
-        CARD_TITLES[3]: "unknown",
+        CARD_TITLES[1]: "counts.capture",
+        CARD_TITLES[2]: "counts.not collected",
+        CARD_TITLES[3]: "counts.unknown",
     }
-    for title, verdict in expected.items():
+    for title, field in expected.items():
         panel = PANELS[title]
-        transforms = [t for t in panel.get("transformations", []) if t["id"] == "filterByValue"]
-        if verdict is None:
-            assert not transforms, "the total card counts every run"
-            continue
-        assert len(transforms) == 1, title
-        (filter_config,) = transforms[0]["options"]["filters"]
-        assert filter_config["fieldName"] == "capture_state"
-        assert filter_config["config"] == {"id": "equal", "options": {"value": verdict}}
+        # The cards count the whole window from the endpoint's counts, not
+        # the 200 rows the table renders.
+        assert panel["targets"][0]["root_selector"] == "$", title
+        assert selectors(panel) == {field}, title
+        assert panel["options"]["reduceOptions"] == {
+            "calcs": ["lastNotNull"],
+            "fields": field,
+            "values": False,
+        }, title
+
+
+def test_the_verdict_cards_sum_to_the_window_total() -> None:
+    """A card may never be a page size: the three verdicts plus nothing else
+    cover every run in the window."""
+    counts = RUNS_DOCUMENT["counts"]
+    assert counts["capture"] + counts["not collected"] + counts["unknown"] == counts["matched"]
+
+
+def test_the_three_verdict_cards_never_filter_the_page() -> None:
+    """filterByValue over $.runs would cap a card at the page size."""
+    for title in CARD_TITLES[1:]:
+        assert PANELS[title].get("transformations") == [], title
 
 
 def test_the_completeness_panel_states_both_counts_and_truncation() -> None:
@@ -560,11 +565,18 @@ RUNS_DOCUMENT = {
         "last_ok_at": "2026-11-04T09:59:00Z",
         "coverage_from": "2026-10-20T10:00:00Z",
         "captures": 217,
-        "rejected": 2,
+        "rejected": {"count": 2, "ids": ["direct-4418", "router-direct"]},
     },
     "truncated": True,
     "shown": 200,
     "total": 1737,
+    "counts": {
+        "returned": 200,
+        "matched": 1737,
+        "capture": 1500,
+        "not collected": 200,
+        "unknown": 37,
+    },
     "runs": [{
         "id": "41310072671",
         "workflow": "E2E VMaaS Full Install",

@@ -240,9 +240,17 @@ class CaptureRegistry:
     # The identity a cohort groups on: the suite plus the five refs/SHAs that
     # say which code and harness ran. Empty or "unknown" in any field keeps a
     # capture out of the cohorts list, never in a cohort called unknown.
+    # The six fields an exact cohort groups on. test_ref is metadata: the
+    # same commit can be named `main` and a tag name.
     COHORT_FIELDS = (
-        "suite", "test_ref", "test_sha", "test_infra_ref", "test_infra_sha",
-        "test_infra_workflow_sha",
+        "test_sha", "test_infra_sha", "test_infra_workflow_sha",
+        "test_suite", "test_filter", "test_marker",
+    )
+    # A cohort needs a known revision for the commit under test, the harness
+    # checkout and the reusable workflow. An empty suite, filter or marker is
+    # a real value ("no filter"), not a missing one.
+    COHORT_REQUIRED_FIELDS = (
+        "test_sha", "test_infra_sha", "test_infra_workflow_sha",
     )
 
     def __init__(self, exporter):
@@ -642,6 +650,26 @@ class CaptureRegistry:
         now = datetime.now(timezone.utc)
         days, limit = self._window(params), self._limit(params)
         window_from = self._iso(now - timedelta(days=days))
+        # An explicit but empty lookup is the Find box with nothing typed. It
+        # must answer "no rows", not every capture in the window.
+        blank_lookup = [
+            name
+            for name in ("capture_id", "run_id", "suite")
+            if name in params and not (params[name][0] or "").strip()
+        ]
+        if blank_lookup:
+            return {
+                "days": days,
+                "window_from": window_from,
+                "window_to": self._iso(now),
+                "captures": [],
+                "truncated": False,
+                "counts": {"returned": 0, "matched": 0},
+                "notes": [
+                    f"the {name} lookup is empty; enter a value, or clear it to list every capture"
+                    for name in blank_lookup
+                ],
+            }
         where = ["last_seen_at >= :since"]
         args = {"since": window_from, "fetch": limit + 1}
         for name, column in (
@@ -682,23 +710,29 @@ class CaptureRegistry:
         """GET /api/ci-observe/cohorts: exact cohorts plus the ungrouped rows.
 
         A cohort is one exact combination of the six identity fields, and
-        only rows with identity_source=info and every field non-empty take
-        part. Everything else is listed under `ungrouped`; "unknown" is never
-        used as a cohort value.
+        only rows with identity_source=info and a known commit, harness and
+        workflow SHA take part (an empty suite, filter or marker is a real
+        value, not a missing one). Everything else is listed under `ungrouped`; "unknown" is never
+        used as a cohort value. The requested ref is metadata: the same
+        commit can be named `main` and a tag, and that must not split a
+        cohort.
         """
         now = datetime.now(timezone.utc)
         days, limit = self._window(params), self._limit(params)
         window_from = self._iso(now - timedelta(days=days))
         fields = self.COHORT_FIELDS
         complete = " AND ".join(
-            f"LOWER(COALESCE({field}, '')) NOT IN ('', 'unknown')" for field in fields
+            f"LOWER(COALESCE({field}, '')) NOT IN ('', 'unknown')"
+            for field in self.COHORT_REQUIRED_FIELDS
         )
         group_by = ", ".join(fields)
         args = {"since": window_from, "fetch": limit + 1, "ungrouped_fetch": limit + 1}
         with self.exporter._db() as conn:
             cohorts = [dict(row) for row in conn.execute(
                 f"""
-                SELECT {group_by}, COUNT(*) AS captures,
+                SELECT {group_by}, MIN(test_ref) AS test_ref,
+                       GROUP_CONCAT(DISTINCT test_ref) AS test_refs,
+                       COUNT(*) AS captures,
                        MIN(first_seen_at) AS first_seen_at,
                        MAX(last_seen_at) AS last_seen_at,
                        GROUP_CONCAT(capture_id) AS capture_ids,
@@ -764,13 +798,13 @@ class CaptureRegistry:
         if row.get("identity_source") != "info":
             return "no identity from the info metric"
         missing = [
-            field for field in self.COHORT_FIELDS
+            field for field in self.COHORT_REQUIRED_FIELDS
             if not (row.get(field) or "").strip()
         ]
         if missing:
             return "missing identity: " + ", ".join(missing)
         unknown = [
-            field for field in self.COHORT_FIELDS
+            field for field in self.COHORT_REQUIRED_FIELDS
             if (row.get(field) or "").strip().lower() == "unknown"
         ]
         return "unknown identity: " + ", ".join(unknown)
@@ -4322,6 +4356,70 @@ class WorkflowExporter:
     # registry's captures on run_id, paged by run id (ids increase with
     # creation time), with the total computed by a window function so no
     # second count query is needed. No Tempo.
+    def _ci_observe_run_where(self, window_from, window_to, before="", run_id=""):
+        """The WHERE clause every run-level ci-observe query shares.
+
+        A run-level row is its own run; a pull-request-flow suite row's id is
+        a job id and its run_id is the parent. Only the former is a run, and
+        only its id can appear in a capture id. The gated runs are not E2E.
+        """
+        where = [
+            "j.category = 'e2e'",
+            "j.run_id != ''",
+            "j.run_id = CAST(j.id AS TEXT)",
+            "LOWER(j.workflow) NOT LIKE '%' || :gate_suffix",
+            "COALESCE(LOWER(j.failure_reason), '') != 'gate'",
+        ]
+        args = {"gate_suffix": self.GATE_NAME_SUFFIX}
+        if run_id:
+            where.append("CAST(j.id AS TEXT) = :run_id")
+            args["run_id"] = str(run_id)
+        else:
+            where.append("j.created_at >= :since")
+            where.append("j.created_at < :until")
+            args["since"] = self._iso_utc(window_from)
+            args["until"] = self._iso_utc(window_to)
+            if before:
+                where.append("j.id < :before")
+                args["before"] = int(before)
+        return " AND ".join(where), args
+
+    @staticmethod
+    def _iso_utc(value):
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def get_ci_observe_run_window(self, days):
+        """Every run-level row in the window, one per run.
+
+        The entry page's verdict cards count the whole window, so they cannot
+        read a 200-row page. Same filter as get_ci_observe_run_page, no page
+        limit: about 7,400 rows for 60 days.
+        """
+        now = datetime.now(timezone.utc)
+        window_from = now - timedelta(days=days)
+        where, args = self._ci_observe_run_where(window_from, now)
+        sql = f"""
+            SELECT j.id AS id,
+                   j.conclusion AS conclusion,
+                   j.status AS status,
+                   j.created_at AS created_at,
+                   j.updated_at AS updated_at,
+                   GROUP_CONCAT(c.capture_id) AS capture_ids
+            FROM jobs j
+            LEFT JOIN captures c ON c.run_id = j.run_id
+            WHERE {where}
+            GROUP BY j.id
+            ORDER BY j.id DESC
+        """
+        with self._db() as conn:
+            rows = [dict(row) for row in conn.execute(sql, args)]
+        for row in rows:
+            row["id"] = str(row["id"])
+            row["capture_ids"] = sorted(
+                capture_id for capture_id in (row["capture_ids"] or "").split(",") if capture_id
+            )
+        return rows
+
     def get_ci_observe_run_page(self, days, limit, before="", run_id=""):
         """One page of run-level E2E rows, joined to their captures.
 
@@ -4332,28 +4430,8 @@ class WorkflowExporter:
         """
         now = datetime.now(timezone.utc)
         window_from = now - timedelta(days=days)
-        where = [
-            "j.category = 'e2e'",
-            # A run-level row is its own run; a pull-request-flow suite row's
-            # id is a job id and its run_id is the parent. Only the former is
-            # a run, and only its id can appear in a capture id.
-            "j.run_id != ''",
-            "j.run_id = CAST(j.id AS TEXT)",
-            "LOWER(j.workflow) NOT LIKE '%' || :gate_suffix",
-            "COALESCE(LOWER(j.failure_reason), '') != 'gate'",
-        ]
-        args = {"gate_suffix": self.GATE_NAME_SUFFIX, "fetch": limit + 1}
-        if run_id:
-            where.append("CAST(j.id AS TEXT) = :run_id")
-            args["run_id"] = str(run_id)
-        else:
-            where.append("j.created_at >= :since")
-            where.append("j.created_at < :until")
-            args["since"] = window_from.strftime("%Y-%m-%dT%H:%M:%SZ")
-            args["until"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-            if before:
-                where.append("j.id < :before")
-                args["before"] = int(before)
+        where_sql, args = self._ci_observe_run_where(window_from, now, before, run_id)
+        args["fetch"] = limit + 1
         sql = f"""
             SELECT j.id AS id,
                    j.run_id AS run_id,
@@ -4370,7 +4448,7 @@ class WorkflowExporter:
                    MAX(CASE WHEN c.identity_source = 'info' THEN 1 ELSE 0 END) AS identity_info
             FROM jobs j
             LEFT JOIN captures c ON c.run_id = j.run_id
-            WHERE {" AND ".join(where)}
+            WHERE {where_sql}
             GROUP BY j.id
             ORDER BY j.id DESC
             LIMIT :fetch
@@ -4806,7 +4884,9 @@ class ExporterHandler(BaseHTTPRequestHandler):
         # as "unknown", not an error the dashboard would render as an empty
         # panel.
         elif parsed.path == "/api/ci-observe/runs":
-            params = parse_qs(parsed.query)
+            # keep_blank_values: an explicit run= with an empty Find box must
+            # read as "no rows", not disappear and return the whole window.
+            params = parse_qs(parsed.query, keep_blank_values=True)
             data = self.exporter.get_ci_observe_runs_json(params)
             payload = json.dumps(data, default=str)
             self.send_response(200)
@@ -4833,7 +4913,9 @@ class ExporterHandler(BaseHTTPRequestHandler):
         # The registry rows, read from SQLite only. Never queries Prometheus,
         # Loki or Tempo: the 60-second poller already did.
         elif parsed.path == "/api/ci-observe/captures":
-            params = parse_qs(parsed.query)
+            # keep_blank_values: an explicit but empty capture_id/run_id/suite
+            # lookup answers "no rows" instead of listing every capture.
+            params = parse_qs(parsed.query, keep_blank_values=True)
             data = self.exporter.get_ci_observe_captures_json(params)
             payload = json.dumps(data, default=str)
             self.send_response(200)

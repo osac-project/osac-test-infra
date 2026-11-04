@@ -668,7 +668,9 @@ def test_the_capture_view_searches_tempo_at_most_once_for_four_readers(api, expo
     session trace id; more than one is the thundering herd the cache exists
     to prevent."""
     tempo = FakeTempo()
-    monkeypatch.setenv("CI_OBSERVE_TEMPO_URL", tempo.url)
+    # The view reads its URL at construction, so the env var set after the
+    # exporter exists would not reach it. Point the live object at the fake.
+    exporter._capture_view.tempo_url = tempo.url
     try:
         job = run_job(RUN_ID)
         job["run_id"] = str(RUN_ID)
@@ -683,7 +685,10 @@ def test_the_capture_view_searches_tempo_at_most_once_for_four_readers(api, expo
     states = {result.document.get("state") for result in results.results if result.document}
     assert len(states) == 1, f"four readers saw different states: {states}"
     assert states <= harness.CAPTURE_VIEW_STATES
-    assert tempo.searches_for(CAPTURE) <= 1
+    # The fake returns no traces, so a cold load searches twice: the session
+    # span, then the test-span fallback. Four readers share those two
+    # searches; eight means the single flight is not working.
+    assert tempo.searches_for(CAPTURE) == 2
 
 
 @requires_registry
@@ -829,8 +834,8 @@ def test_an_exception_path_never_produces_not_collected(api, exporter, wfe):
 
 
 @requires_registry
-def test_a_synthetic_capture_is_never_not_collected_and_answers_fast(api, monkeypatch):
-    monkeypatch.setenv("CI_OBSERVE_TEMPO_URL", "http://127.0.0.1:1")
+def test_a_synthetic_capture_is_never_not_collected_and_answers_fast(api, exporter):
+    exporter._capture_view.tempo_url = "http://127.0.0.1:1"
 
     started = time.monotonic()
     status, document = get_json(api, f"/api/ci-observe/capture?capture_id={SYNTHETIC_CAPTURE}")

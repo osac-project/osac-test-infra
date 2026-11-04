@@ -134,7 +134,10 @@ def test_in_flight_items_are_reported_not_judged(harness: Harness) -> None:
         exposition(accepted={"spans": 12}, sent={"spans": 12}, queue=0),
     ]
     assert harness.run() == 0
-    assert "2 reported in flight" in harness.log
+    # The counters are read after the queue drained, not before: the batch
+    # that was in flight has been exported by the last scrape.
+    assert "0 reported in flight" in harness.log
+    assert "telemetry delivered: 12 spans" in harness.log
     assert "batches are still in flight" not in harness.log
     assert "dropped telemetry" not in harness.log
     assert harness.sleeps == [10]

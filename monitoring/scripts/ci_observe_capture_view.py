@@ -431,6 +431,12 @@ class CIObserveCaptureView:
             document["notes"] = notes
             return document
 
+        # Persist only a trace that was actually read. A search can return a
+        # trace the ingester has not flushed yet; storing it then would turn
+        # the next transient 404 into a cached `missing`.
+        if trace_source == "search":
+            notes.extend(self._remember_trace_id(capture_id, trace_id, "search"))
+
         session, buckets, coverage = self._classify_trace(payload)
         if coverage["spans_classified"] + coverage["spans_unclassified"] != coverage["spans_total"]:
             notes.append(
@@ -698,7 +704,6 @@ class CIObserveCaptureView:
             trace_id = trace_ids[0]
             if len(trace_ids) > 1:
                 notes.append(f"the session search returned {len(trace_ids)} traces; using the first ({trace_id})")
-            notes.extend(self._remember_trace_id(capture_id, trace_id, "session search"))
             return trace_id, "ok", notes
 
         fallback = f'resource."{CAPTURE_ATTRIBUTE}"={quoted} && .pytest.span_type = "test"'
@@ -713,7 +718,6 @@ class CIObserveCaptureView:
             if len(trace_ids) > 1:
                 notes.append(f"the test-span search returned {len(trace_ids)} traces; using the first ({trace_id})")
             notes.append("the session search found nothing; the trace id came from a test span")
-            notes.extend(self._remember_trace_id(capture_id, trace_id, "test-span search"))
             return trace_id, "ok", notes
 
         now = datetime.now(UTC)

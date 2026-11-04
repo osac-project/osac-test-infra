@@ -589,10 +589,11 @@ class TestBackfillRuns:
         assert run["listing_complete"] == 1
         assert run["ok"] == 1
 
-    def test_a_stopped_pass_advances_coverage_but_is_not_ok(self, service, github):
-        """The listing was read, so coverage moves. The pass is not ok, and
-        the rows it did not store are explained as missing with that
-        stopped_early reason rather than promised for next hour."""
+    def test_a_stopped_pass_does_not_advance_coverage(self, service, github):
+        """A pass that stops before it read every repository did not cover
+        its window. Coverage stays where it was, so the pull requests it
+        missed read "not fetched yet" instead of "missing", and a full pass
+        that stopped here is retried on the next hour."""
         limit = {"remaining": "50"}
         original_get = github.get
 
@@ -605,10 +606,12 @@ class TestBackfillRuns:
         summary = run_backfill(service, mode="full")
 
         [run] = rows(service, "SELECT * FROM pr_backfill_runs")
-        assert run["listing_complete"] == 1
+        assert run["listing_complete"] == 0
         assert run["ok"] == 0
         assert "rate limit" in run["stopped_early"]
         assert summary["ok"] is False
+        assert service._coverage_until() is None
+        assert service._full_pass_due(NOW + timedelta(hours=1)) is True
 
     def test_an_incremental_pass_is_recorded_with_its_since(self, service, github):
         run_backfill(service, mode="auto")
@@ -666,6 +669,32 @@ class TestFreshness:
         assert late["freshness"]["last_fetched_at"] == iso(NOW + timedelta(hours=1))
         assert late["freshness"]["last_fetched_at"] != early["freshness"]["last_fetched_at"]
         assert f"last ran at {iso(NOW + timedelta(hours=1))}" in late["freshness"]["message"]
+
+    def test_freshness_follows_the_coverage_age_not_the_last_run(self, service):
+        """An hourly pass whose listing keeps failing still writes a row, so
+        the last-run time stays current while the data does not. The page
+        must call that stale, or it reports days-old data as fresh."""
+        service._init_db()
+        with sqlite3.connect(service.db_file) as conn:
+            conn.execute(
+                "INSERT INTO pr_backfill_runs (ran_at, mode, window_from, window_to, stored, skipped,"
+                " failed, api_calls, rate_limit_remaining, stopped_early, listing_complete, ok)"
+                " VALUES (?, 'full', ?, ?, 0, 0, 0, 0, NULL, '', 0, 0)",
+                (iso(NOW), iso(NOW - timedelta(days=DAYS)), iso(NOW)),
+            )
+            conn.execute(
+                "INSERT INTO pr_backfill_runs (ran_at, mode, window_from, window_to, stored, skipped,"
+                " failed, api_calls, rate_limit_remaining, stopped_early, listing_complete, ok)"
+                " VALUES (?, 'full', ?, ?, 3, 0, 0, 12, NULL, '', 1, 1)",
+                (iso(NOW - timedelta(hours=6)), iso(NOW - timedelta(days=DAYS)), iso(NOW - timedelta(hours=6))),
+            )
+
+        doc = service.get_json({"days": ["30"]}, now=NOW + timedelta(minutes=10))
+
+        assert doc["freshness"]["last_fetched_at"] == iso(NOW)
+        assert doc["freshness"]["coverage_until"] == iso(NOW - timedelta(hours=6))
+        assert doc["freshness"]["coverage_age_seconds"] >= 6 * 3600
+        assert doc["freshness"]["state"] == "stale"
 
     def test_the_next_run_is_the_next_five_past_the_hour(self, service):
         run_backfill(service, mode="full")
@@ -739,7 +768,9 @@ class TestStates:
         assert merged_at in doc["pr_state_message"]
         assert doc["next_run_at"] in doc["pr_state_message"]
 
-    def test_missing_names_the_stopped_early_reason(self, service, github):
+    def test_a_stopped_pass_makes_its_pull_requests_not_yet_fetched(self, service, github):
+        """A stopped pass did not cover its window, so an absent pull request
+        inside that window is a delay with a next run, not a gap."""
         limit = {"remaining": "50"}
         original_get = github.get
 
@@ -750,14 +781,13 @@ class TestStates:
 
         github.get = limited
         run_backfill(service, mode="full")
-        ended = "2026-10-02T12:00:00Z"  # inside the window the pass covered
+        ended = "2026-10-02T12:00:00Z"  # inside the window the pass listed
         route_live_pr(github, 202, state="closed", merged_at=ended, closed_at=ended)
 
         doc = self.detail(service, 202, NOW)
 
-        assert doc["pr_state"] == "missing"
-        assert "stopped early" in doc["pr_state_message"]
-        assert "rate limit" in doc["pr_state_message"]
+        assert doc["pr_state"] == "not_yet_fetched"
+        assert "next hourly run" in doc["pr_state_message"]
 
     def test_missing_without_a_live_answer(self, service):
         run_backfill(service, mode="full")
@@ -767,6 +797,18 @@ class TestStates:
         assert doc["pr_state"] == "missing"
         assert doc["source"] == "none"
         assert "no pull request #203" in doc["pr_state_message"]
+
+    def test_a_repository_that_is_not_a_name_is_never_requested(self, service, github):
+        """repo comes from the query string. A path segment there would move
+        the live lookup, made with the shared token, to another repository."""
+        run_backfill(service, mode="full")
+        before = len(github.calls)
+
+        doc = self.detail(service, 205, NOW, repo="../../repos/other-org/private-repo")
+
+        assert doc["pr_state"] == "missing"
+        assert "not a repository name" in doc["pr_state_message"]
+        assert len(github.calls) == before
 
     def test_outside_window(self, service, github):
         run_backfill(service, mode="full")
@@ -950,7 +992,7 @@ class TestEndpointDocument:
         assert doc["mode"] == "pr"
         assert doc["pr"] is None
         assert doc["attempts"] == []
-        assert "not in the backfill" in doc["notes"][0]
+        assert "no stored row in the backfill" in doc["notes"][0]
 
     def test_invalid_number_is_explained(self, filled):
         doc = filled.get_json({"number": ["abc"]})
@@ -1082,6 +1124,8 @@ def test_dashboard_selectors_resolve_against_the_real_response(service):
         for target in panel.get("targets", []):
             doc = documents["index"] if "days=" in target["url"] else documents["pr"]
             selector = target["root_selector"]
+            if selector == "$":
+                continue
             if selector.startswith("$."):
                 selector = selector[2:]
             node = doc

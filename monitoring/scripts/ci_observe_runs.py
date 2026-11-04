@@ -92,10 +92,27 @@ class CIObserveRuns:
             )
             before = ""
 
-        page = self.exporter.get_ci_observe_run_page(
-            days=days, limit=limit, before=before, run_id=run_id
-        )
+        # An explicit but empty run= is the Find box with nothing typed. It
+        # must answer "no rows", not fall back to the whole window.
+        blank_run_lookup = "run" in params and not run_id
+        if blank_run_lookup:
+            page = {
+                "rows": [],
+                "matched": 0,
+                "truncated": False,
+                "window_from": self._iso(now - timedelta(days=days)),
+                "window_to": self._iso(now),
+            }
+        else:
+            page = self.exporter.get_ci_observe_run_page(
+                days=days, limit=limit, before=before, run_id=run_id
+            )
         source = self._source(now)
+        # The cards count the whole window, not the returned page. A run
+        # lookup counts only the runs it returns.
+        counts = self._verdict_counts(now, days if not run_id else None, source, page["rows"])
+        counts["returned"] = len(page["rows"])
+        counts["matched"] = page["matched"]
         doc = {
             "days": days,
             "window_from": page["window_from"],
@@ -105,7 +122,7 @@ class CIObserveRuns:
             "truncated": page["truncated"],
             "shown": len(page["rows"]),
             "total": page["matched"],
-            "counts": {"returned": len(page["rows"]), "matched": page["matched"]},
+            "counts": counts,
             "next_before": None,
             "notes": notes,
         }
@@ -115,7 +132,11 @@ class CIObserveRuns:
                 f"this page is capped at {limit} runs; {page['matched']} match the "
                 "window. Pass before=<next_before> for the next page."
             )
-        if not page["rows"] and run_id:
+        if blank_run_lookup:
+            doc["notes"].append(
+                "the Find box is empty; enter a run id, or clear it to see the window"
+            )
+        elif not page["rows"] and run_id:
             doc["notes"].append(f"the job history has no run with id {run_id}")
         elif not page["rows"]:
             doc["notes"].append(
@@ -145,6 +166,23 @@ class CIObserveRuns:
                 }
             )
         return doc
+
+    def _verdict_counts(self, now, days, source, rows=None):
+        """{"capture": n, "not collected": n, "unknown": n} over the window.
+
+        `days` is None when the caller already has the rows (a run lookup).
+        The rules are `_state` and nothing else, so the cards and the table
+        can never disagree about a run.
+        """
+        if days is not None:
+            rows = self.exporter.get_ci_observe_run_window(days=days)
+        totals = {"capture": 0, "not collected": 0, "unknown": 0}
+        for run in rows or []:
+            ended = self._ended(run)
+            finished = self._finished(run) if ended else None
+            state, _ = self._state(run, ended, finished, source, now)
+            totals[state] = totals.get(state, 0) + 1
+        return totals
 
     def capture_ids_by_run(self, days=DEFAULT_DAYS):
         """{run id: [capture id, ...]} from the registry, for the Pull

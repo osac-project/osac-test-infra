@@ -53,7 +53,7 @@ from datetime import UTC, datetime, timedelta
 # The exporter's own API, the three stores it must agree with, and the
 # Grafana proxy timeout that bounds every panel request.
 API_BASE_DEFAULT = "http://127.0.0.1:9103"
-PROMETHEUS_URL_DEFAULT = "http://127.0.0.1:9091"
+PROMETHEUS_URL_DEFAULT = "http://127.0.0.1:9092"
 LOKI_URL_DEFAULT = "http://127.0.0.1:3100"
 TEMPO_URL_DEFAULT = "http://127.0.0.1:3210"
 PROXY_TIMEOUT_SECONDS = 30.0

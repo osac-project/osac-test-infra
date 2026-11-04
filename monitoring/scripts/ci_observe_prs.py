@@ -80,6 +80,15 @@ logger = logging.getLogger(__name__)
 
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 API_URL = os.getenv("API_URL", "https://api.github.com")
+# A GitHub repository name: letters, digits, dot, dash and underscore. It
+# never contains a slash, a dot segment, a query or a fragment, so it cannot
+# move a live lookup to another path.
+REPO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+# The index document answers the detail panels too, with no number selected.
+# A dedicated token keeps "no selection" from looking like a miss state.
+NO_SELECTION_STATE = "no_selection"
+NO_SELECTION_MESSAGE = "Enter a pull request number in the PR box to see its state."
+
 CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.monitoring-server/data"))
 PRS_DB_FILE = os.path.join(CACHE_DIR, "prs.db")
 
@@ -674,14 +683,19 @@ class CIObservePRs:
             summary["prs_failed"] += repo_summary["prs_failed"]
             summary["attempts_stored"] += repo_summary["attempts_stored"]
             if stopped:
+                # Later repositories were never listed, and this repository's
+                # pending rows were not all stored. The window was not read:
+                # coverage must not advance, and a full pass that stopped
+                # here must not count as the day's full pass.
+                summary["listing_complete"] = False
                 break
 
         summary["api_calls"] = self.api_calls
         summary["rate_limit_remaining"] = self.rate_limit_remaining
-        # ok says the pass stored everything it listed. Coverage advances as
-        # soon as the listing window was read completely, so a pass that
-        # stopped early still moves it; the pull requests it missed are then
-        # "missing" with that stopped_early reason, which is the truth.
+        # ok says the pass stored everything it listed. Coverage advances
+        # only when the listing window was read completely, so a pass that
+        # stopped early leaves coverage where it was: the pull requests it
+        # missed then read "not fetched yet", not "missing".
         summary["ok"] = summary["listing_complete"] and not summary["stopped_early"] and summary["prs_failed"] == 0
         self._record_run(summary, now)
         self._prune_runs(now - timedelta(days=days))
@@ -1241,6 +1255,12 @@ class CIObservePRs:
             "pr": None,
             "stages": [],
             "attempts": [],
+            # The detail panels query this endpoint with an empty number.
+            # These keys let the resolved-state panel say "enter a number"
+            # instead of showing a root-not-found error.
+            "pr_state": NO_SELECTION_STATE,
+            "pr_state_message": NO_SELECTION_MESSAGE,
+            "source": "none",
             "notes": [
                 "prs.db has not been backfilled yet: run monitoring/scripts/ci_observe_prs.py "
                 "--days 60. This is an empty dataset, not a repository with no pull requests."
@@ -1280,17 +1300,24 @@ class CIObservePRs:
     def _freshness(self, now):
         """What the data covers, when it last moved, and when it moves next.
 
-        A page is fresh for two hourly slots. Data through comes from the
-        last pass that finished its window; the last run time is reported
-        separately because a pass that stopped early still ran."""
+        Freshness is the age of the data, not the age of the last process
+        start: a pass that fails its listing every hour still writes a row,
+        and reporting that as fresh would hide days-old data. Data through
+        comes from the last pass that finished its window; the last run time
+        is reported separately because a pass can run and store nothing."""
         last = self._last_run()
         if last is None:
             return self._never_freshness(now)
         coverage = self._coverage_until()
         next_run = _iso(_next_run_at(now))
         age = seconds_between(last["ran_at"], _iso(now))
-        state = "fresh" if age is not None and age <= FRESHNESS_STALE_AFTER_SECONDS else "stale"
         coverage_age = seconds_between(coverage, _iso(now)) if coverage else None
+        stale = (
+            coverage_age is None
+            or coverage_age > FRESHNESS_STALE_AFTER_SECONDS
+            or (age is not None and age > FRESHNESS_STALE_AFTER_SECONDS)
+        )
+        state = "stale" if stale else "fresh"
         through = f"{coverage} ({_minutes_ago(coverage_age)})" if coverage else "never"
         message = (
             f"Data through {through}; refreshed hourly; a pull request merged now appears by {next_run}. "
@@ -1347,6 +1374,8 @@ class CIObservePRs:
         """One read-only GitHub lookup for a pull request that is not
         stored. Returns (pr object or None, why it failed). It never writes
         prs.db and never spends a backfill's rate-limit bookkeeping."""
+        if not repo or not REPO_NAME_RE.match(repo) or repo in (".", ".."):
+            return None, f"{repo!r} is not a repository name"
         if self.api is None:
             return None, "no GitHub access is configured"
         key = (repo, number)
@@ -1424,8 +1453,8 @@ class CIObservePRs:
         notes = []
         if row is None:
             notes.append(
-                f"Pull request #{number} is not in the backfill. Only merged and closed pull requests "
-                f"are stored, and only inside the {days}-day window."
+                f"Pull request #{number} has no stored row in the backfill. "
+                "The state below says whether it is open, not fetched yet, missing, or outside the window."
             )
         elif matches > 1 and not repo:
             notes.append(
@@ -1578,6 +1607,10 @@ class CIObservePRs:
             "pr": None,
             "stages": [],
             "attempts": [],
+            # No number selected: the resolved-state panel says so.
+            "pr_state": NO_SELECTION_STATE,
+            "pr_state_message": NO_SELECTION_MESSAGE,
+            "source": "none",
             "states": _states_document(),
             "notes": notes,
             "derivation": DERIVATION,

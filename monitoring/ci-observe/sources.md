@@ -19,7 +19,7 @@ The split is deliberate:
 | What happened in the cluster: events? | Loki, Kubernetes events labelled by capture id; read in the Capture page's Events row | Loki image default | single run, captured only |
 | What did a pod log? | The run artifact (GitHub); pod logs are not delivered to Loki | 7 days | single run |
 | How long did each job and step take? | Workflow exporter SQLite | 60 days | single run |
-| Which runs have a capture? | `captures` in `workflow-exporter.db`, fed by the Prometheus and Loki `osac_ci_capture_id` label indexes and the capture info metric | 60 days registry; 15 days Prometheus; 30 days Loki | all runs in the window |
+| Which runs have a capture? | `captures` in `workflow-exporter.db`, fed by the Prometheus and Loki `osac_ci_capture_id` label indexes and the capture info metric | 90 days registry; 15 days Prometheus; 30 days Loki | all runs in the window |
 | What did one capture do? | Tempo trace-by-id for the test layer; Prometheus for pods and nodes; Loki for events | 30 days traces, 15 days metrics | single run, captured only |
 | Overall job pass rate, duration, MTTR | Central Prometheus `github_actions_*` and the exporter SQLite | 30 days metrics, 60 days SQLite | overall, every run |
 | Overall per-test pass rate, flake and duration | Per-run JUnit artifacts, rolled up daily into `trends.db` by `ci_observe_trends.py` | as long as each day is rolled up while its 7-day artifact exists | overall, every run |

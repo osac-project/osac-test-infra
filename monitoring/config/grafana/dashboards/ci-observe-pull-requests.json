@@ -1457,14 +1457,124 @@
       "id": 8
     },
     {
+      "title": "Selected pull request state",
+      "description": "The state the endpoint resolved for the pull request in the PR box: stored, open, not_yet_fetched, missing or outside_window, with the sentence that explains it and whether the answer came from the store or one live GitHub lookup. The table below lists what every state means. Ejections shown elsewhere on this page are derived, not recorded by GitHub.",
+      "type": "table",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No pull request number is selected: enter one in the PR box to see its state."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "State"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Meaning"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "What it says"
+              },
+              {
+                "id": "custom.width",
+                "value": 900
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$",
+          "columns": [
+            {
+              "selector": "pr_state",
+              "text": "State",
+              "type": "string"
+            },
+            {
+              "selector": "pr_state_message",
+              "text": "What it says",
+              "type": "string"
+            },
+            {
+              "selector": "source",
+              "text": "Answer from",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "id": 15
+    },
+    {
       "title": "Pull request states",
-      "description": "What a detail request means when no row is stored. `open` is still open and stored after it merges or closes; `not_yet_fetched` ended after the last completed window and is stored next hour; `missing` is inside a covered window with no row, and the message says whether that pass stopped early; `outside_window` ended before the retention. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
+      "description": "What each of the five states means (stored, open, not_yet_fetched, missing, outside_window), so an empty detail panel is never a mystery. This is the legend; the state of the selected pull request is in the panel above it. Ejections shown elsewhere on this page are derived, not recorded by GitHub.",
       "type": "table",
       "gridPos": {
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 50
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1573,7 +1683,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 53
+        "y": 57
       },
       "collapsed": false,
       "panels": [],
@@ -1587,7 +1697,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 58
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -2023,7 +2133,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 64
+        "y": 68
       },
       "fieldConfig": {
         "defaults": {},
@@ -2113,7 +2223,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "CI Observe — Pull requests",
+  "title": "CI Observe \u2014 Pull requests",
   "uid": "ci-observe-pull-requests",
   "version": 1
 }
