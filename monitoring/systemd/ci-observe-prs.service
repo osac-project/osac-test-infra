@@ -1,10 +1,11 @@
-# Daily ci-observe pull-request backfill.
+# Hourly ci-observe pull-request backfill.
 # Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-prs.service
 #
 # Runs inside the workflow-exporter container because that container has the
 # GitHub token, the `requests` dependency and the /data volume where prs.db
-# lives. One pass per day is enough: the backfill stores a pull request once
-# and never refetches it unless --force is given.
+# lives. --mode auto runs an incremental pass every hour and a full pass with
+# the prune once a day, so a stored pull request is not refetched every hour
+# and the file still covers the retention window.
 
 [Unit]
 Description=ci-observe pull-request backfill
@@ -12,4 +13,4 @@ After=workflow-exporter.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 60
+ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 60 --mode auto

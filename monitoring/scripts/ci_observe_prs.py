@@ -1,11 +1,21 @@
 """Pull-request history for the ci-observe Pull requests surface.
 
-One-shot backfill, not a poller. It walks the merged and closed pull
-requests of the last N days in each repository, classifies its merge-queue
-attempts, and writes them to prs.db (a separate SQLite file next to the
-workflow exporter's jobs DB). The exporter's existing 90-second loop never
-calls the GitHub API for this data: the endpoint in workflow-exporter.py
-only reads prs.db.
+A backfill, not a poller. It walks the merged and closed pull requests of
+the last N days in each repository, classifies its merge-queue attempts, and
+writes them to prs.db (a separate SQLite file next to the workflow
+exporter's jobs DB). The exporter's existing 90-second loop never calls the
+GitHub API for this data. The endpoint in workflow-exporter.py reads prs.db,
+and on a miss it may make one cached, read-only lookup for the requested pull
+request (see "The read side" below).
+
+Schedule: the timer fires every hour at :05 with a random delay, so a pull
+request merged now is stored within the hour instead of the next day. Each
+hourly run is incremental: it lists pull requests GitHub updated since the
+end of the last completed window, minus a two-hour overlap, and it skips
+the merge_group query entirely when there is nothing new to store. Once a
+day the same timer runs a full pass over the retention window and prunes
+rows that left it. Every pass writes a row to pr_backfill_runs, which is
+what the read side reports as coverage and freshness.
 
 What is fetched, per pull request (one pass, no repeats):
 
@@ -17,8 +27,10 @@ What is fetched, per pull request (one pass, no repeats):
   - the commits (commit count)
 
 Merge-queue runs are fetched once per repository, not per pull request:
-`GET /repos/{org}/{repo}/actions/runs?event=merge_group&created=<cutoff>..<now>`.
-The runs list stops near 1000 results, so a busy window is split in half
+`GET /repos/{org}/{repo}/actions/runs?event=merge_group&created=<start>..<now>`,
+where start is the oldest pull request this pass will store, floored at the
+retention cutoff. An hour with nothing new skips the query. The runs list
+stops near 1000 results, so a busy window is split in half
 until each query fits. Each run's head branch is
 `gh-readonly-queue/<base>/pr-<N>-<sha>`, the only place GitHub exposes the
 PR number of a queue run. A comment on a PR that links a run id adds that
@@ -38,9 +50,15 @@ and written with INSERT OR REPLACE in one transaction per pull request. A
 pull request already stored is skipped on the next run unless --force is
 given, so a run that hits the rate-limit budget resumes where it stopped.
 
-Manual use (the service never runs this):
+The read side never writes prs.db. When a pull request is not stored it may
+make one read-only GitHub lookup through the exporter's own client (the
+shared token and rate-limit counter) and mark the answer source=live. That
+lookup is cached for a minute so a dashboard refresh does not repeat it.
+
+Manual use:
 
     python3 monitoring/scripts/ci_observe_prs.py --days 60
+    python3 monitoring/scripts/ci_observe_prs.py --days 60 --mode full
     python3 monitoring/scripts/ci_observe_prs.py --days 60 --repo osac --force
 """
 
@@ -53,6 +71,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 
 import requests
@@ -76,6 +95,25 @@ MERGE_GROUP_SAFE_RESULT_LIMIT = 900
 # budget of the exporter and every interactive GitHub call. A stopped run
 # leaves the remaining pull requests unstored, and the next run resumes.
 MIN_RATE_LIMIT_REMAINING = 200
+
+# The hourly timer runs at *:05. An incremental pass re-lists the last two
+# hours before the previous window ended, so a pull request GitHub updated
+# while that pass was running is not lost to a page boundary.
+INCREMENTAL_OVERLAP = timedelta(hours=2)
+# A full pass over the retention window runs once a day; the other hourly
+# passes are incremental.
+FULL_PASS_INTERVAL = timedelta(hours=24)
+# The backfill is stale only after two hourly slots: one delayed or missed
+# run still leaves the page useful.
+FRESHNESS_STALE_AFTER_SECONDS = 2 * 3600
+# Kept in step with ci-observe-prs.timer. Used only to say when the next pass
+# starts, never to schedule one.
+TIMER_MINUTE = 5
+# A live lookup on an unstored pull request is read-only. One minute of cache
+# keeps a dashboard refresh from spending the shared GitHub budget.
+LIVE_CACHE_TTL_SECONDS = 60
+# Hourly rows for 60 days are 1440; keep a little slack and drop the rest.
+BACKFILL_RUNS_KEEP = 2000
 
 # The only place a merge_group run names its pull request. Same expression
 # as WorkflowExporter.MERGE_QUEUE_BRANCH_RE.
@@ -122,7 +160,42 @@ DERIVATION = {
         "The backfill covers merged and closed pull requests only. An open pull request is not stored "
         "until it is merged or closed."
     ),
+    "freshness": (
+        "The backfill runs every hour. Data through is the end of the last pass that finished its "
+        "window; the last run time and its counts are shown even when that pass stopped early."
+    ),
 }
+
+# Why a pull request the reader asked for has no stored row. Exactly one of
+# these applies; a stored pull request is "stored", which is not a miss.
+PR_STATE_MESSAGES = (
+    (
+        "open",
+        "Still open",
+        "The pull request is open. The backfill stores merged and closed pull requests only, so it "
+        "appears here after it merges or closes.",
+    ),
+    (
+        "not_yet_fetched",
+        "Merged after the last fetch",
+        "The pull request ended after the last completed backfill window. The next hourly run stores it.",
+    ),
+    (
+        "missing",
+        "Covered window, no row",
+        "The backfill covered the window that holds this pull request but stored no row. The message "
+        "says whether the pass stopped early or the pull request failed to fetch.",
+    ),
+    (
+        "outside_window",
+        "Outside the retention window",
+        f"The pull request ended before the {PRS_HISTORY_DAYS}-day retention, so the backfill does not keep it.",
+    ),
+)
+
+# Live lookups are read-only and never touch prs.db. The cache lives on the
+# module because the exporter builds a CIObservePRs per request.
+_LIVE_PR_CACHE = {}
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +256,42 @@ def human_duration(seconds):
 
 def pr_url(repo, number):
     return f"https://github.com/{ORG}/{repo}/pull/{number}"
+
+
+def _iso(moment):
+    """GitHub's UTC text for a datetime, the same form the API sends."""
+    if moment is None:
+        return ""
+    return moment.astimezone(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _next_run_at(now):
+    """The next hourly timer slot at :05. The timer's random delay is not
+    part of the timestamp a reader sees."""
+    candidate = now.astimezone(UTC).replace(minute=TIMER_MINUTE, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(hours=1)
+    return candidate
+
+
+def _minutes_ago(seconds):
+    """How old a timestamp is, in the words the freshness line uses."""
+    if seconds is None:
+        return "unknown"
+    minutes = max(0, int(seconds) // 60)
+    if minutes < 1:
+        return "less than a minute ago"
+    if minutes == 1:
+        return "1 min ago"
+    if minutes < 120:
+        return f"{minutes} min ago"
+    return f"{minutes // 60} h ago"
+
+
+def _states_document():
+    """The four miss states, always all four, so the dashboard can explain
+    an empty detail panel instead of leaving it blank."""
+    return [{"state": state, "label": label, "message": message} for state, label, message in PR_STATE_MESSAGES]
 
 
 def _unique_runs(runs):
@@ -380,9 +489,30 @@ class CIObservePRs:
                     PRIMARY KEY (repo, number, run_id)
                 )
             """)
+            # One row per pass, so the read side can say what the data
+            # covers and when it last moved. The window is window_from ..
+            # window_to: the range of updated_at the pass listed.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pr_backfill_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ran_at TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'full',
+                    window_from TEXT NOT NULL DEFAULT '',
+                    window_to TEXT NOT NULL DEFAULT '',
+                    stored INTEGER NOT NULL DEFAULT 0,
+                    skipped INTEGER NOT NULL DEFAULT 0,
+                    failed INTEGER NOT NULL DEFAULT 0,
+                    api_calls INTEGER NOT NULL DEFAULT 0,
+                    rate_limit_remaining INTEGER,
+                    stopped_early TEXT NOT NULL DEFAULT '',
+                    listing_complete INTEGER NOT NULL DEFAULT 0,
+                    ok INTEGER NOT NULL DEFAULT 0
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_events_merged_at ON pr_events(merged_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_events_closed_at ON pr_events(closed_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_queue_attempts_pr ON pr_queue_attempts(repo, number)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_backfill_runs_ran_at ON pr_backfill_runs(ran_at)")
             # A database written before `run_ids` existed keeps every other
             # column; add the new one in place instead of dropping the file.
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(pr_queue_attempts)")}
@@ -425,6 +555,9 @@ class CIObservePRs:
         return items
 
     def _list_repos(self):
+        """Repository names, or None when the org listing failed. A failed
+        listing is not an org with no repositories: the caller must not
+        record coverage over it."""
         if self.repos_filter:
             return self.repos_filter
         url = f"{API_URL}/orgs/{ORG}/repos?per_page={PAGE_SIZE}&type=all"
@@ -432,27 +565,46 @@ class CIObservePRs:
         while url:
             page, url = self._get_page(url)
             if page is None:
-                return repos
+                return None
             repos.extend(r["name"] for r in page if not r.get("archived"))
         return repos
 
     # -- backfill -----------------------------------------------------------
 
-    def backfill(self, days=PRS_HISTORY_DAYS, force=False, limit=None, now=None):
-        """Fetch and store every merged/closed pull request in the window.
+    def backfill(self, days=PRS_HISTORY_DAYS, force=False, limit=None, now=None, mode="auto"):
+        """Fetch and store merged/closed pull requests, then record the pass.
 
-        `now` pins the window for a reproducible replay; the service never
-        calls this. Returns a summary dict. Safe to run repeatedly: stored
-        pull requests are skipped, and every write is keyed, so a second run
-        does not duplicate a row or change a value.
+        mode="full" lists the whole retention window and prunes rows that
+        left it. mode="incremental" lists only what GitHub updated since the
+        last completed window, minus the overlap. mode="auto" runs a full
+        pass when the last successful one is more than a day old, and an
+        incremental pass otherwise.
+
+        `now` pins the window for a reproducible replay. Returns a summary
+        dict. Safe to run repeatedly: stored pull requests are skipped, and
+        every write is keyed, so a second run does not duplicate a row or
+        change a value.
         """
+        if mode not in ("auto", "full", "incremental"):
+            raise ValueError(f"unknown backfill mode: {mode!r}")
         now = now or datetime.now(UTC)
-        cutoff = now - timedelta(days=days)
-        cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
         self._init_db()
+        self.api_calls = 0
+        self.rate_limit_remaining = None
+
+        cutoff = now - timedelta(days=days)
+        cutoff_iso = _iso(cutoff)
+        # --force means refetch every stored row, so it needs the full
+        # window; an incremental pass would only list the recent overlap.
+        planned_mode = "full" if force and mode == "auto" else mode
+        resolved_mode, since = self._plan(days, now, planned_mode)
         summary = {
+            "mode": resolved_mode,
             "days": days,
             "cutoff": cutoff_iso,
+            "since": _iso(since),
+            "window_from": _iso(since),
+            "window_to": _iso(now),
             "repos": [],
             "prs_stored": 0,
             "prs_skipped": 0,
@@ -461,24 +613,46 @@ class CIObservePRs:
             "api_calls": 0,
             "rate_limit_remaining": None,
             "stopped_early": "",
+            "listing_complete": True,
+            "ok": True,
         }
 
-        for repo in self._list_repos():
+        repos = self._list_repos()
+        if repos is None:
+            summary["listing_complete"] = False
+            summary["stopped_early"] = "the repository listing failed; coverage did not advance."
+            repos = []
+        for repo in repos:
             repo_summary = {"repo": repo, "prs_stored": 0, "prs_skipped": 0, "prs_failed": 0, "attempts_stored": 0}
-            merge_runs = self._fetch_merge_group_runs(repo, cutoff_iso, now)
-            prs = self._fetch_closed_prs(repo, cutoff)
+            prs = self._fetch_closed_prs(repo, cutoff, since)
+            if prs is None:
+                # A broken listing is not an empty repository. Do not record
+                # coverage past a window that was never read.
+                summary["listing_complete"] = False
+                summary["stopped_early"] = summary["stopped_early"] or (
+                    f"the pull request listing failed for {repo}; coverage did not advance."
+                )
+                summary["repos"].append(repo_summary)
+                continue
+            pending = [pr for pr in prs if force or not self._is_stored(repo, pr["number"])]
+            repo_summary["prs_skipped"] = len(prs) - len(pending)
+            # merge_group runs are only needed to build attempts for pull
+            # requests that are about to be written. No new pull request
+            # means no queue query at all in the idle hour.
+            merge_runs = (
+                self._fetch_merge_group_runs(repo, self._merge_group_from(pending, cutoff), now) if pending else []
+            )
+
             stored = 0
-            for pr in prs:
-                if force or not self._is_stored(repo, pr["number"]):
-                    attempts = self._backfill_one(repo, pr, merge_runs)
-                    if attempts is None:
-                        repo_summary["prs_failed"] += 1
-                    else:
-                        repo_summary["prs_stored"] += 1
-                        repo_summary["attempts_stored"] += attempts
-                        stored += 1
+            stopped = False
+            for pr in pending:
+                attempts = self._backfill_one(repo, pr, merge_runs)
+                if attempts is None:
+                    repo_summary["prs_failed"] += 1
                 else:
-                    repo_summary["prs_skipped"] += 1
+                    repo_summary["prs_stored"] += 1
+                    repo_summary["attempts_stored"] += attempts
+                    stored += 1
 
                 if self.rate_limit_remaining is not None and self.rate_limit_remaining < MIN_RATE_LIMIT_REMAINING:
                     summary["stopped_early"] = (
@@ -486,23 +660,34 @@ class CIObservePRs:
                         f"{self.rate_limit_remaining} is below {MIN_RATE_LIMIT_REMAINING}. Re-run to resume."
                     )
                     logger.warning(summary["stopped_early"])
-                    break
+                    stopped = True
                 if limit is not None and summary["prs_stored"] + repo_summary["prs_stored"] >= limit:
                     summary["stopped_early"] = f"stopped after --limit {limit} pull request(s)."
+                    stopped = True
+                if stopped:
                     break
-            self._prune(repo, cutoff_iso)
+            if resolved_mode == "full":
+                self._prune(repo, cutoff_iso)
             summary["repos"].append(repo_summary)
             summary["prs_stored"] += repo_summary["prs_stored"]
             summary["prs_skipped"] += repo_summary["prs_skipped"]
             summary["prs_failed"] += repo_summary["prs_failed"]
             summary["attempts_stored"] += repo_summary["attempts_stored"]
-            if summary["stopped_early"]:
+            if stopped:
                 break
 
         summary["api_calls"] = self.api_calls
         summary["rate_limit_remaining"] = self.rate_limit_remaining
+        # ok says the pass stored everything it listed. Coverage advances as
+        # soon as the listing window was read completely, so a pass that
+        # stopped early still moves it; the pull requests it missed are then
+        # "missing" with that stopped_early reason, which is the truth.
+        summary["ok"] = summary["listing_complete"] and not summary["stopped_early"] and summary["prs_failed"] == 0
+        self._record_run(summary, now)
+        self._prune_runs(now - timedelta(days=days))
         logger.info(
-            "Pull-request backfill: %d stored, %d already present, %d attempts, %d API calls",
+            "Pull-request backfill (%s): %d stored, %d already present, %d attempts, %d API calls",
+            resolved_mode,
             summary["prs_stored"],
             summary["prs_skipped"],
             summary["attempts_stored"],
@@ -510,24 +695,123 @@ class CIObservePRs:
         )
         return summary
 
-    def _fetch_closed_prs(self, repo, cutoff):
-        """Closed PRs whose last activity is inside the window. Sorted by
-        updated, so pagination stops as soon as a whole page is older."""
-        url = f"{API_URL}/repos/{ORG}/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page={PAGE_SIZE}"
+    # -- pass planning and history ------------------------------------------
+
+    def _plan(self, days, now, mode):
+        """The mode this pass really runs and the updated_at floor it lists.
+        A pass that cannot see a completed window falls back to a full pass,
+        because there is nothing to be incremental from."""
+        full_since = now - timedelta(days=days)
+        if mode == "full" or (mode == "auto" and self._full_pass_due(now)):
+            return "full", full_since
+        coverage = parse_iso(self._coverage_until())
+        if coverage is None:
+            return "full", full_since
+        return "incremental", max(coverage - INCREMENTAL_OVERLAP, full_since)
+
+    def _full_pass_due(self, now):
+        """True when no completed full pass ran in the last day. A full pass
+        that stopped early does not count: its window was not covered."""
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM pr_backfill_runs WHERE mode = 'full' AND listing_complete = 1 AND ran_at >= ? LIMIT 1",
+                (_iso(now - FULL_PASS_INTERVAL),),
+            ).fetchone()
+        return row is None
+
+    def _last_run(self):
+        """The most recent pass, completed or not. A prs.db written before
+        pr_backfill_runs existed reads as "never", not as an error."""
+        try:
+            with self._db() as conn:
+                row = conn.execute("SELECT * FROM pr_backfill_runs ORDER BY ran_at DESC, id DESC LIMIT 1").fetchone()
+        except sqlite3.Error:
+            return None
+        return dict(row) if row is not None else None
+
+    def _coverage_until(self):
+        """The end of the last pass that finished its listing window. It is
+        not the same as ok: a pass can read every page and still stop before
+        it stores every pull request."""
+        try:
+            with self._db() as conn:
+                row = conn.execute(
+                    "SELECT window_to FROM pr_backfill_runs WHERE listing_complete = 1 "
+                    "ORDER BY ran_at DESC, id DESC LIMIT 1"
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        return row["window_to"] if row is not None else None
+
+    def _record_run(self, summary, now):
+        """One row per pass. coverage_until reads this table, so a pass that
+        stopped early must not be written as ok."""
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO pr_backfill_runs "
+                "(ran_at, mode, window_from, window_to, stored, skipped, failed, api_calls, "
+                "rate_limit_remaining, stopped_early, listing_complete, ok) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _iso(now),
+                    summary["mode"],
+                    summary["window_from"],
+                    summary["window_to"],
+                    summary["prs_stored"],
+                    summary["prs_skipped"],
+                    summary["prs_failed"],
+                    summary["api_calls"],
+                    summary["rate_limit_remaining"],
+                    summary["stopped_early"],
+                    1 if summary["listing_complete"] else 0,
+                    1 if summary["ok"] else 0,
+                ),
+            )
+
+    def _prune_runs(self, cutoff):
+        """Bound the pass history; it is diagnostic, not a second dataset."""
+        cutoff_iso = _iso(cutoff)
+        with self._db() as conn:
+            conn.execute("DELETE FROM pr_backfill_runs WHERE ran_at < ?", (cutoff_iso,))
+            conn.execute(
+                "DELETE FROM pr_backfill_runs WHERE id NOT IN "
+                "(SELECT id FROM pr_backfill_runs ORDER BY ran_at DESC, id DESC LIMIT ?)",
+                (BACKFILL_RUNS_KEEP,),
+            )
+
+    def _merge_group_from(self, pending, cutoff):
+        """The queue history of a new pull request starts at its creation,
+        not at the two-hour overlap: a queue entry can predate the merge by
+        days. Floored at the retention cutoff."""
+        starts = [parse_iso(pr.get("created_at")) for pr in pending]
+        starts = [start for start in starts if start is not None]
+        return max(cutoff, min(starts)) if starts else cutoff
+
+    # -- listing ------------------------------------------------------------
+
+    def _fetch_closed_prs(self, repo, cutoff, since):
+        """Closed PRs whose last activity is inside the retention window and
+        whose updated_at is at or after `since`. Sorted by updated, so
+        pagination stops as soon as a whole page is older. None means the
+        listing failed; the caller must not treat that as an empty window."""
+        url = (
+            f"{API_URL}/repos/{ORG}/{repo}/pulls?state=closed&sort=updated&direction=desc"
+            f"&per_page={PAGE_SIZE}&since={_iso(since)}"
+        )
         prs = []
         while url:
             page, url = self._get_page(url)
             if page is None:
-                break
+                return None
             for pr in page:
                 ended = pr.get("merged_at") or pr.get("closed_at")
                 if ended and parse_iso(ended) and parse_iso(ended) >= cutoff:
                     prs.append(pr)
-            if page and all((parse_iso(pr.get("updated_at")) or cutoff) < cutoff for pr in page):
+            if page and all((parse_iso(pr.get("updated_at")) or since) < since for pr in page):
                 break
         return prs
 
-    def _fetch_merge_group_runs(self, repo, cutoff_iso, until=None) -> list[dict] | None:
+    def _fetch_merge_group_runs(self, repo, cutoff_dt, until=None) -> list[dict] | None:
         """Every merge_group run created in the window, once per repo.
 
         The runs list stops near 1000 results, so a window with more runs is
@@ -539,14 +823,13 @@ class CIObservePRs:
         pull request unstored instead of writing "no queue history" over a
         transient error.
         """
-        cutoff = parse_iso(cutoff_iso)
-        if cutoff is None:
+        if cutoff_dt is None:
             return None
-        return self._fetch_merge_group_range(repo, cutoff, until or datetime.now(UTC))
+        return self._fetch_merge_group_range(repo, cutoff_dt, until or datetime.now(UTC))
 
     def _fetch_merge_group_range(self, repo, since_dt, until_dt) -> list[dict] | None:
-        since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        until_iso = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        since_iso = _iso(since_dt)
+        until_iso = _iso(until_dt)
         url = (
             f"{API_URL}/repos/{ORG}/{repo}/actions/runs?event=merge_group"
             f"&created={since_iso}..{until_iso}&per_page={PAGE_SIZE}"
@@ -873,14 +1156,18 @@ class CIObservePRs:
 
     # -- read side ----------------------------------------------------------
 
-    def get_json(self, params):
+    def get_json(self, params, now=None):
         """The /api/ci-observe/prs document.
 
         ?number=<n>[&repo=<name>]  one pull request: its row, its stages and
                                    its queue attempts
         ?days=<n>                  the index: recent pull requests and the
                                    stage funnel (median and p95 per stage)
+
+        `now` pins "how fresh is this" for a test; the endpoint leaves it
+        at the request time.
         """
+        now = now or datetime.now(UTC)
         days = _param(params, "days")
         try:
             days = int(days) if days else DEFAULT_INDEX_DAYS
@@ -893,19 +1180,37 @@ class CIObservePRs:
             try:
                 number = int(number)
             except ValueError:
-                return self._empty_number_document(number, days, note=f"{number!r} is not a pull request number.")
+                return self._empty_number_document(
+                    number,
+                    days,
+                    now,
+                    note=f"{number!r} is not a pull request number.",
+                    reason=f"{number!r} is not a number, so no pull request state applies.",
+                    freshness=self._freshness(now) if os.path.exists(self.db_file) else None,
+                )
             if not os.path.exists(self.db_file):
-                return self._empty_number_document(number, days)
-            return self.pr_document(number, _param(params, "repo"), days)
+                return self._empty_number_document(number, days, now)
+            return self.pr_document(number, _param(params, "repo"), days, now)
         if not os.path.exists(self.db_file):
-            return self._empty_index_document(days)
-        return self.index_document(days)
+            return self._empty_index_document(days, now)
+        return self.index_document(days, now)
 
     # The endpoint is read-only: it never creates prs.db. A missing file is
     # the state before the backfill has run, and it says so instead of
     # looking like a repository with no pull requests.
 
-    def _empty_number_document(self, number, days, note=None):
+    def _empty_number_document(self, number, days, now, note=None, reason=None, freshness=None):
+        freshness = freshness or self._never_freshness(now)
+        notes = [note] if note else []
+        if reason is None:
+            state = "not_yet_fetched"
+            reason = (
+                f"#{number} cannot be resolved: prs.db does not exist yet, so the backfill has not run "
+                "and there is no live answer to fall back on."
+            )
+        else:
+            state = "missing"
+        notes.append(reason)
         return {
             "mode": "pr",
             "generated_at": _utc_now(),
@@ -913,26 +1218,188 @@ class CIObservePRs:
             "pr": None,
             "stages": [],
             "attempts": [],
-            "notes": [note] if note else [],
+            "pr_state": state,
+            "pr_state_message": reason,
+            "source": "none",
+            "states": _states_document(),
+            "notes": notes,
             "derivation": DERIVATION,
+            **self._freshness_fields(now, freshness),
         }
 
-    def _empty_index_document(self, days):
+    def _empty_index_document(self, days, now):
+        freshness = self._never_freshness(now)
         return {
             "mode": "index",
             "generated_at": _utc_now(),
             "days": days,
             "prs": [],
             "funnel": _funnel([]),
+            # The detail panels query this same endpoint with an empty
+            # number. Present keys let them render "enter a number" instead
+            # of a root-not-found error.
+            "pr": None,
+            "stages": [],
+            "attempts": [],
             "notes": [
                 "prs.db has not been backfilled yet: run monitoring/scripts/ci_observe_prs.py "
                 "--days 60. This is an empty dataset, not a repository with no pull requests."
             ],
+            "states": _states_document(),
             "derivation": DERIVATION,
+            **self._freshness_fields(now, freshness),
         }
 
-    def pr_document(self, number, repo, days):
-        now = datetime.now(UTC)
+    # -- freshness ----------------------------------------------------------
+
+    def _never_freshness(self, now):
+        """The freshness of a page whose backfill has never run. It reads no
+        database on purpose: the read path must not create prs.db."""
+        next_run = _iso(_next_run_at(now))
+        return {
+            "state": "never",
+            "age_seconds": None,
+            "last_fetched_at": None,
+            "coverage_until": None,
+            "coverage_age_seconds": None,
+            "next_run_at": next_run,
+            "last_run_mode": "",
+            "stored": 0,
+            "skipped": 0,
+            "failed": 0,
+            "api_calls": 0,
+            "rate_limit_remaining": None,
+            "stopped_early": "",
+            "ok": False,
+            "message": (
+                "The pull-request backfill has not run yet, so there is no data to show. "
+                f"The hourly timer starts the first pass by {next_run}."
+            ),
+        }
+
+    def _freshness(self, now):
+        """What the data covers, when it last moved, and when it moves next.
+
+        A page is fresh for two hourly slots. Data through comes from the
+        last pass that finished its window; the last run time is reported
+        separately because a pass that stopped early still ran."""
+        last = self._last_run()
+        if last is None:
+            return self._never_freshness(now)
+        coverage = self._coverage_until()
+        next_run = _iso(_next_run_at(now))
+        age = seconds_between(last["ran_at"], _iso(now))
+        state = "fresh" if age is not None and age <= FRESHNESS_STALE_AFTER_SECONDS else "stale"
+        coverage_age = seconds_between(coverage, _iso(now)) if coverage else None
+        through = f"{coverage} ({_minutes_ago(coverage_age)})" if coverage else "never"
+        message = (
+            f"Data through {through}; refreshed hourly; a pull request merged now appears by {next_run}. "
+            f"The backfill last ran at {last['ran_at']} ({_minutes_ago(age)})."
+        )
+        if last["stopped_early"]:
+            message += f" The last run stopped early: {last['stopped_early']}"
+        return {
+            "state": state,
+            "age_seconds": age,
+            "last_fetched_at": last["ran_at"],
+            "coverage_until": coverage,
+            "coverage_age_seconds": coverage_age,
+            "next_run_at": next_run,
+            "last_run_mode": last["mode"],
+            "stored": last["stored"],
+            "skipped": last["skipped"],
+            "failed": last["failed"],
+            "api_calls": last["api_calls"],
+            "rate_limit_remaining": last["rate_limit_remaining"],
+            "stopped_early": last["stopped_early"],
+            "ok": bool(last["ok"]),
+            "message": message,
+        }
+
+    def _freshness_fields(self, now, freshness=None):
+        freshness = freshness or self._freshness(now)
+        return {
+            "last_fetched_at": freshness["last_fetched_at"],
+            "coverage_until": freshness["coverage_until"],
+            "next_run_at": freshness["next_run_at"],
+            "freshness": freshness,
+        }
+
+    def _run_covering(self, ended):
+        """The first completed pass whose window reached `ended`. Its
+        counters explain a missing row."""
+        if not ended:
+            return None
+        try:
+            with self._db() as conn:
+                row = conn.execute(
+                    "SELECT * FROM pr_backfill_runs WHERE listing_complete = 1 AND window_to >= ? "
+                    "ORDER BY window_to ASC, id ASC LIMIT 1",
+                    (ended,),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        return dict(row) if row is not None else None
+
+    # -- live resolve -------------------------------------------------------
+
+    def _live_pr(self, repo, number):
+        """One read-only GitHub lookup for a pull request that is not
+        stored. Returns (pr object or None, why it failed). It never writes
+        prs.db and never spends a backfill's rate-limit bookkeeping."""
+        if self.api is None:
+            return None, "no GitHub access is configured"
+        key = (repo, number)
+        cached = _LIVE_PR_CACHE.get(key)
+        if cached is not None and time.monotonic() - cached[0] < LIVE_CACHE_TTL_SECONDS:
+            return cached[1], cached[2]
+        url = f"{API_URL}/repos/{ORG}/{repo}/pulls/{number}"
+        try:
+            resp = self.api._get(url)
+        except requests.RequestException as exc:
+            return None, f"the live lookup failed: {exc}"
+        if resp.status_code == 404:
+            result = (None, f"GitHub has no pull request #{number} in {repo}")
+        elif not resp.ok:
+            return None, f"the live lookup returned HTTP {resp.status_code}"
+        else:
+            result = (resp.json(), "")
+        _LIVE_PR_CACHE[key] = (time.monotonic(), result[0], result[1])
+        if len(_LIVE_PR_CACHE) > 256:
+            expired = [
+                cached_key
+                for cached_key, (cached_at, _, _) in _LIVE_PR_CACHE.items()
+                if time.monotonic() - cached_at >= LIVE_CACHE_TTL_SECONDS
+            ]
+            for cached_key in expired:
+                _LIVE_PR_CACHE.pop(cached_key, None)
+        return result
+
+    def _live_record(self, repo, number, live):
+        """The identity a live lookup can supply. It is a PR object with the
+        stored fields that GitHub knows, so the detail panel renders it; the
+        stages and attempts stay empty because the backfill has no row."""
+        labels = {label.get("name") for label in live.get("labels") or [] if isinstance(label, dict)}
+        labels.discard(None)
+        return {
+            "repo": repo,
+            "number": number,
+            "title": live.get("title") or "",
+            "author": (live.get("user") or {}).get("login") or "",
+            "url": live.get("html_url") or pr_url(repo, number),
+            "state": live.get("state") or "",
+            "labels": ",".join(sorted(labels)),
+            "opened_at": live.get("created_at"),
+            "merged_at": live.get("merged_at"),
+            "closed_at": live.get("closed_at"),
+            "fetched_at": "",
+            "source": "live",
+        }
+
+    # -- detail -------------------------------------------------------------
+
+    def pr_document(self, number, repo, days, now=None):
+        now = now or datetime.now(UTC)
         with self._db() as conn:
             if repo:
                 row = conn.execute("SELECT * FROM pr_events WHERE number = ? AND repo = ?", (number, repo)).fetchone()
@@ -953,6 +1420,7 @@ class CIObservePRs:
                     )
                 ]
 
+        freshness = self._freshness(now)
         notes = []
         if row is None:
             notes.append(
@@ -964,14 +1432,28 @@ class CIObservePRs:
                 f"#{number} exists in {matches} repositories; showing {row['repo']}. Add &repo= to choose another."
             )
 
-        pr = dict(row) if row is not None else None
-        if pr is not None:
+        source = "store" if row is not None else "none"
+        pr_state = "stored" if row is not None else ""
+        pr_state_message = ""
+        if row is None:
+            if repo:
+                live, live_error = self._live_pr(repo, number)
+            else:
+                live, live_error = None, "no repository was given, so there was no live lookup"
+            if live is not None:
+                source = "live"
+            pr_state, pr_state_message = self._miss_state(number, live, live_error, freshness, now)
+            notes.append(pr_state_message)
+
+        pr = dict(row) if row is not None else (self._live_record(repo, number, live) if live is not None else None)
+        if pr is not None and row is not None:
             pr["url"] = pr.get("url") or pr_url(pr["repo"], pr["number"])
             pr["age_seconds"] = pr.get("total_seconds")
             if pr["age_seconds"] is None:
-                pr["age_seconds"] = seconds_between(pr["opened_at"], now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+                pr["age_seconds"] = seconds_between(pr["opened_at"], _iso(now))
             pr["queue_attempt_count"] = len(attempts)
             pr["queue_history"] = "present" if attempts else "none"
+            pr_state_message = f"Stored from the backfill; fetched at {pr['fetched_at']}."
             if not attempts:
                 notes.append(
                     "No merge_group attempt is stored for this pull request. That is 'no queue history', "
@@ -985,15 +1467,70 @@ class CIObservePRs:
             "generated_at": _utc_now(),
             "days": days,
             "pr": pr,
-            "stages": _stages(pr),
+            "stages": _stages(pr) if row is not None else [],
             "attempts": [_attempt_out(row) for row in attempts],
+            "pr_state": pr_state,
+            "pr_state_message": pr_state_message,
+            "source": source,
+            "states": _states_document(),
             "notes": notes,
             "derivation": DERIVATION,
+            **self._freshness_fields(now),
         }
 
-    def index_document(self, days):
-        now = datetime.now(UTC)
-        cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    def _miss_state(self, number, live, live_error, freshness, now):
+        """Why a pull request has no stored row. Exactly one of the four
+        states applies; the order matters because an open pull request has
+        no merge time to compare against coverage."""
+        if live is not None and live.get("state") == "open" and not live.get("merged_at"):
+            return "open", (
+                f"Pull request #{number} is open. The backfill stores merged and closed pull requests only, "
+                f"so it appears here after it merges or closes. The next hourly run is by "
+                f"{freshness['next_run_at']}."
+            )
+        ended = (live or {}).get("merged_at") or (live or {}).get("closed_at")
+        ended_dt = parse_iso(ended)
+        if ended_dt is not None:
+            if ended_dt < now - timedelta(days=PRS_HISTORY_DAYS):
+                return "outside_window", (
+                    f"#{number} ended at {ended}, before the {PRS_HISTORY_DAYS}-day retention. "
+                    "The backfill does not keep pull requests that old."
+                )
+            coverage = parse_iso(freshness["coverage_until"])
+            if coverage is None or ended_dt > coverage:
+                return "not_yet_fetched", (
+                    f"#{number} ended at {ended}, after the last completed backfill window "
+                    f"(data through {freshness['coverage_until'] or 'never'}). "
+                    f"The next hourly run stores it by {freshness['next_run_at']}."
+                )
+            return "missing", self._missing_message(number, ended, freshness)
+        through = freshness["coverage_until"] or "never"
+        return "missing", (
+            f"The backfill covered its window through {through} and has no row for #{number}. "
+            f"The live GitHub lookup gave no answer ({live_error or 'unknown reason'}). "
+            f"The next hourly run is by {freshness['next_run_at']}."
+        )
+
+    def _missing_message(self, number, ended, freshness):
+        """Name the pass that should have stored the row and why it did not.
+        stopped_early is the rate-limit or listing failure the pass recorded;
+        a failed count covers a pull request whose pages did not come back."""
+        covering = self._run_covering(ended)
+        if covering is not None and covering["stopped_early"]:
+            return f"The backfill covered {ended} but that pass stopped early: {covering['stopped_early']}"
+        if covering is not None and covering["failed"]:
+            return (
+                f"The backfill covered {ended} but {covering['failed']} pull request(s) failed to fetch in "
+                f"that pass, and #{number} has no row. The daily full pass retries it."
+            )
+        return (
+            f"The backfill completed the pass that covers {ended} but has no row for #{number}. "
+            f"The daily full pass retries it; the next hourly run is by {freshness['next_run_at']}."
+        )
+
+    def index_document(self, days, now=None):
+        now = now or datetime.now(UTC)
+        cutoff = _iso(now - timedelta(days=days))
         with self._db() as conn:
             rows = [
                 dict(r)
@@ -1014,20 +1551,37 @@ class CIObservePRs:
             row["url"] = row.get("url") or pr_url(row["repo"], row["number"])
             row["age_seconds"] = row.get("total_seconds")
             if row["age_seconds"] is None:
-                row["age_seconds"] = seconds_between(row["opened_at"], _utc_now())
+                row["age_seconds"] = seconds_between(row["opened_at"], _iso(now))
             row["queue_attempt_count"] = len(row_attempts)
             row["ejected_attempt_count"] = sum(1 for a in row_attempts if a["ejected"])
             row["age_display"] = human_duration(row["age_seconds"])
             prs.append(row)
 
+        fields = self._freshness_fields(now)
+        freshness = fields["freshness"]
+        notes = []
+        if not rows:
+            notes.append("The index is empty for this window: run the backfill.")
+        if freshness["state"] == "never":
+            notes.append(freshness["message"])
+        elif freshness["state"] == "stale":
+            notes.append(
+                f"The backfill is stale: {freshness['message']} Rows older than the last completed window "
+                "may be missing."
+            )
         return {
             "mode": "index",
             "generated_at": _utc_now(),
             "days": days,
             "prs": prs,
             "funnel": funnel,
-            "notes": [] if rows else ["The index is empty for this window: run the backfill."],
+            "pr": None,
+            "stages": [],
+            "attempts": [],
+            "states": _states_document(),
+            "notes": notes,
             "derivation": DERIVATION,
+            **fields,
         }
 
 
@@ -1155,11 +1709,17 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=None, help="stop after this many pull requests")
     parser.add_argument("--force", action="store_true", help="refetch pull requests already stored")
     parser.add_argument("--db", default=PRS_DB_FILE, help=f"SQLite file (default {PRS_DB_FILE})")
+    parser.add_argument(
+        "--mode",
+        choices=("auto", "full", "incremental"),
+        default="auto",
+        help="auto runs a full pass once a day and incremental passes the rest of the hours",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
     service = CIObservePRs(db_file=args.db, api=StandaloneAPI(), repos=args.repo)
-    summary = service.backfill(days=args.days, force=args.force, limit=args.limit)
+    summary = service.backfill(days=args.days, force=args.force, limit=args.limit, mode=args.mode)
     print(json.dumps(summary, indent=2))
     return 0
 

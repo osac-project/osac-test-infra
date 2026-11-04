@@ -35,9 +35,283 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "This page follows one pull request from open to merge or close. The unit is one pull request; the axis is calendar time from `opened_at` to `merged_at` or `closed_at`.\n\n**Recent pull requests** lists merged and closed pull requests in the selected window, with the last stage each one reached and its age at that point. Click a number to load its detail below, or the GitHub link to open the pull request itself.\n\n**Stage funnel** gives the median and p95 duration of each stage over the same population: authoring (opened to first human review), review (first review to first human approval), waiting (approval to queue entry), queue (queue entry to merge or ejection) and merged (last attempt to merge).\n\n**Pull request detail** and **Queue attempts** read the number in the variable at the top.\n\n> Enqueued is the start of the pull request's first merge_group run. GitHub exposes no durable enqueue timestamp, so the run start is the only reproducible choice.\n\n> Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.\n\n> Queue runs carry no pull request number and no ci-observe capture today, so an attempt links to its GitHub run, not to a capture. A merge group can carry up to four pull requests while its gh-readonly-queue branch names one; the other pull requests are found through queue comments that link the run.\n\nOnly merged and closed pull requests are backfilled. An open pull request appears here after it merges or closes. A pull request with no stored merge_group run shows `no queue history`, never `no ejections`."
+        "content": "This page follows one pull request from open to merge or close. The unit is one pull request; the axis is calendar time from `opened_at` to `merged_at` or `closed_at`.\n\n**Recent pull requests** lists merged and closed pull requests in the selected window, with the last stage each one reached and its age at that point. Click a number to load its detail below, or the GitHub link to open the pull request itself.\n\n**Stage funnel** gives the median and p95 duration of each stage over the same population: authoring (opened to first human review), review (first review to first human approval), waiting (approval to queue entry), queue (queue entry to merge or ejection) and merged (last attempt to merge).\n\n**Pull request detail** and **Queue attempts** read the number in the variable at the top.\n\n> Enqueued is the start of the pull request's first merge_group run. GitHub exposes no durable enqueue timestamp, so the run start is the only reproducible choice.\n\n> Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.\n\n> Queue runs carry no pull request number and no ci-observe capture today, so an attempt links to its GitHub run, not to a capture. A merge group can carry up to four pull requests while its gh-readonly-queue branch names one; the other pull requests are found through queue comments that link the run.\n\nThe backfill runs every hour. **Data freshness** says what the data covers and when the next pass starts, so a pull request that is not here yet is either not merged, not fetched, or missing for a named reason. Only merged and closed pull requests are backfilled. An open pull request appears here after it merges or closes; until then the detail panel says `open`. A pull request with no stored merge_group run shows `no queue history`, never `no ejections`."
       },
       "id": 1
+    },
+    {
+      "title": "Data freshness",
+      "description": "When the pull-request backfill last ran, how far its data reaches and when it runs next. A pull request merged now is stored by the next hourly pass. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 12
+    },
+    {
+      "title": "Data freshness",
+      "description": "The last hourly pass and what it covered. `last_fetched_at` is when the backfill last ran, `coverage_until` is the end of the last pass that finished its window, and `message` states both in words. A stale state means the backfill has not run for more than two hours. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
+      "type": "table",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "The backfill has not run yet"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "State"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "noValue",
+                "value": "unknown"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_fetched_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last fetch"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "coverage_until"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Data through"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "next_run_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Next run"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stored"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Stored"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "skipped"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Skipped"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "api_calls"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "API calls"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stopped_early"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Stopped early"
+              },
+              {
+                "id": "custom.width",
+                "value": 260
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "What this means"
+              },
+              {
+                "id": "custom.width",
+                "value": 520
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.freshness",
+          "columns": [
+            {
+              "selector": "state",
+              "text": "State",
+              "type": "string"
+            },
+            {
+              "selector": "last_fetched_at",
+              "text": "Last fetch",
+              "type": "string"
+            },
+            {
+              "selector": "coverage_until",
+              "text": "Data through",
+              "type": "string"
+            },
+            {
+              "selector": "next_run_at",
+              "text": "Next run",
+              "type": "string"
+            },
+            {
+              "selector": "stored",
+              "text": "Stored",
+              "type": "number"
+            },
+            {
+              "selector": "skipped",
+              "text": "Skipped",
+              "type": "number"
+            },
+            {
+              "selector": "failed",
+              "text": "Failed",
+              "type": "number"
+            },
+            {
+              "selector": "api_calls",
+              "text": "API calls",
+              "type": "number"
+            },
+            {
+              "selector": "stopped_early",
+              "text": "Stopped early",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "What this means",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "id": 13
     },
     {
       "title": "Recent pull requests",
@@ -47,7 +321,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 15
       },
       "collapsed": false,
       "panels": [],
@@ -61,7 +335,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 16
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -420,7 +694,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 26
       },
       "collapsed": false,
       "panels": [],
@@ -434,7 +708,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 27
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -572,7 +846,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 36
       },
       "collapsed": false,
       "panels": [],
@@ -580,13 +854,13 @@
     },
     {
       "title": "Pull request",
-      "description": "One pull request: the boundary timestamps of every stage and the total open-to-end duration. A blank boundary means the stage was not reached. Enqueued is the start of the pull request's first merge_group run. GitHub exposes no durable enqueue timestamp, so the run start is the only reproducible choice. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
+      "description": "One pull request: the boundary timestamps of every stage and the total open-to-end duration. A blank boundary means the stage was not reached. Empty when the number is not stored; the Pull request states panel below names why, and a row resolved live is marked `source: live`. Enqueued is the start of the pull request's first merge_group run, so the run start is the only reproducible choice. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
       "type": "table",
       "gridPos": {
         "h": 9,
         "w": 13,
         "x": 0,
-        "y": 30
+        "y": 37
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -985,7 +1259,7 @@
         "h": 9,
         "w": 11,
         "x": 13,
-        "y": 30
+        "y": 37
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1183,6 +1457,115 @@
       "id": 8
     },
     {
+      "title": "Pull request states",
+      "description": "What a detail request means when no row is stored. `open` is still open and stored after it merges or closes; `not_yet_fetched` ended after the last completed window and is stored next hour; `missing` is inside a covered window with no row, and the message says whether that pass stopped early; `outside_window` ended before the retention. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
+      "type": "table",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No state to show"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "State"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Meaning"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "What it says"
+              },
+              {
+                "id": "custom.width",
+                "value": 900
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.states",
+          "columns": [
+            {
+              "selector": "state",
+              "text": "State",
+              "type": "string"
+            },
+            {
+              "selector": "label",
+              "text": "Meaning",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "What it says",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "id": 14
+    },
+    {
       "title": "Queue attempts",
       "description": "Every merge_group attempt of the selected pull request, with its run, conclusion and derived ejection reason. Enqueued is the start of the pull request's first merge_group run. GitHub exposes no durable enqueue timestamp, so the run start is the only reproducible choice. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
       "type": "row",
@@ -1190,7 +1573,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 53
       },
       "collapsed": false,
       "panels": [],
@@ -1204,7 +1587,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 54
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1640,7 +2023,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 64
       },
       "fieldConfig": {
         "defaults": {},
@@ -1648,7 +2031,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**No backfill data** or **Enter a pull request number above** means the panel has no rows, not a passing result.\n\n- The index and funnel are empty before `ci_observe_prs.py` has run, or when the selected window has no merged or closed pull requests.\n- The detail and queue panels are empty until a PR number is typed in the variable at the top.\n- A pull request that never entered the merge queue shows `no queue history`, which is not the same as `no ejections`.\n\nQueue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history."
+        "content": "**No backfill data** or **Enter a pull request number above** means the panel has no rows, not a passing result.\n\n- **Data freshness** is never empty: it says when the backfill last ran and what its data covers. `never` means it has not run yet and `stale` means more than two hours have passed.\n- The index and funnel are empty before `ci_observe_prs.py` has run, or when the selected window has no merged or closed pull requests.\n- The detail and queue panels are empty until a PR number is typed in the variable at the top.\n- A pull request with no stored row is one of four states, never a blank panel: `open` (still open, stored after it merges), `not_yet_fetched` (merged after the last completed window, stored next hour), `missing` (inside a covered window with no row, with the stopped-early reason) or `outside_window` (ended before the retention).\n- A pull request that never entered the merge queue shows `no queue history`, which is not the same as `no ejections`.\n\nQueue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history."
       },
       "id": 11
     }

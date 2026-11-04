@@ -58,7 +58,36 @@ INDEX_DOCUMENT = {
         {"stage": "merged", "label": "Merged", "samples": 2, "median_seconds": 330, "p95_seconds": 573},
     ],
     "notes": [],
+    "states": [
+        {"state": "open", "label": "Still open", "message": "The pull request is open."},
+        {"state": "not_yet_fetched", "label": "Merged after the last fetch", "message": "It appears next hour."},
+        {"state": "missing", "label": "Covered window, no row", "message": "The pass stopped early."},
+        {"state": "outside_window", "label": "Outside the retention window", "message": "It is older than 60 days."},
+    ],
     "derivation": {"enqueued": ENQUEUED, "ejections": "Queue ejections are derived, not recorded by GitHub."},
+    "last_fetched_at": "2026-11-01T00:00:00Z",
+    "coverage_until": "2026-11-01T00:00:00Z",
+    "next_run_at": "2026-11-01T01:05:00Z",
+    "freshness": {
+        "state": "fresh",
+        "age_seconds": 300,
+        "last_fetched_at": "2026-11-01T00:00:00Z",
+        "coverage_until": "2026-11-01T00:00:00Z",
+        "coverage_age_seconds": 300,
+        "next_run_at": "2026-11-01T01:05:00Z",
+        "last_run_mode": "incremental",
+        "stored": 1,
+        "skipped": 3,
+        "failed": 0,
+        "api_calls": 6,
+        "rate_limit_remaining": 4994,
+        "stopped_early": "",
+        "ok": True,
+        "message": (
+            "Data through 2026-11-01T00:00:00Z (5 min ago); refreshed hourly; a pull request merged now "
+            "appears by 2026-11-01T01:05:00Z. The backfill last ran at 2026-11-01T00:00:00Z (5 min ago)."
+        ),
+    },
 }
 
 PR_DOCUMENT = {
@@ -124,6 +153,19 @@ PR_DOCUMENT = {
     ],
     "notes": ["Queue ejections are derived, not recorded by GitHub."],
     "derivation": {"enqueued": ENQUEUED},
+    "pr_state": "not_yet_fetched",
+    "pr_state_message": "Merged after the last completed window; the next hourly run stores it.",
+    "source": "live",
+    "states": [
+        {"state": "open", "label": "Still open", "message": "The pull request is open."},
+        {"state": "not_yet_fetched", "label": "Merged after the last fetch", "message": "It appears next hour."},
+        {"state": "missing", "label": "Covered window, no row", "message": "The pass stopped early."},
+        {"state": "outside_window", "label": "Outside the retention window", "message": "It is older than 60 days."},
+    ],
+    "last_fetched_at": "2026-11-01T00:00:00Z",
+    "coverage_until": "2026-11-01T00:00:00Z",
+    "next_run_at": "2026-11-01T01:05:00Z",
+    "freshness": INDEX_DOCUMENT["freshness"],
 }
 
 GRAFANA_BUILTIN_VARIABLE = re.compile(r"^__")
@@ -174,7 +216,7 @@ def test_variables(dashboard: dict) -> None:
 
 def test_sections_in_reading_order(dashboard: dict) -> None:
     rows = [p["title"] for p in dashboard["panels"] if p["type"] == "row"]
-    assert rows == ["Recent pull requests", "Stage funnel", "Pull request detail", "Queue attempts"]
+    assert rows == ["Data freshness", "Recent pull requests", "Stage funnel", "Pull request detail", "Queue attempts"]
     positions = [(p["gridPos"]["y"], p["gridPos"]["x"]) for p in dashboard["panels"]]
     assert positions == sorted(positions)
 
@@ -188,6 +230,58 @@ def test_reading_guide_comes_first(dashboard: dict) -> None:
     assert ENQUEUED in content
     assert DERIVED in content
     assert "no queue history" in content
+
+
+def test_freshness_panel_binds_to_last_fetched_at(dashboard: dict) -> None:
+    """The panel shows the same field the sentence is built from, so a reader
+    can check "last ran" against the timestamp next to it."""
+    panel = _panels_by_title(dashboard)["Data freshness"]
+    assert panel["type"] == "table"
+    target = panel["targets"][0]
+    assert target["root_selector"] == "$.freshness"
+    selectors = [column["selector"] for column in target["columns"]]
+
+    for required in ("state", "last_fetched_at", "coverage_until", "next_run_at", "message"):
+        assert required in selectors, f"Data freshness does not show {required}"
+
+    freshness = INDEX_DOCUMENT["freshness"]
+    assert freshness["last_fetched_at"] in freshness["message"]
+    assert "refreshed hourly" in freshness["message"]
+    assert freshness["next_run_at"] in freshness["message"]
+
+
+def test_the_four_state_messages_are_on_the_page(dashboard: dict) -> None:
+    """A missing row is never a blank panel: the page lists all four states
+    and what each one means."""
+    panel = _panels_by_title(dashboard)["Pull request states"]
+    selectors = [column["selector"] for column in panel["targets"][0]["columns"]]
+    assert selectors == ["state", "label", "message"]
+
+    states = PR_DOCUMENT["states"]
+    assert [state["state"] for state in states] == ["open", "not_yet_fetched", "missing", "outside_window"]
+    assert all(state["message"] for state in states)
+    for word in ("open", "not_yet_fetched", "missing", "outside_window"):
+        assert word in panel["description"]
+
+
+def test_state_panel_resolves_with_no_number_selected(dashboard: dict) -> None:
+    """With an empty PR number the endpoint returns the index document. The
+    states panel must still resolve there instead of a root-not-found error."""
+    target = _panels_by_title(dashboard)["Pull request states"]["targets"][0]
+    assert "number=" in target["url"]
+    states = INDEX_DOCUMENT["states"]
+    assert target["root_selector"] == "$.states"
+    assert [state["state"] for state in states] == ["open", "not_yet_fetched", "missing", "outside_window"]
+
+
+def test_no_empty_panel_without_an_explanation(dashboard: dict) -> None:
+    for panel in _iter_panels(dashboard["panels"]):
+        assert panel.get("description"), f"{panel['title']} has no description"
+        if panel["type"] == "text":
+            assert panel["options"]["content"], f"{panel['title']} has no content"
+        elif panel["type"] == "table":
+            no_value = panel["fieldConfig"]["defaults"].get("noValue")
+            assert no_value, f"{panel['title']} has nothing to say when it is empty"
 
 
 def test_every_panel_states_ejections_are_derived(dashboard: dict) -> None:

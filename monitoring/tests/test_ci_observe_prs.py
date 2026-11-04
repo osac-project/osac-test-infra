@@ -13,7 +13,14 @@ Covered here:
   place, and a failed GitHub page leaves the pull request unstored so the
   next run retries it;
 - the API cost: one pass per pull request, merge_group runs listed once per
-  repository;
+  repository, and no merge_group query in an hour with nothing new;
+- the hourly pass: auto mode is a full pass once a day and incremental
+  otherwise, a pull request merged between two runs appears on the next one,
+  the listing carries `since`, and stored rows are skipped;
+- freshness: never, fresh and stale, plus the pass history in
+  pr_backfill_runs;
+- the four miss states (open, not_yet_fetched, missing, outside_window),
+  including the read-only live lookup and its cache;
 - the endpoint: index + funnel, one pull request, missing DB, clamping,
   invalid input;
 - the dashboard contract: the real response resolves every selector the
@@ -35,7 +42,7 @@ from pathlib import Path
 
 import pytest
 import requests
-from helpers import FakeGitHub, FakeResponse
+from helpers import FakeGitHub, FakeResponse, iso
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ci_observe_prs"
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
@@ -44,7 +51,7 @@ DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-pull-requests.json"
 NOW = datetime(2026, 11, 1, tzinfo=UTC)
 DAYS = 60
 REPO = "osac"
-PULLS_PATH = f"/repos/osac-project/{REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100"
+RETENTION_START = NOW - timedelta(days=DAYS)
 REPOS_PATH = "/orgs/osac-project/repos?per_page=100&type=all"
 
 
@@ -55,15 +62,30 @@ def load_fixture(name):
     return json.loads((FIXTURES / f"{name}.json").read_text())
 
 
-def merge_runs_path(now=NOW, days=DAYS):
-    return runs_window_path(now - timedelta(days=days), now)
+def pulls_path(since):
+    """A closed-PR listing bounded by updated_at, the `since` the backfill
+    sends on every pass."""
+    return f"/repos/osac-project/{REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100&since={iso(since)}"
+
+
+PULLS_PATH = pulls_path(RETENTION_START)
+
+
+def oldest_pending():
+    """The earliest created_at among the three fixture pull requests. The
+    merge_group query starts there: a queue entry cannot predate its PR."""
+    return min(
+        datetime.fromisoformat(load_fixture(name)["pr"]["created_at"].replace("Z", "+00:00"))
+        for name in ("merged_pr", "ejected_pr", "closed_pr")
+    )
+
+
+def merge_runs_path(now=NOW):
+    return runs_window_path(oldest_pending(), now)
 
 
 def runs_window_path(since, until):
-    return (
-        f"/repos/osac-project/{REPO}/actions/runs?event=merge_group"
-        f"&created={since.strftime('%Y-%m-%dT%H:%M:%SZ')}..{until.strftime('%Y-%m-%dT%H:%M:%SZ')}&per_page=100"
-    )
+    return f"/repos/osac-project/{REPO}/actions/runs?event=merge_group&created={iso(since)}..{iso(until)}&per_page=100"
 
 
 class FakeAPI:
@@ -77,8 +99,8 @@ class FakeAPI:
         return self.github.get(url)
 
 
-def route_pr(github, fixture):
-    number = fixture["pr"]["number"]
+def route_pr(github, fixture, number=None):
+    number = number or fixture["pr"]["number"]
     github.add(
         f"/repos/osac-project/{REPO}/issues/{number}/timeline?per_page=100", FakeResponse(payload=fixture["timeline"])
     )
@@ -114,13 +136,26 @@ def github(wfe):
 
 @pytest.fixture
 def service(prs, github, tmp_path):
+    # The live lookup cache is module-level so the exporter's per-request
+    # CIObservePRs shares it. Start every test from a cold cache.
+    prs._LIVE_PR_CACHE.clear()
     return prs.CIObservePRs(db_file=str(tmp_path / "prs.db"), api=FakeAPI(github))
 
 
 def run_backfill(service, **kwargs):
+    # The parser tests describe one full pass; the hourly behaviour has its
+    # own section and asks for mode explicitly.
     kwargs.setdefault("days", DAYS)
     kwargs.setdefault("now", NOW)
+    kwargs.setdefault("mode", "full")
     return service.backfill(**kwargs)
+
+
+def pull(number, **overrides):
+    """A closed-PR listing entry based on the merged_pr fixture."""
+    pr = dict(load_fixture("merged_pr")["pr"])
+    pr.update({"number": number, **overrides})
+    return pr
 
 
 def rows(service, sql, params=()):
@@ -298,8 +333,9 @@ class TestBackfill:
         assert summary["prs_skipped"] == 3
         assert rows(service, "SELECT * FROM pr_events ORDER BY number") == before
         assert rows(service, "SELECT * FROM pr_queue_attempts ORDER BY run_id") == attempts_before
-        # Only the three shared listing calls: no per-PR fetch at all.
-        assert len(github.calls) - calls_before == 3
+        # Org repos plus the one closed-PR listing: no per-PR fetch and no
+        # merge_group query, because nothing new is going to be stored.
+        assert len(github.calls) - calls_before == 2
 
     def test_force_rewrites_in_place(self, service):
         run_backfill(service)
@@ -316,8 +352,13 @@ class TestBackfill:
         assert summary["prs_stored"] == 2
         assert summary["prs_failed"] == 1
         assert rows(service, "SELECT number FROM pr_events ORDER BY number") == [{"number": 101}, {"number": 103}]
-        # The next run retries only the missing pull request.
+        # The next run retries only the missing pull request. Its queue window
+        # starts at that pull request's creation, not at the oldest of three.
         github.add(broken, FakeResponse(payload=load_fixture("closed_pr")["reviews"]))
+        github.add(
+            runs_window_path(datetime(2026, 10, 2, 9, tzinfo=UTC), NOW),
+            FakeResponse(payload={"total_count": 7, "workflow_runs": load_fixture("merge_group_runs")["runs"]}),
+        )
         second = run_backfill(service)
         assert second["prs_stored"] == 1
         assert pr_row(service, 102)["state"] == "closed"
@@ -353,11 +394,13 @@ class TestBackfill:
 
     def test_merge_group_window_is_split_at_the_result_cap(self, service, github):
         """A busy window is split until each query fits, so runs past
-        GitHub's list cap are not silently dropped."""
-        cutoff = NOW - timedelta(days=DAYS)
-        middle = cutoff + (NOW - cutoff) / 2
-        top = runs_window_path(cutoff, NOW)
-        left = runs_window_path(cutoff, middle)
+        GitHub's list cap are not silently dropped. The window starts at the
+        oldest pending pull request, not at the retention cutoff: a queue
+        entry cannot predate the pull request that entered it."""
+        start = datetime.fromisoformat(load_fixture("merged_pr")["pr"]["created_at"].replace("Z", "+00:00"))
+        middle = start + (NOW - start) / 2
+        top = runs_window_path(start, NOW)
+        left = runs_window_path(start, middle)
         right = runs_window_path(middle, NOW)
         github.add(top, FakeResponse(payload={"total_count": 950, "workflow_runs": []}))
         github.add(
@@ -401,6 +444,373 @@ class TestBackfill:
         assert summary["rate_limit_remaining"] == 50
         assert "rate limit" in summary["stopped_early"]
         assert summary["prs_stored"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Hourly incremental pass
+# ---------------------------------------------------------------------------
+class TestHourly:
+    """The timer runs every hour. A full pass is daily; the other hours list
+    only what changed, minus a two-hour overlap, and spend no call at all on
+    the merge queue when there is nothing to store."""
+
+    def test_auto_is_full_then_incremental(self, service, github):
+        first = run_backfill(service, mode="auto")
+        assert first["mode"] == "full"
+        assert first["since"] == iso(RETENTION_START)
+
+        github.add(pulls_path(NOW - timedelta(hours=2)), FakeResponse(payload=[]))
+        second = run_backfill(service, mode="auto", now=NOW + timedelta(hours=1))
+
+        assert second["mode"] == "incremental"
+        assert second["since"] == iso(NOW - timedelta(hours=2))
+        assert github.count(pulls_path(NOW - timedelta(hours=2))) == 1
+
+    def test_a_full_pass_runs_again_after_a_day(self, service, github):
+        run_backfill(service, mode="auto")
+        for hour in range(1, 26):
+            # coverage before run `hour` is NOW + (hour - 1); the listing
+            # floor is that minus the two-hour overlap.
+            github.add(pulls_path(NOW + timedelta(hours=hour - 3)), FakeResponse(payload=[]))
+            summary = run_backfill(service, mode="auto", now=NOW + timedelta(hours=hour))
+
+        assert summary["mode"] == "full", "24 hours after the last full pass, the daily pass is due again"
+
+    def test_pr_merged_between_runs_appears_next_hour(self, service, github):
+        """The regression this section exists for: a pull request merged at
+        10:10 was absent until the next day. With the hourly pass it is
+        stored on the 11:05 run."""
+        run_backfill(service, mode="auto")
+        run_at = NOW + timedelta(hours=1)
+        merged_at = iso(NOW + timedelta(minutes=10))
+        new_pr = pull(
+            104,
+            title="Merged between two runs",
+            created_at=iso(NOW - timedelta(hours=2)),
+            updated_at=merged_at,
+            merged_at=merged_at,
+            closed_at=merged_at,
+        )
+        github.add(pulls_path(NOW - timedelta(hours=2)), FakeResponse(payload=[new_pr]))
+        route_pr(github, load_fixture("merged_pr"), number=104)
+        github.add(
+            runs_window_path(NOW - timedelta(hours=2), run_at),
+            FakeResponse(payload={"total_count": 0, "workflow_runs": []}),
+        )
+
+        summary = run_backfill(service, mode="incremental", now=run_at)
+
+        assert summary["prs_stored"] == 1
+        row = pr_row(service, 104)
+        assert row["merged_at"] == merged_at
+        document = service.get_json({"number": ["104"], "repo": [REPO]}, now=run_at)
+        assert document["pr_state"] == "stored"
+        assert document["freshness"]["last_fetched_at"] == iso(run_at)
+
+    def test_an_idle_hour_stays_under_thirty_api_calls(self, service, github):
+        run_backfill(service, mode="auto")
+        github.add(pulls_path(NOW - timedelta(hours=2)), FakeResponse(payload=[]))
+        calls_before = len(github.calls)
+
+        summary = run_backfill(service, mode="incremental", now=NOW + timedelta(hours=1))
+
+        assert summary["api_calls"] == len(github.calls) - calls_before
+        assert summary["api_calls"] <= 30
+        # One org listing and one PR listing; no merge_group window.
+        assert summary["api_calls"] == 2
+        assert sum(1 for call in github.calls if "event=merge_group" in call) == 1
+
+    def test_force_still_lists_the_full_window(self, service, github):
+        """--force refetches stored rows, which needs the whole retention
+        window; an incremental listing would only see the last hours."""
+        run_backfill(service, mode="auto")
+        run_at = NOW + timedelta(hours=1)
+        github.add(
+            runs_window_path(oldest_pending(), run_at),
+            FakeResponse(payload={"total_count": 7, "workflow_runs": load_fixture("merge_group_runs")["runs"]}),
+        )
+
+        summary = run_backfill(service, mode="auto", force=True, now=run_at)
+
+        assert summary["mode"] == "full"
+        assert summary["since"] == iso(run_at - timedelta(days=DAYS))
+
+    def test_stored_pull_requests_in_the_overlap_are_skipped(self, service, github):
+        run_backfill(service, mode="auto")
+        stored = [load_fixture(name)["pr"] for name in ("merged_pr", "ejected_pr", "closed_pr")]
+        github.add(pulls_path(NOW - timedelta(hours=2)), FakeResponse(payload=stored))
+        calls_before = len(github.calls)
+
+        summary = run_backfill(service, mode="incremental", now=NOW + timedelta(hours=1))
+
+        assert summary["prs_stored"] == 0
+        assert summary["prs_skipped"] == 3
+        # No per-PR pages and no merge_group window for already stored rows.
+        assert len(github.calls) - calls_before == 2
+
+    def test_a_failed_listing_does_not_advance_coverage(self, service, github):
+        run_backfill(service, mode="auto")
+        github.add(pulls_path(NOW - timedelta(hours=2)), FakeResponse(500, text="boom"))
+
+        summary = run_backfill(service, mode="incremental", now=NOW + timedelta(hours=1))
+
+        assert summary["ok"] is False
+        assert summary["listing_complete"] is False
+        assert service._coverage_until() == iso(NOW)
+
+    def test_a_failed_repository_listing_does_not_advance_coverage(self, service, github):
+        """An org listing that fails is not an org with no repositories."""
+        github.add(REPOS_PATH, FakeResponse(500, text="boom"))
+
+        summary = run_backfill(service, mode="auto")
+
+        assert summary["listing_complete"] is False
+        assert summary["ok"] is False
+        assert "repository listing failed" in summary["stopped_early"]
+        assert service.get_json({}, now=NOW)["coverage_until"] is None
+
+
+# ---------------------------------------------------------------------------
+# pr_backfill_runs: what each pass did
+# ---------------------------------------------------------------------------
+class TestBackfillRuns:
+    def test_each_pass_is_recorded(self, service):
+        run_backfill(service, mode="full")
+
+        [run] = rows(service, "SELECT * FROM pr_backfill_runs")
+        assert run["ran_at"] == iso(NOW)
+        assert run["mode"] == "full"
+        assert run["window_from"] == iso(RETENTION_START)
+        assert run["window_to"] == iso(NOW)
+        assert (run["stored"], run["skipped"], run["failed"]) == (3, 0, 0)
+        assert run["api_calls"] == 12
+        assert run["rate_limit_remaining"] is None
+        assert run["stopped_early"] == ""
+        assert run["listing_complete"] == 1
+        assert run["ok"] == 1
+
+    def test_a_stopped_pass_advances_coverage_but_is_not_ok(self, service, github):
+        """The listing was read, so coverage moves. The pass is not ok, and
+        the rows it did not store are explained as missing with that
+        stopped_early reason rather than promised for next hour."""
+        limit = {"remaining": "50"}
+        original_get = github.get
+
+        def limited(url, **kwargs):
+            response = original_get(url, **kwargs)
+            response.headers["X-RateLimit-Remaining"] = limit["remaining"]
+            return response
+
+        github.get = limited
+        summary = run_backfill(service, mode="full")
+
+        [run] = rows(service, "SELECT * FROM pr_backfill_runs")
+        assert run["listing_complete"] == 1
+        assert run["ok"] == 0
+        assert "rate limit" in run["stopped_early"]
+        assert summary["ok"] is False
+
+    def test_an_incremental_pass_is_recorded_with_its_since(self, service, github):
+        run_backfill(service, mode="auto")
+        github.add(pulls_path(NOW - timedelta(hours=2)), FakeResponse(payload=[]))
+        run_backfill(service, mode="incremental", now=NOW + timedelta(hours=1))
+
+        latest = rows(service, "SELECT * FROM pr_backfill_runs ORDER BY id DESC LIMIT 1")[0]
+        assert latest["mode"] == "incremental"
+        assert latest["window_from"] == iso(NOW - timedelta(hours=2))
+        assert latest["window_to"] == iso(NOW + timedelta(hours=1))
+        assert latest["ok"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Freshness
+# ---------------------------------------------------------------------------
+class TestFreshness:
+    def test_never(self, service):
+        doc = service.get_json({"days": ["30"]}, now=NOW)
+
+        assert doc["freshness"]["state"] == "never"
+        assert doc["last_fetched_at"] is None
+        assert doc["coverage_until"] is None
+        assert doc["next_run_at"] == iso(NOW.replace(minute=5))
+        assert "has not run yet" in doc["freshness"]["message"]
+
+    def test_fresh_and_stale(self, service):
+        run_backfill(service, mode="full")
+
+        fresh = service.get_json({"days": ["30"]}, now=NOW + timedelta(minutes=20))
+        assert fresh["freshness"]["state"] == "fresh"
+        assert fresh["freshness"]["age_seconds"] == 20 * 60
+        assert fresh["freshness"]["coverage_until"] == iso(NOW)
+        assert fresh["last_fetched_at"] == iso(NOW)
+        assert fresh["next_run_at"] == iso(NOW + timedelta(hours=1, minutes=5))
+        assert iso(NOW) in fresh["freshness"]["message"]
+        assert "20 min ago" in fresh["freshness"]["message"]
+
+        stale = service.get_json({"days": ["30"]}, now=NOW + timedelta(hours=3))
+        assert stale["freshness"]["state"] == "stale"
+        assert any("stale" in note for note in stale["notes"])
+
+    def test_the_message_binds_to_last_fetched_at(self, service, github):
+        """The dashboard text is built from the same field the panel shows,
+        so the two cannot disagree about when the backfill last ran."""
+        run_backfill(service, mode="full")
+        early = service.get_json({}, now=NOW + timedelta(minutes=5))
+        assert early["freshness"]["last_fetched_at"] == iso(NOW)
+        assert f"last ran at {iso(NOW)}" in early["freshness"]["message"]
+
+        github.add(pulls_path(NOW - timedelta(hours=2)), FakeResponse(payload=[]))
+        run_backfill(service, mode="incremental", now=NOW + timedelta(hours=1))
+        late = service.get_json({}, now=NOW + timedelta(minutes=65))
+
+        assert late["freshness"]["last_fetched_at"] == iso(NOW + timedelta(hours=1))
+        assert late["freshness"]["last_fetched_at"] != early["freshness"]["last_fetched_at"]
+        assert f"last ran at {iso(NOW + timedelta(hours=1))}" in late["freshness"]["message"]
+
+    def test_the_next_run_is_the_next_five_past_the_hour(self, service):
+        run_backfill(service, mode="full")
+
+        doc = service.get_json({}, now=NOW + timedelta(hours=2, minutes=7))
+        assert doc["next_run_at"] == iso(NOW + timedelta(hours=3, minutes=5))
+
+    def test_a_database_without_the_pass_table_reads_as_never(self, prs, tmp_path):
+        """A prs.db written before this change has no pr_backfill_runs. The
+        read path says never and must not fail until the next pass."""
+        db_file = tmp_path / "prs.db"
+        prs.CIObservePRs(db_file=str(db_file))._init_db()
+        with sqlite3.connect(db_file) as conn:
+            conn.execute("DROP TABLE pr_backfill_runs")
+
+        service = prs.CIObservePRs(db_file=str(db_file), api=None)
+        index = service.get_json({"days": ["30"]}, now=NOW)
+        one = service.get_json({"number": ["101"]}, now=NOW)
+
+        assert index["freshness"]["state"] == "never"
+        assert index["prs"] == []
+        assert one["pr_state"] == "missing"
+        assert "no GitHub access" in one["pr_state_message"] or "no answer" in one["pr_state_message"]
+
+
+# ---------------------------------------------------------------------------
+# The four miss states
+# ---------------------------------------------------------------------------
+def route_live_pr(github, number, **overrides):
+    payload = {
+        "number": number,
+        "state": "closed",
+        "title": f"Live pull request {number}",
+        "user": {"login": "author1"},
+        "html_url": f"https://github.com/osac-project/{REPO}/pull/{number}",
+        "labels": [{"name": "ok-to-test"}],
+        "created_at": "2026-10-01T10:00:00Z",
+        "updated_at": "2026-10-20T00:00:00Z",
+        "merged_at": None,
+        "closed_at": None,
+    }
+    payload.update(overrides)
+    github.add(f"/repos/osac-project/{REPO}/pulls/{number}", FakeResponse(payload=payload))
+
+
+class TestStates:
+    def detail(self, service, number, now, repo=REPO):
+        return service.get_json({"number": [str(number)], "repo": [repo]}, now=now)
+
+    def test_open(self, service, github):
+        run_backfill(service, mode="full")
+        route_live_pr(github, 200, state="open")
+
+        doc = self.detail(service, 200, NOW + timedelta(minutes=20))
+
+        assert doc["pr_state"] == "open"
+        assert doc["source"] == "live"
+        assert doc["pr"]["state"] == "open"
+        assert doc["pr"]["title"] == "Live pull request 200"
+        assert "is open" in doc["pr_state_message"]
+
+    def test_not_yet_fetched(self, service, github):
+        run_backfill(service, mode="full")
+        merged_at = iso(NOW + timedelta(minutes=10))
+        route_live_pr(github, 201, state="closed", merged_at=merged_at, closed_at=merged_at)
+
+        doc = self.detail(service, 201, NOW + timedelta(minutes=20))
+
+        assert doc["pr_state"] == "not_yet_fetched"
+        assert doc["source"] == "live"
+        assert merged_at in doc["pr_state_message"]
+        assert doc["next_run_at"] in doc["pr_state_message"]
+
+    def test_missing_names_the_stopped_early_reason(self, service, github):
+        limit = {"remaining": "50"}
+        original_get = github.get
+
+        def limited(url, **kwargs):
+            response = original_get(url, **kwargs)
+            response.headers["X-RateLimit-Remaining"] = limit["remaining"]
+            return response
+
+        github.get = limited
+        run_backfill(service, mode="full")
+        ended = "2026-10-02T12:00:00Z"  # inside the window the pass covered
+        route_live_pr(github, 202, state="closed", merged_at=ended, closed_at=ended)
+
+        doc = self.detail(service, 202, NOW)
+
+        assert doc["pr_state"] == "missing"
+        assert "stopped early" in doc["pr_state_message"]
+        assert "rate limit" in doc["pr_state_message"]
+
+    def test_missing_without_a_live_answer(self, service):
+        run_backfill(service, mode="full")
+
+        doc = self.detail(service, 203, NOW)
+
+        assert doc["pr_state"] == "missing"
+        assert doc["source"] == "none"
+        assert "no pull request #203" in doc["pr_state_message"]
+
+    def test_outside_window(self, service, github):
+        run_backfill(service, mode="full")
+        ended = iso(NOW - timedelta(days=DAYS, hours=1))
+        route_live_pr(github, 204, state="closed", merged_at=ended, closed_at=ended)
+
+        doc = self.detail(service, 204, NOW)
+
+        assert doc["pr_state"] == "outside_window"
+        assert "retention" in doc["pr_state_message"]
+
+    def test_every_document_lists_the_four_states(self, service, github):
+        run_backfill(service, mode="full")
+        route_live_pr(github, 205, state="open")
+
+        document = self.detail(service, 205, NOW)
+
+        assert [state["state"] for state in document["states"]] == [
+            "open",
+            "not_yet_fetched",
+            "missing",
+            "outside_window",
+        ]
+        assert all(state["message"] for state in document["states"])
+
+    def test_a_stored_pull_request_is_not_a_miss(self, service):
+        run_backfill(service, mode="full")
+
+        doc = self.detail(service, 101, NOW)
+
+        assert doc["pr_state"] == "stored"
+        assert doc["source"] == "store"
+        assert "Stored from the backfill" in doc["pr_state_message"]
+
+    def test_the_live_lookup_is_read_only_and_cached(self, service, github):
+        run_backfill(service, mode="full")
+        route_live_pr(github, 206, state="open")
+        path = f"/repos/osac-project/{REPO}/pulls/206"
+
+        self.detail(service, 206, NOW)
+        self.detail(service, 206, NOW)
+
+        assert github.count(path) == 1, "the second read must come from the cache"
+        assert rows(service, "SELECT number FROM pr_events WHERE number = 206") == []
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +892,17 @@ class TestEndpointDocument:
         assert by_number[101]["age_seconds"] == by_number[101]["total_seconds"] == 95 * 60
         assert by_number[101]["age_display"] == "1h 35m"
 
+    def test_the_index_also_answers_the_detail_panels(self, filled):
+        """The detail panels query the same endpoint with an empty number.
+        The index document must carry their roots and the four states, so
+        they render an explanation instead of a missing-root error."""
+        doc = filled.get_json({"days": [str(DAYS)]})
+
+        assert doc["pr"] is None
+        assert doc["stages"] == []
+        assert doc["attempts"] == []
+        assert [state["state"] for state in doc["states"]] == ["open", "not_yet_fetched", "missing", "outside_window"]
+
     def test_index_funnel_median_and_p95(self, filled):
         funnel = {row["stage"]: row for row in filled.get_json({"days": [str(DAYS)]})["funnel"]}
 
@@ -556,8 +977,12 @@ class TestEndpointDocument:
         assert {row["stage"] for row in index["funnel"]} == {"authoring", "review", "waiting", "queue", "merged"}
         assert all(row["samples"] == 0 for row in index["funnel"])
         assert "has not been backfilled" in index["notes"][0]
+        assert index["freshness"]["state"] == "never"
+        assert index["last_fetched_at"] is None
+        assert index["next_run_at"]
         assert one["pr"] is None
-        assert one["notes"] == []
+        assert one["pr_state"] == "not_yet_fetched"
+        assert "does not exist yet" in one["notes"][-1]
         assert not db_file.exists(), "the read path must not create prs.db"
 
     def test_no_token_or_header_leaks(self, filled):
@@ -672,19 +1097,20 @@ def test_dashboard_selectors_resolve_against_the_real_response(service):
     assert checked >= 5
 
 
-def test_backfill_is_mounted_in_the_exporter_and_scheduled_daily():
+def test_backfill_is_mounted_in_the_exporter_and_scheduled_hourly():
     """The backfill runs inside the exporter container: that is where the
-    token, requests and the /data volume live. One pass a day is enough; a
-    stored pull request is never refetched without --force."""
+    token, requests and the /data volume live. It runs hourly so a merge
+    shows up within the hour; --mode auto keeps one full pass a day."""
     monitoring = Path(__file__).resolve().parents[1]
     quadlet = (monitoring / "quadlet" / "workflow-exporter.container").read_text()
     assert "ci_observe_prs.py:/app/ci_observe_prs.py" in quadlet
 
     service = (monitoring / "systemd" / "ci-observe-prs.service").read_text()
-    assert "podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 60" in service
+    assert "podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 60 --mode auto" in service
 
     timer = (monitoring / "systemd" / "ci-observe-prs.timer").read_text()
-    assert "OnCalendar=*-*-* 04:45:00" in timer
+    assert "OnCalendar=*-*-* *:05:00" in timer
+    assert "RandomizedDelaySec=300" in timer
     assert "Persistent=true" in timer
 
     setup = (monitoring / "scripts" / "monitoring-setup.sh").read_text()

@@ -1,17 +1,18 @@
 # Systemd user timer for the ci-observe pull-request backfill.
 # Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-prs.timer
 #
-# Runs after the per-test rollup, so a slow artifact download never delays the
-# PR history. Persistent=true means a missed run starts when the machine comes
-# back; GitHub keeps the PR history, so a late run loses nothing, unlike the
-# 7-day JUnit artifacts.
+# Runs hourly, five minutes past the hour, so a pull request merged now is on
+# the Pull requests page within the hour instead of the next day. The random
+# delay spreads the GitHub calls of several machines. Persistent=true means a
+# missed run starts when the machine comes back; the two-hour overlap of each
+# incremental pass means a late run still sees what it missed.
 
 [Unit]
-Description=Run the ci-observe pull-request backfill daily
+Description=Run the ci-observe pull-request backfill hourly
 
 [Timer]
-OnCalendar=*-*-* 04:45:00
-RandomizedDelaySec=600
+OnCalendar=*-*-* *:05:00
+RandomizedDelaySec=300
 Persistent=true
 
 [Install]
