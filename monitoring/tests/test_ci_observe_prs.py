@@ -613,6 +613,22 @@ class TestBackfillRuns:
         assert service._coverage_until() is None
         assert service._full_pass_due(NOW + timedelta(hours=1)) is True
 
+    def test_a_repository_filtered_pass_does_not_move_org_coverage(self, service, github, prs):
+        """--repo reads one repository. It must not advance org-wide
+        coverage or count as the day's full pass."""
+        run_backfill(service, mode="full")  # the real org-wide pass
+        coverage = service._coverage_until()
+
+        filtered = prs.CIObservePRs(db_file=service.db_file, api=FakeAPI(github), repos=[REPO])
+        github.add(pulls_path(NOW), FakeResponse(payload=[]))
+        run_backfill(filtered, mode="full", now=NOW + timedelta(hours=6))
+
+        [latest] = rows(service, "SELECT * FROM pr_backfill_runs ORDER BY id DESC LIMIT 1")
+        assert latest["listing_complete"] == 0
+        assert latest["ok"] == 0
+        assert REPO in latest["stopped_early"]
+        assert service._coverage_until() == coverage
+
     def test_an_incremental_pass_is_recorded_with_its_since(self, service, github):
         run_backfill(service, mode="auto")
         github.add(pulls_path(NOW - timedelta(hours=2)), FakeResponse(payload=[]))

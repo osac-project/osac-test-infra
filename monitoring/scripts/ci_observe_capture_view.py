@@ -294,9 +294,11 @@ class CIObserveCaptureView:
         """The Capture document for ?capture_id=.
 
         Returns capture_id, state, session, coverage, identity, tests,
-        waits, fixtures, fixture_uses, failed_tests and notes. Every state
-        returns the full shape: a failed lookup has empty buckets and a note
-        saying why, never a partial table.
+        waits, fixtures, fixture_uses, failed_tests, transient and notes.
+        Every state returns the full shape: a failed lookup has empty buckets
+        and a note saying why, never a partial table. `transient` marks a
+        failure of the source (Tempo unreachable or 5xx), which is cached for
+        the short negative TTL; a stable result is cached for the full TTL.
         """
         capture_id = self._param(params, "capture_id").strip()
         if not capture_id:
@@ -339,9 +341,8 @@ class CIObserveCaptureView:
             return copy.deepcopy(document)
 
     def _store(self, capture_id, document):
-        ttl = (
-            self.NEGATIVE_CACHE_TTL_SECONDS if document["state"] in ("not_indexed", "busy") else self.CACHE_TTL_SECONDS
-        )
+        retry_soon = document["state"] in ("not_indexed", "busy") or document.get("transient")
+        ttl = self.NEGATIVE_CACHE_TTL_SECONDS if retry_soon else self.CACHE_TTL_SECONDS
         size = len(json.dumps(document, separators=(",", ":")).encode("utf-8"))
         with self._lock:
             self._cache[capture_id] = {"expires_at": time.monotonic() + ttl, "document": document, "size": size}
@@ -400,6 +401,9 @@ class CIObserveCaptureView:
             notes.extend(search_notes)
             if not trace_id:
                 document["state"] = state
+                # A failed search is the source being unavailable, not a
+                # property of the capture: retry it soon, not in 10 minutes.
+                document["transient"] = state == "unknown"
                 document["notes"] = notes
                 return document
             trace_source = "search"
@@ -428,6 +432,7 @@ class CIObserveCaptureView:
         except TempoError as error:
             notes.append(f"Tempo could not read trace {trace_id}: {error}")
             document["state"] = "unknown"
+            document["transient"] = True
             document["notes"] = notes
             return document
 
@@ -485,6 +490,7 @@ class CIObserveCaptureView:
         return {
             "capture_id": capture_id,
             "state": "unknown",
+            "transient": False,
             "session": {
                 "trace_id": "",
                 "started_at": None,

@@ -465,8 +465,10 @@ def test_ungrouped_links_open_capture_with_the_capture_window() -> None:
     url = links[0]["url"]
     assert url.startswith(RUN_INVESTIGATION_LINK)
     assert "var-capture_id=${__value.raw}" in url
-    assert "from=${__data.fields.capture_started_at}" in url
-    assert "to=${__data.fields.last_seen_at}" in url
+    # Registry-only rows can have no info-metric start time; the endpoint
+    # supplies a window that always contains the capture.
+    assert "from=${__data.fields.capture_window_from}" in url
+    assert "to=${__data.fields.capture_window_to}" in url
 
 
 def test_unknown_is_never_a_cohort_value() -> None:

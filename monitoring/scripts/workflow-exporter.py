@@ -721,9 +721,13 @@ class CaptureRegistry:
         days, limit = self._window(params), self._limit(params)
         window_from = self._iso(now - timedelta(days=days))
         fields = self.COHORT_FIELDS
+        selected = [field for field in fields if field not in self.COHORT_REQUIRED_FIELDS]
         complete = " AND ".join(
-            f"LOWER(COALESCE({field}, '')) NOT IN ('', 'unknown')"
-            for field in self.COHORT_REQUIRED_FIELDS
+            [f"LOWER(COALESCE({field}, '')) NOT IN ('', 'unknown')" for field in self.COHORT_REQUIRED_FIELDS]
+            # An empty suite, filter or marker is a real value ("no filter"),
+            # but `unknown` means the action could not record it: the Compare
+            # queries exclude it, so it must not key a cohort either.
+            + [f"LOWER(COALESCE({field}, '')) != 'unknown'" for field in selected]
         )
         group_by = ", ".join(fields)
         args = {"since": window_from, "fetch": limit + 1, "ungrouped_fetch": limit + 1}
@@ -753,7 +757,16 @@ class CaptureRegistry:
                        test_ref, test_sha, test_infra_ref, test_infra_sha,
                        test_infra_workflow_sha, test_suite, test_filter,
                        test_marker, identity_source, capture_started_at,
-                       first_seen_at, last_seen_at
+                       first_seen_at, last_seen_at,
+                       -- A row without an info-metric start time still needs
+                       -- a window that contains the capture: it was first
+                       -- seen within a poll interval of starting, so two
+                       -- hours back is a safe lower bound.
+                       COALESCE(
+                           capture_started_at,
+                           strftime('%Y-%m-%dT%H:%M:%SZ', first_seen_at, '-2 hours')
+                       ) AS capture_window_from,
+                       last_seen_at AS capture_window_to
                 FROM captures
                 WHERE last_seen_at >= :since
                   AND (identity_source != 'info' OR NOT ({complete}))
@@ -804,7 +817,7 @@ class CaptureRegistry:
         if missing:
             return "missing identity: " + ", ".join(missing)
         unknown = [
-            field for field in self.COHORT_REQUIRED_FIELDS
+            field for field in self.COHORT_FIELDS
             if (row.get(field) or "").strip().lower() == "unknown"
         ]
         return "unknown identity: " + ", ".join(unknown)

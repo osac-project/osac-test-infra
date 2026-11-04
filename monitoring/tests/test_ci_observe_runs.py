@@ -664,12 +664,14 @@ def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, f
     other_sha = base | {"osac_ci_capture_id": "vmaas-pr7-77-a1", "ci_run_id": "77", "ci_test_sha": "d" * 40}
     incomplete = base | {"osac_ci_capture_id": "vmaas-main-78-a1", "ci_run_id": "78", "ci_test_infra_sha": ""}
     unknown = base | {"osac_ci_capture_id": "vmaas-main-79-a1", "ci_run_id": "79", "ci_test_sha": "unknown"}
+    unknown_suite = base | {"osac_ci_capture_id": "vmaas-main-81-a1", "ci_run_id": "81", "ci_test_suite": "unknown"}
     sources.prometheus = [
         CAPTURE, f"caas-main-{SECOND_RUN_ID}-a1", "vmaas-pr7-77-a1",
         "vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1",
+        "vmaas-main-81-a1",
     ]
     sources.loki = []
-    sources.info = [base, same, other_sha, incomplete, unknown]
+    sources.info = [base, same, other_sha, incomplete, unknown, unknown_suite]
     registry.refresh()
 
     doc = registry.cohorts_json({"days": ["7"]})
@@ -689,13 +691,19 @@ def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, f
     for row in doc["cohorts"]:
         assert "unknown" not in row.values()
     ungrouped = {row["capture_id"]: row for row in doc["ungrouped"]}
-    assert set(ungrouped) == {"vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1"}
+    assert set(ungrouped) == {
+        "vmaas-main-78-a1", "vmaas-main-79-a1", "vmaas-main-80-a1", "vmaas-main-81-a1",
+    }
     assert {row["identity_source"] for row in doc["ungrouped"]} == {"none", "info"}
     assert ungrouped["vmaas-main-78-a1"]["reason"] == "missing identity: test_infra_sha"
     assert ungrouped["vmaas-main-79-a1"]["reason"] == "unknown identity: test_sha"
     assert ungrouped["vmaas-main-80-a1"]["reason"] == "no identity from the info metric"
+    # An empty filter is a real value; `unknown` is not.
+    assert ungrouped["vmaas-main-81-a1"]["reason"] == "unknown identity: test_suite"
     for row in doc["ungrouped"]:
-        assert {"capture_started_at", "last_seen_at"} <= set(row)
+        assert {"capture_started_at", "last_seen_at", "capture_window_from", "capture_window_to"} <= set(row)
+        assert row["capture_window_from"]
+        assert row["capture_window_to"]
     assert "source" in doc and "notes" in doc
 
 

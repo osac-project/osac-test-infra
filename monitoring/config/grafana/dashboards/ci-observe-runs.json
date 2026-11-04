@@ -2743,7 +2743,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "duration_seconds"
+              "options": "duration_s"
             },
             "properties": [
               {
@@ -2809,8 +2809,8 @@
               "type": "string"
             },
             {
-              "selector": "duration_seconds",
-              "text": "duration_seconds",
+              "selector": "duration_s",
+              "text": "duration_s",
               "type": "number"
             }
           ]
@@ -2957,7 +2957,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "duration_seconds"
+              "options": "duration_s"
             },
             "properties": [
               {
@@ -3023,8 +3023,8 @@
               "type": "string"
             },
             {
-              "selector": "duration_seconds",
-              "text": "duration_seconds",
+              "selector": "duration_s",
+              "text": "duration_s",
               "type": "number"
             }
           ]
@@ -3036,7 +3036,7 @@
           "options": {
             "sort": [
               {
-                "field": "duration_seconds",
+                "field": "duration_s",
                 "desc": true
               }
             ]
@@ -3369,7 +3369,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "duration_seconds"
+              "options": "duration_s"
             },
             "properties": [
               {
@@ -3435,8 +3435,8 @@
               "type": "string"
             },
             {
-              "selector": "duration_seconds",
-              "text": "duration_seconds",
+              "selector": "duration_s",
+              "text": "duration_s",
               "type": "number"
             }
           ]
@@ -3567,7 +3567,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "duration_seconds"
+              "options": "duration_s"
             },
             "properties": [
               {
@@ -3618,8 +3618,8 @@
               "type": "string"
             },
             {
-              "selector": "test",
-              "text": "test",
+              "selector": "nodeid",
+              "text": "nodeid",
               "type": "string"
             },
             {
@@ -3633,8 +3633,8 @@
               "type": "string"
             },
             {
-              "selector": "duration_seconds",
-              "text": "duration_seconds",
+              "selector": "duration_s",
+              "text": "duration_s",
               "type": "number"
             }
           ]
@@ -3825,7 +3825,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "duration_seconds"
+              "options": "duration_s"
             },
             "properties": [
               {
@@ -3906,8 +3906,8 @@
               "type": "string"
             },
             {
-              "selector": "duration_seconds",
-              "text": "duration_seconds",
+              "selector": "duration_s",
+              "text": "duration_s",
               "type": "number"
             }
           ]

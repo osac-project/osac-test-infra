@@ -67,6 +67,7 @@ EVENTS_ROW = "Events"
 CAPTURE_DOC = {
     "capture_id": "vmaas-main-41709318840-a1",
     "state": "ok",
+    "transient": False,
     "session": {
         "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
         "started_at": "2026-11-04T09:12:03Z",
@@ -106,17 +107,19 @@ CAPTURE_DOC = {
     "tests": [
         {
             "name": "tests/e2e/vmaas/test_cluster_create.py::TestCluster::test_create",
+            "nodeid": "tests/e2e/vmaas/test_cluster_create.py::TestCluster::test_create",
             "worker": "gw3",
             "status": "error",
             "started_at": "2026-11-04T09:13:10Z",
-            "duration_seconds": 95.2,
+            "duration_s": 95.2,
         },
         {
             "name": "tests/e2e/vmaas/test_network.py::test_virtual_network",
+            "nodeid": "tests/e2e/vmaas/test_network.py::test_virtual_network",
             "worker": "gw1",
             "status": "ok",
             "started_at": "2026-11-04T09:14:45Z",
-            "duration_seconds": 12.4,
+            "duration_s": 12.4,
         },
     ],
     "waits": [
@@ -128,7 +131,7 @@ CAPTURE_DOC = {
             "condition_met": "true",
             "status": "ok",
             "started_at": "2026-11-04T09:15:00Z",
-            "duration_seconds": 282.0,
+            "duration_s": 282.0,
         }
     ],
     "fixtures": [
@@ -137,16 +140,16 @@ CAPTURE_DOC = {
             "scope": "session",
             "worker": "gw0",
             "started_at": "2026-11-04T09:12:05Z",
-            "duration_seconds": 610.0,
+            "duration_s": 610.0,
         }
     ],
     "fixture_uses": [
         {
             "fixture_name": "cluster",
-            "test": "tests/e2e/vmaas/test_cluster_create.py::TestCluster::test_create",
+            "nodeid": "tests/e2e/vmaas/test_cluster_create.py::TestCluster::test_create",
             "worker": "gw3",
             "started_at": "2026-11-04T09:13:10Z",
-            "duration_seconds": 0.4,
+            "duration_s": 0.4,
         }
     ],
     "failed_tests": [
@@ -461,6 +464,7 @@ def test_every_selector_resolves_against_the_capture_document(dashboard: dict) -
         "fixtures",
         "fixture_uses",
         "failed_tests",
+        "transient",
         "notes",
     }
     assert set(CAPTURE_DOC["session"]) == {
@@ -522,7 +526,7 @@ def test_slowest_tests_keeps_the_twenty_longest(dashboard: dict) -> None:
     pipeline = [t["id"] for t in panel["transformations"]]
     assert pipeline == ["sortBy", "limit"], pipeline
     assert panel["transformations"][1]["options"]["limitField"] == 20
-    assert panel["transformations"][0]["options"]["sort"] == [{"field": "duration_seconds", "desc": True}]
+    assert panel["transformations"][0]["options"]["sort"] == [{"field": "duration_s", "desc": True}]
 
 
 # ---------------------------------------------------------------------------

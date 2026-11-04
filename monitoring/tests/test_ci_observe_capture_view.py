@@ -708,6 +708,22 @@ def test_caas_trace_has_eight_tests(tmp_path, monkeypatch):
     assert search["q"] == ['resource."osac.ci.capture_id"="caas-main-41709318840-a1" && name="test run"']
 
 
+def test_a_transient_tempo_failure_is_cached_only_briefly(tmp_path, monkeypatch):
+    """A 30-second Tempo restart must not pin the Capture page at `unknown`
+    for the full ten-minute TTL."""
+    capture_id = VMAAS_CAPTURE
+    tempo = FakeTempo({}, search_error=capture_view.TempoError("HTTP 503"))
+    view, _ = build_view(tmp_path, tempo, jobs=[make_job(41709279176, "2026-11-03T21:00:00Z")], monkeypatch=monkeypatch)
+
+    document = fetch(view, capture_id)
+
+    assert document["state"] == "unknown"
+    assert document["transient"] is True
+    entry = view._cache[capture_id]
+    remaining = entry["expires_at"] - time.monotonic()
+    assert remaining <= view.NEGATIVE_CACHE_TTL_SECONDS + 1
+
+
 def test_response_is_deterministic(tmp_path, monkeypatch):
     payload = fixture_trace(VMAAS_41818898681)
     trace_id = trace_id_for(VMAAS_41818898681)
@@ -1300,6 +1316,7 @@ def test_response_has_the_documented_shape(tmp_path, monkeypatch):
         "fixtures",
         "fixture_uses",
         "failed_tests",
+        "transient",
         "notes",
     }
     assert set(document["session"]) == {
@@ -1319,6 +1336,24 @@ def test_response_has_the_documented_shape(tmp_path, monkeypatch):
         "session_span",
         "service_calls",
         "service_calls_complete",
+    }
+    # The per-row keys are the dashboard's contract. The Capture fixture in
+    # test_ci_observe_dashboard.py copies them; a rename here must fail both.
+    assert set(document["tests"][0]) == {
+        "name", "nodeid", "file", "worker", "started_at", "duration_s",
+        "status", "phase_spans",
+    }
+    assert set(document["waits"][0]) == {
+        "name", "worker", "started_at", "duration_s", "status", "attempts",
+        "condition_met", "resource_kind", "resource_id",
+    }
+    assert set(document["fixtures"][0]) == {
+        "name", "fixture_name", "scope", "phase", "worker", "started_at",
+        "duration_s", "status",
+    }
+    assert set(document["fixture_uses"][0]) == {
+        "name", "fixture_name", "nodeid", "worker", "started_at", "duration_s",
+        "status",
     }
     assert set(document["identity"]) == {
         "run_id",

@@ -690,6 +690,16 @@ class CIObservePRs:
                 summary["listing_complete"] = False
                 break
 
+        if self.repos_filter:
+            # A --repo run reads a subset of the org. It must not move
+            # org-wide coverage or count as the day's full pass, or the other
+            # repositories' pull requests are skipped until the next one.
+            summary["listing_complete"] = False
+            summary["stopped_early"] = summary["stopped_early"] or (
+                "this run was limited to "
+                + ", ".join(self.repos_filter)
+                + "; org-wide coverage did not advance."
+            )
         summary["api_calls"] = self.api_calls
         summary["rate_limit_remaining"] = self.rate_limit_remaining
         # ok says the pass stored everything it listed. Coverage advances
