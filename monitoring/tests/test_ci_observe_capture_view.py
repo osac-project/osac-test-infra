@@ -705,7 +705,10 @@ def test_caas_trace_has_eight_tests(tmp_path, monkeypatch):
     search = tempo.query()
     assert search["limit"] == ["10"]
     assert search["spss"] == ["10"]
-    assert search["q"] == ['resource."osac.ci.capture_id"="caas-main-41709318840-a1" && name="test run"']
+    # TraceQL needs the braces; without them Tempo answers HTTP 400.
+    assert search["q"] == [
+        '{ resource."osac.ci.capture_id"="caas-main-41709318840-a1" && name="test run" }'
+    ]
 
 
 def test_a_capture_without_a_session_span_is_cached_only_briefly(tmp_path, monkeypatch):
@@ -805,6 +808,24 @@ def test_an_unknown_attempt_falls_back_to_created_at(tmp_path, monkeypatch):
     assert fetch(view, capture_id)["state"] == "ok"
     window = tempo.query()
     assert int(window["start"][0]) == int((BASE_TIME - view.WINDOW_BEFORE).timestamp())
+
+
+def test_the_search_query_is_a_braced_spanset(tmp_path, monkeypatch):
+    """Tempo 2.10 rejects a bare `resource...` expression with HTTP 400, and
+    the Capture page then shows unknown for every capture."""
+    capture_id = CAAS_CAPTURE
+    tempo = FakeTempo({trace_id_for(capture_id): fixture_trace(capture_id)})
+    view, _ = build_view(
+        tmp_path,
+        tempo,
+        jobs=[make_job(41709318840, "2026-11-03T21:00:00Z")],
+        monkeypatch=monkeypatch,
+    )
+
+    assert fetch(view, capture_id)["state"] == "ok"
+    query = tempo.query()["q"][0]
+    assert query.startswith("{ ") and query.endswith(" }")
+    assert "resource." in query and capture_id in query
 
 
 def test_response_is_deterministic(tmp_path, monkeypatch):
