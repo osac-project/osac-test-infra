@@ -8,9 +8,9 @@ The readers are test owners, the monitoring owner and release managers. They ask
 
 ## What a dashboard is
 
-The `ci-observe` folder holds three dashboards: **Capture**, **Pull requests** and **Trends**. It also holds the entry page, which is a router, not one of the three.
+The `ci-observe` folder holds three content dashboards: **Capture**, **Pull requests** and **Trends**. It also holds **Start here**, the entry page, which is a router, not a fourth dashboard.
 
-A new question becomes a section on one of them, not a fourth dashboard.
+A new question becomes a section on one of the three, not a fourth dashboard. Compare is a section of Trends, not a page of its own.
 
 ## Three units
 
@@ -24,11 +24,14 @@ A run belongs to a **ref**. A ref is a branch or a pull request. `main` is a ref
 
 ## Starting a task
 
+The entry page takes a run id, a capture id, a pull request number, a test id, or nothing. Each input resolves to one dashboard in one step. Run id and capture id resolve today. The pull request number and test id lookups are being added.
+
 | You have | Start at | It opens |
 |---|---|---|
-| A run id from Slack, for example `41554302161` | the entry page | that run's capture, or its row in the index when it has none |
-| A test name | Trends, Test history | that test's passes, failures and duration |
-| A pull request number | Pull requests | that PR's stage funnel |
+| A run id from Slack, for example `41554302161` | the entry page | that run's capture, or its row in the index marked `not collected` with a GitHub link |
+| A capture id, for example `vmaas-main-41554302161-a1` | the entry page | that capture |
+| A test id or name (being added) | the entry page | that test's history in Trends |
+| A pull request number (being added) | the entry page | that pull request's stage funnel |
 | A question about CI overall | Trends, Overview | pass rate, duration and failure mix |
 | Nothing | the entry page | the run index, searchable by run id |
 
@@ -49,6 +52,15 @@ The exporter is the workflow-exporter service on the central machine. It polls G
 ## The sources
 
 Each question has one authoritative store. [sources.md](sources.md) maps every question to its source, its retention and whether it covers a single run or the whole population. When two stores can answer, that table says which one wins.
+
+## Where the code lives
+
+`monitoring/` owns the central stack: the backend, the Grafana provisioning and the cluster manifests for the in-cluster collectors. Two CI hooks sit outside it:
+
+- **The capture action**, `.github/actions/ci-observe-capture/action.yml`. A workflow calls a local action by path, so it lives beside the workflows that use it. It deploys the collectors from `monitoring/config/ci-observe/`, runs the test command, and verifies that telemetry reached the backend.
+- **The gather script**, `scripts/gather-osac-logs.sh`, wrapped by `.github/actions/collect-artifacts/`. It runs on the runner against the live test cluster and collects the failure evidence that becomes the GitHub artifact.
+
+Both run on the runner as part of a workflow or its failure path, not on the central machine. `monitoring/` still owns the configs they deploy and the backend they push to.
 
 ## The two populations
 
@@ -75,11 +87,13 @@ The unit is one capture. The axis is time inside the run, bounded by the capture
 | Service | Beyla spans | What did the OSAC services do? |
 | Environment | pod and node metrics, events, pod lifecycle | What was the cluster doing? |
 
-The Capture page holds one section per layer: Run overview and Collection coverage for the verdict, CI evidence for the CI layer (GitHub jobs, steps and the JUnit result), Tests and workers, Fixture work and Waits for the test layer, Service requests for the service layer, and Environment for the pod and node metrics.
+The Capture page holds one section per layer: Run overview and Collection coverage for the verdict, CI evidence for the CI layer (GitHub jobs, steps, the JUnit result, the failed tests and the artifact link), Run identity for the SHAs and image refs, Tests and workers, Fixture work and Waits for the test layer, Service requests for the service layer, and Environment for the pod and node metrics. The Events row, which reads the Kubernetes events stored in Loki, is being added.
 
 The moment of failure is one vertical marker on every chart. It is derived from the end of the failed span, not stored, so it is exact on trace panels and within one minute on cluster panels.
 
-Evidence links to the artifact sit in the CI layer, next to the failure that needs them. The artifact keeps the pod logs, the per-test `failure.json` and the cluster snapshots, and GitHub deletes it after 7 days.
+The CI evidence section carries the failed tests, the JUnit result and a link to the run's artifact. The artifact is the evidence bundle: the per-test `failure.json`, the pod logs and the cluster snapshots. GitHub deletes it after 7 days, so the page links to it rather than copying it. Pod logs exist only in that artifact: the collector cannot read `/var/log/pods`, so Loki holds no pod logs.
+
+Runtime image IDs are not resolved in current captures. `osac.ci.osac_image_ids` reads `unknown`, so a capture proves the requested image refs, not the running image bytes. The gap closes when a capture lists an ID for every OSAC Deployment container and `osac_image_ids_complete` is `true`; that capture is the proof.
 
 A run that produced no capture still appears in the index with verdict `not collected` and a link to GitHub. Otherwise the front door is blind exactly when ingest is broken.
 
@@ -101,11 +115,11 @@ An **ejection** is a pull request leaving the merge queue without merging. It is
 
 For each stage: duration, the attempts inside it, and why an attempt was ejected. Every queue attempt links to its run. The link opens the Capture dashboard when a capture exists, and the GitHub job when it does not.
 
-A pull request needs an index, a list of recent pull requests with stage and age. Without it the Pull requests dashboard is reachable only by already knowing the PR number.
+The dashboard opens on an index: recent pull requests with their last stage and age. Without it the page would be reachable only by already knowing the PR number.
 
-The queue stage needs its own unit. One `merge_group` run can carry up to four pull requests, and today a queue run has neither a PR number nor a capture. The run is the unit; the PR links come from the `gh-readonly-queue` branch name and from queue comments that name a run; queue runs must enable `ci-observe` before the stage has telemetry.
+The queue stage needs its own unit. One `merge_group` run can carry up to four pull requests, and a queue run has neither a PR number nor a capture. The run is the unit; the PR links come from the `gh-readonly-queue` branch name and from queue comments that name a run. A separate queue-workflow change would give a queue run its PR number and a capture, which means enabling `ci-observe` there.
 
-## Trends: comparisons, trends, overall
+## Trends: test history, compare, overview
 
 | Section | Population | Question |
 |---|---|---|
@@ -113,19 +127,19 @@ The queue stage needs its own unit. One `merge_group` run can carry up to four p
 | Compare | a cohort of captured runs | Did these runs differ, and by how much? |
 | Overview | all jobs for a suite or a ref | What is the pass rate, duration and failure mix? |
 
+The cohort is chosen in the Compare section, and its tables rank tests by observed test-span time and list what failed.
+
 **Flaky** means the same test passed and failed on the same source SHA. Test history counts distinct source SHAs with both outcomes over 60 days, from all jobs. Reruns of the same SHA do not add to that count. **Slower** is a duration trend over the same window, from captured runs. **Newly broken** is consecutive failures on the most recent SHAs with no pass between them.
 
-## Compare is an action
+## Compare is an action in Trends
 
-Compare is not a separate dashboard. It is an action on a capture (`compare with its baseline`), on a pull request (`compare this attempt with the last green one`) and on a test row (`compare the last two runs`).
+Compare is a section of Trends, not a dashboard. It is an action on a capture (`compare with its baseline`), on a pull request (`compare this attempt with the last green one`) and on a test row (`compare the last two runs`).
 
-The **baseline** is the most recent cohort with the same source, harness and workflow SHAs and at least two captures. When none exists, the baseline is the last three captures of the same suite before this one. The action seeds the cohort from the unit's own identity fields, so no one types SHAs by hand. The Compare section in Trends is where a reader lands after the action.
+The **baseline** is the most recent cohort with the same source, harness and workflow SHAs and at least two captures. When none exists, the baseline is the last three captures of the same suite before this one. The action seeds the cohort from the unit's own identity fields, so no one types SHAs by hand, and lands the reader in the Compare section of Trends.
 
 ## Entry and navigation
 
-The entry page is a router. It accepts a run id, a capture id, a pull request number, a test id, or nothing. Each resolves to one dashboard in one step. A run id resolves to its capture when one exists, and to its row in the index when none does. With nothing, it shows the run index, searchable by run id.
-
-Every link between dashboards carries the unit and the time range, so the reader never loses their place:
+The entry page is the router described under [Starting a task](#starting-a-task). Every link between dashboards carries the unit and the time range, so the reader never loses their place:
 
 - Capture to its ref, and to `compare with baseline`.
 - Capture back to the entry page with the run's time range, not "now".
@@ -179,10 +193,11 @@ In scope, and easily confused with it: the merge queue of a pull request. That i
 
 ## Constraints the model must respect
 
-- **Pod logs are not delivered today.** The collector is configured for `/var/log/pods`, but the unprivileged UID cannot read it. Until that permission changes, pod logs exist only in the 7-day artifact.
-- **GitHub keeps no merge-queue history.** An ejected entry disappears. Ejection is derived from a failed `merge_group` run plus the pull request comment. Exact events need a webhook receiver.
+- **Pod logs are not delivered to Loki.** The collector is configured for `/var/log/pods`, but the unprivileged UID cannot read it, so pod logs exist only in the 7-day artifact.
+- **Runtime image IDs are `unknown` in current captures.** The requested image refs are recorded; the running image bytes are not. A capture that lists an ID for every OSAC Deployment container with `osac_image_ids_complete=true` is what proves the path works.
+- **GitHub keeps no merge-queue history.** An ejected entry disappears. An ejection is derived from a failed `merge_group` run plus the pull request comment. Exact events need a webhook receiver.
 - **Tempo keeps 30 days and rejects queries over 7 days.** A 30-day per-test trend needs a daily rollup of counts and percentiles, not a longer query.
-- **The exporter is a 90-second poller with a 30-PR window.** PR history needs a one-shot backfill with a sentinel, not re-polling every cycle.
+- **The exporter is a 90-second poller with a 30-PR window.** PR history needs a daily backfill with a sentinel, not re-polling every cycle.
 - **Label and review-request history exists only in the PR timeline.** The PR object carries current state only.
 
 ## How new data is admitted
@@ -192,15 +207,16 @@ A new dataset enters only if it joins a unit by an existing key, or by a key tha
 - Adapter request logs join a capture by capture id and a time.
 - Router logs join a capture by capture id and a time, if the gather step stamps them.
 - Pod restart history joins a capture by capture id and a time.
+- Kubernetes events join a capture by capture id and a time.
 - PR reviews join a pull request by PR number.
 - Queue events join a pull request by PR number and a workflow run.
 
 Data that only describes the fleet is not admitted.
 
-## The first three things to build
+## What exists, and what is next
 
-1. Split the Grafana folder: `CI Fleet` and `ci-observe`.
-2. Make the entry page a router with the run index behind an empty input.
-3. Rebuild Capture as one page from the panels that exist today: one section per layer, one timeline, no new data.
+1. The Grafana folder is split: `CI Fleet` and `ci-observe`.
+2. The entry page routes a run id or a capture id, with the run index behind an empty input. Pull request number and test id lookups are being added.
+3. Capture is one page: one section per layer, one timeline, no new data.
 
-Then add the missing layers one at a time, and build Pull requests once the PR data exists.
+Next: the Events row on Capture, runtime image IDs that resolve in a live capture, router access logs when the ingress controller writes them to Container, and the queue-workflow change that gives a `merge_group` run its PR number and capture.

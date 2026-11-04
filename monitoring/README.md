@@ -352,7 +352,7 @@ it; the first two are deployed from this repository:
    from `config/ci-observe/tempo210/tempo.yaml`), a separate container from
    the LGTM bundle: Tempo 3.1.1 inside the bundle has a TraceQL search bug
    (grafana/tempo#8054) that returns only about two thirds of the matching
-   spans, which made the CI Observe dashboard undercount. The bundle's
+   spans, which made the ci-observe dashboards undercount. The bundle's
    Tempo 3.1.1 keeps running on port 3200 as the read-only
    `ci-observe-traces-archive` datasource for traces ingested before the
    2026-11-01 cutover; all new traces go to Tempo 2.10 on port 3210
@@ -391,14 +391,15 @@ it; the first two are deployed from this repository:
 
 ### Unit tests
 
-`monitoring/tests/` holds the unit tests for the Python scripts in
-`monitoring/scripts/` (`workflow-exporter.py` and `post-ci-digest.py`).
-They fake the GitHub, exporter, and Slack APIs, so they need no network
-access and no secrets. `.github/workflows/monitoring-unit-tests.yml` runs
-them on pull requests that change `monitoring/scripts/**` or
-`monitoring/tests/**`, and fails when coverage of `monitoring/scripts/`
-drops below 80%. To run them locally (from `monitoring/tests`, since the
-coverage path in `pytest.ini` is relative to it):
+`monitoring/tests/` holds the unit tests for the scripts in `monitoring/scripts/`
+(`workflow-exporter.py`, `post-ci-digest.py`, the `ci_observe_*` capture,
+backfill and rollup scripts, and the capture supervisor), plus the dashboard
+checks in `test_*_dashboard.py`. They fake the GitHub, exporter, and Slack
+APIs, so they need no network access and no secrets.
+`.github/workflows/monitoring-unit-tests.yml` runs them on pull requests that
+change `monitoring/scripts/**` or `monitoring/tests/**`, and fails when
+coverage of `monitoring/scripts/` drops below 80%. To run them locally (from
+`monitoring/tests`, since the coverage path in `pytest.ini` is relative to it):
 
 ```bash
 cd monitoring/tests
@@ -442,8 +443,10 @@ auto-provisioned into two folders. **CI Fleet** holds five: **CI Fleet —
 Runner Health**, **CI Fleet — Runner Status**, **CI Fleet — Workflow Jobs**,
 **CI Fleet — Workflow Metrics**, and **CI Fleet — Health Overview** (a
 team-facing summary -- pass rate trend, flake rate, MTTR -- for standups and
-sprint reviews, see OSAC-2064). **ci-observe** holds the run, pull request and
-trend dashboards; see [`ci-observe/README.md`](ci-observe/README.md).
+sprint reviews, see OSAC-2064). **ci-observe** holds the **CI Observe — Start
+here** entry page and three content dashboards: **CI Observe — Capture**, **CI
+Observe — Pull requests** and **CI Observe — Trends**. Compare is a section of
+Trends, not a dashboard. See [`ci-observe/README.md`](ci-observe/README.md).
 
 Also reachable via an internal relay machine instead of the central host's
 public IP -- see [`vpn-relay-access.md`](vpn-relay-access.md) for why and
@@ -458,9 +461,12 @@ the shortest store shows gaps, not zeros.
 |---|---|---|
 | Traces | Tempo 2.10 | 30 days; queries over 7 days are rejected |
 | ci-observe metrics (one sample per 60 seconds) | ci-observe Prometheus | 15 days |
-| Run artifact and JUnit XML | GitHub | 7 days |
+| Kubernetes events | Loki | the image default |
+| Logs (adapter, router) | Loki | the image default |
+| Run artifact: failed tests, JUnit, `failure.json`, pod logs, cluster snapshots | GitHub | 7 days |
 | Job history | workflow exporter SQLite | 60 days |
-| Logs | Loki | the image default |
+| Pull request history and queue attempts | exporter `prs.db` | 60 days |
+| Per-test daily rollup | `trends.db` | as long as each day is rolled up while its artifact exists |
 | Fleet metrics | central Prometheus | 30 days |
 
 ## Troubleshooting
