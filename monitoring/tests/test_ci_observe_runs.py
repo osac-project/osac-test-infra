@@ -239,13 +239,18 @@ def test_a_run_with_a_capture_is_marked_capture(client, jobs, fresh):
     run = state_of(doc, RUN_ID)
     assert run["capture_ids"] == [CAPTURE]
     assert run["capture_reason"] == ""
+    # Grafana data links read epoch milliseconds. The run's start and finish
+    # are supplied in that form because its URL parser ignores ISO strings.
+    assert isinstance(run["started_at_ms"], int) and run["started_at_ms"] > 1_600_000_000_000
+    assert isinstance(run["done_at_ms"], int) and run["done_at_ms"] >= run["started_at_ms"]
     assert doc["source"]["state"] == "ok"
     assert doc["source"]["captures"] == 2
 
 
 def test_job_rows_are_not_listed_as_runs(client, exporter, fresh):
-    """A pull-request-flow run's suite rows are jobs: their ids never appear
-    in a capture id, so listing them would invent not collected rows."""
+    """A pull-request-flow run's suite rows are jobs. They group into their
+    parent run, so the suite's job id never appears as a run id and the run is
+    listed once, not once per suite."""
     exporter._upsert_job(run_job(RUN_ID))
     exporter._upsert_job(make_job(
         id=41310072001,
@@ -262,6 +267,7 @@ def test_job_rows_are_not_listed_as_runs(client, exporter, fresh):
     assert [run["id"] for run in doc["runs"]] == [str(RUN_ID)]
     suite = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"]
     assert [row["id"] for row in suite] == [str(RUN_ID)]
+    assert "E2E vmaas (pull requests)" in suite[0]["workflow"]
 
 
 def test_run_id_is_backfilled_from_the_run_url(wfe, tmp_path, monkeypatch, github):
@@ -602,9 +608,12 @@ def test_captures_are_filterable_and_counted(registry, fresh):
         "test_sha", "test_infra_ref", "test_infra_sha",
         "test_infra_workflow_sha", "test_suite", "test_filter", "test_marker",
         "session_trace_id", "identity_source", "capture_started_at",
-        "first_seen_at", "last_seen_at",
+        "first_seen_at", "last_seen_at", "capture_window_from",
+        "capture_window_to", "capture_window_from_ms", "capture_window_to_ms",
     ):
         assert field in doc["captures"][0], f"capture row is missing {field}"
+    assert isinstance(doc["captures"][0]["capture_window_from_ms"], int)
+    assert isinstance(doc["captures"][0]["capture_window_to_ms"], int)
 
     one = registry.captures_json({"days": ["7"], "run_id": [str(RUN_ID)]})
     assert [row["capture_id"] for row in one["captures"]] == [CAPTURE]
@@ -615,6 +624,59 @@ def test_captures_are_filterable_and_counted(registry, fresh):
     limited = registry.captures_json({"days": ["7"], "limit": ["1"]})
     assert limited["truncated"] is True
     assert limited["counts"] == {"returned": 1, "matched": 2}
+
+
+def test_a_pull_request_flow_run_is_listed_once_with_its_capture(client, exporter, sources, registry, fresh):
+    """e2e-pr.yml stores one e2e row per suite: its id is the suite job id and
+    its run_id is the parent run. The run index must list that run with its
+    capture, not skip it (the old id-equality filter) and not list it twice."""
+    parent = RUN_ID + 100
+    for offset, suite in enumerate(("vmaas", "caas")):
+        job = run_job(
+            parent,
+            id=parent * 10 + offset,
+            workflow=f"E2E {suite} (pr)",
+            url=f"https://github.com/osac-project/osac/actions/runs/{parent}/job/{parent * 10 + offset}",
+            created_minutes=30,
+            finished_minutes=20,
+        )
+        job["run_id"] = str(parent)
+        exporter._upsert_job(job)
+    capture = f"vmaas-pr9-{parent}-a1"
+    sources.prometheus = [capture]
+    sources.loki = []
+    sources.info = []
+    registry.refresh()
+
+    doc = client.get_json({"days": ["7"]})
+
+    rows = [run for run in doc["runs"] if run["id"] == str(parent)]
+    assert len(rows) == 1, doc["runs"]
+    assert rows[0]["capture_state"] == "capture"
+    assert rows[0]["capture_id"] == capture
+    assert rows[0]["workflow"] == "E2E caas (pr),E2E vmaas (pr)"
+    assert rows[0]["url"] == f"https://github.com/osac-project/osac/actions/runs/{parent}"
+    assert rows[0]["conclusion"] == "success"
+
+    exact = client.get_json({"days": ["7"], "run": [str(parent)]})
+    assert [run["id"] for run in exact["runs"]] == [str(parent)]
+
+    # Paging by run id still neither repeats nor skips a run when one of them
+    # is stored as several suite rows.
+    exporter._upsert_job(run_job(parent + 1, created_minutes=40, finished_minutes=35))
+    exporter._upsert_job(run_job(parent - 1, created_minutes=10, finished_minutes=5))
+    seen = []
+    before = ""
+    for _ in range(4):
+        page = client.get_json({"days": ["7"], "limit": ["1"], "before": [before]})
+        if not page["runs"]:
+            break
+        seen.append(page["runs"][0]["id"])
+        before = page["next_before"] or ""
+        if not before:
+            break
+    assert seen == [str(parent + 1), str(parent), str(parent - 1)]
+    assert len(set(seen)) == len(seen)
 
 
 def test_an_empty_run_lookup_returns_no_rows(client, exporter, fresh):
@@ -701,9 +763,15 @@ def test_cohorts_group_on_the_six_identity_fields(registry, exporter, sources, f
     # An empty filter is a real value; `unknown` is not.
     assert ungrouped["vmaas-main-81-a1"]["reason"] == "unknown identity: test_suite"
     for row in doc["ungrouped"]:
-        assert {"capture_started_at", "last_seen_at", "capture_window_from", "capture_window_to"} <= set(row)
+        assert {
+            "capture_started_at", "last_seen_at", "capture_window_from",
+            "capture_window_to", "capture_window_from_ms", "capture_window_to_ms",
+        } <= set(row)
         assert row["capture_window_from"]
         assert row["capture_window_to"]
+        # Grafana links need epoch ms; the ISO strings are for display only.
+        assert isinstance(row["capture_window_from_ms"], int)
+        assert isinstance(row["capture_window_to_ms"], int)
     assert "source" in doc and "notes" in doc
 
 
@@ -797,6 +865,16 @@ def test_the_runs_module_is_mounted_and_copied():
 
     assert "ci_observe_runs.py:/app/ci_observe_runs.py" in quadlet
     assert "scripts/ci_observe_runs.py" in setup
+    # A first install (--central) must copy every module the quadlet mounts,
+    # not only the ones --update-central refreshes.
+    first_install = setup.split("Phase 3: Deploy Quadlet units")[0]
+    for module in (
+        "workflow-exporter.py",
+        "ci_observe_run_evidence.py",
+        "ci_observe_runs.py",
+        "ci_observe_capture_view.py",
+    ):
+        assert f"scripts/{module}" in first_install, f"a first install does not copy {module}"
 
 
 def test_the_quadlet_reaches_the_registry_sources_on_the_host():

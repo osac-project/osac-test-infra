@@ -714,9 +714,11 @@ def test_the_capture_cache_outlives_the_dashboard_refresh():
 
     assert ttls, "no capture view cache TTL found in the ci-observe scripts"
     for filename, name, seconds in ttls:
-        if "NEGATIVE" in name:
-            # The spec asks for a 10-second negative cache on a missing or
-            # busy capture; that is not the document cache under test.
+        if "NEGATIVE" in name or "INCOMPLETE" in name:
+            # These hold a document that is expected to change: a missing,
+            # busy, transient or in-progress capture. They are not the final
+            # document cache under test, and must stay short.
+            assert seconds <= 60, f"{filename}:{name}={seconds}s is not a short TTL"
             continue
         assert seconds >= refresh, f"{filename}:{name}={seconds}s is shorter than the {refresh}s refresh"
     assert max(seconds for _, _, seconds in ttls) >= 600, (

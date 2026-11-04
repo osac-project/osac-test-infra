@@ -478,16 +478,25 @@ def test_the_run_id_links_to_capture_with_the_runs_own_window() -> None:
     url = link["url"]
     assert url.startswith("/d/ci-observe-runs/ci-observe-e28094-run-investigation?")
     assert "var-capture_id=${__data.fields.capture_id}" in url
-    assert "from=${__data.fields.started_at}" in url
-    assert "to=${__data.fields.finished_at}" in url
+    # Epoch ms: Grafana's URL parser ignores a 20-character ISO string.
+    assert "from=${__data.fields.started_at_ms}" in url
+    assert "to=${__data.fields.done_at_ms}" in url
+
+
+def test_the_run_id_also_offers_github_when_there_is_no_capture() -> None:
+    """A not-collected row has an empty capture id, so the Capture link would
+    open with an empty variable. The same cell offers the GitHub run."""
+    urls = [link["url"] for link in links(PANELS[E2E_RUNS], "id")]
+    assert "${__data.fields.url}" in urls
+    assert any("no capture" in link["title"] for link in links(PANELS[E2E_RUNS], "id"))
 
 
 def test_the_capture_lookup_link_carries_its_own_window() -> None:
     url = links(PANELS[CAPTURE_LOOKUP], "capture_id")[0]["url"]
     assert url.startswith("/d/ci-observe-runs/ci-observe-e28094-run-investigation?")
     assert "var-capture_id=${__value.raw}" in url
-    assert "from=${__data.fields.capture_started_at}" in url
-    assert "to=${__data.fields.last_seen_at}" in url
+    assert "from=${__data.fields.capture_window_from_ms}" in url
+    assert "to=${__data.fields.capture_window_to_ms}" in url
 
 
 def test_a_not_collected_row_links_to_github() -> None:
@@ -585,6 +594,8 @@ RUNS_DOCUMENT = {
         "conclusion": "failure",
         "created_at": "2026-11-03T10:00:00Z",
         "started_at": "2026-11-03T10:01:00Z",
+        "started_at_ms": 1762164060000,
+        "done_at_ms": 1762166520000,
         "finished_at": "2026-11-03T10:42:00Z",
         "url": "https://github.com/osac-project/osac/actions/runs/41310072671",
         "capture_state": "capture",
@@ -600,6 +611,8 @@ RUNS_DOCUMENT = {
         "conclusion": "failure",
         "created_at": "2026-11-03T09:00:00Z",
         "started_at": "2026-11-03T09:01:00Z",
+        "started_at_ms": 1762160460000,
+        "done_at_ms": 1762163400000,
         "finished_at": "2026-11-03T09:50:00Z",
         "url": "https://github.com/osac-project/osac/actions/runs/41310072672",
         "capture_state": "not collected",
@@ -615,6 +628,8 @@ RUNS_DOCUMENT = {
         "conclusion": "",
         "created_at": "2026-11-04T09:55:00Z",
         "started_at": "2026-11-04T09:55:00Z",
+        "started_at_ms": 1762247700000,
+        "done_at_ms": 1762250100000,
         "finished_at": "",
         "url": "https://github.com/osac-project/osac/actions/runs/41310072673",
         "capture_state": "unknown",
@@ -649,6 +664,10 @@ CAPTURES_DOCUMENT = {
         "capture_started_at": "2026-11-03T10:01:00Z",
         "first_seen_at": "2026-11-03T10:02:00Z",
         "last_seen_at": "2026-11-04T09:59:00Z",
+        "capture_window_from": "2026-11-03T10:01:00Z",
+        "capture_window_to": "2026-11-04T09:59:00Z",
+        "capture_window_from_ms": 1762164060000,
+        "capture_window_to_ms": 1762261140000,
     }],
     "notes": [],
 }

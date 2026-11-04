@@ -43,7 +43,7 @@
     {
       "type": "row",
       "id": 2,
-      "title": "Test history — one test, all jobs, last $days days",
+      "title": "Test history \u2014 one test, all jobs, last $days days",
       "description": "Is this test flaky, slower, or newly broken? Outcomes and durations for one test id, from the daily JUnit rollup.",
       "collapsed": false,
       "gridPos": {
@@ -57,7 +57,7 @@
     {
       "type": "timeseries",
       "id": 3,
-      "title": "Passes and failures, all jobs, last $days days — $test",
+      "title": "Passes and failures, all jobs, last $days days \u2014 $test",
       "description": "One point per day for the selected test id. Population: all jobs that produced a JUnit artifact, captured or not. Window: the Days variable (the rollup's own calendar), not the time picker. Leave Test empty and every test's rows are drawn on the same day; set it to one test id for a readable line.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -165,7 +165,7 @@
     {
       "type": "timeseries",
       "id": 4,
-      "title": "Duration p50 and p95, all jobs, last $days days — $test",
+      "title": "Duration p50 and p95, all jobs, last $days days \u2014 $test",
       "description": "Per day, the median and 95th-percentile duration in seconds of the selected test, nearest-rank over the runs of that day. Population: all jobs that produced a JUnit artifact. Window: the Days variable. A day with no readable artifact has no point, never a zero.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -273,7 +273,7 @@
     {
       "type": "table",
       "id": 5,
-      "title": "Rollup rows and their source SHA, all jobs, last $days days — $test",
+      "title": "Rollup rows and their source SHA, all jobs, last $days days \u2014 $test",
       "description": "The rows behind the two charts, one per day, repo, workflow, suite, test id and source SHA. Flaky means the same test passed and failed on the same SHA: look for a SHA with both passes and failures. Population: all jobs that produced a JUnit artifact. Window: the Days variable. The SHA links to that commit's checks on GitHub, where the individual runs are.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -565,7 +565,7 @@
     {
       "type": "row",
       "id": 6,
-      "title": "Overview — all jobs, selected range",
+      "title": "Overview \u2014 all jobs, selected range",
       "description": "What is the pass rate, duration and failure mix? Population: every run, captured or not. Window: the dashboard time range, which each panel names.",
       "collapsed": false,
       "gridPos": {
@@ -1171,7 +1171,7 @@
     {
       "type": "row",
       "id": 16,
-      "title": "Compare — captured runs, selected cohort, dashboard time range",
+      "title": "Compare \u2014 captured runs, selected cohort, dashboard time range",
       "description": "Did these captured runs differ, and by how much? Population: a cohort of captured runs. Window: the dashboard time range (7 days maximum). Pick a cohort from the tables, then read which tests used the most observed test-span time and what failed.",
       "collapsed": true,
       "gridPos": {
@@ -1576,7 +1576,7 @@
                     "value": [
                       {
                         "title": "Open this capture with its own time range",
-                        "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}&from=${__data.fields.capture_window_from}&to=${__data.fields.capture_window_to}"
+                        "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}&from=${__data.fields.capture_window_from_ms}&to=${__data.fields.capture_window_to_ms}"
                       }
                     ]
                   }
@@ -1739,6 +1739,30 @@
                     }
                   }
                 ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "capture_window_from_ms"
+                },
+                "properties": [
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "capture_window_to_ms"
+                },
+                "properties": [
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  }
+                ]
               }
             ]
           },
@@ -1816,6 +1840,16 @@
                   "selector": "reason",
                   "text": "reason",
                   "type": "string"
+                },
+                {
+                  "selector": "capture_window_from_ms",
+                  "text": "capture_window_from_ms",
+                  "type": "number"
+                },
+                {
+                  "selector": "capture_window_to_ms",
+                  "text": "capture_window_to_ms",
+                  "type": "number"
                 }
               ]
             }
@@ -3396,7 +3430,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "CI Observe — Trends",
+  "title": "CI Observe \u2014 Trends",
   "uid": "ci-observe-trends",
   "version": 1
 }

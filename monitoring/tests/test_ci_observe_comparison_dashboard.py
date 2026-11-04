@@ -467,8 +467,9 @@ def test_ungrouped_links_open_capture_with_the_capture_window() -> None:
     assert "var-capture_id=${__value.raw}" in url
     # Registry-only rows can have no info-metric start time; the endpoint
     # supplies a window that always contains the capture.
-    assert "from=${__data.fields.capture_window_from}" in url
-    assert "to=${__data.fields.capture_window_to}" in url
+    # Grafana ignores a 20-character ISO value in from/to; epoch ms works.
+    assert "from=${__data.fields.capture_window_from_ms}" in url
+    assert "to=${__data.fields.capture_window_to_ms}" in url
 
 
 def test_unknown_is_never_a_cohort_value() -> None:
@@ -875,6 +876,10 @@ COHORTS_DOCUMENT = {
         "identity_source": "none",
         "capture_started_at": "2026-11-03T10:00:00Z",
         "last_seen_at": "2026-11-04T09:00:00Z",
+        "capture_window_from": "2026-11-03T10:00:00Z",
+        "capture_window_to": "2026-11-04T09:00:00Z",
+        "capture_window_from_ms": 1762164000000,
+        "capture_window_to_ms": 1762246800000,
         "reason": "the registry has no osac.ci.test_infra_sha for this capture",
     }],
     "truncated": False,

@@ -357,6 +357,22 @@ def test_info_post_failure_never_raises(verify_module: ModuleType) -> None:
     assert "network down" in detail
 
 
+@pytest.fixture(autouse=True)
+def _isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The module writes to GITHUB_STEP_SUMMARY when it is set. Running the
+    suite inside a GitHub Actions job must not append ci-observe lines to
+    that job's own summary."""
+    for name in (
+        "GITHUB_STEP_SUMMARY",
+        "CI_OBSERVE_DEPLOYED",
+        "CI_OBSERVE_METRICS_PORT",
+        "CI_OBSERVE_TEST_DURATION",
+        "CI_OBSERVE_OTLP_AUTH",
+        "CI_OBSERVE_INFO_ENDPOINT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_main_never_exits_non_zero(verify_module: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
     assert verify_module.main([]) == 0
     assert verify_module.main(["not-a-command"]) == 0

@@ -248,6 +248,10 @@ class CIObserveCaptureView:
     # for ten seconds: an open page retries soon without hammering Tempo.
     CACHE_TTL_SECONDS = 600
     NEGATIVE_CACHE_TTL_SECONDS = 10
+    # A capture with no "test run" span yet may still be exporting spans: the
+    # session span is written last. Its tables are partial, so re-read it
+    # within a minute instead of pinning a partial count for ten.
+    INCOMPLETE_CACHE_TTL_SECONDS = 60
     CACHE_MAX_BYTES = 64 * 1024 * 1024
 
     # A trace larger than this is not read into memory. The live traces
@@ -340,9 +344,13 @@ class CIObserveCaptureView:
                 event.set()
             return copy.deepcopy(document)
 
-    def _store(self, capture_id, document):
-        retry_soon = document["state"] in ("not_indexed", "busy") or document.get("transient")
-        ttl = self.NEGATIVE_CACHE_TTL_SECONDS if retry_soon else self.CACHE_TTL_SECONDS
+    def _store(self, capture_id, document) -> None:
+        if document["state"] in ("not_indexed", "busy") or document.get("transient"):
+            ttl = self.NEGATIVE_CACHE_TTL_SECONDS
+        elif document["state"] == "ok" and not document["coverage"]["session_span"]:
+            ttl = self.INCOMPLETE_CACHE_TTL_SECONDS
+        else:
+            ttl = self.CACHE_TTL_SECONDS
         size = len(json.dumps(document, separators=(",", ":")).encode("utf-8"))
         with self._lock:
             self._cache[capture_id] = {"expires_at": time.monotonic() + ttl, "document": document, "size": size}

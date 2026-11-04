@@ -158,6 +158,12 @@ class CIObserveRuns:
                     # finish. started_at is created_at under the name the
                     # dashboard reads.
                     "started_at": run.get("created_at", ""),
+                    # Grafana data links take epoch milliseconds: a 20-char
+                    # "...Z" value is not a format its URL parser accepts, so
+                    # the range would be ignored. An unfinished run still
+                    # needs a `to`, and now is the honest end.
+                    "started_at_ms": self._epoch_ms(run.get("created_at")),
+                    "done_at_ms": self._epoch_ms(finished) or int(now.timestamp() * 1000),
                     "finished": ended,
                     "finished_at": self._iso(finished),
                     "capture_state": state,
@@ -310,6 +316,12 @@ class CIObserveRuns:
     @staticmethod
     def _iso(value):
         return value.strftime("%Y-%m-%dT%H:%M:%SZ") if value else ""
+
+    @classmethod
+    def _epoch_ms(cls, value):
+        """Unix milliseconds for a timestamp, or None. Grafana links use it."""
+        parsed = value if isinstance(value, datetime) else cls._parse_time(value)
+        return int(parsed.timestamp() * 1000) if parsed else None
 
     @staticmethod
     def _int_param(params, name, default, low, high):

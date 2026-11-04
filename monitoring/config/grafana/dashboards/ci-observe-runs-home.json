@@ -512,8 +512,12 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Open this run in Capture with the run's own time range",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__data.fields.capture_id}&from=${__data.fields.started_at}&to=${__data.fields.finished_at}"
+                    "title": "Open this run in Capture with its own time range (when it has a capture)",
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__data.fields.capture_id}&from=${__data.fields.started_at_ms}&to=${__data.fields.done_at_ms}"
+                  },
+                  {
+                    "title": "Open this run on GitHub, where a run with no capture keeps its logs",
+                    "url": "${__data.fields.url}"
                   }
                 ]
               }
@@ -846,6 +850,30 @@
                 ]
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "started_at_ms"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "done_at_ms"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
           }
         ]
       },
@@ -944,6 +972,16 @@
               "selector": "url",
               "text": "url",
               "type": "string"
+            },
+            {
+              "selector": "started_at_ms",
+              "text": "started_at_ms",
+              "type": "number"
+            },
+            {
+              "selector": "done_at_ms",
+              "text": "done_at_ms",
+              "type": "number"
             }
           ]
         }
@@ -1003,7 +1041,7 @@
                 "value": [
                   {
                     "title": "Open this capture with its own time range",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}&from=${__data.fields.capture_started_at}&to=${__data.fields.last_seen_at}"
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}&from=${__data.fields.capture_window_from_ms}&to=${__data.fields.capture_window_to_ms}"
                   }
                 ]
               }
@@ -1318,6 +1356,30 @@
                 "value": 170
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "capture_window_from_ms"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "capture_window_to_ms"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
           }
         ]
       },
@@ -1430,6 +1492,16 @@
               "selector": "last_seen_at",
               "text": "last_seen_at",
               "type": "string"
+            },
+            {
+              "selector": "capture_window_from_ms",
+              "text": "capture_window_from_ms",
+              "type": "number"
+            },
+            {
+              "selector": "capture_window_to_ms",
+              "text": "capture_window_to_ms",
+              "type": "number"
             }
           ]
         }
@@ -1981,8 +2053,12 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Open this run in Capture with the run's own time range",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__data.fields.capture_id}&from=${__data.fields.started_at}&to=${__data.fields.finished_at}"
+                    "title": "Open this run in Capture with its own time range (when it has a capture)",
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__data.fields.capture_id}&from=${__data.fields.started_at_ms}&to=${__data.fields.done_at_ms}"
+                  },
+                  {
+                    "title": "Open this run on GitHub, where a run with no capture keeps its logs",
+                    "url": "${__data.fields.url}"
                   }
                 ]
               }
@@ -2315,6 +2391,30 @@
                 ]
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "started_at_ms"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "done_at_ms"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
           }
         ]
       },
@@ -2413,6 +2513,16 @@
               "selector": "url",
               "text": "url",
               "type": "string"
+            },
+            {
+              "selector": "started_at_ms",
+              "text": "started_at_ms",
+              "type": "number"
+            },
+            {
+              "selector": "done_at_ms",
+              "text": "done_at_ms",
+              "type": "number"
             }
           ]
         }

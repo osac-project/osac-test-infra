@@ -620,14 +620,19 @@ class TestBackfillRuns:
         coverage = service._coverage_until()
 
         filtered = prs.CIObservePRs(db_file=service.db_file, api=FakeAPI(github), repos=[REPO])
-        github.add(pulls_path(NOW), FakeResponse(payload=[]))
-        run_backfill(filtered, mode="full", now=NOW + timedelta(hours=6))
+        run_at = NOW + timedelta(hours=6)
+        # Route the URL this pass actually asks for, so it reads the listing
+        # successfully and the only reason coverage stays put is the filter.
+        github.add(pulls_path(run_at - timedelta(days=DAYS)), FakeResponse(payload=[]))
+        run_backfill(filtered, mode="full", now=run_at)
 
         [latest] = rows(service, "SELECT * FROM pr_backfill_runs ORDER BY id DESC LIMIT 1")
         assert latest["listing_complete"] == 0
         assert latest["ok"] == 0
-        assert REPO in latest["stopped_early"]
+        assert "org-wide coverage did not advance" in latest["stopped_early"]
+        assert "the pull request listing failed" not in latest["stopped_early"]
         assert service._coverage_until() == coverage
+        assert service._full_pass_due(run_at + timedelta(hours=19)) is True
 
     def test_an_incremental_pass_is_recorded_with_its_since(self, service, github):
         run_backfill(service, mode="auto")
@@ -804,6 +809,21 @@ class TestStates:
 
         assert doc["pr_state"] == "not_yet_fetched"
         assert "next hourly run" in doc["pr_state_message"]
+
+    def test_a_failed_live_lookup_is_cached_for_a_few_seconds(self, service, github):
+        """Every detail panel refreshes. While GitHub returns 403, a refresh
+        must not spend the shared budget again on each panel."""
+        run_backfill(service, mode="full")
+        path = f"/repos/osac-project/{REPO}/pulls/206"
+        github.add(path, FakeResponse(403, text="rate limited"))
+        before = github.count(path)
+
+        first = self.detail(service, 206, NOW)
+        second = self.detail(service, 206, NOW)
+
+        assert first["pr_state"] == second["pr_state"] == "missing"
+        assert "HTTP 403" in first["pr_state_message"]
+        assert github.count(path) == before + 1
 
     def test_missing_without_a_live_answer(self, service):
         run_backfill(service, mode="full")

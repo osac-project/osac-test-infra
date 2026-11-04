@@ -708,6 +708,25 @@ def test_caas_trace_has_eight_tests(tmp_path, monkeypatch):
     assert search["q"] == ['resource."osac.ci.capture_id"="caas-main-41709318840-a1" && name="test run"']
 
 
+def test_a_capture_without_a_session_span_is_cached_only_briefly(tmp_path, monkeypatch):
+    """The session span is exported last, so an in-progress run has partial
+    tables. Ten minutes of that is a wrong count on an open page."""
+    capture_id = CAAS_CAPTURE
+    # No "test run" span, which is exactly an in-progress run.
+    payload = build_trace(
+        capture_id, parent_tests=8, workers=1, fixtures=2, fixture_uses=3,
+        waits=1, service_spans=0, session_seconds=2463.0, include_session=False,
+    )
+    tempo = FakeTempo({trace_id_for(capture_id): payload})
+    view, _ = build_view(tmp_path, tempo, jobs=[make_job(41709318840, "2026-11-03T21:00:00Z")], monkeypatch=monkeypatch)
+
+    document = fetch(view, capture_id)
+    assert document["state"] == "ok"
+    assert document["coverage"]["session_span"] == 0
+    remaining = view._cache[capture_id]["expires_at"] - time.monotonic()
+    assert remaining <= view.INCOMPLETE_CACHE_TTL_SECONDS + 1
+
+
 def test_a_transient_tempo_failure_is_cached_only_briefly(tmp_path, monkeypatch):
     """A 30-second Tempo restart must not pin the Capture page at `unknown`
     for the full ten-minute TTL."""

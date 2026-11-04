@@ -54,6 +54,24 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 ORG = os.getenv("GITHUB_ORG", "osac-project")
+
+
+def epoch_ms(value):
+    """Unix milliseconds for an ISO timestamp, or None.
+
+    Grafana data links are rendered with this: its URL parser takes epoch
+    milliseconds everywhere, while a 20-character `...Z` string is not one
+    of the formats it accepts, so the range is silently ignored.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
 TOKEN = os.getenv("PRIVATE_GITHUB_TOKEN")
 API_URL = os.getenv("API_URL", "https://api.github.com")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "90"))
@@ -686,7 +704,11 @@ class CaptureRegistry:
             "test_ref, test_sha, test_infra_ref, test_infra_sha, "
             "test_infra_workflow_sha, test_suite, test_filter, test_marker, "
             "session_trace_id, identity_source, capture_started_at, "
-            "first_seen_at, last_seen_at, COUNT(*) OVER () AS matched "
+            "first_seen_at, last_seen_at, "
+            "COALESCE(capture_started_at, "
+            "strftime('%Y-%m-%dT%H:%M:%SZ', first_seen_at, '-2 hours')) AS capture_window_from, "
+            "last_seen_at AS capture_window_to, "
+            "COUNT(*) OVER () AS matched "
             "FROM captures WHERE " + " AND ".join(where) +
             " ORDER BY last_seen_at DESC, capture_id LIMIT :fetch"
         )
@@ -696,6 +718,8 @@ class CaptureRegistry:
         truncated = len(rows) > limit
         for row in rows[:limit]:
             row.pop("matched", None)
+            row["capture_window_from_ms"] = epoch_ms(row["capture_window_from"])
+            row["capture_window_to_ms"] = epoch_ms(row["capture_window_to"])
         return {
             "days": days,
             "window_from": window_from,
@@ -781,7 +805,13 @@ class CaptureRegistry:
             row["capture_ids"] = sorted((row.get("capture_ids") or "").split(","))
             row.pop("matched", None)
         ungrouped = [
-            row | {"reason": self._ungrouped_reason(row)} for row in ungrouped[:limit]
+            row
+            | {
+                "reason": self._ungrouped_reason(row),
+                "capture_window_from_ms": epoch_ms(row["capture_window_from"]),
+                "capture_window_to_ms": epoch_ms(row["capture_window_to"]),
+            }
+            for row in ungrouped[:limit]
         ]
         notes = []
         if truncated:
@@ -4372,20 +4402,22 @@ class WorkflowExporter:
     def _ci_observe_run_where(self, window_from, window_to, before="", run_id=""):
         """The WHERE clause every run-level ci-observe query shares.
 
-        A run-level row is its own run; a pull-request-flow suite row's id is
-        a job id and its run_id is the parent. Only the former is a run, and
-        only its id can appear in a capture id. The gated runs are not E2E.
+        A full-install run has one e2e row whose id is the run id. A
+        pull-request-flow run (e2e-pr.yml, e2e-queue.yml) has one e2e row per
+        suite: its id is a job id and its run_id is the parent run. Both are
+        runs, and a capture id always names the parent run, so the index
+        groups by run_id and a run is visible either way. The gated runs are
+        not E2E.
         """
         where = [
             "j.category = 'e2e'",
             "j.run_id != ''",
-            "j.run_id = CAST(j.id AS TEXT)",
             "LOWER(j.workflow) NOT LIKE '%' || :gate_suffix",
             "COALESCE(LOWER(j.failure_reason), '') != 'gate'",
         ]
         args = {"gate_suffix": self.GATE_NAME_SUFFIX}
         if run_id:
-            where.append("CAST(j.id AS TEXT) = :run_id")
+            where.append("CAST(j.run_id AS INTEGER) = CAST(:run_id AS INTEGER)")
             args["run_id"] = str(run_id)
         else:
             where.append("j.created_at >= :since")
@@ -4393,9 +4425,45 @@ class WorkflowExporter:
             args["since"] = self._iso_utc(window_from)
             args["until"] = self._iso_utc(window_to)
             if before:
-                where.append("j.id < :before")
+                where.append("CAST(j.run_id AS INTEGER) < CAST(:before AS INTEGER)")
                 args["before"] = int(before)
         return " AND ".join(where), args
+
+    # A run can have several e2e rows, so every selected column states how it
+    # combines them. The conclusion follows GitHub: any failed row fails the
+    # run, a row still without one leaves it unfinished, and an all-cancelled
+    # run is cancelled.
+    CI_OBSERVE_RUN_CONCLUSION = (
+        "CASE"
+        " WHEN SUM(CASE WHEN LOWER(COALESCE(j.conclusion, '')) = 'failure' THEN 1 ELSE 0 END) > 0"
+        " THEN 'failure'"
+        " WHEN SUM(CASE WHEN COALESCE(j.conclusion, '') = '' THEN 1 ELSE 0 END) > 0"
+        " THEN ''"
+        " WHEN SUM(CASE WHEN LOWER(COALESCE(j.conclusion, '')) = 'cancelled' THEN 1 ELSE 0 END) > 0"
+        " THEN 'cancelled'"
+        " ELSE 'success'"
+        " END"
+    )
+    CI_OBSERVE_RUN_STATUS = (
+        "CASE WHEN SUM(CASE WHEN LOWER(COALESCE(j.status, '')) != 'completed' THEN 1 ELSE 0 END) > 0"
+        " THEN MAX(CASE WHEN LOWER(COALESCE(j.status, '')) != 'completed' THEN j.status END)"
+        " ELSE 'completed' END"
+    )
+    CI_OBSERVE_RUN_WORKFLOW = (
+        "CASE WHEN COUNT(DISTINCT j.workflow) > 1"
+        " THEN GROUP_CONCAT(DISTINCT j.workflow)"
+        " ELSE MAX(j.workflow) END"
+    )
+    # The stored url of a suite row is its job page. Prefer the run-level
+    # row's url; otherwise build the run page from the repo and run id.
+    CI_OBSERVE_RUN_URL = (
+        "COALESCE("
+        " MAX(CASE WHEN CAST(j.id AS TEXT) = j.run_id THEN j.url END),"
+        " MAX(CASE WHEN j.repo != '' THEN"
+        " 'https://github.com/' || :org || '/' || j.repo || '/actions/runs/' || j.run_id END),"
+        " MAX(j.url)"
+        ")"
+    )
 
     @staticmethod
     def _iso_utc(value):
@@ -4412,17 +4480,17 @@ class WorkflowExporter:
         window_from = now - timedelta(days=days)
         where, args = self._ci_observe_run_where(window_from, now)
         sql = f"""
-            SELECT j.id AS id,
-                   j.conclusion AS conclusion,
-                   j.status AS status,
-                   j.created_at AS created_at,
-                   j.updated_at AS updated_at,
-                   GROUP_CONCAT(c.capture_id) AS capture_ids
+            SELECT j.run_id AS id,
+                   {self.CI_OBSERVE_RUN_CONCLUSION} AS conclusion,
+                   {self.CI_OBSERVE_RUN_STATUS} AS status,
+                   MIN(j.created_at) AS created_at,
+                   MAX(j.updated_at) AS updated_at,
+                   GROUP_CONCAT(DISTINCT c.capture_id) AS capture_ids
             FROM jobs j
             LEFT JOIN captures c ON c.run_id = j.run_id
             WHERE {where}
-            GROUP BY j.id
-            ORDER BY j.id DESC
+            GROUP BY j.run_id
+            ORDER BY CAST(j.run_id AS INTEGER) DESC
         """
         with self._db() as conn:
             rows = [dict(row) for row in conn.execute(sql, args)]
@@ -4445,25 +4513,26 @@ class WorkflowExporter:
         window_from = now - timedelta(days=days)
         where_sql, args = self._ci_observe_run_where(window_from, now, before, run_id)
         args["fetch"] = limit + 1
+        args["org"] = ORG
         sql = f"""
-            SELECT j.id AS id,
+            SELECT j.run_id AS id,
                    j.run_id AS run_id,
-                   j.workflow AS workflow,
-                   j.trigger AS trigger,
-                   j.branch AS branch,
-                   j.conclusion AS conclusion,
-                   j.status AS status,
-                   j.created_at AS created_at,
-                   j.updated_at AS updated_at,
-                   j.url AS url,
+                   {self.CI_OBSERVE_RUN_WORKFLOW} AS workflow,
+                   MAX(j.trigger) AS trigger,
+                   MAX(j.branch) AS branch,
+                   {self.CI_OBSERVE_RUN_CONCLUSION} AS conclusion,
+                   {self.CI_OBSERVE_RUN_STATUS} AS status,
+                   MIN(j.created_at) AS created_at,
+                   MAX(j.updated_at) AS updated_at,
+                   {self.CI_OBSERVE_RUN_URL} AS url,
                    COUNT(*) OVER () AS matched,
-                   GROUP_CONCAT(c.capture_id) AS capture_ids,
+                   GROUP_CONCAT(DISTINCT c.capture_id) AS capture_ids,
                    MAX(CASE WHEN c.identity_source = 'info' THEN 1 ELSE 0 END) AS identity_info
             FROM jobs j
             LEFT JOIN captures c ON c.run_id = j.run_id
             WHERE {where_sql}
-            GROUP BY j.id
-            ORDER BY j.id DESC
+            GROUP BY j.run_id
+            ORDER BY CAST(j.run_id AS INTEGER) DESC
             LIMIT :fetch
         """
         with self._db() as conn:
@@ -4479,6 +4548,10 @@ class WorkflowExporter:
             page.append(
                 row | {
                     "id": str(row["id"]),
+                    # A multi-suite run lists every suite. GROUP_CONCAT's
+                    # order is row order, which SQLite does not promise, so
+                    # sort it: the label must not change between requests.
+                    "workflow": ",".join(sorted(str(row["workflow"] or "").split(","))),
                     "capture_ids": capture_ids,
                     "identity_source": "info" if row.pop("identity_info") else "none",
                 }

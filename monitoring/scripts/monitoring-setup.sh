@@ -792,6 +792,18 @@ cp "${MONITORING_REPO_DIR}/scripts/ci_observe_prs.py" \
    "${MONITORING_HOME}/scripts/ci_observe_prs.py"
 chmod +x "${MONITORING_HOME}/scripts/ci_observe_prs.py"
 info "Installed ci_observe_prs.py"
+# The workflow-exporter quadlet bind-mounts these four from
+# ${MONITORING_HOME}/scripts, and workflow-exporter.py imports three of them
+# at load. A first install must copy them or the container cannot start.
+cp "${MONITORING_REPO_DIR}/scripts/workflow-exporter.py" \
+   "${MONITORING_HOME}/scripts/workflow-exporter.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_run_evidence.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_run_evidence.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_runs.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_runs.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_capture_view.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_capture_view.py"
+info "Installed workflow-exporter and its ci-observe modules"
 
 ###############################################################################
 # Phase 3: Deploy Quadlet units

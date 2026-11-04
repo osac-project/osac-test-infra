@@ -121,6 +121,11 @@ TIMER_MINUTE = 5
 # A live lookup on an unstored pull request is read-only. One minute of cache
 # keeps a dashboard refresh from spending the shared GitHub budget.
 LIVE_CACHE_TTL_SECONDS = 60
+# A failed lookup is cached too. Every detail panel refreshes, and while
+# GitHub returns 403 or 502 each refresh would spend the shared token's
+# budget again, at the moment that budget is already low. Failures clear
+# sooner than answers.
+LIVE_FAILURE_CACHE_TTL_SECONDS = 15
 # Hourly rows for 60 days are 1440; keep a little slack and drop the rest.
 BACKFILL_RUNS_KEEP = 2000
 
@@ -1390,29 +1395,37 @@ class CIObservePRs:
             return None, "no GitHub access is configured"
         key = (repo, number)
         cached = _LIVE_PR_CACHE.get(key)
-        if cached is not None and time.monotonic() - cached[0] < LIVE_CACHE_TTL_SECONDS:
+        if cached is not None and time.monotonic() - cached[0] < cached[3]:
             return cached[1], cached[2]
         url = f"{API_URL}/repos/{ORG}/{repo}/pulls/{number}"
         try:
             resp = self.api._get(url)
         except requests.RequestException as exc:
-            return None, f"the live lookup failed: {exc}"
+            return self._remember_live(
+                key, None, f"the live lookup failed: {exc}", LIVE_FAILURE_CACHE_TTL_SECONDS
+            )
         if resp.status_code == 404:
-            result = (None, f"GitHub has no pull request #{number} in {repo}")
-        elif not resp.ok:
-            return None, f"the live lookup returned HTTP {resp.status_code}"
-        else:
-            result = (resp.json(), "")
-        _LIVE_PR_CACHE[key] = (time.monotonic(), result[0], result[1])
+            return self._remember_live(key, None, f"GitHub has no pull request #{number} in {repo}")
+        if not resp.ok:
+            return self._remember_live(
+                key,
+                None,
+                f"the live lookup returned HTTP {resp.status_code}",
+                LIVE_FAILURE_CACHE_TTL_SECONDS,
+            )
+        return self._remember_live(key, resp.json(), "")
+
+    @staticmethod
+    def _remember_live(key, document, message, ttl=LIVE_CACHE_TTL_SECONDS):
+        """Cache one live answer, success or failure, and prune expired
+        entries. Returns (document, message) so the caller stays a return."""
+        now = time.monotonic()
+        _LIVE_PR_CACHE[key] = (now, document, message, ttl)
         if len(_LIVE_PR_CACHE) > 256:
-            expired = [
-                cached_key
-                for cached_key, (cached_at, _, _) in _LIVE_PR_CACHE.items()
-                if time.monotonic() - cached_at >= LIVE_CACHE_TTL_SECONDS
-            ]
-            for cached_key in expired:
-                _LIVE_PR_CACHE.pop(cached_key, None)
-        return result
+            for cached_key, entry in list(_LIVE_PR_CACHE.items()):
+                if now - entry[0] >= entry[3]:
+                    _LIVE_PR_CACHE.pop(cached_key, None)
+        return document, message
 
     def _live_record(self, repo, number, live):
         """The identity a live lookup can supply. It is a PR object with the

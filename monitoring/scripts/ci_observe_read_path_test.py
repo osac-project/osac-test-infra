@@ -289,12 +289,13 @@ def check_clean(name: str, samples: Load) -> list[Check]:
 
 
 def check_concurrency(name: str, single: Load, concurrent: Load) -> list[Check]:
-    """Four readers: clean statuses, and p95 no worse than twice one reader.
+    """Four readers: p95 no worse than twice one reader.
 
-    Both loads carry successful requests only; a dead endpoint is a status
-    failure, not a fast concurrency result.
+    Both loads carry successful requests only. Statuses and 429s are checked
+    by the caller against the unfiltered load: passing only the 200s here
+    would make those checks unable to fail.
     """
-    checks = check_clean(f"{name}/4-readers", concurrent)
+    checks: list[Check] = []
     single_p95 = percentile(single.latencies, 0.95)
     concurrent_p95 = percentile(concurrent.latencies, 0.95)
     if single_p95 is None or concurrent_p95 is None:
@@ -811,6 +812,7 @@ def measure(args: argparse.Namespace) -> list[Check]:
         warm = load(url, 1, args.warm_samples, args.timeout)
         checks.extend(check_clean(f"{name}/warm", warm))
         four = load(url, 4, args.per_request, args.timeout)
+        checks.extend(check_clean(f"{name}/4-readers", four))
         # A budget is a claim about a successful answer. A dead endpoint is
         # already a status failure; its absence must not read as a fast pass.
         answered = [result for result in warm.results if result.status == 200]
@@ -913,7 +915,10 @@ def check_completeness(api_base: str, args: argparse.Namespace) -> list[Check]:
     checks = check_coverage_window(document, args.coverage_limit)
     registry = capture_ids_from_registry(document)
     readers = (
-        ("prometheus", prometheus_capture_ids, args.prometheus_url, 15),
+        # Prometheus keeps 15 days, so a narrower --coverage-days must narrow
+        # it too; otherwise the registry looks like it is missing captures
+        # that Prometheus was never asked about.
+        ("prometheus", prometheus_capture_ids, args.prometheus_url, min(args.coverage_days, 15)),
         ("loki", loki_capture_ids, args.loki_url, min(args.coverage_days, 30)),
         ("tempo", tempo_capture_ids, args.tempo_url, min(args.coverage_days, 30)),
     )
