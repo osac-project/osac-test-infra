@@ -3,28 +3,28 @@
 monitoring/config/grafana/dashboards/ci-observe-runs-home.json is the
 router, not one of the three ci-observe dashboards (see ci-observe/model.md).
 It accepts a run id or capture id in **Find**, a pull request from the
-**Pull request lookup** and a test id from the **Test id lookup**, and it
+**Pull request lookup**, and a test id from the **Test id lookup**, and it
 lists the run index behind an empty input.
 
-These tests pin four things a reader at the front door depends on:
+The page reads only the workflow exporter's HTTP endpoints. Tempo is not a
+data source here: the run index, the verdict cards and the capture lookup
+come from /api/ci-observe/runs and /api/ci-observe/captures. The endpoint's
+verdict is the only source of `capture`, `not collected` and `unknown`; the
+page never derives one from a Tempo answer.
 
-- the Find box is still there and still narrows every Tempo query;
-- each lookup reads the endpoint of the dashboard it opens, and its link
-  carries the exact Grafana variable that dashboard expects
-  (`pr_number`/`pr_repo` for Pull requests, `test` for Trends);
-- every lookup column exists in the dashboard it links to, so the two
-  cannot drift apart;
-- the all-runs table states the honest limit of the data: the workflow
-  exporter stores no capture id and cannot read Tempo, so the page cannot
-  print a `not collected` verdict on a row, and it must not pretend to.
+These tests pin five things a reader at the front door depends on:
 
-The test id lookup takes its per-test sums from the endpoint's
-`summary=test` mode rather than re-aggregating the capped rollup rows on
-the page; that mode and its arithmetic are pinned in
-test_ci_observe_trends.py. The data-path half of the all-runs table lives at
-the bottom of this file: the real /api/jobs response is resolved against
-this dashboard's URL and selectors, so a filter change that silently empties
-the table fails here.
+- the exact lookups: `run=` for a run id and `capture_id=` for a capture id;
+- the real counts and both truncation counts, with no page-side row cap;
+- the run table's capture link carries `var-capture_id` and the run's own
+  start and finish as `from` and `to`;
+- each lookup column exists in the dashboard it links to, so the two cannot
+  drift apart;
+- every selector resolves against a fixture document with the endpoint's keys.
+
+The data-path half lives at the bottom of this file: fixture documents use
+the keys the endpoints return, and every column selector is resolved against
+them so a filter change that silently empties a panel fails here.
 """
 
 from __future__ import annotations
@@ -32,8 +32,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from urllib.parse import quote
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, quote, urlparse
 
 
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
@@ -41,11 +40,22 @@ HOME_FILE = DASHBOARDS_DIR / "ci-observe-runs-home.json"
 HOME = json.loads(HOME_FILE.read_text())
 PANELS = {panel["title"]: panel for panel in HOME["panels"]}
 INFINITY = {"type": "yesoreyeram-infinity-datasource", "uid": "workflow-api"}
+TEMPO = {"type": "tempo", "uid": "ci-observe-traces"}
 TEMPLATE_TOKEN = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+API = "http://127.0.0.1:9103/api/ci-observe"
 
 PR_LOOKUP = "Pull request lookup, one pull request per row, last $days days (workflow exporter)"
 TEST_LOOKUP = "Test id lookup, one test per row, last 7 days (workflow exporter)"
-E2E_RUNS = "Recent E2E runs and their capture, all jobs, last $days days (workflow exporter + Tempo)"
+RUN_LOOKUP = "Lookup by run id, exact match (workflow exporter + capture registry)"
+CAPTURE_LOOKUP = "Lookup by capture id, exact match (capture registry)"
+E2E_RUNS = "Recent E2E runs and their capture, all jobs, last $days days (workflow exporter + capture registry)"
+COMPLETENESS = "Run index completeness and capture registry coverage, last $days days"
+CARD_TITLES = [
+    "Runs in the window, all jobs, last $days days",
+    "capture, all jobs, last $days days",
+    "not collected, all jobs, last $days days",
+    "unknown, all jobs, last $days days",
+]
 
 PRS_DASHBOARD = json.loads((DASHBOARDS_DIR / "ci-observe-pull-requests.json").read_text())
 TRENDS_DASHBOARD = json.loads((DASHBOARDS_DIR / "ci-observe-trends.json").read_text())
@@ -94,6 +104,22 @@ def resolved_url(panel: dict, field: str, raw: str) -> str:
     )
 
 
+def resolve_rows(document: dict, root_selector: str) -> list[dict]:
+    if root_selector == "$":
+        return [document]
+    node = document
+    for part in root_selector.lstrip("$.").split("."):
+        node = node[part]
+    return node if isinstance(node, list) else [node]
+
+
+def resolve_field(row: dict, selector: str):
+    node = row
+    for part in selector.split("."):
+        node = node[part]
+    return node
+
+
 # ---------------------------------------------------------------------------
 # The page as a router
 # ---------------------------------------------------------------------------
@@ -115,18 +141,37 @@ def test_the_page_accepts_every_unit() -> None:
     assert "router" in content.lower()
 
 
-def test_the_intro_defines_every_capture_verdict() -> None:
+def test_the_intro_defines_every_capture_verdict_and_its_reason() -> None:
     """A reader must know what each verdict means before reading a row."""
     content = PANELS["Start here"]["options"]["content"]
     start = content.index("**Runs with no capture.**")
     paragraph = content[start:].split("\n\n", 1)[0]
 
-    assert "**Capture** column is the verdict" in paragraph
+    assert "**Capture** column is the registry endpoint's verdict" in paragraph
     assert "**capture** means at least one capture id names the run" in paragraph
-    assert "**not collected** means GitHub has the run and no telemetry arrived" in paragraph
-    assert "**unknown** means the page could not tell" in paragraph
+    assert "**not collected** means the run finished, the registry covered its window, and no telemetry arrived" in paragraph
+    assert "**unknown** means the registry could not tell" in paragraph
+    assert "**Why** column carries the reason" in paragraph
     assert "**unknown** is never a claim that a capture is missing" in paragraph
     assert "statement about the recording, not about the result" in paragraph
+    assert "never infers a verdict from Tempo" in paragraph
+
+
+def test_the_intro_glosses_suite_and_osac_in_one_line() -> None:
+    content = PANELS["Start here"]["options"]["content"]
+    paragraph = content.split("**Suite and OSAC.**", 1)[1].split("\n\n", 1)[0]
+    assert "**suite** is the test target" in paragraph
+    assert "**OSAC** is the product repository" in paragraph
+    assert "source revision" in paragraph
+
+
+def test_the_intro_labels_each_window() -> None:
+    content = PANELS["Start here"]["options"]["content"]
+    windows = content.split("**Windows.**", 1)[1].split("\n\n", 1)[0]
+    assert "Pull request lookup reads $days days" in windows
+    assert "Test id lookup always reads 7 days" in windows
+    assert "run table and its cards read $days days" in windows
+    assert "dashboard time range does not affect" in windows
 
 
 def test_every_link_opens_a_dashboard_that_exists() -> None:
@@ -140,6 +185,18 @@ def test_every_link_opens_a_dashboard_that_exists() -> None:
     assert targets <= uids, f"links to unknown dashboards: {sorted(targets - uids)}"
 
 
+def test_the_page_has_no_tempo_target() -> None:
+    """The registry endpoints answer every question on this page. No panel may
+    fall back to a wildcard TraceQL search for capture ids or a span cap."""
+    for panel in HOME["panels"]:
+        assert panel.get("datasource") != TEMPO, panel["title"]
+        for target in panel.get("targets", []):
+            assert target.get("queryType") != "traceql", panel["title"]
+            assert "query" not in target, panel["title"]
+            assert "spss" not in target, panel["title"]
+            assert "osac.ci.capture_id" not in json.dumps(target), panel["title"]
+
+
 # ---------------------------------------------------------------------------
 # Pull request lookup
 # ---------------------------------------------------------------------------
@@ -149,7 +206,7 @@ def test_pull_request_lookup_reads_the_prs_endpoint() -> None:
     assert panel["datasource"] == INFINITY
 
     target = panel["targets"][0]
-    assert target["url"] == "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}"
+    assert target["url"] == f"{API}/prs?days=${{days}}"
     assert target["root_selector"] == "$.prs"
     assert target["url_options"] == {"method": "GET", "data": ""}
 
@@ -214,7 +271,7 @@ def test_test_id_lookup_reads_the_rollup() -> None:
     assert panel["datasource"] == INFINITY
 
     target = panel["targets"][0]
-    assert target["url"] == "http://127.0.0.1:9103/api/ci-observe/trends?days=7&summary=test"
+    assert target["url"] == f"{API}/trends?days=7&summary=test"
     assert target["root_selector"] == "tests"
     assert target["url_options"] == {"method": "GET", "data": ""}
     assert selectors(panel) == {"test_id", "suite", "repo", "runs", "failures"}
@@ -267,30 +324,131 @@ def test_test_id_lookup_states_its_fixed_window() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The all-runs table and its capture verdict
+# Find: the two exact lookups
 # ---------------------------------------------------------------------------
-def test_all_runs_table_reads_the_runs_endpoint() -> None:
+def test_find_by_run_id_reads_the_exact_run_endpoint() -> None:
+    panel = PANELS[RUN_LOOKUP]
+    assert panel["type"] == "table"
+    assert panel["datasource"] == INFINITY
+
+    target = panel["targets"][0]
+    assert target["url"] == f"{API}/runs?run=${{find}}"
+    assert target["root_selector"] == "$.runs"
+    assert target["url_options"] == {"method": "GET", "data": ""}
+
+
+def test_find_by_capture_id_reads_the_registry_endpoint() -> None:
+    panel = PANELS[CAPTURE_LOOKUP]
+    assert panel["type"] == "table"
+    assert panel["datasource"] == INFINITY
+
+    target = panel["targets"][0]
+    assert target["url"] == f"{API}/captures?capture_id=${{find}}"
+    assert target["root_selector"] == "$.captures"
+    assert target["url_options"] == {"method": "GET", "data": ""}
+
+
+def test_capture_lookup_carries_the_registry_fields() -> None:
+    assert selectors(PANELS[CAPTURE_LOOKUP]) >= {
+        "capture_id", "run_id", "run_attempt", "suite", "pr", "workflow",
+        "test_ref", "test_sha", "test_infra_ref", "test_infra_sha",
+        "test_infra_workflow_sha", "test_suite", "test_filter", "test_marker",
+        "identity_source", "capture_started_at", "first_seen_at", "last_seen_at",
+    }
+    assert "No capture has this id in the registry" in PANELS[CAPTURE_LOOKUP]["fieldConfig"]["defaults"]["noValue"]
+
+
+# ---------------------------------------------------------------------------
+# The run index: cards, completeness and table
+# ---------------------------------------------------------------------------
+def test_the_run_table_reads_the_runs_endpoint_without_a_page_limit() -> None:
     panel = PANELS[E2E_RUNS]
     assert panel["datasource"] == INFINITY
 
     params = url_params(panel, days="7")
-    assert params["days"] == "7"
-    assert params["limit"] == "200"
-    assert panel["targets"][0]["url"].startswith("http://127.0.0.1:9103/api/ci-observe/runs?")
+    assert params == {"days": "7"}, "the endpoint owns the page size; a limit here would hide rows"
+    assert panel["targets"][0]["url"].startswith(f"{API}/runs?")
     assert panel["targets"][0]["root_selector"] == "$.runs"
 
 
-def test_all_runs_table_carries_the_identity_and_the_verdict() -> None:
-    assert selectors(PANELS[E2E_RUNS]) == {
+def test_the_page_never_hardcodes_two_hundred_rows() -> None:
+    body = json.dumps(HOME)
+    assert "limit=200" not in body
+    assert "limit=2000" not in body
+
+
+def test_the_four_cards_read_the_run_index() -> None:
+    for title in CARD_TITLES:
+        panel = PANELS[title]
+        assert panel["type"] == "stat", title
+        assert panel["datasource"] == INFINITY, title
+        assert panel["targets"][0]["url"] == f"{API}/runs?days=${{days}}", title
+
+    total = PANELS[CARD_TITLES[0]]["targets"][0]
+    assert total["root_selector"] == "$", "the window total is the endpoint's total, not the rows shown"
+    assert selectors(PANELS[CARD_TITLES[0]]) == {"total"}
+    assert PANELS[CARD_TITLES[0]]["options"]["reduceOptions"] == {
+        "calcs": ["lastNotNull"],
+        "fields": "total",
+        "values": False,
+    }
+
+    for title in CARD_TITLES[1:]:
+        panel = PANELS[title]
+        assert panel["targets"][0]["root_selector"] == "$.runs", title
+        assert panel["options"]["reduceOptions"]["calcs"] == ["count"], title
+
+
+def test_the_three_verdict_cards_filter_the_endpoint_verdict() -> None:
+    """The cards count the endpoint's verdict values; they never compute one."""
+    expected = {
+        CARD_TITLES[0]: None,
+        CARD_TITLES[1]: "capture",
+        CARD_TITLES[2]: "not collected",
+        CARD_TITLES[3]: "unknown",
+    }
+    for title, verdict in expected.items():
+        panel = PANELS[title]
+        transforms = [t for t in panel.get("transformations", []) if t["id"] == "filterByValue"]
+        if verdict is None:
+            assert not transforms, "the total card counts every run"
+            continue
+        assert len(transforms) == 1, title
+        (filter_config,) = transforms[0]["options"]["filters"]
+        assert filter_config["fieldName"] == "capture_state"
+        assert filter_config["config"] == {"id": "equal", "options": {"value": verdict}}
+
+
+def test_the_completeness_panel_states_both_counts_and_truncation() -> None:
+    """A truncated page must say how many rows it shows and how many exist."""
+    panel = PANELS[COMPLETENESS]
+    assert panel["datasource"] == INFINITY
+    assert panel["targets"][0]["root_selector"] == "$"
+    assert selectors(panel) >= {"truncated", "shown", "total"}
+    assert panel["targets"][0]["url"] == f"{API}/runs?days=${{days}}"
+
+    description = panel["description"]
+    assert "Shown is the number of run rows returned" in description
+    assert "Total is the number of runs" in description
+    assert "Truncated says whether more runs matched" in description
+    assert "Both counts come from the endpoint" in description
+
+    default = panel["fieldConfig"]["defaults"]["noValue"]
+    assert "returned no completeness row" in default
+
+
+def test_the_run_table_carries_the_identity_the_verdict_and_the_reason() -> None:
+    assert selectors(PANELS[E2E_RUNS]) >= {
         "id", "workflow", "trigger", "branch", "conclusion",
-        "capture_state", "created_at", "url",
+        "capture_state", "capture_reason", "identity_source",
+        "capture_id", "created_at", "url",
     }
 
 
-def test_all_runs_table_shows_each_verdict_distinctly() -> None:
+def test_the_run_table_shows_each_verdict_distinctly() -> None:
     """The three states come from the endpoint. Each must be visible and
     distinct: a reader who cannot tell `unknown` from `not collected` will
-    read a Tempo outage as a CI problem."""
+    read a registry gap as a CI problem."""
     mapping = properties(PANELS[E2E_RUNS], "capture_state")["mappings"][0]["options"]
 
     assert mapping["capture"]["text"] == "capture"
@@ -299,6 +457,32 @@ def test_all_runs_table_shows_each_verdict_distinctly() -> None:
     assert mapping["not collected"]["color"] == "orange"
     assert mapping["unknown"]["text"] == "unknown"
     assert mapping["unknown"]["color"] == "text"
+
+
+def test_the_reason_column_is_visible_next_to_the_verdict() -> None:
+    reason = properties(PANELS[E2E_RUNS], "capture_reason")
+    assert reason["displayName"] == "Why"
+    state = properties(PANELS[E2E_RUNS], "capture_state")
+    assert state["displayName"] == "Capture"
+
+
+def test_the_run_id_links_to_capture_with_the_runs_own_window() -> None:
+    """The run row opens Capture with `var-capture_id` and the run's own start
+    and finish as `from` and `to`, so a reader does not land on "now"."""
+    link = links(PANELS[E2E_RUNS], "id")[0]
+    url = link["url"]
+    assert url.startswith("/d/ci-observe-runs/ci-observe-e28094-run-investigation?")
+    assert "var-capture_id=${__data.fields.capture_id}" in url
+    assert "from=${__data.fields.started_at}" in url
+    assert "to=${__data.fields.finished_at}" in url
+
+
+def test_the_capture_lookup_link_carries_its_own_window() -> None:
+    url = links(PANELS[CAPTURE_LOOKUP], "capture_id")[0]["url"]
+    assert url.startswith("/d/ci-observe-runs/ci-observe-e28094-run-investigation?")
+    assert "var-capture_id=${__value.raw}" in url
+    assert "from=${__data.fields.capture_started_at}" in url
+    assert "to=${__data.fields.last_seen_at}" in url
 
 
 def test_a_not_collected_row_links_to_github() -> None:
@@ -314,40 +498,17 @@ def test_the_table_description_keeps_unknown_honest() -> None:
     description = PANELS[E2E_RUNS]["description"]
     assert "not collected" in description
     assert "unknown" in description
-    assert "Tempo was unreachable" in description
-    assert "30-day retention" in description
+    assert "never infers a verdict from Tempo" in description
+    assert "7 days" in description
     assert "last $days days" in PANELS[E2E_RUNS]["title"]
 
 
-def test_all_runs_table_links_the_run_and_github() -> None:
-    panel = PANELS[E2E_RUNS]
-    run_url = resolved_url(panel, "id", "41310072671")
-
-    assert run_url.startswith("/d/ci-observe-runs-home/ci-observe-runs-home?")
-    assert "var-find=41310072671" in run_url
-    assert resolved_url(panel, "url", "https://github.com/osac-project/osac/actions/runs/1") == (
-        "https://github.com/osac-project/osac/actions/runs/1"
-    )
-
-
-def test_a_run_id_link_finds_its_capture() -> None:
-    """The entry page's own contract: `find` is a regex over the capture id,
-    and the capture id embeds the GitHub run id, so a run id clicks through
-    to its capture. When no capture exists the same click lands on the
-    narrowed index, which is the point of listing the run at all."""
-    url = resolved_url(PANELS[E2E_RUNS], "id", "41310072671")
-    find = re.search(r"var-find=([^&]+)", url).group(1)
-
-    assert re.search(find, "vmaas-main-41310072671-a1")
-    assert re.search(find, "caas-pr123-41310072671-a2")
-
-
-def test_only_the_runs_table_claims_a_capture_verdict() -> None:
-    """A capture verdict per row needs the Tempo join, which only
-    /api/ci-observe/runs does. The capture tables above report what arrived,
-    not what failed to arrive, so a verdict value there would be invented."""
+def test_only_the_run_table_claims_a_capture_verdict() -> None:
+    """A capture verdict needs the registry join, which only /runs does. The
+    lookups report registry rows, not what failed to arrive, so a verdict
+    value there would be invented."""
     for panel in HOME["panels"]:
-        if panel["title"] == E2E_RUNS:
+        if panel["title"] in (E2E_RUNS, RUN_LOOKUP):
             continue
         for entry in panel["fieldConfig"].get("overrides", []):
             assert "not collected" not in json.dumps(entry), panel["title"]
@@ -387,15 +548,23 @@ def test_no_template_token_is_left_unresolved() -> None:
 # ---------------------------------------------------------------------------
 # Data path: the columns above against the endpoint contract
 # ---------------------------------------------------------------------------
-# One response row, pinned here so this file passes in a tree without the
+# One response document, pinned here so this file passes in a tree without the
 # backend. The real endpoint resolves the same selectors in
-# test_ci_observe_runs.py::test_the_dashboard_selectors_resolve_against_the_endpoint.
+# test_ci_observe_runs.py and test_ci_observe_capture.py.
 RUNS_DOCUMENT = {
     "days": 7,
     "window_from": "2026-10-28T10:00:00Z",
     "window_to": "2026-11-04T10:00:00Z",
-    "tempo": {"url": "http://127.0.0.1:3210", "tag": "resource.osac.ci.capture_id",
-              "chunks": 1, "cached": False, "captures": 1, "state": "ok", "note": ""},
+    "source": {
+        "state": "ok",
+        "last_ok_at": "2026-11-04T09:59:00Z",
+        "coverage_from": "2026-10-20T10:00:00Z",
+        "captures": 217,
+        "rejected": 2,
+    },
+    "truncated": True,
+    "shown": 200,
+    "total": 1737,
     "runs": [{
         "id": "41310072671",
         "workflow": "E2E VMaaS Full Install",
@@ -403,23 +572,113 @@ RUNS_DOCUMENT = {
         "branch": "fix/restart",
         "conclusion": "failure",
         "created_at": "2026-11-03T10:00:00Z",
+        "started_at": "2026-11-03T10:01:00Z",
+        "finished_at": "2026-11-03T10:42:00Z",
         "url": "https://github.com/osac-project/osac/actions/runs/41310072671",
         "capture_state": "capture",
         "capture_ids": ["vmaas-pr123-41310072671-a1"],
+        "capture_id": "vmaas-pr123-41310072671-a1",
         "capture_reason": "",
+        "identity_source": "info",
+    }, {
+        "id": "41310072672",
+        "workflow": "E2E VMaaS Full Install",
+        "trigger": "main",
+        "branch": "main",
+        "conclusion": "failure",
+        "created_at": "2026-11-03T09:00:00Z",
+        "started_at": "2026-11-03T09:01:00Z",
+        "finished_at": "2026-11-03T09:50:00Z",
+        "url": "https://github.com/osac-project/osac/actions/runs/41310072672",
+        "capture_state": "not collected",
+        "capture_ids": [],
+        "capture_id": "",
+        "capture_reason": "",
+        "identity_source": "none",
+    }, {
+        "id": "41310072673",
+        "workflow": "E2E VMaaS Full Install",
+        "trigger": "main",
+        "branch": "main",
+        "conclusion": "",
+        "created_at": "2026-11-04T09:55:00Z",
+        "started_at": "2026-11-04T09:55:00Z",
+        "finished_at": "",
+        "url": "https://github.com/osac-project/osac/actions/runs/41310072673",
+        "capture_state": "unknown",
+        "capture_ids": [],
+        "capture_id": "",
+        "capture_reason": "the run has not finished",
+        "identity_source": "none",
+    }],
+    "notes": [],
+}
+
+CAPTURES_DOCUMENT = {
+    "days": 30,
+    "window_from": "2026-10-05T10:00:00Z",
+    "window_to": "2026-11-04T10:00:00Z",
+    "captures": [{
+        "capture_id": "vmaas-pr123-41310072671-a1",
+        "run_id": "41310072671",
+        "run_attempt": "1",
+        "suite": "vmaas",
+        "pr": "123",
+        "workflow": "E2E VMaaS Full Install",
+        "test_ref": "refs/pull/123/head",
+        "test_sha": "a" * 40,
+        "test_infra_ref": "refs/heads/main",
+        "test_infra_sha": "b" * 40,
+        "test_infra_workflow_sha": "c" * 40,
+        "test_suite": "vmaas",
+        "test_filter": "none",
+        "test_marker": "none",
+        "identity_source": "info",
+        "capture_started_at": "2026-11-03T10:01:00Z",
+        "first_seen_at": "2026-11-03T10:02:00Z",
+        "last_seen_at": "2026-11-04T09:59:00Z",
     }],
     "notes": [],
 }
 
 
-def test_every_column_resolves_against_the_runs_contract() -> None:
+def test_every_run_column_resolves_against_the_runs_contract() -> None:
     panel = PANELS[E2E_RUNS]
-    selector = panel["targets"][0]["root_selector"]
-    node = RUNS_DOCUMENT
-    for part in selector.lstrip("$.").split("."):
-        node = node[part]
-    rows = node if isinstance(node, list) else [node]
-
+    rows = resolve_rows(RUNS_DOCUMENT, panel["targets"][0]["root_selector"])
     assert rows, "the contract document has no rows"
     for column in panel["targets"][0]["columns"]:
-        assert column["selector"] in rows[0], f"column {column['selector']} is not in the contract"
+        resolve_field(rows[0], column["selector"])
+
+
+def test_every_card_column_resolves_against_the_runs_contract() -> None:
+    for title in CARD_TITLES:
+        panel = PANELS[title]
+        rows = resolve_rows(RUNS_DOCUMENT, panel["targets"][0]["root_selector"])
+        for column in panel["targets"][0]["columns"]:
+            resolve_field(rows[0], column["selector"])
+
+
+def test_every_completeness_column_resolves_against_the_runs_contract() -> None:
+    panel = PANELS[COMPLETENESS]
+    (row,) = resolve_rows(RUNS_DOCUMENT, panel["targets"][0]["root_selector"])
+    for column in panel["targets"][0]["columns"]:
+        resolve_field(row, column["selector"])
+
+
+def test_every_capture_column_resolves_against_the_capture_contract() -> None:
+    panel = PANELS[CAPTURE_LOOKUP]
+    rows = resolve_rows(CAPTURES_DOCUMENT, panel["targets"][0]["root_selector"])
+    assert rows, "the capture contract has no rows"
+    for column in panel["targets"][0]["columns"]:
+        resolve_field(rows[0], column["selector"])
+
+
+def test_the_fixture_documents_show_every_verdict_and_both_counts() -> None:
+    """The fixture is the endpoint contract: three verdicts, one empty reason
+    for a capture, a real reason for unknown, and both truncation counts."""
+    states = {run["capture_state"] for run in RUNS_DOCUMENT["runs"]}
+    assert states == {"capture", "not collected", "unknown"}
+    assert RUNS_DOCUMENT["truncated"] is True
+    assert RUNS_DOCUMENT["shown"] < RUNS_DOCUMENT["total"]
+    unknown = next(run for run in RUNS_DOCUMENT["runs"] if run["capture_state"] == "unknown")
+    assert unknown["capture_reason"] == "the run has not finished"
