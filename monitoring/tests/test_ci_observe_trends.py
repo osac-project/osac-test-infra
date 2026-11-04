@@ -285,6 +285,32 @@ class TestCandidateRuns:
         assert runs[0]["source_sha"] == SHA
         assert runs[0]["repo"] == "osac"
 
+    @pytest.mark.parametrize("reversed_rows", [False, True], ids=["run-row-first", "run-row-last"])
+    def test_an_empty_sha_never_overwrites_the_run_rows_sha(self, trends, reversed_rows):
+        """The exporter stores the run's own row and, for a flow run, a row per
+        suite. A suite row written before head_sha existed keeps an empty one,
+        and a suite row whose job payload carried no html_url stores the run's
+        URL. Such a row used to overwrite the run row and blank the SHA of a
+        whole day's rollup (source_sha ''), losing exactly the two revisions a
+        comparison needs."""
+        rows = [
+            pipeline_row(),  # the run's own row: id == run id, head_sha set
+            suite_row(101, url=f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}", head_sha=""),
+        ]
+        if reversed_rows:
+            rows.reverse()
+
+        runs = trends.candidate_runs(rows)
+
+        assert len(runs) == 1
+        assert runs[0]["source_sha"] == SHA, "an empty head_sha must not win over the run row's"
+        assert runs[0]["workflow"] == "E2E for pull requests", "the run row names the run, not a suite"
+
+    def test_a_run_row_keeps_its_sha_when_only_a_suite_row_has_none(self, trends):
+        runs = trends.candidate_runs([run_row(head_sha=""), suite_row(101, head_sha="")])
+
+        assert runs[0]["source_sha"] == ""
+
     def test_a_direct_run_keeps_its_own_workflow(self, trends):
         runs = trends.candidate_runs([run_row()])
 
@@ -451,6 +477,41 @@ class TestMain:
         assert (coverage["runs_listed"], coverage["runs_parsed"], coverage["runs_unavailable"]) == (1, 0, 1)
         assert self.rows(wired) == []
 
+    def test_force_replaces_a_day_the_guard_would_keep(self, wired, exporter, github):
+        """--force is how a stored day is repaired without waiting a day: it
+        re-parses the requested days and replaces their rows even when this
+        pass reads fewer runs."""
+        exporter._upsert_job(run_row())
+        assert wired.main(["--days", "7"]) == 0
+        assert len(self.rows(wired)) == 3
+
+        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        assert wired.main(["--days", "7"]) == 0
+        assert len(self.rows(wired)) == 3, "the default still keeps the stored day"
+
+        assert wired.main(["--day", today(), "--force"]) == 0
+
+        assert self.rows(wired) == []
+        coverage = self.coverage(wired)
+        assert (coverage["runs_listed"], coverage["runs_parsed"], coverage["runs_unavailable"]) == (1, 0, 1)
+
+    def test_force_rewrites_a_stored_day_with_the_shas_the_run_rows_carry(self, wired, exporter):
+        """The repair the two cohort days need: rows rolled up with
+        source_sha '' come back keyed by the exporter's head_sha."""
+        exporter._upsert_job(run_row())
+        assert wired.main(["--days", "7"]) == 0
+        conn = sqlite3.connect(wired.TRENDS_DB)
+        try:
+            conn.execute("UPDATE test_rollup SET source_sha = ''")
+            conn.commit()
+        finally:
+            conn.close()
+        assert {row["source_sha"] for row in self.rows(wired)} == {""}
+
+        assert wired.main(["--day", today(), "--force"]) == 0
+
+        assert {row["source_sha"] for row in self.rows(wired)} == {SHA}
+
     def test_no_token_is_an_error(self, wired, monkeypatch):
         monkeypatch.setattr(wired, "TOKEN", None)
 
@@ -515,6 +576,131 @@ def test_a_day_may_only_be_replaced_when_every_stored_run_is_still_readable(tren
     assert trends.day_is_superset([1], [1, 2]) is True
     assert trends.day_is_superset([1], [2]) is False
     assert trends.day_is_superset([1, 2], [1]) is False
+
+
+def rollup_row(day, sha, test, runs, failures, p50):
+    return {
+        "day": day, "repo": "osac", "workflow": "E2E VMaaS Full Install",
+        "suite": "tests/e2e/vmaas", "test_id": f"tests/e2e/vmaas/test_vm::{test}",
+        "source_sha": sha, "runs": runs, "passes": runs - failures, "failures": failures,
+        "p50_duration_s": p50, "p95_duration_s": p50,
+    }
+
+
+@pytest.fixture
+def two_revisions(trends, exporter, tmp_path):
+    """A trends.db in the exporter fixture's CACHE_DIR: two source SHAs, the
+    base revision on two days and the head one on the newest day, plus a test
+    that exists on one side only."""
+    path = str(tmp_path / "trends.db")
+    day = today()
+    earlier = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    conn = trends.open_trends_db(path)
+    try:
+        trends.write_day(conn, earlier, [
+            rollup_row(earlier, SHA, "test_restart", 2, 2, 20.0),
+            rollup_row(earlier, SHA, "test_create", 2, 0, 5.0),
+            rollup_row(earlier, SHA, "test_removed", 2, 1, 1.0),
+        ], {"day": earlier, "runs_listed": 2, "runs_parsed": 2, "runs_unavailable": 0,
+            "generated_at": recent_iso()})
+        trends.write_day(conn, day, [
+            rollup_row(day, SHA, "test_restart", 2, 0, 10.0),
+            rollup_row(day, OTHER_SHA, "test_restart", 3, 0, 8.0),
+            rollup_row(day, OTHER_SHA, "test_create", 3, 0, 6.0),
+            rollup_row(day, OTHER_SHA, "test_added", 3, 0, 2.0),
+        ], {"day": day, "runs_listed": 3, "runs_parsed": 3, "runs_unavailable": 0,
+            "generated_at": recent_iso()})
+    finally:
+        conn.close()
+    return path
+
+
+class TestCompare:
+    @staticmethod
+    def by_test(rows):
+        return {row["test_id"].rsplit("::", 1)[-1]: row for row in rows}
+
+    def test_the_join_pairs_the_same_test_across_two_shas(self, trends, two_revisions):
+        doc = trends.compare_document(two_revisions, SHA, OTHER_SHA)
+        rows = self.by_test(doc["rows"])
+
+        assert set(rows) == {"test_restart", "test_create"}
+        restart = rows["test_restart"]
+        assert (restart["base_runs"], restart["base_failures"]) == (4, 2), "days are summed"
+        assert restart["base_p50_duration_s"] == 10.0, "median of the two days' p50 values"
+        assert (restart["head_runs"], restart["head_failures"]) == (3, 0)
+        assert restart["delta_failures"] == -2, "head fails less"
+        assert restart["delta_p50_s"] == -2.0, "head is faster"
+        assert restart["workflow"] == "E2E VMaaS Full Install"
+        assert restart["suite"] == "tests/e2e/vmaas"
+
+        create = rows["test_create"]
+        assert create["delta_failures"] == 0
+        assert create["delta_p50_s"] == 1.0, "head is slower"
+
+    def test_a_test_on_one_side_only_is_listed_there(self, trends, two_revisions):
+        doc = trends.compare_document(two_revisions, SHA, OTHER_SHA)
+
+        assert [row["test_id"].rsplit("::", 1)[-1] for row in doc["only_base"]] == ["test_removed"]
+        assert [row["test_id"].rsplit("::", 1)[-1] for row in doc["only_head"]] == ["test_added"]
+        assert set(doc["only_base"][0]) == {
+            "repo", "workflow", "suite", "test_id", "runs", "failures", "p50_duration_s",
+        }
+        assert doc["only_head"][0]["runs"] == 3
+        assert doc["only_head"][0]["failures"] == 0
+
+    def test_the_document_states_its_population_and_window(self, trends, two_revisions):
+        doc = trends.compare_document(two_revisions, SHA, OTHER_SHA, days=7)
+
+        assert (doc["base_sha"], doc["head_sha"], doc["days"]) == (SHA, OTHER_SHA, 7)
+        assert doc["window_from"] in doc["population"]
+        assert "all CI jobs" in doc["population"]
+        assert "not a per-capture comparison" in doc["population"]
+        assert doc["window_to"] == today()
+
+    def test_a_missing_rollup_is_a_note_not_an_error(self, trends, tmp_path):
+        doc = trends.compare_document(str(tmp_path / "absent.db"), SHA, OTHER_SHA)
+
+        assert (doc["rows"], doc["only_base"], doc["only_head"]) == ([], [], [])
+        assert any("no per-test rollup" in note for note in doc["notes"])
+
+    def test_an_unreadable_rollup_is_a_note_not_an_error(self, trends, tmp_path):
+        (tmp_path / "trends.db").write_bytes(b"this is not a sqlite database")
+
+        doc = trends.compare_document(str(tmp_path / "trends.db"), SHA, OTHER_SHA)
+
+        assert doc["rows"] == []
+        assert any("could not be" in note for note in doc["notes"])
+
+    def test_a_missing_sha_is_a_note_not_an_error(self, trends, two_revisions):
+        doc = trends.compare_document(two_revisions, "", OTHER_SHA)
+
+        assert doc["rows"] == []
+        assert any("base and head are required" in note for note in doc["notes"])
+
+    def test_an_unknown_sha_is_a_note_and_keeps_the_other_side(self, trends, two_revisions):
+        unknown = "0123456789abcdef0123456789abcdef01234567"
+
+        doc = trends.compare_document(two_revisions, SHA, unknown)
+
+        assert doc["rows"] == []
+        assert self.by_test(doc["only_base"]).keys() == {"test_restart", "test_create", "test_removed"}
+        assert any("no rows for head SHA" in note for note in doc["notes"])
+
+    def test_the_rollup_file_is_never_written(self, trends, two_revisions):
+        before = Path(two_revisions).read_bytes()
+
+        trends.compare_document(two_revisions, SHA, OTHER_SHA)
+
+        assert Path(two_revisions).read_bytes() == before
+
+    def test_a_capped_table_is_a_note_not_a_silent_truncation(self, trends, two_revisions, monkeypatch):
+        monkeypatch.setattr(trends, "COMPARE_MAX_ROWS", 1)
+
+        doc = trends.compare_document(two_revisions, SHA, OTHER_SHA)
+
+        assert len(doc["rows"]) == 1
+        assert any("capped at 1" in note for note in doc["notes"])
 
 
 class TestEndpoint:
@@ -653,6 +839,24 @@ class TestEndpoint:
         assert doc["tests"] == []
         assert any("no per-test rollup" in note for note in doc["notes"])
 
+    def test_compare_returns_the_two_revisions_side_by_side(self, exporter, two_revisions):
+        doc = exporter.get_ci_observe_trends_compare_json(
+            {"base": [SHA], "head": [OTHER_SHA], "days": ["30"]}
+        )
+
+        assert doc["days"] == 30
+        assert len(doc["rows"]) == 2
+        assert doc["base_sha"] == SHA
+        assert doc["head_sha"] == OTHER_SHA
+
+    def test_compare_defaults_and_garbage_days(self, exporter, two_revisions):
+        assert exporter.get_ci_observe_trends_compare_json({})["days"] == 60
+        assert exporter.get_ci_observe_trends_compare_json({"days": ["nonsense"]})["days"] == 60
+        assert exporter.get_ci_observe_trends_compare_json({"days": ["0"]})["days"] == 1
+        assert (
+            exporter.get_ci_observe_trends_compare_json({"days": ["100000"]})["days"]
+            == exporter.CIOBS_COMPARE_MAX_DAYS
+        )
 
 class TestHTTP:
     @pytest.fixture
@@ -697,6 +901,25 @@ class TestHTTP:
         ]
         assert doc["rows"] == []
 
+    def test_compare_json_shape_and_cors(self, two_revisions, base_url):
+        status, headers, body = self.get(
+            f"{base_url}/api/ci-observe/trends/compare?base={SHA}&head={OTHER_SHA}&days=30"
+        )
+
+        assert status == 200
+        assert headers.get("Content-Type") == "application/json"
+        assert headers.get("Access-Control-Allow-Origin") == "*"
+        doc = json.loads(body)
+        assert doc["base_sha"] == SHA
+        assert len(doc["rows"]) == 2
+
+    def test_compare_without_shas_is_still_200(self, rollup, base_url):
+        status, _, body = self.get(f"{base_url}/api/ci-observe/trends/compare")
+
+        assert status == 200
+        doc = json.loads(body)
+        assert doc["rows"] == []
+        assert any("base and head are required" in note for note in doc["notes"])
 
 @pytest.mark.skipif(not DASHBOARD.exists(), reason="ci-observe-trends.json ships with the dashboard")
 def test_dashboard_queries_resolve_against_the_endpoint(exporter, trends, tmp_path):

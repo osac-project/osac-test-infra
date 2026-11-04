@@ -17,11 +17,18 @@ adding to them.
     set -a; . ~/.monitoring-server/.env; set +a
     CACHE_DIR=~/.monitoring-server/data ./ci_observe_trends.py --days 7
 
+    # Repair a day that is already stored, after a rollup bug (see --force):
+    CACHE_DIR=~/.monitoring-server/data ./ci_observe_trends.py --day 2026-11-02 --force
+
 One run contributes one artifact set to the rollup. A run whose artifact
 has already expired contributes nothing: it is counted in rollup_days as
 unavailable, never as a green zero. The first rollup therefore covers the
 runs whose artifacts still exist (about the last 7 days), and history from
 before that cannot be recovered.
+
+The same file holds the read-only compare query behind
+GET /api/ci-observe/trends/compare (see compare_document): two source SHAs,
+one window of days, the tests both revisions ran and how they differ.
 
 Reuse: the bounded artifact download and the zip/JUnit extraction come
 from ci_observe_run_evidence.py, imported directly (that module starts no
@@ -156,6 +163,19 @@ def stored_rows(exporter_db, since_day):
         conn.close()
 
 
+def run_row_score(row, run_id):
+    """How well one stored row stands in for the run itself.
+
+    The exporter stores a run's own row with the run id as the row id; a
+    suite row carries a job id. A row with a non-empty head_sha beats one
+    without. Ordering the stored rows therefore never decides which source
+    SHA a run is rolled up under.
+    """
+    has_sha = 1 if (row.get("head_sha") or "").strip() else 0
+    is_run_row = 1 if row.get("id") == run_id else 0
+    return is_run_row, has_sha
+
+
 def candidate_runs(rows):
     """Group the stored job rows into one entry per GitHub run to parse.
 
@@ -166,17 +186,33 @@ def candidate_runs(rows):
     workflows; the source SHA comes from the run-level row when it has one
     (the exporter stores it per row, so a suite row carries a copy).
 
+    An empty head_sha never wins over a non-empty one. The exporter writes
+    rows over time: a suite row stored before head_sha existed keeps its
+    empty value, and a suite row whose job payload carried no html_url
+    stores the run's URL (so it looks like the run's own row). Picking the
+    last row per run id let such a row overwrite the run row and blank the
+    SHA of every test it contributed, which is how a whole day's rollup
+    ended up with source_sha ''.
+
     Returns dicts with run_id, repo, workflow, day, created_at, source_sha,
     sorted oldest first. Rows with no run id in their url are skipped: the
     URL is the only stored link from a suite row to its run.
     """
     run_rows = {}
+    run_shas = {}
     for row in rows:
+        match = RUN_ID_RE.search(row.get("url") or "")
+        if not match:
+            continue
+        run_id = int(match.group(1))
+        sha = (row.get("head_sha") or "").strip()
+        if sha and not run_shas.get(run_id):
+            run_shas[run_id] = sha
         if "/job/" in (row.get("url") or ""):
             continue
-        match = RUN_ID_RE.search(row.get("url") or "")
-        if match:
-            run_rows[int(match.group(1))] = row
+        current = run_rows.get(run_id)
+        if current is None or run_row_score(row, run_id) > run_row_score(current, run_id):
+            run_rows[run_id] = row
 
     grouped = {}
     for row in rows:
@@ -191,7 +227,7 @@ def candidate_runs(rows):
             {"run_id": run_id, "repo": "", "workflows": [], "created_at": "", "source_sha": ""},
         )
         entry["repo"] = entry["repo"] or (row.get("repo") or "")
-        entry["source_sha"] = entry["source_sha"] or (row.get("head_sha") or "")
+        entry["source_sha"] = entry["source_sha"] or (row.get("head_sha") or "").strip()
         created = row.get("created_at") or ""
         if created and (not entry["created_at"] or created < entry["created_at"]):
             entry["created_at"] = created
@@ -212,7 +248,13 @@ def candidate_runs(rows):
             workflow = " + ".join(workflows)
         entry["workflow"] = workflow
         entry["repo"] = entry["repo"] or (parent.get("repo") or "")
-        entry["source_sha"] = parent.get("head_sha") or entry["source_sha"]
+        # The run row's SHA wins, then any non-empty SHA of the run's own
+        # rows, then any non-empty SHA stored anywhere for that run.
+        entry["source_sha"] = (
+            (parent.get("head_sha") or "").strip()
+            or entry["source_sha"]
+            or run_shas.get(run_id, "")
+        )
         # The day is the run's UTC creation date: the rollup's calendar
         # axis, and the same day the exporter's own dashboards group by.
         entry["day"] = entry["created_at"][:10]
@@ -472,6 +514,186 @@ def write_day(conn, day, rows, coverage):
         )
 
 
+# -- comparing two source revisions ------------------------------------------
+# "Which fixes matter most?" is a question about two commits, not about two
+# captures: the tests that failed on one source revision and pass on another.
+# These read test_rollup directly, over one window of days, and never write.
+# The population is every job the rollup stored -- all jobs, not captured
+# runs -- so the document says so in its own words.
+
+COMPARE_DEFAULT_DAYS = 60
+COMPARE_MAX_DAYS = 400
+# Rows of the joined table, one-sided lists included. A 60-day window on a
+# busy repo holds a few thousand distinct tests; past this the reader gets a
+# note instead of a document too large to render.
+COMPARE_MAX_ROWS = 2000
+
+SHA_TOTALS_SQL = """
+    SELECT repo, workflow, suite, test_id, runs, failures, p50_duration_s
+      FROM test_rollup
+     WHERE source_sha = ? AND day >= ?
+"""
+
+TEST_FIELDS = ("repo", "workflow", "suite", "test_id")
+
+
+def sha_totals(conn, source_sha, window_from):
+    """One source SHA's tests in the window, keyed by test identity.
+
+    runs and failures are summed over the window's days. p50_duration_s is
+    the nearest-rank median of those days' p50 values: the durations behind
+    each day were never stored, so a median of medians is the most this
+    table can support. One day of ten runs therefore weighs the same as one
+    day of one run, and the document has to say that.
+    """
+    totals = {}
+    for row in conn.execute(SHA_TOTALS_SQL, (source_sha, window_from)):
+        identity = tuple(row[field] for field in TEST_FIELDS)
+        total = totals.setdefault(
+            identity,
+            {
+                "repo": row["repo"], "workflow": row["workflow"],
+                "suite": row["suite"], "test_id": row["test_id"],
+                "runs": 0, "failures": 0, "p50_values": [],
+            },
+        )
+        total["runs"] += row["runs"]
+        total["failures"] += row["failures"]
+        if row["p50_duration_s"] is not None:
+            total["p50_values"].append(row["p50_duration_s"])
+    for total in totals.values():
+        total["p50_duration_s"] = percentile(total.pop("p50_values"), 0.50)
+    return totals
+
+
+def _one_side_row(total):
+    row = {field: total[field] for field in TEST_FIELDS}
+    row["runs"] = total["runs"]
+    row["failures"] = total["failures"]
+    row["p50_duration_s"] = total["p50_duration_s"]
+    return row
+
+
+def compare_rows(base_totals, head_totals):
+    """(both, only_base, only_head) tables from two revisions' totals.
+
+    A test is the same test when repo, workflow, suite and test id match.
+    Suite alone is not a key (see ci-observe/model.md), and a test that
+    exists on one side only is listed there rather than paired with a zero:
+    "no row" is not "ran and passed". Deltas are head minus base, so a
+    negative delta_p50_s means head is faster and a negative
+    delta_failures means head fails less.
+    """
+    both = []
+    only_base = []
+    only_head = []
+    for identity in sorted(set(base_totals) | set(head_totals)):
+        base = base_totals.get(identity)
+        head = head_totals.get(identity)
+        if base is None:
+            only_head.append(_one_side_row(head))
+            continue
+        if head is None:
+            only_base.append(_one_side_row(base))
+            continue
+        row = {field: base[field] for field in TEST_FIELDS}
+        row.update({
+            "base_runs": base["runs"],
+            "base_failures": base["failures"],
+            "base_p50_duration_s": base["p50_duration_s"],
+            "head_runs": head["runs"],
+            "head_failures": head["failures"],
+            "head_p50_duration_s": head["p50_duration_s"],
+            "delta_failures": head["failures"] - base["failures"],
+            "delta_p50_s": (
+                round(head["p50_duration_s"] - base["p50_duration_s"], 3)
+                if base["p50_duration_s"] is not None and head["p50_duration_s"] is not None
+                else None
+            ),
+        })
+        both.append(row)
+    return both, only_base, only_head
+
+
+def compare_document(trends_db, base_sha, head_sha, days=COMPARE_DEFAULT_DAYS, now=None):
+    """The /api/ci-observe/trends/compare document for two source SHAs.
+
+    days is the window counted back from now (UTC). Nothing here raises for
+    a missing file, a DB that cannot be read, an unknown SHA or a missing
+    parameter: each is a note, so the endpoint answers 200 and the reader is
+    told what is missing instead of seeing an empty table.
+    """
+    days = max(1, min(int(days), COMPARE_MAX_DAYS))
+    today = (now or datetime.now(timezone.utc)).date()
+    window_from = (today - timedelta(days=days)).isoformat()
+    document = {
+        "base_sha": base_sha,
+        "head_sha": head_sha,
+        "days": days,
+        "window_from": window_from,
+        "window_to": today.isoformat(),
+        "population": (
+            f"all CI jobs whose per-test JUnit outcomes the daily rollup stored in the {days}-day "
+            f"window from {window_from} (all jobs, not captured runs); it compares two source "
+            "revisions over that window and is not a per-capture comparison"
+        ),
+        "source": (
+            "trends.db: the daily per-test JUnit rollup written by ci_observe_trends.py "
+            "(one row per day, repo, workflow, suite, test id and source SHA)"
+        ),
+        "rows": [],
+        "only_base": [],
+        "only_head": [],
+        "notes": [],
+    }
+    if not base_sha or not head_sha:
+        document["notes"].append(
+            "base and head are required: both are source SHAs, for example ?base=<sha>&head=<sha>"
+        )
+        return document
+    if not os.path.exists(trends_db):
+        document["notes"].append(
+            "no per-test rollup has been written on this machine yet, so there is nothing to compare"
+        )
+        return document
+    try:
+        conn = sqlite3.connect(f"file:{trends_db}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error as exc:
+        document["notes"].append(f"the rollup DB could not be opened: {exc}")
+        return document
+    try:
+        conn.row_factory = sqlite3.Row
+        base_totals = sha_totals(conn, base_sha, window_from)
+        head_totals = sha_totals(conn, head_sha, window_from)
+    except sqlite3.Error as exc:
+        document["notes"].append(f"the rollup DB could not be read: {exc}")
+        return document
+    finally:
+        conn.close()
+
+    if not base_totals:
+        document["notes"].append(
+            f"the rollup has no rows for base SHA {base_sha} on or after {window_from}"
+        )
+    if not head_totals:
+        document["notes"].append(
+            f"the rollup has no rows for head SHA {head_sha} on or after {window_from}"
+        )
+    both, only_base, only_head = compare_rows(base_totals, head_totals)
+    for key, table in (("rows", both), ("only_base", only_base), ("only_head", only_head)):
+        if len(table) > COMPARE_MAX_ROWS:
+            document["notes"].append(
+                f"{key} was capped at {COMPARE_MAX_ROWS} of {len(table)} test(s); narrow the window"
+            )
+            table = table[:COMPARE_MAX_ROWS]
+        document[key] = table
+    if not both:
+        document["notes"].append(
+            f"no test appears under both SHAs in the window from {window_from}; see only_base and only_head"
+        )
+    return document
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Daily per-test JUnit rollup for ci-observe Trends.")
     parser.add_argument(
@@ -485,6 +707,14 @@ def parse_args(argv=None):
     parser.add_argument(
         "--day", default=None,
         help="roll up one UTC day (YYYY-MM-DD) and replace that day's rows",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help=(
+            "replace the stored rows of the requested days even when this pass reads fewer "
+            "runs than the stored rollup did; use it to repair a day already rolled up, and "
+            "expect the rows of runs whose artifact has expired to be dropped"
+        ),
     )
     parser.add_argument("--exporter-db", default=None, help=f"exporter SQLite file (default {EXPORTER_DB})")
     parser.add_argument("--trends-db", default=None, help=f"rollup SQLite file (default {TRENDS_DB})")
@@ -549,20 +779,31 @@ def main(argv=None):
                 "SELECT runs_parsed, parsed_run_ids FROM rollup_days WHERE day = ?", (day,)
             ).fetchone()
             current_ids = sorted(parsed_ids.get(day, []))
-            if previous:
+            if previous and not args.force:
                 previous_ids = json.loads(previous["parsed_run_ids"] or "[]")
                 if not day_is_superset(previous_ids, current_ids):
                     logger.warning(
-                        "%s: stored run(s) %s are not all readable now %s; keeping the stored rollup",
+                        "%s: stored run(s) %s are not all readable now %s; keeping the stored rollup"
+                        " (--force replaces it anyway)",
                         day, sorted(set(previous_ids) - set(current_ids)), current_ids,
                     )
                     continue
                 if previous["runs_parsed"] > parsed.get(day, 0):
                     logger.warning(
-                        "%s: only %d run(s) readable now, %d were rolled up before; keeping the stored rollup",
+                        "%s: only %d run(s) readable now, %d were rolled up before; keeping the stored"
+                        " rollup (--force replaces it anyway)",
                         day, parsed.get(day, 0), previous["runs_parsed"],
                     )
                     continue
+            if previous and args.force:
+                previous_ids = json.loads(previous["parsed_run_ids"] or "[]")
+                lost = sorted(set(previous_ids) - set(current_ids))
+                if lost:
+                    logger.warning(
+                        "%s: --force replaces the stored rollup; run(s) %s are not readable now and their"
+                        " rows are dropped",
+                        day, lost,
+                    )
             rows = rollup_rows(day_runs)
             write_day(conn, day, rows, {
                 "day": day,

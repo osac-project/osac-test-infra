@@ -3782,6 +3782,39 @@ class WorkflowExporter:
 
     # -- ci-observe trends (end) --------------------------------------------
 
+    # --- ci-observe trends compare (begin): single additive block ----------
+    # GET /api/ci-observe/trends/compare?base=<sha>&head=<sha>&days=<n>
+    # answers "which fixes matter most?": the tests that failed on the base
+    # source revision and pass on the head one, and how their durations and
+    # failure counts differ. Read-only over the same trends.db the trends
+    # route reads; the query itself lives in ci_observe_trends.py
+    # (compare_document) so the rollup and its reader share one schema.
+    #
+    # Population: all jobs the daily rollup stored in the requested window,
+    # not captured runs. It is not a per-capture comparison, and the
+    # document says so. A missing rollup, an unreadable DB, an unknown SHA
+    # or a missing parameter is a note in a 200, never an error.
+    CIOBS_COMPARE_DEFAULT_DAYS = 60
+    CIOBS_COMPARE_MAX_DAYS = 400
+
+    def get_ci_observe_trends_compare_json(self, params):
+        """The /api/ci-observe/trends/compare document. Thin wrapper: parse
+        base, head and days here, delegate the join to ci_observe_trends."""
+        import ci_observe_trends
+
+        base_sha = (params.get("base", [""])[0] or "").strip()
+        head_sha = (params.get("head", [""])[0] or "").strip()
+        try:
+            days = int(params.get("days", [""])[0] or self.CIOBS_COMPARE_DEFAULT_DAYS)
+        except (TypeError, ValueError):
+            days = self.CIOBS_COMPARE_DEFAULT_DAYS
+        days = max(1, min(days, self.CIOBS_COMPARE_MAX_DAYS))
+        return ci_observe_trends.compare_document(
+            os.path.join(CACHE_DIR, self.CIOBS_TRENDS_FILE), base_sha, head_sha, days
+        )
+
+    # --- ci-observe trends compare (end) ----------------------------------
+
 
 # ---------------------------------------------------------------------------
 # Custom HTTP handler: /metrics + /api/jobs
@@ -4006,6 +4039,19 @@ class ExporterHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload.encode())
 
+        # --- ci-observe trends compare: begin (single additive block) ------
+        # GET /api/ci-observe/trends/compare?base=<sha>&head=<sha>&days=<n>
+        # Read-only over trends.db, like /api/ci-observe/trends above.
+        elif parsed.path == "/api/ci-observe/trends/compare":
+            params = parse_qs(parsed.query)
+            data = self.exporter.get_ci_observe_trends_compare_json(params)
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+        # --- ci-observe trends compare: end --------------------------------
         # --- ci-observe pull requests: begin (single additive block) --------
         # GET /api/ci-observe/prs?number=<n>&repo=<name>  one PR's life and
         #                                                 its queue attempts
