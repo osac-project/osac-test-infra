@@ -4070,6 +4070,29 @@ class ExporterHandler(BaseHTTPRequestHandler):
             data = ci_observe_prs.CIObservePRs(db_file=prs_db_file, api=self.exporter).get_json(
                 parse_qs(parsed.query)
             )
+            # A queue attempt stores no capture id. The run id does appear on
+            # every captured span, so the run cache turns it into the capture
+            # id the Capture dashboard needs. The journal stays store-only
+            # when Tempo is unavailable: an empty link is honest, a guessed
+            # one is not.
+            runs = getattr(self.exporter, "_runs", None)
+            if data.get("mode") == "pr" and data.get("attempts") and runs is not None:
+                try:
+                    captures = runs.capture_ids_by_run()
+                except (OSError, ValueError):
+                    captures = {}
+                for attempt in data["attempts"]:
+                    capture_ids = []
+                    for run_id in attempt.get("run_ids") or [attempt.get("run_id")]:
+                        for capture_id in captures.get(str(run_id), []):
+                            if capture_id not in capture_ids:
+                                capture_ids.append(capture_id)
+                    if capture_ids:
+                        attempt["capture_ids"] = capture_ids
+                        attempt["capture_url"] = (
+                            "/d/ci-observe-runs/ci-observe-e28094-run-investigation"
+                            f"?var-capture_id={capture_ids[0]}"
+                        )
             payload = json.dumps(data, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

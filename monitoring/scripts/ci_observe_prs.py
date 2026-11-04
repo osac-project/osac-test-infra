@@ -115,7 +115,8 @@ DERIVATION = {
         "request through its gh-readonly-queue branch name and through queue comments that link the run."
     ),
     "queue_capture": (
-        "Queue runs carry no ci-observe capture today, so a queue attempt links to its GitHub run, not to a capture."
+        "A queue attempt links to its capture when Tempo has one for the run; otherwise the GitHub run "
+        "is the link. A queue run older than Tempo retention has no capture to link."
     ),
     "window": (
         "The backfill covers merged and closed pull requests only. An open pull request is not stored "
@@ -1126,8 +1127,8 @@ def _attempt_out(row):
     attempt["duration_display"] = human_duration(attempt.get("duration_seconds"))
     attempt["ejected"] = bool(attempt.get("ejected"))
     attempt["ejection"] = "ejected" if attempt["ejected"] else "not ejected"
-    # A queue run has no capture today. Keeping the field makes the missing
-    # link explicit instead of leaving the column off the dashboard.
+    # The store does not know Tempo. The exporter fills capture_url from the
+    # run cache when a capture exists; an empty value is the store-only view.
     attempt["capture_url"] = ""
     return attempt
 
