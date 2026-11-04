@@ -3,27 +3,17 @@
 Compare is an action, not a dashboard: the model puts it as a collapsed row on
 monitoring/config/grafana/dashboards/ci-observe-trends.json. This section
 answers two questions across comparable captures: what changed versus a passing
-run (Q7) and which fixes matter most (Q8). It opens with a short intro, the two
-cohort tables, the sample-status stat, the tests table, the runs table, the
-reading guide and the query limits, and it keeps the failed-test evidence at
-the bottom. Exact cohorts key on the resolved osac commit (osac.ci.test_sha);
-the requested ref (osac.ci.test_ref) is metadata only.
+run (Q7) and which fixes matter most (Q8). It opens with a short intro, the
+exact-cohort table, the ungrouped-capture table, the sample-status stat, the
+tests table, the runs table, the reading guide and the query limits, and it
+keeps the failed-test evidence at the bottom.
 
-Every panel runs exactly one TraceQL query, and the section stays at seven
-targets: this Grafana's Tempo plugin executes only the first query of a panel
-and overwrites every additional target with it (verified 2026-11-02 from the
-served plugin bundle and captured browser requests), and the backend's search
-queue returned 429 job-queue-full under ten concurrent queries (verified
-2026-11-02 live; seven was the load the passing visual check used). Keeping the
-compare panels in a collapsed row also means they are not queried until a
-reader expands the section.
-
-The TraceQL queries and the Grafana transform semantics they rely on
-(groupBy, filterByValue, sortBy, limit) were validated against the central
-Tempo 2.10 datasource (uid ci-observe-traces) through Grafana's /api/ds/query
-on 2026-11-01, including the structural-negation predicates that keep
-source-revision cohorts from absorbing captures with resolved harness SHAs.
-The limit copy pinned here states the caps observed on that datasource.
+Cohort discovery reads /api/ci-observe/cohorts, not Tempo. The registry groups
+exact cohorts on the six identity fields and returns captures whose
+`identity_source` is `none` in a separate ungrouped list. The page never merges
+the two lists and never uses `unknown` as a cohort value. The span tables and
+the failed evidence still read Tempo, but only after the collapsed row expands,
+so a page load runs no Tempo query. Q8 stays on /api/ci-observe/trends/compare.
 """
 
 from __future__ import annotations
@@ -38,38 +28,26 @@ DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-trends.json"
 SHA_PATTERN = "^[0-9a-f]{40}([0-9a-f]{24})?$"
 SHA_RE = re.compile(SHA_PATTERN)
 
-# Structural negation, verified live: true when the attribute is absent or not
-# a resolved SHA, false exactly when it is a 40/64-hex commit.
-NEG_INFRA_SHA = f'!( resource."osac.ci.test_infra_sha" =~ "{SHA_PATTERN}" )'
-NEG_WORKFLOW_SHA = f'!( resource."osac.ci.test_infra_workflow_sha" =~ "{SHA_PATTERN}" )'
-
-# The pytest node id and the code.function attribute: present on every parent
-# test span. The comparison queries require and project both so empty result
-# frames are dropped, and code.function gives the tables a test-name column
-# short enough to fit the viewport.
+PHASE_EXCLUSION = 'name !~ ".*::(setup|call|teardown)"'
 NODEID_PROJECTION = '.pytest.nodeid =~ ".+"'
 FUNCTION_PROJECTION = '.code.function =~ ".+"'
-
-# The prototype shipped with one real osac SHA hardcoded as a manual seed.
-# Cohort discovery replaced that; the SHA must never come back.
-PROTOTYPE_SEED_SHA = "91e852e8f48b642428f3e927e93db3e2dcb3d667"
 
 COMPARISON_LINK = "/d/ci-observe-trends/ci-observe-e28094-trends"
 RUN_INVESTIGATION_LINK = "/d/ci-observe-runs/ci-observe-e28094-run-investigation"
 
-PHASE_EXCLUSION = 'name !~ ".*::(setup|call|teardown)"'
-
 COMPARE_ROW_TITLE = "Compare — captured runs, selected cohort, dashboard time range"
+UNGROUPED_TITLE = "Ungrouped captures (identity source none, not a cohort)"
+LIMITS_TITLE = "Query limits and data sources (capture registry + Tempo on expand)"
 
 COMPARE_PANEL_TITLES = [
     "Pick a cohort",
     "Exact cohorts",
-    "Source-revision cohorts (not exact)",
+    UNGROUPED_TITLE,
     "Sample status",
     "Tests using the most time",
     "Runs in this cohort",
     "How to read this comparison",
-    "Query limits (verified against this backend on 2026-11-01)",
+    LIMITS_TITLE,
     "Compare two revisions",
     "Test deltas between two source revisions",
     "",
@@ -77,14 +55,18 @@ COMPARE_PANEL_TITLES = [
     "Failed runs in this cohort",
 ]
 
-COHORT_VARIABLES = {
-    "test_ref",
+IDENTITY_FIELDS = [
     "test_sha",
+    "test_infra_sha",
+    "test_infra_workflow_sha",
     "test_suite",
     "test_filter",
     "test_marker",
-    "test_infra_sha",
-    "test_infra_workflow_sha",
+]
+
+COHORT_VARIABLES = {
+    *IDENTITY_FIELDS,
+    "test_ref",
     "compare_base",
     "compare_head",
 }
@@ -96,12 +78,20 @@ ANALYSIS_TITLES = [
     "Runs in this cohort",
 ]
 
-# The Compare section must never exceed eight query targets: the backend's
-# search queue returned 429 under ten concurrent queries, and seven was the
-# load the passing visual check used.
-MAX_TOTAL_TARGETS = 8
+TARGET_TITLES = [
+    "Exact cohorts",
+    UNGROUPED_TITLE,
+    "Sample status",
+    "Tests using the most time",
+    "Runs in this cohort",
+    "Test deltas between two source revisions",
+    "Failed tests in this cohort",
+    "Failed runs in this cohort",
+]
 
+MAX_TOTAL_TARGETS = 8
 GRAFANA_BUILTIN_VARIABLE = re.compile(r"^__")
+API = "http://127.0.0.1:9103/api/ci-observe"
 
 
 def load_dashboard() -> dict[str, object]:
@@ -151,20 +141,20 @@ def field_links(*, panel: dict[str, object], field: str) -> list[dict[str, objec
 
 
 def transforms(*, panel: dict[str, object], transform_id: str) -> list[dict[str, object]]:
-    return [t for t in panel["transformations"] if t["id"] == transform_id]
+    return [t for t in panel.get("transformations", []) if t["id"] == transform_id]
 
 
-def all_queries(dashboard: dict[str, object]) -> list[str]:
-    return [t["query"] for p in iter_panels(dashboard["panels"]) for t in p.get("targets", []) if "query" in t]
+def selectors(panel: dict[str, object]) -> set[str]:
+    return {column["selector"] for column in panel["targets"][0]["columns"]}
 
 
-def comparison_targets(dashboard: dict[str, object]) -> list[str]:
-    """Every variable-driven cohort query (the sample stat and the four analysis panels)."""
-    queries = []
-    for title in ["Sample status", *ANALYSIS_TITLES]:
-        panel = panel_by_title(dashboard=dashboard, title=title)
-        queries.extend(t["query"] for t in panel["targets"])
-    return queries
+def resolve_rows(document: dict, root_selector: str) -> list[dict]:
+    if root_selector == "$":
+        return [document]
+    node = document
+    for part in root_selector.lstrip("$.").split("."):
+        node = node[part]
+    return node if isinstance(node, list) else [node]
 
 
 def test_compare_section_identity_and_titles() -> None:
@@ -188,34 +178,22 @@ def test_compare_section_identity_and_titles() -> None:
 
 
 def test_every_panel_has_at_most_one_target_and_section_stays_within_eight() -> None:
-    """Two hard limits. Per panel: this Grafana's Tempo plugin overwrites every
-    target after the first with the first query's text, so panels must be
-    single-query. Section-wide: the backend's search queue returned 429 under
-    ten concurrent queries, so the section must stay at eight targets at most
-    (it ships seven)."""
+    """Two hard limits. Per panel: Grafana's Tempo plugin would overwrite every
+    target after the first, so a panel keeps one target. Section-wide: the
+    section ships eight targets."""
     dashboard = load_dashboard()
     total = 0
     for panel in compare_panels(dashboard):
         target_count = len(panel.get("targets", []))
         total += target_count
         assert target_count <= 1, (
-            f"{panel['title']} has {target_count} targets; the Tempo plugin executes only the"
-            " first and overwrites the rest, so panels must have at most one target"
+            f"{panel['title']} has {target_count} targets; keep one per panel"
         )
-    assert total <= MAX_TOTAL_TARGETS, f"the section runs {total} concurrent searches; keep it at {MAX_TOTAL_TARGETS}"
-    assert total == 8, "the section should ship eight targets: two discoveries, the sample stat, four tables and the two-revision delta"
+    assert total <= MAX_TOTAL_TARGETS, f"the section runs {total} queries; keep it at {MAX_TOTAL_TARGETS}"
+    assert total == 8, "the section ships eight targets: two cohort lists, the sample stat, four span tables and the two-revision delta"
 
     with_targets = [p["title"] for p in compare_panels(dashboard) if p.get("targets")]
-    assert with_targets == [
-        "Exact cohorts",
-        "Source-revision cohorts (not exact)",
-        "Sample status",
-        "Tests using the most time",
-        "Runs in this cohort",
-        "Test deltas between two source revisions",
-        "Failed tests in this cohort",
-        "Failed runs in this cohort",
-    ]
+    assert with_targets == TARGET_TITLES
 
 
 def test_no_duplicate_count_stats_remain() -> None:
@@ -252,9 +230,8 @@ def test_failed_evidence_lives_at_the_bottom_of_the_collapsed_row() -> None:
 
 
 def test_page_opens_with_the_sample_rule_before_the_analysis_tables() -> None:
-    """A newcomer sees the intro, the cohort pickers, the sample status, the tests
-    table, the runs table, the guides and the failed evidence. The sample rule,
-    the observed-time warning and the loading note are in the top intro."""
+    """A newcomer sees the intro, the cohort tables, the sample status, the tests
+    table, the runs table, the guides and the failed evidence."""
     dashboard = load_dashboard()
     intro = panel_by_title(dashboard=dashboard, title="Pick a cohort")
     content = intro["options"]["content"]
@@ -273,44 +250,42 @@ def test_page_opens_with_the_sample_rule_before_the_analysis_tables() -> None:
     assert "You pick the cohort here" in content
     assert "does not preselect a capture" in content
 
-    # Reading order inside the row.
     titles = [p["title"] for p in compare_row(dashboard)["panels"]]
     assert titles.index("Pick a cohort") < titles.index("Exact cohorts")
-    assert titles.index("Source-revision cohorts (not exact)") < titles.index("Sample status")
+    assert titles.index(UNGROUPED_TITLE) < titles.index("Sample status")
     assert titles.index("Sample status") < titles.index("Tests using the most time")
     assert titles.index("Tests using the most time") < titles.index("Runs in this cohort")
     assert titles.index("Runs in this cohort") < titles.index("How to read this comparison")
-    assert titles.index("How to read this comparison") < titles.index(
-        "Query limits (verified against this backend on 2026-11-01)"
-    )
-    assert titles.index("Query limits (verified against this backend on 2026-11-01)") < titles.index(
-        "Failed tests in this cohort"
-    )
+    assert titles.index("How to read this comparison") < titles.index(LIMITS_TITLE)
+    assert titles.index(LIMITS_TITLE) < titles.index("Failed tests in this cohort")
     assert titles[-1] == "Failed runs in this cohort"
-    # The text panels get enough height to avoid clipping (measured via DOM:
-    # 330px, 702px and 626px of content at 1280).
     for title, min_height in [
         ("Pick a cohort", 11),
         ("How to read this comparison", 20),
-        ("Query limits (verified against this backend on 2026-11-01)", 18),
+        (LIMITS_TITLE, 18),
     ]:
         panel = panel_by_title(dashboard=dashboard, title=title)
         assert panel["gridPos"]["h"] >= min_height, f"{title} is too short to show its text"
-    # The cohort tables are compact: they hold noValue text or one row today.
-    for title in ("Exact cohorts", "Source-revision cohorts (not exact)"):
+    for title in ("Exact cohorts", UNGROUPED_TITLE):
         assert panel_by_title(dashboard=dashboard, title=title)["gridPos"]["h"] == 6
 
 
-def test_sample_status_is_the_only_stat_and_maps_verdicts() -> None:
-    """The stat between the cohort tables and the analysis tables shows the selected
-    cohort's distinct capture count and the verdict for 0/1/2/3+ captures."""
+def test_sample_status_reads_the_registry_count_for_the_selected_cohort() -> None:
+    """The stat between the cohort tables and the analysis tables shows the
+    selected exact cohort's distinct capture count from /cohorts."""
     dashboard = load_dashboard()
     stat = panel_by_title(dashboard=dashboard, title="Sample status")
 
     assert stat["type"] == "stat"
+    assert stat["datasource"] == {"type": "yesoreyeram-infinity-datasource", "uid": "workflow-api"}
+    (target,) = stat["targets"]
+    assert target["url"] == f"{API}/cohorts?days=${{days}}"
+    assert target["root_selector"] == "$.cohorts"
+    assert selectors(stat) >= set(IDENTITY_FIELDS) | {"captures"}
+
     reduce_options = stat["options"]["reduceOptions"]
-    assert reduce_options["calcs"] == ["distinctCount"]
-    assert reduce_options["fields"] == "osac.ci.capture_id"
+    assert reduce_options["calcs"] == ["lastNotNull"]
+    assert reduce_options["fields"] == "captures"
 
     mappings = stat["fieldConfig"]["defaults"]["mappings"]
     value_options = mappings[0]["options"]
@@ -326,17 +301,23 @@ def test_sample_status_is_the_only_stat_and_maps_verdicts() -> None:
     steps = stat["fieldConfig"]["defaults"]["thresholds"]["steps"]
     assert [(s["value"], s["color"]) for s in steps] == [(None, "red"), (2, "yellow"), (3, "green")]
 
-    # The stat runs the same cohort query as the tests table.
-    assert (
-        stat["targets"][0]["query"]
-        == panel_by_title(dashboard=dashboard, title="Tests using the most time")["targets"][0]["query"]
-    )
+
+def test_sample_status_filters_on_all_six_identity_fields() -> None:
+    stat = panel_by_title(dashboard=load_dashboard(), title="Sample status")
+    (value_filter,) = transforms(panel=stat, transform_id="filterByValue")
+    filters = value_filter["options"]["filters"]
+    assert value_filter["options"]["match"] == "all"
+    assert {f["fieldName"] for f in filters} == set(IDENTITY_FIELDS)
+    for filter_config in filters:
+        assert filter_config["config"] == {
+            "id": "equal",
+            "options": {"value": "${" + filter_config["fieldName"] + "}"},
+        }
 
 
 def test_every_analysis_panel_explains_an_empty_state() -> None:
     """No analysis panel may render an unexplained headers-only box: each has a
-    noValue message pointing at the sample status, and the failed tables stay at
-    the bottom of the collapsed row."""
+    noValue message pointing at the sample status."""
     dashboard = load_dashboard()
     for title in ANALYSIS_TITLES:
         panel = panel_by_title(dashboard=dashboard, title=title)
@@ -350,14 +331,13 @@ def test_every_analysis_panel_explains_an_empty_state() -> None:
 
     runs_panel = panel_by_title(dashboard=dashboard, title="Runs in this cohort")
     assert "No captures matched the selected cohort" in runs_panel["fieldConfig"]["defaults"]["noValue"]
-    assert "timed out" in runs_panel["fieldConfig"]["defaults"]["noValue"]
     tests_panel = panel_by_title(dashboard=dashboard, title="Tests using the most time")
     assert "No captures matched the current selection" in tests_panel["fieldConfig"]["defaults"]["noValue"]
 
 
 def test_dashboard_time_range_fits_the_backend_window() -> None:
     """Tempo on this backend rejects ranges over 168 hours, so the dashboard's
-    default range is 7 days and the Compare section shares it."""
+    default range is 7 days and the Compare span tables share it."""
     assert load_dashboard()["time"] == {"from": "now-7d", "to": "now"}
 
 
@@ -365,19 +345,15 @@ def test_variables_are_the_cohort_link_state() -> None:
     dashboard = load_dashboard()
     variables = {v["name"]: v for v in dashboard["templating"]["list"]}
 
-    # The cohort variables are added next to the existing days and test pair.
     assert set(variables) == {"days", "test"} | COHORT_VARIABLES
     for name in COHORT_VARIABLES:
         assert variables[name]["type"] == "textbox", f"{name} must be a textbox set by the cohort links"
 
-    # Defaults: empty SHA fields, all/none selection. Nothing is prefilled with a
-    # real SHA, so the dashboard starts without a seeded cohort.
     for name in ("test_ref", "test_sha", "test_infra_sha", "test_infra_workflow_sha"):
         assert variables[name]["current"]["value"] == "", f"{name} must default to empty"
     assert variables["test_suite"]["current"]["value"] == "all"
     assert variables["test_filter"]["current"]["value"] == "none"
     assert variables["test_marker"]["current"]["value"] == "none"
-    assert PROTOTYPE_SEED_SHA not in DASHBOARD_FILE.read_text()
 
 
 def test_no_dead_dropdown_dead_links_or_capture_preselection() -> None:
@@ -408,253 +384,134 @@ def test_no_dead_dropdown_dead_links_or_capture_preselection() -> None:
                 if field_property["id"] != "links":
                     continue
                 for link in field_property["value"]:
-                    assert link["url"].split("?")[0] in (COMPARISON_LINK, RUN_INVESTIGATION_LINK), (
-                        f"{panel['title']}: unexpected link target {link['url']}"
-                    )
+                    assert link["url"].split("?")[0] in (
+                        COMPARISON_LINK,
+                        RUN_INVESTIGATION_LINK,
+                    ), f"{panel['title']}: unexpected link target {link['url']}"
 
 
 def test_sha_pattern_accepts_only_pinned_commits() -> None:
-    """The cohort keys must be pinned commits: 40- or 64-char lowercase hex."""
+    """A resolved identity SHA is a pinned commit: 40 or 64 lowercase hex."""
     assert SHA_RE.search("91e852e8f48b642428f3e927e93db3e2dcb3d667")
     assert SHA_RE.search("a" * 64)
     for rejected in ("main", "unknown", "", "release/1.2", "feature-branch", "A" * 40, "a" * 39, "a" * 41):
         assert not SHA_RE.search(rejected), f"{rejected!r} must not form a cohort"
 
 
-def test_exact_discovery_keys_on_the_resolved_osac_commit() -> None:
-    """The exact cohort table requires every resolved identity field; the requested
-    osac ref is projected as metadata and is never a cohort requirement."""
+def test_exact_cohorts_read_the_registry_grouped_on_six_identity_fields() -> None:
+    """The exact table asks /cohorts for rows the registry already grouped on
+    the six identity fields. The requested ref is metadata, not a group key."""
     panel = panel_by_title(dashboard=load_dashboard(), title="Exact cohorts")
-    query = panel["targets"][0]["query"]
+    (target,) = panel["targets"]
 
-    assert PHASE_EXCLUSION in query
-    assert '.pytest.span_type = "test"' in query
-    assert 'resource."osac.ci.capture_id" =~ ".+"' in query
-    assert 'resource."osac.ci.run_attempt" != nil' in query
+    assert panel["datasource"] == {"type": "yesoreyeram-infinity-datasource", "uid": "workflow-api"}
+    assert target["url"] == f"{API}/cohorts?days=${{days}}"
+    assert target["root_selector"] == "$.cohorts"
+    assert selectors(panel) == set(IDENTITY_FIELDS) | {"test_ref", "captures"}
+    assert not transforms(panel=panel, transform_id="groupBy"), "grouping belongs to the registry, not the page"
+    assert not transforms(panel=panel, transform_id="joinByField")
 
-    for attribute in ("test_sha", "test_infra_sha", "test_infra_workflow_sha"):
-        selector = f'resource."osac.ci.{attribute}"'
-        assert f"{selector} != nil" in query
-        assert f'{selector} != ""' in query
-        assert f'{selector} != "unknown"' in query
-        assert f'{selector} =~ "{SHA_PATTERN}"' in query
-
-    for attribute in ("test_suite", "test_filter", "test_marker"):
-        selector = f'resource."osac.ci.{attribute}"'
-        assert f"{selector} != nil" in query
-        assert f'{selector} != ""' in query
-        assert f'{selector} != "unknown"' in query
-
-    # test_ref is metadata: projected (any value, including main), not SHA-guarded.
-    assert 'resource."osac.ci.test_ref" =~ ".*"' in query
-    assert 'resource."osac.ci.test_ref" != "unknown"' not in query
-    assert f'resource."osac.ci.test_ref" =~ "{SHA_PATTERN}"' not in query
-
-    # Discovery is not variable-driven; the comparison queries are.
-    assert "${" not in query
-    assert "osac.ci.test_infra_ref" not in query
-
-
-def test_source_discovery_is_a_separate_not_exact_query() -> None:
-    """Source cohorts group by requested osac commit and suite word only, and
-    exclude captures whose harness SHAs resolved to real commits."""
-    panel = panel_by_title(dashboard=load_dashboard(), title="Source-revision cohorts (not exact)")
-    query = panel["targets"][0]["query"]
-
-    assert PHASE_EXCLUSION in query
-    assert '.pytest.span_type = "test"' in query
-    assert 'resource."osac.ci.capture_id" =~ ".+"' in query
-    assert 'resource."osac.ci.suite" =~ ".+"' in query
-    assert NEG_INFRA_SHA in query
-    assert NEG_WORKFLOW_SHA in query
-
-    selector = 'resource."osac.ci.test_ref"'
-    assert f"{selector} != nil" in query
-    assert f'{selector} != ""' in query
-    assert f'{selector} != "unknown"' in query
-    assert f'{selector} =~ "{SHA_PATTERN}"' in query
-
-    # The source query must not require the resolved identity fields.
-    assert "osac.ci.test_sha" not in query
-    assert "osac.ci.test_suite" not in query
-    assert "osac.ci.test_filter" not in query
-    assert "osac.ci.test_marker" not in query
-    assert "${" not in query
-
-
-def test_source_mode_never_absorbs_exact_captures() -> None:
-    """Every source-side query excludes captures whose harness checkout or workflow
-    SHA resolved, so exact and source rows never mix. The negation must appear in
-    the source discovery and in the source branch of every comparison query."""
-    dashboard = load_dashboard()
-    source_panel = panel_by_title(dashboard=dashboard, title="Source-revision cohorts (not exact)")
-    assert NEG_INFRA_SHA in source_panel["targets"][0]["query"]
-    assert NEG_WORKFLOW_SHA in source_panel["targets"][0]["query"]
-
-    for query in comparison_targets(dashboard):
-        exact_branch = query[query.index("( (") : query.index(") || (")]
-        source_branch = query[query.index(") || (") :]
-        assert NEG_INFRA_SHA in source_branch, "comparison source branch lost the harness SHA exclusion"
-        assert NEG_WORKFLOW_SHA in source_branch, "comparison source branch lost the workflow SHA exclusion"
-        assert "!" not in exact_branch.replace("!=", ""), "exact branch must not use negation"
-
-
-def test_comparison_query_has_one_exact_branch_and_one_source_branch() -> None:
-    """Exactly one branch matches for any variable state: the exact filters need
-    every resolved SHA, the source filter needs the requested commit and suite word.
-    The stat and the tests table share the all-tests query; the failed panels add
-    only the error filter; the runs table drops the unused run_attempt predicate."""
-    dashboard = load_dashboard()
-    all_tests = panel_by_title(dashboard=dashboard, title="Tests using the most time")["targets"][0]["query"]
-    failed = panel_by_title(dashboard=dashboard, title="Failed tests in this cohort")["targets"][0]["query"]
-
-    assert PHASE_EXCLUSION in all_tests
-    assert NODEID_PROJECTION in all_tests
-    assert FUNCTION_PROJECTION in all_tests
-    assert 'resource."osac.ci.capture_id" =~ ".+"' in all_tests
-    assert 'resource."osac.ci.run_attempt" != nil' in all_tests
-
-    exact_branch = all_tests[all_tests.index("( (") : all_tests.index(") || (")]
-    source_branch = all_tests[all_tests.index(") || (") :]
-
-    # Exact branch: the resolved osac commit plus both harness SHAs and the exact
-    # selection, all pinned to variables. It must not key on the requested ref.
-    for attribute in ("test_sha", "test_infra_sha", "test_infra_workflow_sha"):
-        sel = f'resource."osac.ci.{attribute}"'
-        assert f"{sel} != nil" in exact_branch
-        assert f'{sel} != ""' in exact_branch
-        assert f'{sel} != "unknown"' in exact_branch
-        assert f'{sel} =~ "{SHA_PATTERN}"' in exact_branch
-        assert f"{sel} = ${{{attribute}:doublequote}}" in exact_branch
-    for attribute in ("test_suite", "test_filter", "test_marker"):
-        sel = f'resource."osac.ci.{attribute}"'
-        assert f"{sel} != nil" in exact_branch
-        assert f'{sel} != ""' in exact_branch
-        assert f'{sel} != "unknown"' in exact_branch
-        assert f"{sel} = ${{{attribute}:doublequote}}" in exact_branch
-    assert "osac.ci.test_ref" not in exact_branch, "exact cohorts must key on test_sha, not the requested test_ref"
-    assert "osac.ci.test_infra_ref" not in all_tests
-
-    # Source branch: requested commit (pinned SHA), suite word, harness exclusions.
-    assert 'resource."osac.ci.test_ref" =~ "^[0-9a-f]{40}([0-9a-f]{24})?$"' in source_branch
-    assert 'resource."osac.ci.test_ref" = ${test_ref:doublequote}' in source_branch
-    assert 'resource."osac.ci.suite" = ${test_suite:doublequote}' in source_branch
-    assert "osac.ci.test_sha" not in source_branch
-
-    # The failed panels add only the error filter; the runs table drops the unused
-    # run_attempt predicate; the sample stat runs the all-tests query.
-    assert failed == all_tests.replace(" }", " && status = error }")
-    assert panel_by_title(dashboard=dashboard, title="Failed runs in this cohort")["targets"][0]["query"] == failed
-    runs_query = panel_by_title(dashboard=dashboard, title="Runs in this cohort")["targets"][0]["query"]
-    assert runs_query == all_tests.replace(' && resource."osac.ci.run_attempt" != nil', "")
-    assert panel_by_title(dashboard=dashboard, title="Sample status")["targets"][0]["query"] == all_tests
-
-
-def test_cohort_tables_are_single_query_capture_selectors() -> None:
-    """Both cohort tables count captures from their own discovery query in two
-    groupBy steps; no session-status join, no passed/failed columns."""
-    dashboard = load_dashboard()
-    for title, identity in (
-        (
-            "Exact cohorts",
-            [
-                "osac.ci.test_sha",
-                "osac.ci.test_infra_sha",
-                "osac.ci.test_infra_workflow_sha",
-                "osac.ci.test_suite",
-                "osac.ci.test_filter",
-                "osac.ci.test_marker",
-            ],
-        ),
-        ("Source-revision cohorts (not exact)", ["osac.ci.test_ref", "osac.ci.suite"]),
-    ):
-        panel = panel_by_title(dashboard=dashboard, title=title)
-        group_bys = transforms(panel=panel, transform_id="groupBy")
-        assert len(group_bys) == 2, f"{title} must be a two-step groupBy, nothing else"
-        per_capture, per_cohort = group_bys
-        assert per_capture["options"]["fields"]["osac.ci.capture_id"]["operation"] == "groupby"
-        for key in identity:
-            assert per_capture["options"]["fields"][key]["operation"] == "groupby"
-        final_fields = per_cohort["options"]["fields"]
-        assert final_fields["osac.ci.capture_id"] == {"aggregations": ["count"], "operation": "aggregate"}
-        for key in identity:
-            assert final_fields[key]["operation"] == "groupby"
-        assert not transforms(panel=panel, transform_id="joinByField"), f"{title} must not join"
-        assert {"Captures"} <= display_names(panel=panel)
-
-    # The exact table keys on the resolved commit, keeps the requested ref as an
-    # aggregated field for the link, and hides the wide metadata columns so the
-    # three 360px SHA columns fit the viewport.
-    exact = panel_by_title(dashboard=load_dashboard(), title="Exact cohorts")
-    final = transforms(panel=exact, transform_id="groupBy")[1]["options"]["fields"]
-    assert final["osac.ci.test_ref"] == {"aggregations": ["last"], "operation": "aggregate"}
-    assert display_names(panel=exact) >= {"OSAC commit", "Requested ref"}
-    hidden = {
-        o["matcher"]["options"]: any(p["id"] == "custom.hidden" and p["value"] for p in o["properties"])
-        for o in exact["fieldConfig"]["overrides"]
-    }
-    for field in ("osac.ci.test_ref (last)", "osac.ci.test_suite", "osac.ci.test_filter", "osac.ci.test_marker"):
-        assert hidden[field], f"{field} must stay hidden so the SHA columns fit"
-    capture_count_filters = [
-        f
-        for f in transforms(panel=exact, transform_id="filterByValue")
-        if f["options"]["filters"][0]["fieldName"] == "osac.ci.capture_id (count)"
-    ]
-    assert len(capture_count_filters) == 1
-    assert capture_count_filters[0]["options"]["filters"][0]["config"] == {
-        "id": "greaterOrEqual",
-        "options": {"value": 2},
-    }
-    assert "No exact cohort yet" in exact["fieldConfig"]["defaults"]["noValue"]
-
-
-def test_source_cohort_table_carries_the_not_exact_warning() -> None:
-    """The source table is labelled as evidence for current data, never a baseline."""
-    dashboard = load_dashboard()
-    panel = panel_by_title(dashboard=dashboard, title="Source-revision cohorts (not exact)")
-
-    assert "not exact" in panel["title"]
     description = panel["description"]
-    assert "harness revision was not captured" in description
-    assert "not an exact comparison" in description
-    assert "must not be used as a regression baseline" in description
-    assert "excluded" in description, "the source table must say it excludes resolved harness SHAs"
-
-    # No minimum-capture filter on source cohorts: one capture is shown with its
-    # count, and the comparison labels the sample as insufficient.
-    for value_filter in transforms(panel=panel, transform_id="filterByValue"):
-        for filter_config in value_filter["options"]["filters"]:
-            assert filter_config["config"]["id"] != "greaterOrEqual"
-
-    links = field_links(panel=panel, field="osac.ci.test_ref")
-    assert len(links) == 1
-    url = links[0]["url"]
-    assert url.startswith(COMPARISON_LINK)
-    assert "var-test_ref=${__value.raw:percentencode}" in url
-    assert 'var-test_suite=${__data.fields["osac.ci.suite"]:percentencode}' in url
-    # Source links clear the exact-only variables instead of guessing values.
-    for empty in (
-        "var-test_sha=&",
-        "var-test_filter=&",
-        "var-test_marker=&",
-        "var-test_infra_sha=&",
-        "var-test_infra_workflow_sha=&",
-    ):
-        assert empty in url
+    assert "six identity fields" in description
+    assert "requested ref is metadata" in description
+    assert "ungrouped capture is never part of" in description
+    assert "No exact cohort" in panel["fieldConfig"]["defaults"]["noValue"]
 
 
 def test_exact_cohort_links_set_every_variable() -> None:
     panel = panel_by_title(dashboard=load_dashboard(), title="Exact cohorts")
-    links = field_links(panel=panel, field="osac.ci.test_sha")
+    links = field_links(panel=panel, field="test_sha")
     assert len(links) == 1
     url = links[0]["url"]
 
     assert url.startswith(COMPARISON_LINK)
     assert "var-test_sha=${__value.raw:percentencode}" in url
-    # The requested ref is metadata, taken from the aggregated display column.
-    assert 'var-test_ref=${__data.fields["osac.ci.test_ref (last)"]:percentencode}' in url
+    assert 'var-test_ref=${__data.fields.test_ref:percentencode}' in url
     for attribute in ("test_suite", "test_filter", "test_marker", "test_infra_sha", "test_infra_workflow_sha"):
-        assert f'var-{attribute}=${{__data.fields["osac.ci.{attribute}"]:percentencode}}' in url
+        assert f'var-{attribute}=${{__data.fields.{attribute}:percentencode}}' in url
+    assert "var-capture_id" not in url
+
+
+def test_ungrouped_captures_are_a_separate_list_never_a_cohort() -> None:
+    """identity_source=none rows are returned by the same endpoint in their own
+    list. They are shown on their own, never merged into an exact cohort."""
+    panel = panel_by_title(dashboard=load_dashboard(), title=UNGROUPED_TITLE)
+    (target,) = panel["targets"]
+
+    assert panel["datasource"] == {"type": "yesoreyeram-infinity-datasource", "uid": "workflow-api"}
+    assert target["url"] == f"{API}/cohorts?days=${{days}}"
+    assert target["root_selector"] == "$.ungrouped"
+    assert selectors(panel) >= {"capture_id", "run_id", "suite", "test_ref", "identity_source", "reason"}
+    assert not transforms(panel=panel, transform_id="groupBy")
+    assert not transforms(panel=panel, transform_id="joinByField"), "the ungrouped list is never joined to cohorts"
+
+    description = panel["description"]
+    assert "identity_source=none" in description
+    assert "not exact" in description
+    assert "not a baseline" in description
+    assert "never merged into an exact cohort" in description
+
+    identity = next(
+        o for o in panel["fieldConfig"]["overrides"] if o["matcher"]["options"] == "identity_source"
+    )
+    mapping = next(p["value"] for p in identity["properties"] if p["id"] == "mappings")
+    assert mapping[0]["options"]["none"]["text"] == "none"
+
+
+def test_ungrouped_links_open_capture_with_the_capture_window() -> None:
+    panel = panel_by_title(dashboard=load_dashboard(), title=UNGROUPED_TITLE)
+    links = field_links(panel=panel, field="capture_id")
+    assert len(links) == 1
+    url = links[0]["url"]
+    assert url.startswith(RUN_INVESTIGATION_LINK)
+    assert "var-capture_id=${__value.raw}" in url
+    assert "from=${__data.fields.capture_started_at}" in url
+    assert "to=${__data.fields.last_seen_at}" in url
+
+
+def test_unknown_is_never_a_cohort_value() -> None:
+    """The registry never emits `unknown` as an identity value, and the page
+    never writes one into a cohort link."""
+    dashboard = load_dashboard()
+    for title in ("Exact cohorts", UNGROUPED_TITLE):
+        panel = panel_by_title(dashboard=dashboard, title=title)
+        for link in (
+            link
+            for override in panel["fieldConfig"]["overrides"]
+            for prop in override["properties"]
+            if prop["id"] == "links"
+            for link in prop["value"]
+        ):
+            assert "unknown" not in link["url"].lower()
+
+    limits = panel_by_title(dashboard=dashboard, title=LIMITS_TITLE)["options"]["content"]
+    assert "`unknown` is never a cohort value" in limits
+
+
+def test_no_tempo_discovery_or_span_cap_remains() -> None:
+    """Cohort discovery is SQL in the registry. The remaining span tables are
+    selected by the six identity variables, not by a wildcard capture search,
+    and no target asks Tempo for an `spss` cap."""
+    dashboard = load_dashboard()
+    for panel in compare_panels(dashboard):
+        for target in panel.get("targets", []):
+            assert "spss" not in target, panel["title"]
+            query = target.get("query", "")
+            assert 'resource."osac.ci.capture_id"' not in query, panel["title"]
+            assert "osac.ci.test_ref" not in query, panel["title"]
+            assert ") || (" not in query, panel["title"]
+
+
+def test_span_tables_use_the_exact_identity_variables_only() -> None:
+    for title in ANALYSIS_TITLES:
+        panel = panel_by_title(dashboard=load_dashboard(), title=title)
+        query = panel["targets"][0]["query"]
+        assert PHASE_EXCLUSION in query
+        assert NODEID_PROJECTION in query
+        assert FUNCTION_PROJECTION in query
+        for field in IDENTITY_FIELDS:
+            assert f'resource."osac.ci.{field}" = ${{{field}:doublequote}}' in query
+        assert 'resource."osac.ci.suite"' not in query
 
 
 def test_time_ranking_groups_per_capture_then_per_test() -> None:
@@ -686,7 +543,6 @@ def test_time_ranking_groups_per_capture_then_per_test() -> None:
     limit = transforms(panel=panel, transform_id="limit")[0]
     assert limit == {"id": "limit", "options": {"limitField": 30}}
 
-    # Single query, no join, no calculated failure rate.
     assert not transforms(panel=panel, transform_id="joinByField")
     assert not transforms(panel=panel, transform_id="calculateField")
 
@@ -736,8 +592,8 @@ def test_failed_tests_table_lists_failed_tests_per_capture() -> None:
 
 
 def test_failed_runs_table_shows_each_failed_capture_with_links() -> None:
-    """One row per failed test occurrence: capture (linked to the run
-    investigation), test function, time and duration."""
+    """One row per failed test occurrence: capture (linked to Capture),
+    test function, time and duration."""
     panel = panel_by_title(dashboard=load_dashboard(), title="Failed runs in this cohort")
     query = panel["targets"][0]["query"]
 
@@ -819,7 +675,6 @@ def test_table_columns_fit_1280_and_show_full_names() -> None:
             )
             if field in wrapped:
                 assert has_wrap, f"{title}: column {field} must wrap instead of truncating"
-                # A fixed width makes Grafana clip the cell instead of wrapping.
                 assert width is None, f"{title}: wrapped column {field} must take the remaining width"
                 continue
             assert width is not None, f"{title}: column {field} needs a fixed width"
@@ -834,13 +689,10 @@ def test_table_columns_fit_1280_and_show_full_names() -> None:
         )
         assert total <= 1150, f"{title}: column widths sum to {total}px"
 
-    # SHA columns: 40 hex characters need ~336px plus padding; 31-character
-    # prefixes were the earlier defect.
     for title, field in (
-        ("Source-revision cohorts (not exact)", "osac.ci.test_ref"),
-        ("Exact cohorts", "osac.ci.test_sha"),
-        ("Exact cohorts", "osac.ci.test_infra_sha"),
-        ("Exact cohorts", "osac.ci.test_infra_workflow_sha"),
+        ("Exact cohorts", "test_sha"),
+        ("Exact cohorts", "test_infra_sha"),
+        ("Exact cohorts", "test_infra_workflow_sha"),
     ):
         panel = panel_by_title(dashboard=dashboard, title=title)
         width = next(
@@ -852,8 +704,6 @@ def test_table_columns_fit_1280_and_show_full_names() -> None:
         )
         assert width >= 350, f"{title}.{field}: {width}px is too narrow for a 40-character SHA"
 
-    # The Test column shows the code.function value, which fits without wrapping;
-    # the full node id lives in its own wrapped column.
     tests = panel_by_title(dashboard=dashboard, title="Tests using the most time")
     overrides = {
         o["matcher"]["options"]: {
@@ -897,71 +747,46 @@ def test_observed_time_copy_and_no_waste_claim() -> None:
     assert "cannot be converted into runner minutes" in intro
     assert "not a diagnosis" in guide
 
-    # Observed time is never framed as recoverable time or a savings estimate.
     whole_section = json.dumps(compare_row(dashboard)).lower()
     assert "waste" not in whole_section
     assert "minutes saved" not in whole_section
     assert "time saved" not in whole_section
 
 
-def test_limits_copy_pins_the_verified_query_caps() -> None:
+def test_limits_copy_names_the_registry_and_the_expand_only_tempo_reads() -> None:
     dashboard = load_dashboard()
-    text = panel_by_title(dashboard=dashboard, title="Query limits (verified against this backend on 2026-11-01)")[
-        "options"
-    ]["content"]
+    text = panel_by_title(dashboard=dashboard, title=LIMITS_TITLE)["options"]["content"]
 
-    assert "30,000 spansets (traces), not spans" in text
-    assert "30,000 traces holding 38,902 spans" in text
-    assert "100 spans per spanset" in text
-    assert "spans per span set exceeds 100" in text
-    assert "168 hours" in text
-    assert "A live capture is not final" in text
-    assert "excluded from exact cohorts" in text
-    assert "the most observed is 53" in text
-
-    # The nil-semantics claim must match what was verified live: standalone = nil
-    # does match absent attributes, combinations are unreliable, structural
-    # negation is what the source queries use.
-    assert "structural negation" in text
-    assert "!( attribute =~ sha )" in text
-    assert "5,382" in text
-    assert "26 spans" in text
-    assert "16 MB" in text
-    assert "matches nothing" not in text
-    assert "62 of 103" not in text
-
-    # The slow backend is labelled, and the single-query constraint is documented.
-    assert "Panel load time is the backend" in text
+    assert "/api/ci-observe/cohorts" in text
+    assert "not Tempo" in text
+    assert "collapsed" in text
+    assert "six identity fields" in text
+    assert "`identity_source=none`" in text
+    assert "never merged" in text
+    assert "`unknown` is never a cohort value" in text
+    assert "both the runs shown and the total" in text
     assert "exactly one TraceQL query" in text
-    assert "overwrites every additional target" in text
-    # The intermittent failure mode is documented with its verified mechanism.
-    assert "429 job queue full" in text
-    assert "refreshing retries" in text
-
-    # Every Tempo target requests the same caps the copy states.
-    for panel in compare_panels(dashboard):
-        for target in panel.get("targets", []):
-            if target.get("queryType") != "traceql":
-                continue
-            assert target["limit"] == 30000, f"{panel['title']}: query limit must stay at 30,000"
-            assert target["spss"] == 100, f"{panel['title']}: spans per spanset must stay at 100"
-            assert target["queryType"] == "traceql"
-            assert target["tableType"] == "spans"
-            assert target["datasource"]["uid"] == "ci-observe-traces"
+    assert "168 hours" in text
+    assert "spans per span set exceeds 100" not in text
+    assert "30,000 spansets" not in text
 
 
 def test_every_test_span_query_excludes_phase_spans_and_projects_names() -> None:
     """Only parent test spans count; ::setup/::call/::teardown children are excluded.
-    The five variable-driven queries also project the pytest node id and the
-    code.function they group and display by."""
+    The four span tables project the pytest node id and code.function they group
+    and display by, and select the cohort with the six identity variables."""
     dashboard = load_dashboard()
-    test_span_queries = [q for q in all_queries(dashboard) if '.pytest.span_type = "test"' in q]
-    assert len(test_span_queries) == 7  # two discoveries + the stat + four analysis panels
+    test_span_queries = [
+        q
+        for panel in compare_panels(dashboard)
+        for q in (t.get("query", "") for t in panel.get("targets", []))
+        if '.pytest.span_type = "test"' in q
+    ]
+    assert len(test_span_queries) == 4  # tests, runs, failed tests, failed runs
     for query in test_span_queries:
         assert PHASE_EXCLUSION in query
-    for query in comparison_targets(dashboard):
-        assert NODEID_PROJECTION in query, "comparison queries must project the node id they group by"
-        assert FUNCTION_PROJECTION in query, "comparison queries must project the test function they display"
+        assert NODEID_PROJECTION in query
+        assert FUNCTION_PROJECTION in query
 
 
 def test_no_leftover_template_tokens() -> None:
@@ -991,7 +816,7 @@ def test_two_revision_delta_reads_the_compare_endpoint() -> None:
     panel = panel_by_title(dashboard=dashboard, title="Test deltas between two source revisions")
     (target,) = panel["targets"]
     assert target["url"] == (
-        "http://127.0.0.1:9103/api/ci-observe/trends/compare"
+        f"{API}/trends/compare"
         "?base=${compare_base:percentencode}&head=${compare_head:percentencode}&days=${days}"
     )
     assert target["root_selector"] == "rows"
@@ -1011,3 +836,85 @@ def test_two_revision_delta_reads_the_compare_endpoint() -> None:
     assert "head minus base" in panel["description"]
     variables = {v["name"] for v in dashboard["templating"]["list"]}
     assert {"compare_base", "compare_head"} <= variables
+
+
+# ---------------------------------------------------------------------------
+# Data path: every selector against the endpoint contract
+# ---------------------------------------------------------------------------
+COHORTS_DOCUMENT = {
+    "days": 30,
+    "window_from": "2026-10-05T10:00:00Z",
+    "window_to": "2026-11-04T10:00:00Z",
+    "cohorts": [{
+        "test_sha": "a" * 40,
+        "test_infra_sha": "b" * 40,
+        "test_infra_workflow_sha": "c" * 40,
+        "test_suite": "vmaas",
+        "test_filter": "none",
+        "test_marker": "none",
+        "test_ref": "main",
+        "captures": 3,
+    }, {
+        "test_sha": "d" * 40,
+        "test_infra_sha": "e" * 40,
+        "test_infra_workflow_sha": "f" * 40,
+        "test_suite": "caas",
+        "test_filter": "none",
+        "test_marker": "none",
+        "test_ref": "main",
+        "captures": 1,
+    }],
+    "ungrouped": [{
+        "capture_id": "vmaas-main-41535773459-a1",
+        "run_id": "41535773459",
+        "run_attempt": "1",
+        "suite": "vmaas",
+        "test_ref": "main",
+        "identity_source": "none",
+        "capture_started_at": "2026-11-03T10:00:00Z",
+        "last_seen_at": "2026-11-04T09:00:00Z",
+        "reason": "the registry has no osac.ci.test_infra_sha for this capture",
+    }],
+    "truncated": False,
+    "shown": 2,
+    "total": 2,
+    "notes": [],
+}
+
+
+def test_every_exact_cohort_column_resolves_against_the_cohorts_contract() -> None:
+    panel = panel_by_title(dashboard=load_dashboard(), title="Exact cohorts")
+    rows = resolve_rows(COHORTS_DOCUMENT, panel["targets"][0]["root_selector"])
+    assert rows, "the cohort contract has no rows"
+    for column in panel["targets"][0]["columns"]:
+        assert column["selector"] in rows[0], f"column {column['selector']} is not in the contract"
+
+
+def test_every_ungrouped_column_resolves_against_the_cohorts_contract() -> None:
+    panel = panel_by_title(dashboard=load_dashboard(), title=UNGROUPED_TITLE)
+    rows = resolve_rows(COHORTS_DOCUMENT, panel["targets"][0]["root_selector"])
+    assert rows, "the ungrouped contract has no rows"
+    for column in panel["targets"][0]["columns"]:
+        assert column["selector"] in rows[0], f"column {column['selector']} is not in the contract"
+
+
+def test_every_sample_status_column_resolves_against_the_cohorts_contract() -> None:
+    panel = panel_by_title(dashboard=load_dashboard(), title="Sample status")
+    rows = resolve_rows(COHORTS_DOCUMENT, panel["targets"][0]["root_selector"])
+    for column in panel["targets"][0]["columns"]:
+        assert column["selector"] in rows[0], f"column {column['selector']} is not in the contract"
+
+
+def test_the_cohort_contract_keeps_grouped_and_ungrouped_apart() -> None:
+    """Exact cohorts never contain an identity_source value, and the ungrouped
+    list never appears in the exact list. `unknown` is not an identity value."""
+    cohorts = COHORTS_DOCUMENT["cohorts"]
+    ungrouped = COHORTS_DOCUMENT["ungrouped"]
+    assert cohorts and ungrouped
+    for row in cohorts:
+        assert "identity_source" not in row
+        assert "capture_id" not in row
+        assert all(row[field] != "unknown" for field in IDENTITY_FIELDS)
+        assert SHA_RE.search(row["test_sha"])
+    assert {row["identity_source"] for row in ungrouped} == {"none"}
+    assert len({row["capture_id"] for row in ungrouped}) == len(ungrouped)

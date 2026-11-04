@@ -29,12 +29,12 @@ COMPARE_ROW_TITLE = "Compare — captured runs, selected cohort, dashboard time 
 COMPARE_TITLES = [
     "Pick a cohort",
     "Exact cohorts",
-    "Source-revision cohorts (not exact)",
+    "Ungrouped captures (identity source none, not a cohort)",
     "Sample status",
     "Tests using the most time",
     "Runs in this cohort",
     "How to read this comparison",
-    "Query limits (verified against this backend on 2026-11-01)",
+    "Query limits and data sources (capture registry + Tempo on expand)",
     "Compare two revisions",
     "Test deltas between two source revisions",
     "Failed tests in this cohort",
@@ -225,23 +225,36 @@ def test_the_compare_section_is_a_collapsed_row_at_the_bottom() -> None:
     assert positions == sorted(positions)
 
 
-def test_the_compare_section_reads_captured_runs_only() -> None:
-    """The Compare section is the only part of Trends that reads captures,
-    and it keeps to the ci-observe trace datasource."""
+def test_the_compare_section_reads_the_registry_then_tempo_on_expand() -> None:
+    """Cohort discovery is the capture registry. The remaining span tables are
+    Tempo, and they start only when the collapsed row expands. No target asks
+    Tempo to discover a cohort or to cap spans per spanset."""
     for panel in COMPARE_PANELS:
-        if panel["title"] == "Test deltas between two source revisions":
-            # Q8 compares two source revisions from the rollup, not captures.
-            (target,) = targets(panel)
-            assert target["url"].startswith(
-                "http://127.0.0.1:9103/api/ci-observe/trends/compare"
-            )
-            continue
         for target in targets(panel):
+            assert "spss" not in target, panel["title"]
+            query = target.get("query", "")
+            assert 'resource."osac.ci.capture_id"' not in query, panel["title"]
+            assert "osac.ci.test_ref" not in query, panel["title"]
+            assert ") || (" not in query, panel["title"]
+
+    for title in ("Exact cohorts", "Ungrouped captures (identity source none, not a cohort)", "Sample status"):
+        panel = next(p for p in COMPARE_PANELS if p["title"] == title)
+        for target in targets(panel):
+            assert target["url"].startswith("http://127.0.0.1:9103/api/ci-observe/cohorts")
+
+    (delta,) = targets(next(p for p in COMPARE_PANELS if p["title"] == "Test deltas between two source revisions"))
+    assert delta["url"].startswith("http://127.0.0.1:9103/api/ci-observe/trends/compare")
+
+    for panel in COMPARE_PANELS:
+        if panel["title"] in (
+            "Tests using the most time",
+            "Runs in this cohort",
+            "Failed tests in this cohort",
+            "Failed runs in this cohort",
+        ):
+            (target,) = targets(panel)
             assert target["datasource"]["type"] == "tempo"
             assert target["datasource"]["uid"] == "ci-observe-traces"
-        text = json.dumps(panel)
-        assert "prometheus" not in text
-        assert "workflow-api" not in text
 
 
 def test_the_compare_variables_extend_the_existing_pair() -> None:
