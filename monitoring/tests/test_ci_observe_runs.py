@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -534,6 +535,26 @@ def test_the_cache_keeps_only_live_windows(client, jobs, tempo):
     client.get_json({"days": ["30"]})
 
     assert set(client._cache) == {7, 21, 30}
+
+
+def test_one_deadline_bounds_all_chunks(client, jobs, monkeypatch):
+    """Nine chunks must share one deadline; a per-chunk timeout could park a
+    thread for 9 x 45s. A chunk that cannot start before the deadline is a
+    failure, so the verdict stays unknown/truncated, never not collected."""
+    client.TEMPO_TOTAL_TIMEOUT_SECONDS = 0.5
+    calls = []
+
+    def fake(start, end, timeout=None):
+        calls.append(timeout)
+        time.sleep(0.3)
+        return [], True
+
+    monkeypatch.setattr(client, "_tempo_capture_ids", fake)
+    doc = client.get_json({"days": ["60"]})
+
+    assert len(calls) < 9, "the deadline stopped the remaining chunks"
+    assert doc["tempo"]["state"] in ("unknown", "truncated")
+    assert doc["tempo"]["state"] != "ok"
 
 
 def test_an_empty_job_history_still_answers(client, tempo):

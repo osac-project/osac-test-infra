@@ -103,6 +103,12 @@ class CIObserveRuns:
     # row into `unknown`, so leave headroom for a loaded backend. The answer
     # is cached for 60s, and a slow first load is better than a false verdict.
     TEMPO_TIMEOUT_SECONDS = 45
+    # One deadline for the whole lookup, not one per chunk. A 60-day window is
+    # nine chunks; nine 45s timeouts would park a server thread for over six
+    # minutes. A cold 60-day lookup under ingest measured ~180s, so 240s
+    # covers a valid slow answer and still bounds the wait. Chunks that cannot
+    # start before the deadline are failures, never a `not collected` verdict.
+    TEMPO_TOTAL_TIMEOUT_SECONDS = 240
     # Tempo answers only for spans it has indexed. A capture that closed
     # seconds ago may not be searchable yet, so a run younger than this is
     # `unknown`: too new to judge.
@@ -287,10 +293,17 @@ class CIObserveRuns:
         capped = []
         values_seen = 0
         capture_ids_seen = 0
+        deadline = time.monotonic() + self.TEMPO_TOTAL_TIMEOUT_SECONDS
         for start, end in self._window_chunks(window_from, until):
             verdict["chunks"] += 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failures.append(f"{self._iso(start)}: the total lookup deadline was reached")
+                continue
             try:
-                values, complete = self._tempo_capture_ids(start, end)
+                values, complete = self._tempo_capture_ids(
+                    start, end, timeout=min(self.TEMPO_TIMEOUT_SECONDS, remaining)
+                )
             except (OSError, ValueError) as exc:
                 logger.debug("Tempo tag values failed for %s..%s: %s", start, end, exc)
                 failures.append(f"{self._iso(start)}: {exc}")
@@ -365,19 +378,22 @@ class CIObserveRuns:
             yield start, chunk_end
             start = chunk_end
 
-    def _tempo_capture_ids(self, start, end):
+    def _tempo_capture_ids(self, start, end, timeout=None):
         """([capture id, ...], complete) for one chunk of the window.
 
         Raises on any transport or decoding failure so the caller can answer
         `unknown` instead of guessing. `complete` is False when Tempo's own
         metrics say the query did not finish every job: a partial answer must
-        not become a `not collected` verdict.
+        not become a `not collected` verdict. `timeout` is the time left in
+        the caller's total deadline, never a fresh per-chunk budget.
         """
         tag = urllib.parse.quote(CAPTURE_TAG, safe=".")
         query = urllib.parse.urlencode({"start": start, "end": end})
         url = f"{self.tempo_url}/api/v2/search/tag/{tag}/values?{query}"
         try:
-            with urllib.request.urlopen(url, timeout=self.TEMPO_TIMEOUT_SECONDS) as response:
+            with urllib.request.urlopen(
+                url, timeout=timeout or self.TEMPO_TIMEOUT_SECONDS
+            ) as response:
                 document = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             # A tag-values response that is too large comes back as an error,
