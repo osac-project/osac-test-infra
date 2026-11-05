@@ -592,6 +592,7 @@ jobs:
         env:
           CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
           CHART_OCI_TAG: ${{ inputs.chart-oci-tag }}
+        shell: bash
         run: |
           echo "::group::Resolve chart version to install"
           if [[ -n "${CHART_OCI_TAG}" ]]; then
