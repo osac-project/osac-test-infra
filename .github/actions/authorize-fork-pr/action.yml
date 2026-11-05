@@ -65,24 +65,27 @@ runs:
 
         # A cherry-pick of the robot to a release branch: the commits were reviewed and merged on the default branch, the
         # robot pushes them to its own fork, and the E2E starts only after a person with write access approved the exact
-        # head commit (osac-ci). Nothing else of the robot is trusted: not another branch, not another fork.
+        # head commit (osac-ci). Nothing else of the robot is trusted: not another branch, not another fork. The pull
+        # request is only read for an author the list names, and a lookup that fails only means "not trusted here": the
+        # checks below go on.
         if [[ -n "${PR_NUMBER}" && "${TRUSTED_AUTHORS}" =~ ^[A-Za-z0-9,-]+$ ]]; then
-          echo "::group::Check trusted fork author"
-          PR_JSON=$(curl -s \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${PR_REPO}/pulls/${PR_NUMBER}")
-          BASE_REF=$(jq -r '.base.ref // empty' <<<"${PR_JSON}")
-          HEAD_OWNER=$(jq -r '.head.repo.owner.login // empty' <<<"${PR_JSON}")
           IFS=',' read -ra TRUSTED <<<"${TRUSTED_AUTHORS}"
           for trusted in "${TRUSTED[@]}"; do
-            if [[ -n "${trusted}" && "${PR_AUTHOR}" == "${trusted}" && "${HEAD_OWNER}" == "${trusted}" && "${BASE_REF}" =~ ^release-[0-9] ]]; then
+            [[ -n "${trusted}" && "${PR_AUTHOR}" == "${trusted}" ]] || continue
+            echo "::group::Check trusted fork author"
+            PR_JSON=$(curl -s \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${PR_REPO}/pulls/${PR_NUMBER}") || PR_JSON=""
+            BASE_REF=$(jq -r '.base.ref // empty' <<<"${PR_JSON}" 2>/dev/null) || BASE_REF=""
+            HEAD_OWNER=$(jq -r '.head.repo.owner.login // empty' <<<"${PR_JSON}" 2>/dev/null) || HEAD_OWNER=""
+            if [[ "${HEAD_OWNER}" == "${trusted}" && "${BASE_REF}" =~ ^release-[0-9] ]]; then
               echo "Fork PR authorized: '${PR_AUTHOR}' is a trusted cherry-pick author and the pull request targets ${BASE_REF}."
               echo "::endgroup::"
               exit 0
             fi
+            echo "::endgroup::"
           done
-          echo "::endgroup::"
         fi
 
         echo "::group::Check org membership"
