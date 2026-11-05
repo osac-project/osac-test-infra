@@ -643,9 +643,15 @@ jobs:
             # Candidates are a plain release (X.Y.Z) or a release
             # candidate of one (X.Y.Z-rc.N) -- the only two tag shapes
             # osac-release.yaml and osac-promote-to-prod.yaml ever push.
+            # The grep's own exit code (1 when zero tags match -- a real,
+            # expected outcome the check right below handles) is swallowed
+            # here so it can't trip `pipefail`/`set -e` before that check
+            # runs; a genuine skopeo or jq failure upstream still fails the
+            # pipe and aborts the step, since pipefail reports the
+            # rightmost *other* non-zero status in the pipe.
             CANDIDATES=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
               | jq -r '.Tags[]' \
-              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$')
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' || true; })
             if [[ -z "${CANDIDATES}" ]]; then
               echo "::error::No semver-tagged release found on ${CHART_OCI_REPO}"
               exit 1
