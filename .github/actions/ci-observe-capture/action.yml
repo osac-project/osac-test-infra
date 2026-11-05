@@ -580,6 +580,10 @@ runs:
       run: |
         set -u
         ci_dir="${RUNNER_TEMP}/ci-observe"
+        # The deploy step creates this, but it is continue-on-error: if it
+        # died before its own mkdir, the test must still run. The test's own
+        # exit code is the only thing this step may report.
+        mkdir -p "${ci_dir}"
         printf '%s\n' "${COMMAND_INPUT}" > "${ci_dir}/command.sh"
 
         # The OTEL environment is only set when the collectors came up; a

@@ -579,6 +579,24 @@ class TestActionStructure:
                 assert "port-forward" not in step.get("run", "")
         assert "port-forward" not in SCRIPT.read_text()
 
+    def test_only_the_test_step_can_fail_the_job(self, action: dict) -> None:
+        """Telemetry must never fail a job. Every step around the test is
+        continue-on-error; the one step without it is the test command
+        wrapper, whose only job is to return the command's own exit code."""
+        for step in action["runs"]["steps"]:
+            if step.get("id") == "run":
+                assert step.get("continue-on-error") is not True
+                continue
+            assert step.get("continue-on-error") is True, (
+                f"{step.get('name')} can fail the job; only the test command may"
+            )
+
+    def test_the_test_step_returns_the_commands_exit_code(self, action: dict) -> None:
+        script = self.step(action, "run")["run"]
+        assert "mkdir -p \"${ci_dir}\"" in script, "the test must run even if the deploy step did not create its dir"
+        assert "|| rc=$?" in script
+        assert 'exit "${rc}"' in script
+
     def test_info_metric_is_posted_after_deploy_and_in_verify(self, action: dict) -> None:
         deploy = self.step(action, "deploy")["run"]
         verify = self.step(action, "verify")["run"]
