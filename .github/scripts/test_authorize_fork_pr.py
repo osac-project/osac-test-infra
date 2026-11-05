@@ -119,6 +119,10 @@ class AuthorizeForkPr(unittest.TestCase):
             {"base": "releases"},  # not a release-<number> branch
             {"head_owner": "somebody-else"},  # not its own fork
             {"trusted": ""},  # nothing is trusted
+            {"trusted": "-" + BOT},  # a login that starts with a dash
+            {"trusted": BOT + "-"},  # a login that ends with a dash
+            {"trusted": "someone,-bad," + BOT},  # one invalid login rejects the whole list
+            {"trusted": "some--one," + BOT},  # two dashes in a row are no login
             {"trusted": BOT + ","},  # a trailing comma: the list is malformed, so it trusts nobody
             {"trusted": "," + BOT},  # a leading comma
             {"trusted": "someone,," + BOT},  # an empty entry in the middle
@@ -133,6 +137,15 @@ class AuthorizeForkPr(unittest.TestCase):
         """A well-formed list with more than one login."""
         done = run(author=BOT, trusted=f"someone-else,{BOT}")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_logins_are_compared_without_regard_to_case(self) -> None:
+        """GitHub treats logins as case-insensitive: the list, the author and the fork owner may spell them differently."""
+        done = run(author="OpenShift-CherryPick-Robot", head_owner="OPENSHIFT-cherrypick-robot", trusted=BOT)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done = run(author=BOT, trusted="Openshift-Cherrypick-Robot")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done = run(author=BOT, head_owner="somebody-else", trusted="Openshift-Cherrypick-Robot")
+        self.assertEqual(done.returncode, 1)  # still its own fork only
 
     def test_another_author_is_not_trusted_by_the_list(self) -> None:
         """An account the list does not name is blocked."""

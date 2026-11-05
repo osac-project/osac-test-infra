@@ -67,12 +67,13 @@ runs:
         # robot pushes them to its own fork, and the E2E starts only after a person with write access approved the exact
         # head commit (osac-ci). Nothing else of the robot is trusted: not another branch, not another fork. The pull
         # request is only read for an author the list names, and a lookup that fails only means "not trusted here": the
-        # checks below go on. A list that is not plain logins separated by single commas (an empty entry, a leading or
-        # trailing comma included) is a mistake, and it trusts nobody.
-        if [[ -n "${PR_NUMBER}" && "${TRUSTED_AUTHORS}" =~ ^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$ ]]; then
+        # checks below go on. A list that is not valid logins (letters, digits and single dashes inside, none at the
+        # start or the end) separated by single commas is a mistake, and it trusts nobody. Logins are compared without
+        # regard to case, as GitHub does.
+        if [[ -n "${PR_NUMBER}" && "${TRUSTED_AUTHORS}" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*(,[A-Za-z0-9]+(-[A-Za-z0-9]+)*)*$ ]]; then
           IFS=',' read -ra TRUSTED <<<"${TRUSTED_AUTHORS}"
           for trusted in "${TRUSTED[@]}"; do
-            [[ -n "${trusted}" && "${PR_AUTHOR}" == "${trusted}" ]] || continue
+            [[ -n "${trusted}" && "${PR_AUTHOR,,}" == "${trusted,,}" ]] || continue
             echo "::group::Check trusted fork author"
             PR_JSON=$(curl -s \
               -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -80,7 +81,7 @@ runs:
               "https://api.github.com/repos/${PR_REPO}/pulls/${PR_NUMBER}") || PR_JSON=""
             BASE_REF=$(jq -r '.base.ref // empty' <<<"${PR_JSON}" 2>/dev/null) || BASE_REF=""
             HEAD_OWNER=$(jq -r '.head.repo.owner.login // empty' <<<"${PR_JSON}" 2>/dev/null) || HEAD_OWNER=""
-            if [[ "${HEAD_OWNER}" == "${trusted}" && "${BASE_REF}" =~ ^release-[0-9] ]]; then
+            if [[ "${HEAD_OWNER,,}" == "${trusted,,}" && "${BASE_REF}" =~ ^release-[0-9] ]]; then
               echo "Fork PR authorized: '${PR_AUTHOR}' is a trusted cherry-pick author and the pull request targets ${BASE_REF}."
               echo "::endgroup::"
               exit 0
