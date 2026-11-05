@@ -579,11 +579,13 @@ jobs:
       # resolves to the newest real release, never a pinned or cached value
       # -- this is the one place "latest" is decided. Tags also include
       # timestamp-suffixed entries ({{ oci_version }}-{{ timestamp }}, see
-      # osac-build-and-publish.yaml's chart-stamping step); only the bare
-      # semver ones are real release versions. With chart-oci-tag set (the
-      # dev-build packaging-smoke path), that explicit tag is used as-is --
-      # it's never a semver version, just whatever the caller resolved
-      # (e.g. a commit SHA for a Konflux push build).
+      # osac-build-and-publish.yaml's chart-stamping step); those never
+      # match the regex below since it anchors on end-of-string right
+      # after an optional -rc.N, so they're excluded without a separate
+      # check. With chart-oci-tag set (the dev-build packaging-smoke
+      # path), that explicit tag is used as-is -- it's never a semver
+      # version, just whatever the caller resolved (e.g. a commit SHA for
+      # a Konflux push build).
       - name: Resolve chart version to install
         id: chart-version
         if: inputs.chart-oci-repo != ''
@@ -638,15 +640,28 @@ jobs:
             echo "Resolved ${CHART_OCI_REPO}:${VERSION} to digest sha256:${DIGEST}"
             echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           else
-            VERSION=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
+            # Candidates are a plain release (X.Y.Z) or a release
+            # candidate of one (X.Y.Z-rc.N) -- the only two tag shapes
+            # osac-release.yaml and osac-promote-to-prod.yaml ever push.
+            CANDIDATES=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
               | jq -r '.Tags[]' \
-              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -t. -k1,1n -k2,2n -k3,3n \
-              | tail -1)
-            if [[ -z "${VERSION}" ]]; then
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$')
+            if [[ -z "${CANDIDATES}" ]]; then
               echo "::error::No semver-tagged release found on ${CHART_OCI_REPO}"
               exit 1
             fi
+            # `sort -V` ranks "X.Y.Z-rc.N" above plain "X.Y.Z" (it has no
+            # concept of prerelease precedence), which would make a stale
+            # RC outrank the final release that superseded it. Sort
+            # numerically on major/minor/patch first, and only fall back
+            # to prerelease-vs-final (final wins) to break a tie within
+            # the same X.Y.Z, with the RC number itself compared
+            # numerically too (so rc.2 outranks rc.10 correctly).
+            VERSION=$(echo "${CANDIDATES}" | awk -F'[.-]' '{
+              pre = (NF > 3) ? $4 : "~"
+              preN = (NF > 4) ? $5 : 0
+              printf "%05d.%05d.%05d.%s.%010d\t%s\n", $1, $2, $3, pre, preN, $0
+            }' | LC_ALL=C sort | tail -1 | cut -f2)
             echo "Resolved latest chart version: ${VERSION}"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
