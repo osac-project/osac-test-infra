@@ -34,7 +34,7 @@ on:
         required: false
         default: "osac-project/osac"
       image-overrides:
-        description: "JSON mapping Helm value paths to image refs -- debugging escape hatch, overrides the resolved chart's own stamped images"
+        description: "JSON mapping Helm value paths to image refs -- debugging escape hatch for non-stamped keys only. The reusable workflow rejects any override touching the chart's own stamped image fields (operator/service/ui/aap/metering) whenever chart-oci-repo is set, which it always is here."
         required: false
         default: "{}"
       runner-label:
