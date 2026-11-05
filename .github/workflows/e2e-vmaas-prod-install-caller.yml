@@ -1,0 +1,80 @@
+---
+name: E2E VMaaS Production Install
+
+on:
+  # Offset from both the full-install suite's midnight schedule and the
+  # staging-install job's 03:17 schedule so none of the three contend for
+  # the same runner/cluster-tool flavor lock at once.
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+    inputs:
+      test-suite:
+        description: "Test suite (vmaas, vmaas/regression, ...). Default: vmaas."
+        required: false
+        default: "vmaas"
+      test-filter:
+        description: "pytest -k filter"
+        required: false
+        default: ""
+      test-marker:
+        description: "pytest -m marker expression. When empty, excludes tests marked requires_caas or requires_bmaas."
+        required: false
+        default: ""
+      chart-oci-repo:
+        description: "OCI repository holding the published osac-chart umbrella chart"
+        required: false
+        default: "registry.redhat.io/cloud-extensions/osac-chart"
+      installer-ref:
+        description: "Branch/ref of the OSAC monorepo (Makefile/profile values only -- not the chart itself)"
+        required: false
+        default: "main"
+      installer-repo:
+        description: "GitHub repo (owner/name) of the OSAC monorepo"
+        required: false
+        default: "osac-project/osac"
+      image-overrides:
+        description: "JSON mapping Helm value paths to image refs -- debugging escape hatch, overrides the resolved chart's own stamped images"
+        required: false
+        default: "{}"
+      runner-label:
+        description: "Self-hosted runner label to target (e.g. osac-ci-1 to pin to one machine for verification/debugging). Defaults to the shared fleet-wide label."
+        required: false
+        default: ""
+
+concurrency:
+  group: e2e-vmaas-prod-install-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-vmaas-prod-install:
+    permissions:
+      contents: read
+      # Required by e2e-vmaas-full-install.yml's "e2e" job -- only
+      # exercised there when enable-ai-diagnostic is true, but GitHub
+      # statically validates a called reusable workflow's declared job
+      # permissions against what the caller grants regardless of runtime
+      # reachability.
+      id-token: write
+    # Calls the same reusable workflow the staging caller uses -- this file
+    # only differs by chart-oci-repo's default (registry.redhat.io instead
+    # of registry.stage.redhat.io) and registry-environment: prod, which
+    # picks the matching Vault credential (see
+    # e2e-vmaas-full-install.yml's own input/step comments).
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    with:
+      test-suite: ${{ inputs.test-suite || 'vmaas' }}
+      test-filter: ${{ inputs.test-filter || '' }}
+      # The references module contains CaaS and BMaaS tests too. Those
+      # services are disabled in the VMaaS profile, so exclude tests marked
+      # with either dependency unless an explicit workflow-dispatch marker is
+      # supplied. Matches e2e-vmaas-staging-install-caller.yml's own reasoning.
+      test-marker: ${{ inputs.test-marker || 'not requires_caas and not requires_bmaas' }}
+      chart-oci-repo: ${{ inputs.chart-oci-repo || 'registry.redhat.io/cloud-extensions/osac-chart' }}
+      registry-environment: prod
+      installer-ref: ${{ inputs.installer-ref || 'main' }}
+      installer-repo: ${{ inputs.installer-repo || 'osac-project/osac' }}
+      image-overrides: ${{ inputs.image-overrides || '{}' }}
+      runner-label: ${{ inputs.runner-label || 'osac-ci' }}
+      notify-on-failure: ${{ github.event_name == 'schedule' }}
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
