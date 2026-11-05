@@ -67,8 +67,9 @@ runs:
         # robot pushes them to its own fork, and the E2E starts only after a person with write access approved the exact
         # head commit (osac-ci). Nothing else of the robot is trusted: not another branch, not another fork. The pull
         # request is only read for an author the list names, and a lookup that fails only means "not trusted here": the
-        # checks below go on.
-        if [[ -n "${PR_NUMBER}" && "${TRUSTED_AUTHORS}" =~ ^[A-Za-z0-9,-]+$ ]]; then
+        # checks below go on. A list that is not plain logins separated by single commas (an empty entry, a leading or
+        # trailing comma included) is a mistake, and it trusts nobody.
+        if [[ -n "${PR_NUMBER}" && "${TRUSTED_AUTHORS}" =~ ^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$ ]]; then
           IFS=',' read -ra TRUSTED <<<"${TRUSTED_AUTHORS}"
           for trusted in "${TRUSTED[@]}"; do
             [[ -n "${trusted}" && "${PR_AUTHOR}" == "${trusted}" ]] || continue

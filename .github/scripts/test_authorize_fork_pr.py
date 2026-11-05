@@ -119,12 +119,20 @@ class AuthorizeForkPr(unittest.TestCase):
             {"base": "releases"},  # not a release-<number> branch
             {"head_owner": "somebody-else"},  # not its own fork
             {"trusted": ""},  # nothing is trusted
+            {"trusted": BOT + ","},  # a trailing comma: the list is malformed, so it trusts nobody
+            {"trusted": "," + BOT},  # a leading comma
+            {"trusted": "someone,," + BOT},  # an empty entry in the middle
             {"trusted": "openshift-cherrypick-robot; echo hi"},  # a list that is not a list of logins
             {"trusted": "someone-else"},
         ):
             done = run(author=BOT, **kwargs)  # type: ignore[arg-type]
             self.assertEqual(done.returncode, 1, f"{kwargs}: {done.stdout}")
             self.assertIn("Fork PR blocked", done.stdout)
+
+    def test_a_list_of_several_logins_trusts_each_of_them(self) -> None:
+        """A well-formed list with more than one login."""
+        done = run(author=BOT, trusted=f"someone-else,{BOT}")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def test_another_author_is_not_trusted_by_the_list(self) -> None:
         """An account the list does not name is blocked."""
