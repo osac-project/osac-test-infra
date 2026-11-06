@@ -27,6 +27,8 @@ RUNS_DOCUMENT = {
             "repo": "osac-test-infra",
             "branch": "main",
             "trigger": "scheduled",
+            "pr": "",
+            "pr_url": "",
             "conclusion": "failure",
             "created_at": "2026-11-03T10:00:00Z",
             "started_at_ms": 1762164060000,
@@ -40,7 +42,9 @@ RUNS_DOCUMENT = {
             "workflow": "E2E suite · vmaas · #1620 · 87306a0",
             "repo": "osac",
             "branch": "refs/pull/1620/head",
-            "trigger": "PR #1620",
+            "trigger": "PR",
+            "pr": "#1620",
+            "pr_url": "https://github.com/osac-project/osac/pull/1620",
             "conclusion": "success",
             "created_at": "2026-11-03T09:00:00Z",
             "started_at_ms": 1762160460000,
@@ -129,6 +133,7 @@ def test_column_labels_are_plain_words() -> None:
         "id": "Run",
         "workflow": "Job",
         "repo": "Repo",
+        "pr": "PR",
         "branch": "Branch",
         "trigger": "Trigger",
         "conclusion": "Result",
@@ -138,7 +143,7 @@ def test_column_labels_are_plain_words() -> None:
     } == {
         field: display_name(table, field)
         for field in (
-            "id", "workflow", "repo", "branch", "trigger",
+            "id", "workflow", "repo", "pr", "branch", "trigger",
             "conclusion", "capture_state", "created_at", "url",
         )
     }

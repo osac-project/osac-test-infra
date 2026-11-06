@@ -542,6 +542,19 @@ def test_a_thirty_day_window_keeps_every_day(client, exporter, fresh, wfe):
     assert doc["truncated"] is False
 
 
+def test_a_pr_suite_run_reports_its_pull_request(client, exporter, fresh):
+    exporter._upsert_job(run_job(
+        workflow="E2E suite · caas · #1620 · " + "a" * 40,
+        trigger="manual",
+    ))
+
+    run = client.get_json({"days": ["30"]})["runs"][0]
+
+    assert run["pr"] == "#1620"
+    assert run["trigger"] == "PR"
+    assert run["pr_url"] == "https://github.com/osac-project/osac/pull/1620"
+
+
 def test_run_is_an_exact_lookup_outside_the_window(client, exporter, fresh):
     exporter._upsert_job(run_job(RUN_ID))
     exporter._upsert_job(run_job(

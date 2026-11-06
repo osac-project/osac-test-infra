@@ -355,7 +355,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 220
+                "value": 200
               },
               {
                 "id": "custom.cellOptions",
@@ -379,7 +379,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 150
+                "value": 120
               },
               {
                 "id": "custom.cellOptions",
@@ -411,8 +411,62 @@
                         "index": 2
                       }
                     }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^merge queue.*",
+                      "result": {
+                        "text": "Merge queue"
+                      }
+                    }
                   }
                 ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pr"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PR"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open pull request",
+                    "url": "${__data.fields.pr_url}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pr_url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "pr_url"
+              },
+              {
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           }
@@ -460,6 +514,11 @@
               "type": "string"
             },
             {
+              "selector": "pr",
+              "text": "pr",
+              "type": "string"
+            },
+            {
               "selector": "branch",
               "text": "branch",
               "type": "string"
@@ -503,6 +562,11 @@
               "selector": "done_at_ms",
               "text": "done_at_ms",
               "type": "number"
+            },
+            {
+              "selector": "pr_url",
+              "text": "pr_url",
+              "type": "string"
             }
           ]
         }

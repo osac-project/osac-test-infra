@@ -4532,6 +4532,8 @@ class WorkflowExporter:
                    MAX(j.repo) AS repo,
                    MAX(j.trigger) AS trigger,
                    MAX(j.branch) AS branch,
+                   MAX(j.pr_display) AS pr_display,
+                   MAX(j.pr_url) AS pr_url,
                    {self.CI_OBSERVE_RUN_CONCLUSION} AS conclusion,
                    {self.CI_OBSERVE_RUN_STATUS} AS status,
                    MIN(j.created_at) AS created_at,
@@ -4557,13 +4559,28 @@ class WorkflowExporter:
                 capture_id for capture_id in (row.pop("capture_ids") or "").split(",") if capture_id
             )
             row.pop("matched", None)
+            workflow = ",".join(sorted(str(row["workflow"] or "").split(",")))
+            pr_display = str(row.pop("pr_display") or "").strip()
+            pr_url = str(row.pop("pr_url") or "").strip()
+            if not pr_display:
+                match = re.search(r"#(\d+)", workflow)
+                if match:
+                    pr_display = f"#{match.group(1)}"
+            if pr_display and not pr_url:
+                pr_url = f"https://github.com/{ORG}/{row['repo']}/pull/{pr_display.lstrip('#')}"
+            trigger = str(row.get("trigger") or "")
+            if pr_display and not trigger.lower().startswith("merge queue"):
+                trigger = "PR"
             page.append(
                 row | {
                     "id": str(row["id"]),
                     # A multi-suite run lists every suite. GROUP_CONCAT's
                     # order is row order, which SQLite does not promise, so
                     # sort it: the label must not change between requests.
-                    "workflow": ",".join(sorted(str(row["workflow"] or "").split(","))),
+                    "workflow": workflow,
+                    "trigger": trigger,
+                    "pr": pr_display,
+                    "pr_url": pr_url,
                     "capture_ids": capture_ids,
                     "identity_source": "info" if row.pop("identity_info") else "none",
                 }
