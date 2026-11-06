@@ -102,8 +102,9 @@ leader already exited are not reaped, and that gap is accepted.
 
 ## Live telemetry push
 
-An E2E workflow run with the `ci-observe` input deploys the collector
-gateway into the cluster it tests, and the gateway streams every signal
+Standard OSAC full-install runs request telemetry automatically. Test-infra
+ad hoc PR runs still need the `ci-observe` label. The workflow deploys the
+collector gateway into the cluster it tests, and the gateway streams every signal
 (pytest and Beyla traces, cluster logs, kubelet metrics, stamped with the
 capture identity) live to the central backend while the test runs:
 
@@ -131,8 +132,9 @@ capture identity) live to the central backend while the test runs:
   gateway as a precomputed `Authorization` header. An empty password or
   endpoint degrades to running the test without telemetry — never an
   unauthenticated push.
-- Nothing touches GitHub: no capture artifact, no upload gate, no scan.
-  Telemetry is visible in the CI Grafana during the run.
+- The capture action does not upload telemetry to GitHub. The separate failure
+  gather step still uploads a redacted artifact. A telemetry failure never
+  changes the test result.
 
 Every captured signal carries run identity and test selection as `osac.ci.*`
 resource attributes. The fields distinguish requested refs, resolved source
@@ -251,11 +253,11 @@ value, it uses a non-empty `unknown` or `none` value because the collector
 rejects empty resource attributes. Invalid refs and SHAs become `unknown`
 whole, never a mangled value.
 
-These identity attributes are wired end to end, but only a live capture
-exercises the full chain: the workflow context, the overlay step output,
-the workspace git metadata and the cluster queries. A post-merge canary
-run with the `ci-observe` input or label must show, in the CI Grafana
-for its capture id: `test_ref` equal to the requested ref, `test_sha`
+These identity attributes are wired end to end, but only a live E2E run
+checks the full path: workflow inputs, test checkout, workspace Git metadata,
+and cluster queries. Standard OSAC full-install runs request recording
+automatically. Test-infra ad hoc PR runs still need the `ci-observe` label.
+The E2E run page should show: `test_ref` equal to the requested ref, `test_sha`
 matching the osac commit the run's overlay step logged, `test_infra_sha`
 matching the merged test-infra commit (equal to
 `test_infra_workflow_sha` on a scheduled run), `test_suite` naming every

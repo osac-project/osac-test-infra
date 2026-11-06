@@ -2,7 +2,7 @@
 # Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-trends.timer
 #
 # Runs once a day, early enough that the previous day's runs are complete and
-# still inside GitHub's 7-day artifact window. Persistent=true means a missed
+# still inside GitHub's 30-day artifact window. Persistent=true means a missed
 # run (machine down) starts when the machine comes back, which matters because
 # a missed day is a permanent hole in per-test history.
 

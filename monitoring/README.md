@@ -101,7 +101,7 @@ starts from that deploy. Every panel and the daily digest filter on
 | `node-exporter` | every machine | 127.0.0.1:9100 | Host-level metrics (CPU, memory, disk, filesystem) |
 | `haproxy-exporter` | every machine | 127.0.0.1:9104 | HAProxy request rate / backend health / error rate, via a Unix stats socket (no TCP stats port -- zero new network exposure) |
 | `org-runner-exporter` | central only | 127.0.0.1:9102 | GitHub Actions runner online/offline status (org-wide, via GitHub API) |
-| `workflow-exporter` | central only | 127.0.0.1:9103 | Workflow queue depth, run history/duration, failed-step counts (via GitHub API); SQLite-backed, 60-day retention. Also serves the JSON API the ci-observe dashboards read, including `/api/ci-observe/runs`, which joins the run history to Tempo's capture ids. The container runs with `Network=host` so it can reach the host's Tempo on 127.0.0.1:3210 (`CI_OBSERVE_TEMPO_URL` overrides it); `BIND_ADDRESS=127.0.0.1` keeps its own API off the network interfaces. |
+| `workflow-exporter` | central only | 127.0.0.1:9103 | Workflow queue depth, run history/duration, failed-step counts (via GitHub API); SQLite-backed, 30-day retention. Also serves the JSON API the ci-observe dashboards read, including `/api/ci-observe/runs`, which joins the run history to Tempo's recording ids. The container runs with `Network=host` so it can reach the host's Tempo on 127.0.0.1:3210 (`CI_OBSERVE_TEMPO_URL` overrides it); `BIND_ADDRESS=127.0.0.1` keeps its own API off the network interfaces. |
 | `service-health-textfile.timer` | every machine | n/a | Writes `osac_service_active` textfile-collector metrics every 30s |
 | `monitoring-tunnel@<host>--<port>.service` | central only, one per agent | n/a | Persistent SSH tunnel forwarding an agent's `node_exporter:9100` and `haproxy_exporter:9104` to local ports `<port>`/`<port>+1` on the central machine |
 | `ci-observe-tempo210` | central only | 127.0.0.1:3210 (API), 14418 (OTLP) | Tempo 2.10 traces backend for ci-observe, separate from the LGTM bundle (Tempo 3.1.1's TraceQL search bug grafana/tempo#8054 drops ~1/3 of matching spans). The LGTM bundle's Tempo stays up on 3200 as the read-only archive datasource `ci-observe-traces-archive`. See [The ci-observe live OTLP ingest](#the-ci-observe-live-otlp-ingest-caddy-vhost--haproxy-route). |
@@ -446,9 +446,9 @@ Runner Health**, **CI Fleet — Runner Status**, **CI Fleet — Workflow Jobs**,
 **CI Fleet — Workflow Metrics**, and **CI Fleet — Health Overview** (a
 team-facing summary -- pass rate trend, flake rate, MTTR -- for standups and
 sprint reviews, see OSAC-2064). **ci-observe** holds the **CI Observe — Start
-here** entry page and three content dashboards: **CI Observe — Capture**, **CI
-Observe — Pull requests** and **CI Observe — Trends**. Compare is a section of
-Trends, not a dashboard. See [`ci-observe/README.md`](ci-observe/README.md).
+here** entry page and three content dashboards: **CI Observe — E2E run**, **CI
+Observe — Pull requests** and **CI Observe — Trends**. See
+[`ci-observe/README.md`](ci-observe/README.md).
 
 Also reachable via an internal relay machine instead of the central host's
 public IP -- see [`vpn-relay-access.md`](vpn-relay-access.md) for why and
@@ -461,14 +461,14 @@ the shortest store shows gaps, not zeros.
 
 | Data | Store | Kept for |
 |---|---|---|
-| Traces | Tempo 2.10 | 30 days; queries over 7 days are rejected |
-| ci-observe metrics (one sample per 60 seconds) | ci-observe Prometheus | 15 days |
-| Kubernetes events | Loki | the image default |
-| Logs (adapter, router) | Loki | the image default |
-| Run artifact: failed tests, JUnit, `failure.json`, pod logs, cluster snapshots | GitHub | 7 days |
-| Job history | workflow exporter SQLite | 60 days |
-| Pull request history and queue attempts | exporter `prs.db` | 60 days |
-| Per-test daily rollup | `trends.db` | as long as each day is rolled up while its artifact exists |
+| Traces | Tempo 2.10 and archive | 30 days; searches over 7 days are rejected |
+| ci-observe metrics (one sample per 60 seconds) | ci-observe Prometheus | 30 days |
+| Kubernetes events | Loki | 30 days |
+| Logs (adapter, router) | Loki | 30 days |
+| Run artifact: failed tests, JUnit, `failure.json`, pod logs, cluster snapshots | GitHub | 30 days |
+| Job history | workflow exporter SQLite | 30 days |
+| Pull request history and queue attempts | exporter `prs.db` | 30 days |
+| Per-test daily rollup | `trends.db` | 30 days |
 | Fleet metrics | central Prometheus | 30 days |
 
 ## Troubleshooting

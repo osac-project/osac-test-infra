@@ -12,4 +12,4 @@ After=workflow-exporter.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_trends.py --days 7
+ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_trends.py --days 30

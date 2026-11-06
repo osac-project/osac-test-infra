@@ -41,8 +41,8 @@ Environment=POLL_INTERVAL=90
 # container does not share the host's loopback. Empty means "use the
 # built-in default", which is this same address.
 Environment=CI_OBSERVE_TEMPO_URL=http://127.0.0.1:3210
-# The capture registry's two label sources: the ci-observe Prometheus holds
-# osac_ci_capture_id for 15 days, Loki for 30. Both are published on the
+# The capture registry's two label sources: the ci-observe Prometheus and Loki
+# both hold osac_ci_capture_id for 30 days. Both are published on the
 # host's loopback, reachable because of Network=host.
 Environment=CI_OBSERVE_METRICS_URL=http://127.0.0.1:9092
 Environment=CI_OBSERVE_LOKI_URL=http://127.0.0.1:3100
@@ -51,11 +51,9 @@ Environment=CAPTURE_POLL_INTERVAL=60
 # osac-installer, and bare-metal-fulfillment-operator are archived and no
 # longer produce CI activity worth tracking.
 Environment=REPOS=osac,osac-test-infra
-# Job history retention (SQLite-backed, see OSAC-2211): keep 2 months,
-# with a hard row-count cap as a disk safety net. The cap must not bind
-# before the 60-day retention: ~5k jobs/day is ~300k rows, so 400k leaves
-# headroom instead of silently turning a 60-day page into 20 days.
-Environment=JOBS_HISTORY_DAYS=60
+# Job and pull request history is kept for 30 days. The row-count cap is a
+# disk safety net and does not bind at the current event rate.
+Environment=JOBS_HISTORY_DAYS=30
 Environment=JOBS_HISTORY_MAX_COUNT=400000
 
 # Mount the exporter and its sibling modules into the container

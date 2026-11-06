@@ -13,4 +13,4 @@ After=workflow-exporter.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 60 --mode auto
+ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 30 --mode auto

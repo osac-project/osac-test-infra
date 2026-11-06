@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # WorkflowExporter._github_token, which reads it live).
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 API_URL = os.getenv("API_URL", "https://api.github.com")
-JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "60"))
+JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "30"))
 
 
 class BoundedCache:
@@ -545,7 +545,7 @@ class CIObserveRunEvidence:
         if artifact.get("expired"):
             return self._native_doc(
                 "expired", artifact_name, artifact_url,
-                notes + [f"artifact {artifact_name} has passed its 7-day retention"
+                notes + [f"artifact {artifact_name} has passed its 30-day retention"
                          f" (expired {artifact.get('expires_at') or 'date unknown'})"],
             )
         # Read through the exporter (not this class's own value): the tests
@@ -644,7 +644,7 @@ class CIObserveRunEvidence:
             "native_data": (
                 "JUnit XML parsed on demand from the run's "
                 f"osac-logs-[<suite>-]full-install-<run id> workflow artifact "
-                "(GitHub artifact retention is 7 days)"
+                "(GitHub artifact retention is 30 days)"
             ),
             "capture_identity": identity,
             "notes": notes,

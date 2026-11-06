@@ -1,55 +1,18 @@
-# Where each answer comes from
+# Sources
 
-ci-observe reads several stores. Each question has one authoritative source. When two stores can answer, the table says which one wins.
+Each question has one source.
 
-The split is deliberate:
-
-- **Overall** numbers come from the job and test populations that cover every CI run.
-- **A single run** comes from its capture and its artifact.
-- A capture never overrides the GitHub result. JUnit and the job conclusion decide pass or fail. Traces explain it.
-
-## Sources
-
-| Question | Authoritative source | Kept for | Scope |
-|---|---|---|---|
-| Did one run pass, and which tests failed? | GitHub job conclusion, the JUnit artifact through the workflow exporter, and the failed tests in that artifact | 60 days job history, 7 days artifact | single run |
-| What did one test do: spans, phases, waits? | Tempo, the capture's session trace fetched by id | 30 days | single run, captured only |
-| What did the services do? | Tempo, Beyla spans | 30 days | single run, captured only |
-| What did the cluster do: pods, CPU, memory? | ci-observe Prometheus, labelled by capture id | 15 days | single run, captured only |
-| What happened in the cluster: events? | Loki, Kubernetes events labelled by capture id; read in the Capture page's Events row | Loki image default | single run, captured only |
-| What did a pod log? | The run artifact (GitHub); pod logs are not delivered to Loki | 7 days | single run |
-| How long did each job and step take? | Workflow exporter SQLite | 60 days | single run |
-| Which runs have a capture? | `captures` in `workflow-exporter.db`, fed by the Prometheus and Loki `osac_ci_capture_id` label indexes and the capture info metric | 90 days registry; 15 days Prometheus; 30 days Loki | all runs in the window |
-| What did one capture do? | Tempo trace-by-id for the test layer; Prometheus for pods and nodes; Loki for events | 30 days traces, 15 days metrics | single run, captured only |
-| Overall job pass rate, duration, MTTR | Central Prometheus `github_actions_*` and the exporter SQLite | 30 days metrics, 60 days SQLite | overall, every run |
-| Overall per-test pass rate, flake and duration | Per-run JUnit artifacts, rolled up daily into `trends.db` by `ci_observe_trends.py` | as long as each day is rolled up while its 7-day artifact exists | overall, every run |
-| The life of one pull request | Exporter `pr_merges` plus `pr_events` and `pr_queue_attempts` in `prs.db`, from the hourly incremental and daily full backfill | 60 days | single PR |
-| Merge-queue attempts and ejections | `merge_group` workflow runs, linked by the `gh-readonly-queue` branch name and queue comments that name a run; runs that share `head_branch` and `head_sha` are one attempt; ejections derived from a failed attempt and the comment | GitHub retention | single PR |
-| Which hop dropped a connection? | Router access log in the artifact for the router hop; the adapter request log for the server hop | 7 days artifact | single run |
-| Runner, machine and queue health | CI Fleet: central Prometheus and the runner exporters | 30 days | overall, fleet |
+| Question | Source | Kept |
+|---|---|---|
+| Did the run pass? Which tests failed? | GitHub job result, the test report, and the saved artifact | 30 days |
+| Which tests ran, and how long did each take? | Tempo trace for the run | 30 days |
+| Is a test failing more often or getting slower? | Daily JUnit rollup in `trends.db` | 30 days |
+| How long did a pull request spend in review and the queue? | `prs.db` | 30 days |
+| Which code, workflow, and pull request did a run use? | workflow exporter SQLite | 30 days |
+| What did the pod log? | GitHub artifact; Loki does not receive pod logs | 30 days |
 
 ## Rules
 
-1. **A rate names its population and its window.** "Pass rate, all jobs, 60 days" and "pass rate, captured runs, 30 days" are different numbers. They never share an axis.
-2. **Flake comes from all jobs.** A failure without telemetry still counts. Per-test flake reads `trends.db`, the daily JUnit rollup, because the exporter stores job results, not test results. A day that was never rolled up while its artifact existed is a permanent gap, never a green zero.
-3. **A single run's detail comes from its capture and artifact.** If the capture is missing, the artifact and the job history still answer what failed and when. The artifact holds the failed tests, the JUnit XML, the per-test `failure.json`, the pod logs and the cluster snapshots.
-4. **The session span is a cross-check, not the verdict.** A missing session span means "incomplete", never "failed".
-5. **The artifact is the only pod-log source.** The collector is configured for `/var/log/pods` but cannot read it as an unprivileged user, so Loki holds no pod logs and the artifact stays the snapshot.
-6. **The clock bridge is the capture's `started_at` and `ended_at`.** A link from a trend or a PR to a run carries that range.
-
-## What each store is not
-
-- Tempo is not the pass/fail record. It holds the run's own spans.
-- Prometheus is not a test record. It holds the cluster at 60-second resolution.
-- The exporter SQLite is not a per-test record. It holds jobs and steps; test outcomes come from JUnit.
-- `trends.db` is not a run record. It holds daily counts per test and source SHA, with no run id and no spans.
-- The GitHub artifact is not long-term history. It disappears after 7 days, so anything needed beyond that must be rolled up first.
-
-## Gaps this table exposes
-
-- **Per-test history across all jobs**: the daily rollup exists and `ci-observe-trends.timer` runs it, but the first run can only cover the 7 days GitHub still holds. Older history cannot be reconstructed.
-- **Runtime image IDs**: current captures store `osac.ci.osac_image_ids=unknown`, so the requested image refs are recorded but the running image bytes are not. One capture with an ID for every OSAC Deployment container and `osac_image_ids_complete=true` proves the path.
-- **PR events and ejections**: `prs.db` holds the events, but ejections remain derived because GitHub keeps no merge-queue history. Queue runs carry no PR number and no capture; attaching both is a separate change to the queue workflow.
-- **Events**: the Kubernetes events are in Loki, labelled by capture id. The Capture page's Events row reads them.
-- **Router access logs**: gathered into the artifact when the IngressController logs to Container; otherwise the artifact says access logging is disabled.
-- **Pod logs in Loki**: blocked by the collector's permissions, so pod logs stay in the 7-day artifact.
+1. GitHub owns pass or fail. A recording explains a result but never overrides it.
+2. A test report that is missing is missing data, not a pass.
+3. A pull request that left the queue is inferred from its failed queue run and a GitHub comment. GitHub keeps no queue history.

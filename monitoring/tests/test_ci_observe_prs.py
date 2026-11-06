@@ -48,8 +48,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ci_observe_prs"
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
 DASHBOARD_FILE = DASHBOARDS_DIR / "ci-observe-pull-requests.json"
 
-NOW = datetime(2026, 11, 1, tzinfo=UTC)
-DAYS = 60
+NOW = datetime(2026, 10, 15, tzinfo=UTC)
+DAYS = 30
 REPO = "osac"
 RETENTION_START = NOW - timedelta(days=DAYS)
 REPOS_PATH = "/orgs/osac-project/repos?per_page=100&type=all"
@@ -132,6 +132,18 @@ def github(wfe):
         FakeResponse(payload={"total_count": 7, "workflow_runs": load_fixture("merge_group_runs")["runs"]}),
     )
     return fake
+
+
+@pytest.fixture(autouse=True)
+def fixed_clock(prs, monkeypatch):
+    """Pin the read path to NOW. `get_json` defaults to the wall clock, and a
+    test whose window depends on today would expire."""
+    original = prs.CIObservePRs.get_json
+
+    def get_json(self, params, now=None):
+        return original(self, params, NOW if now is None else now)
+
+    monkeypatch.setattr(prs.CIObservePRs, "get_json", get_json)
 
 
 @pytest.fixture
@@ -1040,7 +1052,7 @@ class TestEndpointDocument:
         assert doc["pr"] is None
 
     def test_days_are_clamped_to_the_retention(self, filled):
-        assert filled.get_json({"days": ["999"]})["days"] == 60
+        assert filled.get_json({"days": ["999"]})["days"] == 30
         assert filled.get_json({"days": ["0"]})["days"] == 1
         assert filled.get_json({"days": ["nonsense"]})["days"] == 30
 
@@ -1174,7 +1186,7 @@ def test_dashboard_selectors_resolve_against_the_real_response(service):
                     f"{panel['title']}: column {column['selector']} is not in the endpoint response"
                 )
             checked += 1
-    assert checked >= 5
+    assert checked >= 3, "the page has three tables"
 
 
 def test_backfill_is_mounted_in_the_exporter_and_scheduled_hourly():
@@ -1186,7 +1198,7 @@ def test_backfill_is_mounted_in_the_exporter_and_scheduled_hourly():
     assert "ci_observe_prs.py:/app/ci_observe_prs.py" in quadlet
 
     service = (monitoring / "systemd" / "ci-observe-prs.service").read_text()
-    assert "podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 60 --mode auto" in service
+    assert "podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 30 --mode auto" in service
 
     timer = (monitoring / "systemd" / "ci-observe-prs.timer").read_text()
     assert "OnCalendar=*-*-* *:05:00" in timer

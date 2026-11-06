@@ -8,14 +8,14 @@ SHA into a SQLite file of its own, trends.db. The exporter's own DB is
 opened read-only and never altered.
 
 Why a rollup and not a live query: GitHub deletes a run's artifacts after
-7 days, so a per-test outcome is only readable for a week. The rollup is
+30 days, so a per-test outcome is only readable for a month. The rollup is
 the only way to keep it. Run it daily; every run of the day accumulates
 into that day's rows, and rerunning a day replaces its rows instead of
 adding to them.
 
     # On the central machine, next to the exporter's data directory:
     set -a; . ~/.monitoring-server/.env; set +a
-    CACHE_DIR=~/.monitoring-server/data ./ci_observe_trends.py --days 7
+    CACHE_DIR=~/.monitoring-server/data ./ci_observe_trends.py --days 30
 
     # Repair a day that is already stored, after a rollup bug (see --force):
     CACHE_DIR=~/.monitoring-server/data ./ci_observe_trends.py --day 2026-11-02 --force
@@ -23,7 +23,7 @@ adding to them.
 One run contributes one artifact set to the rollup. A run whose artifact
 has already expired contributes nothing: it is counted in rollup_days as
 unavailable, never as a green zero. The first rollup therefore covers the
-runs whose artifacts still exist (about the last 7 days), and history from
+runs whose artifacts still exist (about the last 30 days), and history from
 before that cannot be recovered.
 
 The same file holds the read-only compare query behind
@@ -73,12 +73,11 @@ EXPORTER_DB = os.path.join(CACHE_DIR, "workflow-exporter.db")
 TRENDS_DB = os.path.join(CACHE_DIR, "trends.db")
 TOKEN = os.getenv("PRIVATE_GITHUB_TOKEN")
 
-# Artifacts are the only per-test record, and GitHub deletes them after 7
+# Artifacts are the only per-test record, and GitHub deletes them after 30
 # days. Listing runs older than that would only spend API calls on
 # artifacts that are already gone, so the default window is the retention
-# window. --days widens it for the (rare) case where a day is rerun after
-# the exporter's own history grew.
-ARTIFACT_RETENTION_DAYS = 7
+# window.
+ARTIFACT_RETENTION_DAYS = 30
 DEFAULT_DAYS = ARTIFACT_RETENTION_DAYS
 # One run normally has one artifact; a pull-request-flow run can have one
 # per suite that ran. The caps keep a single run from dominating a batch.
@@ -437,7 +436,7 @@ class ArtifactFetcher:
         for artifact in artifacts[:MAX_ARTIFACTS_PER_RUN]:
             name = artifact.get("name") or ""
             if artifact.get("expired"):
-                unfinished.append(f"{name}: expired (7-day retention)")
+                unfinished.append(f"{name}: expired (30-day retention)")
                 continue
             if (artifact.get("size_in_bytes") or 0) > self.NATIVE_MAX_DOWNLOAD_BYTES:
                 unfinished.append(f"{name}: larger than the download bound")
@@ -514,6 +513,21 @@ def write_day(conn, day, rows, coverage):
         )
 
 
+def prune_old_days(conn: sqlite3.Connection, cutoff: str) -> None:
+    """Keep only per-test data from the last 30 days."""
+    with conn:
+        conn.execute("DELETE FROM test_rollup WHERE day < ?", (cutoff,))
+        conn.execute("DELETE FROM rollup_days WHERE day < ?", (cutoff,))
+
+
+def prune_trends_db(path: str, cutoff: str) -> None:
+    conn = open_trends_db(path)
+    try:
+        prune_old_days(conn, cutoff)
+    finally:
+        conn.close()
+
+
 # -- comparing two source revisions ------------------------------------------
 # "Which fixes matter most?" is a question about two commits, not about two
 # captures: the tests that failed on one source revision and pass on another.
@@ -521,9 +535,9 @@ def write_day(conn, day, rows, coverage):
 # The population is every job the rollup stored -- all jobs, not captured
 # runs -- so the document says so in its own words.
 
-COMPARE_DEFAULT_DAYS = 60
-COMPARE_MAX_DAYS = 400
-# Rows of the joined table, one-sided lists included. A 60-day window on a
+COMPARE_DEFAULT_DAYS = 30
+COMPARE_MAX_DAYS = 30
+# Rows of the joined table, one-sided lists included. A 30-day window on a
 # busy repo holds a few thousand distinct tests; past this the reader gets a
 # note instead of a document too large to render.
 COMPARE_MAX_ROWS = 2000
@@ -733,18 +747,24 @@ def main(argv=None):
         return 2
 
     today = datetime.now(timezone.utc).date()
+    retention_start = today - timedelta(days=ARTIFACT_RETENTION_DAYS)
     if args.day:
         try:
             start = datetime.strptime(args.day, "%Y-%m-%d").date()
         except ValueError:
             logger.error("--day must be YYYY-MM-DD, got %r", args.day)
             return 2
+        if start < retention_start:
+            logger.error("--day is outside the %d-day retention window", ARTIFACT_RETENTION_DAYS)
+            return 2
     else:
-        start = today - timedelta(days=args.days if args.days is not None else DEFAULT_DAYS)
+        days = min(args.days if args.days is not None else DEFAULT_DAYS, ARTIFACT_RETENTION_DAYS)
+        start = today - timedelta(days=max(days, 1))
 
     runs = candidate_runs(stored_rows(exporter_db, start.isoformat()))
     if args.day:
         runs = [run for run in runs if run["day"] == args.day]
+    prune_trends_db(trends_db, retention_start.isoformat())
     if not runs:
         logger.info("no stored e2e runs on or after %s: nothing to roll up", start)
         return 0
@@ -773,7 +793,7 @@ def main(argv=None):
         for day in sorted(listed):
             day_runs = [run for run in runs if run["day"] == day]
             # Never replace a stored day with a thinner pass. Artifacts expire
-            # after 7 days, so a later run for the same day reads fewer of
+            # after 30 days, so a later run for the same day reads fewer of
             # them; rewriting would delete rows that are the only copy.
             previous = conn.execute(
                 "SELECT runs_parsed, parsed_run_ids FROM rollup_days WHERE day = ?", (day,)

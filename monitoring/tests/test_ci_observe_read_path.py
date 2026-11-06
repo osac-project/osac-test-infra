@@ -339,7 +339,7 @@ def test_the_harness_windows_do_not_touch_a_dashboard_window():
     assert dashboards == set(harness.DASHBOARD_DAYS)
     assert harness.PERF_DAYS not in dashboards
     assert harness.WARM_DAYS not in dashboards
-    assert harness.PERF_DAYS <= 60 and harness.WARM_DAYS <= 60
+    assert harness.PERF_DAYS <= 30 and harness.WARM_DAYS <= 30
 
 
 def test_every_measured_url_uses_the_private_window():

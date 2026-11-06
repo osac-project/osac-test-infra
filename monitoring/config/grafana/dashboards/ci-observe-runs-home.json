@@ -2,19 +2,30 @@
   "annotations": {
     "list": []
   },
-  "description": "The entry page and router. It accepts a run id, a capture id, a pull request number or a test id. Find narrows the capture tables, the pull request lookup opens the Pull requests dashboard, the test id lookup opens Trends, and the last table lists every E2E run with its capture verdict, so a run with no capture cannot hide.",
+  "description": "Recent E2E runs.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "links": [],
+  "links": [
+    {
+      "title": "Pull requests",
+      "type": "link",
+      "url": "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests"
+    },
+    {
+      "title": "Test history",
+      "type": "link",
+      "url": "/d/ci-observe-trends/ci-observe-e28094-trends"
+    }
+  ],
   "panels": [
     {
       "type": "text",
       "id": 1,
-      "title": "Start here",
-      "description": "How to read this page: the exact Find lookups, the links, the windows and the meaning of each capture verdict.",
+      "title": "E2E runs",
+      "description": "",
       "gridPos": {
-        "h": 11,
+        "h": 2,
         "w": 24,
         "x": 0,
         "y": 0
@@ -25,1991 +36,20 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Start here\n\nThis page is a router. It accepts a run id or a capture id in **Find**, a pull request from **Pull request lookup**, a test id from **Test id lookup**, or nothing.\n\n**Find is an exact lookup.** A run id fills **Lookup by run id**; a capture id fills **Lookup by capture id**. A run id such as `41310072671` matches one run. A capture id such as `vmaas-main-41310072671-a1` matches one capture registry row. The table that stays empty is the form that does not apply.\n\n**Pull request lookup** lists one row per pull request the exporter stored in the last $days days. Click the PR number to open that pull request, already selected, in the Pull requests dashboard.\n\n**Test id lookup** lists one row per test the daily JUnit rollup recorded in the last 7 days, with its runs and failures over that window. Click a test id to open that test, already selected, in the Trends dashboard.\n\n**Four words.** A **span** is one timed step inside a test. A **trace** is all the steps of one operation. A **capture** is one CI run with recording on, and its id embeds the GitHub run id. A **cohort** is a set of captures that share one run identity and differ only in what you want to compare.\n\n**Suite and OSAC.** A **suite** is the test target a run executes, such as `vmaas` or `caas`. **OSAC** is the product repository whose commit the run tests; that commit is the run's source revision.\n\n| To answer | Open |\n| --- | --- |\n| Which runs exist, and which failed | this page |\n| Which runs arrived with no capture | this page, the last table |\n| What happened inside one run | [**CI Observe \u2014 Capture**](/d/ci-observe-runs/ci-observe-e28094-run-investigation) (click a run id) |\n| Where the run's minutes went, step by step | the same page, **CI evidence** row (GitHub jobs, steps, JUnit) |\n| What the cluster did during a run | the same page, **Environment** row (pods, CPU, memory) |\n| How a change moved from open to merge | [**CI Observe \u2014 Pull requests**](/d/ci-observe-pull-requests/ci-observe-pull-requests) |\n| Is this test flaky, slower, or newly broken | [**CI Observe \u2014 Trends**](/d/ci-observe-trends/ci-observe-trends) |\n| Did two runs get slower | [**CI Observe \u2014 Trends**, Compare section](/d/ci-observe-trends/ci-observe-e28094-trends) |\n\n**Reading a run ID**: `vmaas-main-41310072671-a1` means suite `vmaas`, branch `main` (a pull request shows `pr123`), GitHub workflow run `41310072671`, and attempt `a1` (the first attempt).\n\n**Runs with no capture.** The run table lists one row per E2E run the workflow exporter recorded in the last $days days, joined to the capture registry by GitHub run id. The **Capture** column is the registry endpoint's verdict: **capture** means at least one capture id names the run; **not collected** means the run finished, the registry covered its window, and no telemetry arrived; **unknown** means the registry could not tell, and the **Why** column carries the reason. The page never infers a verdict from Tempo. **unknown** is never a claim that a capture is missing. **not collected** is a statement about the recording, not about the result, so read the result from the Result column and the logs from GitHub, which keeps them for 7 days.\n\n**Windows.** Pull request lookup reads $days days. Test id lookup always reads 7 days, the age at which GitHub deletes a run's artifact. The run table and its cards read $days days. The dashboard time range does not affect these panels.\n\n**Completeness.** The index card states the runs shown and the runs in the window. When the endpoint truncates, both counts stay visible so a page is never mistaken for the population."
+        "content": "Recent E2E runs. Choose one to see its result and details."
       },
       "targets": []
     },
     {
       "type": "table",
-      "id": 10,
-      "title": "Pull request lookup, one pull request per row, last $days days (workflow exporter)",
-      "description": "One row per merged or closed pull request the exporter's backfill stored in the last $days days, newest first. The unit is one pull request and its axis is its life, opened to merge or close. The PR cell opens that pull request in the Pull requests dashboard, preselected by number and repository; the GitHub cell opens it on github.com. Only merged and closed pull requests are stored.",
-      "gridPos": {
-        "h": 11,
-        "w": 12,
-        "x": 0,
-        "y": 11
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "No pull requests stored for this window"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "number"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "PR"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open this pull request in the Pull requests dashboard",
-                    "url": "/d/ci-observe-pull-requests/ci-observe-pull-requests?var-pr_number=${__value.raw}&var-pr_repo=${__data.fields.repo}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "repo"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Repository"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "title"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Title"
-              },
-              {
-                "id": "custom.width",
-                "value": 320
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "final_stage"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Last stage"
-              },
-              {
-                "id": "custom.width",
-                "value": 150
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "merged": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "merged"
-                      },
-                      "closed in queue": {
-                        "color": "orange",
-                        "index": 1,
-                        "text": "closed in queue"
-                      },
-                      "closed after approval": {
-                        "color": "orange",
-                        "index": 2,
-                        "text": "closed after approval"
-                      },
-                      "closed in review": {
-                        "color": "red",
-                        "index": 3,
-                        "text": "closed in review"
-                      },
-                      "closed in authoring": {
-                        "color": "red",
-                        "index": 4,
-                        "text": "closed in authoring"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "GitHub"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open pull request on GitHub",
-                    "url": "${__value.raw}"
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.prs",
-          "columns": [
-            {
-              "selector": "number",
-              "text": "number",
-              "type": "number"
-            },
-            {
-              "selector": "repo",
-              "text": "repo",
-              "type": "string"
-            },
-            {
-              "selector": "title",
-              "text": "title",
-              "type": "string"
-            },
-            {
-              "selector": "final_stage",
-              "text": "final_stage",
-              "type": "string"
-            },
-            {
-              "selector": "url",
-              "text": "url",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "id": 11,
-      "title": "Test id lookup, one test per row, last 7 days (workflow exporter)",
-      "description": "One row per test the daily JUnit rollup recorded in the last 7 days, with its runs and failures summed over those days. The unit is one test across all its runs and its axis is the 7-day window. The test id cell opens that test in the Trends dashboard, preselected. The sums come from the endpoint, over every rollup row of the window, so they are not cut short by the response row cap. The window is fixed at 7 days because the rollup is built from run artifacts, and GitHub deletes an artifact after 7 days.",
-      "gridPos": {
-        "h": 11,
-        "w": 12,
-        "x": 12,
-        "y": 11
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "No per-test rollup rows for the last 7 days"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_id"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Test id"
-              },
-              {
-                "id": "custom.width",
-                "value": 420
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open this test in the Trends dashboard",
-                    "url": "/d/ci-observe-trends/ci-observe-trends?var-test=${__value.raw:percentencode}&var-days=7"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "suite"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Suite"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "repo"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Repository"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "runs"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Runs"
-              },
-              {
-                "id": "unit",
-                "value": "none"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "failures"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Failures"
-              },
-              {
-                "id": "unit",
-                "value": "none"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 1
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=7&summary=test",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "tests",
-          "columns": [
-            {
-              "selector": "test_id",
-              "text": "test_id",
-              "type": "string"
-            },
-            {
-              "selector": "suite",
-              "text": "suite",
-              "type": "string"
-            },
-            {
-              "selector": "repo",
-              "text": "repo",
-              "type": "string"
-            },
-            {
-              "selector": "runs",
-              "text": "runs",
-              "type": "number"
-            },
-            {
-              "selector": "failures",
-              "text": "failures",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "id": 20,
-      "title": "Lookup by run id, exact match (workflow exporter + capture registry)",
-      "description": "One row for the GitHub run id in Find, or no rows. The row joins the exporter's run index to the capture registry by run id. Capture is the registry's verdict and Why is its reason. The Run cell opens Capture with var-capture_id and the run's own start and finish as from and to; the Capture cell opens GitHub, which keeps a run's logs for 7 days.",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 24
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "No run has this id in the exporter window"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "id"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Run"
-              },
-              {
-                "id": "custom.width",
-                "value": 140
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open this run in Capture with its own time range (when it has a capture)",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__data.fields.capture_id}&from=${__data.fields.started_at_ms}&to=${__data.fields.done_at_ms}"
-                  },
-                  {
-                    "title": "Open this run on GitHub, where a run with no capture keeps its logs",
-                    "url": "${__data.fields.url}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "workflow"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Workflow"
-              },
-              {
-                "id": "custom.width",
-                "value": 200
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "trigger"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Ref"
-              },
-              {
-                "id": "custom.width",
-                "value": 140
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "branch"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Branch"
-              },
-              {
-                "id": "custom.width",
-                "value": 150
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "conclusion"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Result"
-              },
-              {
-                "id": "custom.width",
-                "value": 95
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "success": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "success"
-                      },
-                      "failure": {
-                        "color": "red",
-                        "index": 1,
-                        "text": "failure"
-                      },
-                      "cancelled": {
-                        "color": "orange",
-                        "index": 2,
-                        "text": "cancelled"
-                      },
-                      "skipped": {
-                        "color": "text",
-                        "index": 3,
-                        "text": "skipped"
-                      },
-                      "timed_out": {
-                        "color": "red",
-                        "index": 4,
-                        "text": "timed out"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Capture"
-              },
-              {
-                "id": "custom.width",
-                "value": 120
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "capture": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "capture"
-                      },
-                      "not collected": {
-                        "color": "orange",
-                        "index": 1,
-                        "text": "not collected"
-                      },
-                      "unknown": {
-                        "color": "text",
-                        "index": 2,
-                        "text": "unknown"
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open this run on GitHub, where a run with no capture keeps its logs for 7 days",
-                    "url": "${__data.fields.url}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_reason"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Why"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "identity_source"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Identity"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "info": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "info"
-                      },
-                      "none": {
-                        "color": "orange",
-                        "index": 1,
-                        "text": "none"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_id"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_ids"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "created_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Created"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "finished_at"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "GitHub"
-              },
-              {
-                "id": "custom.width",
-                "value": 85
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open workflow run on GitHub",
-                    "url": "${__value.raw}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at_ms"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "done_at_ms"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "sortBy": [
-          {
-            "displayName": "Created",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/runs?run=${find}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.runs",
-          "columns": [
-            {
-              "selector": "id",
-              "text": "id",
-              "type": "string"
-            },
-            {
-              "selector": "workflow",
-              "text": "workflow",
-              "type": "string"
-            },
-            {
-              "selector": "trigger",
-              "text": "trigger",
-              "type": "string"
-            },
-            {
-              "selector": "branch",
-              "text": "branch",
-              "type": "string"
-            },
-            {
-              "selector": "conclusion",
-              "text": "conclusion",
-              "type": "string"
-            },
-            {
-              "selector": "capture_state",
-              "text": "capture_state",
-              "type": "string"
-            },
-            {
-              "selector": "capture_reason",
-              "text": "capture_reason",
-              "type": "string"
-            },
-            {
-              "selector": "identity_source",
-              "text": "identity_source",
-              "type": "string"
-            },
-            {
-              "selector": "capture_id",
-              "text": "capture_id",
-              "type": "string"
-            },
-            {
-              "selector": "capture_ids",
-              "text": "capture_ids",
-              "type": "string"
-            },
-            {
-              "selector": "created_at",
-              "text": "created_at",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "string"
-            },
-            {
-              "selector": "finished_at",
-              "text": "finished_at",
-              "type": "string"
-            },
-            {
-              "selector": "url",
-              "text": "url",
-              "type": "string"
-            },
-            {
-              "selector": "started_at_ms",
-              "text": "started_at_ms",
-              "type": "number"
-            },
-            {
-              "selector": "done_at_ms",
-              "text": "done_at_ms",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "id": 21,
-      "title": "Lookup by capture id, exact match (capture registry)",
-      "description": "One row for the capture id in Find, or no rows. Every column is a capture registry field: the capture id, its GitHub run, the suite, pull request and workflow, the six identity fields, identity_source (info or none), and when the capture was first and last seen. A capture id opens Capture with the capture's own time range.",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 32
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "No capture has this id in the registry"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_id"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Capture"
-              },
-              {
-                "id": "custom.width",
-                "value": 250
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open this capture with its own time range",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__value.raw}&from=${__data.fields.capture_window_from_ms}&to=${__data.fields.capture_window_to_ms}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "run_id"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Run"
-              },
-              {
-                "id": "custom.width",
-                "value": 140
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "run_attempt"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Attempt"
-              },
-              {
-                "id": "custom.width",
-                "value": 75
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "suite"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Suite"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pr"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "PR"
-              },
-              {
-                "id": "custom.width",
-                "value": 70
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "workflow"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Workflow"
-              },
-              {
-                "id": "custom.width",
-                "value": 200
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_ref"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Requested ref"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_sha"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "OSAC commit"
-              },
-              {
-                "id": "custom.width",
-                "value": 350
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_infra_ref"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_infra_sha"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Harness"
-              },
-              {
-                "id": "custom.width",
-                "value": 350
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_infra_workflow_sha"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Workflow SHA"
-              },
-              {
-                "id": "custom.width",
-                "value": 350
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_suite"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Suite filter"
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_filter"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Filter"
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test_marker"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Marker"
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "identity_source"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Identity"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "info": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "info"
-                      },
-                      "none": {
-                        "color": "orange",
-                        "index": 1,
-                        "text": "none"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_started_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Started"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "first_seen_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "First seen"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "last_seen_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Last seen"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_window_from_ms"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_window_to_ms"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/captures?capture_id=${find}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.captures",
-          "columns": [
-            {
-              "selector": "capture_id",
-              "text": "capture_id",
-              "type": "string"
-            },
-            {
-              "selector": "run_id",
-              "text": "run_id",
-              "type": "string"
-            },
-            {
-              "selector": "run_attempt",
-              "text": "run_attempt",
-              "type": "string"
-            },
-            {
-              "selector": "suite",
-              "text": "suite",
-              "type": "string"
-            },
-            {
-              "selector": "pr",
-              "text": "pr",
-              "type": "string"
-            },
-            {
-              "selector": "workflow",
-              "text": "workflow",
-              "type": "string"
-            },
-            {
-              "selector": "test_ref",
-              "text": "test_ref",
-              "type": "string"
-            },
-            {
-              "selector": "test_sha",
-              "text": "test_sha",
-              "type": "string"
-            },
-            {
-              "selector": "test_infra_ref",
-              "text": "test_infra_ref",
-              "type": "string"
-            },
-            {
-              "selector": "test_infra_sha",
-              "text": "test_infra_sha",
-              "type": "string"
-            },
-            {
-              "selector": "test_infra_workflow_sha",
-              "text": "test_infra_workflow_sha",
-              "type": "string"
-            },
-            {
-              "selector": "test_suite",
-              "text": "test_suite",
-              "type": "string"
-            },
-            {
-              "selector": "test_filter",
-              "text": "test_filter",
-              "type": "string"
-            },
-            {
-              "selector": "test_marker",
-              "text": "test_marker",
-              "type": "string"
-            },
-            {
-              "selector": "identity_source",
-              "text": "identity_source",
-              "type": "string"
-            },
-            {
-              "selector": "capture_started_at",
-              "text": "capture_started_at",
-              "type": "string"
-            },
-            {
-              "selector": "first_seen_at",
-              "text": "first_seen_at",
-              "type": "string"
-            },
-            {
-              "selector": "last_seen_at",
-              "text": "last_seen_at",
-              "type": "string"
-            },
-            {
-              "selector": "capture_window_from_ms",
-              "text": "capture_window_from_ms",
-              "type": "number"
-            },
-            {
-              "selector": "capture_window_to_ms",
-              "text": "capture_window_to_ms",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "id": 22,
-      "title": "Runs in the window, all jobs, last $days days",
-      "description": "Every E2E run the exporter recorded in the last $days days, from the endpoint's total count. This is the denominator for the three verdict cards to the right; it is a real count from the run index, not the number of rows the table happens to render.",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 40
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "total",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/runs?days=${days}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$",
-          "columns": [
-            {
-              "selector": "total",
-              "text": "total",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": []
-    },
-    {
-      "type": "stat",
-      "id": 23,
-      "title": "capture, all jobs, last $days days",
-      "description": "Runs whose id appears on at least one capture id in the registry, counted over the whole window, not just the rows the table renders. The endpoint's verdict; the page does not infer it from Tempo.",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 40
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "counts.capture",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/runs?days=${days}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$",
-          "columns": [
-            {
-              "selector": "counts.capture",
-              "text": "counts.capture",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": []
-    },
-    {
-      "type": "stat",
-      "id": 24,
-      "title": "not collected, all jobs, last $days days",
-      "description": "Runs that finished, sit inside the registry's coverage, and have no capture, counted over the whole window. The endpoint returns this verdict only when every source answered completely; the page never derives it from an empty Tempo answer.",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 40
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "orange",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "counts.not collected",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/runs?days=${days}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$",
-          "columns": [
-            {
-              "selector": "counts.not collected",
-              "text": "counts.not collected",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": []
-    },
-    {
-      "type": "stat",
-      "id": 25,
-      "title": "unknown, all jobs, last $days days",
-      "description": "Runs the registry could not judge: the run has not finished, the registry has no complete answer yet, or the run sits outside capture coverage, counted over the whole window. Unknown is not a claim that a capture is missing.",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 40
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "counts.unknown",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/runs?days=${days}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$",
-          "columns": [
-            {
-              "selector": "counts.unknown",
-              "text": "counts.unknown",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": []
-    },
-    {
-      "type": "table",
-      "id": 26,
-      "title": "Run index completeness and capture registry coverage, last $days days",
-      "description": "One row that states how much of the run index this page shows. Shown is the number of run rows returned; Total is the number of runs in the same window. Truncated says whether more runs matched than were returned. Both counts come from the endpoint, so a truncated page is never mistaken for the population. Registry state, last complete answer, coverage start, known captures and rejected capture ids come from the same response's source object.",
-      "gridPos": {
-        "h": 5,
-        "w": 24,
-        "x": 0,
-        "y": 44
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "The run index returned no completeness row"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "truncated"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Truncated"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "shown"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Shown"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "total"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Total in window"
-              },
-              {
-                "id": "custom.width",
-                "value": 120
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "source.state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Registry state"
-              },
-              {
-                "id": "custom.width",
-                "value": 120
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "source.last_ok_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Last complete answer"
-              },
-              {
-                "id": "custom.width",
-                "value": 190
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "source.coverage_from"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Coverage from"
-              },
-              {
-                "id": "custom.width",
-                "value": 190
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "source.captures"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Known captures"
-              },
-              {
-                "id": "custom.width",
-                "value": 120
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "source.rejected"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Rejected ids"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/runs?days=${days}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$",
-          "columns": [
-            {
-              "selector": "truncated",
-              "text": "truncated",
-              "type": "string"
-            },
-            {
-              "selector": "shown",
-              "text": "shown",
-              "type": "number"
-            },
-            {
-              "selector": "total",
-              "text": "total",
-              "type": "number"
-            },
-            {
-              "selector": "source.state",
-              "text": "source.state",
-              "type": "string"
-            },
-            {
-              "selector": "source.last_ok_at",
-              "text": "source.last_ok_at",
-              "type": "string"
-            },
-            {
-              "selector": "source.coverage_from",
-              "text": "source.coverage_from",
-              "type": "string"
-            },
-            {
-              "selector": "source.captures",
-              "text": "source.captures",
-              "type": "number"
-            },
-            {
-              "selector": "source.rejected.count",
-              "text": "source.rejected",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "type": "table",
       "id": 12,
-      "title": "Recent E2E runs and their capture, all jobs, last $days days (workflow exporter + capture registry)",
-      "description": "One row per E2E run the workflow exporter recorded in the last $days days, newest first, joined to the capture registry by GitHub run id. Capture is the registry endpoint's verdict: capture (at least one capture id names the run), not collected (the run finished, the registry covered its window and no telemetry arrived), or unknown (the registry could not tell, and Why says why). The page never infers a verdict from Tempo. The Run cell opens Capture with the run's own start and finish as from and to. The Capture cell opens GitHub, which keeps a run's logs for 7 days.",
+      "title": "Recent E2E runs, last $days days",
+      "description": "",
       "gridPos": {
-        "h": 16,
+        "h": 20,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 2
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -2039,7 +79,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 140
+                "value": 130
               },
               {
                 "id": "custom.cellOptions",
@@ -2053,78 +93,10 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Open this run in Capture with its own time range (when it has a capture)",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-run-investigation?orgId=1&var-capture_id=${__data.fields.capture_id}&from=${__data.fields.started_at_ms}&to=${__data.fields.done_at_ms}"
-                  },
-                  {
-                    "title": "Open this run on GitHub, where a run with no capture keeps its logs",
-                    "url": "${__data.fields.url}"
+                    "title": "Open the E2E run when recording is available",
+                    "url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run?orgId=1&var-capture_id=${__data.fields.capture_id}&from=${__data.fields.started_at_ms}&to=${__data.fields.done_at_ms}"
                   }
                 ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "workflow"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Workflow"
-              },
-              {
-                "id": "custom.width",
-                "value": 200
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "trigger"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Ref"
-              },
-              {
-                "id": "custom.width",
-                "value": 140
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "branch"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Branch"
-              },
-              {
-                "id": "custom.width",
-                "value": 150
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
               }
             ]
           },
@@ -2137,139 +109,6 @@
               {
                 "id": "displayName",
                 "value": "Result"
-              },
-              {
-                "id": "custom.width",
-                "value": 95
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "success": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "success"
-                      },
-                      "failure": {
-                        "color": "red",
-                        "index": 1,
-                        "text": "failure"
-                      },
-                      "cancelled": {
-                        "color": "orange",
-                        "index": 2,
-                        "text": "cancelled"
-                      },
-                      "skipped": {
-                        "color": "text",
-                        "index": 3,
-                        "text": "skipped"
-                      },
-                      "timed_out": {
-                        "color": "red",
-                        "index": 4,
-                        "text": "timed out"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Capture"
-              },
-              {
-                "id": "custom.width",
-                "value": 120
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "capture": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "capture"
-                      },
-                      "not collected": {
-                        "color": "orange",
-                        "index": 1,
-                        "text": "not collected"
-                      },
-                      "unknown": {
-                        "color": "text",
-                        "index": 2,
-                        "text": "unknown"
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open this run on GitHub, where a run with no capture keeps its logs for 7 days",
-                    "url": "${__data.fields.url}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_reason"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Why"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "identity_source"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Identity"
               },
               {
                 "id": "custom.width",
@@ -2287,15 +126,69 @@
                   {
                     "type": "value",
                     "options": {
-                      "info": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "info"
+                      "success": {
+                        "text": "Passed",
+                        "color": "green"
                       },
-                      "none": {
-                        "color": "orange",
-                        "index": 1,
-                        "text": "none"
+                      "failure": {
+                        "text": "Failed",
+                        "color": "red"
+                      },
+                      "cancelled": {
+                        "text": "Canceled",
+                        "color": "orange"
+                      },
+                      "skipped": {
+                        "text": "Skipped",
+                        "color": "text"
+                      },
+                      "timed_out": {
+                        "text": "Timed out",
+                        "color": "red"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "capture_state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Recording"
+              },
+              {
+                "id": "custom.width",
+                "value": 105
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "capture": {
+                        "text": "Yes",
+                        "color": "green"
+                      },
+                      "not collected": {
+                        "text": "No",
+                        "color": "orange"
+                      },
+                      "unknown": {
+                        "text": "Unknown",
+                        "color": "text"
                       }
                     }
                   }
@@ -2312,18 +205,14 @@
               {
                 "id": "custom.hidden",
                 "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_ids"
-            },
-            "properties": [
+              },
               {
-                "id": "custom.hidden",
-                "value": true
+                "id": "displayName",
+                "value": "Recording ID"
+              },
+              {
+                "id": "noValue",
+                "value": ""
               }
             ]
           },
@@ -2346,30 +235,6 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "finished_at"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
               "options": "url"
             },
             "properties": [
@@ -2379,7 +244,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 85
+                "value": 75
               },
               {
                 "id": "links",
@@ -2387,6 +252,20 @@
                   {
                     "title": "Open workflow run on GitHub",
                     "url": "${__value.raw}"
+                  }
+                ]
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": ".*",
+                      "result": {
+                        "text": "Open"
+                      }
+                    }
                   }
                 ]
               }
@@ -2401,6 +280,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "displayName",
+                "value": "started_at_ms"
               }
             ]
           },
@@ -2413,6 +296,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "displayName",
+                "value": "done_at_ms"
               }
             ]
           }
@@ -2450,21 +337,6 @@
               "type": "string"
             },
             {
-              "selector": "workflow",
-              "text": "workflow",
-              "type": "string"
-            },
-            {
-              "selector": "trigger",
-              "text": "trigger",
-              "type": "string"
-            },
-            {
-              "selector": "branch",
-              "text": "branch",
-              "type": "string"
-            },
-            {
               "selector": "conclusion",
               "text": "conclusion",
               "type": "string"
@@ -2475,38 +347,13 @@
               "type": "string"
             },
             {
-              "selector": "capture_reason",
-              "text": "capture_reason",
-              "type": "string"
-            },
-            {
-              "selector": "identity_source",
-              "text": "identity_source",
-              "type": "string"
-            },
-            {
               "selector": "capture_id",
               "text": "capture_id",
               "type": "string"
             },
             {
-              "selector": "capture_ids",
-              "text": "capture_ids",
-              "type": "string"
-            },
-            {
               "selector": "created_at",
               "text": "created_at",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "string"
-            },
-            {
-              "selector": "finished_at",
-              "text": "finished_at",
               "type": "string"
             },
             {
@@ -2539,26 +386,11 @@
   "templating": {
     "list": [
       {
-        "name": "find",
-        "label": "Find by run id or capture id",
-        "description": "Type a run id (41310072671) or part of a capture id (vmaas-pr123). The cards and the three capture tables narrow to matching runs; the lookup tables and the all-runs table read the workflow exporter and are not narrowed. Empty shows every run in the time range.",
-        "type": "textbox",
-        "current": {
-          "text": "",
-          "value": "",
-          "selected": false
-        },
-        "options": [],
-        "query": "",
-        "refresh": 0,
-        "hide": 0
-      },
-      {
         "name": "days",
-        "label": "Lookup and run window (days)",
+        "label": "Days",
         "type": "custom",
         "hide": 0,
-        "query": "7,30,60",
+        "query": "7,30",
         "options": [
           {
             "text": "7",
@@ -2569,11 +401,6 @@
             "text": "30",
             "value": "30",
             "selected": true
-          },
-          {
-            "text": "60",
-            "value": "60",
-            "selected": false
           }
         ],
         "current": {
@@ -2582,15 +409,17 @@
           "selected": true
         },
         "refresh": 0,
-        "description": "How many days the pull request lookup and the Recent E2E runs table read. It does not affect the capture tables, which follow the dashboard time range, or the test lookup, which always reads 7 days."
+        "description": ""
       }
     ]
   },
   "time": {
-    "from": "now-7d",
+    "from": "now-30d",
     "to": "now"
   },
-  "timepicker": {},
+  "timepicker": {
+    "hidden": true
+  },
   "timezone": "browser",
   "title": "CI Observe \u2014 Start here",
   "uid": "ci-observe-runs-home",

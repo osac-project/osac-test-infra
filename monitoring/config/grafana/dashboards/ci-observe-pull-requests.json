@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "The life of one pull request, from opened to merged or closed: recent pull requests, the stage funnel with median and p95 per stage, and every merge-queue attempt with its derived ejection reason. Ejections are derived from a failed merge_group run and the pull request comment; GitHub records no merge-queue history.",
+  "description": "Pull request review and merge-queue time.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -10,21 +10,21 @@
     {
       "title": "Start here",
       "type": "link",
-      "url": "/d/ci-observe-runs-home/ci-observe-e28094-test-runs"
+      "url": "/d/ci-observe-runs-home/ci-observe-e28094-start-here"
     },
     {
-      "title": "Capture evidence for a run",
+      "title": "E2E run details",
       "type": "link",
-      "url": "/d/ci-observe-run-evidence/ci-observe-run-evidence"
+      "url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run"
     }
   ],
   "panels": [
     {
-      "title": "How to read this page",
-      "description": "How to read this page: the unit is one pull request and the axis is calendar time. Queue ejections are derived, not recorded by GitHub. This page follows one pull request from open to merge or close. The unit is one pull request; the axis is calendar time from `opened_at` to `merged_at` or `closed_at`.",
+      "title": "Pull requests",
+      "description": "",
       "type": "text",
       "gridPos": {
-        "h": 8,
+        "h": 2,
         "w": 24,
         "x": 0,
         "y": 0
@@ -35,33 +35,19 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "This page follows one pull request from open to merge or close. The unit is one pull request; the axis is calendar time from `opened_at` to `merged_at` or `closed_at`.\n\n**Recent pull requests** lists merged and closed pull requests in the selected window, with the last stage each one reached and its age at that point. Click a number to load its detail below, or the GitHub link to open the pull request itself.\n\n**Stage funnel** gives the median and p95 duration of each stage over the same population: authoring (opened to first human review), review (first review to first human approval), waiting (approval to queue entry), queue (queue entry to merge or ejection) and merged (last attempt to merge).\n\n**Pull request detail** and **Queue attempts** read the number in the variable at the top.\n\n> Enqueued is the start of the pull request's first merge_group run. GitHub exposes no durable enqueue timestamp, so the run start is the only reproducible choice.\n\n> Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.\n\n> Queue runs carry no pull request number and no ci-observe capture today, so an attempt links to its GitHub run, not to a capture. A merge group can carry up to four pull requests while its gh-readonly-queue branch names one; the other pull requests are found through queue comments that link the run.\n\nThe backfill runs every hour. **Data freshness** says what the data covers and when the next pass starts, so a pull request that is not here yet is either not merged, not fetched, or missing for a named reason. Only merged and closed pull requests are backfilled. An open pull request appears here after it merges or closes; until then the detail panel says `open`. A pull request with no stored merge_group run shows `no queue history`, never `no ejections`."
+        "content": "Review and merge-queue time. Choose a pull request."
       },
       "id": 1
     },
     {
-      "title": "Data freshness",
-      "description": "When the pull-request backfill last ran, how far its data reaches and when it runs next. A pull request merged now is stored by the next hourly pass. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 8
-      },
-      "collapsed": false,
-      "panels": [],
-      "id": 12
-    },
-    {
-      "title": "Data freshness",
-      "description": "The last hourly pass and what it covered. `last_fetched_at` is when the backfill last ran, `coverage_until` is the end of the last pass that finished its window, and `message` states both in words. A stale state means the backfill has not run for more than two hours. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
+      "title": "Recent pull requests, last $days days",
+      "description": "",
       "type": "table",
       "gridPos": {
-        "h": 6,
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 2
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -69,281 +55,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "The backfill has not run yet"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "State"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "noValue",
-                "value": "unknown"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "last_fetched_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Last fetch"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "coverage_until"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Data through"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "next_run_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Next run"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "stored"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Stored"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "skipped"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Skipped"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "failed"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Failed"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "api_calls"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "API calls"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "stopped_early"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Stopped early"
-              },
-              {
-                "id": "custom.width",
-                "value": 260
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "message"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "What this means"
-              },
-              {
-                "id": "custom.width",
-                "value": 520
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.freshness",
-          "columns": [
-            {
-              "selector": "state",
-              "text": "State",
-              "type": "string"
-            },
-            {
-              "selector": "last_fetched_at",
-              "text": "Last fetch",
-              "type": "string"
-            },
-            {
-              "selector": "coverage_until",
-              "text": "Data through",
-              "type": "string"
-            },
-            {
-              "selector": "next_run_at",
-              "text": "Next run",
-              "type": "string"
-            },
-            {
-              "selector": "stored",
-              "text": "Stored",
-              "type": "number"
-            },
-            {
-              "selector": "skipped",
-              "text": "Skipped",
-              "type": "number"
-            },
-            {
-              "selector": "failed",
-              "text": "Failed",
-              "type": "number"
-            },
-            {
-              "selector": "api_calls",
-              "text": "API calls",
-              "type": "number"
-            },
-            {
-              "selector": "stopped_early",
-              "text": "Stopped early",
-              "type": "string"
-            },
-            {
-              "selector": "message",
-              "text": "What this means",
-              "type": "string"
-            }
-          ]
-        }
-      ],
-      "id": 13
-    },
-    {
-      "title": "Recent pull requests",
-      "description": "Merged and closed pull requests in the selected window, newest last activity first. Stage is the last stage the pull request reached, age is opened to merge or close, and the GitHub link opens the pull request. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 15
-      },
-      "collapsed": false,
-      "panels": [],
-      "id": 2
-    },
-    {
-      "title": "Recent pull requests",
-      "description": "Recent merged and closed pull requests. Stage is the last stage reached; age is opened to merge or close. The PR cell loads the row in this dashboard and the GitHub cell opens the pull request. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
-      "type": "table",
-      "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 16
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "No backfill data for this window"
+          "noValue": "No pull request data for these days"
         },
         "overrides": [
           {
@@ -406,22 +118,6 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "author"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Author"
-              },
-              {
-                "id": "custom.width",
-                "value": 140
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
               "options": "final_stage"
             },
             "properties": [
@@ -440,29 +136,24 @@
                     "type": "value",
                     "options": {
                       "merged": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "merged"
+                        "text": "Merged",
+                        "color": "green"
                       },
                       "closed in queue": {
-                        "color": "orange",
-                        "index": 1,
-                        "text": "closed in queue"
+                        "text": "Closed in queue",
+                        "color": "orange"
                       },
                       "closed after approval": {
-                        "color": "orange",
-                        "index": 2,
-                        "text": "closed after approval"
+                        "text": "Closed after approval",
+                        "color": "orange"
                       },
                       "closed in review": {
-                        "color": "red",
-                        "index": 3,
-                        "text": "closed in review"
+                        "text": "Closed in review",
+                        "color": "red"
                       },
                       "closed in authoring": {
-                        "color": "red",
-                        "index": 4,
-                        "text": "closed in authoring"
+                        "text": "Closed before review",
+                        "color": "red"
                       }
                     }
                   }
@@ -489,72 +180,16 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "opened_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Opened"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "merged_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Merged"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "closed_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Closed"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
               "options": "queue_attempt_count"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Queue attempts"
+                "value": "Queue runs"
               },
               {
                 "id": "custom.width",
-                "value": 120
+                "value": 100
               }
             ]
           },
@@ -566,11 +201,11 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Ejected attempts"
+                "value": "Left queue"
               },
               {
                 "id": "custom.width",
-                "value": 120
+                "value": 100
               }
             ]
           },
@@ -586,7 +221,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 90
+                "value": 110
               },
               {
                 "id": "links",
@@ -594,6 +229,20 @@
                   {
                     "title": "Open pull request on GitHub",
                     "url": "${__value.raw}"
+                  }
+                ]
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": ".*",
+                      "result": {
+                        "text": "Open"
+                      }
+                    }
                   }
                 ]
               }
@@ -623,7 +272,7 @@
           "columns": [
             {
               "selector": "number",
-              "text": "PR",
+              "text": "number",
               "type": "number"
             },
             {
@@ -633,52 +282,32 @@
             },
             {
               "selector": "title",
-              "text": "Title",
-              "type": "string"
-            },
-            {
-              "selector": "author",
-              "text": "Author",
+              "text": "title",
               "type": "string"
             },
             {
               "selector": "final_stage",
-              "text": "Last stage",
+              "text": "final_stage",
               "type": "string"
             },
             {
               "selector": "age_display",
-              "text": "Age",
-              "type": "string"
-            },
-            {
-              "selector": "opened_at",
-              "text": "Opened",
-              "type": "string"
-            },
-            {
-              "selector": "merged_at",
-              "text": "Merged",
-              "type": "string"
-            },
-            {
-              "selector": "closed_at",
-              "text": "Closed",
+              "text": "age_display",
               "type": "string"
             },
             {
               "selector": "queue_attempt_count",
-              "text": "Queue attempts",
+              "text": "queue_attempt_count",
               "type": "number"
             },
             {
               "selector": "ejected_attempt_count",
-              "text": "Ejected attempts",
+              "text": "ejected_attempt_count",
               "type": "number"
             },
             {
               "selector": "url",
-              "text": "GitHub",
+              "text": "url",
               "type": "string"
             }
           ]
@@ -687,28 +316,14 @@
       "id": 3
     },
     {
-      "title": "Stage funnel",
-      "description": "Median and p95 seconds per stage over the pull requests in the selected window. A pull request that never reached a stage is excluded from that stage's sample, and `samples` says how many really contributed. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 26
-      },
-      "collapsed": false,
-      "panels": [],
-      "id": 4
-    },
-    {
-      "title": "Stage funnel, median and p95",
-      "description": "Median and p95 seconds per stage. `samples` counts the pull requests that reached the stage, so a small sample is visible instead of being smoothed into the median. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
+      "title": "Stage times",
+      "description": "",
       "type": "table",
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 11
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -716,7 +331,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "No stage measured"
+          "noValue": "No stage times for these days"
         },
         "overrides": [
           {
@@ -731,7 +346,32 @@
               },
               {
                 "id": "custom.width",
-                "value": 160
+                "value": 200
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "Authoring": {
+                        "text": "Open to first review"
+                      },
+                      "Review": {
+                        "text": "First review to approval"
+                      },
+                      "Waiting": {
+                        "text": "Approval to queue"
+                      },
+                      "Queue": {
+                        "text": "In the merge queue"
+                      },
+                      "Merged": {
+                        "text": "Last queue run to merge"
+                      }
+                    }
+                  }
+                ]
               }
             ]
           },
@@ -743,7 +383,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Samples"
+                "value": "PRs"
               },
               {
                 "id": "custom.width",
@@ -759,7 +399,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Median"
+                "value": "Typical"
               },
               {
                 "id": "custom.width",
@@ -779,7 +419,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "p95"
+                "value": "Slow end"
               },
               {
                 "id": "custom.width",
@@ -815,22 +455,22 @@
           "columns": [
             {
               "selector": "label",
-              "text": "Stage",
+              "text": "label",
               "type": "string"
             },
             {
               "selector": "samples",
-              "text": "Samples",
+              "text": "samples",
               "type": "number"
             },
             {
               "selector": "median_seconds",
-              "text": "Median",
+              "text": "median_seconds",
               "type": "number"
             },
             {
               "selector": "p95_seconds",
-              "text": "p95",
+              "text": "p95_seconds",
               "type": "number"
             }
           ]
@@ -839,1311 +479,204 @@
       "id": 5
     },
     {
-      "title": "Pull request detail",
-      "description": "The pull request selected by the PR number variable, with its stage boundaries and durations. Set the PR number and repository variables at the top. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
+      "title": "Selected pull request",
+      "description": "",
       "type": "row",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 19
       },
-      "collapsed": false,
-      "panels": [],
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "Details",
+          "description": "",
+          "type": "table",
+          "gridPos": {
+            "h": 4,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "Enter a PR number above."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "number"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "PR"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 70
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "title"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Title"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 260
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "final_stage"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Last stage"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 150
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "merged": {
+                            "text": "Merged",
+                            "color": "green"
+                          },
+                          "closed in queue": {
+                            "text": "Closed in queue",
+                            "color": "orange"
+                          },
+                          "closed after approval": {
+                            "text": "Closed after approval",
+                            "color": "orange"
+                          },
+                          "closed in review": {
+                            "text": "Closed in review",
+                            "color": "red"
+                          },
+                          "closed in authoring": {
+                            "text": "Closed before review",
+                            "color": "red"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "opened_at"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Opened"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 165
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "total_seconds"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Total time"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "$.pr",
+              "columns": [
+                {
+                  "selector": "number",
+                  "text": "number",
+                  "type": "number"
+                },
+                {
+                  "selector": "title",
+                  "text": "title",
+                  "type": "string"
+                },
+                {
+                  "selector": "final_stage",
+                  "text": "final_stage",
+                  "type": "string"
+                },
+                {
+                  "selector": "opened_at",
+                  "text": "opened_at",
+                  "type": "string"
+                },
+                {
+                  "selector": "total_seconds",
+                  "text": "total_seconds",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "id": 7
+        }
+      ],
       "id": 6
-    },
-    {
-      "title": "Pull request",
-      "description": "One pull request: the boundary timestamps of every stage and the total open-to-end duration. A blank boundary means the stage was not reached. Empty when the number is not stored; the Pull request states panel below names why, and a row resolved live is marked `source: live`. Enqueued is the start of the pull request's first merge_group run, so the run start is the only reproducible choice. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 13,
-        "x": 0,
-        "y": 37
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "Enter a pull request number above"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "number"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "PR"
-              },
-              {
-                "id": "custom.width",
-                "value": 70
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "repo"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Repository"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "title"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Title"
-              },
-              {
-                "id": "custom.width",
-                "value": 260
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "author"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Author"
-              },
-              {
-                "id": "custom.width",
-                "value": 120
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "State"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "final_stage"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Last stage"
-              },
-              {
-                "id": "custom.width",
-                "value": 150
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opened_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Opened"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "first_review_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "First human review"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "first_approval_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "First human approval"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "queued_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Enqueued"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "merged_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Merged"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "closed_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Closed"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "total_seconds"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Open to end"
-              },
-              {
-                "id": "custom.width",
-                "value": 120
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "retest_count"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Retests"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "noValue",
-                "value": "no job history"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "labels"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Labels"
-              },
-              {
-                "id": "custom.width",
-                "value": 150
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "GitHub"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open pull request on GitHub",
-                    "url": "${__value.raw}"
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.pr",
-          "columns": [
-            {
-              "selector": "number",
-              "text": "PR",
-              "type": "number"
-            },
-            {
-              "selector": "repo",
-              "text": "repo",
-              "type": "string"
-            },
-            {
-              "selector": "title",
-              "text": "Title",
-              "type": "string"
-            },
-            {
-              "selector": "author",
-              "text": "Author",
-              "type": "string"
-            },
-            {
-              "selector": "state",
-              "text": "state",
-              "type": "string"
-            },
-            {
-              "selector": "final_stage",
-              "text": "Last stage",
-              "type": "string"
-            },
-            {
-              "selector": "opened_at",
-              "text": "Opened",
-              "type": "string"
-            },
-            {
-              "selector": "first_review_at",
-              "text": "First human review",
-              "type": "string"
-            },
-            {
-              "selector": "first_approval_at",
-              "text": "First human approval",
-              "type": "string"
-            },
-            {
-              "selector": "queued_at",
-              "text": "Enqueued",
-              "type": "string"
-            },
-            {
-              "selector": "merged_at",
-              "text": "Merged",
-              "type": "string"
-            },
-            {
-              "selector": "closed_at",
-              "text": "Closed",
-              "type": "string"
-            },
-            {
-              "selector": "total_seconds",
-              "text": "Open to end",
-              "type": "number"
-            },
-            {
-              "selector": "retest_count",
-              "text": "Retests",
-              "type": "number"
-            },
-            {
-              "selector": "labels",
-              "text": "Labels",
-              "type": "string"
-            },
-            {
-              "selector": "url",
-              "text": "GitHub",
-              "type": "string"
-            }
-          ]
-        }
-      ],
-      "id": 7
-    },
-    {
-      "title": "Stages",
-      "description": "The five stages with their boundaries. A stage the pull request never reached says so; a stage whose boundary is missing says why instead of showing zero. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 11,
-        "x": 13,
-        "y": 37
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "Enter a pull request number above"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "label"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Stage"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "start_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "From"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "end_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "To"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "seconds"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "State"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "measured": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "measured"
-                      },
-                      "unknown": {
-                        "color": "orange",
-                        "index": 1,
-                        "text": "unknown"
-                      },
-                      "not_reached": {
-                        "color": "blue",
-                        "index": 2,
-                        "text": "not reached"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "missing_reason"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Why it is blank"
-              },
-              {
-                "id": "custom.width",
-                "value": 220
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.stages",
-          "columns": [
-            {
-              "selector": "label",
-              "text": "Stage",
-              "type": "string"
-            },
-            {
-              "selector": "start_at",
-              "text": "From",
-              "type": "string"
-            },
-            {
-              "selector": "end_at",
-              "text": "To",
-              "type": "string"
-            },
-            {
-              "selector": "seconds",
-              "text": "Duration",
-              "type": "number"
-            },
-            {
-              "selector": "state",
-              "text": "state",
-              "type": "string"
-            },
-            {
-              "selector": "missing_reason",
-              "text": "Why it is blank",
-              "type": "string"
-            }
-          ]
-        }
-      ],
-      "id": 8
-    },
-    {
-      "title": "Selected pull request state",
-      "description": "The state the endpoint resolved for the pull request in the PR box: stored, open, not_yet_fetched, missing or outside_window, with the sentence that explains it and whether the answer came from the store or one live GitHub lookup. The table below lists what every state means. Ejections shown elsewhere on this page are derived, not recorded by GitHub.",
-      "type": "table",
-      "gridPos": {
-        "h": 4,
-        "w": 24,
-        "x": 0,
-        "y": 46
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "No pull request number is selected: enter one in the PR box to see its state."
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "State"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "label"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Meaning"
-              },
-              {
-                "id": "custom.width",
-                "value": 220
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "message"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "What it says"
-              },
-              {
-                "id": "custom.width",
-                "value": 900
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        },
-        "sortBy": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$",
-          "columns": [
-            {
-              "selector": "pr_state",
-              "text": "State",
-              "type": "string"
-            },
-            {
-              "selector": "pr_state_message",
-              "text": "What it says",
-              "type": "string"
-            },
-            {
-              "selector": "source",
-              "text": "Answer from",
-              "type": "string"
-            }
-          ]
-        }
-      ],
-      "id": 15
-    },
-    {
-      "title": "Pull request states",
-      "description": "What each of the four states of a pull request with no stored row means (open, not_yet_fetched, missing, outside_window), so an empty detail panel is never a mystery. This is the legend; the state of the selected pull request, and its message, are in the panel above it. A stored pull request is shown by the Pull request panel. Ejections shown elsewhere on this page are derived, not recorded by GitHub.",
-      "type": "table",
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 50
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "No state to show"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "State"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "label"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Meaning"
-              },
-              {
-                "id": "custom.width",
-                "value": 220
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "message"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "What it says"
-              },
-              {
-                "id": "custom.width",
-                "value": 900
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.states",
-          "columns": [
-            {
-              "selector": "state",
-              "text": "State",
-              "type": "string"
-            },
-            {
-              "selector": "label",
-              "text": "Meaning",
-              "type": "string"
-            },
-            {
-              "selector": "message",
-              "text": "What it says",
-              "type": "string"
-            }
-          ]
-        }
-      ],
-      "id": 14
-    },
-    {
-      "title": "Queue attempts",
-      "description": "Every merge_group attempt of the selected pull request, with its run, conclusion and derived ejection reason. Enqueued is the start of the pull request's first merge_group run. GitHub exposes no durable enqueue timestamp, so the run start is the only reproducible choice. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 57
-      },
-      "collapsed": false,
-      "panels": [],
-      "id": 9
-    },
-    {
-      "title": "Queue attempts",
-      "description": "One row per merge-queue entry. One entry starts several merge_group workflows that share head_branch and head_sha, so those runs are grouped into one attempt; `workflows` says how many, and the GitHub run link opens the first. `ejected` and the reason are derived, not recorded by GitHub; `reason source` says whether the reason came from the queue comment or only from the run conclusion. A Capture link appears when Tempo has a capture for that run; otherwise the GitHub run is the link. Enqueued is the start of the pull request's first merge_group run. GitHub exposes no durable enqueue timestamp, so the run start is the only reproducible choice. Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history.",
-      "type": "table",
-      "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 58
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "Enter a pull request number above"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "run_id"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Run"
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "run_attempt"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Run attempt"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "run_count"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Workflows"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "conclusion"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Conclusion"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "success": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "success"
-                      },
-                      "failure": {
-                        "color": "red",
-                        "index": 1,
-                        "text": "failure"
-                      },
-                      "cancelled": {
-                        "color": "orange",
-                        "index": 2,
-                        "text": "cancelled"
-                      },
-                      "timed_out": {
-                        "color": "red",
-                        "index": 3,
-                        "text": "timed out"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Started"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "completed_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Completed"
-              },
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration_seconds"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ejected"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Ejected (derived)"
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "true": {
-                        "color": "red",
-                        "index": 0,
-                        "text": "ejected (derived)"
-                      },
-                      "false": {
-                        "color": "green",
-                        "index": 1,
-                        "text": "not ejected"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ejection_kind"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Ejection kind"
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ejection_reason"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Derived ejection reason"
-              },
-              {
-                "id": "custom.width",
-                "value": 420
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "reason_source"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Reason source"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "comment_url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Queue comment"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the queue comment",
-                    "url": "${__value.raw}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "run_url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "GitHub run"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the merge_group run",
-                    "url": "${__value.raw}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "capture_url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Capture"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
-                "id": "noValue",
-                "value": "no capture"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.attempts",
-          "columns": [
-            {
-              "selector": "run_id",
-              "text": "Run",
-              "type": "number"
-            },
-            {
-              "selector": "run_attempt",
-              "text": "Run attempt",
-              "type": "number"
-            },
-            {
-              "selector": "run_count",
-              "text": "Workflows",
-              "type": "number"
-            },
-            {
-              "selector": "conclusion",
-              "text": "Conclusion",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "Started",
-              "type": "string"
-            },
-            {
-              "selector": "completed_at",
-              "text": "Completed",
-              "type": "string"
-            },
-            {
-              "selector": "duration_seconds",
-              "text": "Duration",
-              "type": "number"
-            },
-            {
-              "selector": "ejected",
-              "text": "Ejected (derived)",
-              "type": "boolean"
-            },
-            {
-              "selector": "ejection_kind",
-              "text": "Ejection kind",
-              "type": "string"
-            },
-            {
-              "selector": "ejection_reason",
-              "text": "Derived ejection reason",
-              "type": "string"
-            },
-            {
-              "selector": "reason_source",
-              "text": "Reason source",
-              "type": "string"
-            },
-            {
-              "selector": "comment_url",
-              "text": "Queue comment",
-              "type": "string"
-            },
-            {
-              "selector": "run_url",
-              "text": "GitHub run",
-              "type": "string"
-            },
-            {
-              "selector": "capture_url",
-              "text": "Capture",
-              "type": "string"
-            }
-          ]
-        }
-      ],
-      "id": 10
-    },
-    {
-      "title": "If a panel is empty",
-      "description": "How to read this page: the unit is one pull request and the axis is calendar time. Queue ejections are derived, not recorded by GitHub. **No backfill data** or **Enter a pull request number above** means the panel has no rows, not a passing result.",
-      "type": "text",
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 68
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "**No backfill data** or **Enter a pull request number above** means the panel has no rows, not a passing result.\n\n- **Data freshness** is never empty: it says when the backfill last ran and what its data covers. `never` means it has not run yet and `stale` means more than two hours have passed.\n- The index and funnel are empty before `ci_observe_prs.py` has run, or when the selected window has no merged or closed pull requests.\n- The detail and queue panels are empty until a PR number is typed in the variable at the top.\n- A pull request with no stored row is one of four states, never a blank panel: `open` (still open, stored after it merges), `not_yet_fetched` (merged after the last completed window, stored next hour), `missing` (inside a covered window with no row, with the stopped-early reason) or `outside_window` (ended before the retention).\n- A pull request that never entered the merge queue shows `no queue history`, which is not the same as `no ejections`.\n\nQueue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history."
-      },
-      "id": 11
     }
   ],
   "schemaVersion": 39,
@@ -2156,10 +689,10 @@
     "list": [
       {
         "name": "days",
-        "label": "Window (days)",
+        "label": "Days",
         "type": "custom",
         "hide": 0,
-        "query": "7,30,60",
+        "query": "7,30",
         "options": [
           {
             "text": "7",
@@ -2170,11 +703,6 @@
             "text": "30",
             "value": "30",
             "selected": true
-          },
-          {
-            "text": "60",
-            "value": "60",
-            "selected": false
           }
         ],
         "current": {
@@ -2183,11 +711,11 @@
           "selected": true
         },
         "refresh": 0,
-        "description": "Window for the index and the funnel. The backfill keeps 60 days."
+        "description": ""
       },
       {
         "name": "pr_number",
-        "label": "PR number",
+        "label": "PR",
         "type": "textbox",
         "hide": 0,
         "query": "",
@@ -2198,13 +726,13 @@
           "selected": true
         },
         "options": [],
-        "description": "A pull request number from the index. Only merged and closed pull requests are stored."
+        "description": ""
       },
       {
         "name": "pr_repo",
         "label": "Repository",
         "type": "textbox",
-        "hide": 0,
+        "hide": 2,
         "query": "",
         "refresh": 0,
         "current": {
@@ -2213,15 +741,17 @@
           "selected": true
         },
         "options": [],
-        "description": "Repository name for the PR number, for example osac."
+        "description": ""
       }
     ]
   },
   "time": {
-    "from": "now-60d",
+    "from": "now-30d",
     "to": "now"
   },
-  "timepicker": {},
+  "timepicker": {
+    "hidden": true
+  },
   "timezone": "browser",
   "title": "CI Observe \u2014 Pull requests",
   "uid": "ci-observe-pull-requests",

@@ -66,7 +66,7 @@ CAPTURE_TAG = "resource.osac.ci.capture_id"
 
 # Dashboard window lengths. The harness must not use these, or it would
 # evict the entry page's cache entry and change the number it is measuring.
-DASHBOARD_DAYS = (7, 30, 60)
+DASHBOARD_DAYS = (7, 30)
 PERF_DAYS = 13
 WARM_DAYS = 17
 EXACT_LOOKUP_RUN_ID = "99999999999999"
@@ -961,10 +961,10 @@ def check_completeness(api_base: str, args: argparse.Namespace) -> list[Check]:
     checks = check_coverage_window(document, args.coverage_limit)
     registry = capture_ids_from_registry(document)
     readers = (
-        # Prometheus keeps 15 days, so a narrower --coverage-days must narrow
+        # Prometheus keeps 30 days, so a narrower --coverage-days must narrow
         # it too; otherwise the registry looks like it is missing captures
         # that Prometheus was never asked about.
-        ("prometheus", prometheus_capture_ids, args.prometheus_url, min(args.coverage_days, 15)),
+        ("prometheus", prometheus_capture_ids, args.prometheus_url, min(args.coverage_days, 30)),
         ("loki", loki_capture_ids, args.loki_url, min(args.coverage_days, 30)),
         ("tempo", tempo_capture_ids, args.tempo_url, min(args.coverage_days, 30)),
     )

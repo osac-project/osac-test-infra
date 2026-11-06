@@ -92,9 +92,9 @@ NO_SELECTION_MESSAGE = "Enter a pull request number in the PR box to see its sta
 CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.monitoring-server/data"))
 PRS_DB_FILE = os.path.join(CACHE_DIR, "prs.db")
 
-# Matches the workflow exporter's 60-day job history, so a pull request and
+# Matches the workflow exporter's 30-day job history, so a pull request and
 # the jobs it produced cover the same window.
-PRS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "60"))
+PRS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "30"))
 DEFAULT_INDEX_DAYS = 30
 PAGE_SIZE = 100
 # GitHub's actions/runs list stops near 1000 results. Split a merge-group
@@ -126,7 +126,7 @@ LIVE_CACHE_TTL_SECONDS = 60
 # budget again, at the moment that budget is already low. Failures clear
 # sooner than answers.
 LIVE_FAILURE_CACHE_TTL_SECONDS = 15
-# Hourly rows for 60 days are 1440; keep a little slack and drop the rest.
+# Hourly rows for 30 days are 720; keep a little slack and drop the rest.
 BACKFILL_RUNS_KEEP = 2000
 
 # The only place a merge_group run names its pull request. Same expression
@@ -1760,7 +1760,7 @@ def _stored_run_ids(value, run_id):
 # ---------------------------------------------------------------------------
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Backfill ci-observe pull-request history into prs.db")
-    parser.add_argument("--days", type=int, default=PRS_HISTORY_DAYS, help="window in days (default 60)")
+    parser.add_argument("--days", type=int, default=PRS_HISTORY_DAYS, help="window in days (default 30)")
     parser.add_argument("--repo", action="append", default=[], help="repository name; repeatable")
     parser.add_argument("--limit", type=int, default=None, help="stop after this many pull requests")
     parser.add_argument("--force", action="store_true", help="refetch pull requests already stored")

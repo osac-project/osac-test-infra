@@ -3,7 +3,7 @@
 /api/ci-observe/trends endpoint.
 
 The rollup turns the JUnit XML inside a run's GitHub artifact -- the only
-per-test record, deleted after 7 days -- into one row per day, repo,
+per-test record, deleted after 30 days -- into one row per day, repo,
 workflow, suite, test id and source SHA. These tests pin the parser (which
 testcase counts as a pass, a failure and neither), the run grouping that
 survives a pull-request-flow run's several stored rows, day replacement
@@ -453,7 +453,7 @@ class TestMain:
         assert (second[0]["runs"], second[0]["passes"], second[0]["failures"]) == (1, 1, 0)
 
     def test_a_thinner_pass_keeps_the_stored_day(self, wired, exporter, github):
-        """Artifacts expire after 7 days. A later pass for the same day reads
+        """Artifacts expire after 30 days. A later pass for the same day reads
         fewer runs; replacing the day would delete the only copy."""
         exporter._upsert_job(run_row())
         assert wired.main(["--days", "7"]) == 0
@@ -751,8 +751,8 @@ class TestEndpoint:
         assert [row["test_id"].rsplit("::", 1)[-1] for row in doc["rows"]] == ["test_restart"]
 
     def test_defaults_and_garbage_days(self, exporter, rollup):
-        assert exporter.get_ci_observe_trends_json({})["days"] == 60
-        assert exporter.get_ci_observe_trends_json({"days": ["nonsense"]})["days"] == 60
+        assert exporter.get_ci_observe_trends_json({})["days"] == 30
+        assert exporter.get_ci_observe_trends_json({"days": ["nonsense"]})["days"] == 30
         assert exporter.get_ci_observe_trends_json({"days": ["0"]})["days"] == 1
 
     def test_a_missing_rollup_is_a_note_not_an_error(self, exporter):
@@ -850,8 +850,8 @@ class TestEndpoint:
         assert doc["head_sha"] == OTHER_SHA
 
     def test_compare_defaults_and_garbage_days(self, exporter, two_revisions):
-        assert exporter.get_ci_observe_trends_compare_json({})["days"] == 60
-        assert exporter.get_ci_observe_trends_compare_json({"days": ["nonsense"]})["days"] == 60
+        assert exporter.get_ci_observe_trends_compare_json({})["days"] == 30
+        assert exporter.get_ci_observe_trends_compare_json({"days": ["nonsense"]})["days"] == 30
         assert exporter.get_ci_observe_trends_compare_json({"days": ["0"]})["days"] == 1
         assert (
             exporter.get_ci_observe_trends_compare_json({"days": ["100000"]})["days"]
@@ -944,7 +944,12 @@ def test_dashboard_queries_resolve_against_the_endpoint(exporter, trends, tmp_pa
     dashboard = json.loads(DASHBOARD.read_text())
 
     checked = 0
-    for panel in dashboard["panels"]:
+    def iter_panels(panels):
+        for panel in panels:
+            yield panel
+            yield from iter_panels(panel.get("panels", []))
+
+    for panel in iter_panels(dashboard["panels"]):
         if panel["type"] in ("row", "text"):
             continue
         for target in panel.get("targets") or []:
@@ -959,7 +964,7 @@ def test_dashboard_queries_resolve_against_the_endpoint(exporter, trends, tmp_pa
                 assert column["selector"] in rows[0], (
                     f"{panel['title']}: column {column['selector']} is not in the response"
                 )
-    assert checked >= 4, "the dashboard must query the rollup endpoint"
+    assert checked >= 2, "the dashboard must query the rollup endpoint"
 
 
 def test_deployment_copies_the_rollup_script():
@@ -973,13 +978,13 @@ def test_deployment_copies_the_rollup_script():
 
 def test_rollup_is_mounted_in_the_exporter_and_scheduled_daily():
     """The rollup runs inside the exporter container: that is where the token,
-    requests and the /data volume live. A timer runs it daily while the 7-day
-    artifact window still has the previous day."""
+    requests and the /data volume live. A timer runs it daily while the
+    30-day artifact window still has the previous day."""
     quadlet = (MONITORING / "quadlet" / "workflow-exporter.container").read_text()
     assert "ci_observe_trends.py:/app/ci_observe_trends.py" in quadlet
 
     service = (MONITORING / "systemd" / "ci-observe-trends.service").read_text()
-    assert "podman exec workflow-exporter python3 /app/ci_observe_trends.py --days 7" in service
+    assert "podman exec workflow-exporter python3 /app/ci_observe_trends.py --days 30" in service
 
     timer = (MONITORING / "systemd" / "ci-observe-trends.timer").read_text()
     assert "OnCalendar=*-*-* 04:15:00" in timer

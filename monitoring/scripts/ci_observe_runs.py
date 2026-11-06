@@ -1,7 +1,7 @@
 """The runs half of ci-observe: /api/ci-observe/runs, the E2E run list with a
 per-run capture verdict.
 
-The workflow exporter knows every E2E run (SQLite job history, 60 days) and,
+The workflow exporter knows every E2E run (SQLite job history, 30 days) and,
 since the capture registry landed, every capture that arrived (SQLite
 `captures`). Both answers are one SQL statement joined on the GitHub run id
 that the capture id embeds, so this endpoint never calls Tempo: its
@@ -47,8 +47,8 @@ class CIObserveRuns:
     capture registry) and the registry itself; this class applies the
     verdict."""
 
-    DEFAULT_DAYS = 7
-    MAX_DAYS = 60
+    DEFAULT_DAYS = 30
+    MAX_DAYS = 30
     DEFAULT_LIMIT = 200
     MAX_LIMIT = 2000
 
@@ -65,8 +65,8 @@ class CIObserveRuns:
     def get_json(self, params):
         """The /api/ci-observe/runs document.
 
-        Query params: days -- how many days of runs to list (default 7,
-        clamped to 1..60); limit -- how many runs to list (default 200,
+        Query params: days -- how many days of runs to list (default 30,
+        clamped to 1..30); limit -- how many runs to list (default 200,
         clamped to 1..2000); before -- the id of the last run on the previous
         page (keyset paging); run -- an exact run id, which ignores the
         window.

@@ -1,7 +1,7 @@
 # Loki override for the ci-observe local development stack.
 #
 # This is the stock grafana/otel-lgtm 0.38.1 loki-config.yaml (Loki 3.7.9) with
-# four changes:
+# six changes:
 #   - max_chunk_age 168h: Loki accepts out-of-order entries at most max_chunk_age/2
 #     behind the newest entry in a stream; the stock 2h (1h window) silently
 #     discarded replayed day-old logs that shared stream labels with newer logs.
@@ -20,6 +20,8 @@
 #     (stock 4 MiB): a query over a whole 20-minute capture returns a response
 #     larger than 4 MiB and Loki failed with ResourceExhausted (4505394 vs.
 #     4194304); a 5-minute window or a line filter fit under the stock limit.
+#   - 30-day retention: ci-observe keeps logs for the same 30 days as traces
+#     and cluster metrics.
 #
 # This is a local development stack setting, not a fleet production setting. Keep
 # the remaining defaults in sync with the pinned image when it changes.
@@ -83,7 +85,13 @@ frontend:
 query_scheduler:
   use_scheduler_ring: false
 
+compactor:
+  working_directory: /data/loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
 limits_config:
+  retention_period: 720h
   otlp_config:
     resource_attributes:
       attributes_config:

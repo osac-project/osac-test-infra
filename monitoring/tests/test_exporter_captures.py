@@ -6,8 +6,8 @@ promises: an upsert never empties a known field, coverage_from is written once
 and never moves, last_ok_at only advances on a complete answer, junk ids are
 counted and named, and a capture is not deleted before its 90-day prune.
 
-They also pin the job-history cap: the old 100k rows cut a 60-day page to
-about 20 days, so the default cap and the prune must keep a 60-day window.
+They also pin the job-history cap: the old 100k rows cut a long page short,
+so the default cap must not bind inside the 30-day window.
 """
 
 from __future__ import annotations
@@ -135,17 +135,17 @@ def test_run_id_is_stored_on_a_run_row_and_a_suite_row(exporter):
     assert got == {700: "700", 701: "700"}
 
 
-def test_the_job_history_cap_does_not_bind_before_sixty_days(exporter, wfe):
-    """~5k jobs/day is ~300k rows in 60 days. The old 100k cap silently cut
-    the page to about 20 days."""
+def test_the_job_history_cap_does_not_bind_before_thirty_days(exporter, wfe):
+    """~5k jobs/day is ~150k rows in 30 days. The old 100k cap silently cut
+    the page short."""
     assert wfe.JOBS_HISTORY_MAX_COUNT >= 300_000
-    for day in range(60):
+    for day in range(30):
         exporter._upsert_job(make_job(
             id=1000 + day, created_at=iso(days_ago(day)),
         ))
     exporter._prune_jobs()
 
-    assert len(rows(exporter, "SELECT id FROM jobs")) == 60
+    assert len(rows(exporter, "SELECT id FROM jobs")) == 30
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +252,7 @@ def test_coverage_from_is_written_once_and_never_moves(registry, sources):
     first = days_ago(10)
     registry.refresh(first)
     row = source_row(registry.exporter, "prometheus")
-    assert row["coverage_from"] == iso(first - timedelta(days=14))
+    assert row["coverage_from"] == iso(first - timedelta(days=29))
 
     registry.refresh()
     later = source_row(registry.exporter, "prometheus")
@@ -321,9 +321,9 @@ def test_a_bad_document_is_a_source_failure_not_an_empty_capture_set(registry, s
 # ---------------------------------------------------------------------------
 # Retention
 # ---------------------------------------------------------------------------
-def test_a_capture_is_kept_until_ninety_days(registry, sources):
+def test_a_capture_is_kept_until_thirty_days(registry, sources):
     sources.prometheus = [CAPTURE]
-    registry.refresh(days_ago(89))
+    registry.refresh(days_ago(29))
     sources.prometheus = ["vmaas-main-1-a1"]
     registry.refresh(days_ago(1))
 
@@ -331,9 +331,9 @@ def test_a_capture_is_kept_until_ninety_days(registry, sources):
     assert capture_row(registry.exporter, "vmaas-main-1-a1")
 
 
-def test_a_capture_older_than_ninety_days_is_pruned(registry, sources):
+def test_a_capture_older_than_thirty_days_is_pruned(registry, sources):
     sources.prometheus = [CAPTURE]
-    registry.refresh(days_ago(91))
+    registry.refresh(days_ago(31))
     sources.prometheus = ["vmaas-main-1-a1"]
     registry.refresh()
 

@@ -4,8 +4,8 @@
 # out-of-order time window is widened from 10m to 7d so post-run CI captures, which
 # arrive hours to a day after collection, replay with their original timestamps
 # instead of being silently dropped as out-of-order samples (the stock 10m window
-# only absorbs retries and network delays). 7d matches the local detail retention
-# budget in the collector-first plan; older samples are still rejected and reported.
+# only absorbs retries and network delays). The 7d window accepts delayed replay;
+# Prometheus keeps the resulting samples for 30d.
 #
 # This is a local development stack setting, not a fleet production setting. Keep
 # the remaining defaults in sync with the pinned image when it changes.

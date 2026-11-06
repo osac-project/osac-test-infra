@@ -5,7 +5,7 @@ registry, every capture that arrived. Both live in workflow-exporter.db, so
 this endpoint is one SQL page joined on the GitHub run id and never calls
 Tempo.
 
-These tests pin the join, the keyset paging, the 60-day window, the three
+These tests pin the join, the keyset paging, the 30-day window, the three
 registry endpoints, and above all the rule that keeps a data gap from
 becoming a false verdict: a running run, a run that just ended, a registry
 with no answer, a stale answer, an answer older than the run, a run older
@@ -411,14 +411,14 @@ def test_a_stale_registry_is_unknown(client, exporter, registry):
 
 def test_a_run_older_than_coverage_is_unknown(client, exporter, fresh):
     clear_captures(exporter)
-    """Prometheus keeps 15 days and the registry's coverage starts a day
+    """Prometheus keeps 30 days and the registry's coverage starts a day
     inside that. An older run's capture may have expired, so its absence is
     not evidence."""
     exporter._upsert_job(run_job(
         RUN_ID, created_minutes=30 * 24 * 60, finished_minutes=30 * 24 * 60 - 10
     ))
 
-    doc = client.get_json({"days": ["60"]})
+    doc = client.get_json({"days": ["30"]})
 
     run = state_of(doc, RUN_ID)
     assert run["capture_state"] == "unknown"
@@ -471,7 +471,7 @@ def test_a_junk_capture_id_is_rejected_and_named(client, jobs, registry, sources
 
 
 # ---------------------------------------------------------------------------
-# Paging and the 60-day window
+# Paging and the 30-day window
 # ---------------------------------------------------------------------------
 def test_the_run_page_is_one_sql_statement(client, exporter, wfe, monkeypatch):
     exporter._upsert_job(run_job(RUN_ID))
@@ -522,13 +522,12 @@ def test_an_invalid_before_is_ignored_with_a_note(client, jobs, fresh):
     assert "is not a run id" in doc["notes"][0]
 
 
-def test_a_sixty_day_window_keeps_every_day(client, exporter, fresh, wfe):
-    """The count cap used to cut a 60-day page to about 20 days. One run per
-    day for 60 days must all be listed, and the cap must be above a 60-day
-    volume."""
+def test_a_thirty_day_window_keeps_every_day(client, exporter, fresh, wfe):
+    """The count cap must not cut a full-retention page. One run per day for
+    30 days must all be listed."""
     assert wfe.JOBS_HISTORY_MAX_COUNT >= 300_000
-    exporter._upsert_job(run_job(1, created_minutes=59 * 24 * 60, finished_minutes=59 * 24 * 60 - 10))
-    for day in range(1, 60):
+    exporter._upsert_job(run_job(1, created_minutes=29 * 24 * 60, finished_minutes=29 * 24 * 60 - 10))
+    for day in range(1, 30):
         exporter._upsert_job(run_job(
             1 + day,
             created_minutes=day * 24 * 60,
@@ -536,10 +535,10 @@ def test_a_sixty_day_window_keeps_every_day(client, exporter, fresh, wfe):
         ))
 
     exporter._prune_jobs()
-    doc = client.get_json({"days": ["60"], "limit": ["2000"]})
+    doc = client.get_json({"days": ["30"], "limit": ["2000"]})
 
-    assert len(doc["runs"]) == 60
-    assert doc["counts"]["matched"] == 60
+    assert len(doc["runs"]) == 30
+    assert doc["counts"]["matched"] == 30
     assert doc["truncated"] is False
 
 
@@ -567,13 +566,13 @@ def test_an_unknown_run_id_is_an_empty_page_with_a_note(client, jobs, fresh):
 @pytest.mark.parametrize(
     ("params", "expected_days", "expected_limit"),
     [
-        ({}, 7, 200),
+        ({}, 30, 200),
         ({"days": ["0"]}, 1, 200),
-        ({"days": ["9999"]}, 60, 200),
-        ({"days": ["nonsense"]}, 7, 200),
-        ({"limit": ["0"]}, 7, 1),
-        ({"limit": ["999999"]}, 7, 2000),
-        ({"limit": ["nonsense"]}, 7, 200),
+        ({"days": ["9999"]}, 30, 200),
+        ({"days": ["nonsense"]}, 30, 200),
+        ({"limit": ["0"]}, 30, 1),
+        ({"limit": ["999999"]}, 30, 2000),
+        ({"limit": ["nonsense"]}, 30, 200),
     ],
 )
 def test_days_and_limit_are_clamped(client, jobs, fresh, params, expected_days, expected_limit):
@@ -929,7 +928,7 @@ def test_the_registry_defaults_are_documented_constants(wfe):
     assert registry.DEFAULT_LOKI_URL == "http://127.0.0.1:3100"
     assert registry.POLL_SECONDS == 60
     assert registry.CAPTURE_LABEL == "osac_ci_capture_id"
-    assert registry.PROMETHEUS_RETENTION_DAYS == 15
+    assert registry.PROMETHEUS_RETENTION_DAYS == 30
     assert registry.LOKI_RETENTION_DAYS == 30
 
 

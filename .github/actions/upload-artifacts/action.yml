@@ -258,5 +258,5 @@ runs:
         path: |
           ${{ runner.temp }}/osac-artifacts/
           !${{ runner.temp }}/osac-artifacts/.redaction-complete
-        retention-days: 7
+        retention-days: 30
         if-no-files-found: warn

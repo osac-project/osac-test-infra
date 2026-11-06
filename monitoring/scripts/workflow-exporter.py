@@ -97,12 +97,11 @@ REPOS_FILTER = [r.strip() for r in os.getenv("REPOS", "").split(",") if r.strip(
 # old JOBS_HISTORY_SIZE behavior, 500 jobs shared across all repos) gets
 # exhausted in ~10 hours during busy periods since PR/comment-triggered runs
 # vastly outnumber scheduled ones -- silently truncating dashboards that
-# select "last 7 days" (see OSAC-2211).
-JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "60"))
+# select "last 30 days".
+JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "30"))
 # Hard cap on stored job count regardless of age, as a memory/disk safety
-# net. It must not be the binding constraint before the 60-day retention:
-# ~5k jobs/day at current CI volume is ~300k jobs in 60 days, and the old
-# 100k cap silently cut a 60-day page to about 20 days.
+# net. It must not be the binding constraint before the 30-day retention:
+# ~5k jobs/day at current CI volume is ~150k jobs in 30 days.
 JOBS_HISTORY_MAX_COUNT = int(os.getenv("JOBS_HISTORY_MAX_COUNT", "400000"))
 # Data directory for the SQLite DB (persists across restarts) and the
 # legacy JSON cache file this exporter migrates from on first startup.
@@ -192,8 +191,8 @@ class CaptureRegistry:
     """The capture set in workflow-exporter.db, refreshed by a 60-second poll.
 
     The set is the union of three answers: the Prometheus label values of
-    `osac_ci_capture_id` (15-day retention), the Loki label values of the same
-    label (30-day query cap), and the `osac_ci_capture_info` metric, which
+    `osac_ci_capture_id` (30-day retention), the Loki label values of the same
+    label (30-day retention), and the `osac_ci_capture_info` metric, which
     carries the identity fields. Tempo is never queried for discovery; its
     tag-values scan took 21-29s for 7 days against 17ms for Prometheus.
 
@@ -209,10 +208,10 @@ class CaptureRegistry:
     missing capture is judged as "not collected".
     """
 
-    PROMETHEUS_RETENTION_DAYS = 15
+    PROMETHEUS_RETENTION_DAYS = 30
     LOKI_RETENTION_DAYS = 30
-    INFO_RETENTION_DAYS = 15
-    PRUNE_DAYS = 90
+    INFO_RETENTION_DAYS = 30
+    PRUNE_DAYS = 30
     # A registry that has not answered for this long is stale. The verdict
     # then says unknown, never not collected: telemetry may have arrived
     # while the poller was down.
@@ -647,7 +646,7 @@ class CaptureRegistry:
             "sources": sources,
         }
 
-    def capture_ids_by_run(self, days=7, now=None):
+    def capture_ids_by_run(self, days=30, now=None):
         """{run id: [capture id, ...]} from SQLite. The Pull requests page
         reads this, so it never pays a Tempo query for a capture link."""
         now = now or datetime.now(timezone.utc)
@@ -1329,8 +1328,8 @@ class WorkflowExporter:
 
     # -- SQLite persistence ---------------------------------------------------
     #
-    # Job history lives in a SQLite DB (DB_FILE), not in memory: at 60 days
-    # of retention (~70-80k jobs at current CI volume) a JSON-file dump on
+    # Job history lives in a SQLite DB (DB_FILE), not in memory: at 30 days
+    # of retention (~35-40k jobs at current CI volume) a JSON-file dump on
     # every 90s poll cycle -- the previous design -- rewrites the entire
     # history every cycle, and every dashboard query re-scans the entire
     # list in Python. SQLite gives cheap appends and indexed queries
@@ -4486,7 +4485,7 @@ class WorkflowExporter:
 
         The entry page's verdict cards count the whole window, so they cannot
         read a 200-row page. Same filter as get_ci_observe_run_page, no page
-        limit: about 7,400 rows for 60 days.
+        limit: about 3,700 rows for 30 days.
         """
         now = datetime.now(timezone.utc)
         window_from = now - timedelta(days=days)
@@ -4599,7 +4598,7 @@ class WorkflowExporter:
     # GET /api/ci-observe/trends reads the daily per-test JUnit rollup that
     # monitoring/scripts/ci_observe_trends.py writes to trends.db, next to
     # this exporter's own DB. Per-test outcomes do not exist in the job
-    # history, and a run's artifact is gone after 7 days, so the rollup is
+    # history, and a run's artifact is gone after 30 days, so the rollup is
     # the only source for them. The file is opened read-only and this
     # endpoint never touches workflow-exporter.db.
     #
@@ -4611,8 +4610,8 @@ class WorkflowExporter:
     # window, so the response row cap cannot make a total cover only part of
     # its window.
     CIOBS_TRENDS_FILE = "trends.db"
-    CIOBS_TRENDS_DEFAULT_DAYS = 60
-    CIOBS_TRENDS_MAX_DAYS = 400
+    CIOBS_TRENDS_DEFAULT_DAYS = 30
+    CIOBS_TRENDS_MAX_DAYS = 30
     CIOBS_TRENDS_MAX_ROWS = 5000
     CIOBS_TRENDS_MAX_TESTS = 500
     CIOBS_TRENDS_COLUMNS = (
@@ -4745,8 +4744,8 @@ class WorkflowExporter:
     # not captured runs. It is not a per-capture comparison, and the
     # document says so. A missing rollup, an unreadable DB, an unknown SHA
     # or a missing parameter is a note in a 200, never an error.
-    CIOBS_COMPARE_DEFAULT_DAYS = 60
-    CIOBS_COMPARE_MAX_DAYS = 400
+    CIOBS_COMPARE_DEFAULT_DAYS = 30
+    CIOBS_COMPARE_MAX_DAYS = 30
 
     def get_ci_observe_trends_compare_json(self, params):
         """The /api/ci-observe/trends/compare document. Thin wrapper: parse

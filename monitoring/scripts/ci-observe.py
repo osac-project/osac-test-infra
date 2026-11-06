@@ -560,6 +560,7 @@ def render_quadlet(state_dir: Path) -> str:
         "[Container]",
         f"ContainerName={QUADLET_CONTAINER}",
         f"Image={LGTM_IMAGE}",
+        "Environment=PROMETHEUS_EXTRA_ARGS=--storage.tsdb.retention.time=30d",
         f"Label={OWNED_LABEL}=true",
         "Label=osac.ci-observe.state=quadlet",
         f"PublishPort=127.0.0.1:{QUADLET_PORTS['ui']}:3000",

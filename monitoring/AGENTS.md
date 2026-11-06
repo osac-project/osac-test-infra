@@ -4,8 +4,8 @@ Read [`ci-observe/model.md`](ci-observe/model.md) before you change a ci-observe
 
 Hard rules:
 
-- There are three ci-observe content dashboards: Capture, Pull requests and Trends. Start here is the entry page, a router, not a fourth dashboard. Compare is a section of Trends. A new question becomes a section on one of the three.
-- The entry page takes a run id, a capture id, a pull request number, a test id, or nothing. Run id, capture id, pull request number and test id all resolve. Describe the full input set as the rule.
+- There are three ci-observe content dashboards: E2E run, Pull requests and Trends. Start here is the entry page and router, not a fourth dashboard. A new question becomes a section on one of the three. The E2E run page shows one recorded CI run; `capture_id` remains its internal key.
+- The entry page lists recent E2E runs and opens one run. There is no combined lookup box.
 - Every panel names its unit, its population (all jobs or captured runs) and its time axis.
 - A dataset joins a unit by capture id, run id or pull request number. Data that cannot join is not admitted.
 - Fleet health (runners, machines, queue infrastructure, exporter health) belongs to the `CI Fleet` folder, not ci-observe.

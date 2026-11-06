@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "One ci-observe E2E capture at a time: pick it with the Run variable (Loki label osac_ci_capture_id, newest first). Read top to bottom: Run overview says what the capture endpoint answered for this capture, Collection coverage gives the exact span counts, the collapsed CI evidence row holds the GitHub job, step and JUnit evidence, the collapsed Run identity row holds the registry's exact refs, then Tests and workers, Fixture work and Waits break the capture down, Service requests links Explore for the sampled service calls, and the collapsed Environment row holds the pod and node metrics while the collapsed Events row holds the capture's Kubernetes events. Every count comes from the capture endpoint's one document; no number on this page is a Tempo search page size. Keep the default 7-day time range while picking a capture, because the Environment and Events rows are read over it.",
+  "description": "One E2E run: result, failures, tests, and run info.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -10,19 +10,19 @@
     {
       "title": "Start here",
       "type": "link",
-      "url": "/d/ci-observe-runs-home/ci-observe-e28094-start-here?from=${__from}&to=${__to}"
+      "url": "/d/ci-observe-runs-home/ci-observe-e28094-start-here"
     },
     {
-      "title": "Compare runs",
+      "title": "Test history",
       "type": "link",
-      "url": "/d/ci-observe-trends/ci-observe-e28094-trends?from=${__from}&to=${__to}"
+      "url": "/d/ci-observe-trends/ci-observe-e28094-trends"
     }
   ],
   "panels": [
     {
       "id": 100,
-      "title": "Run overview",
-      "description": "Read this first: what the capture endpoint answered, and what the session recorded. Every card here reads the capture document after the endpoint classified every span in the session trace, so the counts are exact. A missing session span means the outcome is unknown, not passed.",
+      "title": "Run summary",
+      "description": "",
       "type": "row",
       "gridPos": {
         "h": 1,
@@ -34,13 +34,13 @@
       "panels": []
     },
     {
-      "id": 101,
-      "title": "Capture state",
-      "description": "What the capture endpoint answered for this capture id. `indexed` means Tempo holds the session trace and every span was classified. `not indexed` means the capture is registered but its trace is not searchable yet, so reload in a few minutes. `missing`, `busy`, `too_large` and `unknown` mean no complete document exists. Before the first answer the card reads `Loading`.",
+      "id": 104,
+      "title": "Result",
+      "description": "",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 8,
         "x": 0,
         "y": 1
       },
@@ -51,261 +51,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "Loading: no answer yet",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "ok": {
-                  "text": "indexed",
-                  "color": "green",
-                  "index": 0
-                },
-                "not_indexed": {
-                  "text": "not indexed",
-                  "color": "orange",
-                  "index": 1
-                },
-                "missing": {
-                  "text": "missing",
-                  "color": "red",
-                  "index": 2
-                },
-                "busy": {
-                  "text": "busy",
-                  "color": "orange",
-                  "index": 3
-                },
-                "too_large": {
-                  "text": "too large",
-                  "color": "red",
-                  "index": 4
-                },
-                "unknown": {
-                  "text": "unknown",
-                  "color": "orange",
-                  "index": 5
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "state",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$",
-          "columns": [
-            {
-              "selector": "state",
-              "text": "state",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 102,
-      "title": "Tests",
-      "description": "Parent pytest tests in this capture's session trace, counted by the capture endpoint after classifying every span. Population: this capture. This is the trace's exact test count, never a Tempo search page size.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 1
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "Loading or no session span",
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "tests",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "session",
-          "columns": [
-            {
-              "selector": "tests",
-              "text": "tests",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 103,
-      "title": "Failed",
-      "description": "Failed tests in the capture document's `failed_tests`, which the endpoint builds from the run's JUnit evidence. Zero is only evidence of no failures when the capture is indexed and the session span exists; GitHub still owns the job conclusion.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 8,
-        "y": 1
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "Loading or no failed-test evidence",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "none",
-                  "color": "text"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "name",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "failed_tests",
-          "columns": [
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 104,
-      "title": "Result",
-      "description": "Status of the pytest session span: error means at least one test failed. `No session span yet` means the outcome was never captured, so it is unknown, not passed.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 12,
-        "y": 1
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No session span yet",
+          "noValue": "Test result not available",
           "mappings": [
             {
               "type": "value",
@@ -372,13 +118,81 @@
       ]
     },
     {
-      "id": 105,
-      "title": "Test time",
-      "description": "Wall-clock duration of the pytest session from its start to its end, in seconds, as the capture endpoint reports it. Population: this capture. One session, so this is the run's test time.",
+      "id": 102,
+      "title": "Tests run",
+      "description": "",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "Test count not available",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "tests",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "session",
+          "columns": [
+            {
+              "selector": "tests",
+              "text": "tests",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 105,
+      "title": "Test time",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
         "x": 16,
         "y": 1
       },
@@ -389,7 +203,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "not recorded",
+          "noValue": "Test time unavailable",
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -440,1557 +254,28 @@
       ]
     },
     {
-      "id": 106,
-      "title": "Test attempts",
-      "description": "Setup, call and teardown phase spans behind the tests, counted by the capture endpoint from the classified spans. Population: this capture. The count is larger than the test count because each test has several phases.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 20,
-        "y": 1
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "Loading or no session span",
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "test_attempts",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "session",
-          "columns": [
-            {
-              "selector": "test_attempts",
-              "text": "test_attempts",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 107,
-      "title": "Test paths",
-      "description": "The exact pytest path list the run collected (`identity.test_suite`), straight from the capture registry. Population: this capture. `unknown` means the workflow reported no selection.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 0,
-        "y": 5
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "not recorded",
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "test_suite",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "identity",
-          "columns": [
-            {
-              "selector": "test_suite",
-              "text": "test_suite",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 108,
-      "title": "PR",
-      "description": "Pull request number from the capture registry (`identity.pr`). Population: this capture. `none` means the run tested a branch, not a pull request.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 5
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "not recorded",
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "pr",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "identity",
-          "columns": [
-            {
-              "selector": "pr",
-              "text": "pr",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 109,
-      "title": "Workflow",
-      "description": "GitHub Actions workflow name from the capture registry (`identity.workflow`). Population: this capture.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 5
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "not recorded",
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "workflow",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "identity",
-          "columns": [
-            {
-              "selector": "workflow",
-              "text": "workflow",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 110,
-      "title": "Collection coverage",
-      "description": "How complete the capture document is: exact span counts from the endpoint, not search page sizes. The CI evidence row below carries the GitHub job and native pytest evidence, which stays authoritative.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 9
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 111,
-      "title": "Wait spans",
-      "description": "Wait spans (poll_until waits) in the capture document, counted by the endpoint after classifying every span. Population: this capture. Waits overlap the tests that waited, so they are never added to test time.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 10
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "Loading or no wait spans",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "none",
-                  "color": "text"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "name",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "waits",
-          "columns": [
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 112,
-      "title": "Fixture setups",
-      "description": "Fixture setup spans in the capture document, counted by the endpoint after classifying every span. Population: this capture. Fixture time overlaps the test that triggered it; it is never added to test time.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 10
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "Loading or no fixture spans",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "none",
-                  "color": "text"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "name",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "fixtures",
-          "columns": [
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 113,
-      "title": "Fixture uses",
-      "description": "One row per test that reused a shared fixture, counted by the endpoint. Population: this capture. Empty means the capture reused no shared fixture.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 10
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "Loading or no fixture reuse",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "none",
-                  "color": "text"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "fixture_name",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "fixture_uses",
-          "columns": [
-            {
-              "selector": "fixture_name",
-              "text": "fixture_name",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 114,
-      "title": "Unclassified spans",
-      "description": "Spans the endpoint could not classify (`coverage.spans_unclassified`). The endpoint returns a document only when classified plus unclassified equals the trace total, so a non-zero value marks a span type this page does not know, not a missing count.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 10
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "Loading",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "none",
-                  "color": "text"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "spans_unclassified",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "coverage",
-          "columns": [
-            {
-              "selector": "spans_unclassified",
-              "text": "spans_unclassified",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 115,
-      "title": "How these counts are made",
-      "description": "Where each number on this page comes from, and what loading, not indexed and error look like.",
-      "type": "text",
-      "gridPos": {
-        "h": 5,
-        "w": 24,
-        "x": 0,
-        "y": 14
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "Every count here is a length of a table in the capture endpoint's document, or a count field the endpoint computed after classifying every span in the session trace. No Tempo search page size is presented as a count.\n\n**Loading.** Each panel reads one cached capture document; before the first answer it shows its loading text. **Not indexed.** State `not indexed` means the capture is registered but Tempo has no complete session trace yet; reload in a few minutes. **Error.** If `http://127.0.0.1:9103` is unreachable, the panels show an error or no data; no zero on this page is evidence that the capture is empty.\n\nThe **CI evidence** row keeps the GitHub job conclusion and the native JUnit result, which stay authoritative. Pod logs and per-test stack traces stay in the run's GitHub artifact."
-      },
-      "targets": []
-    },
-    {
       "id": 14,
-      "title": "CI evidence",
-      "description": "GitHub-side evidence for this capture, read top to bottom: **Run** and **Jobs** say what GitHub recorded, **Steps** breaks down where the time went, **JUnit summary** is the native pytest result, and **Failed tests** lists the failures with a link to the artifact.\n\n**If a panel shows \"Not deployed or unavailable\", a query error, or no content at all**, the native evidence was not loaded. The workflow-exporter endpoint is either not deployed or unreachable, or the artifact is gone; this is not a passing result. Grafana does not replay an errored query to panels that mount after it failed, so a far-down table can render no content at all rather than an error.\n\n**Where the data comes from.** Job and step data is the workflow exporter's GitHub job history (SQLite, 60-day retention). Native test data is the JUnit XML inside the run's `osac-logs-[<suite>-]full-install-<run id>` artifact, fetched on demand and cached for 15 minutes. GitHub keeps workflow artifacts for 7 days; past that the status is `expired` and the counts stay empty, never a green zero.\n\n**States the native panels can show.** `unavailable` is a dashboard display state, not a status the endpoint returns: the workflow-exporter endpoint is not deployed or unreachable, so no native evidence was loaded at all. `available`: the JUnit file was parsed, so the counts are real. `missing`: no artifact matching the osac-logs full-install pattern exists. `expired`: the artifact passed its 7-day retention. `too_large`: the artifact is above the 64 MiB download bound. `invalid`: the artifact was downloaded but holds no readable `junit.xml`. `not_requested`: nothing was looked up.\n\n**Limits.** Step durations are the wall-clock time between a step's start and end, not runner minutes, and a skipped or cancelled job has no steps at all. No automatic root-cause diagnosis is generated: the failed-test messages are raw JUnit output. They show what failed; they are not a root-cause diagnosis. Re-runs overwrite the artifact, so an older attempt may show the newest attempt's native results.\n\n**The artifact holds the rest.** The last cell of the **Run** table opens the GitHub run and, from the same URL with `#artifacts`, its artifacts page. The per-test `failure.json`, the pod logs and the cluster snapshots live there: the collector cannot read `/var/log/pods`, so pod logs never reach Loki, and the panels here show only what was parsed. GitHub deletes the artifact after 7 days.",
+      "title": "Failures",
+      "description": "",
       "type": "row",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 5
       },
       "collapsed": true,
       "panels": [
         {
-          "id": 15,
-          "title": "Run",
-          "description": "The workflow run itself. Commit is fetched from GitHub on demand and can be empty when that fetch fails. The last cell opens the GitHub run, and the same URL with `#artifacts` opens the run's artifacts page, where the per-test `failure.json`, the pod logs and the cluster snapshots live. GitHub deletes that artifact after 7 days.",
-          "type": "table",
-          "gridPos": {
-            "h": 8,
-            "w": 14,
-            "x": 0,
-            "y": 20
-          },
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "workflow-api"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "Not deployed or unavailable"
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "repo"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Repository"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "workflow"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Workflow"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 220
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "conclusion"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Conclusion"
-                  },
-                  {
-                    "id": "mappings",
-                    "value": [
-                      {
-                        "type": "value",
-                        "options": {
-                          "failure": {
-                            "color": "red",
-                            "index": 0,
-                            "text": "failure"
-                          },
-                          "success": {
-                            "color": "green",
-                            "index": 1,
-                            "text": "success"
-                          },
-                          "cancelled": {
-                            "color": "orange",
-                            "index": 2,
-                            "text": "cancelled"
-                          }
-                        }
-                      }
-                    ]
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "run_attempt"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Attempt"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "duration_s"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Job duration (s)"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "runner_name"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Runner"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "branch"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Branch"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "pr_display"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "PR"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "head_sha"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Commit"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "created_at"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Created"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "url"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "GitHub run and artifacts"
-                  },
-                  {
-                    "id": "links",
-                    "value": [
-                      {
-                        "title": "Open the GitHub run",
-                        "url": "${__value.text}"
-                      },
-                      {
-                        "title": "Artifacts: failure.json, pod logs, cluster snapshots (deleted after 7 days)",
-                        "url": "${__value.text}#artifacts"
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
-          "options": {
-            "showHeader": true,
-            "cellHeight": "sm",
-            "footer": {
-              "show": false
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "table",
-              "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
-              "url_options": {
-                "method": "GET",
-                "data": ""
-              },
-              "root_selector": "run",
-              "columns": [
-                {
-                  "selector": "repo",
-                  "text": "repo",
-                  "type": "string"
-                },
-                {
-                  "selector": "workflow",
-                  "text": "workflow",
-                  "type": "string"
-                },
-                {
-                  "selector": "conclusion",
-                  "text": "conclusion",
-                  "type": "string"
-                },
-                {
-                  "selector": "run_attempt",
-                  "text": "run_attempt",
-                  "type": "number"
-                },
-                {
-                  "selector": "duration_s",
-                  "text": "duration_s",
-                  "type": "number"
-                },
-                {
-                  "selector": "runner_name",
-                  "text": "runner_name",
-                  "type": "string"
-                },
-                {
-                  "selector": "branch",
-                  "text": "branch",
-                  "type": "string"
-                },
-                {
-                  "selector": "pr_display",
-                  "text": "pr_display",
-                  "type": "string"
-                },
-                {
-                  "selector": "head_sha",
-                  "text": "head_sha",
-                  "type": "string"
-                },
-                {
-                  "selector": "created_at",
-                  "text": "created_at",
-                  "type": "string"
-                },
-                {
-                  "selector": "url",
-                  "text": "url",
-                  "type": "string"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": 16,
-          "title": "Jobs",
-          "description": "The stored job rows of this run and attempt: the run's own row, plus each suite row for pull-request flow runs. Open a job on GitHub from the last column.",
-          "type": "table",
-          "gridPos": {
-            "h": 8,
-            "w": 10,
-            "x": 14,
-            "y": 20
-          },
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "workflow-api"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "Not deployed or unavailable"
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "name"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Job"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 220
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "workflow"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Workflow"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "conclusion"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Conclusion"
-                  },
-                  {
-                    "id": "mappings",
-                    "value": [
-                      {
-                        "type": "value",
-                        "options": {
-                          "failure": {
-                            "color": "red",
-                            "index": 0,
-                            "text": "failure"
-                          },
-                          "success": {
-                            "color": "green",
-                            "index": 1,
-                            "text": "success"
-                          },
-                          "cancelled": {
-                            "color": "orange",
-                            "index": 2,
-                            "text": "cancelled"
-                          },
-                          "skipped": {
-                            "color": "blue",
-                            "index": 3,
-                            "text": "skipped"
-                          }
-                        }
-                      }
-                    ]
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "duration_s"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Job duration (s)"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "failed_step"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Failed step"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 200
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "failure_reason"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Failure reason"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "url"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "GitHub job"
-                  },
-                  {
-                    "id": "links",
-                    "value": [
-                      {
-                        "title": "Open the job on GitHub",
-                        "url": "${__value.text}"
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
-          "options": {
-            "showHeader": true,
-            "cellHeight": "sm",
-            "footer": {
-              "show": false
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "table",
-              "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
-              "url_options": {
-                "method": "GET",
-                "data": ""
-              },
-              "root_selector": "jobs",
-              "columns": [
-                {
-                  "selector": "name",
-                  "text": "name",
-                  "type": "string"
-                },
-                {
-                  "selector": "workflow",
-                  "text": "workflow",
-                  "type": "string"
-                },
-                {
-                  "selector": "conclusion",
-                  "text": "conclusion",
-                  "type": "string"
-                },
-                {
-                  "selector": "duration_s",
-                  "text": "duration_s",
-                  "type": "number"
-                },
-                {
-                  "selector": "failed_step",
-                  "text": "failed_step",
-                  "type": "string"
-                },
-                {
-                  "selector": "failure_reason",
-                  "text": "failure_reason",
-                  "type": "string"
-                },
-                {
-                  "selector": "url",
-                  "text": "url",
-                  "type": "string"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": 17,
-          "title": "Steps",
-          "description": "Every stored step of the run's jobs, with the job it belongs to. Conclusion is failure when the step name appears in the job's failed-step text; otherwise it was not recorded per step.",
-          "type": "table",
-          "gridPos": {
-            "h": 9,
-            "w": 24,
-            "x": 0,
-            "y": 28
-          },
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "workflow-api"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "Not deployed or unavailable"
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "job_name"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Job"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 260
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "step_name"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Step"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 320
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "duration_s"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Step duration (s)"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "conclusion"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Conclusion"
-                  },
-                  {
-                    "id": "mappings",
-                    "value": [
-                      {
-                        "type": "value",
-                        "options": {
-                          "failure": {
-                            "color": "red",
-                            "index": 0,
-                            "text": "failure"
-                          }
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "id": "noValue",
-                    "value": ""
-                  }
-                ]
-              }
-            ]
-          },
-          "options": {
-            "showHeader": true,
-            "cellHeight": "sm",
-            "sortBy": [
-              {
-                "displayName": "Duration (s)",
-                "desc": true
-              }
-            ],
-            "footer": {
-              "show": false
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "table",
-              "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
-              "url_options": {
-                "method": "GET",
-                "data": ""
-              },
-              "root_selector": "steps",
-              "columns": [
-                {
-                  "selector": "job_name",
-                  "text": "job_name",
-                  "type": "string"
-                },
-                {
-                  "selector": "step_name",
-                  "text": "step_name",
-                  "type": "string"
-                },
-                {
-                  "selector": "duration_s",
-                  "text": "duration_s",
-                  "type": "number"
-                },
-                {
-                  "selector": "conclusion",
-                  "text": "conclusion",
-                  "type": "string"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": 18,
-          "title": "JUnit summary",
-          "description": "One row: the native status, the JUnit counts and total time, the artifact link, and the notes explaining any gap. The root selector is a JSONPath because the Infinity parser replaces a plain object root with its first nested array.",
-          "type": "table",
-          "gridPos": {
-            "h": 6,
-            "w": 24,
-            "x": 0,
-            "y": 37
-          },
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "workflow-api"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "noValue": "Not deployed or unavailable"
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "status"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Status"
-                  },
-                  {
-                    "id": "mappings",
-                    "value": [
-                      {
-                        "type": "value",
-                        "options": {
-                          "available": {
-                            "color": "green",
-                            "index": 0,
-                            "text": "available"
-                          },
-                          "missing": {
-                            "color": "red",
-                            "index": 1,
-                            "text": "missing"
-                          },
-                          "expired": {
-                            "color": "orange",
-                            "index": 2,
-                            "text": "expired"
-                          },
-                          "too_large": {
-                            "color": "red",
-                            "index": 3,
-                            "text": "too large"
-                          },
-                          "invalid": {
-                            "color": "red",
-                            "index": 4,
-                            "text": "invalid"
-                          },
-                          "not_requested": {
-                            "color": "blue",
-                            "index": 5,
-                            "text": "not requested"
-                          }
-                        }
-                      }
-                    ]
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "tests"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Tests"
-                  },
-                  {
-                    "id": "noValue",
-                    "value": "no result (see Status)"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "failures"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Failures"
-                  },
-                  {
-                    "id": "noValue",
-                    "value": "no result (see Status)"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "errors"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Errors"
-                  },
-                  {
-                    "id": "noValue",
-                    "value": "no result (see Status)"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "skipped"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Skipped"
-                  },
-                  {
-                    "id": "noValue",
-                    "value": "no result (see Status)"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "time_s"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Time (s)"
-                  },
-                  {
-                    "id": "noValue",
-                    "value": "no result (see Status)"
-                  },
-                  {
-                    "id": "decimals",
-                    "value": 1
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "artifact_name"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Artifact"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "artifact_url"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Artifact link"
-                  },
-                  {
-                    "id": "links",
-                    "value": [
-                      {
-                        "title": "Open the artifact on GitHub",
-                        "url": "${__value.text}"
-                      }
-                    ]
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "notes"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Notes"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 500
-                  }
-                ]
-              }
-            ]
-          },
-          "options": {
-            "showHeader": true,
-            "cellHeight": "sm",
-            "footer": {
-              "show": false
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "table",
-              "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
-              "url_options": {
-                "method": "GET",
-                "data": ""
-              },
-              "root_selector": "$.native",
-              "columns": [
-                {
-                  "selector": "status",
-                  "text": "status",
-                  "type": "string"
-                },
-                {
-                  "selector": "tests",
-                  "text": "tests",
-                  "type": "number"
-                },
-                {
-                  "selector": "failures",
-                  "text": "failures",
-                  "type": "number"
-                },
-                {
-                  "selector": "errors",
-                  "text": "errors",
-                  "type": "number"
-                },
-                {
-                  "selector": "skipped",
-                  "text": "skipped",
-                  "type": "number"
-                },
-                {
-                  "selector": "time_s",
-                  "text": "time_s",
-                  "type": "number"
-                },
-                {
-                  "selector": "artifact_name",
-                  "text": "artifact_name",
-                  "type": "string"
-                },
-                {
-                  "selector": "artifact_url",
-                  "text": "artifact_url",
-                  "type": "string"
-                },
-                {
-                  "selector": "notes",
-                  "text": "notes",
-                  "type": "string"
-                }
-              ]
-            }
-          ]
-        },
-        {
           "id": 19,
           "title": "Failed tests",
-          "description": "At most the first 100 failed tests are listed; messages are capped at 2000 characters and stack traces are never included. Empty when the run passed, or when the artifact is missing, expired or too large. The untruncated per-test detail, stack traces included, is in the artifact's `failure.json`: open the artifacts link in the Run row. GitHub deletes the artifact after 7 days.",
+          "description": "",
           "type": "table",
           "gridPos": {
-            "h": 9,
+            "h": 4,
             "w": 24,
             "x": 0,
-            "y": 43
+            "y": 0
           },
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -1998,25 +283,9 @@
           },
           "fieldConfig": {
             "defaults": {
-              "noValue": "No failed tests, or no JUnit evidence: check the JUnit summary Status row."
+              "noValue": "No failures."
             },
             "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "classname"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Class"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 260
-                  }
-                ]
-              },
               {
                 "matcher": {
                   "id": "byName",
@@ -2036,28 +305,20 @@
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "type"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Type"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
                   "options": "message"
                 },
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Message"
+                    "value": "Error message"
                   },
                   {
                     "id": "custom.width",
                     "value": 600
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
                   }
                 ]
               },
@@ -2069,7 +330,7 @@
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Duration (s)"
+                    "value": "Test time"
                   }
                 ]
               },
@@ -2081,7 +342,7 @@
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Artifact link"
+                    "value": "Full error details"
                   },
                   {
                     "id": "links",
@@ -2089,6 +350,24 @@
                       {
                         "title": "Open the artifact on GitHub",
                         "url": "${__value.text}"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "regex",
+                        "options": {
+                          "pattern": ".*",
+                          "result": {
+                            "text": "Open details"
+                          }
+                        }
                       }
                     ]
                   }
@@ -2117,18 +396,8 @@
               "root_selector": "native.failed_tests",
               "columns": [
                 {
-                  "selector": "classname",
-                  "text": "classname",
-                  "type": "string"
-                },
-                {
                   "selector": "name",
                   "text": "name",
-                  "type": "string"
-                },
-                {
-                  "selector": "type",
-                  "text": "type",
                   "type": "string"
                 },
                 {
@@ -2153,28 +422,28 @@
       ]
     },
     {
-      "id": 116,
-      "title": "Run identity (source commit, harness commit, selection)",
-      "description": "Who ran what: the registry identity fields this capture is registered with, bound one-to-one to the `identity` object the capture endpoint returns. `identity_source = info` means the action's info metric supplied them; `none` means only the capture id is known and the fields are empty.",
+      "id": 120,
+      "title": "Test list",
+      "description": "",
       "type": "row",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 6
       },
       "collapsed": true,
       "panels": [
         {
-          "id": 117,
-          "title": "Code under test",
-          "description": "The requested refs and the commits they resolved to: the osac source under test and the test-infra harness that wrapped the run. Population: this capture, from the registry.",
+          "id": 121,
+          "title": "All tests",
+          "description": "",
           "type": "table",
           "gridPos": {
-            "h": 4,
-            "w": 12,
+            "h": 12,
+            "w": 24,
             "x": 0,
-            "y": 21
+            "y": 0
           },
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -2189,66 +458,132 @@
                 },
                 "inspect": false
               },
-              "noValue": "Loading: waiting for the capture endpoint"
+              "noValue": "Test list not available"
             },
             "overrides": [
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "test_ref"
+                  "options": "name"
                 },
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Source ref"
+                    "value": "Test"
+                  },
+                  {
+                    "id": "custom.inspect",
+                    "value": true
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "auto",
+                      "wrapText": true,
+                      "dynamicHeight": true
+                    }
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "regex",
+                        "options": {
+                          "pattern": "/(?<=\\/|::|_|\\[)/g",
+                          "result": {
+                            "text": "\u200b"
+                          }
+                        }
+                      }
+                    ]
                   }
                 ]
               },
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "test_sha"
+                  "options": "status"
                 },
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Source SHA"
+                    "value": "Status"
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "ok": {
+                            "text": "Passed",
+                            "color": "green"
+                          },
+                          "error": {
+                            "text": "Failed",
+                            "color": "red"
+                          },
+                          "skipped": {
+                            "text": "Skipped",
+                            "color": "text"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 90
                   }
                 ]
               },
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "test_infra_ref"
+                  "options": "started_at"
                 },
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Harness ref"
+                    "value": "Start"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 195
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
                   }
                 ]
               },
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "test_infra_sha"
+                  "options": "duration_s"
                 },
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Harness SHA"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "test_infra_workflow_sha"
-                },
-                "properties": [
+                    "value": "Duration"
+                  },
                   {
-                    "id": "displayName",
-                    "value": "Harness workflow SHA"
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 1
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
                   }
                 ]
               }
@@ -2257,7 +592,12 @@
           "options": {
             "showHeader": true,
             "cellHeight": "sm",
-            "sortBy": [],
+            "sortBy": [
+              {
+                "displayName": "Start",
+                "desc": false
+              }
+            ],
             "footer": {
               "show": false
             }
@@ -2273,47 +613,57 @@
                 "method": "GET",
                 "data": ""
               },
-              "root_selector": "identity",
+              "root_selector": "tests",
               "columns": [
                 {
-                  "selector": "test_ref",
-                  "text": "test_ref",
+                  "selector": "name",
+                  "text": "name",
                   "type": "string"
                 },
                 {
-                  "selector": "test_sha",
-                  "text": "test_sha",
+                  "selector": "status",
+                  "text": "status",
                   "type": "string"
                 },
                 {
-                  "selector": "test_infra_ref",
-                  "text": "test_infra_ref",
+                  "selector": "started_at",
+                  "text": "started_at",
                   "type": "string"
                 },
                 {
-                  "selector": "test_infra_sha",
-                  "text": "test_infra_sha",
-                  "type": "string"
-                },
-                {
-                  "selector": "test_infra_workflow_sha",
-                  "text": "test_infra_workflow_sha",
-                  "type": "string"
+                  "selector": "duration_s",
+                  "text": "duration_s",
+                  "type": "number"
                 }
               ]
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "id": 116,
+      "title": "Run info",
+      "description": "",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "collapsed": true,
+      "panels": [
         {
           "id": 118,
-          "title": "Selection and run",
-          "description": "The GitHub run and the exact pytest selection: run id, attempt, suite, pull request, workflow, test paths, filter and marker. Population: this capture, from the registry.",
+          "title": "Details",
+          "description": "",
           "type": "table",
           "gridPos": {
-            "h": 4,
-            "w": 12,
-            "x": 12,
-            "y": 21
+            "h": 5,
+            "w": 24,
+            "x": 0,
+            "y": 0
           },
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -2328,7 +678,7 @@
                 },
                 "inspect": false
               },
-              "noValue": "Loading: waiting for the capture endpoint"
+              "noValue": "Run details not saved"
             },
             "overrides": [
               {
@@ -2339,31 +689,7 @@
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Run id"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "run_attempt"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Attempt"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "suite"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Suite"
+                    "value": "GitHub run"
                   }
                 ]
               },
@@ -2375,7 +701,21 @@
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "PR"
+                    "value": "Pull request"
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "none": {
+                            "text": "No pull request",
+                            "color": "text"
+                          }
+                        }
+                      }
+                    ]
                   }
                 ]
               },
@@ -2394,24 +734,12 @@
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "test_filter"
+                  "options": "workflow"
                 },
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Filter"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "test_marker"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Marker"
+                    "value": "Workflow"
                   }
                 ]
               }
@@ -2444,16 +772,6 @@
                   "type": "string"
                 },
                 {
-                  "selector": "run_attempt",
-                  "text": "run_attempt",
-                  "type": "string"
-                },
-                {
-                  "selector": "suite",
-                  "text": "suite",
-                  "type": "string"
-                },
-                {
                   "selector": "pr",
                   "text": "pr",
                   "type": "string"
@@ -2467,2426 +785,8 @@
                   "selector": "test_suite",
                   "text": "test_suite",
                   "type": "string"
-                },
-                {
-                  "selector": "test_filter",
-                  "text": "test_filter",
-                  "type": "string"
-                },
-                {
-                  "selector": "test_marker",
-                  "text": "test_marker",
-                  "type": "string"
                 }
               ]
-            }
-          ]
-        },
-        {
-          "id": 119,
-          "title": "Capture record",
-          "description": "How the registry holds this capture: the Tempo trace id of the session, the identity source, and when the capture started. Population: this capture, from the registry.",
-          "type": "table",
-          "gridPos": {
-            "h": 4,
-            "w": 24,
-            "x": 0,
-            "y": 25
-          },
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "workflow-api"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "cellOptions": {
-                  "type": "auto"
-                },
-                "inspect": false
-              },
-              "noValue": "Loading: waiting for the capture endpoint"
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "session_trace_id"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Session trace id"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "identity_source"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Identity source"
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "capture_started_at"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Capture started"
-                  }
-                ]
-              }
-            ]
-          },
-          "options": {
-            "showHeader": true,
-            "cellHeight": "sm",
-            "sortBy": [],
-            "footer": {
-              "show": false
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "table",
-              "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-              "url_options": {
-                "method": "GET",
-                "data": ""
-              },
-              "root_selector": "identity",
-              "columns": [
-                {
-                  "selector": "session_trace_id",
-                  "text": "session_trace_id",
-                  "type": "string"
-                },
-                {
-                  "selector": "identity_source",
-                  "text": "identity_source",
-                  "type": "string"
-                },
-                {
-                  "selector": "capture_started_at",
-                  "text": "capture_started_at",
-                  "type": "string"
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 120,
-      "title": "Tests and workers",
-      "description": "The capture document's test table: one row per parent pytest test with its xdist worker, status, start and duration. The endpoint classifies every span before returning, so this is the complete population of this capture. Durations are span wall time and overlap across workers.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 21
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 121,
-      "title": "Test timeline",
-      "description": "Every parent pytest test in the capture, in start order, with the xdist worker that ran it. `not recorded` in Worker means the span carried no worker attribute. Population: this capture; durations are span wall time and overlap across workers.",
-      "type": "table",
-      "gridPos": {
-        "h": 12,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "Loading: waiting for the capture endpoint"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Test"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "regex",
-                    "options": {
-                      "pattern": "/(?<=\\/|::|_|\\[)/g",
-                      "result": {
-                        "text": "\u200b"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "worker"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Worker"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "status"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Status"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "ok": {
-                        "text": "passed",
-                        "color": "green"
-                      },
-                      "error": {
-                        "text": "failed",
-                        "color": "red"
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Start"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration_s"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "sortBy": [
-          {
-            "displayName": "Start",
-            "desc": false
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "tests",
-          "columns": [
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "worker",
-              "text": "worker",
-              "type": "string"
-            },
-            {
-              "selector": "status",
-              "text": "status",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "string"
-            },
-            {
-              "selector": "duration_s",
-              "text": "duration_s",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 122,
-      "title": "Slowest tests",
-      "description": "The 20 slowest tests in the capture, longest first. Durations are span wall time and overlap across xdist workers, so they do not sum to test time.",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 14,
-        "x": 0,
-        "y": 34
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "Loading: waiting for the capture endpoint"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Test"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "regex",
-                    "options": {
-                      "pattern": "/(?<=\\/|::|_|\\[)/g",
-                      "result": {
-                        "text": "\u200b"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "worker"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Worker"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "status"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Status"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "ok": {
-                        "text": "passed",
-                        "color": "green"
-                      },
-                      "error": {
-                        "text": "failed",
-                        "color": "red"
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Start"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration_s"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "sortBy": [
-          {
-            "displayName": "Duration",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "tests",
-          "columns": [
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "worker",
-              "text": "worker",
-              "type": "string"
-            },
-            {
-              "selector": "status",
-              "text": "status",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "string"
-            },
-            {
-              "selector": "duration_s",
-              "text": "duration_s",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": [
-        {
-          "id": "sortBy",
-          "options": {
-            "sort": [
-              {
-                "field": "duration_s",
-                "desc": true
-              }
-            ]
-          }
-        },
-        {
-          "id": "limit",
-          "options": {
-            "limitField": 20
-          }
-        }
-      ]
-    },
-    {
-      "id": 123,
-      "title": "Capture failures",
-      "description": "Every failed test the capture document reports under `failed_tests`. The endpoint builds this list from the run's JUnit evidence, not from span status. Messages are the raw JUnit text; open the artifact's `failure.json` for stack traces. Empty is only evidence of a pass when the capture is indexed and the JUnit status is available; GitHub owns the job conclusion.",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 10,
-        "x": 14,
-        "y": 34
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "Loading: waiting for the capture endpoint"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Test"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "regex",
-                    "options": {
-                      "pattern": "/(?<=\\/|::|_|\\[)/g",
-                      "result": {
-                        "text": "\u200b"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "classname"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Class"
-              },
-              {
-                "id": "custom.width",
-                "value": 260
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "type"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Type"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "message"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Message"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "custom.width",
-                "value": 600
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "time_s"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "sortBy": [],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "failed_tests",
-          "columns": [
-            {
-              "selector": "classname",
-              "text": "classname",
-              "type": "string"
-            },
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "type",
-              "text": "type",
-              "type": "string"
-            },
-            {
-              "selector": "message",
-              "text": "message",
-              "type": "string"
-            },
-            {
-              "selector": "time_s",
-              "text": "time_s",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 124,
-      "title": "Fixture work",
-      "description": "Shared pytest fixtures: every setup span and every reuse, as tables of the capture document. Fixture time overlaps the runner's wall time; never add it to test time.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 43
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 125,
-      "title": "Fixture setup",
-      "description": "One row per fixture setup span in the capture document, with its pytest scope and the xdist worker that ran it. Durations are span wall time and overlap the test that triggered the setup; never add them to test time.",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 44
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "Loading: waiting for the capture endpoint"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Fixture"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "regex",
-                    "options": {
-                      "pattern": "/(?<=_)/g",
-                      "result": {
-                        "text": "\u200b"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "scope"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Scope"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "worker"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Worker"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Start"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration_s"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "sortBy": [
-          {
-            "displayName": "Duration",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "fixtures",
-          "columns": [
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "scope",
-              "text": "scope",
-              "type": "string"
-            },
-            {
-              "selector": "worker",
-              "text": "worker",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "string"
-            },
-            {
-              "selector": "duration_s",
-              "text": "duration_s",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 126,
-      "title": "Fixture use",
-      "description": "One row per test that reused a shared fixture, from the capture document. `test` is the pytest nodeid that used the fixture. Empty means the capture reused no shared fixture.",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 44
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "Loading: waiting for the capture endpoint"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "fixture_name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Fixture"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "regex",
-                    "options": {
-                      "pattern": "/(?<=_)/g",
-                      "result": {
-                        "text": "\u200b"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "test"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Test"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "worker"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Worker"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Start"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration_s"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "sortBy": [
-          {
-            "displayName": "Fixture",
-            "desc": false
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "fixture_uses",
-          "columns": [
-            {
-              "selector": "fixture_name",
-              "text": "fixture_name",
-              "type": "string"
-            },
-            {
-              "selector": "nodeid",
-              "text": "nodeid",
-              "type": "string"
-            },
-            {
-              "selector": "worker",
-              "text": "worker",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "string"
-            },
-            {
-              "selector": "duration_s",
-              "text": "duration_s",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 127,
-      "title": "Waits",
-      "description": "What the run waited for and how long each wait took, longest first, from the capture document. Wait time overlaps the tests that waited; it is not runner wall time.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 53
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 128,
-      "title": "Longest waits",
-      "description": "Every wait span in the capture document, longest first: what the run waited for, on which resource, how many poll attempts, and whether the condition was met. `not recorded` in Resource, Attempts or Condition means the span predates wait-resource identity. Wait time overlaps the tests that waited; it is not runner wall time. Pod logs stay in the run's GitHub artifact.",
-      "type": "table",
-      "gridPos": {
-        "h": 12,
-        "w": 24,
-        "x": 0,
-        "y": 54
-      },
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "noValue": "Loading: waiting for the capture endpoint"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Wait"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "resource_kind"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Resource kind"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "resource_id"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Resource"
-              },
-              {
-                "id": "custom.inspect",
-                "value": true
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "auto",
-                  "wrapText": true,
-                  "dynamicHeight": true
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "attempts"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Attempts"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "condition_met"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Condition met"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "status"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Status"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "ok": {
-                        "text": "passed",
-                        "color": "green"
-                      },
-                      "error": {
-                        "text": "failed",
-                        "color": "red"
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Start"
-              },
-              {
-                "id": "custom.width",
-                "value": 195
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration_s"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "sortBy": [
-          {
-            "displayName": "Duration",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "waits",
-          "columns": [
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "resource_kind",
-              "text": "resource_kind",
-              "type": "string"
-            },
-            {
-              "selector": "resource_id",
-              "text": "resource_id",
-              "type": "string"
-            },
-            {
-              "selector": "attempts",
-              "text": "attempts",
-              "type": "number"
-            },
-            {
-              "selector": "condition_met",
-              "text": "condition_met",
-              "type": "string"
-            },
-            {
-              "selector": "status",
-              "text": "status",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "string"
-            },
-            {
-              "selector": "duration_s",
-              "text": "duration_s",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 129,
-      "title": "Service requests",
-      "description": "Sampled service evidence. The capture document has no service-call table, so this row links Explore and shows no total.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 66
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 130,
-      "title": "Service calls are sampled",
-      "description": "Where to read the sampled Beyla service calls, and why this page shows no total.",
-      "type": "text",
-      "gridPos": {
-        "h": 4,
-        "w": 24,
-        "x": 0,
-        "y": 67
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "**Service calls are sampled and this page shows no total.** Service-call errors are not test failures; they can be expected inside a passing test. Use Capture failures and Result for the test outcome, and the CI evidence row for the job conclusion.\n\n[Open Explore with this capture's service spans](/explore?orgId=1&left=%7B%22datasource%22%3A%22ci-observe-traces%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22ci-observe-traces%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7Bresource.%5C%22osac.ci.capture_id%5C%22%20%3D%20%5C%22$capture_id%5C%22%20%26%26%20.pytest.span_type%20%3D%20nil%20%26%26%20span.%5C%22poll.delay%5C%22%20%3D%20nil%7D%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22$%7B__from%7D%22%2C%22to%22%3A%22$%7B__to%7D%22%7D%7D). The query is the capture id from this page, and Explore runs it over the capture window you set there. A TraceQL search stops at its own span limit, so any row count Explore returns is a sample for the window, never a complete count."
-      },
-      "targets": []
-    },
-    {
-      "id": 51,
-      "title": "Environment",
-      "description": "One capture, minute by minute: how many pods existed, what each pod used in CPU and memory, what each node used, and which pods existed when. Every query is scoped to this capture with the osac_ci_capture_id label. The collector scrapes the kubelet summary API every 60 seconds, so one point is one minute, and Prometheus keeps 15 days of samples. The time range must cover the capture: a finished capture has no samples in \"now\", so a range that ends before the capture starts, or begins after it ends, renders empty. Links from Start here and the Pull requests page set from and to to the run's window; arriving without them, set the range to the capture's start and end from Run overview.\n\nThe **Pods seen** table keeps working after the capture ends because it reads its values with range functions over the dashboard range; a bare instant query of a metric stops returning anything about five minutes after the last sample, which is Prometheus's lookback window, not missing data. The pod series carry no node label, so this page cannot say which node a pod ran on. Node metrics are cluster-wide, one line per node.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 132
-      },
-      "collapsed": true,
-      "panels": [
-        {
-          "id": 52,
-          "title": "Pod count",
-          "description": "Number of distinct pods that reported a CPU sample at each 60-second step. Counted from k8s_pod_cpu_usage, so a pod that exists but reports no CPU sample is not counted. A gap means no samples were collected in that minute, not an empty cluster.",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 133
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "ci-observe-metrics"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "lineWidth": 1,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": false,
-                "axisPlacement": "auto",
-                "axisLabel": "",
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "color": {
-                "mode": "palette-classic"
-              },
-              "unit": "short",
-              "min": 0,
-              "decimals": 0,
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              },
-              "noValue": "No pod samples in this range"
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": [
-                "max"
-              ],
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "count(count by (k8s_pod_name) (k8s_pod_cpu_usage{osac_ci_capture_id=\"$capture_id\"}))",
-              "legendFormat": "pods",
-              "range": true,
-              "instant": false
-            }
-          ]
-        },
-        {
-          "id": 53,
-          "title": "CPU by pod",
-          "description": "CPU used by each pod, in cores, one line per pod at each 60-second step. Only the ten pods with the highest mean CPU over the dashboard time range are drawn; the ranking is fixed at the end of the range, so the lines do not swap in and out. A pod that ran for part of the capture has a shorter line.",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 9,
-            "w": 12,
-            "x": 0,
-            "y": 140
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "ci-observe-metrics"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "lineWidth": 1,
-                "fillOpacity": 0,
-                "showPoints": "never",
-                "spanNulls": false,
-                "axisPlacement": "auto",
-                "axisLabel": "cores",
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "color": {
-                "mode": "palette-classic"
-              },
-              "unit": "short",
-              "min": 0,
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              },
-              "noValue": "No pod CPU samples in this range"
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "max",
-                "mean"
-              ],
-              "showLegend": true,
-              "sortBy": "Max",
-              "sortDesc": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum by (k8s_pod_name) (k8s_pod_cpu_usage{osac_ci_capture_id=\"$capture_id\"}) and on (k8s_pod_name) topk(10, sum by (k8s_pod_name) (avg_over_time(k8s_pod_cpu_usage{osac_ci_capture_id=\"$capture_id\"}[$__range] @ end())))",
-              "legendFormat": "{{k8s_pod_name}}",
-              "range": true,
-              "instant": false
-            }
-          ]
-        },
-        {
-          "id": 54,
-          "title": "Memory by pod",
-          "description": "Memory used by each pod, from the kubelet's working set, one line per pod at each 60-second step. Only the ten pods with the highest mean working set over the dashboard time range are drawn. Working set counts the pages the pod is actually using, so it is the number to compare against a memory limit; the container usage metric also counts reclaimable cache.",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 9,
-            "w": 12,
-            "x": 12,
-            "y": 140
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "ci-observe-metrics"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "lineWidth": 1,
-                "fillOpacity": 0,
-                "showPoints": "never",
-                "spanNulls": false,
-                "axisPlacement": "auto",
-                "axisLabel": "",
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "color": {
-                "mode": "palette-classic"
-              },
-              "unit": "bytes",
-              "min": 0,
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              },
-              "noValue": "No pod memory samples in this range"
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "max",
-                "mean"
-              ],
-              "showLegend": true,
-              "sortBy": "Max",
-              "sortDesc": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum by (k8s_pod_name) (k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"}) and on (k8s_pod_name) topk(10, sum by (k8s_pod_name) (avg_over_time(k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"}[$__range] @ end())))",
-              "legendFormat": "{{k8s_pod_name}}",
-              "range": true,
-              "instant": false
-            }
-          ]
-        },
-        {
-          "id": 55,
-          "title": "Node CPU",
-          "description": "CPU used by each node of the cluster, in cores, at each 60-second step. One line per node. This is the whole node, so it is always larger than the sum of the pod lines above: the difference is system work and pods that the collector did not sample.",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 9,
-            "w": 12,
-            "x": 0,
-            "y": 149
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "ci-observe-metrics"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "lineWidth": 1,
-                "fillOpacity": 0,
-                "showPoints": "never",
-                "spanNulls": false,
-                "axisPlacement": "auto",
-                "axisLabel": "cores",
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "color": {
-                "mode": "palette-classic"
-              },
-              "unit": "short",
-              "min": 0,
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              },
-              "noValue": "No node CPU samples in this range"
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "max",
-                "mean"
-              ],
-              "showLegend": true,
-              "sortBy": "Max",
-              "sortDesc": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum by (k8s_node_name) (k8s_node_cpu_usage{osac_ci_capture_id=\"$capture_id\"})",
-              "legendFormat": "{{k8s_node_name}}",
-              "range": true,
-              "instant": false
-            }
-          ]
-        },
-        {
-          "id": 56,
-          "title": "Node memory",
-          "description": "Memory used by each node of the cluster, as the kubelet reports it, one line per node at each 60-second step. This is the node total, not the sum of the pod working sets: page cache and system processes are included.",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 9,
-            "w": 12,
-            "x": 12,
-            "y": 149
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "ci-observe-metrics"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "lineWidth": 1,
-                "fillOpacity": 0,
-                "showPoints": "never",
-                "spanNulls": false,
-                "axisPlacement": "auto",
-                "axisLabel": "",
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "color": {
-                "mode": "palette-classic"
-              },
-              "unit": "bytes",
-              "min": 0,
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              },
-              "noValue": "No node memory samples in this range"
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "max",
-                "mean"
-              ],
-              "showLegend": true,
-              "sortBy": "Max",
-              "sortDesc": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum by (k8s_node_name) (k8s_node_memory_usage_bytes{osac_ci_capture_id=\"$capture_id\"})",
-              "legendFormat": "{{k8s_node_name}}",
-              "range": true,
-              "instant": false
-            }
-          ]
-        },
-        {
-          "id": 57,
-          "title": "Pods seen",
-          "description": "Every pod that produced any sample during the dashboard time range, with its namespace, its first and last sample time, and its peak CPU and peak memory. This is the answer to 'which pods existed, and when': a pod whose first sample is late was created late, and a pod whose last sample is early was deleted early. The sample times come from the pod working-set metric, which every scraped pod reports. A blank Peak CPU means the pod has no CPU sample: CPU usage is a rate, so a pod scraped only once cannot have one. There is no node column because the pod series carry no node label.",
-          "type": "table",
-          "gridPos": {
-            "h": 14,
-            "w": 24,
-            "x": 0,
-            "y": 158
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "ci-observe-metrics"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "cellOptions": {
-                  "type": "auto"
-                },
-                "inspect": false,
-                "filterable": false
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              },
-              "noValue": "no sample"
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Pod"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 420
-                  },
-                  {
-                    "id": "custom.inspect",
-                    "value": true
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Namespace"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 260
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "First sample"
-                },
-                "properties": [
-                  {
-                    "id": "unit",
-                    "value": "dateTimeAsIso"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 210
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last sample"
-                },
-                "properties": [
-                  {
-                    "id": "unit",
-                    "value": "dateTimeAsIso"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 210
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Peak CPU"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Peak CPU (cores)"
-                  },
-                  {
-                    "id": "unit",
-                    "value": "short"
-                  },
-                  {
-                    "id": "decimals",
-                    "value": 3
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 120
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Peak memory"
-                },
-                "properties": [
-                  {
-                    "id": "unit",
-                    "value": "bytes"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 130
-                  }
-                ]
-              }
-            ]
-          },
-          "options": {
-            "showHeader": true,
-            "sortBy": [
-              {
-                "displayName": "Peak CPU",
-                "desc": true
-              }
-            ],
-            "footer": {
-              "show": false,
-              "reducer": [
-                "sum"
-              ],
-              "countRows": false,
-              "fields": ""
-            },
-            "cellHeight": "sm"
-          },
-          "transformations": [
-            {
-              "id": "merge",
-              "options": {}
-            },
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "Time 1": true,
-                  "Time 2": true,
-                  "Time 3": true,
-                  "__name__": true
-                },
-                "indexByName": {
-                  "k8s_pod_name": 0,
-                  "k8s_namespace_name": 1,
-                  "Value #C": 2,
-                  "Value #D": 3,
-                  "Value #A": 4,
-                  "Value #B": 5
-                },
-                "renameByName": {
-                  "k8s_pod_name": "Pod",
-                  "k8s_namespace_name": "Namespace",
-                  "Value #A": "Peak CPU",
-                  "Value #B": "Peak memory",
-                  "Value #C": "First sample",
-                  "Value #D": "Last sample"
-                }
-              }
-            }
-          ],
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "max by (k8s_pod_name, k8s_namespace_name, k8s_node_name) (max_over_time(k8s_pod_cpu_usage{osac_ci_capture_id=\"$capture_id\"}[$__range]))",
-              "legendFormat": "",
-              "format": "table",
-              "instant": true,
-              "range": false
-            },
-            {
-              "refId": "B",
-              "expr": "max by (k8s_pod_name, k8s_namespace_name, k8s_node_name) (max_over_time(k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"}[$__range]))",
-              "legendFormat": "",
-              "format": "table",
-              "instant": true,
-              "range": false
-            },
-            {
-              "refId": "C",
-              "expr": "min by (k8s_pod_name, k8s_namespace_name, k8s_node_name) (min_over_time(timestamp(k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"})[$__range:60s])) * 1000",
-              "legendFormat": "",
-              "format": "table",
-              "instant": true,
-              "range": false
-            },
-            {
-              "refId": "D",
-              "expr": "max by (k8s_pod_name, k8s_namespace_name, k8s_node_name) (max_over_time(timestamp(k8s_pod_memory_working_set_bytes{osac_ci_capture_id=\"$capture_id\"})[$__range:60s])) * 1000",
-              "legendFormat": "",
-              "format": "table",
-              "instant": true,
-              "range": false
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 58,
-      "title": "Events",
-      "description": "Kubernetes events recorded for this capture, oldest first. The query is scoped to the capture's own osac_ci_capture_id stream. The collector watches events in the observed namespace only, so events from other namespaces are not here; an empty table means no event was recorded in the capture window, not that the cluster was healthy. Links from Start here and the Pull requests page set from and to to the run's window; a finished capture needs the range set to that window.",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 172
-      },
-      "collapsed": true,
-      "panels": [
-        {
-          "id": 59,
-          "title": "Kubernetes events",
-          "description": "One row per event the capture's Kubernetes watch recorded: when it happened, its type (Normal or Warning), the reason and message the controller gave, and the object it is about. Type, reason and message are parsed from the watch record's object with Loki's json stage; the watch action itself (ADDED or MODIFIED) is not shown. Times are the event times inside the capture window, not the dashboard time range. The watch records the same event again when its count or last timestamp changes, so repeated rows are one event updating, not new events.",
-          "type": "table",
-          "gridPos": {
-            "h": 14,
-            "w": 24,
-            "x": 0,
-            "y": 173
-          },
-          "datasource": {
-            "type": "loki",
-            "uid": "ci-observe-logs"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "cellOptions": {
-                  "type": "auto"
-                },
-                "inspect": false,
-                "filterable": false
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              },
-              "noValue": "No Kubernetes events in this capture"
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Time"
-                },
-                "properties": [
-                  {
-                    "id": "unit",
-                    "value": "dateTimeAsIso"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 210
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "k8s_namespace_name"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Namespace"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 200
-                  },
-                  {
-                    "id": "custom.cellOptions",
-                    "value": {
-                      "type": "auto",
-                      "wrapText": true,
-                      "dynamicHeight": true
-                    }
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "event_type"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Type"
-                  },
-                  {
-                    "id": "mappings",
-                    "value": [
-                      {
-                        "type": "value",
-                        "options": {
-                          "Normal": {
-                            "text": "Normal",
-                            "color": "green",
-                            "index": 0
-                          },
-                          "Warning": {
-                            "text": "Warning",
-                            "color": "orange",
-                            "index": 1
-                          }
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "id": "custom.cellOptions",
-                    "value": {
-                      "type": "color-text"
-                    }
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 110
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "event_reason"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Reason"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 200
-                  },
-                  {
-                    "id": "custom.inspect",
-                    "value": true
-                  },
-                  {
-                    "id": "custom.cellOptions",
-                    "value": {
-                      "type": "auto",
-                      "wrapText": true,
-                      "dynamicHeight": true
-                    }
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "object_kind"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Object kind"
-                  },
-                  {
-                    "id": "custom.width",
-                    "value": 140
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "object_name"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Object"
-                  },
-                  {
-                    "id": "custom.inspect",
-                    "value": true
-                  },
-                  {
-                    "id": "custom.cellOptions",
-                    "value": {
-                      "type": "auto",
-                      "wrapText": true,
-                      "dynamicHeight": true
-                    }
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "event_message"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Message"
-                  },
-                  {
-                    "id": "custom.inspect",
-                    "value": true
-                  },
-                  {
-                    "id": "custom.cellOptions",
-                    "value": {
-                      "type": "auto",
-                      "wrapText": true,
-                      "dynamicHeight": true
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          "options": {
-            "showHeader": true,
-            "cellHeight": "sm",
-            "sortBy": [
-              {
-                "displayName": "Time",
-                "desc": false
-              }
-            ],
-            "footer": {
-              "show": false,
-              "reducer": [
-                "sum"
-              ],
-              "countRows": false,
-              "fields": ""
-            }
-          },
-          "transformations": [
-            {
-              "id": "merge",
-              "options": {}
-            },
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Line": true,
-                  "osac_ci_capture_id": true,
-                  "osac_ci_observed_namespace": true,
-                  "osac_ci_suite": true,
-                  "osac_ci_pr": true,
-                  "service_name": true,
-                  "service_namespace": true,
-                  "service_instance_id": true
-                },
-                "indexByName": {
-                  "Time": 0,
-                  "k8s_namespace_name": 1,
-                  "event_type": 2,
-                  "event_reason": 3,
-                  "object_kind": 4,
-                  "object_name": 5,
-                  "event_message": 6
-                },
-                "renameByName": {}
-              }
-            }
-          ],
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "{osac_ci_capture_id=\"$capture_id\"} | k8s_resource_name=\"events\" | event_domain=\"k8s\" | json event_type=\"object.type\", event_reason=\"object.reason\", event_message=\"object.message\", object_kind=\"object.involvedObject.kind\", object_name=\"object.involvedObject.name\"",
-              "legendFormat": "",
-              "queryType": "range"
             }
           ]
         }
@@ -4924,7 +824,8 @@
         "current": {},
         "options": [],
         "regex": "",
-        "hide": 0
+        "hide": 0,
+        "description": ""
       }
     ]
   },
@@ -4932,9 +833,11 @@
     "from": "now-7d",
     "to": "now"
   },
-  "timepicker": {},
+  "timepicker": {
+    "hidden": true
+  },
   "timezone": "browser",
-  "title": "CI Observe \u2014 Capture",
+  "title": "CI Observe \u2014 E2E run",
   "uid": "ci-observe-runs",
   "version": 1
 }

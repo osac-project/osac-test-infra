@@ -455,7 +455,7 @@ class TestNative:
         native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
 
         assert native["status"] == "expired"
-        assert any("7-day retention" in n for n in native["notes"])
+        assert any("30-day retention" in n for n in native["notes"])
         assert native["artifact_url"] == ARTIFACT_URL
 
     def test_too_large_without_download(self, evidence, github, wfe):
@@ -742,14 +742,12 @@ class TestHTTP:
         assert json.loads(body)["parsed"] == "invalid"
 
 
-# The run-evidence panels live in the CI evidence row of the Capture
-# dashboard (dashboard JSON + its own structural test, which pins the response
-# contract with a static document). This is the other half of that contract:
-# the real endpoint's response must resolve every root_selector/columns pair
-# the row queries.
+# The failed-test table on the E2E run page reads /api/ci-observe/run. This
+# is the other half of that contract: the real endpoint's response must
+# resolve every root_selector/columns pair the table queries.
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
 CAPTURE_DASHBOARD = DASHBOARDS_DIR / "ci-observe-runs.json"
-CI_EVIDENCE_ROW = "CI evidence"
+RUN_ENDPOINT = "/api/ci-observe/run"
 
 
 def _iter_panels(panels):
@@ -760,12 +758,16 @@ def _iter_panels(panels):
 
 def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wfe):
     """The real /api/ci-observe/run response must resolve every
-    root_selector and column the CI evidence row queries, so the endpoint and
-    the dashboard cannot drift apart."""
+    root_selector and column the failed-test table queries, so the endpoint
+    and the dashboard cannot drift apart."""
     dashboard = json.loads(CAPTURE_DASHBOARD.read_text())
-    (row,) = [p for p in dashboard["panels"] if p["type"] == "row" and p["title"] == CI_EVIDENCE_ROW]
-    panels = [p for p in _iter_panels(row["panels"]) if p["type"] not in ("row", "text")]
-    assert panels, "the CI evidence row has no data panels"
+    panels = [
+        panel
+        for panel in _iter_panels(dashboard["panels"])
+        if panel["type"] not in ("row", "text")
+        and any(RUN_ENDPOINT in target.get("url", "") for target in panel.get("targets", []))
+    ]
+    assert panels, "no panel reads the run endpoint"
     seed_direct_run(
         evidence,
         steps=[{"name": "Run E2E tests", "duration_s": 500}],
@@ -777,10 +779,6 @@ def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wf
     github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
     doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-
-    # The fixture must exercise every table the dashboard reads.
-    assert doc["run"] is not None
-    assert doc["jobs"] and doc["steps"]
     assert doc["native"]["status"] == "available"
     assert doc["native"]["failed_tests"]
 

@@ -125,7 +125,7 @@ class UploadArtifactsTest(unittest.TestCase):
         upload = self.step("Upload artifacts")
         self.assertEqual(upload["if"], "always()")
         self.assertEqual(upload["with"]["overwrite"], "${{ inputs.overwrite }}")
-        self.assertEqual(upload["with"]["retention-days"], 7)
+        self.assertEqual(upload["with"]["retention-days"], 30)
         self.assertEqual(upload["with"]["if-no-files-found"], "warn")
         self.assertEqual(
             upload["with"]["path"].splitlines(),
