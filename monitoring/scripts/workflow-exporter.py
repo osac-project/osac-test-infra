@@ -5129,8 +5129,10 @@ class ExporterHandler(BaseHTTPRequestHandler):
                         parsed = registry.parse_capture_id(capture_id) if registry is not None else None
                         if (
                             parsed
-                            and parsed["suite"] == run.get("suite_key")
                             and parsed["run_attempt"] == str(run.get("run_attempt") or 1)
+                            # A legacy capture names no suite: it belongs to
+                            # the whole run, so every suite row can use it.
+                            and parsed["suite"] in ("", run.get("suite_key"))
                         ):
                             capture_ids.append(capture_id)
                     if capture_ids:
