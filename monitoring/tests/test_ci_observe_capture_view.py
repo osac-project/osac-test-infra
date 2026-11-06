@@ -743,10 +743,12 @@ def test_a_capture_without_a_session_span_that_is_recent_reports_running(tmp_pat
         base_time=started,
     )
     tempo = FakeTempo({trace_id_for(capture_id): payload})
+    live_job = make_job(41709318840, iso(started))
+    live_job.update({"status": "in_progress", "conclusion": ""})
     view, _ = build_view(
         tmp_path,
         tempo,
-        jobs=[make_job(41709318840, iso(started))],
+        jobs=[live_job],
         captures=[make_capture(capture_id, 41709318840, started_at=iso(started))],
         monkeypatch=monkeypatch,
     )
@@ -756,7 +758,30 @@ def test_a_capture_without_a_session_span_that_is_recent_reports_running(tmp_pat
     assert document["state"] == "ok"
     assert document["coverage"]["session_span"] == 0
     assert document["session"]["status"] == "running"
+    assert document["summary"][0]["status"] == "running"
     assert any("still running" in note for note in document["notes"])
+
+
+def test_the_summary_uses_github_when_a_setup_error_misses_the_session_span(tmp_path, monkeypatch):
+    """A setup or teardown failure can fail the job without marking the
+    pytest session span as an error. GitHub owns the result."""
+    capture_id = CAAS_CAPTURE
+    payload = build_trace(
+        capture_id, parent_tests=1, workers=1, fixtures=0, fixture_uses=0,
+        waits=0, service_spans=0, session_seconds=30.0, failed_index=None,
+    )
+    tempo = FakeTempo({trace_id_for(capture_id): payload})
+    view, _ = build_view(
+        tmp_path,
+        tempo,
+        jobs=[make_job(41709318840, "2026-11-03T21:00:00Z")],
+        monkeypatch=monkeypatch,
+    )
+
+    document = fetch(view, capture_id)
+
+    assert document["session"]["status"] == "ok", "the trace alone says the session passed"
+    assert document["summary"][0]["status"] == "error", "the job failed in setup or teardown"
 
 
 def test_a_transient_tempo_failure_is_cached_only_briefly(tmp_path, monkeypatch):
@@ -1455,13 +1480,10 @@ def test_response_has_the_documented_shape(tmp_path, monkeypatch):
         "transient",
         "notes",
     }
-    assert document["summary"] == [
-        {
-            "status": document["session"]["status"],
-            "tests": document["session"]["tests"],
-            "duration_seconds": document["session"]["duration_seconds"],
-        }
-    ]
+    summary = document["summary"][0]
+    assert set(summary) == {"status", "tests", "duration_seconds"}
+    assert summary["tests"] == document["session"]["tests"]
+    assert summary["duration_seconds"] == document["session"]["duration_seconds"]
     assert set(document["session"]) == {
         "trace_id",
         "started_at",

@@ -491,7 +491,7 @@ class CIObserveCaptureView:
 
         document["summary"] = [
             {
-                "status": session.get("status"),
+                "status": self._github_outcome(run_id, run_attempt) or session.get("status"),
                 "tests": session.get("tests"),
                 "duration_seconds": session.get("duration_seconds"),
             }
@@ -509,6 +509,26 @@ class CIObserveCaptureView:
         document["failed_tests"] = self._cached_failed_tests(run_id, run_attempt, notes)
         document["notes"] = notes
         return document
+
+    def _github_outcome(self, run_id, run_attempt):
+        """The run's GitHub conclusion, normalized, or None while it runs.
+
+        GitHub owns pass or fail: a setup or teardown error can fail the job
+        without marking the pytest session span as an error.
+        """
+        rows, _ = self._job_rows(run_id, run_attempt)
+        conclusions = {
+            str(row.get("conclusion") or "").lower()
+            for row in rows
+            if str(row.get("status") or "").lower() == "completed"
+        }
+        if conclusions & {"failure", "timed_out", "action_required"}:
+            return "error"
+        if "cancelled" in conclusions:
+            return "cancelled"
+        if "success" in conclusions:
+            return "ok"
+        return None
 
     def _recently_active(self, session) -> bool:
         """True when the trace's last span is recent enough to be a live run."""

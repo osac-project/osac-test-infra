@@ -70,6 +70,16 @@
                   "text": "Still running",
                   "color": "orange",
                   "index": 2
+                },
+                "cancelled": {
+                  "text": "Canceled",
+                  "color": "orange",
+                  "index": 3
+                },
+                "null": {
+                  "text": "Not finished",
+                  "color": "orange",
+                  "index": 4
                 }
               }
             }
@@ -141,7 +151,17 @@
         "defaults": {
           "unit": "none",
           "noValue": "Test count not available",
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Test count not available",
+                  "index": 0
+                }
+              }
+            }
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -209,7 +229,17 @@
         "defaults": {
           "unit": "s",
           "noValue": "Test time unavailable",
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Test time unavailable",
+                  "index": 0
+                }
+              }
+            }
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [

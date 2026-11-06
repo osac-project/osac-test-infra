@@ -127,6 +127,8 @@ def test_a_live_capture_reads_as_still_running() -> None:
     defaults = result["fieldConfig"]["defaults"]
     options = defaults["mappings"][0]["options"]
     assert options["running"]["text"] == "Still running"
+    assert options["null"]["text"] == "Not finished"
+    assert options["cancelled"]["text"] == "Canceled"
     assert defaults["noValue"] == "Not finished"
 
 
