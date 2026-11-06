@@ -1,7 +1,8 @@
 """Structural tests for the ci-observe entry page.
 
 `ci-observe-runs-home.json` lists recent E2E runs and opens one. It has a
-heading and one table. There is no lookup box: the table is the way in.
+heading and one table. The filters narrow the data, not just the visible
+rows; the table also enables column filters for ad-hoc narrowing.
 
 Every selector is resolved against a fixture document with the same keys as
 `/api/ci-observe/runs`, so a column rename fails here.
@@ -28,14 +29,14 @@ RUNS_DOCUMENT = {
             "branch": "main",
             "trigger": "scheduled",
             "pr": "",
+            "pr_number": "",
             "pr_url": "",
             "conclusion": "failure",
             "created_at": "2026-11-03T10:00:00Z",
-            "started_at_ms": 1762164060000,
-            "done_at_ms": 1762166520000,
             "url": "https://github.com/osac-project/osac/actions/runs/41310072671",
             "capture_state": "capture",
             "capture_id": "vmaas-pr123-41310072671-a1",
+            "details_url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run?var-capture_id=x",
         },
         {
             "id": "41310072672",
@@ -44,14 +45,14 @@ RUNS_DOCUMENT = {
             "branch": "refs/pull/1620/head",
             "trigger": "PR",
             "pr": "#1620",
+            "pr_number": "1620",
             "pr_url": "https://github.com/osac-project/osac/pull/1620",
             "conclusion": "success",
             "created_at": "2026-11-03T09:00:00Z",
-            "started_at_ms": 1762160460000,
-            "done_at_ms": 1762163400000,
             "url": "https://github.com/osac-project/osac/actions/runs/41310072672",
             "capture_state": "not collected",
             "capture_id": "",
+            "details_url": "https://github.com/osac-project/osac/actions/runs/41310072672",
         },
     ],
 }
@@ -92,6 +93,11 @@ def display_name(table: dict, field: str) -> str | None:
     return None
 
 
+def link_url(table: dict, field: str) -> str:
+    entry = override(table, field)
+    return next(prop["value"] for prop in entry["properties"] if prop["id"] == "links")[0]["url"]
+
+
 def test_identity_and_folder() -> None:
     assert DASHBOARD["uid"] == "ci-observe-runs-home"
     assert DASHBOARD["title"] == "CI Observe — Start here"
@@ -102,17 +108,38 @@ def test_the_page_is_a_heading_and_one_table() -> None:
     assert [panel["type"] for panel in DASHBOARD["panels"]] == ["text", "table"]
 
 
-def test_the_only_variable_is_days() -> None:
-    assert set(variables()) == {"days"}
-    days = variables()["days"]
-    assert days["current"]["value"] == "30"
-    assert {"7", "30"} <= {option["value"] for option in days["options"]}
+def test_the_heading_explains_the_filters_and_the_github_fallback() -> None:
+    heading = next(candidate for candidate in DASHBOARD["panels"] if candidate["type"] == "text")
+    content = heading["options"]["content"].lower()
+    assert "filter by repository, suite or result" in content
+    assert "no test data opens github" in content
 
 
-def test_the_table_reads_the_runs_endpoint() -> None:
+def test_the_filters_are_days_repository_suite_and_result() -> None:
+    assert set(variables()) == {"days", "repo", "suite", "result"}
+    assert variables()["days"]["current"]["value"] == "30"
+    assert {"7", "30"} <= {option["value"] for option in variables()["days"]["options"]}
+    for name in ("repo", "suite", "result"):
+        variable = variables()[name]
+        assert variable["current"]["value"] == "all", f"{name} defaults to All"
+        assert variable["type"] == "custom"
+        assert variable["query"].startswith("All : all,"), f"{name} has an All option"
+        assert {"text": "All", "value": "all", "selected": True} in variable["options"]
+
+
+def test_the_result_options_match_the_endpoint(runs) -> None:
+    values = [option["value"] for option in variables()["result"]["options"]]
+    assert values == ["all", "success", "failure", "cancelled"]
+    for value in values:
+        assert value == "all" or value in runs.RESULTS, value
+
+
+def test_the_table_reads_the_runs_endpoint_with_every_filter() -> None:
     table = panel("Recent E2E runs, last $days days")
     target = table["targets"][0]
-    assert target["url"] == f"{RUNS_URL}?days=${{days}}"
+    assert target["url"] == (
+        f"{RUNS_URL}?days=${{days}}&repo=${{repo}}&suite=${{suite}}&result=${{result}}"
+    )
     assert target["root_selector"] == "$.runs"
     assert target["format"] == "table"
 
@@ -122,23 +149,42 @@ def test_every_column_resolves_against_the_endpoint_contract() -> None:
     row = RUNS_DOCUMENT["runs"][0]
     for column in selectors(table):
         assert column in row, column
-    assert "capture_id" in selectors(table), "the run link needs the capture id"
-    assert "started_at_ms" in selectors(table), "the run link needs the start time"
-    assert "done_at_ms" in selectors(table), "the run link needs the finish time"
+    assert "details_url" in selectors(table), "the run link needs its details url"
+    assert "pr_number" in selectors(table), "the PR link needs the bare number"
+
+
+def test_the_old_recording_columns_are_gone() -> None:
+    table = panel("Recent E2E runs, last $days days")
+    for gone in ("capture_id", "started_at_ms", "done_at_ms"):
+        assert gone not in selectors(table), gone
+        assert override(table, gone) is None, gone
+
+
+def test_the_link_fields_are_hidden() -> None:
+    table = panel("Recent E2E runs, last $days days")
+    for field in ("pr_number", "details_url"):
+        entry = override(table, field)
+        hidden = next(prop["value"] for prop in entry["properties"] if prop["id"] == "custom.hidden")
+        assert hidden is True, field
+
+
+def test_the_newest_run_is_first() -> None:
+    table = panel("Recent E2E runs, last $days days")
+    assert table["options"]["sortBy"] == [{"displayName": "Started", "desc": True}]
 
 
 def test_column_labels_are_plain_words() -> None:
     table = panel("Recent E2E runs, last $days days")
     assert {
         "id": "Run",
-        "workflow": "Job",
-        "repo": "Repo",
+        "workflow": "Workflow",
+        "repo": "Repository",
         "pr": "PR",
         "branch": "Branch",
-        "trigger": "Trigger",
+        "trigger": "Started by",
         "conclusion": "Result",
         "capture_state": "Recorded",
-        "created_at": "Created",
+        "created_at": "Started",
         "url": "GitHub",
     } == {
         field: display_name(table, field)
@@ -149,20 +195,27 @@ def test_column_labels_are_plain_words() -> None:
     }
 
 
-def test_a_run_opens_the_e2e_run_page_with_its_own_window() -> None:
+def test_a_run_opens_its_details_url_or_github_when_unrecorded() -> None:
     table = panel("Recent E2E runs, last $days days")
-    links = next(prop["value"] for prop in override(table, "id")["properties"] if prop["id"] == "links")
-    url = links[0]["url"]
-    assert "/d/ci-observe-runs/" in url
-    assert "var-capture_id=${__data.fields.capture_id}" in url
-    assert "from=${__data.fields.started_at_ms}" in url
-    assert "to=${__data.fields.done_at_ms}" in url
+    assert link_url(table, "id") == "${__data.fields.details_url}"
+
+
+def test_a_pr_cell_opens_the_pull_requests_page() -> None:
+    table = panel("Recent E2E runs, last $days days")
+    url = link_url(table, "pr")
+    assert "/d/ci-observe-pull-requests/" in url
+    assert "var-pr_number=${__data.fields.pr_number}" in url
+    assert "var-pr_repo=${__data.fields.repo}" in url
 
 
 def test_a_run_opens_github() -> None:
     table = panel("Recent E2E runs, last $days days")
-    links = next(prop["value"] for prop in override(table, "url")["properties"] if prop["id"] == "links")
-    assert links[0]["url"] == "${__value.raw}"
+    assert link_url(table, "url") == "${__value.raw}"
+
+
+def test_the_table_can_be_filtered() -> None:
+    table = panel("Recent E2E runs, last $days days")
+    assert table["fieldConfig"]["defaults"]["custom"]["filterable"] is True
 
 
 def test_every_link_opens_a_dashboard_that_exists() -> None:

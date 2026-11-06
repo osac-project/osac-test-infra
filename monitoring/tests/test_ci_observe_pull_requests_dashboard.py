@@ -29,6 +29,7 @@ INDEX_DOCUMENT = {
             "age_display": "1d 1h",
             "queue_attempt_count": 2,
             "ejected_attempt_count": 1,
+            "option_label": "#101 · merged · Add VM restart coverage",
             "url": "https://github.com/osac-project/osac/pull/101",
         }
     ],
@@ -61,6 +62,7 @@ PR_DOCUMENT = {
             "start_at": "2026-10-01T10:20:00Z",
             "end_at": "2026-10-01T10:50:00Z",
             "seconds": 1800,
+            "time_display": "30m",
             "state": "measured",
             "missing_reason": "",
         }
@@ -148,7 +150,48 @@ def test_identity_and_folder() -> None:
 def test_the_page_keeps_three_variables() -> None:
     assert set(variables()) == {"days", "pr_number", "pr_repo"}
     assert variables()["days"]["current"]["value"] == "30"
-    assert variables()["pr_repo"]["hide"] == 2, "the repository defaults to osac"
+    assert variables()["pr_repo"]["hide"] == 0, "the repository is a visible control"
+    assert variables()["pr_number"]["type"] == "query", "the PR is a drop-down of saved PRs"
+    assert variables()["pr_number"]["allowCustomValue"] is True, "an open PR can still be typed"
+
+
+def test_the_repository_control_defaults_to_osac() -> None:
+    repo = variables()["pr_repo"]
+    assert repo["type"] == "custom"
+    assert repo["current"]["value"] == "osac"
+    assert [option["value"] for option in repo["options"]] == ["osac", "osac-test-infra"]
+
+
+def test_the_pull_request_control_lists_saved_pull_requests() -> None:
+    pr_number = variables()["pr_number"]
+    assert pr_number["datasource"] == {"type": "yesoreyeram-infinity-datasource", "uid": "workflow-api"}
+    infinity = pr_number["query"]["infinityQuery"]
+    assert pr_number["query"]["queryType"] == "infinity"
+    assert infinity["type"] == "json"
+    assert infinity["source"] == "url"
+    assert infinity["parser"] == "backend"
+    assert infinity["url"] == f"{PRS_URL}?days=${{days}}&repo=${{pr_repo}}"
+    assert infinity["url_options"] == {"method": "GET", "data": ""}
+    assert infinity["root_selector"] == "$.prs"
+    assert infinity["format"] == "table"
+    assert infinity["columns"] == [
+        {"selector": "option_label", "text": "__text", "type": "string"},
+        {"selector": "number", "text": "__value", "type": "string"},
+    ]
+    assert pr_number["refresh"] == 1
+    assert pr_number["multi"] is False
+
+
+def test_the_pull_request_options_resolve_against_the_index() -> None:
+    row = INDEX_DOCUMENT["prs"][0]
+    for column in variables()["pr_number"]["query"]["infinityQuery"]["columns"]:
+        assert column["selector"] in row, column["selector"]
+
+
+def test_the_page_asks_for_a_pull_request_until_one_is_chosen() -> None:
+    assert panel("Details")["fieldConfig"]["defaults"]["noValue"] == "Choose a pull request above."
+    heading = next(candidate for candidate in DASHBOARD["panels"] if candidate["type"] == "text")
+    assert "Choose one above" in heading["options"]["content"]
 
 
 def test_the_selected_pull_request_comes_first_and_is_open() -> None:
@@ -196,7 +239,7 @@ def test_the_stage_table_reads_the_selected_pr_stages() -> None:
         "label": "Stage",
         "start_at": "From",
         "end_at": "To",
-        "seconds": "Time",
+        "time_display": "Time",
         "state": "State",
         "missing_reason": "Why not measured",
     }
@@ -244,7 +287,7 @@ def test_the_queue_attempts_table_reads_the_attempts() -> None:
 
 def test_the_browse_section_keeps_the_index_and_funnel() -> None:
     recent = panel("Recent pull requests, last $days days")
-    assert recent["targets"][0]["url"] == f"{PRS_URL}?days=${{days}}"
+    assert recent["targets"][0]["url"] == f"{PRS_URL}?days=${{days}}&repo=${{pr_repo}}"
     assert recent["targets"][0]["root_selector"] == "$.prs"
     assert_selectors_resolve(recent, INDEX_DOCUMENT)
     assert display_names(recent) == {
@@ -259,7 +302,7 @@ def test_the_browse_section_keeps_the_index_and_funnel() -> None:
     }
 
     stages = panel("Stage times")
-    assert stages["targets"][0]["url"] == f"{PRS_URL}?days=${{days}}"
+    assert stages["targets"][0]["url"] == f"{PRS_URL}?days=${{days}}&repo=${{pr_repo}}"
     assert stages["targets"][0]["root_selector"] == "$.funnel"
     assert_selectors_resolve(stages, INDEX_DOCUMENT)
     assert display_names(stages) == {
@@ -268,6 +311,11 @@ def test_the_browse_section_keeps_the_index_and_funnel() -> None:
         "median_seconds": "Typical",
         "p95_seconds": "Slow end",
     }
+
+
+def test_the_tables_can_be_filtered() -> None:
+    for title in ("E2E runs", "Queue attempts", "Recent pull requests, last $days days"):
+        assert panel(title)["fieldConfig"]["defaults"]["custom"]["filterable"] is True, title
 
 
 def test_every_link_opens_a_dashboard_that_exists() -> None:

@@ -1009,7 +1009,33 @@ class TestEndpointDocument:
         assert first["queue_attempt_count"] == 3
         assert first["ejected_attempt_count"] == 2
         assert first["age_display"]
+        assert first["option_label"].startswith("#103 · merged · ")
         assert "derived, not recorded by GitHub" in doc["derivation"]["ejections"]
+
+    def test_index_filters_by_repository(self, filled):
+        with sqlite3.connect(filled.db_file) as conn:
+            conn.execute(
+                "INSERT INTO pr_events (repo, number, title, final_stage, opened_at, fetched_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                ("osac-test-infra", 9, "Other repo", "merged", "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z"),
+            )
+
+        doc = filled.get_json({"days": [str(DAYS)], "repo": ["osac-test-infra"]})
+
+        assert [pr["number"] for pr in doc["prs"]] == [9]
+
+    def test_every_index_row_has_a_picker_label(self, filled):
+        doc = filled.get_json({"days": [str(DAYS)]})
+
+        for pr in doc["prs"]:
+            assert pr["option_label"] == f"#{pr['number']} · {pr['final_stage']} · {pr['title']}"
+
+    def test_each_stage_carries_a_display_duration(self, filled, prs):
+        doc = filled.get_json({"number": ["103"], "repo": [REPO], "days": [str(DAYS)]})
+
+        for stage in doc["stages"]:
+            assert stage["time_display"] == prs.human_duration(stage["seconds"])
+            assert stage["time_display"], stage["stage"]
 
     def test_index_age_is_the_lifetime_not_the_time_since_opened(self, filled):
         """The column says "opened to merge or close", so a pull request

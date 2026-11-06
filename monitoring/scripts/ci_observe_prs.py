@@ -1263,7 +1263,8 @@ class CIObservePRs:
             return self.pr_document(number, _param(params, "repo"), days, now)
         if not os.path.exists(self.db_file):
             return self._empty_index_document(days, now)
-        return self.index_document(days, now)
+        repo = _param(params, "repo")
+        return self.index_document(days, now, repo or None)
 
     # The endpoint is read-only: it never creates prs.db. A missing file is
     # the state before the backfill has run, and it says so instead of
@@ -1835,7 +1836,7 @@ class CIObservePRs:
             f"The daily full pass retries it; the next hourly run is by {freshness['next_run_at']}."
         )
 
-    def index_document(self, days, now=None):
+    def index_document(self, days, now=None, repo=None):
         now = now or datetime.now(UTC)
         cutoff = _iso(now - timedelta(days=days))
         with self._db() as conn:
@@ -1843,8 +1844,9 @@ class CIObservePRs:
                 dict(r)
                 for r in conn.execute(
                     "SELECT * FROM pr_events WHERE COALESCE(merged_at, closed_at, opened_at) >= ? "
-                    "ORDER BY COALESCE(merged_at, closed_at, opened_at) DESC",
-                    (cutoff,),
+                    + ("AND repo = ? " if repo else "")
+                    + "ORDER BY COALESCE(merged_at, closed_at, opened_at) DESC",
+                    (cutoff, repo) if repo else (cutoff,),
                 )
             ]
             attempts = {}
@@ -1862,6 +1864,9 @@ class CIObservePRs:
             row["queue_attempt_count"] = len(row_attempts)
             row["ejected_attempt_count"] = sum(1 for a in row_attempts if a["ejected"])
             row["age_display"] = human_duration(row["age_seconds"])
+            # The Pull requests page turns this list into a drop-down. The
+            # label carries the three things a reader needs to choose.
+            row["option_label"] = f"#{row['number']} · {row['final_stage']} · {row['title']}"
             prs.append(row)
 
         fields = self._freshness_fields(now)
@@ -1955,6 +1960,7 @@ def _stages(pr):
                 "start_at": start,
                 "end_at": end,
                 "seconds": seconds,
+                "time_display": human_duration(seconds),
                 "state": state,
                 "missing_reason": "" if state == "measured" else reasons[key],
             }

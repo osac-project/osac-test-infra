@@ -36,7 +36,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Recent E2E runs. Choose one to see its result and details. A run shows **No** under Recorded when the job has no capture wiring; Netris, full-regression and agentless jobs cannot record yet."
+        "content": "Recent E2E runs. Filter by repository, suite or result above, or use a column filter. A row with no test data opens GitHub. **No** under Recorded means the job sent no test data; Netris, full-regression and agentless jobs cannot record yet."
       },
       "targets": []
     },
@@ -62,9 +62,10 @@
             "cellOptions": {
               "type": "auto"
             },
-            "inspect": false
+            "inspect": false,
+            "filterable": true
           },
-          "noValue": "No E2E runs recorded in the last $days days"
+          "noValue": "No E2E runs match these filters"
         },
         "overrides": [
           {
@@ -93,8 +94,8 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Open the E2E run when recording is available",
-                    "url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run?orgId=1&var-capture_id=${__data.fields.capture_id}&from=${__data.fields.started_at_ms}&to=${__data.fields.done_at_ms}"
+                    "title": "Open the run page, or GitHub when no test data arrived",
+                    "url": "${__data.fields.details_url}"
                   }
                 ]
               }
@@ -199,32 +200,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "capture_id"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              },
-              {
-                "id": "displayName",
-                "value": "Recording ID"
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
               "options": "created_at"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Created"
+                "value": "Started"
               },
               {
                 "id": "custom.width",
@@ -274,44 +255,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "started_at_ms"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              },
-              {
-                "id": "displayName",
-                "value": "started_at_ms"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "done_at_ms"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              },
-              {
-                "id": "displayName",
-                "value": "done_at_ms"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
               "options": "workflow"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Job"
+                "value": "Workflow"
               },
               {
                 "id": "custom.width",
@@ -335,7 +284,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Repo"
+                "value": "Repository"
               },
               {
                 "id": "custom.width",
@@ -375,7 +324,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Trigger"
+                "value": "Started by"
               },
               {
                 "id": "custom.width",
@@ -447,8 +396,8 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Open pull request",
-                    "url": "${__data.fields.pr_url}"
+                    "title": "Open this pull request",
+                    "url": "/d/ci-observe-pull-requests/ci-observe-pull-requests?var-pr_number=${__data.fields.pr_number}&var-pr_repo=${__data.fields.repo}"
                   }
                 ]
               }
@@ -457,13 +406,21 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "pr_url"
+              "options": "pr_number"
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "pr_url"
-              },
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "details_url"
+            },
+            "properties": [
               {
                 "id": "custom.hidden",
                 "value": true
@@ -477,7 +434,7 @@
         "cellHeight": "sm",
         "sortBy": [
           {
-            "displayName": "Created",
+            "displayName": "Started",
             "desc": true
           }
         ],
@@ -491,7 +448,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/runs?days=${days}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/runs?days=${days}&repo=${repo}&suite=${suite}&result=${result}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -539,11 +496,6 @@
               "type": "string"
             },
             {
-              "selector": "capture_id",
-              "text": "capture_id",
-              "type": "string"
-            },
-            {
               "selector": "created_at",
               "text": "created_at",
               "type": "string"
@@ -554,18 +506,13 @@
               "type": "string"
             },
             {
-              "selector": "started_at_ms",
-              "text": "started_at_ms",
-              "type": "number"
+              "selector": "pr_number",
+              "text": "pr_number",
+              "type": "string"
             },
             {
-              "selector": "done_at_ms",
-              "text": "done_at_ms",
-              "type": "number"
-            },
-            {
-              "selector": "pr_url",
-              "text": "pr_url",
+              "selector": "details_url",
+              "text": "details_url",
               "type": "string"
             }
           ]
@@ -603,6 +550,119 @@
         "current": {
           "text": "30",
           "value": "30",
+          "selected": true
+        },
+        "refresh": 0,
+        "description": ""
+      },
+      {
+        "name": "repo",
+        "label": "Repository",
+        "type": "custom",
+        "hide": 0,
+        "query": "All : all,osac : osac,osac-test-infra : osac-test-infra",
+        "options": [
+          {
+            "text": "All",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "osac",
+            "value": "osac",
+            "selected": false
+          },
+          {
+            "text": "osac-test-infra",
+            "value": "osac-test-infra",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "All",
+          "value": "all",
+          "selected": true
+        },
+        "refresh": 0,
+        "description": ""
+      },
+      {
+        "name": "suite",
+        "label": "Suite",
+        "type": "custom",
+        "hide": 0,
+        "query": "All : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas,Netris : netris,Stretched : stretched",
+        "options": [
+          {
+            "text": "All",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "VMaaS",
+            "value": "vmaas",
+            "selected": false
+          },
+          {
+            "text": "CaaS",
+            "value": "caas",
+            "selected": false
+          },
+          {
+            "text": "BMaaS",
+            "value": "bmaas",
+            "selected": false
+          },
+          {
+            "text": "Netris",
+            "value": "netris",
+            "selected": false
+          },
+          {
+            "text": "Stretched",
+            "value": "stretched",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "All",
+          "value": "all",
+          "selected": true
+        },
+        "refresh": 0,
+        "description": ""
+      },
+      {
+        "name": "result",
+        "label": "Result",
+        "type": "custom",
+        "hide": 0,
+        "query": "All : all,Passed : success,Failed : failure,Canceled : cancelled",
+        "options": [
+          {
+            "text": "All",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "Passed",
+            "value": "success",
+            "selected": false
+          },
+          {
+            "text": "Failed",
+            "value": "failure",
+            "selected": false
+          },
+          {
+            "text": "Canceled",
+            "value": "cancelled",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "All",
+          "value": "all",
           "selected": true
         },
         "refresh": 0,

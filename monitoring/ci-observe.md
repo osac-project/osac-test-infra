@@ -12,9 +12,9 @@ The collector-first path is live. What works now, verified against the central b
 - Live push is the delivery path. A recorded run streams pytest traces, cluster logs and kubelet metrics to the central backend while the test runs. The capture step uploads no telemetry. The separate failure gather still uploads a redacted artifact.
 - Standard VMaaS, BMaaS and CaaS full-install runs record by default in both repositories, for pull request, merge queue, scheduled and manual runs. Netris, stretched, agentless and full-regression workflows have no capture action yet.
 - Every store keeps 30 days: Tempo, Prometheus, Loki, the GitHub artifact, the workflow exporter, `prs.db` and `trends.db`.
-- **Start here** shows Run, Job, Repo, PR, Branch, Trigger, Result, Recorded, Created and GitHub. Every identifier is a link.
+- **Start here** shows Run, Workflow, Repository, PR, Branch, Started by, Result, Recorded, Started and GitHub. Repository, Suite and Result filter the data; every column also has a filter. Every identifier is a link. A run with no recording opens GitHub.
 - **E2E run** shows Result, Tests run and Test time, then collapsed Failures, Jobs and steps, Test list, Run info and Cluster rows. Result comes from GitHub. Run info links the run, PR and commit. Jobs and steps show where the time went outside the test itself. Cluster shows pods, CPU, memory and nodes for the run window. The page refreshes every minute.
-- **Pull requests** starts from one pull request: its dates, the time in each stage, every E2E run it made (one code version per commit), and its merge-queue attempts. A pull request that is still open is read from GitHub when the page loads. **Trends** shows per-test history.
+- **Pull requests** starts from one pull request, chosen from the list or typed by number: its dates, the time in each stage, every E2E run it made (one code version per commit), and its merge-queue attempts. The Repository control picks `osac` or `osac-test-infra`. A pull request that is still open is read from GitHub when the page loads. **Trends** shows per-test history.
 - Capture ids stay readable (`bmaas-main-<run-id>-a1`). Suite and PR are promoted to Loki and Prometheus labels.
 - Batch-era session traces remain queryable through the archive datasource.
 

@@ -12,7 +12,7 @@ The principles behind the pages, the current gaps, and the roadmap are in [`obse
 
 ## Start here
 
-One table of recent E2E runs: Run, Job, Repo, PR, Branch, Trigger, Result, Recorded, Created and GitHub. Every identifier is a link. `No` under Recorded means the job sent no test data; `Unknown` means the check could not judge.
+One table of recent E2E runs: Run, Workflow, Repository, PR, Branch, Started by, Result, Recorded, Started and GitHub. Repository, Suite and Result filter the data; every column also has a filter. Every identifier is a link. `No` under Recorded means the job sent no test data; `Unknown` means the check could not judge, and a row with no recording opens GitHub.
 
 ## E2E run
 
@@ -28,6 +28,8 @@ One table of recent E2E runs: Run, Job, Repo, PR, Branch, Trigger, Result, Recor
 A run has detailed data only when its recording arrived. A missing recording does not change the GitHub result. A trace with no session end shows **Not finished** until the session span arrives.
 
 ## Pull requests
+
+Choose the pull request from the list, or type its number, and pick the repository. The list holds pull requests that merged or closed in the last 30 days.
 
 | Section | Contents |
 |---|---|

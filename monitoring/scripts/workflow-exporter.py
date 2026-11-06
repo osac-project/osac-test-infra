@@ -4390,6 +4390,7 @@ class WorkflowExporter:
     # -- ci-observe runs (begin) --------------------------------------------
     #
     # GET /api/ci-observe/runs?days=<n>&limit=<n>&before=<run id>&run=<run id>
+    #     &repo=<repo>&suite=<suite>&result=<conclusion>
     # backs the entry page's "Recent E2E runs" table: one row per E2E run,
     # with the per-run verdict the front door needs (capture, not collected,
     # or unknown). The verdict lives in the sibling ci_observe_runs module
@@ -4400,7 +4401,7 @@ class WorkflowExporter:
     # registry's captures on run_id, paged by run id (ids increase with
     # creation time), with the total computed by a window function so no
     # second count query is needed. No Tempo.
-    def _ci_observe_run_where(self, window_from, window_to, before="", run_id=""):
+    def _ci_observe_run_where(self, window_from, window_to, before="", run_id="", repo="", suite=""):
         """The WHERE clause every run-level ci-observe query shares.
 
         A full-install run has one e2e row whose id is the run id. A
@@ -4409,6 +4410,10 @@ class WorkflowExporter:
         runs, and a capture id always names the parent run, so the index
         groups by run_id and a run is visible either way. The gated runs are
         not E2E.
+
+        `repo` and `suite` narrow the rows before grouping. The result
+        filter runs on the grouped conclusion in the caller, so a run with
+        one failed suite cannot appear as a success.
         """
         where = [
             "j.category = 'e2e'",
@@ -4428,6 +4433,12 @@ class WorkflowExporter:
             where.append("j.created_at < :until")
             args["since"] = self._iso_utc(window_from)
             args["until"] = self._iso_utc(window_to)
+            if repo:
+                where.append("j.repo = :repo")
+                args["repo"] = repo
+            if suite:
+                where.append("LOWER(j.workflow) LIKE '%' || :suite || '%'")
+                args["suite"] = suite
             if before:
                 # Keyset paging on the indexed text column. Run ids are
                 # fixed-length digit strings, so text order is numeric order.
@@ -4480,7 +4491,7 @@ class WorkflowExporter:
     def _iso_utc(value):
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def get_ci_observe_run_window(self, days):
+    def get_ci_observe_run_window(self, days, repo="", suite="", result=""):
         """Every run-level row in the window, one per run.
 
         The entry page's verdict cards count the whole window, so they cannot
@@ -4489,7 +4500,13 @@ class WorkflowExporter:
         """
         now = datetime.now(timezone.utc)
         window_from = now - timedelta(days=days)
-        where, args = self._ci_observe_run_where(window_from, now)
+        where, args = self._ci_observe_run_where(
+            window_from, now, repo=repo, suite=suite
+        )
+        having = ""
+        if result:
+            having = f" HAVING {self.CI_OBSERVE_RUN_CONCLUSION} = :result"
+            args["result"] = result
         sql = f"""
             SELECT j.run_id AS id,
                    {self.CI_OBSERVE_RUN_CONCLUSION} AS conclusion,
@@ -4501,6 +4518,7 @@ class WorkflowExporter:
             LEFT JOIN captures c ON c.run_id = j.run_id
             WHERE {where}
             GROUP BY j.run_id
+            {having}
             ORDER BY j.run_id DESC
         """
         with self._db() as conn:
@@ -4512,17 +4530,25 @@ class WorkflowExporter:
             )
         return rows
 
-    def get_ci_observe_run_page(self, days, limit, before="", run_id=""):
+    def get_ci_observe_run_page(self, days, limit, before="", run_id="", repo="", suite="", result=""):
         """One page of run-level E2E rows, joined to their captures.
 
         Returns rows, matched, truncated, window_from, window_to. `before` is
         the id of the last run on the previous page: real keyset paging, so a
         page neither repeats nor skips a run. `run_id` is an exact lookup and
-        ignores the window, so an old run still resolves.
+        ignores the window, so an old run still resolves. `repo` and `suite`
+        narrow the rows; `result` filters the grouped conclusion, so a run
+        with one failed suite cannot appear as a success.
         """
         now = datetime.now(timezone.utc)
         window_from = now - timedelta(days=days)
-        where_sql, args = self._ci_observe_run_where(window_from, now, before, run_id)
+        where_sql, args = self._ci_observe_run_where(
+            window_from, now, before, run_id, repo=repo, suite=suite
+        )
+        having = ""
+        if result:
+            having = f" HAVING {self.CI_OBSERVE_RUN_CONCLUSION} = :result"
+            args["result"] = result
         args["fetch"] = limit + 1
         args["org"] = ORG
         sql = f"""
@@ -4546,6 +4572,7 @@ class WorkflowExporter:
             LEFT JOIN captures c ON c.run_id = j.run_id
             WHERE {where_sql}
             GROUP BY j.run_id
+            {having}
             ORDER BY j.run_id DESC
             LIMIT :fetch
         """

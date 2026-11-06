@@ -13,22 +13,24 @@ Sign in to Grafana with GitHub. Open **ci-observe** and choose **Start here**.
 
 ## Start here
 
+Filter by **Repository**, **Suite** and **Result** above the table. The filters narrow the data, so the rows stay honest. Every column also has a funnel filter.
+
 The table shows one row per E2E run:
 
 | Column | Meaning |
 |---|---|
-| Run | GitHub run id. Opens the E2E run page. |
-| Job | Workflow name. |
-| Repo | `osac` or `osac-test-infra`. |
-| PR | Pull request number. Opens GitHub. |
+| Run | GitHub run id. Opens the run page when test data was recorded, and GitHub otherwise. |
+| Workflow | Workflow name. |
+| Repository | `osac` or `osac-test-infra`. |
+| PR | Pull request number. Opens the Pull requests page. |
 | Branch | Branch or merge-queue ref. |
-| Trigger | Scheduled, manual, push, PR or merge queue. |
+| Started by | Scheduled, manual, push, PR or merge queue. |
 | Result | GitHub pass or fail. |
 | Recorded | Yes when test data arrived, No when the check proved it did not, Unknown when the check could not judge. |
-| Created | When GitHub created the run. |
+| Started | When GitHub created the run. |
 | GitHub | Opens the workflow run. |
 
-`No` under Recorded means the job sent no test data. `Unknown` means the recording check could not judge: the run just ended, the capture list is stale, or the run is older than its coverage. Netris, full-regression and agentless jobs have no capture wiring yet, so they cannot record.
+`No` under Recorded means the job sent no test data. `Unknown` means the recording check could not judge: the run just ended, the capture list is stale, or the run is older than its coverage. A run with no recording opens GitHub from the Run cell; only a recorded run opens the run page. Netris, full-regression and agentless jobs have no capture wiring yet, so they cannot record.
 
 ## E2E run
 
@@ -50,7 +52,7 @@ A run without detailed test data shows **Not finished** and no test count. A run
 
 ## Pull requests
 
-The page starts with one pull request. Enter its number above.
+The page starts with one pull request. Choose one from the list, or type its number. The **Repository** control picks `osac` or `osac-test-infra`. The list holds pull requests that merged or closed in the last 30 days; an open pull request can still be typed.
 
 - **Selected pull request**: its identity and dates. Opened, first review, approved, entered the queue, last queue attempt, merged or closed.
 - **Time in each stage**: where the time went, with the reason a stage could not be measured.

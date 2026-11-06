@@ -32,7 +32,7 @@
       "id": 1,
       "options": {
         "mode": "markdown",
-        "content": "**Start with a pull request.** Type its number above (the repository defaults to `osac`).\n\nThe page shows where its time went, every E2E run it made, and every merge-queue attempt. A run after a rebase appears as a new code version. Open a run for its jobs, steps and tests.\n\nA pull request that is still open is read from GitHub when the page loads. The saved history starts after it merges or closes. Data is kept for 30 days."
+        "content": "**Start with a pull request.** Choose one above, or type its number. The list holds pull requests that merged or closed in the last 30 days.\n\nThe page shows where its time went, every E2E run it made, and every merge-queue attempt. A run after a rebase appears as a new code version. Open a run for its jobs, steps and tests.\n\nA pull request that is still open is read from GitHub when the page loads. The saved history starts after it merges or closes. Data is kept for 30 days."
       },
       "fieldConfig": {
         "defaults": {},
@@ -76,7 +76,7 @@
             },
             "inspect": false
           },
-          "noValue": "Enter a pull request number above."
+          "noValue": "Choose a pull request above."
         },
         "overrides": [
           {
@@ -540,7 +540,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "seconds"
+              "options": "time_display"
             },
             "properties": [
               {
@@ -550,10 +550,6 @@
               {
                 "id": "custom.width",
                 "value": 100
-              },
-              {
-                "id": "unit",
-                "value": "s"
               }
             ]
           },
@@ -653,9 +649,9 @@
               "type": "string"
             },
             {
-              "selector": "seconds",
-              "text": "seconds",
-              "type": "number"
+              "selector": "time_display",
+              "text": "time_display",
+              "type": "string"
             },
             {
               "selector": "state",
@@ -693,7 +689,8 @@
             "cellOptions": {
               "type": "auto"
             },
-            "inspect": false
+            "inspect": false,
+            "filterable": true
           },
           "noValue": "No E2E run for this pull request in the last 30 days."
         },
@@ -1076,7 +1073,8 @@
             "cellOptions": {
               "type": "auto"
             },
-            "inspect": false
+            "inspect": false,
+            "filterable": true
           },
           "noValue": "No queue attempt in the last 30 days. That is no queue history, not no ejections."
         },
@@ -1446,7 +1444,8 @@
             "cellOptions": {
               "type": "auto"
             },
-            "inspect": false
+            "inspect": false,
+            "filterable": true
           },
           "noValue": "No pull request data for these days"
         },
@@ -1650,7 +1649,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1815,7 +1814,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1882,34 +1881,79 @@
         "description": ""
       },
       {
-        "name": "pr_number",
-        "label": "PR",
-        "type": "textbox",
-        "hide": 0,
-        "query": "",
-        "refresh": 0,
-        "current": {
-          "text": "",
-          "value": "",
-          "selected": true
-        },
-        "options": [],
-        "description": ""
-      },
-      {
         "name": "pr_repo",
         "label": "Repository",
-        "type": "textbox",
-        "hide": 2,
-        "query": "",
+        "type": "custom",
+        "hide": 0,
+        "query": "osac,osac-test-infra",
         "refresh": 0,
         "current": {
           "text": "osac",
           "value": "osac",
           "selected": true
         },
-        "options": [],
+        "options": [
+          {
+            "text": "osac",
+            "value": "osac",
+            "selected": true
+          },
+          {
+            "text": "osac-test-infra",
+            "value": "osac-test-infra",
+            "selected": false
+          }
+        ],
         "description": ""
+      },
+      {
+        "name": "pr_number",
+        "label": "Pull request",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "workflow-api"
+        },
+        "definition": "",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable",
+          "infinityQuery": {
+            "refId": "variable",
+            "type": "json",
+            "source": "url",
+            "parser": "backend",
+            "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+            "url_options": {
+              "method": "GET",
+              "data": ""
+            },
+            "root_selector": "$.prs",
+            "format": "table",
+            "columns": [
+              {
+                "selector": "option_label",
+                "text": "__text",
+                "type": "string"
+              },
+              {
+                "selector": "number",
+                "text": "__value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "allowCustomValue": true,
+        "multi": false,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "regex": "",
+        "hide": 0,
+        "description": "Saved pull requests from the last $days days. Type a number to open an open or older pull request."
       }
     ]
   },

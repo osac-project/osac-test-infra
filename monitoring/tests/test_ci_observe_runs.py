@@ -415,6 +415,92 @@ def test_the_page_parses_a_capture_id_the_same_way_as_the_registry(client, fresh
     assert parsed == {"run_id": str(RUN_ID), "run_attempt": "2", "suite": "vmaas"}
 
 
+def test_a_repository_filter_narrows_the_window(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, repo="osac"))
+    exporter._upsert_job(run_job(SECOND_RUN_ID, repo="osac-test-infra"))
+
+    doc = client.get_json({"days": ["7"], "repo": ["osac-test-infra"]})
+
+    assert [run["id"] for run in doc["runs"]] == [str(SECOND_RUN_ID)]
+
+
+def test_a_suite_filter_narrows_the_window(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, workflow="E2E VMaaS Full Install"))
+    exporter._upsert_job(run_job(SECOND_RUN_ID, workflow="E2E CaaS Full Install"))
+
+    doc = client.get_json({"days": ["7"], "suite": ["caas"]})
+
+    assert [run["id"] for run in doc["runs"]] == [str(SECOND_RUN_ID)]
+
+
+def test_a_result_filter_uses_the_grouped_conclusion(client, exporter, fresh):
+    """A run with one failed suite is not a success, even when the result
+    filter is applied to its rows."""
+    clear_captures(exporter)
+    passed = run_job(RUN_ID, id=1001, workflow="E2E vmaas (pull requests)", conclusion="success")
+    passed["run_id"] = str(RUN_ID)
+    failed = run_job(RUN_ID, id=1002, workflow="E2E caas (pull requests)", conclusion="failure")
+    failed["run_id"] = str(RUN_ID)
+    exporter._upsert_job(passed)
+    exporter._upsert_job(failed)
+
+    assert client.get_json({"days": ["7"], "result": ["success"]})["runs"] == []
+    assert [run["id"] for run in client.get_json({"days": ["7"], "result": ["failure"]})["runs"]] == [
+        str(RUN_ID)
+    ]
+
+
+def test_all_means_no_filter(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, repo="osac"))
+    exporter._upsert_job(run_job(SECOND_RUN_ID, repo="osac-test-infra", conclusion="failure"))
+
+    doc = client.get_json({"days": ["7"], "repo": ["all"], "suite": ["all"], "result": ["all"]})
+
+    assert {run["id"] for run in doc["runs"]} == {str(RUN_ID), str(SECOND_RUN_ID)}
+
+
+def test_unknown_filter_values_are_ignored_with_a_note(client, jobs, fresh):
+    doc = client.get_json(
+        {"days": ["7"], "repo": ["not a repo"], "suite": ["unknown"], "result": ["flaky"]}
+    )
+
+    assert {run["id"] for run in doc["runs"]} == {str(RUN_ID), str(SECOND_RUN_ID)}
+    assert any("repository" in note and "ignored" in note for note in doc["notes"])
+    assert any("suite" in note and "ignored" in note for note in doc["notes"])
+    assert any("result" in note and "ignored" in note for note in doc["notes"])
+
+
+def test_a_run_carries_the_pr_number_and_its_window(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, pr_display="#123"))
+    fresh.refresh()
+    run = state_of(client.get_json({"days": ["7"]}), RUN_ID)
+
+    assert run["pr_number"] == "123"
+    assert f"var-capture_id={CAPTURE}" in run["details_url"]
+    assert f"from={run['started_at_ms']}" in run["details_url"]
+    assert f"to={run['done_at_ms']}" in run["details_url"]
+
+
+def test_a_recorded_run_opens_the_run_page(client, jobs, fresh):
+    doc = client.get_json({"days": ["7"]})
+    run = state_of(doc, RUN_ID)
+
+    assert run["details_url"].startswith("/d/ci-observe-runs/")
+    assert f"var-capture_id={CAPTURE}" in run["details_url"]
+
+
+def test_an_unrecorded_run_opens_github(client, exporter, fresh):
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID))
+    run = state_of(client.get_json({"days": ["7"]}), RUN_ID)
+
+    assert run["details_url"] == f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}"
+
+
 def test_no_complete_discovery_since_the_run_finished_is_unknown(client, jobs, registry):
     """A run that finished after the registry's last complete answer may have
     sent its capture since. Its absence proves nothing."""
