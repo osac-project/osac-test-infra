@@ -51,7 +51,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "Test result not available",
+          "noValue": "Not finished",
           "mappings": [
             {
               "type": "value",
@@ -65,6 +65,11 @@
                   "text": "Failed",
                   "color": "red",
                   "index": 1
+                },
+                "running": {
+                  "text": "Still running",
+                  "color": "orange",
+                  "index": 2
                 }
               }
             }

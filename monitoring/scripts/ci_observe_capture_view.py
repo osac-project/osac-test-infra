@@ -244,14 +244,19 @@ class CIObserveCaptureView:
     """
 
     # A complete trace is stable, so a positive answer is cached for ten
-    # minutes. not_indexed and busy are expected to clear, so they are held
-    # for ten seconds: an open page retries soon without hammering Tempo.
+    # minutes. not_indexed, busy and missing are expected to clear, so they
+    # are held briefly: a capture that registers while a page is open must not
+    # stay "missing" for ten minutes.
     CACHE_TTL_SECONDS = 600
-    NEGATIVE_CACHE_TTL_SECONDS = 10
+    NEGATIVE_CACHE_TTL_SECONDS = 30
     # A capture with no "test run" span yet may still be exporting spans: the
     # session span is written last. Its tables are partial, so re-read it
     # within a minute instead of pinning a partial count for ten.
     INCOMPLETE_CACHE_TTL_SECONDS = 60
+    # A trace whose last span is this recent is treated as a run still in
+    # progress, not as a capture that ended without a session span. A single
+    # E2E test can run for many minutes without exporting a new span.
+    RUNNING_WINDOW_SECONDS = 30 * 60
     CACHE_MAX_BYTES = 64 * 1024 * 1024
 
     # A trace larger than this is not read into memory. The live traces
@@ -345,7 +350,7 @@ class CIObserveCaptureView:
             return copy.deepcopy(document)
 
     def _store(self, capture_id, document) -> None:
-        if document["state"] in ("not_indexed", "busy") or document.get("transient"):
+        if document["state"] in ("not_indexed", "busy", "missing") or document.get("transient"):
             ttl = self.NEGATIVE_CACHE_TTL_SECONDS
         elif document["state"] == "ok" and not document["coverage"]["session_span"]:
             ttl = self.INCOMPLETE_CACHE_TTL_SECONDS
@@ -469,10 +474,14 @@ class CIObserveCaptureView:
         if not session["workers"]:
             notes.append("the trace records no xdist worker; the worker column stays empty")
         if coverage["session_span"] == 0:
-            notes.append(
-                "the trace has no 'test run' session span; the session duration is "
-                "the trace wall clock, and the capture is incomplete"
-            )
+            if session["status"] is None and self._recently_active(session):
+                session["status"] = "running"
+                notes.append("the capture is still running; the session span is written when the run ends")
+            else:
+                notes.append(
+                    "the trace has no 'test run' session span; the session duration is "
+                    "the trace wall clock, and the capture is incomplete"
+                )
         if coverage["spans_unclassified"]:
             notes.append(
                 f"{coverage['spans_unclassified']} spans are outside the pytest classes "
@@ -493,6 +502,15 @@ class CIObserveCaptureView:
         document["failed_tests"] = self._cached_failed_tests(run_id, run_attempt, notes)
         document["notes"] = notes
         return document
+
+    def _recently_active(self, session) -> bool:
+        """True when the trace's last span is recent enough to be a live run."""
+        started = _parse_time(session.get("started_at"))
+        if started is None:
+            return False
+        duration = session.get("duration_seconds") or 0
+        last_span = started + timedelta(seconds=duration)
+        return datetime.now(UTC) - last_span <= timedelta(seconds=self.RUNNING_WINDOW_SECONDS)
 
     def _empty_document(self, capture_id):
         return {

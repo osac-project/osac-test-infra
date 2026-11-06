@@ -111,6 +111,14 @@ def test_the_summary_answers_three_questions() -> None:
     assert [panel(title)["type"] for title in ("Result", "Tests run", "Test time")] == ["stat", "stat", "stat"]
 
 
+def test_a_live_capture_reads_as_still_running() -> None:
+    result = panel("Result")
+    defaults = result["fieldConfig"]["defaults"]
+    options = defaults["mappings"][0]["options"]
+    assert options["running"]["text"] == "Still running"
+    assert defaults["noValue"] == "Not finished"
+
+
 def test_the_summary_reads_the_capture_endpoint() -> None:
     for title, selector in (("Result", "status"), ("Tests run", "tests"), ("Test time", "duration_seconds")):
         target = panel(title)["targets"][0]
