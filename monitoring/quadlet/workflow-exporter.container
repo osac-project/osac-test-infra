@@ -62,6 +62,7 @@ Volume=%h/.monitoring-server/scripts/ci_observe_run_evidence.py:/app/ci_observe_
 Volume=%h/.monitoring-server/scripts/ci_observe_runs.py:/app/ci_observe_runs.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_capture_view.py:/app/ci_observe_capture_view.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_trends.py:/app/ci_observe_trends.py:ro,Z
+Volume=%h/.monitoring-server/scripts/ci_observe_history.py:/app/ci_observe_history.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_prs.py:/app/ci_observe_prs.py:ro,Z
 # Mount data directory for cache persistence across restarts
 Volume=%h/.monitoring-server/data:/data:Z

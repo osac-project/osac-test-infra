@@ -64,6 +64,7 @@ RUN_DOCUMENT = {
             "failed_step": "Run E2E tests",
             "failure_reason": "test",
             "url": "https://github.com/osac-project/osac/actions/runs/41709318840/job/1",
+            "history_url": "/d/ci-observe-trends/ci-observe-e28094-trends?var-kind=job&var-repo=osac",
         }
     ],
     "steps": [
@@ -187,6 +188,24 @@ def test_jobs_read_the_run_endpoint() -> None:
         "failed_step": "Failed step",
         "failure_reason": "Failure kind",
     }
+
+
+def test_a_job_name_opens_its_history_not_github() -> None:
+    """The question after a run is whether the job is failing more often or
+    getting slower, so the name links to the Trends page with the job
+    preselected. The stored GitHub link stays on the hidden url column."""
+    table = panel("Jobs")
+    links = {}
+    for entry in table["fieldConfig"]["overrides"]:
+        field = entry["matcher"].get("options")
+        for prop in entry["properties"]:
+            if prop["id"] == "links":
+                links[field] = prop["value"][0]["url"]
+    assert links["name"] == "${__data.fields.history_url}"
+    assert "history_url" in selectors(table)
+    assert "ci-observe-trends" in RUN_DOCUMENT["jobs"][0]["history_url"]
+    assert "var-kind=job" in RUN_DOCUMENT["jobs"][0]["history_url"]
+    assert "var-repo=osac" in RUN_DOCUMENT["jobs"][0]["history_url"]
 
 
 def test_steps_read_the_run_endpoint() -> None:

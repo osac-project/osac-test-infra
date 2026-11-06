@@ -99,6 +99,7 @@ REGISTRY_LOCK_FILE="${MONITORING_HOME}/config/.remote-runners.lock"
 ###############################################################################
 phase() { echo -e "\n==> Phase $1: $2"; }
 info()  { echo "    $1"; }
+warn()  { echo "    WARNING: $1" >&2; }
 ###############################################################################
 
 usage() {
@@ -601,6 +602,10 @@ if [[ "${MODE}" == "update-central" ]]; then
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_trends.py" \
        "${MONITORING_HOME}/scripts/ci_observe_trends.py"
     chmod +x "${MONITORING_HOME}/scripts/ci_observe_trends.py"
+    # The read side of the same store: one test or one job over a window,
+    # behind /api/ci-observe/history. workflow-exporter.py imports it.
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_history.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_history.py"
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_prs.py" \
        "${MONITORING_HOME}/scripts/ci_observe_prs.py"
     chmod +x "${MONITORING_HOME}/scripts/ci_observe_prs.py"
@@ -671,6 +676,15 @@ if [[ "${MODE}" == "update-central" ]]; then
     systemctl --user restart service-health-textfile.timer
     systemctl --user enable --now ci-observe-trends.timer
     systemctl --user enable --now ci-observe-prs.timer
+    # The timer only fires at 04:15. Start the rollup once now: this deploy
+    # may have replaced monitoring-setup.sh and the rollup script while
+    # trends.db still has the old schema, and the live Trends page must not
+    # read an unmigrated file. Type=oneshot, so start waits for the pass and
+    # returns its exit code. A failure must not fail the whole deploy: the
+    # read path tolerates the old schema and the timer retries tomorrow.
+    if ! systemctl --user start ci-observe-trends.service; then
+        warn "ci-observe-trends.service did not finish; trends.db stays on its old schema and the 30-day backfill waits for the next 04:15 timer run"
+    fi
 
     info "Central update complete."
     exit 0
@@ -788,6 +802,9 @@ cp "${MONITORING_REPO_DIR}/scripts/ci_observe_trends.py" \
    "${MONITORING_HOME}/scripts/ci_observe_trends.py"
 chmod +x "${MONITORING_HOME}/scripts/ci_observe_trends.py"
 info "Installed ci_observe_trends.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_history.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_history.py"
+info "Installed ci_observe_history.py"
 cp "${MONITORING_REPO_DIR}/scripts/ci_observe_prs.py" \
    "${MONITORING_HOME}/scripts/ci_observe_prs.py"
 chmod +x "${MONITORING_HOME}/scripts/ci_observe_prs.py"
@@ -803,6 +820,8 @@ cp "${MONITORING_REPO_DIR}/scripts/ci_observe_runs.py" \
    "${MONITORING_HOME}/scripts/ci_observe_runs.py"
 cp "${MONITORING_REPO_DIR}/scripts/ci_observe_capture_view.py" \
    "${MONITORING_HOME}/scripts/ci_observe_capture_view.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_history.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_history.py"
 info "Installed workflow-exporter and its ci-observe modules"
 
 ###############################################################################

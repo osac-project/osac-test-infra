@@ -14,8 +14,9 @@ The collector-first path is live. What works now, verified against the central b
 - Every store keeps 30 days: Tempo, Prometheus, Loki, the GitHub artifact, the workflow exporter, `prs.db` and `trends.db`.
 - **Start here** shows Run, Workflow, Repository, PR, Branch, Started by, Result, Recorded, Started and GitHub. Repository, Suite and Result filter the data; every column also has a filter. Every identifier is a link. A run with no recording opens GitHub.
 - **E2E run** shows Result, Tests run and Test time, then collapsed Failures, Jobs and steps, Test list, Run info and Cluster rows. Result comes from GitHub. Run info links the run, PR and commit. Jobs and steps show where the time went outside the test itself. Cluster shows pods, CPU, memory and nodes for the run window. The page refreshes every minute.
-- **Pull requests** starts from one pull request, chosen from the list or typed by number: its dates, the time in each stage, every E2E run it made (one code version per commit), and its merge-queue attempts. The Repository control picks `osac` or `osac-test-infra`. A pull request that is still open is read from GitHub when the page loads. **Trends** shows per-test history.
+- **Pull requests** starts from one pull request, chosen from the list or typed by number: its dates, the time in each stage, every E2E run it made (one code version per commit), and its merge-queue attempts. The Repository control picks `osac` or `osac-test-infra`. A pull request that is still open is read from GitHub when the page loads. **Trends** answers "is this test or this job failing more often or getting slower?" for one unit over 7 or 30 days: runs, pass rate, p50, p95, p99 and mean duration, a daily chart, a duration chart and the recent runs. A job is a repository and display name, so retries and suites aggregate. The E2E run page's Jobs table links each job to its history.
 - Capture ids stay readable (`bmaas-main-<run-id>-a1`). Suite and PR are promoted to Loki and Prometheus labels.
+- `monitoring-setup.sh --update-central` runs `ci-observe-trends.service` once after enabling its timer, so trends.db is migrated and the last 30 days are re-rolled before the live page reads it. A failed one-shot only warns: the read path tolerates the old schema and the 04:15 timer retries.
 - Batch-era session traces remain queryable through the archive datasource.
 
 Known gaps:
@@ -24,6 +25,7 @@ Known gaps:
 - No attempts or flake view, no Kubernetes events, no waits table, no per-test trace and log links, no service call summary.
 - No CI SLOs, capture coverage target or telemetry pipeline health.
 - No outcome-based sampling and no long-term rollups.
+- Trends window p99 and mean are not measured for days rolled up before raw per-run durations were stored; those days keep their counts and daily p50 and p95.
 - Telemetry still uses `osac.ci.*` names. OpenTelemetry CI/CD and test names are the planned shared vocabulary.
 
 [`ci-observe/observability.md`](ci-observe/observability.md) explains the impact and the order of work.

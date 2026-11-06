@@ -168,6 +168,9 @@ def test_direct_run_evidence(evidence, github, wfe):
     assert doc["run"]["url"] == f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}"
     assert [j["name"] for j in doc["jobs"]] == ["osac / E2E VMaaS Full Install"]
     assert doc["jobs"][0]["failure_reason"] == "test"
+    assert "var-kind=job" in doc["jobs"][0]["history_url"]
+    assert "var-repo=osac" in doc["jobs"][0]["history_url"]
+    assert "var-name=osac%20%2F%20E2E%20VMaaS%20Full%20Install" in doc["jobs"][0]["history_url"]
     assert doc["steps"] == [
         {
             "job_name": "osac / E2E VMaaS Full Install",

@@ -66,7 +66,8 @@ The custom `osac.ci.*` names work. New signals should emit the shared name next 
 | Cluster pods, CPU, memory, nodes | ci-observe Prometheus | Cluster row |
 | Pull request stages and queue time | `prs.db` | Pull requests |
 | Every E2E run of a pull request, one code version per commit | Workflow exporter job history | Pull requests |
-| Test history | `trends.db` | Trends |
+| Test history | `trends.db` (daily rollup plus raw per-run rows) | Trends |
+| Job history | Workflow exporter job history, grouped by repository and display name | Trends |
 | Pod logs and full failure detail | GitHub artifact | Failures link |
 
 Records are kept for 30 days. Tempo accepts a search window of 7 days at a time.
@@ -87,6 +88,7 @@ Records are kept for 30 days. Tempo accepts a search window of 7 days at a time.
 | No telemetry pipeline health | Dropped spans or ingest lag are not shown. |
 | No sampling policy | Volume is low today, but there is no rule for when it grows. |
 | No long-term rollups | Raw data stops at 30 days, so yearly trends are impossible. |
+| Window percentiles before raw durations | The daily rollup alone cannot give a window p99 or mean. Days rolled up before the raw per-run rows existed keep their counts and daily p50 and p95, and say the window value was not measured. |
 
 ## Roadmap
 

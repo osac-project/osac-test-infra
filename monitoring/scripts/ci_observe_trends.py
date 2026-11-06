@@ -30,6 +30,15 @@ The same file holds the read-only compare query behind
 GET /api/ci-observe/trends/compare (see compare_document): two source SHAs,
 one window of days, the tests both revisions ran and how they differ.
 
+Alongside the daily rows it keeps one row per test per run
+(`test_runs`), the raw durations behind the daily percentiles. The daily
+rollup alone cannot answer a true percentile over a whole window (a
+percentile of percentiles is not a percentile), so the history endpoint
+reads these rows for its window summary and its recent-run table. The
+table starts empty on an older database: those days have counts and their
+daily p50 and p95, but no window percentile and no recent run. Missing is
+shown as missing, never as zero.
+
 Reuse: the bounded artifact download and the zip/JUnit extraction come
 from ci_observe_run_evidence.py, imported directly (that module starts no
 server). Only the per-testcase walk below is new: the run-evidence parser
@@ -91,7 +100,12 @@ RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 ROLLUP_COLUMNS = (
     "day", "repo", "workflow", "suite", "test_id", "source_sha",
     "runs", "passes", "failures", "p50_duration_s", "p95_duration_s",
+    "p99_duration_s", "mean_duration_s",
 )
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS does not
+# alter an existing table, so open_trends_db adds them with ALTER TABLE. A
+# row written before that change keeps NULL there: "not measured", never 0.
+ADDED_ROLLUP_COLUMNS = ("p99_duration_s", "mean_duration_s")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS test_rollup (
@@ -106,10 +120,30 @@ CREATE TABLE IF NOT EXISTS test_rollup (
     failures INTEGER NOT NULL,
     p50_duration_s REAL,
     p95_duration_s REAL,
+    p99_duration_s REAL,
+    mean_duration_s REAL,
     PRIMARY KEY (day, repo, workflow, suite, test_id, source_sha)
 );
 CREATE INDEX IF NOT EXISTS idx_test_rollup_test ON test_rollup(test_id, day);
 CREATE INDEX IF NOT EXISTS idx_test_rollup_day ON test_rollup(day);
+-- One row per test per run: the raw durations behind a day's percentiles.
+-- The history endpoint needs them for a true window percentile and for the
+-- recent-run table, which the daily rollup cannot provide. Replaced with
+-- the day's test_rollup rows, so a rerun corrects both together.
+CREATE TABLE IF NOT EXISTS test_runs (
+    day TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    suite TEXT NOT NULL,
+    test_id TEXT NOT NULL,
+    source_sha TEXT NOT NULL,
+    run_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    duration_s REAL,
+    passed INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_test_runs_test ON test_runs(test_id, day);
+CREATE INDEX IF NOT EXISTS idx_test_runs_day ON test_runs(day);
 -- One row per rolled-up day: how many runs the day had, how many of them
 -- still had a readable artifact, and how many did not. A day with
 -- runs_unavailable > 0 is a partial day, not a day without failures.
@@ -140,6 +174,17 @@ def percentile(values, fraction):
     rank = math.ceil(fraction * len(ordered))
     index = min(max(rank, 1), len(ordered)) - 1
     return round(ordered[index], 3)
+
+
+def mean_value(values):
+    """The arithmetic mean of values, None for an empty list.
+
+    Durations are seconds rounded to milliseconds like the rest of the
+    monitoring code.
+    """
+    if not values:
+        return None
+    return round(sum(values) / len(values), 3)
 
 
 def stored_rows(exporter_db, since_day):
@@ -363,7 +408,35 @@ def rollup_rows(runs):
             "failures": group["failures"],
             "p50_duration_s": percentile(group["durations"], 0.50),
             "p95_duration_s": percentile(group["durations"], 0.95),
+            "p99_duration_s": percentile(group["durations"], 0.99),
+            "mean_duration_s": mean_value(group["durations"]),
         })
+    return rows
+
+
+def test_run_rows(runs):
+    """One row per test per run, for the history endpoint.
+
+    runs: the same dicts rollup_rows consumes. A skipped test never reaches
+    here (parse_junit_outcomes leaves it out), so every row is a pass or a
+    failure. A testcase without a duration keeps a NULL duration: it counts
+    in runs but is excluded from every percentile.
+    """
+    rows = []
+    for run in runs:
+        for case in run.get("cases") or []:
+            rows.append({
+                "day": run["day"],
+                "repo": run["repo"],
+                "workflow": run["workflow"],
+                "suite": case["suite"],
+                "test_id": case["test_id"],
+                "source_sha": run["source_sha"],
+                "run_id": run["run_id"],
+                "created_at": run["created_at"],
+                "duration_s": case["duration_s"],
+                "passed": 1 if case["passed"] else 0,
+            })
     return rows
 
 
@@ -472,10 +545,16 @@ def open_trends_db(path):
     conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(test_rollup)")}
+    for column in ADDED_ROLLUP_COLUMNS:
+        if column not in columns:
+            # Existing rows read NULL here, not 0: the rollup never measured
+            # them, and a zero would look like an instant test.
+            conn.execute(f"ALTER TABLE test_rollup ADD COLUMN {column} REAL")
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(rollup_days)")}
     if "parsed_run_ids" not in columns:
         conn.execute("ALTER TABLE rollup_days ADD COLUMN parsed_run_ids TEXT NOT NULL DEFAULT '[]'")
-        conn.commit()
+    conn.commit()
     return conn
 
 
@@ -490,20 +569,37 @@ def day_is_superset(previous_ids, current_ids):
     return set(previous_ids) <= set(current_ids)
 
 
-def write_day(conn, day, rows, coverage):
-    """Replace one day's rollup rows and its coverage row in one transaction.
+def write_day(conn, day, rows, coverage, runs=None):
+    """Replace one day's rollup rows, raw run rows and coverage row in one
+    transaction.
 
     Idempotent by construction: the day's rows are deleted before the new
     ones are inserted, so rerunning a day corrects it instead of doubling
-    it. Other days are untouched.
+    it. Other days are untouched. `runs` is optional so a caller holding
+    only aggregate rows (a test fixture or a repair) still replaces the
+    day; the raw rows are deleted either way, because leaving an older
+    day's durations behind the new counts would make the two disagree.
     """
+    aggregate_rows = [
+        {**{"p99_duration_s": None, "mean_duration_s": None}, **row} for row in rows
+    ]
     with conn:
         conn.execute("DELETE FROM test_rollup WHERE day = ?", (day,))
         conn.executemany(
             f"INSERT INTO test_rollup ({', '.join(ROLLUP_COLUMNS)})"
             f" VALUES ({', '.join(':' + column for column in ROLLUP_COLUMNS)})",
-            rows,
+            aggregate_rows,
         )
+        conn.execute("DELETE FROM test_runs WHERE day = ?", (day,))
+        if runs:
+            conn.executemany(
+                "INSERT INTO test_runs"
+                " (day, repo, workflow, suite, test_id, source_sha, run_id,"
+                "  created_at, duration_s, passed)"
+                " VALUES (:day, :repo, :workflow, :suite, :test_id, :source_sha,"
+                "  :run_id, :created_at, :duration_s, :passed)",
+                runs,
+            )
         conn.execute("DELETE FROM rollup_days WHERE day = ?", (day,))
         conn.execute(
             "INSERT INTO rollup_days"
@@ -517,6 +613,7 @@ def prune_old_days(conn: sqlite3.Connection, cutoff: str) -> None:
     """Keep only per-test data from the last 30 days."""
     with conn:
         conn.execute("DELETE FROM test_rollup WHERE day < ?", (cutoff,))
+        conn.execute("DELETE FROM test_runs WHERE day < ?", (cutoff,))
         conn.execute("DELETE FROM rollup_days WHERE day < ?", (cutoff,))
 
 
@@ -832,7 +929,7 @@ def main(argv=None):
                 "runs_unavailable": listed[day] - parsed.get(day, 0),
                 "generated_at": generated_at,
                 "parsed_run_ids": current_ids,
-            })
+            }, test_run_rows(day_runs))
             logger.info(
                 "%s: %d run(s) listed, %d parsed, %d without readable test data, %d rollup row(s)",
                 day, listed[day], parsed.get(day, 0), listed[day] - parsed.get(day, 0), len(rows),

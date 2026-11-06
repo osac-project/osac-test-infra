@@ -4672,7 +4672,15 @@ class WorkflowExporter:
     CIOBS_TRENDS_COLUMNS = (
         "day", "repo", "workflow", "suite", "test_id", "source_sha",
         "runs", "passes", "failures", "p50_duration_s", "p95_duration_s",
+        "p99_duration_s", "mean_duration_s",
     )
+
+    def _trends_history_url(self, kind, name, days=30, repo=""):
+        """A Trends page link with one unit preselected. The builder lives
+        in ci_observe_history, next to the endpoint that serves it."""
+        import ci_observe_history
+
+        return ci_observe_history.history_url(kind, name, days, repo)
 
     def get_ci_observe_trends_json(self, params):
         """The /api/ci-observe/trends document: the rollup rows of the
@@ -4683,7 +4691,9 @@ class WorkflowExporter:
         coverage, notes. With summary=test, rows stays empty and tests
         carries one row per test id, suite and repo. Never fails the
         request: a missing rollup, a DB that cannot be opened, or a window
-        with no rows all come back as notes.
+        with no rows all come back as notes. A trends.db written before the
+        p99/mean columns existed is read with those columns as NULL, so the
+        old p50/p95 charts keep working until the rollup migrates it.
         """
         try:
             days = int((params.get("days", [""])[0] or self.CIOBS_TRENDS_DEFAULT_DAYS))
@@ -4743,8 +4753,24 @@ class WorkflowExporter:
                         [*args, self.CIOBS_TRENDS_MAX_TESTS],
                     )
                 ]
+                for row in doc["tests"]:
+                    row["history_url"] = self._trends_history_url(
+                        "test", row["test_id"], days, row["repo"]
+                    )
             else:
-                query = f"SELECT {', '.join(self.CIOBS_TRENDS_COLUMNS)} FROM test_rollup {where}"
+                # A trends.db written before a column existed must not turn
+                # the page into a query error: the read path names only the
+                # columns the file has and reads the missing ones as NULL
+                # ("not measured"). The rollup migrates the file on its next
+                # run; this path never writes.
+                existing = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(test_rollup)")
+                }
+                columns = ", ".join(
+                    column if column in existing else f"NULL AS {column}"
+                    for column in self.CIOBS_TRENDS_COLUMNS
+                )
+                query = f"SELECT {columns} FROM test_rollup {where}"
                 # Newest days first, so the cap drops the oldest rows, not the
                 # most recent days; restore chronological order for the chart.
                 query += " ORDER BY day DESC, repo, workflow, suite, test_id, source_sha LIMIT ?"
@@ -4819,6 +4845,36 @@ class WorkflowExporter:
         )
 
     # --- ci-observe trends compare (end) ----------------------------------
+
+    # --- ci-observe history (begin): single additive block ----------------
+    # GET /api/ci-observe/history?kind=test|job&name=<id>&days=<n>&repo=<repo>
+    # answers "is this test or this job failing more often or getting slower?"
+    # for one unit over 7 or 30 days: a summary, a daily series and the recent
+    # runs. Tests read trends.db (the rollup plus its raw per-run rows);
+    # jobs read this exporter's own job history. Both are read-only and a
+    # missing store, an unknown unit and an empty window are notes in a 200.
+    #
+    # GET /api/ci-observe/jobs?days=<n>&q=<text>&repo=<repo>&limit=<n>
+    # is the picker behind the same page: the job names matching a substring,
+    # with a link that opens their history. Job names are high cardinality,
+    # so it is a bounded list, not a fixed dropdown.
+    def get_ci_observe_history_json(self, params):
+        """The /api/ci-observe/history document. Thin wrapper: the query
+        lives in ci_observe_history.py so the rollup and its readers share
+        one schema."""
+        import ci_observe_history
+
+        return ci_observe_history.history_document(
+            os.path.join(CACHE_DIR, self.CIOBS_TRENDS_FILE), DB_FILE, params
+        )
+
+    def get_ci_observe_jobs_json(self, params):
+        """The /api/ci-observe/jobs document: job names matching a query."""
+        import ci_observe_history
+
+        return ci_observe_history.jobs_document(DB_FILE, params)
+
+    # --- ci-observe history (end) -----------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -5102,6 +5158,34 @@ class ExporterHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload.encode())
         # --- ci-observe trends compare: end --------------------------------
+
+        # --- ci-observe history: begin (single additive block) -------------
+        # GET /api/ci-observe/history?kind=test|job&name=<id>&days=<n>
+        # One unit over one window. Always 200: a missing rollup, an unknown
+        # unit or an empty window is a note, so the page shows why instead of
+        # an empty panel. Read-only over trends.db and workflow-exporter.db.
+        elif parsed.path == "/api/ci-observe/history":
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            data = self.exporter.get_ci_observe_history_json(params)
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+
+        # GET /api/ci-observe/jobs?days=<n>&q=<text>&repo=<repo>&limit=<n>
+        # The job-name picker: a bounded list, read from SQLite only.
+        elif parsed.path == "/api/ci-observe/jobs":
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            data = self.exporter.get_ci_observe_jobs_json(params)
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+        # --- ci-observe history: end ---------------------------------------
         # --- ci-observe pull requests: begin (single additive block) --------
         # GET /api/ci-observe/prs?number=<n>&repo=<name>  one PR's life and
         #                                                 its queue attempts

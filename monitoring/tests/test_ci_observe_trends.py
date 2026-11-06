@@ -742,6 +742,7 @@ class TestEndpoint:
         assert set(doc["rows"][0]) == {
             "day", "repo", "workflow", "suite", "test_id", "source_sha",
             "runs", "passes", "failures", "p50_duration_s", "p95_duration_s",
+            "p99_duration_s", "mean_duration_s",
         }
         assert doc["coverage"][0]["runs_unavailable"] == 1
 
@@ -760,6 +761,46 @@ class TestEndpoint:
 
         assert doc["rows"] == []
         assert any("no per-test rollup" in note for note in doc["notes"])
+
+    def test_an_unmigrated_rollup_still_serves_the_old_charts(self, exporter, tmp_path):
+        """The read path must not select a column the file does not have yet.
+        A deploy can install the new code before the rollup migrates
+        trends.db; until then the page keeps its p50 and p95 charts and the
+        new columns read as not measured."""
+        conn = sqlite3.connect(str(tmp_path / "trends.db"))
+        conn.executescript(f"""
+            CREATE TABLE test_rollup (
+                day TEXT NOT NULL, repo TEXT NOT NULL, workflow TEXT NOT NULL,
+                suite TEXT NOT NULL, test_id TEXT NOT NULL, source_sha TEXT NOT NULL,
+                runs INTEGER NOT NULL, passes INTEGER NOT NULL, failures INTEGER NOT NULL,
+                p50_duration_s REAL, p95_duration_s REAL,
+                PRIMARY KEY (day, repo, workflow, suite, test_id, source_sha)
+            );
+            CREATE TABLE rollup_days (
+                day TEXT PRIMARY KEY, runs_listed INTEGER NOT NULL,
+                runs_parsed INTEGER NOT NULL, runs_unavailable INTEGER NOT NULL,
+                generated_at TEXT NOT NULL
+            );
+            INSERT INTO test_rollup VALUES
+                ('{today()}', 'osac', 'E2E VMaaS Full Install', 'tests/e2e/vmaas',
+                 'tests/e2e/vmaas/test_vm::test_restart', '{SHA}', 2, 1, 1, 12.0, 30.0);
+            INSERT INTO rollup_days VALUES ('{today()}', 2, 2, 0, '2026-11-06T00:00:00Z');
+        """)
+        conn.commit()
+        conn.close()
+
+        doc = exporter.get_ci_observe_trends_json({"days": ["30"]})
+
+        assert len(doc["rows"]) == 1
+        assert doc["rows"][0]["p50_duration_s"] == 12.0
+        assert doc["rows"][0]["p95_duration_s"] == 30.0
+        assert doc["rows"][0]["p99_duration_s"] is None
+        assert doc["rows"][0]["mean_duration_s"] is None
+        assert doc["coverage"][0]["runs_parsed"] == 2
+        assert not any("could not be read" in note for note in doc["notes"])
+
+        summary = exporter.get_ci_observe_trends_json({"days": ["30"], "summary": ["test"]})
+        assert summary["tests"][0]["test_id"] == "tests/e2e/vmaas/test_vm::test_restart"
 
     def test_an_unreadable_rollup_is_a_note_not_an_error(self, exporter, tmp_path):
         (tmp_path / "trends.db").write_bytes(b"this is not a sqlite database")
@@ -786,7 +827,11 @@ class TestEndpoint:
         assert [row["test_id"].rsplit("::", 1)[-1] for row in doc["tests"]] == [
             "test_restart", "test_create"
         ], "worst first: failures, then runs"
-        assert set(doc["tests"][0]) == {"test_id", "suite", "repo", "runs", "failures"}
+        assert set(doc["tests"][0]) == {
+            "test_id", "suite", "repo", "runs", "failures", "history_url",
+        }
+        assert doc["tests"][0]["history_url"].startswith("/d/ci-observe-trends/")
+        assert "var-kind=test" in doc["tests"][0]["history_url"]
         assert doc["tests"][0]["runs"] == 4
         assert doc["tests"][0]["failures"] == 1
         assert doc["tests"][0]["suite"] == "tests/e2e/vmaas"
@@ -923,9 +968,12 @@ class TestHTTP:
 
 @pytest.mark.skipif(not DASHBOARD.exists(), reason="ci-observe-trends.json ships with the dashboard")
 def test_dashboard_queries_resolve_against_the_endpoint(exporter, trends, tmp_path):
-    """Every root_selector and column the Trends dashboard reads from
-    /api/ci-observe/trends must exist in the real response, so the two
-    cannot drift apart."""
+    """Every root_selector and column the Trends dashboard reads from the
+    ci-observe endpoints must exist in the real response, so the two cannot
+    drift apart. The fixture data covers both stores: one rolled-up test
+    with its raw run rows, and the exporter's job history."""
+    import urllib.parse
+
     conn = trends.open_trends_db(str(tmp_path / "trends.db"))
     try:
         trends.write_day(conn, today(), [{
@@ -933,14 +981,20 @@ def test_dashboard_queries_resolve_against_the_endpoint(exporter, trends, tmp_pa
             "suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas/test_vm::test_restart",
             "source_sha": SHA, "runs": 2, "passes": 1, "failures": 1,
             "p50_duration_s": 12.0, "p95_duration_s": 30.0,
+            "p99_duration_s": 31.0, "mean_duration_s": 14.0,
         }], {
             "day": today(), "runs_listed": 2, "runs_parsed": 2,
             "runs_unavailable": 0, "generated_at": recent_iso(),
-        })
+        }, [{
+            "day": today(), "repo": "osac", "workflow": "E2E VMaaS Full Install",
+            "suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas/test_vm::test_restart",
+            "source_sha": SHA, "run_id": RUN_ID, "created_at": recent_iso(),
+            "duration_s": 12.0, "passed": 1,
+        }])
     finally:
         conn.close()
+    exporter._upsert_job(run_row())
 
-    doc = exporter.get_ci_observe_trends_json({"days": ["60"]})
     dashboard = json.loads(DASHBOARD.read_text())
 
     checked = 0
@@ -953,9 +1007,27 @@ def test_dashboard_queries_resolve_against_the_endpoint(exporter, trends, tmp_pa
         if panel["type"] in ("row", "text"):
             continue
         for target in panel.get("targets") or []:
-            if "/api/ci-observe/trends" not in target.get("url", ""):
+            url = target.get("url", "")
+            if "/api/ci-observe/" not in url:
                 continue
             checked += 1
+            query_name = "VMaaS" if "/api/ci-observe/jobs" in url else (
+                "tests/e2e/vmaas/test_vm::test_restart"
+            )
+            query = urllib.parse.urlparse(
+                url.replace("${days}", "30")
+                .replace("${repo:percentencode}", "osac")
+                .replace(
+                    "${name:percentencode}", urllib.parse.quote(query_name)
+                )
+            ).query
+            params = urllib.parse.parse_qs(query)
+            if "/api/ci-observe/history" in url:
+                doc = exporter.get_ci_observe_history_json(params)
+            elif "/api/ci-observe/jobs" in url:
+                doc = exporter.get_ci_observe_jobs_json(params)
+            else:
+                doc = exporter.get_ci_observe_trends_json(params)
             selector = target["root_selector"]
             node = doc if selector in ("$", "") else doc[selector.split(".", 1)[-1]]
             rows = node if isinstance(node, list) else [node]
@@ -964,7 +1036,7 @@ def test_dashboard_queries_resolve_against_the_endpoint(exporter, trends, tmp_pa
                 assert column["selector"] in rows[0], (
                     f"{panel['title']}: column {column['selector']} is not in the response"
                 )
-    assert checked >= 2, "the dashboard must query the rollup endpoint"
+    assert checked >= 8, "the dashboard must query the history, job and rollup endpoints"
 
 
 def test_deployment_copies_the_rollup_script():
@@ -974,6 +1046,24 @@ def test_deployment_copies_the_rollup_script():
 
     assert "scripts/ci_observe_trends.py" in setup
     assert "ci_observe_run_evidence.py" in setup
+
+
+def test_update_central_runs_the_rollup_once_before_the_page_reads_it():
+    """The daily timer is not enough at deploy time. --update-central must
+    start the rollup once after enabling the timer, so trends.db is migrated
+    and re-rolled before the live page reads it. A failure only warns."""
+    setup = (MONITORING / "scripts" / "monitoring-setup.sh").read_text()
+    block = setup.split('if [[ "${MODE}" == "update-central" ]]', 1)[1]
+    block = block.split('if [[ "${MODE}" == "update-agent" ]]', 1)[0]
+
+    enable = block.index("systemctl --user enable --now ci-observe-trends.timer")
+    start = block.index("systemctl --user start ci-observe-trends.service")
+    assert enable < start, "the timer is installed before the one-shot runs"
+    assert "if ! systemctl --user start ci-observe-trends.service" in block, (
+        "a failed one-shot must warn, not fail the deploy"
+    )
+    assert "warn " in block
+    assert "04:15" in block, "the warning says when the next run happens"
 
 
 def test_rollup_is_mounted_in_the_exporter_and_scheduled_daily():

@@ -6,7 +6,7 @@ CI Observe has three content pages, each answering one question. **Start here** 
 |---|---|---|
 | **E2E run** | One GitHub Actions run | Did it pass, what failed, and where did the time go? |
 | **Pull requests** | One pull request | How long did review and the merge queue take? |
-| **Trends** | One test over time | Is this test failing more often or getting slower? |
+| **Trends** | One test or one job over time | Is this test or this job failing more often or getting slower? |
 
 The principles behind the pages, the current gaps, and the roadmap are in [`observability.md`](observability.md).
 
@@ -46,7 +46,22 @@ An **ejection** means a pull request left the merge queue without merging. GitHu
 
 ## Trends
 
-The page reads GitHub test reports from E2E runs. A run without a readable report is missing data, not a pass. Test reports are kept for 30 days.
+The page answers one question for one unit over 7 or 30 days: is this test or this job failing more often or getting slower?
+
+| Section | Contents |
+|---|---|
+| Pick a unit | Days, Unit (Test or Job) and Name, then the matching tests and matching jobs lists. Opening a row selects that unit. |
+| Summary | Runs, Passed, Failed, pass rate, p50, p95, p99 and mean duration, the measured-run count and the measurement basis. Pass rate is passes divided by all stored runs, including cancelled. Missing values say **not measured**, never 0. |
+| Daily passes and failures | One point per day for the selected unit. |
+| Duration by day | For a test, the median of that day's stored rows for p50, p95 and p99 and a run-weighted mean; for a job, true percentiles over that day's records. Not a percentile over the whole window. |
+| Recent runs | The newest 50 runs: when, result, duration, commit, and the run link. |
+| Test history (all matching tests) | The broad search, kept from before: every test whose id contains the Name box, per day. |
+
+A test is a pytest node id (`tests/e2e/vmaas/...::test_x`). Its outcomes and durations come from the daily JUnit rollup and the raw per-run rows behind it in `trends.db`. A job is the workflow exporter's job identity, `repo` + `display_name` (for example "osac / E2E VMaaS Full Install"), not a single row id, so retries and suites of one job aggregate. Its percentiles come from the raw job records in the 30-day window.
+
+A window percentile is computed from raw per-run durations. Days rolled up before those rows existed keep their daily values and counts; their window p99 and mean are not measured, and the page says so. Test reports are kept for 30 days.
+
+The E2E run page's **Jobs** table links each job name to this page with that job already selected.
 
 ## Keys
 

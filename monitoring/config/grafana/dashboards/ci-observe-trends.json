@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Test history across E2E runs.",
+  "description": "Test and job history across E2E runs.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -20,39 +20,1169 @@
   ],
   "panels": [
     {
-      "type": "text",
-      "id": 1,
-      "title": "Find a test",
-      "description": "",
-      "gridPos": {
-        "h": 2,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "Enter a test name above."
-      }
-    },
-    {
       "type": "row",
-      "id": 2,
-      "title": "Test history",
+      "id": 1,
+      "title": "Pick a unit",
       "description": "",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 2
+        "y": 0
+      },
+      "panels": [
+        {
+          "type": "text",
+          "id": 2,
+          "title": "How to use this page",
+          "description": "",
+          "gridPos": {
+            "h": 3,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "Choose **Days** and **Unit** above, then type a name in **Name** or open a row below.\n\n- **Test**: a pytest node id, for example `tests/e2e/vmaas/test_vm.py::test_create`.\n- **Job**: a repository and display name, for example `osac / E2E VMaaS Full Install`.\n\nThe History row follows the Unit and Name controls. The last row still charts every test whose id matches Name."
+          }
+        },
+        {
+          "type": "table",
+          "id": 3,
+          "title": "Matching tests",
+          "description": "Tests whose id contains the Name box, in the selected Days window ($days days), summed over the runs that stored each test's JUnit outcome. Worst first. Open a row to make it the selected unit.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 0,
+            "y": 3
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No rows for this window."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_id"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Test"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 520
+                  },
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Open this test's history",
+                        "url": "${__data.fields.history_url}"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "suite"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Suite"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 220
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "runs"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Runs"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 80
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failures"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Failed"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "history_url"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "history_url"
+                  },
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&summary=test&test=${name:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "tests",
+              "columns": [
+                {
+                  "selector": "test_id",
+                  "text": "test_id",
+                  "type": "string"
+                },
+                {
+                  "selector": "suite",
+                  "text": "suite",
+                  "type": "string"
+                },
+                {
+                  "selector": "runs",
+                  "text": "runs",
+                  "type": "number"
+                },
+                {
+                  "selector": "failures",
+                  "text": "failures",
+                  "type": "number"
+                },
+                {
+                  "selector": "history_url",
+                  "text": "history_url",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 4,
+          "title": "Matching jobs",
+          "description": "Job names that contain the Name box, in the selected Days window ($days days), most runs first. A job is identified by repository and display name, so retries and suites of one job aggregate. Open a row to make it the selected unit.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 12,
+            "y": 3
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No rows for this window."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "display_name"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Job"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 420
+                  },
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Open this job's history",
+                        "url": "${__data.fields.history_url}"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "repo"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Repository"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 140
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "runs"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Runs"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 80
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "last_seen"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Last seen"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "history_url"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "history_url"
+                  },
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/jobs?days=${days}&q=${name:percentencode}&limit=20&repo=${repo:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "jobs",
+              "columns": [
+                {
+                  "selector": "display_name",
+                  "text": "display_name",
+                  "type": "string"
+                },
+                {
+                  "selector": "repo",
+                  "text": "repo",
+                  "type": "string"
+                },
+                {
+                  "selector": "runs",
+                  "text": "runs",
+                  "type": "number"
+                },
+                {
+                  "selector": "last_seen",
+                  "text": "last_seen",
+                  "type": "timestamp"
+                },
+                {
+                  "selector": "history_url",
+                  "text": "history_url",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 10,
+      "title": "History",
+      "description": "",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "panels": [
+        {
+          "type": "table",
+          "id": 11,
+          "title": "Summary",
+          "description": "Runs, results and durations for the selected unit ($kind) over the selected Days window ($days days). Runs is every stored run; pass rate is passes divided by all stored runs, including cancelled. p50 and p95 are true percentiles over the measured runs when raw durations are stored; otherwise they are the median of the daily values. p99 and mean are shown only when measured from raw runs. The Basis column says which case applies.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No rows for this window."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "runs"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Runs"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 80
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "passes"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Passed"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failures"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Failed"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "pass_rate"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Pass rate"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "unit",
+                    "value": "percentunit"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 1
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p50_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "p50"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p95_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "p95"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p99_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "p99"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "mean_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Mean"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "measured_runs"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Measured runs"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 130
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "0"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "duration_basis"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Basis"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 520
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/history?kind=${kind}&name=${name:percentencode}&days=${days}&repo=${repo:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "summary",
+              "columns": [
+                {
+                  "selector": "runs",
+                  "text": "runs",
+                  "type": "number"
+                },
+                {
+                  "selector": "passes",
+                  "text": "passes",
+                  "type": "number"
+                },
+                {
+                  "selector": "failures",
+                  "text": "failures",
+                  "type": "number"
+                },
+                {
+                  "selector": "pass_rate",
+                  "text": "pass_rate",
+                  "type": "number"
+                },
+                {
+                  "selector": "p50_duration_s",
+                  "text": "p50_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "p95_duration_s",
+                  "text": "p95_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "p99_duration_s",
+                  "text": "p99_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "mean_duration_s",
+                  "text": "mean_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "measured_runs",
+                  "text": "measured_runs",
+                  "type": "number"
+                },
+                {
+                  "selector": "duration_basis",
+                  "text": "duration_basis",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 12,
+          "title": "Daily passes and failures",
+          "description": "One point per day for the selected unit ($kind) over the selected Days window ($days days). A day with no stored run has no point; GitHub owns pass or fail.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "not measured",
+              "custom": {
+                "drawStyle": "line",
+                "showPoints": "always"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "passes"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Passed"
+                  },
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failures"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  },
+                  {
+                    "id": "displayName",
+                    "value": "Failed"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "timeseries",
+              "url": "http://127.0.0.1:9103/api/ci-observe/history?kind=${kind}&name=${name:percentencode}&days=${days}&repo=${repo:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "daily",
+              "columns": [
+                {
+                  "selector": "day",
+                  "text": "day",
+                  "type": "timestamp"
+                },
+                {
+                  "selector": "passes",
+                  "text": "passes",
+                  "type": "number"
+                },
+                {
+                  "selector": "failures",
+                  "text": "failures",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 13,
+          "title": "Duration by day",
+          "description": "One point per day in the selected Days window ($days days). For a test, each point is the median of that day's stored rollup rows (repository, workflow, suite and source SHA). For a job, each point is a true percentile over that day's job records. Neither is a percentile over the whole window; the Summary row is. A value the rollup never measured says not measured.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "not measured",
+              "custom": {
+                "drawStyle": "line",
+                "showPoints": "always"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p50_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "p50"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p95_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "p95"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p99_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "p99"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "mean_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Mean"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "timeseries",
+              "url": "http://127.0.0.1:9103/api/ci-observe/history?kind=${kind}&name=${name:percentencode}&days=${days}&repo=${repo:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "daily",
+              "columns": [
+                {
+                  "selector": "day",
+                  "text": "day",
+                  "type": "timestamp"
+                },
+                {
+                  "selector": "p50_duration_s",
+                  "text": "p50_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "p95_duration_s",
+                  "text": "p95_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "p99_duration_s",
+                  "text": "p99_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "mean_duration_s",
+                  "text": "mean_duration_s",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 14,
+          "title": "Recent runs",
+          "description": "The newest 50 runs of the selected unit ($kind) in the selected Days window ($days days), newest first. Commit is the source SHA. A run with no stored duration shows no duration.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 12
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No rows for this window."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "created_at"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "When"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  },
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Open the run",
+                        "url": "${__data.fields.run_url}"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "conclusion"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Result"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "Not finished"
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "success": {
+                            "text": "Success",
+                            "color": "green"
+                          },
+                          "failure": {
+                            "text": "Failure",
+                            "color": "red"
+                          },
+                          "cancelled": {
+                            "text": "Cancelled",
+                            "color": "orange"
+                          },
+                          "timed_out": {
+                            "text": "Timed out",
+                            "color": "red"
+                          },
+                          "startup_failure": {
+                            "text": "Startup failure",
+                            "color": "red"
+                          },
+                          "skipped": {
+                            "text": "Skipped",
+                            "color": "grey"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Duration"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "commit"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Commit"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "No code version"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "run_url"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "run_url"
+                  },
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/history?kind=${kind}&name=${name:percentencode}&days=${days}&repo=${repo:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "recent",
+              "columns": [
+                {
+                  "selector": "created_at",
+                  "text": "created_at",
+                  "type": "timestamp"
+                },
+                {
+                  "selector": "conclusion",
+                  "text": "conclusion",
+                  "type": "string"
+                },
+                {
+                  "selector": "duration_s",
+                  "text": "duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "commit",
+                  "text": "commit",
+                  "type": "string"
+                },
+                {
+                  "selector": "run_url",
+                  "text": "run_url",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 19,
+      "title": "Test history (all matching tests)",
+      "description": "",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
       },
       "panels": [
         {
           "type": "timeseries",
-          "id": 3,
+          "id": 20,
           "title": "Passes and failures",
-          "description": "",
+          "description": "All tests whose id contains the Name box, per day over the selected Days window ($days days), summed over every source SHA and suite. This is the broad search; the History row above is one exact unit.",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
             "uid": "workflow-api"
@@ -80,15 +1210,15 @@
                 },
                 "properties": [
                   {
+                    "id": "displayName",
+                    "value": "Passes"
+                  },
+                  {
                     "id": "color",
                     "value": {
                       "mode": "fixed",
                       "fixedColor": "green"
                     }
-                  },
-                  {
-                    "id": "displayName",
-                    "value": "Passes"
                   }
                 ]
               },
@@ -99,15 +1229,15 @@
                 },
                 "properties": [
                   {
+                    "id": "displayName",
+                    "value": "Failures"
+                  },
+                  {
                     "id": "color",
                     "value": {
                       "mode": "fixed",
                       "fixedColor": "red"
                     }
-                  },
-                  {
-                    "id": "displayName",
-                    "value": "Failures"
                   }
                 ]
               }
@@ -130,7 +1260,7 @@
               "type": "json",
               "source": "url",
               "format": "timeseries",
-              "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${test:percentencode}",
+              "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${name:percentencode}",
               "url_options": {
                 "method": "GET",
                 "data": ""
@@ -158,9 +1288,9 @@
         },
         {
           "type": "timeseries",
-          "id": 4,
+          "id": 21,
           "title": "Test time",
-          "description": "",
+          "description": "Each point is one stored group (day, repository, workflow, suite and source SHA) for every test whose id contains the Name box, over the selected Days window ($days days). Its p50, p95 and p99 are over that group's runs, not every run of the test. Days rolled up before p99 and mean were stored say not measured.",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
             "uid": "workflow-api"
@@ -188,15 +1318,16 @@
                 },
                 "properties": [
                   {
-                    "id": "color",
-                    "value": {
-                      "mode": "fixed",
-                      "fixedColor": "blue"
-                    }
-                  },
-                  {
                     "id": "displayName",
                     "value": "Typical time"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
                   }
                 ]
               },
@@ -207,15 +1338,56 @@
                 },
                 "properties": [
                   {
-                    "id": "color",
-                    "value": {
-                      "mode": "fixed",
-                      "fixedColor": "orange"
-                    }
-                  },
-                  {
                     "id": "displayName",
                     "value": "95% finish by"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p99_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "99% finish by"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "mean_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Mean"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "not measured"
                   }
                 ]
               }
@@ -238,7 +1410,7 @@
               "type": "json",
               "source": "url",
               "format": "timeseries",
-              "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${test:percentencode}",
+              "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${name:percentencode}",
               "url_options": {
                 "method": "GET",
                 "data": ""
@@ -258,6 +1430,16 @@
                 {
                   "selector": "p95_duration_s",
                   "text": "p95_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "p99_duration_s",
+                  "text": "p99_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "mean_duration_s",
+                  "text": "mean_duration_s",
                   "type": "number"
                 }
               ]
@@ -300,11 +1482,36 @@
           "value": "30",
           "selected": true
         },
-        "description": ""
+        "description": "The history window, counted back from today."
       },
       {
-        "name": "test",
-        "label": "Test",
+        "name": "kind",
+        "label": "Unit",
+        "type": "custom",
+        "hide": 0,
+        "query": "test,job",
+        "options": [
+          {
+            "selected": true,
+            "text": "Test",
+            "value": "test"
+          },
+          {
+            "selected": false,
+            "text": "Job",
+            "value": "job"
+          }
+        ],
+        "current": {
+          "text": "Test",
+          "value": "test",
+          "selected": true
+        },
+        "description": "Test history reads the per-test rollup; job history reads the job records."
+      },
+      {
+        "name": "name",
+        "label": "Name",
         "type": "textbox",
         "hide": 0,
         "query": "",
@@ -314,7 +1521,21 @@
           "text": "",
           "value": ""
         },
-        "description": ""
+        "description": "A pytest node id or a job display name. A substring also narrows the matching lists."
+      },
+      {
+        "name": "repo",
+        "label": "Repository",
+        "type": "textbox",
+        "hide": 2,
+        "query": "",
+        "options": [],
+        "current": {
+          "selected": true,
+          "text": "",
+          "value": ""
+        },
+        "description": "Set by a job link. Empty means every repository."
       }
     ]
   },
@@ -328,5 +1549,5 @@
   "timezone": "browser",
   "title": "CI Observe \u2014 Trends",
   "uid": "ci-observe-trends",
-  "version": 1
+  "version": 2
 }

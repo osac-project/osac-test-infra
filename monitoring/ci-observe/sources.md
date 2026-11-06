@@ -13,7 +13,8 @@ Each question has one authoritative source.
 | Which E2E runs did this pull request make? | Workflow exporter job history, joined by pull request number | 30 days |
 | When was this pull request approved or queued? | `prs.db`; for an open pull request, GitHub read when the page loads | 30 days |
 | Why did this pull request leave the queue? | Failed queue run plus the GitHub comment in `prs.db` | 30 days |
-| Is a test failing more often or getting slower? | Daily JUnit rollup in `trends.db` | 30 days |
+| Is a test failing more often or getting slower? | Daily JUnit rollup plus the raw per-run rows in `trends.db` | 30 days |
+| Is a job failing more often or getting slower? | Workflow exporter job history, grouped by repository and display name | 30 days |
 | How long did a pull request spend in review and the queue? | `prs.db` | 30 days |
 | What did the pod log? | GitHub artifact; Loki does not receive pod logs | 30 days |
 

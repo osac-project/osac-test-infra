@@ -717,9 +717,13 @@ class CIObserveRunEvidence:
             if not doc["run"]["head_sha"]:
                 notes.append("head_sha could not be fetched from GitHub")
 
+        import ci_observe_history
+
         doc["jobs"] = [
             {
                 "name": j.get("display_name") or j.get("workflow", ""),
+                "display_name": j.get("display_name") or j.get("workflow", ""),
+                "repo": j.get("repo", ""),
                 "workflow": j.get("workflow", ""),
                 "conclusion": j.get("conclusion", ""),
                 "duration_s": j.get("duration_s", 0),
@@ -727,6 +731,13 @@ class CIObserveRunEvidence:
                 "failure_reason": j.get("failure_reason") or "",
                 "steps": j.get("steps", []),
                 "url": j.get("url", ""),
+                # The job name opens its Trends history, not GitHub: the
+                # question after a run is "is this job failing more often or
+                # getting slower?" The GitHub link stays on the url field.
+                "history_url": ci_observe_history.history_url(
+                    "job", j.get("display_name") or j.get("workflow", ""),
+                    repo=j.get("repo", ""),
+                ),
             }
             for j in jobs
         ]

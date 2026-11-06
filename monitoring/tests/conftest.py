@@ -45,6 +45,12 @@ def trends():
 
 
 @pytest.fixture(scope="session")
+def history():
+    """The read side of test history (a plain module, no metrics)."""
+    return _load("ci_observe_history", "ci_observe_history.py")
+
+
+@pytest.fixture(scope="session")
 def prs():
     """The pull-request backfill module (a plain module, no metrics)."""
     return _load("ci_observe_prs", "ci_observe_prs.py")
