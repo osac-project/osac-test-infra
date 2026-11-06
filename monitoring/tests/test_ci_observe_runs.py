@@ -409,6 +409,12 @@ def test_the_page_verdict_keeps_a_found_capture(client, jobs, fresh):
     assert reason == ""
 
 
+def test_the_page_parses_a_capture_id_the_same_way_as_the_registry(client, fresh):
+    parsed = client.parse_capture_id(f"vmaas-main-{RUN_ID}-a2")
+
+    assert parsed == {"run_id": str(RUN_ID), "run_attempt": "2", "suite": "vmaas"}
+
+
 def test_no_complete_discovery_since_the_run_finished_is_unknown(client, jobs, registry):
     """A run that finished after the registry's last complete answer may have
     sent its capture since. Its absence proves nothing."""

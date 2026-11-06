@@ -216,6 +216,17 @@ class CIObserveRuns:
         finished = self._finished(run) if ended else None
         return self._state(run, ended, finished, self._source(now), now)
 
+    def parse_capture_id(self, capture_id):
+        """The capture id's suite, run and attempt, or None for a junk id.
+
+        The Pull requests page needs the suite and attempt to pick its own
+        capture; the parser stays on the capture registry.
+        """
+        registry = self.registry
+        if registry is None:
+            return None
+        return registry.parse_capture_id(capture_id)
+
     # -- the verdict -------------------------------------------------------
     def _state(self, run, ended, finished, source, now):
         """("capture" | "not collected" | "unknown", reason).
