@@ -24,11 +24,11 @@ The table shows one row per E2E run:
 | Branch | Branch or merge-queue ref. |
 | Trigger | Scheduled, manual, push, PR or merge queue. |
 | Result | GitHub pass or fail. |
-| Recorded | Yes when test data arrived, No when it did not. |
+| Recorded | Yes when test data arrived, No when the check proved it did not, Unknown when the check could not judge. |
 | Created | When GitHub created the run. |
 | GitHub | Opens the workflow run. |
 
-`No` under Recorded means the job sent no test data. Netris, full-regression and agentless jobs have no capture wiring yet, so they cannot record.
+`No` under Recorded means the job sent no test data. `Unknown` means the recording check could not judge: the run just ended, the capture list is stale, or the run is older than its coverage. Netris, full-regression and agentless jobs have no capture wiring yet, so they cannot record.
 
 ## E2E run
 
@@ -54,7 +54,7 @@ The page starts with one pull request. Enter its number above.
 
 - **Selected pull request**: its identity and dates. Opened, first review, approved, entered the queue, last queue attempt, merged or closed.
 - **Time in each stage**: where the time went, with the reason a stage could not be measured.
-- **E2E runs**: every run the pull request made, oldest first. One row per suite. A run after a rebase is a new code version. Each row opens the run page when test data was recorded, and the GitHub run always.
+- **E2E runs**: every run the pull request made, oldest first. One row per suite. A pull-request run shows the commit it tested, so a rebase appears as a new code version. A merge-queue run tests a temporary merge commit and shows no code version. Each row opens the run page when test data was recorded, and the GitHub run always.
 - **Queue attempts**: each merge-queue entry, how long it lasted, and why it left.
 - **Recent pull requests** and **Stage times**: the browse tables for all pull requests in the selected days.
 

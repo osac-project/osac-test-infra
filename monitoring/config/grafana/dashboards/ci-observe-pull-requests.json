@@ -876,6 +876,10 @@
                       "no": {
                         "text": "No",
                         "color": "red"
+                      },
+                      "unknown": {
+                        "text": "Unknown",
+                        "color": "orange"
                       }
                     }
                   }

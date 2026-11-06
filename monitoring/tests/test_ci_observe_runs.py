@@ -377,6 +377,38 @@ def test_a_registry_with_no_answer_is_unknown(client, jobs, registry):
     assert "never as not collected" in doc["notes"][-1]
 
 
+def test_the_page_verdict_reuses_the_same_rules(client, jobs, registry):
+    """The Pull requests page asks for one run's verdict. A registry without
+    an answer must say unknown there too, never not collected."""
+    state, reason = client.verdict(
+        {
+            "capture_ids": [],
+            "created_at": "2026-10-01T00:00:00Z",
+            "updated_at": "2026-10-01T01:00:00Z",
+            "conclusion": "success",
+            "status": "completed",
+        }
+    )
+
+    assert state == "unknown"
+    assert "no complete answer" in reason
+
+
+def test_the_page_verdict_keeps_a_found_capture(client, jobs, fresh):
+    state, reason = client.verdict(
+        {
+            "capture_ids": [CAPTURE],
+            "created_at": "2026-10-01T00:00:00Z",
+            "updated_at": "2026-10-01T01:00:00Z",
+            "conclusion": "success",
+            "status": "completed",
+        }
+    )
+
+    assert state == "capture"
+    assert reason == ""
+
+
 def test_no_complete_discovery_since_the_run_finished_is_unknown(client, jobs, registry):
     """A run that finished after the registry's last complete answer may have
     sent its capture since. Its absence proves nothing."""

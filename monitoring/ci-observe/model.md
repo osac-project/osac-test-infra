@@ -12,7 +12,7 @@ The principles behind the pages, the current gaps, and the roadmap are in [`obse
 
 ## Start here
 
-One table of recent E2E runs: Run, Job, Repo, PR, Branch, Trigger, Result, Recorded, Created and GitHub. Every identifier is a link. `No` under Recorded means the job sent no test data.
+One table of recent E2E runs: Run, Job, Repo, PR, Branch, Trigger, Result, Recorded, Created and GitHub. Every identifier is a link. `No` under Recorded means the job sent no test data; `Unknown` means the check could not judge.
 
 ## E2E run
 
@@ -33,7 +33,7 @@ A run has detailed data only when its recording arrived. A missing recording doe
 |---|---|
 | Selected pull request | Identity, state, and the dates of each stage. |
 | Time in each stage | Authoring, review, waiting, queue and merge, with the reason a stage is unknown. |
-| E2E runs | Every run the pull request made, oldest first, one row per suite. Each new commit is a code version. Rows open the run page or GitHub. |
+| E2E runs | Every run the pull request made, oldest first, one row per suite. A pull-request run shows its commit, so a rebase is a new code version. A merge-queue run tests a temporary merge commit and shows no code version. Rows open the run page or GitHub. |
 | Queue attempts | Each merge-queue entry, its duration, and whether it was ejected and why. |
 | Recent pull requests and stage times | The browse tables for the selected days. |
 

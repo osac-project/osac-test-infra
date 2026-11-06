@@ -288,6 +288,15 @@ def _suite_label(workflow):
     return workflow or "E2E"
 
 
+def _suite_key(workflow):
+    """The short suite key a capture id carries: vmaas, caas, bmaas."""
+    text = (workflow or "").lower()
+    for key, _ in SUITE_LABELS:
+        if key in text:
+            return key
+    return ""
+
+
 def _iso_from_ms(value):
     return datetime.fromtimestamp(int(value) / 1000, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1502,6 +1511,7 @@ class CIObservePRs:
         commits = self._get_all(f"{API_URL}/repos/{ORG}/{repo}/pulls/{number}/commits?per_page={PAGE_SIZE}")
         if timeline is None or reviews is None or commits is None:
             record = self._live_record(repo, number, live)
+            record["history_unavailable"] = True
             return self._remember_live(
                 key,
                 record,
@@ -1542,9 +1552,11 @@ class CIObservePRs:
         for run in runs:
             if run.get("event") != "merge_group":
                 continue
-            key = (run.get("branch") or "", run.get("head_sha") or "", run.get("run_id") or "")
-            if not key[0] and not key[1]:
-                key = (key[2],)
+            branch = run.get("branch") or ""
+            head_sha = run.get("head_sha") or ""
+            # One queue entry starts several workflows at the same branch and
+            # commit. The run id only separates a run that has neither.
+            key = (branch, head_sha) if branch and head_sha else (branch, head_sha, run.get("run_id") or "")
             groups.setdefault(key, []).append(run)
         ordered = sorted(groups.values(), key=lambda group: min(run.get("created_at") or "" for run in group))
         attempts = []
@@ -1627,7 +1639,10 @@ class CIObservePRs:
         rows = []
         for row in stored:
             sha = row.get("head_sha") or ""
-            if sha and sha not in versions:
+            is_queue = row.get("event") == "merge_group"
+            # A merge-queue run tests a temporary merge commit, not the pull
+            # request head. It is not a code version of the pull request.
+            if sha and not is_queue and sha not in versions:
                 versions[sha] = len(versions) + 1
             started = parse_iso(row.get("created_at"))
             done = parse_iso(row.get("updated_at"))
@@ -1638,18 +1653,19 @@ class CIObservePRs:
                     "run_attempt": row.get("run_attempt") or 1,
                     "workflow": row.get("workflow") or "",
                     "suite": _suite_label(row.get("workflow") or ""),
+                    "suite_key": _suite_key(row.get("workflow") or ""),
                     "branch": row.get("branch") or "",
                     "status": row.get("status") or "",
                     "conclusion": row.get("conclusion") or "",
                     "event": row.get("event") or "",
                     "trigger": row.get("trigger") or "",
                     "created_at": row.get("created_at") or "",
-                    "duration_s": row.get("duration_s") or 0,
-                    "duration_display": human_duration(row.get("duration_s") or 0),
+                    "duration_s": row.get("duration_s"),
+                    "duration_display": human_duration(row.get("duration_s")),
                     "head_sha": sha,
-                    "head": sha[:12],
-                    "commit_url": f"https://github.com/{ORG}/{repo}/commit/{sha}" if sha else "",
-                    "version": versions.get(sha, ""),
+                    "head": "" if is_queue else sha[:12],
+                    "commit_url": "" if is_queue or not sha else f"https://github.com/{ORG}/{repo}/commit/{sha}",
+                    "version": "" if is_queue else versions.get(sha, ""),
                     "url": row.get("url") or "",
                     "started_at_ms": int(started.timestamp() * 1000) if started else None,
                     "done_at_ms": int(done.timestamp() * 1000) if done else None,
@@ -1657,6 +1673,7 @@ class CIObservePRs:
                     # module never talks to Tempo.
                     "capture_id": "",
                     "recorded": "",
+                    "recorded_reason": "",
                     "run_url": "",
                 }
             )
@@ -1712,6 +1729,11 @@ class CIObservePRs:
                 live, live_error = None, "no repository was given, so there was no live lookup"
             if live is not None:
                 source = "live"
+            if live is not None and live_error:
+                # The identity was readable but the review history was not.
+                # Say so instead of letting the stages claim what never
+                # happened.
+                notes.append(live_error)
             pr_state, pr_state_message = self._miss_state(number, live, live_error, freshness, now)
             notes.append(pr_state_message)
 
@@ -1752,7 +1774,7 @@ class CIObservePRs:
             "generated_at": _utc_now(),
             "days": days,
             "pr": pr,
-            "stages": _stages(pr) if pr is not None else [],
+            "stages": _stages(pr) if pr is not None and not pr.get("history_unavailable") else [],
             "runs": runs,
             "attempts": [_attempt_out(attempt) for attempt in attempts],
             "pr_state": pr_state,

@@ -1142,13 +1142,29 @@ class TestRuns:
         doc = service.get_json({"number": ["101"]})
 
         assert [run["run_id"] for run in doc["runs"]] == ["9001", "9002", "9003"]
-        assert [run["version"] for run in doc["runs"]] == [1, 2, 2]
+        assert [run["version"] for run in doc["runs"]] == [1, 2, ""]
         assert [run["suite"] for run in doc["runs"]] == ["VMaaS", "VMaaS", "VMaaS"]
         assert [run["event"] for run in doc["runs"]] == ["pull_request", "pull_request", "merge_group"]
+        # A merge-queue run tests a temporary merge commit, not the PR head:
+        # it is not a code version and has no commit link.
+        assert doc["runs"][2]["head"] == ""
+        assert doc["runs"][2]["commit_url"] == ""
         # The gate row and another pull request's row are not e2e results.
         assert all(run["run_id"] != "9004" for run in doc["runs"])
         assert doc["runs"][0]["recorded"] == ""
         assert doc["runs"][0]["run_url"] == ""
+
+    def test_a_missing_duration_is_empty_not_zero(self, service):
+        run_backfill(service)
+        seed_jobs(
+            service,
+            [(1, 9001, "E2E VMaaS Full Install", "pull_request", "a" * 40, "2026-10-01T10:00:00Z", "success")],
+        )
+        with sqlite3.connect(Path(service.db_file).parent / "workflow-exporter.db") as conn:
+            conn.execute("UPDATE jobs SET duration_s = NULL WHERE id = 1")
+        doc = service.get_json({"number": ["101"]})
+        assert doc["runs"][0]["duration_s"] is None
+        assert doc["runs"][0]["duration_display"] == ""
 
     def test_a_pull_request_without_runs_says_why(self, service):
         run_backfill(service)
@@ -1169,6 +1185,7 @@ class TestRuns:
             [
                 (11, 9101, "E2E vmaas (pull requests)", "pull_request", "a" * 40, "2026-10-05T10:00:00Z", "success"),
                 (12, 9102, "E2E vmaas (merge queue)", "merge_group", "b" * 40, "2026-10-06T11:00:00Z", "failure"),
+                (13, 9103, "E2E caas (merge queue)", "merge_group", "b" * 40, "2026-10-06T11:05:00Z", "success"),
             ],
             pr=777,
         )
@@ -1190,13 +1207,32 @@ class TestRuns:
         assert doc["stages"][3]["state"] == "measured"
         assert doc["stages"][3]["seconds"] > 0
         assert doc["stages"][4]["state"] == "not_reached"
-        assert len(doc["runs"]) == 2
-        # The queue history comes from the stored merge_group run, and its
-        # failed conclusion is the ejection signal.
+        assert len(doc["runs"]) == 3
+        # The queue history comes from the stored merge_group runs. The two
+        # workflows of one queue entry share a branch and commit, so they are
+        # one attempt; the failed workflow marks it ejected.
         assert len(doc["attempts"]) == 1
+        assert doc["attempts"][0]["run_ids"] == ["9102", "9103"]
+        assert doc["attempts"][0]["run_count"] == 2
         assert doc["attempts"][0]["run_id"] == 9102
         assert doc["attempts"][0]["ejected"] is True
         assert doc["attempts"][0]["ejection_kind"] == "check_failed"
+
+    def test_an_unreadable_review_history_does_not_invent_stages(self, service, github):
+        run_backfill(service)
+        fixture = load_fixture("merged_pr")
+        open_pr = dict(fixture["pr"])
+        open_pr.update({"number": 888, "state": "open", "merged_at": None, "closed_at": None})
+        # The pull request itself is readable; its timeline is not routed.
+        github.add(f"/repos/osac-project/{REPO}/pulls/888", FakeResponse(payload=open_pr))
+
+        doc = service.get_json({"number": ["888"], "repo": [REPO]})
+
+        assert doc["source"] == "live"
+        assert doc["pr"]["state"] == "open"
+        # An unreadable history is missing, not "never reviewed".
+        assert doc["stages"] == []
+        assert any("review history could not be read" in note for note in doc["notes"])
 
 
 # ---------------------------------------------------------------------------
@@ -1259,34 +1295,55 @@ class TestHTTP:
         assert "var-capture_id=caas-pr103-5101-a1" in attempt["capture_url"]
         assert attempt["capture_url"].startswith("/d/ci-observe-runs/")
 
-    def test_a_run_links_to_the_run_page_only_when_it_was_recorded(self, base_url, service):
-        """A recorded run opens the E2E run page with its capture id. An
-        unrecorded run has no capture page, so its GitHub link is the entry;
-        the page never guesses a capture id."""
+    def test_a_run_links_to_its_own_suite_capture_or_unknown(self, base_url, service):
+        """One pull-request-flow run holds a capture per suite, and a missing
+        capture is only a proven absence when the registry can judge it."""
         run_backfill(service)
         seed_jobs(
             service,
             [
                 (1, 9201, "E2E VMaaS Full Install", "pull_request", "a" * 40, "2026-10-01T10:00:00Z", "success"),
                 (2, 9202, "E2E VMaaS Full Install", "pull_request", "b" * 40, "2026-10-02T10:00:00Z", "failure"),
+                (3, 9203, "E2E vmaas (pull requests)", "pull_request", "c" * 40, "2026-10-03T10:00:00Z", "success"),
+                (4, 9203, "E2E caas (pull requests)", "pull_request", "c" * 40, "2026-10-03T10:00:00Z", "success"),
             ],
         )
 
         class FakeRuns:
             def capture_ids_by_run(self):
-                return {"9201": ["vmaas-pr101-9201-a1"]}
+                return {
+                    "9201": ["vmaas-pr101-9201-a1"],
+                    "9203": ["caas-pr101-9203-a1", "vmaas-pr101-9203-a1"],
+                }
+
+            @staticmethod
+            def parse_capture_id(capture_id):
+                suite = capture_id.split("-pr")[0].split("-main")[0]
+                return {"suite": suite, "run_attempt": capture_id.rsplit("-a", 1)[1]}
+
+            def verdict(self, run, now=None):
+                if run["capture_ids"]:
+                    return "capture", ""
+                return "unknown", "the capture registry has no complete answer yet"
 
         service._runs = FakeRuns()
         status, _, body = self.get(f"{base_url}/api/ci-observe/prs?number=101&repo=osac")
 
         assert status == 200
-        first, second = json.loads(body)["runs"]
-        assert first["capture_id"] == "vmaas-pr101-9201-a1"
-        assert first["recorded"] == "yes"
-        assert "var-capture_id=vmaas-pr101-9201-a1" in first["run_url"]
-        assert second["recorded"] == "no"
-        assert second["capture_id"] == ""
-        assert second["run_url"] == ""
+        runs = json.loads(body)["runs"]
+        by_run = {run["run_id"]: run for run in runs}
+        assert by_run["9201"]["capture_id"] == "vmaas-pr101-9201-a1"
+        assert by_run["9201"]["recorded"] == "yes"
+        assert "var-capture_id=vmaas-pr101-9201-a1" in by_run["9201"]["run_url"]
+        # No capture and a registry that cannot judge: unknown, not "No".
+        assert by_run["9202"]["recorded"] == "unknown"
+        assert by_run["9202"]["recorded_reason"]
+        assert by_run["9202"]["run_url"] == ""
+        # Two suites of one run each link to their own capture.
+        vmaas_row = next(run for run in runs if run["run_id"] == "9203" and run["suite_key"] == "vmaas")
+        caas_row = next(run for run in runs if run["run_id"] == "9203" and run["suite_key"] == "caas")
+        assert vmaas_row["capture_id"] == "vmaas-pr101-9203-a1"
+        assert caas_row["capture_id"] == "caas-pr101-9203-a1"
 
 
 # ---------------------------------------------------------------------------

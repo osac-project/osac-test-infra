@@ -203,6 +203,19 @@ class CIObserveRuns:
             return {}
         return registry.capture_ids_by_run(days=days)
 
+    def verdict(self, run, now=None):
+        """("capture" | "not collected" | "unknown", reason) for one run.
+
+        The Pull requests page uses the same rules as the run list: a missing
+        capture is only 'not collected' when the registry has a complete,
+        fresh answer that covers the run. Everything else is unknown with a
+        reason, so the page never blames CI for an unproven absence.
+        """
+        now = now or datetime.now(UTC)
+        ended = self._ended(run)
+        finished = self._finished(run) if ended else None
+        return self._state(run, ended, finished, self._source(now), now)
+
     # -- the verdict -------------------------------------------------------
     def _state(self, run, ended, finished, source, now):
         """("capture" | "not collected" | "unknown", reason).

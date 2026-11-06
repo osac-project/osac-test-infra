@@ -5119,17 +5119,34 @@ class ExporterHandler(BaseHTTPRequestHandler):
                             f"?var-capture_id={capture_ids[0]}"
                         )
             if data.get("mode") == "pr":
+                now = datetime.now(timezone.utc)
                 for run in data.get("runs") or []:
-                    capture_ids = captures.get(str(run.get("run_id")), [])
+                    # One pull-request-flow run holds one capture per suite,
+                    # and a rerun adds an attempt. The row names both, so the
+                    # link can only point at its own capture.
+                    capture_ids = []
+                    for capture_id in captures.get(str(run.get("run_id")), []):
+                        parsed = registry.parse_capture_id(capture_id) if registry is not None else None
+                        if (
+                            parsed
+                            and parsed["suite"] == run.get("suite_key")
+                            and parsed["run_attempt"] == str(run.get("run_attempt") or 1)
+                        ):
+                            capture_ids.append(capture_id)
                     if capture_ids:
                         run["capture_id"] = capture_ids[0]
-                        run["recorded"] = "yes"
+                    if registry is None:
+                        state, reason = "unknown", "the capture registry is not available"
                     else:
-                        run["recorded"] = "no"
+                        state, reason = registry.verdict({**run, "capture_ids": capture_ids}, now)
+                    run["recorded"] = {
+                        "capture": "yes",
+                        "not collected": "no",
+                    }.get(state, "unknown")
+                    run["recorded_reason"] = reason
                     # A recorded run opens the run page with its capture id.
-                    # An unrecorded run has no capture page yet, so the
-                    # GitHub link is its entry point; the run page's job
-                    # and step section arrives in a follow-up change.
+                    # An unrecorded run has no capture to open it with, so
+                    # the GitHub link is its entry point.
                     if run.get("capture_id"):
                         query = f"?orgId=1&var-capture_id={urllib.parse.quote(run['capture_id'], safe='')}"
                         if run.get("started_at_ms") and run.get("done_at_ms"):
