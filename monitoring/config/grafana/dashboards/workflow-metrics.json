@@ -513,7 +513,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "OSAC CI - Workflow Metrics",
+  "title": "CI Fleet — Workflow Metrics",
   "uid": "osac-workflow-metrics",
   "version": 1
 }

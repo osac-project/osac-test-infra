@@ -473,7 +473,7 @@
   "timepicker": {},
   "timezone": "browser",
   "refresh": "30s",
-  "title": "OSAC CI - Workflow Jobs",
+  "title": "CI Fleet — Workflow Jobs",
   "uid": "osac-workflow-jobs",
   "version": 1
 }

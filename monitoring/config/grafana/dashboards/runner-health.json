@@ -452,7 +452,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "OSAC CI - Runner Health",
+  "title": "CI Fleet — Runner Health",
   "uid": "osac-runner-health",
   "version": 1
 }

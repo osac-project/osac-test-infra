@@ -1,87 +1,88 @@
-# ci-observe: what it is and how to read it
+# CI Observe
 
-ci-observe records what happens inside an OSAC E2E test run and shows it in Grafana. Use it to answer "why did this run fail" and "where did the time go" without reading raw logs.
+CI Observe shows why an E2E run failed and where it spent time.
 
-You need two things:
+## Open it
 
-1. Access to Grafana at `https://<central-host>:3000`. Sign in with GitHub; only members of the `osac-project` org get in.
-2. A run with ci-observe turned on. The person who starts an E2E workflow sets the `ci-observe` input. Without it, no data is captured.
+Sign in to Grafana with GitHub. Open **ci-observe** and choose **Start here**.
 
-If Grafana will not load, or you see no data for a run you know finished, read [What to do when data is missing](#what-to-do-when-data-is-missing).
+- **Start here**: recent E2E runs.
+- **E2E run**: one run.
+- **Pull requests**: review and merge-queue time.
+- **Trends**: one test over time.
 
 ## Start here
 
-Open the **OSAC CI** folder in Grafana and pick **CI Observe — Test Runs**. This page lists recent runs. Every row is one capture, and the run id links to its detail page.
+Filter by **Repository**, **Suite** and **Result** above the table. The filters narrow the data, so the rows stay honest. Every column also has a funnel filter.
 
-A capture is one E2E workflow run that had ci-observe enabled. Its id has three parts: `bmaas-main-41318528583-a1` is the suite, the GitHub run id, and the run attempt.
+The table shows one row per E2E run:
 
-There are three dashboards. They answer different questions, and you normally read them in this order.
+| Column | Meaning |
+|---|---|
+| Run | GitHub run id. Opens the run page when test data was recorded, and GitHub otherwise. |
+| Workflow | Workflow name. |
+| Repository | `osac` or `osac-test-infra`. |
+| PR | Pull request number. Opens the Pull requests page. |
+| Branch | Branch or merge-queue ref. |
+| Started by | Scheduled, manual, push, PR or merge queue. |
+| Result | GitHub pass or fail. |
+| Recorded | Yes when test data arrived, No when the check proved it did not, Unknown when the check could not judge. |
+| Started | When GitHub created the run. |
+| GitHub | Opens the workflow run. |
 
-| Dashboard | Question it answers | When to open it |
-| --- | --- | --- |
-| **CI Observe — Test Runs** | Which runs exist, which failed, which are missing data? | Always start here. |
-| **CI Observe — Run Investigation** | What happened inside one run? | After you pick a run. |
-| **CI Observe — Compare runs** | Did these runs get slower, and which tests dominate the time? | When you have two or more runs of the same revision. |
+`No` under Recorded means the job sent no test data. `Unknown` means the recording check could not judge: the run just ended, the capture list is stale, or the run is older than its coverage. A run with no recording opens GitHub from the Run cell; only a recorded run opens the run page. Netris, full-regression and agentless jobs have no capture wiring yet, so they cannot record.
 
-## Read one run in four steps
+## E2E run
 
-1. **Find the run.** On **Test Runs**, look at the three cards at the top. `Runs with a session span` is the number of complete runs. `Failed runs` counts runs that ended in failure. `Missing session span` counts captures that sent test data but no run summary. The tables below list the runs themselves.
-2. **Open the detail page.** Click a run id. The top row of the detail page is the summary: `Tests`, `Failed`, `Result`, `Session`, `Duration`, `Suite`, `PR`. Read `Result` first. If it says `Incomplete`, the run summary never arrived and the other cards describe only what did arrive.
-3. **Read the timeline.** `Test timeline` lists every test with its start time and duration. `Slowest tests` and `Failed tests, longest first` put the expensive and broken tests at the top. `Longest waits` shows the named waits inside tests, so a 16-minute test can turn into "instance RUNNING 282 s, metering heartbeats 60 s, deletion 243 s".
-4. **Compare, if you can.** If a second run has the same source revision, harness revision and test selection, open **Compare runs** and pick that cohort. The page shows the sample size before any table, because one run is not a comparison.
+The page opens from a **Run** link and covers that run's time range.
 
-## Words you will see
+The summary shows **Result**, **Tests run**, and **Test time**. Result comes from GitHub. A live run shows **Still running** and refreshes every minute.
 
-- **Capture**: one E2E run with telemetry enabled. The run id is its name.
-- **Session span**: the single `test run` span that wraps the whole pytest session. It carries the run's start, end and result.
-- **Incomplete**: test spans exist, but the session span does not. You can still see which tests ran. You cannot see the run's overall duration or result.
-- **Not collected**: this capture does not have the field. Older captures predate identity stamping, so fields such as the resolved harness SHA are empty for them.
-- **Cohort**: the set of runs that are comparable, meaning the same resolved source commit, harness commit, workflow commit and test selection.
-- **No baseline**: the cohort has fewer than two captures. The tables show one run's numbers, and there is nothing to compare against.
-- **Wait span**: one named wait inside a test, for example polling until an instance is `RUNNING`. Wait spans are how ci-observe explains slow tests.
-- **Service call**: an RPC from one OSAC service to another. A service call can fail while the test still passes, so service errors are not run failures.
+Open a row for detail:
 
-## What ci-observe does not do
+- **Failures**: failed tests, error messages, test time, and a link to the full artifact.
+- **Jobs and steps**: every job that ran, its result and duration, then each job's steps with their durations.
+- **Test list**: every test, result, start time, and duration.
+- **Run info**: GitHub run, pull request, workflow, commit, and test paths. Every identifier is a link.
+- **Cluster**: pods, CPU by pod, memory by pod, node CPU, and node memory during the run.
 
-These gaps are known and deliberate for now.
+Cluster graphs are flat at zero before the test cluster is created.
 
-- **It does not show what happened inside the test cluster.** Logs, events, node metrics and pod metrics are collected and stored, but there is no readable event view yet. This is the deferred Q5 item.
-- **It does not make tests faster or slower.** ci-observe is opt-in telemetry. A delivery failure shows a red step marker and an error annotation, and leaves the job result unchanged.
-- **It does not cover production.** It runs only in the disposable E2E test cluster.
+A run without detailed test data shows **Not finished** and no test count. A run whose code details were not saved says **Run details not saved**. A trace with no session end stays **Not finished** until the session span arrives.
 
-## Does it run inside the OSAC services?
+## Pull requests
 
-No. Nothing is injected into the fulfillment service, the operator, or any other OSAC container. Those services run unchanged.
+The page starts with one pull request. Choose one from the list, or type its number. The **Repository** control picks `osac` or `osac-test-infra`. The list holds pull requests that merged or closed in the last 30 days; an open pull request can still be typed.
 
-The telemetry comes from two separate components that the capture action deploys into the test cluster, in the `ci-observability-canary` namespace:
+- **Selected pull request**: its identity and dates. Opened, first review, approved, entered the queue, last queue attempt, merged or closed.
+- **Time in each stage**: where the time went, with the reason a stage could not be measured.
+- **E2E runs**: every run the pull request made, oldest first. One row per suite. A pull-request run shows the commit it tested, so a rebase appears as a new code version. A merge-queue run tests a temporary merge commit and shows no code version. Each row opens the run page when test data was recorded, and the GitHub run always.
+- **Queue attempts**: each merge-queue entry, how long it lasted, and why it left.
+- **Recent pull requests** and **Stage times**: the browse tables for all pull requests in the selected days.
 
-- A **collector gateway** Deployment. It receives test spans from a pytest plugin, plus pod logs, Kubernetes events and kubelet metrics from the test namespace, and forwards them to the central backend on `osac-ci-1`.
-- A **Beyla** DaemonSet. Beyla reads network requests from the node's kernel. It runs as root and can see every process on its node, so it needs extra permissions in the test cluster. It watches processes from outside and never attaches to them.
+A pull request that is still open is read from GitHub when the page loads, so its dates are current. The saved history starts after it merges or closes.
 
-The bare-metal runner gets no privileged observer at all. So the production answer is: ci-observe is not deployed to production, and it does not alter any OSAC service. The thing to keep in mind is that Beyla is a privileged observer on the nodes of the disposable test cluster.
+## Trends
 
-## Data and privacy
+Enter a test name above and open **Test history**. The charts show passes, failures, and test run time for the selected days.
 
-For debugging, ci-observe stores more than numbers: raw request parameters, exception text and command lines. It scrubs the registry pull secret and the AAP license before sending. Everything stays in the test cluster and the central backend; nothing is uploaded to GitHub.
+## Data
 
-## Limits that change what you see
+Run details, test reports, cluster data, and pull request history are kept for 30 days. Tempo searches are limited to 7 days. Pod logs stay in the GitHub artifact.
 
-- **Traces appear late.** Tempo hides freshly written data from search for up to 15 minutes. A run that just finished can be missing from a query and appear later.
-- **JUnit evidence expires.** The workflow exporter keeps native JUnit results for 7 days. Older captures have traces but no native pass/fail detail.
-- **One query per panel.** Each panel runs a single trace query. A page can take up to two minutes on a cold backend. A blank panel while loading is not an empty result.
+## Missing data
 
-## What to do when data is missing
+| What you see | What it means |
+|---|---|
+| **No recording** | The run has no detailed test data. |
+| **Run details not saved** | The run did not save its code or test settings. |
+| **Not finished** | The trace has no end of session. Reload after the run ends. |
+| No test history | No readable test report exists for the selected days. |
+| No pod samples | The capture has no cluster metrics for this time range. |
 
-| What you see | Likely cause | What to do |
-| --- | --- | --- |
-| No run on **Test Runs** | ci-observe was not enabled, or the data is still inside the 15-minute window | Check the workflow inputs, then wait and refresh. |
-| `Missing session span` includes the run | The session span never reached the backend | Open the run. The test data is still usable. Check the workflow's capture step for a delivery error. |
-| All identity fields say `not collected` | The capture predates identity stamping | Use a capture from after 2026-11-01, or ask the monitoring owner. |
-| **Compare runs** says `No baseline` | Fewer than two comparable captures | Run the same suite again with the same source and harness revisions. |
-| A panel shows a red error | The trace backend timed out | Refresh. If it keeps failing, tell the monitoring owner. |
+## More detail
 
-## Where the details are
-
-- [`monitoring/ci-observe.md`](../ci-observe.md): the operator reference. Architecture, deployment, validation and known backend gaps.
-- [`monitoring/README.md`](../README.md): the whole monitoring stack, including how to deploy it and how to reach Grafana.
-- [`monitoring/config/ci-observe/`](../config/ci-observe/): the cluster manifests for the gateway and Beyla.
+- [`observability.md`](observability.md): why the system looks like this, what is missing, and the roadmap.
+- [`model.md`](model.md): the three dashboard units and their sections.
+- [`sources.md`](sources.md): where each answer comes from.
+- [`../ci-observe.md`](../ci-observe.md): deployment and backend checks.

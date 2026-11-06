@@ -1,0 +1,332 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Test history across E2E runs.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [
+    {
+      "title": "E2E runs",
+      "type": "link",
+      "url": "/d/ci-observe-runs-home/ci-observe-e28094-start-here"
+    },
+    {
+      "title": "E2E run details",
+      "type": "link",
+      "url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run"
+    }
+  ],
+  "panels": [
+    {
+      "type": "text",
+      "id": 1,
+      "title": "Find a test",
+      "description": "",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Enter a test name above."
+      }
+    },
+    {
+      "type": "row",
+      "id": 2,
+      "title": "Test history",
+      "description": "",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 2
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "id": 3,
+          "title": "Passes and failures",
+          "description": "",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No per-test data yet",
+              "custom": {
+                "drawStyle": "bars",
+                "fillOpacity": 60,
+                "showPoints": "always"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "passes"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  },
+                  {
+                    "id": "displayName",
+                    "value": "Passes"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failures"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  },
+                  {
+                    "id": "displayName",
+                    "value": "Failures"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "timeseries",
+              "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${test:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "rows",
+              "columns": [
+                {
+                  "selector": "day",
+                  "text": "day",
+                  "type": "timestamp"
+                },
+                {
+                  "selector": "passes",
+                  "text": "passes",
+                  "type": "number"
+                },
+                {
+                  "selector": "failures",
+                  "text": "failures",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 4,
+          "title": "Test time",
+          "description": "",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No per-test data yet",
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "showPoints": "always"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p50_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "blue"
+                    }
+                  },
+                  {
+                    "id": "displayName",
+                    "value": "Typical time"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "p95_duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  },
+                  {
+                    "id": "displayName",
+                    "value": "95% finish by"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "timeseries",
+              "url": "http://127.0.0.1:9103/api/ci-observe/trends?days=${days}&test=${test:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "rows",
+              "columns": [
+                {
+                  "selector": "day",
+                  "text": "day",
+                  "type": "timestamp"
+                },
+                {
+                  "selector": "p50_duration_s",
+                  "text": "p50_duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "p95_duration_s",
+                  "text": "p95_duration_s",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "osac",
+    "ci",
+    "ci-observe",
+    "trends"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "days",
+        "label": "Days",
+        "type": "custom",
+        "hide": 0,
+        "query": "7,30",
+        "options": [
+          {
+            "selected": false,
+            "text": "7",
+            "value": "7"
+          },
+          {
+            "selected": true,
+            "text": "30",
+            "value": "30"
+          }
+        ],
+        "current": {
+          "text": "30",
+          "value": "30",
+          "selected": true
+        },
+        "description": ""
+      },
+      {
+        "name": "test",
+        "label": "Test",
+        "type": "textbox",
+        "hide": 0,
+        "query": "",
+        "options": [],
+        "current": {
+          "selected": true,
+          "text": "",
+          "value": ""
+        },
+        "description": ""
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "timezone": "browser",
+  "title": "CI Observe \u2014 Trends",
+  "uid": "ci-observe-trends",
+  "version": 1
+}

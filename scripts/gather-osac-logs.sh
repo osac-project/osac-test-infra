@@ -13,6 +13,9 @@
 #   OSAC_E2E_OUTPUT_DIR    — where the E2E suites write their output
 #                            (default: dirname of JUNIT_PATH, else /tmp/test-output);
 #                            copied to e2e/
+#   INVENTORY_FILE         — path to the raw virtual-BMH inventory (optional;
+#                            set by setup-virtual-bmh.sh through GITHUB_ENV;
+#                            collected with the BMC passwords redacted)
 #
 set -o nounset
 set -o pipefail
@@ -32,6 +35,19 @@ JUNIT_PATH="${JUNIT_PATH:-}"
 # host), then /tmp/test-output.
 E2E_OUTPUT_DIR="${OSAC_E2E_OUTPUT_DIR:-${JUNIT_PATH:+$(dirname "${JUNIT_PATH}")}}"
 E2E_OUTPUT_DIR="${E2E_OUTPUT_DIR:-/tmp/test-output}"
+# Router hop evidence. The ingress access log is the only record of whether
+# the router received a request that a test saw fail, so the gather keeps the
+# lines for the routes this run could reach, bounded to the tail. The router
+# writes access logs to its container stdout only when the IngressController
+# logs to Container, so that setting is recorded beside the lines.
+#
+# The cap is per pod, not across pods: a global tail of every router pod's
+# output keeps only the last pod's lines, which is exactly the wrong pod when
+# the request landed on the first one. The read is deeper than the cap so a
+# busy router's last 2000 raw lines are not all unrelated traffic.
+ROUTER_NAMESPACE="openshift-ingress"
+ROUTER_LOG_MAX_LINES=2000
+ROUTER_LOG_READ_LINES=20000
 
 if [[ ! -f "${KUBECONFIG:-}" ]]; then
     echo "ERROR: KUBECONFIG not set or file does not exist" >&2
@@ -71,7 +87,95 @@ collect_namespace_logs() {
     wait
 }
 
+# The router hop answers "did the router receive it, and what did it record?".
+# Hosts come from the namespace's own Routes, which is what a test can reach;
+# there is no per-test host in the artifact, so every route in the namespace
+# is filtered for. endpoints/endpointslices say whether a Service had a ready
+# backend at all, which separates "the router rejected it" from "nothing
+# behind the Route".
+collect_router_evidence() {
+    local ns="$1"
+    local dir="$MGMT_CLUSTER_DIR/namespaces/$ns"
+    mkdir -p "${dir}"
+
+    local routes_json
+    routes_json=$(timeout 30s oc get route -n "${ns}" -o json 2>/dev/null) || routes_json='{"items":[]}'
+    # Route objects can carry a TLS private key. Delete it before the file is
+    # written; the artifact must never hold a key, and no redaction pass can
+    # reliably match a PEM block.
+    # Delete the live TLS key and the last-applied annotation, which can
+    # carry the same key inside a serialized copy of the object. If jq
+    # fails, write an empty list rather than the unsanitized response.
+    jq '.items |= map(
+        (if .spec.tls then .spec.tls |= del(.key) else . end)
+        | del(.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"])
+    )' <<<"${routes_json}" > "${dir}/routes.yaml" 2>/dev/null \
+        || printf '%s\n' '{"items":[]}' > "${dir}/routes.yaml"
+    timeout 30s oc get endpoints -n "${ns}" -o yaml > "${dir}/endpoints.yaml" 2>&1 || true
+    timeout 30s oc get endpointslices -n "${ns}" -o yaml > "${dir}/endpointslices.yaml" 2>&1 || true
+
+    # A HAProxy timeout annotation cuts a slow response at the router before
+    # the test's own client timeout would fire, so it belongs with the routes.
+    {
+        printf 'NAME\tHOST\tTIMEOUT\n'
+        jq -r '.items[]? | [.metadata.name, .spec.host,
+            (.metadata.annotations["haproxy.router.openshift.io/timeout"] // "none")] | @tsv' \
+            <<<"${routes_json}" 2>/dev/null || true
+    } > "${dir}/routes.txt"
+
+    local hosts
+    hosts=$(jq -r '.items[]?.spec.host // empty' <<<"${routes_json}" 2>/dev/null | sort -u) || hosts=""
+
+    local access_logging
+    access_logging=$(timeout 30s oc get ingresscontroller default -n openshift-ingress-operator \
+        -o jsonpath='{.spec.logging.access.destination.type}' 2>/dev/null) || access_logging=""
+    access_logging="${access_logging:-disabled}"
+
+    local pods
+    pods=$(timeout 30s oc get pods -n "${ROUTER_NAMESPACE}" \
+        -l ingresscontroller.operator.openshift.io/owning-ingresscontroller \
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null) || pods=""
+    # The label comes from the IngressController operator. Falling back to the
+    # whole namespace keeps a label rename from silently reporting "no lines".
+    if [[ -z "${pods}" ]]; then
+        pods=$(timeout 30s oc get pods -n "${ROUTER_NAMESPACE}" \
+            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null) || pods=""
+    fi
+
+    local body
+    body=$(mktemp)
+    if [[ -n "${hosts}" && -n "${pods}" ]]; then
+        local host_patterns=()
+        local host
+        while IFS= read -r host; do
+            [[ -n "${host}" ]] && host_patterns+=(-e "${host}")
+        done <<<"${hosts}"
+        local pod
+        for pod in ${pods}; do
+            { timeout 60s oc logs "${pod}" -n "${ROUTER_NAMESPACE}" \
+                --tail="${ROUTER_LOG_READ_LINES}" 2>/dev/null || true; } \
+                | grep -F "${host_patterns[@]}" 2>/dev/null \
+                | tail -n "${ROUTER_LOG_MAX_LINES}" >> "${body}" || true
+        done
+    fi
+
+    local host_list="${hosts//$'\n'/ }"
+    {
+        printf '# router access log: namespace=%s accessLogging=%s\n' \
+            "${ROUTER_NAMESPACE}" "${access_logging}"
+        printf '# pods: %s\n' "${pods:-none}"
+        printf '# route hosts: %s\n' "${host_list:-none}"
+        printf '# kept: last %s lines matching a route host, per pod (read up to %s)\n' \
+            "${ROUTER_LOG_MAX_LINES}" "${ROUTER_LOG_READ_LINES}"
+        cat "${body}"
+    } > "${dir}/router-access.log"
+    rm -f "${body}"
+}
+
 collect_namespace_logs "$E2E_NAMESPACE" "$MGMT_CLUSTER_DIR/namespaces/$E2E_NAMESPACE"
+
+echo "Collecting router hop evidence (routes, endpoints, router access log)..."
+collect_router_evidence "$E2E_NAMESPACE"
 
 for ns in keycloak ansible-aap openshift-cnv; do
     if oc get namespace "${ns}" &>/dev/null; then
@@ -415,6 +519,35 @@ else
     echo "  AAP route or admin password not found, skipping job stdout capture"
 fi
 
+# Raw virtual-BMH inventory (see setup-virtual-bmh.sh). jq redacts the
+# BMC passwords at copy time, so raw values never enter the artifact
+# directory; the bmc_password sed sweep below is defense in depth.
+if [[ -n "${INVENTORY_FILE:-}" && -f "${INVENTORY_FILE}" ]]; then
+    INVENTORY_BASENAME="$(basename "${INVENTORY_FILE}")"
+    INVENTORY_DEST="${ARTIFACT_DIR}/${INVENTORY_BASENAME}"
+    # An inventory already inside the artifact directory is redacted in
+    # place: a plain redirect would truncate it before jq reads it.
+    if [[ "$(realpath -m "${INVENTORY_DEST}")" == "$(realpath -m "${INVENTORY_FILE}")" ]]; then
+        INVENTORY_TMP="$(mktemp)"
+        if jq '(.hosts[]? | select(has("bmc_password")) | .bmc_password) |= "REDACTED"' \
+            "${INVENTORY_FILE}" > "${INVENTORY_TMP}"; then
+            mv "${INVENTORY_TMP}" "${INVENTORY_FILE}"
+            echo "Redacted the virtual BMH inventory in place: ${INVENTORY_FILE}"
+        else
+            rm -f "${INVENTORY_TMP}"
+            echo "::warning::could not redact ${INVENTORY_FILE}" >&2
+        fi
+    elif jq '(.hosts[]? | select(has("bmc_password")) | .bmc_password) |= "REDACTED"' \
+        "${INVENTORY_FILE}" > "${INVENTORY_DEST}"; then
+        echo "Collected virtual BMH inventory (bmc_password redacted): ${INVENTORY_FILE}"
+    else
+        echo "::warning::could not redact ${INVENTORY_FILE}; not collecting it" >&2
+        rm -f "${INVENTORY_DEST}"
+    fi
+else
+    echo "No virtual BMH inventory (INVENTORY_FILE not set or missing), skipping"
+fi
+
 if [[ -n "${JUNIT_PATH}" && -f "${JUNIT_PATH}" ]]; then
     cp "${JUNIT_PATH}" "${ARTIFACT_DIR}/junit.xml"
     for extra in "$(dirname "${JUNIT_PATH}")"/junit-*.xml; do
@@ -471,12 +604,20 @@ find "${ARTIFACT_DIR}" -type f \( -name "*.yaml" -o -name "*.log" -o -name "*.tx
 find "${ARTIFACT_DIR}" \( -name "pods-describe.txt" -o -name "*.log" -o -name "*.txt" \) -print0 \
     | xargs -0 sed -i -E 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/REDACTED_JWT/g' || true
 
+# Router access logs record the request path, query string included. A
+# credential passed as a query parameter is not in the JSON shapes below, so
+# keep the parameter name and drop its value.
+find "${ARTIFACT_DIR}" -name "router-access.log" -print0 \
+    | xargs -0 -r sed -i -E 's/([?&](access_token|id_token|refresh_token|token|code|password|passwd|secret|client_secret|api_?key|auth|authorization|signature|sig|x-amz-signature)=)[^&[:space:]"]+/\1REDACTED/gI' || true
+
 # Base64-encoded database passwords and API tokens (operator logs, AAP job stdout)
 # [^"]+ (not [A-Za-z0-9+/=]) so passwords with punctuation (@/%/#) are covered too.
 # find -exec succeeds on zero matches (unlike xargs); fail closed on sed errors.
+# bmc_password: defense in depth on top of the jq redaction at collection.
 find "${ARTIFACT_DIR}" -type f \( -name "*.log" -o -name "*.txt" -o -name "*.json" -o -name "*.jsonl" \) \
     -exec sed -i -E \
         -e 's/"password":\s*"[^"]+"/"password": "REDACTED"/g' \
+        -e 's/"bmc_password":\s*"[^"]+"/"bmc_password": "REDACTED"/g' \
         -e 's/"token":\s*"[^"]+"/"token": "REDACTED"/g' \
         {} + || {
     echo "ERROR: password/token redaction failed" >&2

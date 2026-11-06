@@ -90,6 +90,9 @@ osac_installer_dir: "{{ osac_dir }}/osac-installer"
 osac_namespace: "osac-e2e-ci"
 osac_test_tenant_name: "tenant1"
 osac_values_file: "values/caas-ci/instance.yaml"
+
+# Shared provider-networking provisioning gate for all OSAC consumers.
+networking_provisioning_enabled: true
 osac_license_path: "{{ inventory_dir }}/../license.zip"
 
 # Container image overrides (leave empty to use installer defaults)

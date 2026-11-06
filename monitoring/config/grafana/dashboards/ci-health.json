@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Team-facing CI health summary for standups and sprint reviews: pass rate trend, flake rate, and MTTR. See OSAC CI - Workflow Jobs for the detailed engineering drill-down.",
+  "description": "Team-facing CI health summary for standups and sprint reviews: pass rate trend, flake rate, and MTTR. See CI Fleet — Workflow Jobs for the detailed engineering drill-down.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -824,7 +824,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "OSAC CI - Health Overview",
+  "title": "CI Fleet — Health Overview",
   "uid": "osac-ci-health",
   "version": 1
 }

@@ -5,6 +5,9 @@
 # Render before apply: the coordinator substitutes the plain ${...} tokens
 # (envsubst-style; no custom template framework):
 #   CI_OBSERVE_CAPTURE_ID        capture identity, stamped on every signal
+#   CI_OBSERVE_RUN_ID            GitHub workflow run id, stamped on every
+#                                signal as osac.ci.run_id; "unknown" for a
+#                                local capture, which has no GitHub run
 #   CI_OBSERVE_NAMESPACE         observed OSAC namespace, e.g. osac-e2e-ci
 #   CI_OBSERVE_CLUSTER_UID       cluster identity
 #   CI_OBSERVE_KUBELET_ENDPOINT  https://<node-ip>:10250
@@ -157,6 +160,12 @@ spec:
           env:
             - name: CI_OBSERVE_CAPTURE_ID
               value: "${CI_OBSERVE_CAPTURE_ID}"
+            # The run id the capture belongs to, also embedded in the
+            # capture id. Stamped separately so a trace joins the exporter's
+            # jobs table (SQLite, keyed by run id) without parsing the
+            # capture id string.
+            - name: CI_OBSERVE_RUN_ID
+              value: "${CI_OBSERVE_RUN_ID}"
             - name: CI_OBSERVE_NAMESPACE
               value: "${CI_OBSERVE_NAMESPACE}"
             - name: CI_OBSERVE_CLUSTER_UID

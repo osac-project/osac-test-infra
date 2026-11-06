@@ -27,6 +27,14 @@ processors:
     limit_mib: 512
   batch:
     timeout: 5s
+    # Tempo's distributor-to-ingester push rejected batches over 16 MiB
+    # (ResourceExhausted, "received message after decompression larger than
+    # max 16777216"). The default 8192-span batch could exceed that, the
+    # router queued, the gateway queued behind it, and the gateway's memory
+    # limiter refused pytest spans. Keep one push small enough for the
+    # ingester, and the ingester limit was raised as well.
+    send_batch_size: 1024
+    send_batch_max_size: 2048
 
 exporters:
   otlphttp/tempo210:

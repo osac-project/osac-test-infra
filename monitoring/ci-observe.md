@@ -5,49 +5,35 @@ For an introduction, start with [ci-observe/README.md](ci-observe/README.md).
 
 The application and the individual tests keep their current source and behavior.
 
-## Status at the 2026-11-01 cutover
+## Status at 2026-11-06
 
-The collector-first prototype became the live CI path. What works now, all verified
-against the central backend on `osac-ci-1`:
+The collector-first path is live. What works now, verified against the central backend on `osac-ci-1`:
 
-- Live push is the delivery path. A `ci-observe` run streams pytest traces, cluster
-  logs and kubelet metrics to the central backend while the test runs. Nothing is
-  uploaded to GitHub, so the capture step needs no artifact and no gitleaks scan.
-- The dashboard shows real numbers for a finished capture: 17 tests, 24.1 minutes
-  run duration, the slowest-test table with per-test durations. Run duration
-  uses the single `test run` session span, not the separate xdist worker spans.
-- Every E2E wait is a named span (`poll_until` in the osac repo). The 16-minute
-  bmaas metering test breaks down into named waits: instance RUNNING 282 s,
-  metering heartbeats 60 s, instance deletion 243 s.
-- Kubelet metrics arrive: the cluster panels show node and pod CPU and memory.
-- Capture ids are readable (`bmaas-main-<run-id>-a1`), with suite and PR promoted
-  to Loki and Prometheus labels.
-- Delivery is verified after each test: the capture action reports a loud,
-  non-gating error when telemetry was requested but never reached the backend.
-  The job result and the test's own exit code stay unchanged.
-- Traces from the batch era stay queryable through the archive datasource. The
-  31 batch session traces were migrated into Tempo 2.10.
+- Live push is the delivery path. A recorded run streams pytest traces, cluster logs and kubelet metrics to the central backend while the test runs. The capture step uploads no telemetry. The separate failure gather still uploads a redacted artifact.
+- Standard VMaaS, BMaaS and CaaS full-install runs record by default in both repositories, for pull request, merge queue, scheduled and manual runs. Netris, stretched, agentless and full-regression workflows have no capture action yet.
+- Every store keeps 30 days: Tempo, Prometheus, Loki, the GitHub artifact, the workflow exporter, `prs.db` and `trends.db`.
+- **Start here** shows Run, Workflow, Repository, PR, Branch, Started by, Result, Recorded, Started and GitHub. Repository, Suite and Result filter the data; every column also has a filter. Every identifier is a link. A run with no recording opens GitHub.
+- **E2E run** shows Result, Tests run and Test time, then collapsed Failures, Jobs and steps, Test list, Run info and Cluster rows. Result comes from GitHub. Run info links the run, PR and commit. Jobs and steps show where the time went outside the test itself. Cluster shows pods, CPU, memory and nodes for the run window. The page refreshes every minute.
+- **Pull requests** starts from one pull request, chosen from the list or typed by number: its dates, the time in each stage, every E2E run it made (one code version per commit), and its merge-queue attempts. The Repository control picks `osac` or `osac-test-infra`. A pull request that is still open is read from GitHub when the page loads. **Trends** shows per-test history.
+- Capture ids stay readable (`bmaas-main-<run-id>-a1`). Suite and PR are promoted to Loki and Prometheus labels.
+- Batch-era session traces remain queryable through the archive datasource.
 
-What is missing or known gaps:
+Known gaps:
 
-- Beyla service-request spans from the batch era were not migrated, only session
-  traces. Old captures show test spans in the service-request panels.
-- The Traces Drilldown app (v3.1.0) is installed and served but not yet confirmed
-  rendering in a user's browser. Explore with query type Trace ID is the working
-  path to a trace waterfall today.
-- Count stat panels render unitless (`47`, not `47 ns`); `Run duration` keeps its
-  time unit. Verified in Grafana 13.2.4.
-- The router keeps its sending queues in memory. A router restart while a backend
-  is down discards already accepted batches. Persistent queue storage is a
-  follow-up, not part of the cutover.
-- Collectors use `insecure_skip_verify` for the internal CA. Mounting the CA into
-  the gateway pod for real verification is a follow-up.
-- Freshly flushed Tempo blocks are invisible to TraceQL search for up to 15
-  minutes (the backend search sharder skips young blocks). A just-finished run's
-  spans appear with that delay; this is Tempo 2.10 behavior, not a bug.
-- GitHub OAuth users may see a reduced sidebar without Explore. The admin account
-  sees the full navigation. Granting the OAuth users the needed org role is an
-  open task.
+- No run waterfall or task timeline for queue, provision, build, test and teardown.
+- No attempts or flake view, no Kubernetes events, no waits table, no per-test trace and log links, no service call summary.
+- No CI SLOs, capture coverage target or telemetry pipeline health.
+- No outcome-based sampling and no long-term rollups.
+- Telemetry still uses `osac.ci.*` names. OpenTelemetry CI/CD and test names are the planned shared vocabulary.
+
+[`ci-observe/observability.md`](ci-observe/observability.md) explains the impact and the order of work.
+
+Operational gaps that remain:
+
+- The router keeps its sending queues in memory. A router restart while a backend is down discards already accepted batches. Persistent queue storage is a follow-up.
+- Collectors use `insecure_skip_verify` for the internal CA. Mounting the CA into the gateway pod for real verification is a follow-up.
+- Freshly flushed Tempo blocks are invisible to TraceQL search for up to 15 minutes. A just-finished run's spans appear with that delay. This is Tempo 2.10 behavior, not a bug.
+- GitHub OAuth users may see a reduced sidebar without Explore. The admin account sees the full navigation.
 
 ## Scope
 
@@ -102,8 +88,11 @@ leader already exited are not reaped, and that gap is accepted.
 
 ## Live telemetry push
 
-An E2E workflow run with the `ci-observe` input deploys the collector
-gateway into the cluster it tests, and the gateway streams every signal
+Every standard full-install E2E run records by default: VMaaS, BMaaS and
+CaaS in both repositories, for pull request, merge queue, scheduled and
+manual runs. Netris, stretched, agentless and full-regression workflows do
+not have capture wired, so they cannot record yet. The workflow deploys the
+collector gateway into the cluster it tests, and the gateway streams every signal
 (pytest and Beyla traces, cluster logs, kubelet metrics, stamped with the
 capture identity) live to the central backend while the test runs:
 
@@ -131,8 +120,9 @@ capture identity) live to the central backend while the test runs:
   gateway as a precomputed `Authorization` header. An empty password or
   endpoint degrades to running the test without telemetry — never an
   unauthenticated push.
-- Nothing touches GitHub: no capture artifact, no upload gate, no scan.
-  Telemetry is visible in the CI Grafana during the run.
+- The capture action does not upload telemetry to GitHub. The separate failure
+  gather step still uploads a redacted artifact. A telemetry failure never
+  changes the test result.
 
 Every captured signal carries run identity and test selection as `osac.ci.*`
 resource attributes. The fields distinguish requested refs, resolved source
@@ -149,7 +139,7 @@ SHAs, deployment image refs, runtime image IDs and pytest selection:
 | `test_filter` | The exact pytest `-k` expression, or `none` when the run passed no filter. |
 | `test_marker` | The exact pytest `-m` expression, or `none` when the run passed no marker. |
 | `osac_images` | The Deployment spec image refs (including mutable tags) requested for the OSAC workloads. This existing attribute is unchanged. |
-| `osac_image_ids` | Runtime IDs from Running OSAC Deployment pods, plus `=unknown` entries for expected containers without enough IDs. A truncated list ends in `...[truncated]`. |
+| `osac_image_ids` | Runtime IDs from the Running pods of the namespace's Deployments, plus `=unknown` entries for expected containers without enough IDs. A truncated list ends in `...[truncated]`. |
 | `osac_image_ids_complete` | `true` only when every desired replica had an image ID and the list was not truncated. `false` marks missing IDs or truncation; `unknown` marks an unavailable query. |
 | `workflow`, `run_attempt` | GitHub workflow name and attempt number. |
 
@@ -197,12 +187,18 @@ design.
 
 `osac_images` and `osac_image_ids` answer different questions. The first
 keeps the requested Deployment spec refs, including mutable tags. The second
-reads `.status.containerStatuses[].imageID` only from Running pods owned by
-Deployments labeled `app.kubernetes.io/part-of=osac`. It compares those IDs
-with every declared OSAC Deployment container and its desired replica count.
-Missing IDs appear as `deployment/container=unknown`; the completeness
-attribute is false. The helper preserves underscores, rejects
-unsafe image ID characters and hostile deployment names (degrading the
+reads `.status.containerStatuses[].imageID` only from Running pods owned by a
+Deployment in the observed namespace, the same Deployments `osac_images`
+lists. The namespace is the population because OSAC sets no label shared by
+all of its Deployments: the fulfillment services carry `app=<name>`, the
+operator workloads carry `app.kubernetes.io/instance=osac`, and the Ansible
+Automation Platform workloads carry `app.kubernetes.io/name`. It compares
+those IDs with every declared Deployment container and its desired replica
+count. Init containers are not entries: they exit before the main containers
+run, so their IDs describe a start step, not the workload. Missing IDs appear
+as `deployment/container=unknown`; the completeness attribute is false. The
+helper preserves underscores, rejects unsafe image ID characters and hostile
+deployment names (degrading the
 whole value to `unknown`) instead of rewriting them, sorts the mappings
 and caps the value at 4 KiB. If the cap cuts the list, `...[truncated]`
 marks the end and completeness stays false. A scaled-to-zero Deployment
@@ -245,11 +241,10 @@ value, it uses a non-empty `unknown` or `none` value because the collector
 rejects empty resource attributes. Invalid refs and SHAs become `unknown`
 whole, never a mangled value.
 
-These identity attributes are wired end to end, but only a live capture
-exercises the full chain: the workflow context, the overlay step output,
-the workspace git metadata and the cluster queries. A post-merge canary
-run with the `ci-observe` input or label must show, in the CI Grafana
-for its capture id: `test_ref` equal to the requested ref, `test_sha`
+These identity attributes are wired end to end, but only a live E2E run
+checks the full path: workflow inputs, test checkout, workspace Git metadata,
+and cluster queries. Standard VMaaS, BMaaS and CaaS full-install runs record
+by default in every trigger. The E2E run page should show: `test_ref` equal to the requested ref, `test_sha`
 matching the osac commit the run's overlay step logged, `test_infra_sha`
 matching the merged test-infra commit (equal to
 `test_infra_workflow_sha` on a scheduled run), `test_suite` naming every
@@ -275,13 +270,29 @@ sync workflow's vault-auth and `ci-observe.py up --quadlet` steps on the
 monitoring-central runner, and nothing else. It deliberately has no
 schedule, for the same batch-dropping reason.
 
-The capture action verifies delivery after the test: it scrapes the gateway
-collector's self-metrics (`:8888`) and reports an error when telemetry was
-requested but never reached the central backend (deployment failed, receiver
-refused data, exporter send failures, sent less than accepted, or nothing
-collected at all). The verify step has `continue-on-error: true`, so the error
-is loud but never gating: the job result and the test's own exit code stay
-unchanged.
+The capture action verifies delivery after the test: it reads the gateway
+collector's self-metrics through the same port-forward the deploy step
+opened (one forward for `:4317` and `:8888`), and reports a warning when
+telemetry was requested but never reached the central backend (deployment
+failed, input was refused, batches could not be queued, or the exporter
+queue was still busy when a bounded wait expired). Send failures are
+information: the exporter retries them. Residue in the queue is reported as
+in flight, not as a verdict. The step always exits 0 and has
+`continue-on-error: true`, so it is loud but never gating: the job result
+and the test's own exit code stay unchanged.
+
+The action also posts one `osac_ci_capture_info` metric after deploy and
+again during verify, but only when the gateway actually deployed: both
+posts require `CI_OBSERVE_DEPLOYED=1` and no deploy-failure marker. A failed
+deploy posts nothing, because the run is a no-telemetry run and a registry
+capture with no data would read as a capture that lost its telemetry. The
+payload is value 1, the capture id as the resource attribute, and the run
+identity (`ci_run_id`, `ci_run_attempt`, `ci_suite`, `ci_pr`,
+`ci_workflow`, the refs and SHAs, and the test selection) as datapoint
+attributes. It posts to `https://osac-ci-1.redhat.com` on 443, the runner-reachable HAProxy route to the central ingest vhost; runners cannot reach the vhost's own port. Those identity attributes stay on this one series; the resource
+processor never promotes them globally. A failed post is a warning. The
+central registry then knows the capture exists even when its traces and
+logs arrive late or not at all.
 
 The backend uses the persistent state directory `~/monitoring/ci-observe` and
 fixed loopback ports: UI 3300, OTLP 4318, Tempo 3200, Loki 3100 and Prometheus

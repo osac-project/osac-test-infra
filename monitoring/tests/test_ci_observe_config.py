@@ -130,6 +130,55 @@ class TestGateway:
         assert "extra_metadata_labels" not in kubelet
         assert "metric_groups" not in kubelet, "defaults are node, pod and container: the bounded set"
 
+    def test_kubelet_stats_enables_only_the_restart_signal(self, collector: dict[str, Any]) -> None:
+        """container.uptime is the one restart signal a scrape can carry
+        without the /pods call: the kubelet resets it when a container
+        restarts, so a drop is a restart and the value is the time since the
+        container started. It is disabled by default, so it is enabled here.
+        k8s.pod.uptime stays off: a recreated pod already arrives under a new
+        k8s.pod.uid."""
+        kubelet = collector["receivers"]["kubelet_stats"]
+        enabled = {name for name, config in kubelet["metrics"].items() if config["enabled"]}
+        assert enabled == {"container.uptime"}
+
+    def test_kubelet_stats_cannot_report_restarts_ready_state_or_termination(self, collector: dict[str, Any]) -> None:
+        """The documented gap. kubeletstats 0.164 has no metric for a container
+        restart count, ready state or last termination reason, and the kubelet
+        summary API has no field for them, so no metric name enabled here
+        produces them. Those facts exist only in the pod object's
+        status.containerStatuses, which the k8s_objects pods watch already
+        sends to Loki. The *_utilization metrics stay off as well: enabling
+        one makes the scraper call /pods (needsResources)."""
+        kubelet = collector["receivers"]["kubelet_stats"]
+        enabled = {name for name, config in kubelet["metrics"].items() if config["enabled"]}
+        for missing in ("restart", "ready", "terminat", "utilization"):
+            assert not any(missing in name for name in enabled), missing
+        # The pods watch is where a panel gets restart count, ready and the
+        # termination reason, so it must stay on and keep the pod status.
+        watched = {obj["name"] for obj in collector["receivers"]["k8s_objects"]["objects"]}
+        assert "pods" in watched
+        statements = collector["processors"]["transform/k8s_objects"]["log_statements"][0]["statements"]
+        assert any(s.startswith('keep_keys(body["object"], ["metadata", "status"])') for s in statements)
+
+    def test_pod_records_carry_the_node_name(self, collector: dict[str, Any]) -> None:
+        """A pod's node name is spec.nodeName, and the projection drops spec so
+        env and secret refs never leave the cluster. The node name is copied to
+        an attribute before that, which is the only pod-to-node mapping
+        available: /stats/summary identifies a pod by name, namespace and uid
+        only, so kubeletstats cannot put k8s.node.name on pod metrics without
+        the /pods call."""
+        statements = collector["processors"]["transform/k8s_objects"]["log_statements"][0]["statements"]
+        copy_node = next(
+            i
+            for i, statement in enumerate(statements)
+            if 'set(attributes["k8s.node.name"], body["object"]["spec"]["nodeName"])' in statement
+        )
+        drop_spec = next(
+            i for i, statement in enumerate(statements) if statement.startswith('keep_keys(body["object"], ["metadata"')
+        )
+        assert copy_node < drop_spec, "the node name must be copied before spec is dropped"
+        assert 'attributes["k8s.resource.name"] == "pods"' in statements[copy_node], "pods only"
+
     def test_capture_files_are_append_only_jsonl(self, collector: dict[str, Any]) -> None:
         for signal in SIGNALS:
             exporter = collector["exporters"][f"file/{signal}"]
@@ -297,7 +346,13 @@ class TestLiveGateway:
         path: only the transport and the memory budget differ."""
         for name in ("otlp", "k8s_objects", "file_log", "kubelet_stats"):
             assert collector_live["receivers"][name] == collector["receivers"][name], name
-        for name in ("resource/capture", "transform/sanitize_traces", "transform/k8s_objects"):
+        # The one intentional difference in resource/capture: osac.ci.run_id
+        # is live-only, because a local capture wraps an arbitrary command
+        # rather than a GitHub workflow run and has no run id to stamp.
+        live_attributes = collector_live["processors"]["resource/capture"]["attributes"]
+        local_attributes = collector["processors"]["resource/capture"]["attributes"]
+        assert [a for a in live_attributes if a["key"] != "osac.ci.run_id"] == local_attributes
+        for name in ("transform/sanitize_traces", "transform/k8s_objects"):
             assert collector_live["processors"][name] == collector["processors"][name], name
         # The live gateway raises only limit_mib: the local file-capture path
         # keeps its 384 MiB budget.
@@ -428,6 +483,7 @@ class TestCluster:
         env = {e["name"]: e["value"] for e in container["env"]}
         assert set(env) == {
             "CI_OBSERVE_CAPTURE_ID",
+            "CI_OBSERVE_RUN_ID",
             "CI_OBSERVE_NAMESPACE",
             "CI_OBSERVE_CLUSTER_UID",
             "CI_OBSERVE_KUBELET_ENDPOINT",
@@ -535,6 +591,15 @@ class TestLgtmOverrides:
             assert name in attributes, name
         for name in ("osac.ci.capture_id", "osac.ci.observed_namespace", "osac.ci.suite", "osac.ci.pr"):
             assert name in attributes, name
+
+    def test_loki_grpc_message_limit_fits_a_full_capture_response(self) -> None:
+        """A query over a whole 20-minute capture returned more than Loki's stock
+        4 MiB gRPC message limit and failed with ResourceExhausted
+        (4505394 vs. 4194304). Both directions are raised to 32 MiB."""
+        config = yaml.safe_load((CONFIG_DIR / "lgtm-overrides" / "loki-config.yaml").read_text())
+        server = config["server"]
+        assert server["grpc_server_max_recv_msg_size"] == 33554432
+        assert server["grpc_server_max_send_msg_size"] == 33554432
 
     def test_prometheus_promotes_the_osac_ci_attributes(self) -> None:
         config = yaml.safe_load((CONFIG_DIR / "lgtm-overrides" / "prometheus.yaml").read_text())

@@ -370,6 +370,7 @@ catalog and `all.yml` list different keys.
 
 | Key | Default | Consumed by |
 |---|---|---|
+| `networking_provisioning_enabled` | `true` | `prep-osac` |
 | `netris_tenant_network_cidr` | `192.168.101.0/24` | `configure-caas-tenant-network`, `create-caas`, `prep-osac` |
 | `netris_tenant_subnet_cidr` | `192.168.101.0/24` | `configure-caas-tenant-network`, `prep-osac` |
 | `netris_k8s_manager_suites` | `[vmaas, full]` | `deploy-ocp playbook`, `prep-osac` |

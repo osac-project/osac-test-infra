@@ -1,0 +1,82 @@
+---
+name: Fetch and merge prod registry secret
+description: >-
+  Fetch the prod-registry-pull Vault secret and merge it into a job-scoped
+  containers auth file and the cluster pull-secret file. Mirrors
+  fetch-stage-registry-secret exactly (see that action's own header comment
+  for the full reasoning -- kept as a separate action, not a parametrized
+  one, so a malformed or missing Vault entry here can't affect the stage
+  path) -- only the Vault secret path differs.
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+  pull-secret-path:
+    description: "Path to the pull-secret.json file that will be passed to cluster-tool boot"
+    required: true
+  auth-json-path:
+    description: >-
+      Job-scoped output path for the merged containers auth file (e.g.
+      under runner.temp). Deliberately NOT the shared
+      ~/.config/containers/auth.json: osac-ci is a shared fleet where
+      concurrent jobs run under the same account and $HOME, and every job's
+      own fetch-and-write-secrets call rewrites that shared file with
+      content that lacks this credential, racing with (and sometimes
+      overwriting) whatever a concurrent job just wrote there.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve prod registry secret from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: secret/data/osac/e2e/prod-registry-pull dockerconfigjson | PROD_REGISTRY_AUTH
+
+    # Merged into two job-scoped files, not the shared auth.json: the
+    # runner-local one covers podman/skopeo/helm-login for this job only,
+    # and cluster-tool boot reads pull-secret-path separately to seed the
+    # cluster's own pull secret -- without the second merge, the cluster's
+    # nodes would have no credential to pull the registry.redhat.io images
+    # the installed chart references.
+    - name: Merge into a job-scoped auth file and the cluster pull secret
+      shell: bash
+      env:
+        PROD_REGISTRY_AUTH: ${{ steps.vault.outputs.PROD_REGISTRY_AUTH }}
+        PULL_SECRET_PATH: ${{ inputs.pull-secret-path }}
+        AUTH_JSON_PATH: ${{ inputs.auth-json-path }}
+      run: |
+        echo "::group::Merge prod registry credential into pull secrets"
+        # Belt and suspenders with the explicit chmod calls below: a
+        # permissive default umask would otherwise leave each file
+        # world/group-readable for the brief window between creation and
+        # that chmod.
+        umask 077
+        TMP_PULL_SECRET="${PULL_SECRET_PATH}.tmp"
+        trap 'rm -f "${TMP_PULL_SECRET}"' EXIT
+        # Base is the job-scoped copy fetch-and-write-secrets also writes
+        # (never the shared ~/.config/containers/auth.json), so a
+        # concurrent job rewriting/removing that shared file on the same
+        # osac-ci host can't affect this job's merged output.
+        jq -s '.[0].auths * .[1].auths | {auths: .}' \
+          "$RUNNER_TEMP/containers-auth-base.json" \
+          <(printf '%s' "${PROD_REGISTRY_AUTH}") \
+          > "${AUTH_JSON_PATH}"
+        chmod 600 "${AUTH_JSON_PATH}"
+
+        jq -s '.[0].auths * .[1].auths | {auths: .}' \
+          "${PULL_SECRET_PATH}" \
+          <(printf '%s' "${PROD_REGISTRY_AUTH}") \
+          > "${TMP_PULL_SECRET}"
+        chmod 600 "${TMP_PULL_SECRET}"
+        mv "${TMP_PULL_SECRET}" "${PULL_SECRET_PATH}"
+        trap - EXIT
+        echo "::endgroup::"

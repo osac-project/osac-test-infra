@@ -3,8 +3,8 @@ parsing, run evidence from the SQLite job history, and the native JUnit
 lookup against the run's osac-logs-[<suite>-]full-install-<run id> artifact
 (missing, expired, too large, invalid, and the cached happy path). The
 last test is the backend half of the dashboard contract: it resolves the
-real endpoint response against the run-evidence dashboard's queries, and
-skips in a tree where that dashboard has not landed yet."""
+real endpoint response against the CI evidence row of the Capture
+dashboard."""
 
 from __future__ import annotations
 
@@ -455,7 +455,7 @@ class TestNative:
         native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
 
         assert native["status"] == "expired"
-        assert any("7-day retention" in n for n in native["notes"])
+        assert any("30-day retention" in n for n in native["notes"])
         assert native["artifact_url"] == ARTIFACT_URL
 
     def test_too_large_without_download(self, evidence, github, wfe):
@@ -655,6 +655,18 @@ class TestCacheAndSecrets:
         evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
         assert github.count(RUN_PATH) == 1
 
+    def test_stored_head_sha_needs_no_github_call(self, evidence, github):
+        """The run payload stored the SHA on the job row, so the endpoint
+        serves it without the live metadata fetch. Nothing is routed for
+        RUN_PATH here: a fetch would 404 and blank the field."""
+        seed_direct_run(evidence, head_sha="c" * 40)
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
+
+        assert doc["run"]["head_sha"] == "c" * 40
+        assert github.count(RUN_PATH) == 0
+
     def test_no_token_leakage(self, evidence, github, wfe):
         seed_direct_run(evidence)
         github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
@@ -730,26 +742,32 @@ class TestHTTP:
         assert json.loads(body)["parsed"] == "invalid"
 
 
-# The run-evidence dashboard ships in its own PR (dashboard JSON + its own
-# structural test, which pins the response contract with a static
-# document). This is the other half of that contract: the real endpoint's
-# response must resolve every root_selector/columns pair the dashboard
-# queries. It skips in a tree without the dashboard, and runs once both
-# have landed.
+# The failed-test table on the E2E run page reads /api/ci-observe/run. This
+# is the other half of that contract: the real endpoint's response must
+# resolve every root_selector/columns pair the table queries.
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
-RUN_EVIDENCE_DASHBOARD = DASHBOARDS_DIR / "ci-observe-run-evidence.json"
-
-requires_run_evidence_dashboard = pytest.mark.skipif(
-    not RUN_EVIDENCE_DASHBOARD.exists(), reason="ci-observe-run-evidence.json ships in the dashboard PR"
-)
+CAPTURE_DASHBOARD = DASHBOARDS_DIR / "ci-observe-runs.json"
+RUN_ENDPOINT = "/api/ci-observe/run"
 
 
-@requires_run_evidence_dashboard
+def _iter_panels(panels):
+    for panel in panels:
+        yield panel
+        yield from _iter_panels(panel.get("panels", []))
+
+
 def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wfe):
     """The real /api/ci-observe/run response must resolve every
-    root_selector and column the run-evidence dashboard queries, so the
-    endpoint and the dashboard cannot drift apart."""
-    dashboard = json.loads(RUN_EVIDENCE_DASHBOARD.read_text())
+    root_selector and column the failed-test table queries, so the endpoint
+    and the dashboard cannot drift apart."""
+    dashboard = json.loads(CAPTURE_DASHBOARD.read_text())
+    panels = [
+        panel
+        for panel in _iter_panels(dashboard["panels"])
+        if panel["type"] not in ("row", "text")
+        and any(RUN_ENDPOINT in target.get("url", "") for target in panel.get("targets", []))
+    ]
+    assert panels, "no panel reads the run endpoint"
     seed_direct_run(
         evidence,
         steps=[{"name": "Run E2E tests", "duration_s": 500}],
@@ -761,16 +779,10 @@ def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wf
     github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
 
     doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
-
-    # The fixture must exercise every table the dashboard reads.
-    assert doc["run"] is not None
-    assert doc["jobs"] and doc["steps"]
     assert doc["native"]["status"] == "available"
     assert doc["native"]["failed_tests"]
 
-    for panel in dashboard["panels"]:
-        if panel["type"] in ("row", "text"):
-            continue
+    for panel in panels:
         for target in panel["targets"]:
             node = doc
             # Object roots use a JSONPath so Infinity keeps them as one row.

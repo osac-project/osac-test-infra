@@ -165,6 +165,8 @@ def test_make_job_record(exporter, wfe):
     assert rec["pr_display"] == "#7"
     assert rec["pr_url"] == f"https://github.com/{wfe.ORG}/osac/pull/7"
     assert (rec["duration_s"], rec["duration"], rec["status"]) == (1800, "30m 0s", "success")
+    # The source SHA comes from the run payload the poller already fetched.
+    assert rec["head_sha"] == "9f1c2ab37d54e6f0a1b2c3d4e5f60718293a4b5c"
 
     exporter._pr_map = {"osac": {"feature": (8, "https://pr/8")}}
     rec = exporter._make_job_record(make_run(pull_requests=[], conclusion=None, status="queued"), "osac")

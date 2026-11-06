@@ -1,7 +1,7 @@
 # Tempo override for the ci-observe local development stack.
 #
 # This is the stock grafana/otel-lgtm 0.38.1 tempo-config.yaml with raised
-# ingestion limits in overrides.defaults and live_store:
+# ingestion limits and 30-day trace retention:
 #   - max_traces_per_user 0 (stock 10000): one capture already holds more
 #     traces than the stock per-user cap, so a single import discarded every
 #     trace beyond the first ten thousand (9.6M discarded spans observed on
@@ -85,6 +85,12 @@ metrics_generator:
 # is gigabytes. The machine running the backend has 500GB of RAM.
 live_store:
   max_live_traces_bytes: 32000000000
+
+backend_scheduler:
+  provider:
+    compaction:
+      compaction:
+        block_retention: 720h
 
 overrides:
   defaults:

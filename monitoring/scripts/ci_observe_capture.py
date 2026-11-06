@@ -261,7 +261,21 @@ def _osac_images(kubeconfig: Path, namespace: str) -> str:
 
 
 def osac_image_ids(kubeconfig: Path, namespace: str) -> OSACImageIDCapture:
-    """Return runtime IDs and whether each expected OSAC replica was observed."""
+    """Return runtime IDs and whether each expected OSAC replica was observed.
+
+    The population is every Deployment in the observed namespace, the same
+    population ``_osac_images`` reads. OSAC has no label shared by all of its
+    Deployments: the fulfillment services carry ``app=<name>``, the operator
+    workloads carry ``app.kubernetes.io/instance=osac`` and the Ansible
+    Automation Platform workloads carry ``app.kubernetes.io/name``. A
+    ``app.kubernetes.io/part-of=osac`` filter matches none of them, which
+    reported every live capture as unknown.
+
+    Each ID is read from ``.status.containerStatuses[].imageID`` of a Running
+    pod whose ReplicaSet the Deployment controls. Init containers are not
+    expected entries: they have exited before the main containers run, and
+    their IDs describe a start step, not the workload.
+    """
     try:
         raw = _kubectl(kubeconfig, "get", "deployments,replicasets,pods", "-n", namespace, "-o", "json")
         result = json.loads(raw)
@@ -285,9 +299,6 @@ def osac_image_ids(kubeconfig: Path, namespace: str) -> OSACImageIDCapture:
         if not isinstance(name, str):
             continue
         if resource.get("kind") == "Deployment":
-            labels = metadata.get("labels")
-            if not isinstance(labels, dict) or labels.get("app.kubernetes.io/part-of") != "osac":
-                continue
             spec = resource.get("spec")
             template = spec.get("template") if isinstance(spec, dict) else None
             pod_spec = template.get("spec") if isinstance(template, dict) else None
@@ -436,6 +447,7 @@ def render_manifest(
     test_infra_workflow_sha: str = "",
     workflow: str = "",
     run_attempt: str = "",
+    run_id: str = "",
     osac_images: str = "",
     osac_image_ids: str = "",
     osac_image_ids_complete: str = "unknown",
@@ -456,7 +468,9 @@ def render_manifest(
     The run identity tokens have non-empty fallbacks because an empty value
     makes the collector reject its config at load. Requested refs stay
     separate from resolved SHAs: the resolved osac commit (test_sha) is a
-    40/64 lowercase hex SHA or "unknown", never the requested ref.
+    40/64 lowercase hex SHA or "unknown", never the requested ref. The run
+    id is "unknown" here: a local capture wraps an arbitrary command, not a
+    GitHub workflow run.
     Test-selection strings are JSON-quoted YAML scalars so quotes,
     backslashes and newlines remain safe and exact; an empty selection
     means the caller reported nothing and records "unknown" ("none" for
@@ -477,6 +491,7 @@ def render_manifest(
     test_infra_workflow_sha = _sha_or_unknown(test_infra_workflow_sha)
     workflow = _manifest_safe(workflow) or "unknown"
     run_attempt = re.sub(r"[^0-9]", "", run_attempt) or "1"
+    run_id = re.sub(r"[^0-9]", "", run_id) or "unknown"
     osac_images = _manifest_safe(osac_images) or "unknown"
     osac_image_ids = _manifest_safe(osac_image_ids) or "unknown"
     if osac_image_ids_complete not in ("true", "false", "unknown"):
@@ -498,6 +513,7 @@ def render_manifest(
         "CI_OBSERVE_TEST_INFRA_WORKFLOW_SHA": test_infra_workflow_sha,
         "CI_OBSERVE_WORKFLOW": workflow,
         "CI_OBSERVE_RUN_ATTEMPT": run_attempt,
+        "CI_OBSERVE_RUN_ID": run_id,
         "CI_OBSERVE_OSAC_IMAGES": osac_images,
         "CI_OBSERVE_OSAC_IMAGE_IDS": osac_image_ids,
         "CI_OBSERVE_OSAC_IMAGE_IDS_COMPLETE": osac_image_ids_complete,
@@ -752,6 +768,7 @@ def capture(args: object) -> int:
             test_infra_workflow_sha="unknown",
             workflow="local",
             run_attempt="1",
+            run_id="unknown",
             osac_images=_osac_images(kubeconfig, args.namespace),
             osac_image_ids=image_capture.image_ids,
             osac_image_ids_complete=image_capture.complete,

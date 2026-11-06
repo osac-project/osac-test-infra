@@ -298,7 +298,8 @@ VMaaS EVPN runs the OSAC Netris Fabric Manager (`osac.templates.netris`) and the
 
 | Value | Source |
 |-------|--------|
-| `global.networking.provisioningEnabled: true`, `fabricManager: netris` | `netris.yaml` for vmaas, bmaas, full; the runtime file for caas and maas |
+| `global.networking.provisioningEnabled` | `networking_provisioning_enabled` in inventory/EXTRA_VARS (default: `true`) |
+| `fabricManager: netris` | `netris-runtime.yaml`, generated after the optional profile overlay for all deployment suites |
 | `global.networking.k8sManager` | `netris.yaml`: `cudn_evpn` for vmaas and full, `""` for bmaas; caas-ci's profile value otherwise (prep-osac asserts vmaas, full and bmaas) |
 | `global.networking.networkClass.defaults` | `virtualNetworkIPv4CIDR` and `subnetIPv4CIDR` from `netris_tenant_network_cidr` / `netris_tenant_subnet_cidr` (`192.168.101.0/24`, the CaaS tenant default network) |
 | `global.networking.excludedIpv4Cidrs` | computed: all of `10.0.0.0/8` (the Netris private allocation; tenant networks must not use 10.x, the E2E suites use 172.16-172.31 except 172.27 and 172.30), the bare-metal resolver `/32` (`dns_server`, handed to bare metal by the Netris default DHCP option set), OCP SNAT/DNAT `/32`, node subnet, `192.168.16.0/20`, BMC network, provisioning SNAT range, then from `.evpn-values.yaml` the VTEP CIDR, the Netris loopbacks (`acceptPrefixes`) and the node uplink networks, plus `netris_extra_excluded_cidrs` |
@@ -624,7 +625,8 @@ Common overrides:
 | Option | Example | Use |
 |---|---|---|
 | `dns_server` | `EXTRA_VARS="dns_server=<reachable-dns-server>"` | The bare-metal resolver, which the Netris default DHCP option set hands to bare metal, and the lab resolver. Change it when public DNS is unavailable. Default: `8.8.8.8`. Set it permanently as `dns_server` in [`inventory/group_vars/all.yml`](inventory/group_vars/all.yml); a per-run `EXTRA_VARS` value has the highest precedence. |
-| `osac_branch` | `EXTRA_VARS="osac_branch=my-branch"` | Install OSAC charts from a mono-repo branch. |
+| `osac_branch` | `EXTRA_VARS="osac_branch=my-branch"` | Install OSAC charts from a mono-repo branch. When setting `networking_provisioning_enabled=false`, use a branch with the shared setting and Fulfillment checks; `main` includes them from OSAC PR #1989. |
+| `networking_provisioning_enabled` | `EXTRA_VARS='{"networking_provisioning_enabled": false}'` | Set the installation-time shared provider-networking provisioning flag (default: `true`). Fulfillment saves it on first startup; changing it requires reinstalling with a fresh Fulfillment database. |
 | `fulfillment_service_image` | `EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-service:pr-123"` | Override a component image for a build under test. |
 
 For example, combine common options in one `EXTRA_VARS` value:

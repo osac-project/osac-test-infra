@@ -39,6 +39,25 @@ def digest():
     return _load("post_ci_digest", "post-ci-digest.py")
 
 
+@pytest.fixture(scope="session")
+def trends():
+    return _load("ci_observe_trends", "ci_observe_trends.py")
+
+
+@pytest.fixture(scope="session")
+def prs():
+    """The pull-request backfill module (a plain module, no metrics)."""
+    return _load("ci_observe_prs", "ci_observe_prs.py")
+
+
+@pytest.fixture(scope="session")
+def runs():
+    """The E2E runs + capture verdict module (a plain module, no metrics).
+    Loaded once and shared with workflow-exporter.py, which imports it by
+    the same name."""
+    return _load("ci_observe_runs", "ci_observe_runs.py")
+
+
 @pytest.fixture
 def github(wfe, monkeypatch):
     fake = FakeGitHub(wfe.API_URL)

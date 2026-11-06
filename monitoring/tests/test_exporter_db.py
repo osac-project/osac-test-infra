@@ -28,7 +28,7 @@ def insert_pr_merge(exporter, **values):
 
 def test_init_db_creates_schema(exporter):
     cols = {r["name"] for r in rows(exporter, "PRAGMA table_info(jobs)")}
-    assert {"id", "failure_reason", "runner_name", "steps_json"} <= cols
+    assert {"id", "failure_reason", "runner_name", "steps_json", "head_sha"} <= cols
     pr_cols = {r["name"] for r in rows(exporter, "PRAGMA table_info(pr_merges)")}
     assert {"queued_at", "via_merge_queue", "approval_to_queue_seconds"} <= pr_cols
 
@@ -39,6 +39,8 @@ def test_init_db_migrates_old_schema(wfe, tmp_path, monkeypatch, github):
     conn.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, repo TEXT, workflow TEXT, category TEXT, "
                  "event TEXT, conclusion TEXT, failed_step TEXT, steps_json TEXT, created_at TEXT, "
                  "run_attempt INTEGER)")
+    conn.execute("INSERT INTO jobs (id, repo, workflow, conclusion, run_attempt) "
+                 "VALUES (1, 'osac', 'E2E VMaaS', 'success', 1)")
     conn.execute("CREATE TABLE pr_merges (id INTEGER PRIMARY KEY, repo TEXT, number INTEGER, merged_at TEXT)")
     conn.commit()
     conn.close()
@@ -48,9 +50,23 @@ def test_init_db_migrates_old_schema(wfe, tmp_path, monkeypatch, github):
     monkeypatch.setattr(wfe, "TOKEN", None)
     exporter = wfe.WorkflowExporter()
     cols = {r["name"] for r in rows(exporter, "PRAGMA table_info(jobs)")}
-    assert {"pr_url", "pr_display", "failure_reason", "runner_name"} <= cols
+    assert {"pr_url", "pr_display", "failure_reason", "runner_name", "head_sha"} <= cols
+    # A row stored before the column existed migrates to the empty default;
+    # nothing guesses a SHA for it.
+    assert job_row(exporter, 1)["head_sha"] == ""
     pr_cols = {r["name"] for r in rows(exporter, "PRAGMA table_info(pr_merges)")}
     assert {"first_approval_at", "queued_at", "retest_count", "via_merge_queue"} <= pr_cols
+
+
+def test_head_sha_is_stored_and_kept_current_on_upsert(exporter):
+    """The source SHA arrives with the run payload, so it is stored on the
+    row; a later attempt of the same run refreshes it like every other
+    field instead of keeping the first attempt's SHA."""
+    assert exporter._upsert_job(make_job(head_sha="a" * 40))
+    assert job_row(exporter, 1)["head_sha"] == "a" * 40
+    # A re-run of the same run id (new attempt, new head) overwrites it.
+    assert exporter._upsert_job(make_job(head_sha="b" * 40, run_attempt=2))
+    assert job_row(exporter, 1)["head_sha"] == "b" * 40
 
 
 def test_upsert_job_only_overwrites_newer_attempts(exporter):

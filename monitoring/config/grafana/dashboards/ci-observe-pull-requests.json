@@ -1,0 +1,1971 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "One pull request: its lifecycle, every E2E run it made, and its merge-queue attempts.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [
+    {
+      "title": "Start here",
+      "type": "link",
+      "url": "/d/ci-observe-runs-home/ci-observe-e28094-start-here"
+    },
+    {
+      "title": "E2E run details",
+      "type": "link",
+      "url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run"
+    }
+  ],
+  "panels": [
+    {
+      "title": "",
+      "description": "",
+      "type": "text",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "mode": "markdown",
+        "content": "**Start with a pull request.** Choose one above, or type its number. The list holds pull requests that merged or closed in the last 30 days.\n\nThe page shows where its time went, every E2E run it made, and every merge-queue attempt. A run after a rebase appears as a new code version. Open a run for its jobs, steps and tests.\n\nA pull request that is still open is read from GitHub when the page loads. The saved history starts after it merges or closes. Data is kept for 30 days."
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "title": "Selected pull request",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 2,
+      "panels": []
+    },
+    {
+      "title": "Details",
+      "description": "",
+      "type": "table",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 3,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "Choose a pull request above."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "number"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PR"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "title"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Title"
+              },
+              {
+                "id": "custom.width",
+                "value": 320
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "author"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Author"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "repo"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Repository"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "State"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "open": {
+                        "text": "Open",
+                        "color": "blue"
+                      },
+                      "merged": {
+                        "text": "Merged",
+                        "color": "green"
+                      },
+                      "closed": {
+                        "text": "Closed",
+                        "color": "orange"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "opened_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Opened"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "first_review_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "First review"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "first_approval_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Approved"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "queued_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Entered queue"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_attempt_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last queue attempt"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "merged_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Merged"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "closed_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Closed"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Total time"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "GitHub"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open on GitHub",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.pr",
+          "columns": [
+            {
+              "selector": "number",
+              "text": "number",
+              "type": "number"
+            },
+            {
+              "selector": "title",
+              "text": "title",
+              "type": "string"
+            },
+            {
+              "selector": "author",
+              "text": "author",
+              "type": "string"
+            },
+            {
+              "selector": "repo",
+              "text": "repo",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "opened_at",
+              "text": "opened_at",
+              "type": "string"
+            },
+            {
+              "selector": "first_review_at",
+              "text": "first_review_at",
+              "type": "string"
+            },
+            {
+              "selector": "first_approval_at",
+              "text": "first_approval_at",
+              "type": "string"
+            },
+            {
+              "selector": "queued_at",
+              "text": "queued_at",
+              "type": "string"
+            },
+            {
+              "selector": "last_attempt_at",
+              "text": "last_attempt_at",
+              "type": "string"
+            },
+            {
+              "selector": "merged_at",
+              "text": "merged_at",
+              "type": "string"
+            },
+            {
+              "selector": "closed_at",
+              "text": "closed_at",
+              "type": "string"
+            },
+            {
+              "selector": "total_display",
+              "text": "total_display",
+              "type": "string"
+            },
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Time in each stage",
+      "description": "",
+      "type": "table",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 4,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "No stage data for this pull request yet."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Stage"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "start_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "From"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "end_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "To"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Time"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "State"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "measured": {
+                        "text": "Measured",
+                        "color": "green"
+                      },
+                      "unknown": {
+                        "text": "Unknown",
+                        "color": "orange"
+                      },
+                      "not_reached": {
+                        "text": "Not reached",
+                        "color": "grey"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "missing_reason"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Why not measured"
+              },
+              {
+                "id": "custom.width",
+                "value": 300
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.stages",
+          "columns": [
+            {
+              "selector": "label",
+              "text": "label",
+              "type": "string"
+            },
+            {
+              "selector": "start_at",
+              "text": "start_at",
+              "type": "string"
+            },
+            {
+              "selector": "end_at",
+              "text": "end_at",
+              "type": "string"
+            },
+            {
+              "selector": "time_display",
+              "text": "time_display",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "missing_reason",
+              "text": "missing_reason",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "E2E runs",
+      "description": "",
+      "type": "table",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 5,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "No E2E run for this pull request in the last 30 days."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "version"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Code version"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "head"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Commit"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the commit",
+                    "url": "${__data.fields.commit_url}"
+                  }
+                ]
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "commit_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trigger"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Why it ran"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "conclusion"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Result"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "success": {
+                        "text": "Success",
+                        "color": "green"
+                      },
+                      "failure": {
+                        "text": "Failure",
+                        "color": "red"
+                      },
+                      "cancelled": {
+                        "text": "Cancelled",
+                        "color": "orange"
+                      },
+                      "timed_out": {
+                        "text": "Timed out",
+                        "color": "red"
+                      },
+                      "skipped": {
+                        "text": "Skipped",
+                        "color": "grey"
+                      },
+                      "in_progress": {
+                        "text": "Running",
+                        "color": "blue"
+                      },
+                      "queued": {
+                        "text": "Queued",
+                        "color": "blue"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "recorded"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Recorded"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "yes": {
+                        "text": "Yes",
+                        "color": "green"
+                      },
+                      "no": {
+                        "text": "No",
+                        "color": "red"
+                      },
+                      "unknown": {
+                        "text": "Unknown",
+                        "color": "orange"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "created_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Started"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run_url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Open run"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the E2E run page",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "GitHub"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open on GitHub",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.runs",
+          "columns": [
+            {
+              "selector": "version",
+              "text": "version",
+              "type": "number"
+            },
+            {
+              "selector": "head",
+              "text": "head",
+              "type": "string"
+            },
+            {
+              "selector": "commit_url",
+              "text": "commit_url",
+              "type": "string"
+            },
+            {
+              "selector": "suite",
+              "text": "suite",
+              "type": "string"
+            },
+            {
+              "selector": "trigger",
+              "text": "trigger",
+              "type": "string"
+            },
+            {
+              "selector": "conclusion",
+              "text": "conclusion",
+              "type": "string"
+            },
+            {
+              "selector": "recorded",
+              "text": "recorded",
+              "type": "string"
+            },
+            {
+              "selector": "created_at",
+              "text": "created_at",
+              "type": "string"
+            },
+            {
+              "selector": "duration_display",
+              "text": "duration_display",
+              "type": "string"
+            },
+            {
+              "selector": "run_url",
+              "text": "run_url",
+              "type": "string"
+            },
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Queue attempts",
+      "description": "",
+      "type": "table",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 6,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "No queue attempt in the last 30 days. That is no queue history, not no ejections."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "started_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Entered queue"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "completed_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Left queue"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "conclusion"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Result"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "success": {
+                        "text": "Success",
+                        "color": "green"
+                      },
+                      "failure": {
+                        "text": "Failure",
+                        "color": "red"
+                      },
+                      "cancelled": {
+                        "text": "Cancelled",
+                        "color": "orange"
+                      },
+                      "timed_out": {
+                        "text": "Timed out",
+                        "color": "red"
+                      },
+                      "skipped": {
+                        "text": "Skipped",
+                        "color": "grey"
+                      },
+                      "in_progress": {
+                        "text": "Running",
+                        "color": "blue"
+                      },
+                      "queued": {
+                        "text": "Queued",
+                        "color": "blue"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run_count"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Runs"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "queue_outcome"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Queue"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ejected": {
+                        "text": "Ejected",
+                        "color": "orange"
+                      },
+                      "passed": {
+                        "text": "Passed",
+                        "color": "green"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ejection_kind"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Why it left"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ejection_reason"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Reason"
+              },
+              {
+                "id": "custom.width",
+                "value": 300
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run_url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "GitHub run"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the queue run",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "comment_url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Comment"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the queue comment",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.attempts",
+          "columns": [
+            {
+              "selector": "started_at",
+              "text": "started_at",
+              "type": "string"
+            },
+            {
+              "selector": "completed_at",
+              "text": "completed_at",
+              "type": "string"
+            },
+            {
+              "selector": "conclusion",
+              "text": "conclusion",
+              "type": "string"
+            },
+            {
+              "selector": "run_count",
+              "text": "run_count",
+              "type": "number"
+            },
+            {
+              "selector": "queue_outcome",
+              "text": "queue_outcome",
+              "type": "string"
+            },
+            {
+              "selector": "ejection_kind",
+              "text": "ejection_kind",
+              "type": "string"
+            },
+            {
+              "selector": "ejection_reason",
+              "text": "ejection_reason",
+              "type": "string"
+            },
+            {
+              "selector": "duration_display",
+              "text": "duration_display",
+              "type": "string"
+            },
+            {
+              "selector": "run_url",
+              "text": "run_url",
+              "type": "string"
+            },
+            {
+              "selector": "comment_url",
+              "text": "comment_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "All pull requests",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 7,
+      "panels": []
+    },
+    {
+      "title": "Recent pull requests, last $days days",
+      "description": "",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "id": 8,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "No pull request data for these days"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "number"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PR"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this pull request above",
+                    "url": "/d/ci-observe-pull-requests/ci-observe-pull-requests?var-pr_number=${__value.raw}&var-pr_repo=${__data.fields.repo}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "repo"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Repository"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "title"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Title"
+              },
+              {
+                "id": "custom.width",
+                "value": 320
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "final_stage"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last stage"
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "merged": {
+                        "text": "Merged",
+                        "color": "green"
+                      },
+                      "open": {
+                        "text": "Open",
+                        "color": "blue"
+                      },
+                      "open in queue": {
+                        "text": "Open, in queue",
+                        "color": "purple"
+                      },
+                      "closed in queue": {
+                        "text": "Closed in queue",
+                        "color": "orange"
+                      },
+                      "closed after approval": {
+                        "text": "Closed after approval",
+                        "color": "orange"
+                      },
+                      "closed in review": {
+                        "text": "Closed in review",
+                        "color": "red"
+                      },
+                      "closed in authoring": {
+                        "text": "Closed before review",
+                        "color": "red"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "age_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Age"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "queue_attempt_count"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Queue runs"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ejected_attempt_count"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Left queue"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "GitHub"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open on GitHub",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.prs",
+          "columns": [
+            {
+              "selector": "number",
+              "text": "number",
+              "type": "number"
+            },
+            {
+              "selector": "repo",
+              "text": "repo",
+              "type": "string"
+            },
+            {
+              "selector": "title",
+              "text": "title",
+              "type": "string"
+            },
+            {
+              "selector": "final_stage",
+              "text": "final_stage",
+              "type": "string"
+            },
+            {
+              "selector": "age_display",
+              "text": "age_display",
+              "type": "string"
+            },
+            {
+              "selector": "queue_attempt_count",
+              "text": "queue_attempt_count",
+              "type": "number"
+            },
+            {
+              "selector": "ejected_attempt_count",
+              "text": "ejected_attempt_count",
+              "type": "number"
+            },
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Stage times",
+      "description": "",
+      "type": "table",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "id": 9,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": "No stage data for these days"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Stage"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "samples"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PRs"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "median_seconds"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Typical"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95_seconds"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Slow end"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.funnel",
+          "columns": [
+            {
+              "selector": "label",
+              "text": "label",
+              "type": "string"
+            },
+            {
+              "selector": "samples",
+              "text": "samples",
+              "type": "number"
+            },
+            {
+              "selector": "median_seconds",
+              "text": "median_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "p95_seconds",
+              "text": "p95_seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "osac",
+    "ci",
+    "ci-observe"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "days",
+        "label": "Days",
+        "type": "custom",
+        "hide": 0,
+        "query": "7,30",
+        "options": [
+          {
+            "text": "7",
+            "value": "7",
+            "selected": false
+          },
+          {
+            "text": "30",
+            "value": "30",
+            "selected": true
+          }
+        ],
+        "current": {
+          "text": "30",
+          "value": "30",
+          "selected": true
+        },
+        "refresh": 0,
+        "description": ""
+      },
+      {
+        "name": "pr_repo",
+        "label": "Repository",
+        "type": "custom",
+        "hide": 0,
+        "query": "osac,osac-test-infra",
+        "refresh": 0,
+        "current": {
+          "text": "osac",
+          "value": "osac",
+          "selected": true
+        },
+        "options": [
+          {
+            "text": "osac",
+            "value": "osac",
+            "selected": true
+          },
+          {
+            "text": "osac-test-infra",
+            "value": "osac-test-infra",
+            "selected": false
+          }
+        ],
+        "description": ""
+      },
+      {
+        "name": "pr_number",
+        "label": "Pull request",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "workflow-api"
+        },
+        "definition": "",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable",
+          "infinityQuery": {
+            "refId": "variable",
+            "type": "json",
+            "source": "url",
+            "parser": "backend",
+            "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+            "url_options": {
+              "method": "GET",
+              "data": ""
+            },
+            "root_selector": "$.prs",
+            "format": "table",
+            "columns": [
+              {
+                "selector": "option_label",
+                "text": "__text",
+                "type": "string"
+              },
+              {
+                "selector": "number",
+                "text": "__value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "allowCustomValue": true,
+        "multi": false,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "regex": "",
+        "hide": 0,
+        "description": "Saved pull requests from the last $days days. Type a number to open an open or older pull request."
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "timezone": "browser",
+  "title": "CI Observe \u2014 Pull requests",
+  "uid": "ci-observe-pull-requests",
+  "version": 1
+}

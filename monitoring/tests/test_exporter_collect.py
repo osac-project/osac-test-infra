@@ -163,6 +163,9 @@ class TestMain:
             def initial_load(self):
                 events.append("load")
 
+            def start_capture_poll(self):
+                events.append("captures")
+
             def collect(self):
                 events.append("collect")
                 if events.count("collect") == 1:

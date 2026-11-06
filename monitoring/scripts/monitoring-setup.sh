@@ -352,6 +352,26 @@ deploy_tempo210_config() {
     info "Tempo 2.10 config deployed to ${target_dir}/tempo.yaml."
 }
 
+# Deploy the provisioned dashboards into their two Grafana folders. The
+# split is by filename, so the repo stays flat and every dashboard test keeps
+# reading its file at one path. Remove stale files first: a plain cp only
+# adds and overwrites, so a dashboard removed from the repo would otherwise
+# linger here and keep being provisioned.
+deploy_dashboards() {
+    local dest="${MONITORING_HOME}/dashboards"
+    local f base
+    mkdir -p "${dest}/ci-fleet" "${dest}/ci-observe"
+    rm -f "${dest}"/*.json "${dest}/ci-fleet"/*.json "${dest}/ci-observe"/*.json
+    for f in "${MONITORING_REPO_DIR}/config/grafana/dashboards/"*.json; do
+        base="$(basename "${f}")"
+        case "${base}" in
+            ci-observe-*) cp "${f}" "${dest}/ci-observe/${base}" ;;
+            *)            cp "${f}" "${dest}/ci-fleet/${base}" ;;
+        esac
+    done
+    info "Dashboards deployed to ${dest}/ci-fleet and ${dest}/ci-observe."
+}
+
 ###############################################################################
 # Parse arguments
 ###############################################################################
@@ -559,11 +579,7 @@ if [[ "${MODE}" == "update-central" ]]; then
     cp "${MONITORING_REPO_DIR}/config/grafana/dashboards.yml"  "${MONITORING_HOME}/config/grafana/dashboards.yml"
     deploy_tempo210_config
     deploy_caddyfile
-    # Remove stale dashboards first -- a plain cp only adds/overwrites, so a
-    # dashboard removed from the repo would otherwise linger here and keep
-    # being provisioned by Grafana indefinitely.
-    rm -f "${MONITORING_HOME}/dashboards/"*.json
-    cp "${MONITORING_REPO_DIR}/config/grafana/dashboards/"*.json "${MONITORING_HOME}/dashboards/"
+    deploy_dashboards
     cp "${MONITORING_REPO_DIR}/scripts/service-health-textfile.sh" \
        "${MONITORING_HOME}/scripts/service-health-textfile.sh"
     chmod +x "${MONITORING_HOME}/scripts/service-health-textfile.sh"
@@ -575,6 +591,19 @@ if [[ "${MODE}" == "update-central" ]]; then
        "${MONITORING_HOME}/scripts/workflow-exporter.py"
     cp "${MONITORING_REPO_DIR}/scripts/ci_observe_run_evidence.py" \
        "${MONITORING_HOME}/scripts/ci_observe_run_evidence.py"
+    # The E2E run list + capture verdict behind /api/ci-observe/runs.
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_runs.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_runs.py"
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_capture_view.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_capture_view.py"
+    # The per-test rollup the ci-observe Trends dashboard reads (trends.db).
+    # Run from here by hand or by a timer; it is not part of the exporter.
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_trends.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_trends.py"
+    chmod +x "${MONITORING_HOME}/scripts/ci_observe_trends.py"
+    cp "${MONITORING_REPO_DIR}/scripts/ci_observe_prs.py" \
+       "${MONITORING_HOME}/scripts/ci_observe_prs.py"
+    chmod +x "${MONITORING_HOME}/scripts/ci_observe_prs.py"
     info "Config files + scripts updated."
 
     # The prometheus.yml copy above just brought in the repo's template
@@ -596,6 +625,14 @@ if [[ "${MODE}" == "update-central" ]]; then
        "${SYSTEMD_USER_DIR}/service-health-textfile.service"
     cp "${MONITORING_REPO_DIR}/systemd/service-health-textfile.timer" \
        "${SYSTEMD_USER_DIR}/service-health-textfile.timer"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-trends.service" \
+       "${SYSTEMD_USER_DIR}/ci-observe-trends.service"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-trends.timer" \
+       "${SYSTEMD_USER_DIR}/ci-observe-trends.timer"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-prs.service" \
+       "${SYSTEMD_USER_DIR}/ci-observe-prs.service"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-prs.timer" \
+       "${SYSTEMD_USER_DIR}/ci-observe-prs.timer"
     # Refresh the tunnel template too (OSAC-2206 added a second -L forward
     # to it) -- this was previously never refreshed by --update-central at
     # all, so a template change would silently never reach production
@@ -632,6 +669,8 @@ if [[ "${MODE}" == "update-central" ]]; then
         systemctl --user restart "${svc}"
     done
     systemctl --user restart service-health-textfile.timer
+    systemctl --user enable --now ci-observe-trends.timer
+    systemctl --user enable --now ci-observe-prs.timer
 
     info "Central update complete."
     exit 0
@@ -700,8 +739,7 @@ if [[ "${MODE}" == "central" ]]; then
     deploy_tempo210_config
     deploy_caddyfile
 
-    # Copy dashboards
-    cp "${MONITORING_REPO_DIR}/config/grafana/dashboards/"*.json "${MONITORING_HOME}/dashboards/"
+    deploy_dashboards
 
     info "Config files copied for central deployment."
 
@@ -746,6 +784,26 @@ cp "${MONITORING_REPO_DIR}/scripts/service-health-textfile.sh" \
    "${MONITORING_HOME}/scripts/service-health-textfile.sh"
 chmod +x "${MONITORING_HOME}/scripts/service-health-textfile.sh"
 info "Installed service-health-textfile.sh"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_trends.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_trends.py"
+chmod +x "${MONITORING_HOME}/scripts/ci_observe_trends.py"
+info "Installed ci_observe_trends.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_prs.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_prs.py"
+chmod +x "${MONITORING_HOME}/scripts/ci_observe_prs.py"
+info "Installed ci_observe_prs.py"
+# The workflow-exporter quadlet bind-mounts these four from
+# ${MONITORING_HOME}/scripts, and workflow-exporter.py imports three of them
+# at load. A first install must copy them or the container cannot start.
+cp "${MONITORING_REPO_DIR}/scripts/workflow-exporter.py" \
+   "${MONITORING_HOME}/scripts/workflow-exporter.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_run_evidence.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_run_evidence.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_runs.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_runs.py"
+cp "${MONITORING_REPO_DIR}/scripts/ci_observe_capture_view.py" \
+   "${MONITORING_HOME}/scripts/ci_observe_capture_view.py"
+info "Installed workflow-exporter and its ci-observe modules"
 
 ###############################################################################
 # Phase 3: Deploy Quadlet units
@@ -789,6 +847,17 @@ if [[ "${MODE}" == "central" ]]; then
         info "Installed ${unit}"
     done
 
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-trends.service" \
+       "${SYSTEMD_USER_DIR}/ci-observe-trends.service"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-trends.timer" \
+       "${SYSTEMD_USER_DIR}/ci-observe-trends.timer"
+    info "Installed ci-observe-trends.service + .timer"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-prs.service" \
+       "${SYSTEMD_USER_DIR}/ci-observe-prs.service"
+    cp "${MONITORING_REPO_DIR}/systemd/ci-observe-prs.timer" \
+       "${SYSTEMD_USER_DIR}/ci-observe-prs.timer"
+    info "Installed ci-observe-prs.service + .timer"
+
     # Install the SSH tunnel template unit
     cp "${MONITORING_REPO_DIR}/systemd/monitoring-tunnel@.service" \
        "${SYSTEMD_USER_DIR}/monitoring-tunnel@.service"
@@ -796,6 +865,10 @@ if [[ "${MODE}" == "central" ]]; then
 fi
 
 systemctl --user daemon-reload
+if [[ "${MODE}" == "central" ]]; then
+    systemctl --user enable ci-observe-trends.timer
+    systemctl --user enable ci-observe-prs.timer
+fi
 
 ###############################################################################
 # Phase 4: Start services and wait for containers
@@ -820,6 +893,8 @@ CENTRAL_SERVICES=(
     "workflow-exporter.service"
     "caddy.service"
     "ci-observe-tempo210.service"
+    "ci-observe-trends.timer"
+    "ci-observe-prs.timer"
 )
 
 for svc in "${COMMON_SERVICES[@]}"; do

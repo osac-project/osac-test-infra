@@ -118,6 +118,17 @@ on:
         required: false
         type: string
         default: ""
+      registry-environment:
+        description: >-
+          Which Vault-sourced registry pull credential to fetch for
+          chart-oci-repo (ignored when chart-oci-tag is also set -- that
+          path always uses the separate Konflux dev-registry credential
+          instead, regardless of this input): "stage" for
+          registry.stage.redhat.io, "prod" for registry.redhat.io. Has no
+          effect unless chart-oci-repo is also set.
+        required: false
+        type: string
+        default: "stage"
       fork-pr-author-association:
         description: "PR author_association from the caller (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc). Passed by callers for fork PR authorization since github.event context is not inherited by reusable workflows."
         required: false
@@ -177,12 +188,13 @@ on:
         description: >-
           Run the E2E test under ci-observe telemetry (OTel collector gateway
           plus Beyla in the ci-observability-canary namespace) and push it
-          live to the central backend during the run. Opt-in, default off:
-          the plain test step runs unchanged when false. A telemetry problem
-          is a warning in the job summary and never changes the test result.
+          live to the central backend during the run. On by default: every
+          PR, merge-queue, scheduled and manual run records unless the caller
+          explicitly turns it off. A telemetry problem is a warning in the
+          job summary and never changes the test result.
         required: false
         type: boolean
-        default: false
+        default: true
     secrets:
       ci-observe-otlp-password:
         description: >-
@@ -345,16 +357,31 @@ jobs:
 
       # Must run before Boot cluster clone: cluster-tool boot reads
       # pull-secret.json once, at boot time, to seed the cluster's own pull
-      # secret -- merging stage credentials in afterward would be too late
-      # for the cluster's nodes to pull registry.stage.redhat.io images.
-      # Only for the real-release path (no explicit chart-oci-tag): a
-      # dev-build chart's own image refs are never stamped, so the cluster
-      # never needs to pull from chart-oci-repo itself -- only this
-      # runner's own helm/skopeo calls do, via the dev-registry credential
-      # fetched separately below.
+      # secret -- merging registry credentials in afterward would be too
+      # late for the cluster's nodes to pull registry.stage.redhat.io/
+      # registry.redhat.io images. Only for the real-release path (no
+      # explicit chart-oci-tag): a dev-build chart's own image refs are
+      # never stamped, so the cluster never needs to pull from
+      # chart-oci-repo itself -- only this runner's own helm/skopeo calls
+      # do, via the dev-registry credential fetched separately below.
+      #
+      # Two separate actions (not one parametrized by registry-environment),
+      # matching this repo's own established pattern (see
+      # fetch-konflux-dev-registry-secret's header comment): a malformed or
+      # missing Vault entry for one environment must not be able to affect
+      # the other.
       - name: Fetch and merge stage registry credential
-        if: inputs.chart-oci-repo != '' && inputs.chart-oci-tag == ''
+        if: inputs.chart-oci-repo != '' && inputs.chart-oci-tag == '' && inputs.registry-environment == 'stage'
         uses: ./.github/actions/fetch-stage-registry-secret
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          pull-secret-path: ${{ runner.temp }}/pull-secret.json
+          auth-json-path: ${{ runner.temp }}/chart-registry-auth.json
+
+      - name: Fetch and merge prod registry credential
+        if: inputs.chart-oci-repo != '' && inputs.chart-oci-tag == '' && inputs.registry-environment == 'prod'
+        uses: ./.github/actions/fetch-prod-registry-secret
         with:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
@@ -614,17 +641,20 @@ jobs:
       # resolves to the newest real release, never a pinned or cached value
       # -- this is the one place "latest" is decided. Tags also include
       # timestamp-suffixed entries ({{ oci_version }}-{{ timestamp }}, see
-      # osac-build-and-publish.yaml's chart-stamping step); only the bare
-      # semver ones are real release versions. With chart-oci-tag set (the
-      # dev-build packaging-smoke path), that explicit tag is used as-is --
-      # it's never a semver version, just whatever the caller resolved
-      # (e.g. a commit SHA for a Konflux push build).
+      # osac-build-and-publish.yaml's chart-stamping step); those never
+      # match the regex below since it anchors on end-of-string right
+      # after an optional -rc.N, so they're excluded without a separate
+      # check. With chart-oci-tag set (the dev-build packaging-smoke
+      # path), that explicit tag is used as-is -- it's never a semver
+      # version, just whatever the caller resolved (e.g. a commit SHA for
+      # a Konflux push build).
       - name: Resolve chart version to install
         id: chart-version
         if: inputs.chart-oci-repo != ''
         env:
           CHART_OCI_REPO: ${{ inputs.chart-oci-repo }}
           CHART_OCI_TAG: ${{ inputs.chart-oci-tag }}
+        shell: bash
         run: |
           echo "::group::Resolve chart version to install"
           if [[ -n "${CHART_OCI_TAG}" ]]; then
@@ -673,15 +703,34 @@ jobs:
             echo "Resolved ${CHART_OCI_REPO}:${VERSION} to digest sha256:${DIGEST}"
             echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           else
-            VERSION=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
+            # Candidates are a plain release (X.Y.Z) or a release
+            # candidate of one (X.Y.Z-rc.N) -- the only two tag shapes
+            # osac-release.yaml and osac-promote-to-prod.yaml ever push.
+            # The grep's own exit code (1 when zero tags match -- a real,
+            # expected outcome the check right below handles) is swallowed
+            # here so it can't trip `pipefail`/`set -e` before that check
+            # runs; a genuine skopeo or jq failure upstream still fails the
+            # pipe and aborts the step, since pipefail reports the
+            # rightmost *other* non-zero status in the pipe.
+            CANDIDATES=$(skopeo list-tags "docker://${CHART_OCI_REPO}" --authfile "${RUNNER_TEMP}/chart-registry-auth.json" \
               | jq -r '.Tags[]' \
-              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -t. -k1,1n -k2,2n -k3,3n \
-              | tail -1)
-            if [[ -z "${VERSION}" ]]; then
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' || true; })
+            if [[ -z "${CANDIDATES}" ]]; then
               echo "::error::No semver-tagged release found on ${CHART_OCI_REPO}"
               exit 1
             fi
+            # `sort -V` ranks "X.Y.Z-rc.N" above plain "X.Y.Z" (it has no
+            # concept of prerelease precedence), which would make a stale
+            # RC outrank the final release that superseded it. Sort
+            # numerically on major/minor/patch first, and only fall back
+            # to prerelease-vs-final (final wins) to break a tie within
+            # the same X.Y.Z, with the RC number itself compared
+            # numerically too (so rc.2 outranks rc.10 correctly).
+            VERSION=$(echo "${CANDIDATES}" | awk -F'[.-]' '{
+              pre = (NF > 3) ? $4 : "~"
+              preN = (NF > 4) ? $5 : 0
+              printf "%05d.%05d.%05d.%s.%010d\t%s\n", $1, $2, $3, pre, preN, $0
+            }' | LC_ALL=C sort | tail -1 | cut -f2)
             echo "Resolved latest chart version: ${VERSION}"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
