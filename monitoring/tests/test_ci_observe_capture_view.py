@@ -1446,6 +1446,7 @@ def test_response_has_the_documented_shape(tmp_path, monkeypatch):
         "session",
         "coverage",
         "identity",
+        "summary",
         "tests",
         "waits",
         "fixtures",
@@ -1454,6 +1455,13 @@ def test_response_has_the_documented_shape(tmp_path, monkeypatch):
         "transient",
         "notes",
     }
+    assert document["summary"] == [
+        {
+            "status": document["session"]["status"],
+            "tests": document["session"]["tests"],
+            "duration_seconds": document["session"]["duration_seconds"],
+        }
+    ]
     assert set(document["session"]) == {
         "trace_id",
         "started_at",

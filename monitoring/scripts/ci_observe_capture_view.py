@@ -489,6 +489,13 @@ class CIObserveCaptureView:
                 "as a test result"
             )
 
+        document["summary"] = [
+            {
+                "status": session.get("status"),
+                "tests": session.get("tests"),
+                "duration_seconds": session.get("duration_seconds"),
+            }
+        ]
         document.update(
             state="ok",
             session=session,
@@ -536,6 +543,7 @@ class CIObserveCaptureView:
                 "service_calls_complete": False,
             },
             "identity": {field: "" for field in REGISTRY_FIELDS},
+            "summary": [{"status": None, "tests": None, "duration_seconds": None}],
             "tests": [],
             "waits": [],
             "fixtures": [],

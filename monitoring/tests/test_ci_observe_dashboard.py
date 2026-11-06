@@ -26,6 +26,13 @@ CAPTURE_DOCUMENT = {
         "tests": 148,
         "duration_seconds": 1554.5,
     },
+    "summary": [
+        {
+            "status": "error",
+            "tests": 148,
+            "duration_seconds": 1554.5,
+        }
+    ],
     "tests": [
         {
             "name": "tests/e2e/vmaas/test_cluster_create.py::TestCluster::test_create",
@@ -127,7 +134,7 @@ def test_the_summary_reads_the_capture_endpoint() -> None:
     for title, selector in (("Result", "status"), ("Tests run", "tests"), ("Test time", "duration_seconds")):
         target = panel(title)["targets"][0]
         assert target["url"] == CAPTURE_URL
-        assert target["root_selector"] == "session"
+        assert target["root_selector"] == "summary"
         assert selectors(panel(title)) == [selector]
     assert_selectors_resolve(panel("Result"), CAPTURE_DOCUMENT)
 

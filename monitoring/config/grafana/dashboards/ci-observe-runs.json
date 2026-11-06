@@ -111,7 +111,7 @@
             "method": "GET",
             "data": ""
           },
-          "root_selector": "session",
+          "root_selector": "summary",
           "columns": [
             {
               "selector": "status",
@@ -179,7 +179,7 @@
             "method": "GET",
             "data": ""
           },
-          "root_selector": "session",
+          "root_selector": "summary",
           "columns": [
             {
               "selector": "tests",
@@ -247,7 +247,7 @@
             "method": "GET",
             "data": ""
           },
-          "root_selector": "session",
+          "root_selector": "summary",
           "columns": [
             {
               "selector": "duration_seconds",
