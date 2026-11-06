@@ -62,6 +62,7 @@ The custom `osac.ci.*` names work. New signals should emit the shared name next 
 | Run links to GitHub, PR and commit | Workflow exporter and capture view | Run info |
 | Test list, failures, error messages | Tempo trace and JUnit artifact | E2E run |
 | Session result and duration | GitHub conclusion, then Tempo | Result, Test time |
+| Job and step durations | Workflow exporter SQLite | Jobs and steps |
 | Cluster pods, CPU, memory, nodes | ci-observe Prometheus | Cluster row |
 | Pull request stages and queue time | `prs.db` | Pull requests |
 | Every E2E run of a pull request, one code version per commit | Workflow exporter job history | Pull requests |

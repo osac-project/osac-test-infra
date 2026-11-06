@@ -39,6 +39,7 @@ The summary shows **Result**, **Tests run**, and **Test time**. Result comes fro
 Open a row for detail:
 
 - **Failures**: failed tests, error messages, test time, and a link to the full artifact.
+- **Jobs and steps**: every job that ran, its result and duration, then each job's steps with their durations.
 - **Test list**: every test, result, start time, and duration.
 - **Run info**: GitHub run, pull request, workflow, commit, and test paths. Every identifier is a link.
 - **Cluster**: pods, CPU by pod, memory by pod, node CPU, and node memory during the run.

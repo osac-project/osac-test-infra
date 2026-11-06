@@ -457,6 +457,437 @@
       ]
     },
     {
+      "id": 138,
+      "title": "Jobs and steps",
+      "description": "",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "collapsed": true,
+      "panels": [
+        {
+          "id": 136,
+          "title": "Jobs",
+          "description": "",
+          "type": "table",
+          "gridPos": {
+            "h": 6,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No stored jobs for this run."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "name"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Job"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 320
+                  },
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Open the job on GitHub",
+                        "url": "${__data.fields.url}"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "workflow"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Workflow"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 260
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "conclusion"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Result"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 100
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "success": {
+                            "text": "Success",
+                            "color": "green"
+                          },
+                          "failure": {
+                            "text": "Failure",
+                            "color": "red"
+                          },
+                          "cancelled": {
+                            "text": "Cancelled",
+                            "color": "orange"
+                          },
+                          "timed_out": {
+                            "text": "Timed out",
+                            "color": "red"
+                          },
+                          "skipped": {
+                            "text": "Skipped",
+                            "color": "grey"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Duration"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 100
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failed_step"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Failed step"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 220
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failure_reason"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Failure kind"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 130
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "url"
+                },
+                "properties": [
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "jobs",
+              "columns": [
+                {
+                  "selector": "name",
+                  "text": "name",
+                  "type": "string"
+                },
+                {
+                  "selector": "workflow",
+                  "text": "workflow",
+                  "type": "string"
+                },
+                {
+                  "selector": "conclusion",
+                  "text": "conclusion",
+                  "type": "string"
+                },
+                {
+                  "selector": "duration_s",
+                  "text": "duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "failed_step",
+                  "text": "failed_step",
+                  "type": "string"
+                },
+                {
+                  "selector": "failure_reason",
+                  "text": "failure_reason",
+                  "type": "string"
+                },
+                {
+                  "selector": "url",
+                  "text": "url",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 137,
+          "title": "Steps",
+          "description": "",
+          "type": "table",
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 6
+          },
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No stored step timings for this run. Steps are collected for new runs only."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "job_name"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Job"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 280
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "step_name"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Step"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 380
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Duration"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "conclusion"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Result"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "success": {
+                            "text": "Success",
+                            "color": "green"
+                          },
+                          "failure": {
+                            "text": "Failure",
+                            "color": "red"
+                          },
+                          "cancelled": {
+                            "text": "Cancelled",
+                            "color": "orange"
+                          },
+                          "timed_out": {
+                            "text": "Timed out",
+                            "color": "red"
+                          },
+                          "skipped": {
+                            "text": "Skipped",
+                            "color": "grey"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "steps",
+              "columns": [
+                {
+                  "selector": "job_name",
+                  "text": "job_name",
+                  "type": "string"
+                },
+                {
+                  "selector": "step_name",
+                  "text": "step_name",
+                  "type": "string"
+                },
+                {
+                  "selector": "duration_s",
+                  "text": "duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "conclusion",
+                  "text": "conclusion",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 120,
       "title": "Test list",
       "description": "",
@@ -465,7 +896,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 7
       },
       "collapsed": true,
       "panels": [
@@ -685,7 +1116,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 8
       },
       "collapsed": true,
       "panels": [
@@ -974,7 +1405,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 9
       },
       "panels": [
         {

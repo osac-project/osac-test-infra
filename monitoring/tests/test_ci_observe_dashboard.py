@@ -55,6 +55,25 @@ CAPTURE_DOCUMENT = {
 }
 
 RUN_DOCUMENT = {
+    "jobs": [
+        {
+            "name": "e2e",
+            "workflow": "E2E VMaaS Full Install",
+            "conclusion": "failure",
+            "duration_s": 3600,
+            "failed_step": "Run E2E tests",
+            "failure_reason": "test",
+            "url": "https://github.com/osac-project/osac/actions/runs/41709318840/job/1",
+        }
+    ],
+    "steps": [
+        {
+            "job_name": "e2e",
+            "step_name": "Run E2E tests",
+            "duration_s": 1800,
+            "conclusion": "failure",
+        }
+    ],
     "native": {
         "failed_tests": [
             {
@@ -64,7 +83,7 @@ RUN_DOCUMENT = {
                 "artifact_url": "https://github.com/osac-project/osac/actions/runs/41709318840",
             }
         ]
-    }
+    },
 }
 
 
@@ -150,8 +169,37 @@ def test_the_summary_row_is_open_and_detail_rows_are_collapsed() -> None:
     rows = {row["title"]: row for row in DASHBOARD["panels"] if row["type"] == "row"}
     assert rows["Run summary"]["collapsed"] is False
     assert rows["Failures"]["collapsed"] is True
+    assert rows["Jobs and steps"]["collapsed"] is True
     assert rows["Test list"]["collapsed"] is True
     assert rows["Run info"]["collapsed"] is True
+
+
+def test_jobs_read_the_run_endpoint() -> None:
+    table = panel("Jobs")
+    assert table["targets"][0]["url"] == RUN_URL
+    assert table["targets"][0]["root_selector"] == "jobs"
+    assert_selectors_resolve(table, RUN_DOCUMENT)
+    assert display_names(table) == {
+        "name": "Job",
+        "workflow": "Workflow",
+        "conclusion": "Result",
+        "duration_s": "Duration",
+        "failed_step": "Failed step",
+        "failure_reason": "Failure kind",
+    }
+
+
+def test_steps_read_the_run_endpoint() -> None:
+    table = panel("Steps")
+    assert table["targets"][0]["url"] == RUN_URL
+    assert table["targets"][0]["root_selector"] == "steps"
+    assert_selectors_resolve(table, RUN_DOCUMENT)
+    assert display_names(table) == {
+        "job_name": "Job",
+        "step_name": "Step",
+        "duration_s": "Duration",
+        "conclusion": "Result",
+    }
 
 
 def test_failures_read_the_run_endpoint() -> None:

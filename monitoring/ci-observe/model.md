@@ -20,6 +20,7 @@ One table of recent E2E runs: Run, Job, Repo, PR, Branch, Trigger, Result, Recor
 |---|---|
 | Summary | Result, tests run, and test time. Result comes from GitHub. |
 | Failures | Failed tests, error messages, test time, and a link to the full artifact. |
+| Jobs and steps | Every job, its result and duration, and each job's steps with their durations. |
 | Test list | Every test, result, start time, and duration. |
 | Run info | GitHub run, pull request, workflow, commit, and test paths, with links. |
 | Cluster | Pods, CPU by pod, memory by pod, node CPU, and node memory for the run window. |
