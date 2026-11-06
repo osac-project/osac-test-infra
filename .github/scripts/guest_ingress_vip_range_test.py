@@ -67,6 +67,21 @@ class ParseNetworkTests(unittest.TestCase):
         self.assertEqual(net.dhcp_first, None)
         self.assertEqual(vip._ip(net.gateway), "192.168.170.1")
 
+    def test_only_ipv4_ip_hosts_are_reserved(self) -> None:
+        xml = (
+            "<network>"
+            "<ip family='ipv6' address='fd00::1' prefix='64'>"
+            "<dhcp><host id='guest-v6' ip='fd00::10'/></dhcp></ip>"
+            "<dns><host ip='fd00::11'><hostname>other.example</hostname></host></dns>"
+            "<ip family='ipv4' address='192.168.170.1' prefix='24'>"
+            "<dhcp><host mac='52:54:00:aa:bb:01' ip='192.168.170.10'/></dhcp></ip>"
+            "</network>"
+        )
+
+        net = vip.parse_network(xml)
+
+        self.assertEqual(net.reserved, {vip._parse_ipv4("192.168.170.10")})
+
     def test_rejects_malformed_input(self) -> None:
         for xml in ("not xml", "<network/>", "<network><ip family='ipv4'/></network>"):
             with self.subTest(xml=xml), self.assertRaises(vip.RangeError):
