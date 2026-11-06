@@ -102,8 +102,10 @@ leader already exited are not reaped, and that gap is accepted.
 
 ## Live telemetry push
 
-Standard OSAC full-install runs request telemetry automatically. Test-infra
-ad hoc PR runs still need the `ci-observe` label. The workflow deploys the
+Every standard full-install E2E run records by default: VMaaS, BMaaS and
+CaaS in both repositories, for pull request, merge queue, scheduled and
+manual runs. Netris, stretched, agentless and full-regression workflows do
+not have capture wired, so they cannot record yet. The workflow deploys the
 collector gateway into the cluster it tests, and the gateway streams every signal
 (pytest and Beyla traces, cluster logs, kubelet metrics, stamped with the
 capture identity) live to the central backend while the test runs:
@@ -255,9 +257,8 @@ whole, never a mangled value.
 
 These identity attributes are wired end to end, but only a live E2E run
 checks the full path: workflow inputs, test checkout, workspace Git metadata,
-and cluster queries. Standard OSAC full-install runs request recording
-automatically. Test-infra ad hoc PR runs still need the `ci-observe` label.
-The E2E run page should show: `test_ref` equal to the requested ref, `test_sha`
+and cluster queries. Standard VMaaS, BMaaS and CaaS full-install runs record
+by default in every trigger. The E2E run page should show: `test_ref` equal to the requested ref, `test_sha`
 matching the osac commit the run's overlay step logged, `test_infra_sha`
 matching the merged test-infra commit (equal to
 `test_infra_workflow_sha` on a scheduled run), `test_suite` naming every

@@ -44,10 +44,10 @@ on:
         required: false
         default: ""
       ci-observe:
-        description: "Run under ci-observe telemetry capture (collectors + trace/log/metric artifact). The capture lands in the CI Grafana after the run."
+        description: "Run under ci-observe telemetry capture (collectors + trace/log/metric artifact). On by default."
         required: false
         type: boolean
-        default: false
+        default: true
 
 concurrency:
   group: e2e-bmaas-full-install-${{ github.run_id }}
@@ -122,7 +122,7 @@ jobs:
         inputs.installer-ref || 'main') }}
       osac-cli-version: ${{ inputs.osac-cli-version || '' }}
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
-      ci-observe: ${{ inputs.ci-observe || false }}
+      ci-observe: ${{ inputs.ci-observe }}
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number || inputs.pr-number }}

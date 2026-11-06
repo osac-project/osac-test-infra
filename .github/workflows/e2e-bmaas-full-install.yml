@@ -146,12 +146,13 @@ on:
         description: >-
           Run the E2E test under ci-observe telemetry (OTel collector gateway
           plus Beyla in the ci-observability-canary namespace) and push it
-          live to the central backend during the run. Opt-in, default off:
-          the plain test step runs unchanged when false. A telemetry problem
-          is a warning in the job summary and never changes the test result.
+          live to the central backend during the run. On by default: every
+          PR, merge-queue, scheduled and manual run records unless the caller
+          explicitly turns it off. A telemetry problem is a warning in the
+          job summary and never changes the test result.
         required: false
         type: boolean
-        default: false
+        default: true
     secrets:
       ci-observe-otlp-password:
         description: >-

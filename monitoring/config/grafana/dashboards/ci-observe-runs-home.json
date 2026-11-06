@@ -36,7 +36,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Recent E2E runs. Choose one to see its result and details. A run shows **No** under Recorded when the job sent no test data; scheduled osac-test-infra and merge-queue jobs usually do not record."
+        "content": "Recent E2E runs. Choose one to see its result and details. A run shows **No** under Recorded when the job has no capture wiring; Netris, full-regression and agentless jobs cannot record yet."
       },
       "targets": []
     },
