@@ -39,7 +39,7 @@ RUNS_DOCUMENT = {
         },
         {
             "id": "41310072672",
-            "workflow": "E2E suite · vmaas · #1620 · 87306a0",
+            "workflow": "E2E VMaaS Full Install",
             "repo": "osac",
             "branch": "refs/pull/1620/head",
             "trigger": "PR",

@@ -805,7 +805,7 @@ def test_every_workflow_using_the_action_gates_it_behind_the_input() -> None:
     )
     for path in referencing:
         entry = workflow_call(yaml.safe_load(path.read_text()))["inputs"]["ci-observe"]
-        assert entry.get("default") is False, path
+        assert entry.get("default") is True, path
 
 
 @pytest.mark.parametrize(
@@ -834,11 +834,11 @@ def test_observed_command_carries_the_suite_specific_environment(
 
 @pytest.mark.parametrize("workflow", SUITES, indirect=True)
 class TestWorkflowWiring:
-    def test_capture_is_opt_in_and_defaults_to_false(self, workflow: dict) -> None:
+    def test_capture_is_on_by_default(self, workflow: dict) -> None:
         entry = workflow_call(workflow)["inputs"]["ci-observe"]
         assert entry["type"] == "boolean"
         assert entry["required"] is False
-        assert entry["default"] is False
+        assert entry["default"] is True
 
     def test_the_otlp_password_secret_is_declared_and_passed_to_the_action(self, workflow: dict) -> None:
         """The reusable workflow declares the ingest-password secret and
@@ -1059,46 +1059,31 @@ class TestRecordedSelection:
 class TestCallerWiring:
     """The full-install callers own the workflow_dispatch input and pass it on."""
 
-    def test_dispatch_input_is_opt_in_and_defaults_to_false(self, caller: dict) -> None:
+    def test_dispatch_input_is_on_by_default(self, caller: dict) -> None:
         entry = workflow_dispatch_inputs(caller)["ci-observe"]
         assert entry["type"] == "boolean"
         assert entry["required"] is False
-        assert entry["default"] is False
+        assert entry["default"] is True
 
     def test_input_is_passed_to_the_reusable_workflow(self, caller: dict) -> None:
-        assert called_workflow_with(caller)["ci-observe"] == "${{ inputs.ci-observe || false }}"
+        assert called_workflow_with(caller)["ci-observe"] == "${{ inputs.ci-observe }}"
 
 
 @pytest.mark.parametrize("pr_starter", SUITES, indirect=True)
 class TestPrStarterWiring:
-    """A pull request turns the capture on with the ci-observe label: the suite
-    starters read it from the pull request (their runs are dispatches, whose
-    events carry no labels) and pass it to the reusable workflow."""
+    """A pull request records by default. The starter passes the capture on
+    without asking for a label."""
 
-    def test_the_suite_job_waits_for_a_labels_job(self, pr_starter: dict) -> None:
-        suite_job = next(job for name, job in pr_starter["jobs"].items() if name != "verify" and name != "labels")
-        assert suite_job["needs"] == ["verify", "labels"]
+    def test_the_suite_job_waits_only_for_verify(self, pr_starter: dict) -> None:
+        suite_job = next(job for name, job in pr_starter["jobs"].items() if name != "verify")
+        assert suite_job["needs"] == ["verify"]
 
-    def test_the_labels_job_reads_the_ci_observe_label(self, pr_starter: dict) -> None:
-        labels = pr_starter["jobs"]["labels"]
-        assert labels["permissions"] == {"pull-requests": "read"}
-        step = labels["steps"][0]
-        # The input reaches the shell through an environment variable, never
-        # through the script text (the convention of the osac-ci e2e dispatch).
-        assert step["env"]["PR_NUMBER"] == "${{ inputs.pr-number }}"
-        script = step["run"]
-        assert "pulls/" in script and "ci-observe" in script
-        assert '"${PR_NUMBER}"' in script
-        # A non-numeric input degrades to ci-observe=false instead of reaching
-        # the API URL.
-        assert "*[!0-9]*" in script
-        # The pull request lives in this repository even for a fork's commit:
-        # the label query must not use inputs.repo.
-        assert "github.repository" in script
+    def test_there_is_no_label_gate(self, pr_starter: dict) -> None:
+        assert "labels" not in pr_starter["jobs"]
 
-    def test_the_label_reaches_the_reusable_workflow(self, pr_starter: dict) -> None:
-        suite_job = next(job for name, job in pr_starter["jobs"].items() if name != "verify" and name != "labels")
-        assert suite_job["with"]["ci-observe"] == "${{ needs.labels.outputs.ci-observe == 'true' }}"
+    def test_the_capture_is_on(self, pr_starter: dict) -> None:
+        suite_job = next(job for name, job in pr_starter["jobs"].items() if name != "verify")
+        assert suite_job["with"]["ci-observe"] is True
 
 
 class TestSyncWorkflow:

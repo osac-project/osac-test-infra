@@ -550,6 +550,7 @@ def test_a_pr_suite_run_reports_its_pull_request(client, exporter, fresh):
 
     run = client.get_json({"days": ["30"]})["runs"][0]
 
+    assert run["workflow"] == "E2E CaaS Full Install"
     assert run["pr"] == "#1620"
     assert run["trigger"] == "PR"
     assert run["pr_url"] == "https://github.com/osac-project/osac/pull/1620"

@@ -4566,6 +4566,16 @@ class WorkflowExporter:
                 match = re.search(r"#(\d+)", workflow)
                 if match:
                     pr_display = f"#{match.group(1)}"
+            suite_match = re.match(r"E2E suite · ([a-z-]+) · #\d+ · [0-9a-f]+$", workflow)
+            if suite_match:
+                workflow = {
+                    "vmaas": "E2E VMaaS Full Install",
+                    "bmaas": "E2E BMaaS Full Install",
+                    "caas": "E2E CaaS Full Install",
+                    "vmaas-netris": "E2E VMaaS Netris Full Install",
+                    "bmaas-netris": "E2E BMaaS Netris Full Install",
+                    "stretched-netris": "E2E Stretched Netris Full Install",
+                }.get(suite_match.group(1), workflow)
             if pr_display and not pr_url:
                 pr_url = f"https://github.com/{ORG}/{row['repo']}/pull/{pr_display.lstrip('#')}"
             trigger = str(row.get("trigger") or "")
