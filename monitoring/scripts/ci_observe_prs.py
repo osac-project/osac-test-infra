@@ -186,8 +186,8 @@ PR_STATE_MESSAGES = (
     (
         "open",
         "Still open",
-        "The pull request is open. The backfill stores merged and closed pull requests only, so it "
-        "appears here after it merges or closes.",
+        "The pull request is open. The page reads it from GitHub when it opens; the saved history starts "
+        "after it merges or closes.",
     ),
     (
         "not_yet_fetched",
@@ -266,6 +266,30 @@ def human_duration(seconds):
         return f"{hours}h {minutes}m"
     days, hours = divmod(hours, 24)
     return f"{days}d {hours}h"
+
+
+# A short suite name for the E2E runs table. The stored workflow name is
+# either "E2E <suite> (<kind>)" for the pull-request flow or the full-install
+# workflow's own name; both contain the suite word.
+SUITE_LABELS = (
+    ("vmaas", "VMaaS"),
+    ("caas", "CaaS"),
+    ("bmaas", "BMaaS"),
+    ("netris", "Netris"),
+    ("stretched", "Stretched"),
+)
+
+
+def _suite_label(workflow):
+    text = (workflow or "").lower()
+    for key, label in SUITE_LABELS:
+        if key in text:
+            return label
+    return workflow or "E2E"
+
+
+def _iso_from_ms(value):
+    return datetime.fromtimestamp(int(value) / 1000, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def pr_url(repo, number):
@@ -388,6 +412,8 @@ def final_stage(state, first_review_at, first_approval_at, queued_at):
     Merged; for a closed one it says where it stopped."""
     if state == "merged":
         return "merged"
+    if state == "open":
+        return "open in queue" if queued_at else "open"
     if queued_at:
         return "closed in queue"
     if first_approval_at:
@@ -929,11 +955,17 @@ class CIObservePRs:
 
     # -- record building ----------------------------------------------------
 
-    def _build_pr_record(self, repo, pr, timeline, reviews, commits):
+    def _build_pr_record(self, repo, pr, timeline, reviews, commits, now=None):
         number = pr["number"]
         merged_at = pr.get("merged_at")
         closed_at = pr.get("closed_at")
-        state = "merged" if merged_at else "closed"
+        if merged_at:
+            state = "merged"
+        elif closed_at:
+            state = "closed"
+        else:
+            state = "open"
+        now = now or datetime.now(UTC)
 
         human_reviews = [
             r
@@ -985,7 +1017,7 @@ class CIObservePRs:
             "waiting_seconds": None,
             "queue_seconds": None,
             "merged_seconds": None,
-            "total_seconds": seconds_between(pr.get("created_at"), merged_at or closed_at),
+            "total_seconds": seconds_between(pr.get("created_at"), merged_at or closed_at or _iso(now)),
             "commit_count": len(commits),
             "review_count": len(reviews),
             "review_request_count": len(review_requesters),
@@ -1448,6 +1480,188 @@ class CIObservePRs:
             "source": "live",
         }
 
+    def _live_detail(self, repo, number, runs, now):
+        """A cached, read-only look at one pull request the backfill has not
+        stored.
+
+        The pull request gives the identity; its timeline, reviews and
+        commits give the same stages the backfill writes. That is what lets
+        an open pull request show when it was approved and when it entered
+        the queue. One minute of cache keeps a dashboard refresh from
+        spending the shared GitHub budget twice.
+        """
+        key = (repo, number, "detail")
+        cached = _LIVE_PR_CACHE.get(key)
+        if cached is not None and time.monotonic() - cached[0] < cached[3]:
+            return cached[1], cached[2]
+        live, error = self._live_pr(repo, number)
+        if live is None:
+            return self._remember_live(key, None, error, LIVE_FAILURE_CACHE_TTL_SECONDS)
+        timeline = self._get_all(f"{API_URL}/repos/{ORG}/{repo}/issues/{number}/timeline?per_page={PAGE_SIZE}")
+        reviews = self._get_all(f"{API_URL}/repos/{ORG}/{repo}/pulls/{number}/reviews?per_page={PAGE_SIZE}")
+        commits = self._get_all(f"{API_URL}/repos/{ORG}/{repo}/pulls/{number}/commits?per_page={PAGE_SIZE}")
+        if timeline is None or reviews is None or commits is None:
+            record = self._live_record(repo, number, live)
+            return self._remember_live(
+                key,
+                record,
+                "the pull request was found, but its review history could not be read, so only its identity is shown",
+            )
+        record = self._build_pr_record(repo, live, timeline, reviews, commits, now)
+        merge_runs = [run for run in runs if run.get("event") == "merge_group"]
+        if merge_runs:
+            record["queued_at"] = min(run["created_at"] for run in merge_runs)
+            record["waiting_seconds"] = seconds_between(record["first_approval_at"], record["queued_at"])
+            done = max((run.get("done_at_ms") or 0) for run in merge_runs)
+            record["last_attempt_at"] = _iso_from_ms(done) if done else None
+            if record["state"] == "open":
+                # The pull request is still in the queue: its queue time runs
+                # to now, not to the end of its last attempt.
+                queue_end = _iso(now)
+            else:
+                queue_end = record.get("closed_at") or record.get("merged_at") or _iso(now)
+            record["queue_seconds"] = seconds_between(record["queued_at"], queue_end)
+        elif record["state"] == "open" and record["first_approval_at"]:
+            # Approved but not queued yet: the wait is still running.
+            record["waiting_seconds"] = seconds_between(record["first_approval_at"], _iso(now))
+        record["final_stage"] = final_stage(
+            record["state"], record["first_review_at"], record["first_approval_at"], record["queued_at"]
+        )
+        record["source"] = "live"
+        return self._remember_live(key, record, "")
+
+    def _attempts_from_runs(self, repo, number, runs):
+        """Queue history for a pull request the backfill has not stored,
+        derived from the merge_group runs the job history already holds.
+
+        The run conclusion is the only ejection signal here; the comment
+        GitHub leaves on the pull request is read when the backfill stores
+        it after the pull request ends.
+        """
+        groups = {}
+        for run in runs:
+            if run.get("event") != "merge_group":
+                continue
+            key = (run.get("branch") or "", run.get("head_sha") or "", run.get("run_id") or "")
+            if not key[0] and not key[1]:
+                key = (key[2],)
+            groups.setdefault(key, []).append(run)
+        ordered = sorted(groups.values(), key=lambda group: min(run.get("created_at") or "" for run in group))
+        attempts = []
+        for group in ordered:
+            group = sorted(group, key=lambda run: run.get("created_at") or "")
+            conclusion = _entry_conclusion(group)
+            ejected = bool(conclusion) and conclusion not in ("success", "skipped", "neutral")
+            done = max((run.get("done_at_ms") or 0) for run in group)
+            run_ids = [str(run.get("run_id") or "") for run in group if run.get("run_id")]
+            attempts.append(
+                {
+                    "repo": repo,
+                    "number": number,
+                    "run_id": int(run_ids[0]) if run_ids else 0,
+                    "run_number": None,
+                    "run_attempt": group[0].get("run_attempt") or 1,
+                    "branch": group[0].get("branch") or "",
+                    "head_sha": group[0].get("head_sha") or "",
+                    "run_ids": json.dumps(run_ids),
+                    "conclusion": conclusion,
+                    "started_at": group[0].get("created_at") or "",
+                    "completed_at": _iso_from_ms(done) if done else "",
+                    "duration_seconds": seconds_between(
+                        group[0].get("created_at"), _iso_from_ms(done) if done else None
+                    ),
+                    "url": group[0].get("url") or "",
+                    "ejected": int(ejected),
+                    "ejection_reason": f"merge queue run concluded {conclusion}" if ejected else "",
+                    "ejection_kind": ejection_kind(conclusion, "") if ejected else "",
+                    "reason_source": "run" if ejected else "",
+                    "comment_url": "",
+                    "comment_author": "",
+                    "comment_at": "",
+                    "fetched_at": _utc_now(),
+                }
+            )
+        return attempts
+
+    def _jobs_db_file(self):
+        """The exporter's job history, next to prs.db. Read-only."""
+        return os.path.join(os.path.dirname(self.db_file), "workflow-exporter.db")
+
+    def _runs_for_pr(self, repo, number, days, now):
+        """Every E2E run this pull request made in the retention window.
+
+        One row per stored E2E row: a full-install run is one row, a
+        pull-request-flow suite is one row per suite. Each distinct head SHA
+        is a code version, so a rebase shows as a new version even when the
+        suite name is the same.
+        """
+        jobs_db = self._jobs_db_file()
+        if not repo:
+            return [], "no repository was given, so the runs could not be looked up"
+        if not os.path.exists(jobs_db):
+            return [], "the job history has not been written yet, so this pull request has no recorded runs"
+        days = max(1, days)
+        cutoff = _iso(now - timedelta(days=days))
+        try:
+            with sqlite3.connect(jobs_db, timeout=5) as conn:
+                conn.row_factory = sqlite3.Row
+                stored = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT id, run_id, workflow, branch, status, conclusion, event, trigger,"
+                        " duration_s, url, created_at, updated_at, run_attempt, head_sha"
+                        " FROM jobs"
+                        " WHERE repo = ? AND pr_display = ? AND category = 'e2e' AND run_id != ''"
+                        "   AND created_at >= ?"
+                        "   AND LOWER(workflow) NOT LIKE '%-gate'"
+                        "   AND COALESCE(LOWER(failure_reason), '') != 'gate'"
+                        " ORDER BY created_at, id",
+                        (repo, f"#{number}", cutoff),
+                    )
+                ]
+        except sqlite3.Error as exc:
+            return [], f"the job history could not be read: {exc}"
+        if not stored:
+            return [], f"no E2E run for this pull request in the last {days} days"
+        versions = {}
+        rows = []
+        for row in stored:
+            sha = row.get("head_sha") or ""
+            if sha and sha not in versions:
+                versions[sha] = len(versions) + 1
+            started = parse_iso(row.get("created_at"))
+            done = parse_iso(row.get("updated_at"))
+            rows.append(
+                {
+                    "id": row.get("id"),
+                    "run_id": str(row.get("run_id") or ""),
+                    "run_attempt": row.get("run_attempt") or 1,
+                    "workflow": row.get("workflow") or "",
+                    "suite": _suite_label(row.get("workflow") or ""),
+                    "branch": row.get("branch") or "",
+                    "status": row.get("status") or "",
+                    "conclusion": row.get("conclusion") or "",
+                    "event": row.get("event") or "",
+                    "trigger": row.get("trigger") or "",
+                    "created_at": row.get("created_at") or "",
+                    "duration_s": row.get("duration_s") or 0,
+                    "duration_display": human_duration(row.get("duration_s") or 0),
+                    "head_sha": sha,
+                    "head": sha[:12],
+                    "commit_url": f"https://github.com/{ORG}/{repo}/commit/{sha}" if sha else "",
+                    "version": versions.get(sha, ""),
+                    "url": row.get("url") or "",
+                    "started_at_ms": int(started.timestamp() * 1000) if started else None,
+                    "done_at_ms": int(done.timestamp() * 1000) if done else None,
+                    # The exporter fills these from the capture registry; the
+                    # module never talks to Tempo.
+                    "capture_id": "",
+                    "recorded": "",
+                    "run_url": "",
+                }
+            )
+        return rows, ""
+
     # -- detail -------------------------------------------------------------
 
     def pr_document(self, number, repo, days, now=None):
@@ -1484,12 +1698,16 @@ class CIObservePRs:
                 f"#{number} exists in {matches} repositories; showing {row['repo']}. Add &repo= to choose another."
             )
 
+        repo_name = row["repo"] if row is not None else repo
+        runs, runs_note = self._runs_for_pr(repo_name, number, days, now) if repo_name else ([], "")
+
         source = "store" if row is not None else "none"
         pr_state = "stored" if row is not None else ""
         pr_state_message = ""
+        live = None
         if row is None:
             if repo:
-                live, live_error = self._live_pr(repo, number)
+                live, live_error = self._live_detail(repo, number, runs, now)
             else:
                 live, live_error = None, "no repository was given, so there was no live lookup"
             if live is not None:
@@ -1497,30 +1715,46 @@ class CIObservePRs:
             pr_state, pr_state_message = self._miss_state(number, live, live_error, freshness, now)
             notes.append(pr_state_message)
 
-        pr = dict(row) if row is not None else (self._live_record(repo, number, live) if live is not None else None)
-        if pr is not None and row is not None:
+        pr = dict(row) if row is not None else live
+        if pr is not None:
             pr["url"] = pr.get("url") or pr_url(pr["repo"], pr["number"])
             pr["age_seconds"] = pr.get("total_seconds")
             if pr["age_seconds"] is None:
                 pr["age_seconds"] = seconds_between(pr["opened_at"], _iso(now))
+            if row is None:
+                attempts = self._attempts_from_runs(repo, number, runs)
+                pr["queue_history"] = "present" if attempts else "none"
+                pr["fetched_at"] = _utc_now()
+                if pr.get("state") == "open":
+                    notes.append(
+                        "The timeline is read from GitHub when the page opens; the saved history starts "
+                        "after the pull request merges or closes."
+                    )
             pr["queue_attempt_count"] = len(attempts)
+            pr["ejected_attempt_count"] = sum(1 for attempt in attempts if attempt.get("ejected"))
             pr["queue_history"] = "present" if attempts else "none"
-            pr_state_message = f"Stored from the backfill; fetched at {pr['fetched_at']}."
-            if not attempts:
-                notes.append(
-                    "No merge_group attempt is stored for this pull request. That is 'no queue history', "
-                    "not 'no ejections': queue runs before the backfill window are gone from this file."
-                )
-            if any(a["ejected"] for a in attempts):
-                notes.append(DERIVATION["ejections"])
+            pr["total_display"] = human_duration(pr.get("total_seconds"))
+            if row is not None:
+                pr_state_message = f"Stored from the backfill; fetched at {pr['fetched_at']}."
+                if not attempts:
+                    notes.append(
+                        "No merge_group attempt is stored for this pull request. That is 'no queue history', "
+                        "not 'no ejections': queue runs before the backfill window are gone from this file."
+                    )
+                if any(attempt["ejected"] for attempt in attempts):
+                    notes.append(DERIVATION["ejections"])
+
+        if runs_note:
+            notes.append(runs_note)
 
         return {
             "mode": "pr",
             "generated_at": _utc_now(),
             "days": days,
             "pr": pr,
-            "stages": _stages(pr) if row is not None else [],
-            "attempts": [_attempt_out(row) for row in attempts],
+            "stages": _stages(pr) if pr is not None else [],
+            "runs": runs,
+            "attempts": [_attempt_out(attempt) for attempt in attempts],
             "pr_state": pr_state,
             "pr_state_message": pr_state_message,
             "source": source,
@@ -1536,9 +1770,8 @@ class CIObservePRs:
         no merge time to compare against coverage."""
         if live is not None and live.get("state") == "open" and not live.get("merged_at"):
             return "open", (
-                f"Pull request #{number} is open. The backfill stores merged and closed pull requests only, "
-                f"so it appears here after it merges or closes. The next hourly run is by "
-                f"{freshness['next_run_at']}."
+                f"Pull request #{number} is open. The page is reading it from GitHub now, so the dates "
+                "are current. The saved history starts after it merges or closes."
             )
         ended = (live or {}).get("merged_at") or (live or {}).get("closed_at")
         ended_dt = parse_iso(ended)
@@ -1629,6 +1862,7 @@ class CIObservePRs:
             "funnel": funnel,
             "pr": None,
             "stages": [],
+            "runs": [],
             "attempts": [],
             # No number selected: the resolved-state panel says so.
             "pr_state": NO_SELECTION_STATE,
@@ -1737,6 +1971,7 @@ def _attempt_out(row):
     attempt["duration_display"] = human_duration(attempt.get("duration_seconds"))
     attempt["ejected"] = bool(attempt.get("ejected"))
     attempt["ejection"] = "ejected" if attempt["ejected"] else "not ejected"
+    attempt["queue_outcome"] = "ejected" if attempt["ejected"] else "passed"
     # The store does not know Tempo. The exporter fills capture_url from the
     # run cache when a capture exists; an empty value is the store-only view.
     attempt["capture_url"] = ""

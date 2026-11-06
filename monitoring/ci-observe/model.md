@@ -28,9 +28,18 @@ A run has detailed data only when its recording arrived. A missing recording doe
 
 ## Pull requests
 
-The page shows recent pull requests, typical and slow-end stage times, and the selected pull request.
+| Section | Contents |
+|---|---|
+| Selected pull request | Identity, state, and the dates of each stage. |
+| Time in each stage | Authoring, review, waiting, queue and merge, with the reason a stage is unknown. |
+| E2E runs | Every run the pull request made, oldest first, one row per suite. Each new commit is a code version. Rows open the run page or GitHub. |
+| Queue attempts | Each merge-queue entry, its duration, and whether it was ejected and why. |
+| Recent pull requests and stage times | The browse tables for the selected days. |
 
-An **ejection** means a pull request left the merge queue without merging. GitHub does not keep queue history, so the page derives it from a failed queue run and a GitHub comment.
+An open pull request is read from GitHub when the page loads. Its runs are
+already stored; the saved stage history starts after it ends.
+
+An **ejection** means a pull request left the merge queue without merging. GitHub does not keep queue history, so the page derives it from a failed queue run and a GitHub comment. For an open pull request, the failed queue run is the only signal.
 
 ## Trends
 

@@ -64,6 +64,7 @@ The custom `osac.ci.*` names work. New signals should emit the shared name next 
 | Session result and duration | GitHub conclusion, then Tempo | Result, Test time |
 | Cluster pods, CPU, memory, nodes | ci-observe Prometheus | Cluster row |
 | Pull request stages and queue time | `prs.db` | Pull requests |
+| Every E2E run of a pull request, one code version per commit | Workflow exporter job history | Pull requests |
 | Test history | `trends.db` | Trends |
 | Pod logs and full failure detail | GitHub artifact | Failures link |
 

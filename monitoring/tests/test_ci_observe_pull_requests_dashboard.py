@@ -1,9 +1,8 @@
 """Structural tests for the ci-observe Pull requests page.
 
-`ci-observe-pull-requests.json` answers two questions: how long does review
-take, and how long does the merge queue take? It has a recent pull request
-table, a stage time table and one collapsed detail row for a chosen pull
-request.
+`ci-observe-pull-requests.json` starts from one pull request: its lifecycle,
+its E2E runs, and its merge-queue attempts. A second section lists recent
+pull requests and the stage funnel for browsing.
 
 Every selector is resolved against a fixture document with the same keys as
 `/api/ci-observe/prs`.
@@ -18,6 +17,7 @@ from pathlib import Path
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
 DASHBOARD = json.loads((DASHBOARDS_DIR / "ci-observe-pull-requests.json").read_text())
 PRS_URL = "http://127.0.0.1:9103/api/ci-observe/prs"
+PR_URL = f"{PRS_URL}?number=${{pr_number}}&repo=${{pr_repo}}"
 
 INDEX_DOCUMENT = {
     "prs": [
@@ -41,10 +41,60 @@ PR_DOCUMENT = {
     "pr": {
         "number": 101,
         "title": "Add VM restart coverage",
+        "author": "author1",
+        "repo": "osac",
+        "state": "merged",
         "final_stage": "merged",
         "opened_at": "2026-10-01T10:00:00Z",
-        "total_seconds": 5700,
-    }
+        "first_review_at": "2026-10-01T10:20:00Z",
+        "first_approval_at": "2026-10-01T10:50:00Z",
+        "queued_at": "2026-10-01T11:00:00Z",
+        "last_attempt_at": "2026-10-01T11:05:00Z",
+        "merged_at": "2026-10-01T11:06:00Z",
+        "closed_at": None,
+        "total_display": "1h 6m",
+        "url": "https://github.com/osac-project/osac/pull/101",
+    },
+    "stages": [
+        {
+            "label": "Review",
+            "start_at": "2026-10-01T10:20:00Z",
+            "end_at": "2026-10-01T10:50:00Z",
+            "seconds": 1800,
+            "state": "measured",
+            "missing_reason": "",
+        }
+    ],
+    "runs": [
+        {
+            "version": 1,
+            "head": "1234567890ab",
+            "commit_url": "https://github.com/osac-project/osac/commit/1234567890ab",
+            "suite": "VMaaS",
+            "trigger": "PR #101",
+            "conclusion": "success",
+            "recorded": "yes",
+            "created_at": "2026-10-01T10:30:00Z",
+            "duration_display": "12m",
+            "run_url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run?var-capture_id=x",
+            "url": "https://github.com/osac-project/osac/actions/runs/1",
+        }
+    ],
+    "attempts": [
+        {
+            "started_at": "2026-10-01T11:00:00Z",
+            "completed_at": "2026-10-01T11:05:00Z",
+            "conclusion": "failure",
+            "run_count": 2,
+            "ejected": True,
+            "queue_outcome": "ejected",
+            "ejection_kind": "check_failed",
+            "ejection_reason": "merge group failed",
+            "duration_display": "5m",
+            "run_url": "https://github.com/osac-project/osac/actions/runs/2",
+            "comment_url": "https://github.com/osac-project/osac/pull/101#issuecomment-1",
+        }
+    ],
 }
 
 
@@ -101,17 +151,103 @@ def test_the_page_keeps_three_variables() -> None:
     assert variables()["pr_repo"]["hide"] == 2, "the repository defaults to osac"
 
 
-def test_the_recent_table_reads_the_prs_endpoint() -> None:
-    table = panel("Recent pull requests, last $days days")
+def test_the_selected_pull_request_comes_first_and_is_open() -> None:
+    row = next(candidate for candidate in DASHBOARD["panels"] if candidate.get("title") == "Selected pull request")
+    assert row["type"] == "row"
+    assert row["collapsed"] is False
+    assert DASHBOARD["panels"].index(row) < next(
+        index
+        for index, candidate in enumerate(DASHBOARD["panels"])
+        if candidate.get("title") == "All pull requests"
+    )
+
+
+def test_the_details_table_reads_one_pr() -> None:
+    table = panel("Details")
     target = table["targets"][0]
-    assert target["url"] == f"{PRS_URL}?days=${{days}}"
-    assert target["root_selector"] == "$.prs"
-    assert_selectors_resolve(table, INDEX_DOCUMENT)
-
-
-def test_the_recent_table_uses_plain_column_labels() -> None:
-    table = panel("Recent pull requests, last $days days")
+    assert target["url"] == PR_URL
+    assert target["root_selector"] == "$.pr"
+    assert_selectors_resolve(table, PR_DOCUMENT)
     assert display_names(table) == {
+        "number": "PR",
+        "title": "Title",
+        "author": "Author",
+        "repo": "Repository",
+        "state": "State",
+        "opened_at": "Opened",
+        "first_review_at": "First review",
+        "first_approval_at": "Approved",
+        "queued_at": "Entered queue",
+        "last_attempt_at": "Last queue attempt",
+        "merged_at": "Merged",
+        "closed_at": "Closed",
+        "total_display": "Total time",
+        "url": "GitHub",
+    }
+
+
+def test_the_stage_table_reads_the_selected_pr_stages() -> None:
+    table = panel("Time in each stage")
+    target = table["targets"][0]
+    assert target["url"] == PR_URL
+    assert target["root_selector"] == "$.stages"
+    assert_selectors_resolve(table, PR_DOCUMENT)
+    assert display_names(table) == {
+        "label": "Stage",
+        "start_at": "From",
+        "end_at": "To",
+        "seconds": "Time",
+        "state": "State",
+        "missing_reason": "Why not measured",
+    }
+
+
+def test_the_e2e_runs_table_reads_the_runs() -> None:
+    table = panel("E2E runs")
+    target = table["targets"][0]
+    assert target["url"] == PR_URL
+    assert target["root_selector"] == "$.runs"
+    assert_selectors_resolve(table, PR_DOCUMENT)
+    assert display_names(table) == {
+        "version": "Code version",
+        "head": "Commit",
+        "suite": "Suite",
+        "trigger": "Why it ran",
+        "conclusion": "Result",
+        "recorded": "Recorded",
+        "created_at": "Started",
+        "duration_display": "Duration",
+        "run_url": "Open run",
+        "url": "GitHub",
+    }
+
+
+def test_the_queue_attempts_table_reads_the_attempts() -> None:
+    table = panel("Queue attempts")
+    target = table["targets"][0]
+    assert target["url"] == PR_URL
+    assert target["root_selector"] == "$.attempts"
+    assert_selectors_resolve(table, PR_DOCUMENT)
+    assert display_names(table) == {
+        "started_at": "Entered queue",
+        "completed_at": "Left queue",
+        "conclusion": "Result",
+        "run_count": "Runs",
+        "queue_outcome": "Queue",
+        "ejection_kind": "Why it left",
+        "ejection_reason": "Reason",
+        "duration_display": "Duration",
+        "run_url": "GitHub run",
+        "comment_url": "Comment",
+    }
+
+
+def test_the_browse_section_keeps_the_index_and_funnel() -> None:
+    recent = panel("Recent pull requests, last $days days")
+    assert recent["targets"][0]["url"] == f"{PRS_URL}?days=${{days}}"
+    assert recent["targets"][0]["root_selector"] == "$.prs"
+    assert_selectors_resolve(recent, INDEX_DOCUMENT)
+    assert display_names(recent) == {
         "number": "PR",
         "repo": "Repository",
         "title": "Title",
@@ -122,40 +258,15 @@ def test_the_recent_table_uses_plain_column_labels() -> None:
         "url": "GitHub",
     }
 
-
-def test_the_stage_table_reads_the_funnel() -> None:
-    table = panel("Stage times")
-    target = table["targets"][0]
-    assert target["url"] == f"{PRS_URL}?days=${{days}}"
-    assert target["root_selector"] == "$.funnel"
-    assert_selectors_resolve(table, INDEX_DOCUMENT)
-    assert display_names(table) == {
+    stages = panel("Stage times")
+    assert stages["targets"][0]["url"] == f"{PRS_URL}?days=${{days}}"
+    assert stages["targets"][0]["root_selector"] == "$.funnel"
+    assert_selectors_resolve(stages, INDEX_DOCUMENT)
+    assert display_names(stages) == {
         "label": "Stage",
         "samples": "PRs",
         "median_seconds": "Typical",
         "p95_seconds": "Slow end",
-    }
-
-
-def test_the_selected_pull_request_row_is_collapsed() -> None:
-    row = next(candidate for candidate in DASHBOARD["panels"] if candidate.get("title") == "Selected pull request")
-    assert row["type"] == "row"
-    assert row["collapsed"] is True
-    assert [child.get("title") for child in row["panels"]] == ["Details"]
-
-
-def test_the_selected_pull_request_reads_one_pr() -> None:
-    table = panel("Details")
-    target = table["targets"][0]
-    assert target["url"] == f"{PRS_URL}?number=${{pr_number}}&repo=${{pr_repo}}"
-    assert target["root_selector"] == "$.pr"
-    assert_selectors_resolve(table, PR_DOCUMENT)
-    assert display_names(table) == {
-        "number": "PR",
-        "title": "Title",
-        "final_stage": "Last stage",
-        "opened_at": "Opened",
-        "total_seconds": "Total time",
     }
 
 

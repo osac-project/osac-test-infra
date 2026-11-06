@@ -14,7 +14,7 @@ The collector-first path is live. What works now, verified against the central b
 - Every store keeps 30 days: Tempo, Prometheus, Loki, the GitHub artifact, the workflow exporter, `prs.db` and `trends.db`.
 - **Start here** shows Run, Job, Repo, PR, Branch, Trigger, Result, Recorded, Created and GitHub. Every identifier is a link.
 - **E2E run** shows Result, Tests run and Test time, then collapsed Failures, Test list, Run info and Cluster rows. Result comes from GitHub. Run info links the run, PR and commit. Cluster shows pods, CPU, memory and nodes for the run window. The page refreshes every minute.
-- **Pull requests** and **Trends** show stage times, queue attempts and per-test history.
+- **Pull requests** starts from one pull request: its dates, the time in each stage, every E2E run it made (one code version per commit), and its merge-queue attempts. A pull request that is still open is read from GitHub when the page loads. **Trends** shows per-test history.
 - Capture ids stay readable (`bmaas-main-<run-id>-a1`). Suite and PR are promoted to Loki and Prometheus labels.
 - Batch-era session traces remain queryable through the archive datasource.
 

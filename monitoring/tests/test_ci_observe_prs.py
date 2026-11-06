@@ -184,6 +184,44 @@ def attempts(service, number):
     return rows(service, "SELECT * FROM pr_queue_attempts WHERE number = ? ORDER BY started_at", (number,))
 
 
+def seed_jobs(service, entries, pr=101):
+    """A workflow-exporter job history next to prs.db, with the columns the
+    runs lookup reads. entries are (id, run_id, workflow, event, head_sha,
+    created_at, conclusion) tuples; everything else takes a default."""
+    db_file = Path(service.db_file).parent / "workflow-exporter.db"
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS jobs ("
+            "id INTEGER PRIMARY KEY, repo TEXT, workflow TEXT, display_name TEXT, category TEXT,"
+            "branch TEXT, pr_url TEXT, pr_display TEXT, status TEXT, conclusion TEXT, event TEXT,"
+            "trigger TEXT, duration_s INTEGER, duration TEXT, actor TEXT, url TEXT, created_at TEXT,"
+            "updated_at TEXT, run_number INTEGER, run_attempt INTEGER, failed_step TEXT, steps_json TEXT,"
+            "failure_reason TEXT, runner_name TEXT, head_sha TEXT, run_id TEXT)"
+        )
+        for job_id, run_id, workflow, event, head_sha, created_at, conclusion in entries:
+            conn.execute(
+                "INSERT INTO jobs (id, repo, workflow, display_name, category, branch, pr_display, status,"
+                " conclusion, event, trigger, duration_s, url, created_at, updated_at, run_number,"
+                " run_attempt, failed_step, steps_json, failure_reason, runner_name, head_sha, run_id)"
+                " VALUES (?, 'osac', ?, ?, 'e2e', 'branch', ?, 'completed', ?, ?, ?, 600,"
+                " ?, ?, ?, 1, 1, '', '[]', '', 'runner-1', ?, ?)",
+                (
+                    job_id,
+                    workflow,
+                    f"osac / {workflow}",
+                    f"#{pr}",
+                    conclusion,
+                    event,
+                    event,
+                    f"https://github.com/osac-project/osac/actions/runs/{run_id}",
+                    created_at,
+                    created_at,
+                    head_sha,
+                    str(run_id),
+                ),
+            )
+
+
 # ---------------------------------------------------------------------------
 # Parser: the three fixtures
 # ---------------------------------------------------------------------------
@@ -1082,6 +1120,86 @@ class TestEndpointDocument:
 
 
 # ---------------------------------------------------------------------------
+# The pull request's runs
+# ---------------------------------------------------------------------------
+class TestRuns:
+    def test_every_run_is_listed_and_each_commit_is_a_version(self, service):
+        run_backfill(service)
+        seed_jobs(
+            service,
+            [
+                (1, 9001, "E2E VMaaS Full Install", "pull_request", "a" * 40, "2026-10-01T10:00:00Z", "success"),
+                (2, 9002, "E2E vmaas (pull requests)", "pull_request", "b" * 40, "2026-10-02T10:00:00Z", "failure"),
+                (3, 9003, "E2E vmaas (merge queue)", "merge_group", "b" * 40, "2026-10-03T10:00:00Z", "success"),
+                (4, 9004, "E2E vmaas-gate", "pull_request", "c" * 40, "2026-10-04T10:00:00Z", "failure"),
+            ],
+        )
+        seed_jobs(
+            service,
+            [(5, 9005, "E2E VMaaS Full Install", "pull_request", "d" * 40, "2026-10-01T10:00:00Z", "success")],
+            pr=102,
+        )
+        doc = service.get_json({"number": ["101"]})
+
+        assert [run["run_id"] for run in doc["runs"]] == ["9001", "9002", "9003"]
+        assert [run["version"] for run in doc["runs"]] == [1, 2, 2]
+        assert [run["suite"] for run in doc["runs"]] == ["VMaaS", "VMaaS", "VMaaS"]
+        assert [run["event"] for run in doc["runs"]] == ["pull_request", "pull_request", "merge_group"]
+        # The gate row and another pull request's row are not e2e results.
+        assert all(run["run_id"] != "9004" for run in doc["runs"])
+        assert doc["runs"][0]["recorded"] == ""
+        assert doc["runs"][0]["run_url"] == ""
+
+    def test_a_pull_request_without_runs_says_why(self, service):
+        run_backfill(service)
+        seed_jobs(service, [])
+        doc = service.get_json({"number": ["102"]})
+        assert doc["runs"] == []
+        assert "no E2E run" in doc["notes"][-1]
+
+    def test_an_open_pull_request_is_read_from_github_with_stages_and_queue_runs(self, service, github):
+        run_backfill(service)
+        fixture = load_fixture("merged_pr")
+        open_pr = dict(fixture["pr"])
+        open_pr.update({"number": 777, "state": "open", "merged_at": None, "closed_at": None})
+        github.add(f"/repos/osac-project/{REPO}/pulls/777", FakeResponse(payload=open_pr))
+        route_pr(github, {**fixture, "pr": open_pr}, number=777)
+        seed_jobs(
+            service,
+            [
+                (11, 9101, "E2E vmaas (pull requests)", "pull_request", "a" * 40, "2026-10-05T10:00:00Z", "success"),
+                (12, 9102, "E2E vmaas (merge queue)", "merge_group", "b" * 40, "2026-10-06T11:00:00Z", "failure"),
+            ],
+            pr=777,
+        )
+
+        doc = service.get_json({"number": ["777"], "repo": [REPO]})
+
+        assert doc["source"] == "live", (doc.get("pr_state_message"), doc.get("notes"))
+        assert doc["pr_state"] == "open"
+        assert doc["pr"]["state"] == "open"
+        assert doc["pr"]["merged_at"] is None
+        # The review history produces the same stages the backfill stores.
+        assert [stage["stage"] for stage in doc["stages"]] == [
+            "authoring", "review", "waiting", "queue", "merged"
+        ]
+        assert doc["stages"][1]["state"] == "measured"
+        assert doc["pr"]["queued_at"] == "2026-10-06T11:00:00Z"
+        assert doc["pr"]["final_stage"] == "open in queue"
+        # Queue time runs to now while the pull request is still queued.
+        assert doc["stages"][3]["state"] == "measured"
+        assert doc["stages"][3]["seconds"] > 0
+        assert doc["stages"][4]["state"] == "not_reached"
+        assert len(doc["runs"]) == 2
+        # The queue history comes from the stored merge_group run, and its
+        # failed conclusion is the ejection signal.
+        assert len(doc["attempts"]) == 1
+        assert doc["attempts"][0]["run_id"] == 9102
+        assert doc["attempts"][0]["ejected"] is True
+        assert doc["attempts"][0]["ejection_kind"] == "check_failed"
+
+
+# ---------------------------------------------------------------------------
 # HTTP route
 # ---------------------------------------------------------------------------
 class TestHTTP:
@@ -1141,6 +1259,35 @@ class TestHTTP:
         assert "var-capture_id=caas-pr103-5101-a1" in attempt["capture_url"]
         assert attempt["capture_url"].startswith("/d/ci-observe-runs/")
 
+    def test_a_run_links_to_the_run_page_only_when_it_was_recorded(self, base_url, service):
+        """A recorded run opens the E2E run page with its capture id. An
+        unrecorded run has no capture page, so its GitHub link is the entry;
+        the page never guesses a capture id."""
+        run_backfill(service)
+        seed_jobs(
+            service,
+            [
+                (1, 9201, "E2E VMaaS Full Install", "pull_request", "a" * 40, "2026-10-01T10:00:00Z", "success"),
+                (2, 9202, "E2E VMaaS Full Install", "pull_request", "b" * 40, "2026-10-02T10:00:00Z", "failure"),
+            ],
+        )
+
+        class FakeRuns:
+            def capture_ids_by_run(self):
+                return {"9201": ["vmaas-pr101-9201-a1"]}
+
+        service._runs = FakeRuns()
+        status, _, body = self.get(f"{base_url}/api/ci-observe/prs?number=101&repo=osac")
+
+        assert status == 200
+        first, second = json.loads(body)["runs"]
+        assert first["capture_id"] == "vmaas-pr101-9201-a1"
+        assert first["recorded"] == "yes"
+        assert "var-capture_id=vmaas-pr101-9201-a1" in first["run_url"]
+        assert second["recorded"] == "no"
+        assert second["capture_id"] == ""
+        assert second["run_url"] == ""
+
 
 # ---------------------------------------------------------------------------
 # Dashboard contract: the real response resolves what the dashboard queries
@@ -1161,6 +1308,12 @@ def test_dashboard_selectors_resolve_against_the_real_response(service):
     """Every root_selector and column the dashboard asks for must exist in
     the real endpoint response, so the two cannot drift apart."""
     run_backfill(service)
+    seed_jobs(
+        service,
+        [
+            (1, 9001, "E2E VMaaS Full Install", "pull_request", "a" * 40, "2026-10-01T10:00:00Z", "success"),
+        ],
+    )
     dashboard = json.loads(DASHBOARD_FILE.read_text())
     documents = {
         "index": service.get_json({"days": [str(DAYS)]}),

@@ -49,11 +49,15 @@ A run without detailed test data shows **Not finished** and no test count. A run
 
 ## Pull requests
 
-- **Recent pull requests**: PR, repository, title, last stage, age, queue runs, and left-queue count.
-- **Stage times**: typical and slow-end time for each stage.
-- **Selected pull request**: dates and total time. Enter a PR number above.
+The page starts with one pull request. Enter its number above.
 
-"Slow end" means 95% of pull requests finished within that time.
+- **Selected pull request**: its identity and dates. Opened, first review, approved, entered the queue, last queue attempt, merged or closed.
+- **Time in each stage**: where the time went, with the reason a stage could not be measured.
+- **E2E runs**: every run the pull request made, oldest first. One row per suite. A run after a rebase is a new code version. Each row opens the run page when test data was recorded, and the GitHub run always.
+- **Queue attempts**: each merge-queue entry, how long it lasted, and why it left.
+- **Recent pull requests** and **Stage times**: the browse tables for all pull requests in the selected days.
+
+A pull request that is still open is read from GitHub when the page loads, so its dates are current. The saved history starts after it merges or closes.
 
 ## Trends
 
