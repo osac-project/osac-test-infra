@@ -125,8 +125,10 @@ def build_trace(
     failed_index=3,
     include_session=True,
     malformed=False,
+    base_time=None,
 ):
     """A raw v1 Tempo payload with deterministic span counts."""
+    base_time = base_time or BASE_TIME
     trace_id = trace_id_for(capture_id)
     suite = "caas" if capture_id.startswith("caas-") else "vmaas"
     counter = itertools.count(1)
@@ -142,7 +144,7 @@ def build_trace(
                 root_id,
                 "",
                 "test run",
-                BASE_TIME,
+                base_time,
                 session_seconds,
                 {"pytest.span_type": "run"},
                 status="error" if failed_index is not None else "ok",
@@ -158,7 +160,7 @@ def build_trace(
                 worker_id,
                 root_id if include_session else "",
                 f"test worker gw{index}",
-                BASE_TIME + timedelta(seconds=1),
+                base_time + timedelta(seconds=1),
                 session_seconds - 2,
                 {"pytest.span_type": "run"},
                 status="ok",
@@ -173,7 +175,7 @@ def build_trace(
         test_id = span_id()
         test_ids.append(test_id)
         nodeid = f"{path}::{function}"
-        start = BASE_TIME + timedelta(seconds=5 + index * spacing)
+        start = base_time + timedelta(seconds=5 + index * spacing)
         duration = 8 + index % 7
         status = "error" if index == failed_index else "ok"
         attributes = {
@@ -213,7 +215,7 @@ def build_trace(
     for index in range(fixtures):
         parent = test_ids[index % len(test_ids)]
         name = f"fixture_{index} setup"
-        start = BASE_TIME + timedelta(seconds=4 + index)
+        start = base_time + timedelta(seconds=4 + index)
         pytest_spans.append(
             _span(
                 span_id(),
@@ -234,7 +236,7 @@ def build_trace(
     for index in range(fixture_uses):
         parent = test_ids[index % len(test_ids)]
         name = f"fixture_{index % max(1, fixtures)}"
-        start = BASE_TIME + timedelta(seconds=6 + index)
+        start = base_time + timedelta(seconds=6 + index)
         path, function = names[index % len(names)]
         pytest_spans.append(
             _span(
@@ -255,7 +257,7 @@ def build_trace(
 
     for index in range(waits):
         parent = test_ids[index % len(test_ids)]
-        start = BASE_TIME + timedelta(seconds=7 + index)
+        start = base_time + timedelta(seconds=7 + index)
         pytest_spans.append(
             _span(
                 span_id(),
@@ -279,7 +281,7 @@ def build_trace(
     service = []
     for index in range(service_spans):
         parent = test_ids[index % len(test_ids)]
-        start = BASE_TIME + timedelta(seconds=8 + index)
+        start = base_time + timedelta(seconds=8 + index)
         service.append(
             _span(
                 span_id(),
@@ -730,6 +732,33 @@ def test_a_capture_without_a_session_span_is_cached_only_briefly(tmp_path, monke
     assert remaining <= view.INCOMPLETE_CACHE_TTL_SECONDS + 1
 
 
+def test_a_capture_without_a_session_span_that_is_recent_reports_running(tmp_path, monkeypatch):
+    """A live run has no session span yet. Saying "no result" makes it look
+    like data was lost, so report the state the reader can act on."""
+    capture_id = CAAS_CAPTURE
+    started = datetime.now(UTC) - timedelta(minutes=1)
+    payload = build_trace(
+        capture_id, parent_tests=1, workers=1, fixtures=0, fixture_uses=0,
+        waits=0, service_spans=0, session_seconds=30.0, include_session=False,
+        base_time=started,
+    )
+    tempo = FakeTempo({trace_id_for(capture_id): payload})
+    view, _ = build_view(
+        tmp_path,
+        tempo,
+        jobs=[make_job(41709318840, iso(started))],
+        captures=[make_capture(capture_id, 41709318840, started_at=iso(started))],
+        monkeypatch=monkeypatch,
+    )
+
+    document = fetch(view, capture_id)
+
+    assert document["state"] == "ok"
+    assert document["coverage"]["session_span"] == 0
+    assert document["session"]["status"] == "running"
+    assert any("still running" in note for note in document["notes"])
+
+
 def test_a_transient_tempo_failure_is_cached_only_briefly(tmp_path, monkeypatch):
     """A 30-second Tempo restart must not pin the Capture page at `unknown`
     for the full ten-minute TTL."""
@@ -972,6 +1001,8 @@ def test_missing_when_the_run_is_old_and_unregistered(tmp_path, monkeypatch):
 
     assert document["state"] == "missing"
     assert any("neither Tempo nor the registry" in note for note in document["notes"])
+    remaining = view._cache[VMAAS_CAPTURE]["expires_at"] - time.monotonic()
+    assert remaining <= view.NEGATIVE_CACHE_TTL_SECONDS + 1, "a capture that registers later must not stay missing"
 
 
 def test_unreadable_span_returns_unknown_not_a_short_table(tmp_path, monkeypatch):
