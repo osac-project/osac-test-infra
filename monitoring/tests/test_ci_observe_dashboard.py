@@ -176,6 +176,22 @@ def test_run_info_reads_the_capture_identity() -> None:
     }
 
 
+def test_cluster_graphs_are_one_collapsed_row() -> None:
+    row = next(panel for panel in DASHBOARD["panels"] if panel.get("title") == "Cluster")
+    assert row["type"] == "row"
+    assert row["collapsed"] is True
+    assert [child["title"] for child in row["panels"]] == [
+        "Pods",
+        "CPU by pod",
+        "Memory by pod",
+        "Node CPU",
+        "Node memory",
+    ]
+    for child in row["panels"]:
+        assert child["datasource"]["uid"] == "ci-observe-metrics"
+        assert "$capture_id" in child["targets"][0]["expr"]
+
+
 def test_every_panel_has_a_title() -> None:
     assert all(candidate.get("title") for candidate in walk(DASHBOARD["panels"]))
 
