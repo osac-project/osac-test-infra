@@ -844,5 +844,6 @@
   "timezone": "browser",
   "title": "CI Observe \u2014 E2E run",
   "uid": "ci-observe-runs",
-  "version": 1
+  "version": 1,
+  "refresh": "1m"
 }

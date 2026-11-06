@@ -103,6 +103,10 @@ def test_identity_and_folder() -> None:
     assert "ci-observe" in DASHBOARD["tags"]
 
 
+def test_the_page_refreshes_while_a_run_is_live() -> None:
+    assert DASHBOARD["refresh"] == "1m"
+
+
 def test_the_only_variable_is_the_recording() -> None:
     assert set(variables()) == {"capture_id"}
 
