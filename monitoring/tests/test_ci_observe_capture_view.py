@@ -1349,6 +1349,26 @@ def test_identity_is_the_registry_row(tmp_path, monkeypatch):
     assert identity["session_trace_id"] == trace_id
 
 
+def test_identity_carries_github_links(tmp_path, monkeypatch):
+    capture_id = VMAAS_CAPTURE
+    trace_id = trace_id_for(capture_id)
+    tempo = FakeTempo({trace_id: fixture_trace(capture_id)})
+    view, _ = build_view(
+        tmp_path,
+        tempo,
+        jobs=[make_job(41709279176, "2026-11-03T21:00:00Z")],
+        captures=[make_capture(capture_id, 41709279176, trace_id=trace_id, pr="1620")],
+        monkeypatch=monkeypatch,
+    )
+
+    identity = fetch(view, capture_id)["identity"]
+
+    assert identity["repo"] == "osac"
+    assert identity["run_url"] == "https://github.com/osac-project/osac/actions/runs/41709279176"
+    assert identity["pr_url"] == "https://github.com/osac-project/osac/pull/1620"
+    assert identity["commit_url"] == f"https://github.com/osac-project/osac/commit/{'a' * 40}"
+
+
 def test_identity_is_empty_when_the_registry_has_no_row(tmp_path, monkeypatch):
     capture_id = CAAS_CAPTURE
     tempo = FakeTempo({trace_id_for(capture_id): fixture_trace(capture_id)})
@@ -1537,4 +1557,8 @@ def test_response_has_the_documented_shape(tmp_path, monkeypatch):
         "session_trace_id",
         "identity_source",
         "capture_started_at",
+        "repo",
+        "run_url",
+        "pr_url",
+        "commit_url",
     }

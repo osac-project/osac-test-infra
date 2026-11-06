@@ -45,7 +45,12 @@ CAPTURE_DOCUMENT = {
         "run_id": "41709318840",
         "pr": "752",
         "workflow": "E2E VMaaS Full Install",
+        "test_sha": "a" * 40,
         "test_suite": "tests/e2e/vmaas/ tests/e2e/references/",
+        "repo": "osac",
+        "run_url": "https://github.com/osac-project/osac/actions/runs/41709318840",
+        "pr_url": "https://github.com/osac-project/osac/pull/752",
+        "commit_url": "https://github.com/osac-project/osac/commit/" + "a" * 40,
     },
 }
 
@@ -172,8 +177,28 @@ def test_run_info_reads_the_capture_identity() -> None:
         "run_id": "GitHub run",
         "pr": "Pull request",
         "workflow": "Workflow",
+        "test_sha": "Commit",
         "test_suite": "Test paths",
+        "run_url": "run_url",
+        "pr_url": "pr_url",
+        "commit_url": "commit_url",
     }
+
+
+def test_run_info_links_every_identifier() -> None:
+    details = panel("Details")
+    assert "run_url" in selectors(details)
+    assert "pr_url" in selectors(details)
+    assert "commit_url" in selectors(details)
+    links = {}
+    for entry in details["fieldConfig"]["overrides"]:
+        field = entry["matcher"].get("options")
+        for prop in entry["properties"]:
+            if prop["id"] == "links":
+                links[field] = prop["value"][0]["url"]
+    assert links["run_id"] == "${__data.fields.run_url}"
+    assert links["pr"] == "${__data.fields.pr_url}"
+    assert links["test_sha"] == "${__data.fields.commit_url}"
 
 
 def test_cluster_graphs_are_one_collapsed_row() -> None:

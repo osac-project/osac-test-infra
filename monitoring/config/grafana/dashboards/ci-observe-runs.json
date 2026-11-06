@@ -725,6 +725,15 @@
                   {
                     "id": "displayName",
                     "value": "GitHub run"
+                  },
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Open workflow run on GitHub",
+                        "url": "${__data.fields.run_url}"
+                      }
+                    ]
                   }
                 ]
               },
@@ -751,6 +760,15 @@
                         }
                       }
                     ]
+                  },
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Open pull request on GitHub",
+                        "url": "${__data.fields.pr_url}"
+                      }
+                    ]
                   }
                 ]
               },
@@ -775,6 +793,105 @@
                   {
                     "id": "displayName",
                     "value": "Workflow"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "test_sha"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Commit"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  },
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Open commit on GitHub",
+                        "url": "${__data.fields.commit_url}"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "regex",
+                        "options": {
+                          "pattern": ".*",
+                          "result": {
+                            "text": "Open commit"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "run_url"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "run_url"
+                  },
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "pr_url"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "pr_url"
+                  },
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "commit_url"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "commit_url"
+                  },
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  },
+                  {
+                    "id": "noValue",
+                    "value": ""
                   }
                 ]
               }
@@ -817,8 +934,28 @@
                   "type": "string"
                 },
                 {
+                  "selector": "test_sha",
+                  "text": "test_sha",
+                  "type": "string"
+                },
+                {
                   "selector": "test_suite",
                   "text": "test_suite",
+                  "type": "string"
+                },
+                {
+                  "selector": "run_url",
+                  "text": "run_url",
+                  "type": "string"
+                },
+                {
+                  "selector": "pr_url",
+                  "text": "pr_url",
+                  "type": "string"
+                },
+                {
+                  "selector": "commit_url",
+                  "text": "commit_url",
                   "type": "string"
                 }
               ]

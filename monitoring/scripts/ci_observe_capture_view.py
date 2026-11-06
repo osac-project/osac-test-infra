@@ -75,6 +75,8 @@ PYTEST_CLASSES = ("test", "fixture", "fixture_use", "wait", "session")
 # short table.
 SPAN_CLASSES = (*PYTEST_CLASSES, "other")
 
+ORG = os.getenv("GITHUB_ORG", "osac-project")
+
 REGISTRY_FIELDS = (
     "run_id",
     "run_attempt",
@@ -382,6 +384,21 @@ class CIObserveCaptureView:
         if run_attempt is None and registry:
             run_attempt = _as_int(registry.get("run_attempt"))
 
+        job_rows, _ = self._job_rows(run_id, run_attempt)
+        repo = next((str(row.get("repo") or "") for row in job_rows if row.get("repo")), "")
+        identity["repo"] = repo
+        identity["run_url"] = ""
+        identity["pr_url"] = ""
+        identity["commit_url"] = ""
+        if repo and run_id is not None:
+            identity["run_url"] = f"https://github.com/{ORG}/{repo}/actions/runs/{run_id}"
+        pr_number = str(identity.get("pr") or "").lstrip("#")
+        if repo and pr_number:
+            identity["pr_url"] = f"https://github.com/{ORG}/{repo}/pull/{pr_number}"
+        commit_sha = str(identity.get("test_sha") or "")
+        if repo and re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+            identity["commit_url"] = f"https://github.com/{ORG}/{repo}/commit/{commit_sha}"
+
         window = self._run_window(run_id, run_attempt, registry)
         document = self._empty_document(capture_id)
         document["identity"] = identity
@@ -562,7 +579,13 @@ class CIObserveCaptureView:
                 "service_calls": 0,
                 "service_calls_complete": False,
             },
-            "identity": {field: "" for field in REGISTRY_FIELDS},
+            "identity": {
+                **{field: "" for field in REGISTRY_FIELDS},
+                "repo": "",
+                "run_url": "",
+                "pr_url": "",
+                "commit_url": "",
+            },
             "summary": [{"status": None, "tests": None, "duration_seconds": None}],
             "tests": [],
             "waits": [],
