@@ -24,6 +24,9 @@ RUNS_DOCUMENT = {
         {
             "id": "41310072671",
             "workflow": "E2E VMaaS Full Install",
+            "repo": "osac-test-infra",
+            "branch": "main",
+            "trigger": "scheduled",
             "conclusion": "failure",
             "created_at": "2026-11-03T10:00:00Z",
             "started_at_ms": 1762164060000,
@@ -34,7 +37,10 @@ RUNS_DOCUMENT = {
         },
         {
             "id": "41310072672",
-            "workflow": "E2E VMaaS Full Install",
+            "workflow": "E2E suite · vmaas · #1620 · 87306a0",
+            "repo": "osac",
+            "branch": "refs/pull/1620/head",
+            "trigger": "PR #1620",
             "conclusion": "success",
             "created_at": "2026-11-03T09:00:00Z",
             "started_at_ms": 1762160460000,
@@ -121,11 +127,21 @@ def test_column_labels_are_plain_words() -> None:
     table = panel("Recent E2E runs, last $days days")
     assert {
         "id": "Run",
+        "workflow": "Job",
+        "repo": "Repo",
+        "branch": "Branch",
+        "trigger": "Trigger",
         "conclusion": "Result",
-        "capture_state": "Recording",
+        "capture_state": "Recorded",
         "created_at": "Created",
         "url": "GitHub",
-    } == {field: display_name(table, field) for field in ("id", "conclusion", "capture_state", "created_at", "url")}
+    } == {
+        field: display_name(table, field)
+        for field in (
+            "id", "workflow", "repo", "branch", "trigger",
+            "conclusion", "capture_state", "created_at", "url",
+        )
+    }
 
 
 def test_a_run_opens_the_e2e_run_page_with_its_own_window() -> None:

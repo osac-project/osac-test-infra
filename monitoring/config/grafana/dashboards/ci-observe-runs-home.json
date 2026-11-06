@@ -36,7 +36,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Recent E2E runs. Choose one to see its result and details."
+        "content": "Recent E2E runs. Choose one to see its result and details. A run shows **No** under Recorded when the job sent no test data; scheduled osac-test-infra and merge-queue jobs usually do not record."
       },
       "targets": []
     },
@@ -46,7 +46,7 @@
       "title": "Recent E2E runs, last $days days",
       "description": "",
       "gridPos": {
-        "h": 20,
+        "h": 22,
         "w": 24,
         "x": 0,
         "y": 2
@@ -160,7 +160,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Recording"
+                "value": "Recorded"
               },
               {
                 "id": "custom.width",
@@ -302,6 +302,119 @@
                 "value": "done_at_ms"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "workflow"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Job"
+              },
+              {
+                "id": "custom.width",
+                "value": 240
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "repo"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Repo"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "branch"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Branch"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trigger"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Trigger"
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "scheduled": {
+                        "text": "Scheduled",
+                        "color": "text",
+                        "index": 0
+                      },
+                      "manual": {
+                        "text": "Manual",
+                        "color": "text",
+                        "index": 1
+                      },
+                      "push (live-push)": {
+                        "text": "Push",
+                        "color": "text",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -334,6 +447,26 @@
             {
               "selector": "id",
               "text": "id",
+              "type": "string"
+            },
+            {
+              "selector": "workflow",
+              "text": "workflow",
+              "type": "string"
+            },
+            {
+              "selector": "repo",
+              "text": "repo",
+              "type": "string"
+            },
+            {
+              "selector": "branch",
+              "text": "branch",
+              "type": "string"
+            },
+            {
+              "selector": "trigger",
+              "text": "trigger",
               "type": "string"
             },
             {

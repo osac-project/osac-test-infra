@@ -4529,6 +4529,7 @@ class WorkflowExporter:
             SELECT j.run_id AS id,
                    j.run_id AS run_id,
                    {self.CI_OBSERVE_RUN_WORKFLOW} AS workflow,
+                   MAX(j.repo) AS repo,
                    MAX(j.trigger) AS trigger,
                    MAX(j.branch) AS branch,
                    {self.CI_OBSERVE_RUN_CONCLUSION} AS conclusion,
