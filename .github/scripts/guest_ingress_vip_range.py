@@ -132,7 +132,7 @@ def parse_network(xml: str) -> CloneNetwork:
 
     # Static reservations live either inside or outside the DHCP pool; either
     # way a guest VIP must not land on one.
-    for host in root.iter("host"):
+    for host in ip_element.iter("host"):
         address = host.get("ip")
         if address:
             parsed.reserved.add(_parse_ipv4(address))
