@@ -2,13 +2,14 @@
 """Shared fake binaries for the script tests.
 
 The script tests exercise the .github/scripts tools against fake oc,
-virsh and qemu-img binaries installed on PATH. This module owns the
-fakes so they stay consistent across the suites. Behavior is driven by
-environment variables (set through FakeBins.env):
+virsh, qemu-img and osac binaries installed on PATH. This module owns
+the fakes so they stay consistent across the suites. Behavior is driven
+by environment variables (set through FakeBins.env):
 
   CAPTURE_DIR     directory where `oc apply` and `virsh define` capture
                   their stdin, one numbered file per invocation
-  CALLS_FILE      log of every virsh call and of oc annotate/delete/label
+  CALLS_FILE      log of every virsh call, of oc annotate/delete/label
+                  and of every osac invocation
   UNDEFINED_FILE  virsh state: domains recorded there no longer resolve
                   (`domuuid` fails); `undefine` records into it unless
                   VIRSH_UNDEFINE_BROKEN=true
@@ -18,6 +19,9 @@ environment variables (set through FakeBins.env):
                   existence)
   BMH_LIST_FILE   names returned by the list form of `oc get bmh`
   OC_WAIT_EXIT    exit code for `oc wait`
+  SECRETS_DIR     osac state: one JSON file per OSAC Secret, holding
+                  its metadata (name, tenant, labels); `create` captures
+                  --from-file contents into CAPTURE_DIR
 
 Run indirectly: imported by the test_*.py suites.
 """
@@ -136,14 +140,90 @@ FAKE_QEMU_IMG = textwrap.dedent(
 )
 
 
+FAKE_OSAC = textwrap.dedent(
+    '''\
+    #!/usr/bin/env python3
+    """Fake osac CLI: records calls, models OSAC Secret create/list/delete."""
+    import json
+    import shutil
+    import sys
+    from pathlib import Path
+
+    calls = Path(__import__("os").environ["CALLS_FILE"])
+    capture = Path(__import__("os").environ["CAPTURE_DIR"])
+    secrets = Path(__import__("os").environ["SECRETS_DIR"])
+
+    args = sys.argv[1:]
+    tenant = ""
+    if args and args[0] == "--tenant":
+        tenant = args[1]
+        args = args[2:]
+
+    def log(line):
+        with calls.open("a") as handle:
+            handle.write(line + "\\n")
+
+    if args[:2] == ["create", "secret"]:
+        name, labels, from_files = None, [], []
+        flags = iter(args[2:])
+        for flag in flags:
+            if flag == "--name":
+                name = next(flags)
+            elif flag == "--type":
+                next(flags)
+            elif flag == "--label":
+                labels.append(next(flags))
+            elif flag == "--from-file":
+                from_files.append(next(flags))
+            else:
+                sys.exit(88)
+        state = secrets / f"{name}.json"
+        if state.exists():
+            print(f"Error: secret '{name}' already exists", file=sys.stderr)
+            sys.exit(1)
+        n = len(list(capture.glob("secret-*-username"))) if capture.exists() else 0
+        for pair in from_files:
+            key, path = pair.split("=", 1)
+            shutil.copyfile(path, capture / f"secret-{n}-{key}")
+        payload = {"metadata": {"name": name, "tenant": tenant, "labels": dict(
+            dict(item.split("=", 1) for item in labels)
+        )}}
+        state.write_text(json.dumps(payload))
+        log(f"create secret {name} tenant={tenant} labels={' '.join(labels)}")
+        sys.exit(0)
+
+    if args[:2] == ["get", "secrets"]:
+        entries = sorted(secrets.glob("*.json")) if secrets.exists() else []
+        payload = [json.loads(entry.read_text()) for entry in entries]
+        # A single result renders as a bare object, not a one-element
+        # array, matching the real CLI's structured output.
+        print(json.dumps(payload[0] if len(payload) == 1 else payload, indent=2))
+        log(f"get secrets tenant={tenant} format=json")
+        sys.exit(0)
+
+    if args[:2] == ["delete", "secret"]:
+        name = args[2]
+        state = secrets / f"{name}.json"
+        if not state.exists():
+            print(f"Error: secret '{name}' not found", file=sys.stderr)
+            sys.exit(1)
+        state.unlink()
+        log(f"delete secret {name} tenant={tenant}")
+        sys.exit(0)
+
+    sys.exit(87)
+    '''
+)
+
+
 class FakeBins:
-    """Fake oc/virsh/qemu-img binaries plus the state they capture."""
+    """Fake oc/virsh/qemu-img/osac binaries plus the state they capture."""
 
     def __init__(self, temp: Path, binaries: list[str]) -> None:
         self.temp = temp
         self.bin_dir = temp / "bin"
         self.bin_dir.mkdir()
-        contents = {"oc": FAKE_OC, "virsh": FAKE_VIRSH, "qemu-img": FAKE_QEMU_IMG}
+        contents = {"oc": FAKE_OC, "virsh": FAKE_VIRSH, "qemu-img": FAKE_QEMU_IMG, "osac": FAKE_OSAC}
         for binary in binaries:
             path = self.bin_dir / binary
             path.write_text(contents[binary])
@@ -157,6 +237,11 @@ class FakeBins:
     def env(self, **extra: str) -> dict[str, str]:
         """A test-process environment with the fakes on PATH."""
         env = os.environ.copy()
+        # Scripts under test read OSAC_NETBOX_* fallbacks; a value leaking
+        # from the caller's shell (an e2e workflow sets them) would change
+        # behavior. Tests add them back explicitly through env_extra.
+        for key in [k for k in env if k.startswith("OSAC_NETBOX_")]:
+            del env[key]
         env.update(
             {
                 "PATH": f"{self.bin_dir}:{env['PATH']}",

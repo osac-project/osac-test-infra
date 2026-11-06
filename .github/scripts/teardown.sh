@@ -118,7 +118,9 @@ if [[ -z "${BMH_VM_PREFIX}" ]]; then
   echo "WARNING: no usable name_prefix in ${BMH_INVENTORY_FILE}, using the legacy prefix." >&2
   BMH_VM_PREFIX="virtual-bmh-${CLONE_NAME}"
 fi
-BMH_VM_NAMES=$(${VIRSH} list --all --name 2>/dev/null | grep "^${BMH_VM_PREFIX}-" || true)
+# Only tool-created names qualify: <name_prefix>-<token>, the token one
+# hex byte — a looser prefix match could sweep unrelated VMs.
+BMH_VM_NAMES=$(${VIRSH} list --all --name 2>/dev/null | grep -E "^${BMH_VM_PREFIX}-[0-9a-f]{2}$" || true)
 if [[ -n "${BMH_VM_NAMES}" ]]; then
   echo "Cleaning up virtual BMH VMs..."
   for VM_NAME in ${BMH_VM_NAMES}; do
@@ -148,7 +150,7 @@ fi
 # Keep the inventory while VMs of the group remain — or libvirt is
 # unreachable: it is the map for cleaning up a leak by hand.
 if VM_LISTING=$(${VIRSH} list --all --name 2>/dev/null); then
-  if [[ -z "$(grep "^${BMH_VM_PREFIX}-" <<<"${VM_LISTING}" || true)" ]]; then
+  if [[ -z "$(grep -E "^${BMH_VM_PREFIX}-[0-9a-f]{2}$" <<<"${VM_LISTING}" || true)" ]]; then
     rm -f "${BMH_INVENTORY_FILE}"
   fi
 else
@@ -235,7 +237,7 @@ if ! REMAINING_VMS=$(${VIRSH} list --all --name 2>/dev/null); then
   BMH_LEAKED=true
   REMAINING_VMS=""
 fi
-REMAINING_VMS=$(grep "^${BMH_VM_PREFIX}-" <<<"${REMAINING_VMS}" || true)
+REMAINING_VMS=$(grep -E "^${BMH_VM_PREFIX}-[0-9a-f]{2}$" <<<"${REMAINING_VMS}" || true)
 if [[ -n "${REMAINING_VMS}" ]]; then
   echo "ERROR: VMs still present after cleanup:" >&2
   echo "${REMAINING_VMS}" >&2

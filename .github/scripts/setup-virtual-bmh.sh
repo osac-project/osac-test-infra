@@ -50,6 +50,13 @@ SUSHY_CACHE_NAME="sushy-cache-${CLONE_NAME}"
 SUSHY_VMEDIA_TMP="${HOME}/sushy-vmedia-tmp-${CLONE_NAME}"
 INVENTORY_FILE="${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json"
 
+# Export the path before any VM exists: when a later step fails, failure
+# artifacts (gather-osac-logs.sh) still find the inventory — including a
+# partially written one, which the redaction at collection handles.
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  echo "INVENTORY_FILE=${INVENTORY_FILE}" >> "${GITHUB_ENV}"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VIRSH="virsh -c qemu:///system"
 
@@ -98,11 +105,6 @@ python3 "${SCRIPT_DIR}/manage-virtual-bmh-vms.py" create "${VM_ARGS[@]}"
 python3 "${SCRIPT_DIR}/reconcile-bmhs.py" \
   --inventory-file "${INVENTORY_FILE}" \
   --namespace "${BMH_NAMESPACE}"
-
-# Export the inventory path for later workflow steps.
-if [[ -n "${GITHUB_ENV:-}" ]]; then
-  echo "INVENTORY_FILE=${INVENTORY_FILE}" >> "${GITHUB_ENV}"
-fi
 
 echo "==> Virtual BMH setup complete. ${BMH_COUNT} hosts available."
 echo "Raw inventory: ${INVENTORY_FILE}"

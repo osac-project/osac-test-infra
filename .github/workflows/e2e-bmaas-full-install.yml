@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: "host-inventory"
+      inventory-backend:
+        description: "Inventory backend flavor: metal3 (default) or netbox — selects the installer profile, the host setup script, and the e2e OSAC_INVENTORY_BACKEND"
+        required: false
+        type: string
+        default: "metal3"
       flavor-image:
         description: "OCI image containing the cluster-tool flavor"
         required: false
@@ -179,8 +184,16 @@ jobs:
 
     env:
       FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
+      INVENTORY_BACKEND: ${{ inputs.inventory-backend }}
+      BMAAS_PROFILE: ${{ inputs.inventory-backend == 'netbox' && 'bmaas-netbox-ci' || 'bmaas-ci' }}
 
     steps:
+      - name: Validate inventory backend
+        if: inputs.inventory-backend != 'metal3' && inputs.inventory-backend != 'netbox'
+        run: |
+          echo "ERROR: inventory-backend must be 'metal3' or 'netbox', got '${{ inputs.inventory-backend }}'." >&2
+          exit 1
+
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -371,6 +384,7 @@ jobs:
           chmod 600 "$RUNNER_TEMP/kubeconfig"
 
       - name: Setup virtual BareMetalHosts
+        if: inputs.inventory-backend != 'netbox'
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig
           BMH_NAMESPACE: ${{ inputs.bmh-namespace }}
@@ -596,7 +610,7 @@ jobs:
           yq -i '.aapOperator.channel = "stable-2.6-cluster-scoped"' values/bmaas-ci/infra.yaml
           yq -i '.lvms.channel = "stable-4.22"' values/bmaas-ci/infra.yaml
 
-          make install-infra PLATFORM=openshift PROFILE=bmaas-ci NS="${INSTALLER_NAMESPACE}"
+          make install-infra PLATFORM=openshift PROFILE="${BMAAS_PROFILE}" NS="${INSTALLER_NAMESPACE}"
 
       - name: Install OSAC
         env:
@@ -669,10 +683,18 @@ jobs:
 
           SET_ARGS=()
 
-          # The bmaas-ci profile Helm-manages the Metal3 inventory/management
+          # The metal3 profiles Helm-manage the Metal3 inventory/management
           # secrets (bmf.metal3.enabled=true in values/bmaas-ci/instance.yaml);
-          # point them at this run's BareMetalHost namespace (OSAC-4139).
-          SET_ARGS+=("--set-string" "bmf.metal3.namespace=${BMH_NAMESPACE}")
+          # point them at this run's BareMetalHost namespace (OSAC-4139). The
+          # netbox overlay instead disables the Metal3 inventory
+          # (bmf.metal3.enabled=false) and points the operator at NetBox
+          # (bmf.netbox.bmhNamespace: host-inventory), so no BMH namespace is
+          # passed through there; the infra release's token-seed hook has
+          # already written the netbox-api-token Secret the profile's
+          # bmf.secrets.netboxToken expects.
+          if [[ "${INVENTORY_BACKEND}" == "metal3" ]]; then
+            SET_ARGS+=("--set-string" "bmf.metal3.namespace=${BMH_NAMESPACE}")
+          fi
 
           if [[ -n "${MERGED_OVERRIDES}" ]] && [[ "${MERGED_OVERRIDES}" != "{}" ]]; then
             for key in $(echo "${MERGED_OVERRIDES}" | jq -r 'keys[]'); do
@@ -692,7 +714,7 @@ jobs:
             helm dependency update charts/osac/
           fi
 
-          make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE=bmaas-ci NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
+          make install-osac AAP_LICENSE_FILE="${AAP_LICENSE_FILE}" PLATFORM=openshift PROFILE="${BMAAS_PROFILE}" NS="${INSTALLER_NAMESPACE}" EXTRA_HELM_ARGS="${SET_ARGS[*]}"
 
           for tenant in "${INSTALLER_NAMESPACE}" shared; do
             echo "Creating Tenant: ${tenant}"
@@ -744,6 +766,31 @@ jobs:
             echo "Attempt ${i}/30 failed, retrying in 2s..."
             sleep 2
           done
+
+      # NetBox device setup needs everything the reconciler drives: NetBox
+      # (deployed by install-infra's bmaas-netbox-ci profile), the OSAC
+      # Secret API (install-osac), and the extracted osac CLI -- so it runs
+      # here, after the install, instead of next to the metal3 BMH setup.
+      # The reconciler creates system-scoped BMC Secrets through the private
+      # API: the CLI is logged in with a cluster-admin token, matching the
+      # e2e conftest's private-client pattern.
+      - name: Setup virtual NetBox devices
+        if: inputs.inventory-backend == 'netbox'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          # The extracted binary is named osac-cli-bin; expose it as `osac`
+          # on PATH for both this login and reconcile-netbox-devices.py.
+          CLI_DIR="$(mktemp -d)"
+          ln -s "${OSAC_CLI_BIN}" "${CLI_DIR}/osac"
+          export PATH="${CLI_DIR}:${PATH}"
+          DOMAIN="$(oc get ingress.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
+          osac login \
+            --address "https://fulfillment-internal-api-${INSTALLER_NAMESPACE}.${DOMAIN}" \
+            --insecure --private \
+            --token-script "oc create token -n ${INSTALLER_NAMESPACE} admin --as system:admin --duration=2h"
+          bash .github/scripts/setup-virtual-netbox-devices.sh
 
       # Telemetry-only: computes the recorded test selection for the
       # ci-observe capture (BMaaS has no suite fallback step -- the raw
@@ -824,6 +871,7 @@ jobs:
             -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
             -e OSAC_BMI_TEMPLATE="${OSAC_BMI_TEMPLATE}" \
             -e OSAC_BMH_NAMESPACE="${OSAC_BMH_NAMESPACE}" \
+            -e OSAC_INVENTORY_BACKEND="${INVENTORY_BACKEND}" \
             -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
             "${E2E_IMAGE}" \
             pytest "${TEST_ARGS[@]}" "${FILTER_ARGS[@]}" "${MARKER_ARGS[@]}" \
@@ -920,6 +968,7 @@ jobs:
               -e OSAC_NAMESPACE="${OSAC_NAMESPACE}" \
               -e OSAC_BMI_TEMPLATE="${OSAC_BMI_TEMPLATE}" \
               -e OSAC_BMH_NAMESPACE="${OSAC_BMH_NAMESPACE}" \
+              -e OSAC_INVENTORY_BACKEND="${INVENTORY_BACKEND}" \
               -e OSAC_PULL_SECRET_PATH=/root/pull-secret \
               -e OTEL_EXPORTER_OTLP_ENDPOINT \
               -e OTEL_EXPORTER_OTLP_TIMEOUT \
@@ -965,7 +1014,7 @@ jobs:
         if: always() && !cancelled()
         uses: ./.github/actions/upload-artifacts
         with:
-          artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
+          artifact-name: osac-logs-bmaas${{ inputs.inventory-backend == 'netbox' && '-netbox' || '' }}-full-install-${{ github.run_id }}
 
       # Only a cancelled job is bounded: its always() steps get 5 minutes in
       # total. A timeout elsewhere would turn a passing run red. It runs when
@@ -977,7 +1026,7 @@ jobs:
         timeout-minutes: 3
         uses: ./.github/actions/upload-artifacts
         with:
-          artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
+          artifact-name: osac-logs-bmaas${{ inputs.inventory-backend == 'netbox' && '-netbox' || '' }}-full-install-${{ github.run_id }}
           overwrite: "true"
 
       - name: Authenticate for AI diagnosis
@@ -996,7 +1045,7 @@ jobs:
           JUNIT_PATH: ${{ runner.temp }}/test-output/junit.xml
           GOOGLE_CLOUD_PROJECT: ${{ steps.vertex-auth.outputs.gcp-project }}
           GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
-          WORKFLOW_NAME: "E2E BMaaS Full Install"
+          WORKFLOW_NAME: "E2E BMaaS${{ inputs.inventory-backend == 'netbox' && ' NetBox' || '' }} Full Install"
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # Also written here (not just GITHUB_STEP_SUMMARY) so the Slack
           # steps below can grab the raw diagnosis text on its own,
@@ -1010,7 +1059,7 @@ jobs:
         uses: ./.github/actions/notify-slack
         with:
           status: failure
-          workflow-name: "E2E BMaaS Full Install"
+          workflow-name: "E2E BMaaS${{ inputs.inventory-backend == 'netbox' && ' NetBox' || '' }} Full Install"
           # Bot-token path (not the webhook) -- only chat.postMessage
           # returns a message ts, which the two threaded replies below
           # need. Same bot/token/channel already used by the daily CI
