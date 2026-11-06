@@ -1,6 +1,6 @@
 # Monitoring agent notes
 
-Read [`ci-observe/model.md`](ci-observe/model.md) before you change a ci-observe dashboard or add a panel. It defines the three units and the rule for what belongs where. [`ci-observe/sources.md`](ci-observe/sources.md) maps each question to its authoritative store, and [`ci-observe/README.md`](ci-observe/README.md) is the reader guide.
+Read [`ci-observe/observability.md`](ci-observe/observability.md) before you add a signal or a panel. It states the principles, the current gaps and the roadmap. [`ci-observe/model.md`](ci-observe/model.md) defines the three units and what belongs where. [`ci-observe/sources.md`](ci-observe/sources.md) maps each question to its authoritative store, and [`ci-observe/README.md`](ci-observe/README.md) is the reader guide.
 
 Hard rules:
 
@@ -8,6 +8,9 @@ Hard rules:
 - The entry page lists recent E2E runs and opens one run. There is no combined lookup box.
 - Every panel names its unit, its population (all jobs or captured runs) and its time axis.
 - A dataset joins a unit by capture id, run id or pull request number. Data that cannot join is not admitted.
+- GitHub owns pass or fail. A trace, session span or JUnit result explains the outcome and never overrides it.
+- New telemetry emits the OpenTelemetry CI/CD and test attribute names next to the existing `osac.ci.*` fields. The shared names make the data joinable later.
+- Missing data is shown as missing, never as zero. A panel that cannot answer says why.
 - Fleet health (runners, machines, queue infrastructure, exporter health) belongs to the `CI Fleet` folder, not ci-observe.
 - Dashboards are provisioned from `config/grafana/dashboards/`. Every dashboard change needs a test in `monitoring/tests/`.
 - The two CI hooks stay outside `monitoring/`: the capture action (`.github/actions/ci-observe-capture/`) and the gather script (`scripts/gather-osac-logs.sh`). A workflow can only call a local action from its own repository, and both run on the runner, not on the central machine.

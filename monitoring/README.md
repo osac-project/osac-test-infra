@@ -448,7 +448,9 @@ team-facing summary -- pass rate trend, flake rate, MTTR -- for standups and
 sprint reviews, see OSAC-2064). **ci-observe** holds the **CI Observe — Start
 here** entry page and three content dashboards: **CI Observe — E2E run**, **CI
 Observe — Pull requests** and **CI Observe — Trends**. See
-[`ci-observe/README.md`](ci-observe/README.md).
+[`ci-observe/README.md`](ci-observe/README.md) for the reader guide and
+[`ci-observe/observability.md`](ci-observe/observability.md) for the design
+rules, current gaps and roadmap.
 
 Also reachable via an internal relay machine instead of the central host's
 public IP -- see [`vpn-relay-access.md`](vpn-relay-access.md) for why and

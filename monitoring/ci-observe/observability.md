@@ -1,0 +1,131 @@
+# CI Observe observability model
+
+This page explains why CI Observe collects what it collects, what exists today, and what is still missing.
+
+The short version: one run, one trace, every test and cluster signal attached to it, and pages that answer one question at a time.
+
+## Why this shape
+
+Observability lets you ask a new question without adding new instrumentation. Monitoring answers questions you predicted in advance. CI Observe aims at the first.
+
+The design follows a small set of rules:
+
+| Rule | What it means here |
+|---|---|
+| Keep wide events, not narrow metrics | One run and one test carry many attributes. Test name, commit and PR are high cardinality, so they belong in traces and tables, not metric labels. |
+| Use traces as the backbone | A run trace connects the session, tests, setup, waits and service calls. |
+| Use shared names | OpenTelemetry defines CI/CD and test attribute names. They make data joinable across tools and years. |
+| Keep failures, sample successes | A failed or slow run is always worth keeping. A healthy run is not always worth keeping. |
+| Show symptoms first | Pass rate and feedback time first. Pods, waits and service calls come after a drill-down. |
+| Use targets | Pass rate, feedback time, flake rate and queue time need SLOs to become decisions. |
+| Make the page clear | Overview first, zoom and filter, details on demand. One question per page. |
+
+## The unit: one run, one trace
+
+```
+run 42163948768
+├── queue and provision
+├── build and install
+├── test session
+│   ├── test_cluster_create
+│   │   ├── setup: cluster, users, CLI
+│   │   ├── wait: ComputeInstance Ready
+│   │   └── call: POST /clusters
+│   └── test_cluster_delete
+├── teardown
+└── artifact upload
+```
+
+Every span should carry the same identity. The table shows the shared name first and the field we use today second.
+
+| Shared name | Field today | Use |
+|---|---|---|
+| `cicd.pipeline.name` | `workflow` | Name of the workflow |
+| `cicd.pipeline.run.id` | `run_id` | GitHub run id |
+| `cicd.pipeline.run.url.full` | `run_url` | Link to the run |
+| `cicd.pipeline.result` | GitHub `conclusion` | Pass, fail, cancel, timeout |
+| `cicd.pipeline.task.name` | job and step names | Not yet spans |
+| `test.case.name` | `tests[].name` | Test id |
+| `test.case.result.status` | `tests[].status` | Pass or fail |
+| `test.suite.run.status` | `session.status` | Session result |
+| `vcs.repository.url.full` | `repo` | Repository |
+| `vcs.ref.head.revision` | `test_sha` | Commit under test |
+| `osac.ci.capture_id` | `capture_id` | Joins Tempo, Prometheus and Loki |
+
+The custom `osac.ci.*` names work. New signals should emit the shared name next to them, then dashboards can move over without breaking history.
+
+## What we record today
+
+| Signal | Source | Where it appears |
+|---|---|---|
+| Run identity, result, trigger, branch, PR | Workflow exporter SQLite | Start here, Run info |
+| Run links to GitHub, PR and commit | Workflow exporter and capture view | Run info |
+| Test list, failures, error messages | Tempo trace and JUnit artifact | E2E run |
+| Session result and duration | GitHub conclusion, then Tempo | Result, Test time |
+| Cluster pods, CPU, memory, nodes | ci-observe Prometheus | Cluster row |
+| Pull request stages and queue time | `prs.db` | Pull requests |
+| Test history | `trends.db` | Trends |
+| Pod logs and full failure detail | GitHub artifact | Failures link |
+
+Records are kept for 30 days. Tempo accepts a search window of 7 days at a time.
+
+## What is still missing
+
+| Gap | Why it matters |
+|---|---|
+| No run waterfall or task timeline | You cannot see queue, provision, build, test and teardown as one picture. |
+| Custom attribute names | Data is harder to join with other CI tools and future telemetry. |
+| No attempts or flake view | A test that failed then passed is invisible. |
+| No Kubernetes events on the run page | A pod that was evicted or OOMKilled is not explained. |
+| No waits table | A slow test with no CPU or API activity is not explained. |
+| No per-test trace and log links | You cannot jump from a failing test row to its spans and logs. |
+| No service call table | API errors and slow calls are not summarized. |
+| No SLO dashboard | Pass rate, feedback time, flake rate and queue time have no targets. |
+| No capture coverage target | Missing recordings are visible but not measured. |
+| No telemetry pipeline health | Dropped spans or ingest lag are not shown. |
+| No sampling policy | Volume is low today, but there is no rule for when it grows. |
+| No long-term rollups | Raw data stops at 30 days, so yearly trends are impossible. |
+
+## Roadmap
+
+**P0, traceability**
+
+1. Emit OpenTelemetry CI/CD and test names next to the current fields.
+2. Add a run timeline with queue, provision, build, test and teardown.
+3. Link every test row to its trace and logs.
+4. Keep GitHub as the only source of pass or fail.
+
+**P1, explanation**
+
+5. Add Kubernetes events and waits as collapsed rows.
+6. Add attempts and flake state to the test list.
+7. Add capture coverage and ingest health.
+
+**P2, decisions**
+
+8. Add CI SLOs and error budget alerts.
+9. Add outcome-based sampling.
+10. Keep long-term rollups beyond 30 days.
+
+## Rules we keep
+
+1. GitHub owns pass or fail. A recording explains a result, it never changes it.
+2. Missing data is missing, never zero.
+3. One page answers one question.
+4. Identifiers are links, not raw text.
+5. A panel names its population and its time range.
+6. Do not add a panel that cannot change a decision.
+
+## Sources
+
+- OpenTelemetry CI/CD spans: https://opentelemetry.io/docs/specs/semconv/cicd/cicd-spans/
+- OpenTelemetry CI/CD metrics: https://opentelemetry.io/docs/specs/semconv/cicd/cicd-metrics/
+- OpenTelemetry CI/CD resources: https://opentelemetry.io/docs/specs/semconv/resource/cicd/
+- OpenTelemetry test attributes: https://opentelemetry.io/docs/specs/semconv/registry/attributes/test/
+- OpenTelemetry sampling: https://opentelemetry.io/docs/concepts/sampling/
+- Google SRE, monitoring distributed systems: https://sre.google/sre-book/monitoring-distributed-systems/
+- Google SRE workbook, implementing SLOs: https://sre.google/workbook/implementing-slos/
+- Grafana dashboard best practices: https://grafana.com/docs/grafana/latest/visualizations/dashboards/build-dashboards/best-practices/
+- Honeycomb, what is observability: https://www.honeycomb.io/blog/what-is-observability-key-components-best-practices
+- Shneiderman, the visual information-seeking mantra: https://www.cs.umd.edu/~ben/papers/Shneiderman1996eyes.pdf
+- CNCF, OpenTelemetry CI/CD observability: https://www.cncf.io/blog/2024/11/04/opentelemetry-is-expanding-into-ci-cd-observability/

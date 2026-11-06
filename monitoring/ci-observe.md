@@ -5,49 +5,35 @@ For an introduction, start with [ci-observe/README.md](ci-observe/README.md).
 
 The application and the individual tests keep their current source and behavior.
 
-## Status at the 2026-11-01 cutover
+## Status at 2026-11-06
 
-The collector-first prototype became the live CI path. What works now, all verified
-against the central backend on `osac-ci-1`:
+The collector-first path is live. What works now, verified against the central backend on `osac-ci-1`:
 
-- Live push is the delivery path. A `ci-observe` run streams pytest traces, cluster
-  logs and kubelet metrics to the central backend while the test runs. Nothing is
-  uploaded to GitHub, so the capture step needs no artifact and no gitleaks scan.
-- The dashboard shows real numbers for a finished capture: 17 tests, 24.1 minutes
-  run duration, the slowest-test table with per-test durations. Run duration
-  uses the single `test run` session span, not the separate xdist worker spans.
-- Every E2E wait is a named span (`poll_until` in the osac repo). The 16-minute
-  bmaas metering test breaks down into named waits: instance RUNNING 282 s,
-  metering heartbeats 60 s, instance deletion 243 s.
-- Kubelet metrics arrive: the cluster panels show node and pod CPU and memory.
-- Capture ids are readable (`bmaas-main-<run-id>-a1`), with suite and PR promoted
-  to Loki and Prometheus labels.
-- Delivery is verified after each test: the capture action reports a loud,
-  non-gating error when telemetry was requested but never reached the backend.
-  The job result and the test's own exit code stay unchanged.
-- Traces from the batch era stay queryable through the archive datasource. The
-  31 batch session traces were migrated into Tempo 2.10.
+- Live push is the delivery path. A recorded run streams pytest traces, cluster logs and kubelet metrics to the central backend while the test runs. The capture step uploads no telemetry. The separate failure gather still uploads a redacted artifact.
+- Standard VMaaS, BMaaS and CaaS full-install runs record by default in both repositories, for pull request, merge queue, scheduled and manual runs. Netris, stretched, agentless and full-regression workflows have no capture action yet.
+- Every store keeps 30 days: Tempo, Prometheus, Loki, the GitHub artifact, the workflow exporter, `prs.db` and `trends.db`.
+- **Start here** shows Run, Job, Repo, PR, Branch, Trigger, Result, Recorded, Created and GitHub. Every identifier is a link.
+- **E2E run** shows Result, Tests run and Test time, then collapsed Failures, Test list, Run info and Cluster rows. Result comes from GitHub. Run info links the run, PR and commit. Cluster shows pods, CPU, memory and nodes for the run window. The page refreshes every minute.
+- **Pull requests** and **Trends** show stage times, queue attempts and per-test history.
+- Capture ids stay readable (`bmaas-main-<run-id>-a1`). Suite and PR are promoted to Loki and Prometheus labels.
+- Batch-era session traces remain queryable through the archive datasource.
 
-What is missing or known gaps:
+Known gaps:
 
-- Beyla service-request spans from the batch era were not migrated, only session
-  traces. Old captures show test spans in the service-request panels.
-- The Traces Drilldown app (v3.1.0) is installed and served but not yet confirmed
-  rendering in a user's browser. Explore with query type Trace ID is the working
-  path to a trace waterfall today.
-- Count stat panels render unitless (`47`, not `47 ns`); `Run duration` keeps its
-  time unit. Verified in Grafana 13.2.4.
-- The router keeps its sending queues in memory. A router restart while a backend
-  is down discards already accepted batches. Persistent queue storage is a
-  follow-up, not part of the cutover.
-- Collectors use `insecure_skip_verify` for the internal CA. Mounting the CA into
-  the gateway pod for real verification is a follow-up.
-- Freshly flushed Tempo blocks are invisible to TraceQL search for up to 15
-  minutes (the backend search sharder skips young blocks). A just-finished run's
-  spans appear with that delay; this is Tempo 2.10 behavior, not a bug.
-- GitHub OAuth users may see a reduced sidebar without Explore. The admin account
-  sees the full navigation. Granting the OAuth users the needed org role is an
-  open task.
+- No run waterfall or task timeline for queue, provision, build, test and teardown.
+- No attempts or flake view, no Kubernetes events, no waits table, no per-test trace and log links, no service call summary.
+- No CI SLOs, capture coverage target or telemetry pipeline health.
+- No outcome-based sampling and no long-term rollups.
+- Telemetry still uses `osac.ci.*` names. OpenTelemetry CI/CD and test names are the planned shared vocabulary.
+
+[`ci-observe/observability.md`](ci-observe/observability.md) explains the impact and the order of work.
+
+Operational gaps that remain:
+
+- The router keeps its sending queues in memory. A router restart while a backend is down discards already accepted batches. Persistent queue storage is a follow-up.
+- Collectors use `insecure_skip_verify` for the internal CA. Mounting the CA into the gateway pod for real verification is a follow-up.
+- Freshly flushed Tempo blocks are invisible to TraceQL search for up to 15 minutes. A just-finished run's spans appear with that delay. This is Tempo 2.10 behavior, not a bug.
+- GitHub OAuth users may see a reduced sidebar without Explore. The admin account sees the full navigation.
 
 ## Scope
 
