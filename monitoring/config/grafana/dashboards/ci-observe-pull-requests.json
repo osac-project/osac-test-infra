@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "One pull request: its identity, five stage numbers, a stacked stage chart, every E2E run, and its merge-queue attempts.",
+  "description": "One pull request: its data status, identity, five stage numbers and a stage graph, every E2E run, and its merge-queue attempts.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -20,14 +20,144 @@
   ],
   "panels": [
     {
-      "title": "Pull request",
-      "description": "",
+      "title": "Data status",
+      "description": "Whether the stored row has every part the stage numbers need. A data error names the missing field.",
       "type": "table",
       "gridPos": {
         "h": 3,
         "w": 24,
         "x": 0,
         "y": 0
+      },
+      "id": 11,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "noValue": ""
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "data_status"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Data"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "complete": {
+                        "text": "Data complete",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "incomplete": {
+                        "text": "DATA ERROR",
+                        "color": "red",
+                        "index": 1
+                      },
+                      "unavailable": {
+                        "text": "DATA ERROR",
+                        "color": "red",
+                        "index": 2
+                      },
+                      "not_applicable": {
+                        "text": "No pull request selected",
+                        "color": "text",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "data_error"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Details"
+              },
+              {
+                "id": "custom.width",
+                "value": 900
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$",
+          "columns": [
+            {
+              "selector": "data_status",
+              "text": "data_status",
+              "type": "string"
+            },
+            {
+              "selector": "data_error",
+              "text": "data_error",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Pull request",
+      "description": "One row: the title, number, state, repository, author, open and merge dates and total time. Every value a reader can click is a link.",
+      "type": "table",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 3
       },
       "id": 1,
       "datasource": {
@@ -46,6 +176,38 @@
           "noValue": "Choose a pull request above."
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "title"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Title"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 560
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the pull request",
+                    "url": "${__data.fields.url}"
+                  }
+                ]
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",
@@ -74,81 +236,6 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "title"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Title"
-              },
-              {
-                "id": "custom.width",
-                "value": 420
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the pull request",
-                    "url": "${__data.fields.url}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "author"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Author"
-              },
-              {
-                "id": "custom.width",
-                "value": 140
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the author",
-                    "url": "${__data.fields.author_url}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "repo"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Repository"
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the repository",
-                    "url": "${__data.fields.repo_url}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
               "options": "state"
             },
             "properties": [
@@ -158,7 +245,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 90
+                "value": 100
               },
               {
                 "id": "mappings",
@@ -187,16 +274,102 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "dates_display"
+              "options": "repo"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Dates"
+                "value": "Repository"
               },
               {
                 "id": "custom.width",
-                "value": 300
+                "value": 160
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the repository",
+                    "url": "${__data.fields.repo_url}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "author"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Author"
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the author",
+                    "url": "${__data.fields.author_url}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "opened_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Opened"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "merged_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Merged"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Total"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
               }
             ]
           },
@@ -204,18 +377,6 @@
             "matcher": {
               "id": "byName",
               "options": "url"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "author_url"
             },
             "properties": [
               {
@@ -235,11 +396,23 @@
                 "value": true
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "author_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
           }
         ]
       },
       "options": {
-        "showHeader": false,
+        "showHeader": true,
         "cellHeight": "sm",
         "footer": {
           "show": false
@@ -260,6 +433,11 @@
           "root_selector": "$.pr",
           "columns": [
             {
+              "selector": "title",
+              "text": "title",
+              "type": "string"
+            },
+            {
               "selector": "url",
               "text": "url",
               "type": "string"
@@ -270,18 +448,8 @@
               "type": "number"
             },
             {
-              "selector": "title",
-              "text": "title",
-              "type": "string"
-            },
-            {
-              "selector": "author",
-              "text": "author",
-              "type": "string"
-            },
-            {
-              "selector": "author_url",
-              "text": "author_url",
+              "selector": "state",
+              "text": "state",
               "type": "string"
             },
             {
@@ -295,13 +463,28 @@
               "type": "string"
             },
             {
-              "selector": "state",
-              "text": "state",
+              "selector": "author",
+              "text": "author",
               "type": "string"
             },
             {
-              "selector": "dates_display",
-              "text": "dates_display",
+              "selector": "author_url",
+              "text": "author_url",
+              "type": "string"
+            },
+            {
+              "selector": "opened_display",
+              "text": "opened_display",
+              "type": "string"
+            },
+            {
+              "selector": "merged_display",
+              "text": "merged_display",
+              "type": "string"
+            },
+            {
+              "selector": "total_display",
+              "text": "total_display",
               "type": "string"
             }
           ]
@@ -309,14 +492,39 @@
       ]
     },
     {
-      "title": "Total",
-      "description": "Opened to merged or closed. Not measured when a boundary is missing.",
+      "title": "Stage order",
+      "description": "",
+      "type": "text",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "id": 12,
+      "options": {
+        "mode": "markdown",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "Opened \u2192 first review \u2192 approval \u2192 queue start \u2192 last queue run \u2192 merged"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "title": "Before review",
+      "description": "Opened to first human review.",
       "type": "stat",
       "gridPos": {
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 3
+        "y": 9
       },
       "id": 2,
       "datasource": {
@@ -325,65 +533,28 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "total",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.summary",
-          "columns": [
+          "noValue": "No data",
+          "mappings": [
             {
-              "selector": "total",
-              "text": "total",
-              "type": "string"
+              "type": "value",
+              "options": {
+                "DATA ERROR": {
+                  "text": "DATA ERROR",
+                  "color": "red",
+                  "index": 0
+                }
+              }
             }
-          ]
-        }
-      ]
-    },
-    {
-      "title": "Authoring",
-      "description": "Opened to the first human review.",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 4,
-        "y": 3
-      },
-      "id": 3,
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "Not measured."
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -397,9 +568,10 @@
         },
         "orientation": "auto",
         "textMode": "value",
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto"
+        "justifyMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
@@ -425,23 +597,44 @@
       ]
     },
     {
-      "title": "Review",
-      "description": "First human review to the first human approval.",
+      "title": "In review",
+      "description": "First human review to first approval.",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 9,
-        "y": 3
+        "w": 4,
+        "x": 5,
+        "y": 9
       },
-      "id": 4,
+      "id": 3,
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
+          "noValue": "No data",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "DATA ERROR": {
+                  "text": "DATA ERROR",
+                  "color": "red",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -455,9 +648,10 @@
         },
         "orientation": "auto",
         "textMode": "value",
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto"
+        "justifyMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
@@ -483,23 +677,44 @@
       ]
     },
     {
-      "title": "Waiting",
-      "description": "First human approval to the first merge-queue attempt.",
+      "title": "Waiting to queue",
+      "description": "Approval to first queue run.",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 14,
-        "y": 3
+        "w": 4,
+        "x": 10,
+        "y": 9
       },
-      "id": 5,
+      "id": 4,
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
+          "noValue": "No data",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "DATA ERROR": {
+                  "text": "DATA ERROR",
+                  "color": "red",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -513,9 +728,10 @@
         },
         "orientation": "auto",
         "textMode": "value",
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto"
+        "justifyMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
@@ -541,23 +757,44 @@
       ]
     },
     {
-      "title": "Queue",
-      "description": "First merge-queue attempt to the last.",
+      "title": "Queue checks",
+      "description": "First queue run to last queue run.",
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 19,
-        "y": 3
+        "w": 4,
+        "x": 15,
+        "y": 9
       },
-      "id": 6,
+      "id": 5,
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "workflow-api"
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
+          "noValue": "No data",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "DATA ERROR": {
+                  "text": "DATA ERROR",
+                  "color": "red",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -571,9 +808,10 @@
         },
         "orientation": "auto",
         "textMode": "value",
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto"
+        "justifyMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
@@ -599,14 +837,94 @@
       ]
     },
     {
-      "title": "Stage timeline",
-      "description": "Where the time went. A missing stage is absent, never zero.",
-      "type": "barchart",
+      "title": "Merge",
+      "description": "Last queue run to merged.",
+      "type": "stat",
       "gridPos": {
-        "h": 10,
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 9
+      },
+      "id": 6,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No data",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "DATA ERROR": {
+                  "text": "DATA ERROR",
+                  "color": "red",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "merged",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.summary",
+          "columns": [
+            {
+              "selector": "merged",
+              "text": "merged",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Stage graph",
+      "description": "Each stage in hours on one shared axis. A stage the pull request never reached has no bar. A data error draws nothing.",
+      "type": "bargauge",
+      "gridPos": {
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 13
       },
       "id": 7,
       "datasource": {
@@ -616,7 +934,12 @@
       "fieldConfig": {
         "defaults": {
           "unit": "h",
-          "noValue": "No measured stage.",
+          "noValue": "Not reached",
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#1f6feb"
+          },
           "custom": {
             "lineWidth": 1,
             "fillOpacity": 80,
@@ -632,14 +955,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Authoring"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#6e7681"
-                }
+                "value": "Before review"
               }
             ]
           },
@@ -651,14 +967,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Review"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#a371f7"
-                }
+                "value": "In review"
               }
             ]
           },
@@ -670,14 +979,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Waiting"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#d29922"
-                }
+                "value": "Waiting to queue"
               }
             ]
           },
@@ -689,14 +991,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Queue"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#db6d28"
-                }
+                "value": "Queue checks"
               }
             ]
           },
@@ -709,13 +1004,6 @@
               {
                 "id": "displayName",
                 "value": "Merge"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3fb950"
-                }
               }
             ]
           }
@@ -723,16 +1011,22 @@
       },
       "options": {
         "orientation": "horizontal",
-        "stacking": "normal",
-        "xField": "category",
-        "showValue": "auto",
-        "barWidth": 0.7,
-        "groupWidth": 0.7,
-        "fullHighlight": false,
-        "xTickLabelRotation": 0,
-        "xTickLabelSpacing": 0,
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "sizing": "auto",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "legend": {
-          "showLegend": true,
+          "showLegend": false,
           "displayMode": "list",
           "placement": "bottom",
           "calcs": []
@@ -757,11 +1051,6 @@
           },
           "root_selector": "$.chart",
           "columns": [
-            {
-              "selector": "category",
-              "text": "category",
-              "type": "string"
-            },
             {
               "selector": "authoring",
               "text": "authoring",
@@ -793,13 +1082,13 @@
     },
     {
       "title": "Queue attempts",
-      "description": "Each merge-queue entry, how long it lasted, and why it left.",
+      "description": "Each merge-queue entry, how long it lasted, and why it left. A passed entry says so.",
       "type": "table",
       "gridPos": {
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 22
       },
       "id": 8,
       "datasource": {
@@ -906,7 +1195,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "why"
+              "options": "why_display"
             },
             "properties": [
               {
@@ -928,7 +1217,7 @@
               },
               {
                 "id": "noValue",
-                "value": ""
+                "value": "DATA ERROR"
               }
             ]
           },
@@ -1007,8 +1296,8 @@
               "type": "string"
             },
             {
-              "selector": "why",
-              "text": "why",
+              "selector": "why_display",
+              "text": "why_display",
               "type": "string"
             },
             {
@@ -1038,7 +1327,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 29
       },
       "id": 9,
       "datasource": {
@@ -1490,7 +1779,7 @@
         "h": 3,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 41
       },
       "id": 10,
       "datasource": {

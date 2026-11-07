@@ -145,11 +145,11 @@ MERGE_QUEUE_COMMENT_MAX_CHARS = 240
 BOT_LOGIN_RE = re.compile(r"\[bot\]$")
 
 STAGES = (
-    ("authoring", "Authoring"),
-    ("review", "Review"),
-    ("waiting", "Waiting"),
-    ("queue", "Queue"),
-    ("merged", "Merged"),
+    ("authoring", "Before review"),
+    ("review", "In review"),
+    ("waiting", "Waiting to queue"),
+    ("queue", "Queue checks"),
+    ("merged", "Merge"),
 )
 
 # The stored column that starts and ends each stage, the duration column, and
@@ -1886,6 +1886,8 @@ class CIObservePRs:
             pr["ejected_attempt_count"] = sum(1 for attempt in attempts if attempt.get("ejected"))
             pr["queue_history"] = "present" if attempts else "none"
             pr["total_display"] = human_duration(pr.get("total_seconds"))
+            pr["opened_display"] = _short_moment(pr.get("opened_at"))
+            pr["merged_display"] = _short_moment(pr.get("merged_at"))
             if row is not None:
                 pr_state_message = f"Stored from the backfill; fetched at {pr['fetched_at']}."
                 if not attempts:
@@ -1917,8 +1919,8 @@ class CIObservePRs:
             "days": days,
             "pr": pr,
             "stages": stages,
-            "summary": _summary(pr, stages),
-            "chart": _chart(pr, stages),
+            "summary": _summary(pr, stages, data_status),
+            "chart": _chart(pr, stages, data_status),
             "data_status": data_status,
             "data_error": data_error,
             "runs": runs,
@@ -2175,57 +2177,64 @@ def _data_quality(pr, stages):
 
     A merged pull request must measure all five stages. An open or closed
     pull request may stop before a stage; that is not a data error. An
-    'unknown' stage is always a data error, and the message names it.
+    'unknown' stage or a missing total is always a data error, and the
+    message names the field.
     """
     if pr is None:
         return "unavailable", "no stored or live row for this pull request"
     if not stages:
         return "incomplete", "the review history could not be read, so the stages are missing"
-    broken = [stage for stage in stages if stage["state"] == "unknown"]
-    if not broken:
+    errors = [stage["missing_reason"] for stage in stages if stage["state"] == "unknown"]
+    if not pr.get("total_seconds"):
+        errors.append("the stored row has no total duration")
+    if not errors:
         return "complete", ""
-    return "incomplete", "; ".join(stage["missing_reason"] for stage in broken)
+    return "incomplete", "; ".join(errors)
 
 
-def _summary(pr: dict | None, stages: list[dict]) -> list[dict]:
-    """The five numbers at the top of the page, as display strings.
+def _summary(pr: dict | None, stages: list[dict], data_status: str) -> list[dict]:
+    """The five stage numbers, each as duration and share of the total.
 
-    A number the data cannot support says "not measured". A zero would claim
-    a stage took no time, which is a different and false statement.
+    A data error replaces every value with DATA ERROR: a page that shows
+    four good numbers next to a missing one invites a wrong conclusion.
+    An unreached stage says so instead of claiming a duration.
     """
     if pr is None:
         return []
-    by_stage = {stage["stage"]: stage for stage in stages}
-
-    def display(stage_key: str) -> str:
-        stage = by_stage.get(stage_key)
-        if stage is None or stage["state"] != "measured" or stage["seconds"] is None:
-            return "not measured"
-        return human_duration(stage["seconds"])
-
     total = pr.get("total_seconds")
-    return [
-        {
-            "total": human_duration(total) if total is not None else "not measured",
-            "authoring": display("authoring"),
-            "review": display("review"),
-            "waiting": display("waiting"),
-            "queue": display("queue"),
-        }
-    ]
+    by_stage = {stage["stage"]: stage for stage in stages}
+    row = {"total": human_duration(total) if total else "DATA ERROR"}
+    for key, _ in STAGES:
+        stage = by_stage.get(key)
+        if data_status == "incomplete" or stage is None or stage["state"] == "unknown":
+            row[key] = "DATA ERROR"
+        elif stage["state"] == "not_reached":
+            row[key] = f"Not reached · {stage['missing_reason']}"
+        else:
+            row[key] = f"{human_duration(stage['seconds'])} · {_share(stage['seconds'], total)}"
+    return [row]
 
 
-def _chart(pr: dict | None, stages: list[dict]) -> list[dict]:
-    """The stacked bar's one row: each measured stage in hours.
+def _share(seconds: int | None, total: int | None) -> str:
+    """A stage's share of the whole pull request, as a whole percent."""
+    if not total or seconds is None:
+        return "DATA ERROR"
+    return f"{round(seconds * 100 / total)}%"
+
+
+def _chart(pr: dict | None, stages: list[dict], data_status: str) -> list[dict]:
+    """The bar gauge's one row: each stage in hours.
 
     The chart is a duration axis, so the whole pull request fits whatever its
-    length. A stage the data cannot measure stays null and is absent from
-    the bar; it is never drawn as zero.
+    length. A stage the pull request never reached stays null, so the bar
+    gauge prints the field's noValue and draws no bar. A data error returns
+    no row at all: a partial chart would claim the missing part never
+    happened.
     """
-    if pr is None:
+    if pr is None or data_status == "incomplete":
         return []
     by_stage = {stage["stage"]: stage for stage in stages}
-    row: dict[str, str | float | None] = {"category": f"PR #{pr['number']}"}
+    row: dict[str, float | None] = {}
     for key, _ in STAGES:
         stage = by_stage.get(key)
         if stage is None or stage["state"] != "measured" or stage["seconds"] is None:
@@ -2268,7 +2277,11 @@ def _attempt_out(row):
     attempt["ejected"] = bool(attempt.get("ejected"))
     attempt["ejection"] = "ejected" if attempt["ejected"] else "not ejected"
     attempt["queue_outcome"] = "ejected" if attempt["ejected"] else "passed"
-    attempt["why"] = _short_reason(attempt.get("ejection_reason") or attempt.get("ejection_kind") or "")
+    if attempt["ejected"]:
+        reason = _short_reason(attempt.get("ejection_reason") or attempt.get("ejection_kind") or "")
+        attempt["why_display"] = reason or "Ejected; no reason recorded"
+    else:
+        attempt["why_display"] = "Passed; no ejection"
     attempt["why_url"] = attempt.get("comment_url") or attempt["run_url"]
     # The store does not know Tempo. The exporter fills capture_url from the
     # run cache when a capture exists; an empty value is the store-only view.

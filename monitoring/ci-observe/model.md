@@ -45,14 +45,16 @@ Choose the pull request from the list, or type its number, and pick the reposito
 
 | Section | Contents |
 |---|---|
-| Identity | The number, title, author and repository, each a link, plus the state and one date line ("Opened 12 Mar 09:10 · Merged 13 Mar 16:02"). |
-| Five numbers | Total, plus the four long stages (Authoring, Review, Waiting and Queue). A value the data cannot support says **not measured**, never 0. |
-| Stacked stage chart | All five stages as one horizontal bar on a fitted duration axis. A missing stage is absent from the bar, never zero. |
-| Queue attempts | Each merge-queue entry, its duration, Passed or Ejected, and a short reason. The entry opens its run; the outcome and reason open the GitHub comment when one exists, and the run otherwise. |
+| Data status | **Data complete** in green, or **DATA ERROR** in red with the missing field named in Details. A data error draws no stage numbers and no bars. |
+| Identity | Named columns: Title, PR, State, Repository, Author, Opened, Merged and Total. Title, PR, repository and author are links. |
+| Stage order | Opened, first review, approval, queue start, last queue run, merged. |
+| Five stage tiles | **Before review** (opened to first human review), **In review** (first review to first approval), **Waiting to queue** (approval to first queue run), **Queue checks** (first queue run to last queue run) and **Merge** (last queue run to merged). A measured tile reads a duration and its share of the total, such as `16h 54m · 68%`. A stage the pull request never reached says **Not reached** and why. |
+| Stage graph | A horizontal bar gauge, one row per stage in that fixed order, one shared hour axis. Measured stages are one blue bar; an unreached stage has no bar. |
+| Queue attempts | Each merge-queue entry, its duration, Passed or Ejected, and a reason that is never blank: a passed entry says **Passed; no ejection**. The entry opens its run; the reason opens the GitHub comment when one exists, and the run otherwise. |
 | E2E runs | Newest first, one row per suite: status, exact failed step, code (`vN · shortsha`, linked to the commit), suite, test data (Yes, No or Unknown), start, duration, and the run page or GitHub. A merge-queue run tests a temporary merge commit and shows no code version. The column filter is the search. |
 | Status | The one place a long explanation appears, such as why a pull request is missing or its history could not be read. |
 
-Queue time ends at the last merge-queue attempt, and the merge runs from that moment to the merge. For an open pull request still in the queue, queue time runs to now. The tiles show the total and the four long stages, so they do not add up by themselves; the merge segment is only in the bar.
+Queue time ends at the last merge-queue attempt, and the merge runs from that moment to the merge. For an open pull request still in the queue, queue time runs to now. Each tile states its stage's share of the total; the stage graph shows the relative size.
 
 An open pull request is read from GitHub when the page loads. Its runs are
 already stored; the saved stage history starts after it ends.

@@ -1105,17 +1105,26 @@ class TestEndpointDocument:
         assert doc["attempts"][0]["started_display"] == "03 Oct 09:00"
         assert doc["attempts"][0]["why_url"] == doc["attempts"][0]["comment_url"]
         assert doc["attempts"][1]["why_url"] == doc["attempts"][1]["run_url"]
+        assert "removed from the merge queue" in doc["attempts"][0]["why_display"]
+        assert doc["attempts"][1]["why_display"] == "merge_group entry (run 5102) concluded cancelled"
+        assert doc["attempts"][2]["why_display"] == "Passed; no ejection"
         assert any("derived" in note for note in doc["notes"])
 
-    def test_the_summary_and_chart_name_measured_stages(self, filled: CIObservePRs) -> None:
+    def test_the_summary_names_the_share_of_the_total(self, filled: CIObservePRs) -> None:
         doc = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})
 
         assert doc["summary"] == [
-            {"total": "1h 35m", "authoring": "20m", "review": "30m", "waiting": "10m", "queue": "34m"}
+            {
+                "total": "1h 35m",
+                "authoring": "20m · 21%",
+                "review": "30m · 32%",
+                "waiting": "10m · 11%",
+                "queue": "34m · 36%",
+                "merged": "1m · 1%",
+            }
         ]
         assert doc["chart"] == [
             {
-                "category": "PR #101",
                 "authoring": 0.333,
                 "review": 0.5,
                 "waiting": 0.167,
@@ -1130,6 +1139,9 @@ class TestEndpointDocument:
         assert pr["author_url"] == "https://github.com/author1"
         assert pr["repo_url"] == "https://github.com/osac-project/osac"
         assert pr["dates_display"] == "Opened 01 Oct 10:00 · Merged 01 Oct 11:35"
+        assert pr["opened_display"] == "01 Oct 10:00"
+        assert pr["merged_display"] == "01 Oct 11:35"
+        assert pr["total_display"] == "1h 35m"
 
     def test_a_bot_login_is_url_encoded(self, filled: CIObservePRs) -> None:
         with sqlite3.connect(filled.db_file) as conn:
@@ -1139,14 +1151,16 @@ class TestEndpointDocument:
 
         assert pr["author_url"] == "https://github.com/dependabot%5Bbot%5D"
 
-    def test_missing_stages_say_not_measured_and_are_absent_from_the_chart(self, filled: CIObservePRs) -> None:
+    def test_unreached_stages_say_so_and_keep_a_null_bar(self, filled: CIObservePRs) -> None:
         doc = filled.get_json({"number": ["102"]})
 
-        assert doc["summary"][0]["review"] == "not measured"
-        assert doc["summary"][0]["queue"] == "not measured"
+        assert doc["data_status"] == "complete"
+        assert doc["summary"][0]["authoring"] == "30m · 17%"
+        assert doc["summary"][0]["review"] == "Not reached · the pull request was never approved by a human"
+        assert doc["summary"][0]["queue"] == "Not reached · the pull request has no merge_group attempt"
+        assert doc["summary"][0]["merged"] == "Not reached · the pull request did not merge"
         assert doc["chart"] == [
             {
-                "category": "PR #102",
                 "authoring": 0.5,
                 "review": None,
                 "waiting": None,
@@ -1169,10 +1183,11 @@ class TestEndpointDocument:
         queue = next(stage for stage in doc["stages"] if stage["stage"] == "queue")
         assert queue["state"] == "unknown"
         assert queue["missing_reason"] == "merged PR has no queue boundary"
-        # The tile still refuses to invent a number; the document now says
-        # the row is incomplete instead of hiding it.
-        assert doc["summary"][0]["queue"] == "not measured"
-        assert doc["chart"][0]["queue"] is None
+        # Every tile says DATA ERROR and the chart draws nothing: a partial
+        # page would let four good numbers hide the missing one.
+        assert doc["summary"][0]["queue"] == "DATA ERROR"
+        assert doc["summary"][0]["authoring"] == "DATA ERROR"
+        assert doc["chart"] == []
 
     def test_an_open_pull_request_has_not_reached_stages_without_a_data_error(
         self, service: CIObservePRs, github: FakeGitHub
@@ -1200,6 +1215,8 @@ class TestEndpointDocument:
         assert stages["queue"]["missing_reason"] == "not queued yet"
         assert stages["merged"]["missing_reason"] == "not merged yet"
         assert all(stage["state"] != "unknown" for stage in doc["stages"])
+        assert doc["summary"][0]["authoring"] == "Not reached · no review yet"
+        assert doc["summary"][0]["merged"] == "Not reached · not merged yet"
 
     def test_an_unknown_stage_is_a_data_error(self, prs) -> None:
         pr = {
@@ -1431,8 +1448,10 @@ class TestRuns:
         assert doc["stages"][3]["state"] == "measured"
         assert doc["stages"][3]["end_at"] == "2026-10-15T00:00:00Z"
         assert doc["stages"][3]["seconds"] > 0
-        assert doc["summary"][0]["queue"] == doc["stages"][3]["time_display"]
-        assert doc["chart"][0]["queue"] == round(doc["stages"][3]["seconds"] / 3600, 3)
+        queue_stage = doc["stages"][3]
+        queue_share = round(queue_stage["seconds"] * 100 / doc["pr"]["total_seconds"])
+        assert doc["summary"][0]["queue"] == f"{queue_stage['time_display']} · {queue_share}%"
+        assert doc["chart"][0]["queue"] == round(queue_stage["seconds"] / 3600, 3)
         assert doc["stages"][4]["state"] == "not_reached"
         assert len(doc["runs"]) == 3
         # The queue history comes from the stored merge_group runs. The two
@@ -1469,7 +1488,8 @@ class TestRuns:
         assert waiting["end_at"] == "2026-10-15T00:00:00Z"
         assert waiting["seconds"] > 0
         assert queue["state"] == "not_reached"
-        assert doc["summary"][0]["waiting"] == waiting["time_display"]
+        waiting_share = round(waiting["seconds"] * 100 / doc["pr"]["total_seconds"])
+        assert doc["summary"][0]["waiting"] == f"{waiting['time_display']} · {waiting_share}%"
         assert doc["chart"][0]["waiting"] == round(waiting["seconds"] / 3600, 3)
 
     def test_an_unreadable_review_history_does_not_invent_stages(self, service, github):
@@ -1677,7 +1697,7 @@ def test_dashboard_selectors_resolve_against_the_real_response(service):
                     f"{panel['title']}: column {column['selector']} is not in the endpoint response"
                 )
             checked += 1
-    assert checked >= 9, "the page has an identity row, five tiles, a chart and three tables"
+    assert checked >= 10, "the page has a data status, identity, five tiles, a graph and three tables"
 
 
 def test_backfill_is_mounted_in_the_exporter_and_scheduled_hourly():
