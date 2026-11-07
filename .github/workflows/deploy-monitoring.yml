@@ -26,7 +26,7 @@ jobs:
     # branch would still deploy straight to production.
     if: |
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/NO-ISSUE/ci-observe-pr-preview'))
     runs-on: monitoring-central
     permissions:
       contents: read
