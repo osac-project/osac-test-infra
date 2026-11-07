@@ -2506,7 +2506,7 @@
       "type": "table",
       "id": 16,
       "title": "About these numbers",
-      "description": "What this page counts, over which window, and what is missing or partial, as the API computed it. Population: the page's own population, named in the first column. Time: the window in the second column. Unit: text.",
+      "description": "What this page counts, over which window, what is missing or partial, and when each source was last written, as the API computed it. Population: the page's own population, named in the first column. Time: the window in the second column. Unit: text.",
       "gridPos": {
         "x": 0,
         "y": 57,
@@ -2587,6 +2587,29 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "sources"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Data as of"
+              },
+              {
+                "id": "custom.width",
+                "value": 330
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "generated_at"
             },
             "properties": [
@@ -2648,6 +2671,11 @@
             {
               "selector": "missing",
               "text": "missing",
+              "type": "string"
+            },
+            {
+              "selector": "sources",
+              "text": "sources",
               "type": "string"
             },
             {

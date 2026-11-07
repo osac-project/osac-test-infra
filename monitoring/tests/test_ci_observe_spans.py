@@ -152,10 +152,31 @@ class TestBreakdown:
             ("Subnet subnet-7 in VirtualNetwork vnet-ci-12 Ready", "", "Subnet <id> in VirtualNetwork <id> Ready"),
             ("Keycloak realm 'osac' reachable", "", "Keycloak realm '<v>' reachable"),
             ("", "", "(unnamed wait)"),
+            # Names a test made unique the way Kubernetes generateName does:
+            # five characters with no vowel, often with no digit at all.
+            ("vm-ssvtr Running", "5f0c1a2e-8d3b-4c6a-9e7f-1a2b3c4d5e6f", "<id> Running"),
+            ("vm-9btxs Running", "", "<id> Running"),
+            ("vm-mnfjw VMI with 2 sockets and 4 GiB", "", "<id> VMI with N sockets and N GiB"),
+            ("ci-x8k2p deletion", "", "<id> deletion"),
+            # Words that only look like such a suffix stay.
+            ("Namespace osac-system Active", "", "Namespace osac-system Active"),
+            ("cert-manager webhook Ready", "", "cert-manager webhook Ready"),
+            ("Keycloak JWT token", "osac", "Keycloak JWT token"),
         ],
     )
     def test_wait_signature(self, spans, name, resource, signature):
         assert spans.wait_signature(name, resource) == signature
+
+    @pytest.mark.parametrize(
+        "name",
+        ["vm-ssvtr Running", "ComputeInstance ci-e2e-4f9a to become Ready", "Keycloak realm 'osac' reachable",
+         "heartbeat of 7d1f0c2a-3b4e-4f5a-8b6c-9d0e1f2a3b4c with dimensions {'cpu': 'm5'}"],
+    )
+    def test_a_signature_is_its_own_signature(self, spans, name):
+        """The read path regroups stored signatures with the current rules;
+        that only works if a signature maps to itself."""
+        signature = spans.wait_signature(name, "")
+        assert spans.wait_signature(signature, "") == signature
 
 
 @pytest.fixture
@@ -212,6 +233,12 @@ class TestPass:
         calls = len(stores["state"]["calls"])
         assert self.run(spans, stores) == 0
         assert len(stores["state"]["calls"]) == calls, "a complete capture is not read again"
+
+    def test_every_pass_is_recorded_even_with_nothing_new(self, spans, stores):
+        assert self.run(spans, stores) == 0
+        assert self.run(spans, stores, now=NOW + timedelta(hours=1)) == 0
+        passes = query(stores["trends_db"], "SELECT job, finished_at FROM rollup_passes")
+        assert passes == [{"job": "spans", "finished_at": (NOW + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")}]
 
     def test_force_reads_it_again_and_replaces_its_rows(self, spans, stores):
         assert self.run(spans, stores) == 0

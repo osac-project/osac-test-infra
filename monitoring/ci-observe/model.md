@@ -97,9 +97,9 @@ A test is keyed by its canonical name, `tests.e2e.vmaas.sanity.test_vm::TestVm::
 | Section | Contents |
 |---|---|
 | All pull requests | The window's medians (open to merge, wait for first review, review to approval, approval to queue, in the queue), ejections, commits, rebases, force pushes, changes requested, E2E runs, reruns and failed E2E runs; stage medians per week; every pull request. |
-| One pull request | Identity line, the total and four long stages, the stacked stage bar, queue attempts with the ejection reason, every E2E run with the commit it tested, status. |
+| One pull request | Identity line, the total and four long stages, the stacked stage bar, queue attempts with how each ended and why, every E2E run with the commit it tested, status. |
 
-Authoring runs from opening to the first human review, review to the first approval, waiting to the merge queue, queue to the end of the last attempt. An **ejection** is a failed queue run, explained by the GitHub comment when one exists: GitHub keeps no queue history. An open pull request is read from GitHub when the page loads.
+Authoring runs from opening to the first human review, review to the first approval, waiting to the merge queue, queue to the end of the last attempt. A queue attempt ends **ejected** when its own merge_group runs failed or timed out (explained by the GitHub comment when one exists), **re-queued** when it was cancelled or replaced by a later attempt (every entry behind a failing one is, and so is an entry whose pull request got a new push or was taken out by hand), and **passed** otherwise. GitHub keeps no queue history, so all three are derived. An open pull request is read from GitHub when the page loads.
 
 ## All runs
 
@@ -125,6 +125,7 @@ A run is keyed by its GitHub run id; a recording id adds the suite and rerun num
 
 - The run archive (suite runs and their job timelines), the test results, the span rollup and the pull request history are kept for 90 days (`CI_OBSERVE_KEEP_DAYS`).
 - The workflow exporter keeps its own job history for 30 days. GitHub keeps the JUnit artifact for 30 days, so a run's tests are read within that window.
+- The exporter fetches the job timeline (needed for the wait for a runner and for timeouts) of a run stored before timelines existed a few runs per poll, counted suite runs only, newest first.
 - Tempo keeps traces for 30 days; the span rollup reads a run once, 20 minutes after it finished.
 - Prometheus and Loki keep cluster data for 30 days.
 

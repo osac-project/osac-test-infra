@@ -308,7 +308,7 @@ _STEP_PHASE = {
 
 # Fallbacks for a renamed or new step, most specific first.
 _STEP_PATTERNS = (
-    (re.compile(r"^post |^(gather|teardown|scan and upload|upload|destroy|clean ?up)\b"), "collect"),
+    (re.compile(r"^post |^(gather|collect|teardown|scan and upload|upload|destroy|clean ?up)\b"), "collect"),
     (re.compile(r"\b(e2e|pytest)\b.*\btests?\b|^run .*tests?\b|^resolve effective test"), "test"),
     (re.compile(r"slack|ai (failure )?diagnosis|chai-bot|notify"), "collect"),
     (re.compile(r"^(install|deploy) (osac|infrastructure operators)|^setup osac|metering"), "install"),
@@ -316,6 +316,10 @@ _STEP_PATTERNS = (
     (re.compile(r"^build |image|chart|^extract osac cli"), "build"),
     (re.compile(r"checkout|secret|credential|vault|approle|token|authorize|validate|bootstrap|^fetch |^ensure |"
                 r"^install (grpcurl|helm|yq|tools?)"), "prepare"),
+    # The gate and queue bookkeeping a suite run does before it starts: its
+    # check run, readiness, superseded runs, the pull request and its labels,
+    # and the shared suite-inputs action.
+    (re.compile(r"\bgate\b|readiness|superseded|^read the |/suite-inputs@"), "prepare"),
 )
 
 # Steps whose failure means the request itself was refused: an unapproved
@@ -452,6 +456,31 @@ def _cancelled_step(timeline):
             if (step.get("conclusion") or "") == "cancelled":
                 return job.get("name") or "", step.get("name") or ""
     return None
+
+
+# -- rollup passes ----------------------------------------------------------
+
+# When each hourly rollup last finished a pass, new data or not, in
+# trends.db. The pages read it to say how old their numbers are: a timer that
+# stops leaves its last pass behind and the gap grows.
+ROLLUP_PASSES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS rollup_passes (
+    job TEXT PRIMARY KEY,
+    finished_at TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT ''
+)
+"""
+
+
+def record_pass(conn, job: str, now: datetime, summary: str = "") -> None:
+    """Remember that `job` ("trends", "spans") finished a pass at `now`."""
+    with conn:
+        conn.execute(ROLLUP_PASSES_SCHEMA)
+        conn.execute(
+            "INSERT INTO rollup_passes (job, finished_at, summary) VALUES (?, ?, ?)"
+            " ON CONFLICT(job) DO UPDATE SET finished_at = excluded.finished_at, summary = excluded.summary",
+            (job, now.strftime("%Y-%m-%dT%H:%M:%SZ"), summary),
+        )
 
 
 # -- timelines ----------------------------------------------------------------

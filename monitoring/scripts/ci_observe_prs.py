@@ -39,9 +39,11 @@ requests while its branch names only one. One queue entry starts several
 workflows that share (head_branch, head_sha); those runs become one queue
 attempt, so a clean multi-workflow pass is not counted as ejections.
 
-GitHub keeps no merge-queue history: an ejected entry disappears. An
-ejection is therefore derived from a failed (or cancelled) merge_group run
-plus the comment GitHub leaves on the PR. `Enqueued` is the start of the
+GitHub keeps no merge-queue history: an ejected entry disappears. How an
+attempt ended is therefore derived (queue_outcome): ejected when its own
+merge_group runs failed or timed out, re-queued when it was cancelled or
+replaced by a later attempt (every entry behind a failing one is), passed
+otherwise. `Enqueued` is the start of the
 pull request's first merge_group run; GitHub has no durable enqueue
 timestamp. Both choices are the ci-observe model's, not GitHub's.
 
@@ -171,8 +173,10 @@ DERIVATION = {
         "GitHub exposes no durable enqueue timestamp."
     ),
     "ejections": (
-        "Queue ejections are derived, not recorded by GitHub: a failed or cancelled merge_group run "
-        "plus the comment GitHub leaves on the pull request. GitHub keeps no merge-queue history."
+        "Queue outcomes are derived, not recorded by GitHub. Ejected: the entry's own merge_group runs "
+        "failed or timed out. Re-queued: the entry was cancelled or replaced by a later one, which is what "
+        "happens behind a failing entry, after a new push or when the pull request is taken out by hand. "
+        "GitHub keeps no merge-queue history."
     ),
     "queue_pr_number": (
         "A merge_group run carries no pull request number of its own. The run is linked to a pull "
@@ -472,6 +476,34 @@ def ejection_kind(conclusion, reason):
     if "removed from the merge queue" in text:
         return "removed"
     return "unknown"
+
+
+# How a merge-queue attempt ended, from its stored conclusion and reason.
+# Read at query time, so attempts stored before the rule are classified too.
+QUEUE_FAILED_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure"})
+QUEUE_TIMEOUT_RE = re.compile(r"timed[ _]out|timeout|exceeded")
+QUEUE_OUTCOME_LABELS = {"ejected": "ejected", "requeued": "re-queued", "passed": "passed"}
+
+
+def queue_outcome(attempt):
+    """"ejected", "requeued" or "passed".
+
+    ejected: the entry's own checks failed or timed out, so GitHub removed
+    the pull request from the queue. requeued: the entry ended without a
+    result of its own, cancelled or replaced by a later entry. That happens
+    to every entry behind one that fails, and to an entry whose pull request
+    got a new push or was taken out by hand; the pull request did not fail.
+    passed: the entry passed and nothing replaced it.
+    """
+    if not attempt.get("ejected"):
+        return "passed"
+    conclusion = (attempt.get("conclusion") or "").lower()
+    if conclusion in QUEUE_FAILED_CONCLUSIONS:
+        return "ejected"
+    reason = f"{attempt.get('ejection_kind') or ''} {attempt.get('ejection_reason') or ''}".lower()
+    if conclusion == "cancelled" and QUEUE_TIMEOUT_RE.search(reason):
+        return "ejected"
+    return "requeued"
 
 
 def _entry_conclusion(runs):
@@ -2009,7 +2041,8 @@ class CIObservePRs:
                         "after the pull request merges or closes."
                     )
             pr["queue_attempt_count"] = len(attempts)
-            pr["ejected_attempt_count"] = sum(1 for attempt in attempts if attempt.get("ejected"))
+            pr["ejected_attempt_count"] = sum(1 for attempt in attempts if queue_outcome(attempt) == "ejected")
+            pr["requeued_attempt_count"] = sum(1 for attempt in attempts if queue_outcome(attempt) == "requeued")
             pr["queue_history"] = "present" if attempts else "none"
             pr["total_display"] = human_duration(pr.get("total_seconds"))
             if row is not None:
@@ -2019,7 +2052,7 @@ class CIObservePRs:
                         "No merge_group attempt is stored for this pull request. That is 'no queue history', "
                         "not 'no ejections': queue runs before the backfill window are gone from this file."
                     )
-                if any(attempt["ejected"] for attempt in attempts):
+                if any(queue_outcome(attempt) != "passed" for attempt in attempts):
                     notes.append(DERIVATION["ejections"])
 
         if runs_note:
@@ -2139,7 +2172,8 @@ class CIObservePRs:
             if row["age_seconds"] is None:
                 row["age_seconds"] = seconds_between(row["opened_at"], _iso(now))
             row["queue_attempt_count"] = len(row_attempts)
-            row["ejected_attempt_count"] = sum(1 for a in row_attempts if a["ejected"])
+            row["ejected_attempt_count"] = sum(1 for a in row_attempts if queue_outcome(a) == "ejected")
+            row["requeued_attempt_count"] = sum(1 for a in row_attempts if queue_outcome(a) == "requeued")
             row["age_display"] = human_duration(row["age_seconds"])
             # The Pull requests page opens this pull request's own section.
             row["detail_url"] = (
@@ -2351,8 +2385,11 @@ def _kpis(rows, attempts):
     merged = [row for row in rows if row.get("state") == "merged"]
     measured = [row for row in merged if (row.get("record_version") or 1) >= RECORD_VERSION]
 
+    def outcomes(row):
+        return [queue_outcome(a) for a in attempts.get((row["repo"], row["number"]), [])]
+
     def ejected(row):
-        return any(a["ejected"] for a in attempts.get((row["repo"], row["number"]), []))
+        return "ejected" in outcomes(row)
 
     def queued(row):
         return bool(attempts.get((row["repo"], row["number"])))
@@ -2375,9 +2412,8 @@ def _kpis(rows, attempts):
         "merge_median_s": _median(row.get("merged_seconds") for row in merged),
         "queued_share": _share(queued(row) for row in merged),
         "ejected_share": _share(ejected(row) for row in merged if queued(row)),
-        "ejections": sum(
-            1 for row in merged for a in attempts.get((row["repo"], row["number"]), []) if a["ejected"]
-        ),
+        "ejections": sum(outcomes(row).count("ejected") for row in merged),
+        "requeues": sum(outcomes(row).count("requeued") for row in merged),
         "commits_median": _median(row.get("commit_count") for row in merged),
         "rebased_share": _share(
             (row.get("force_push_count") or 0) > 0 for row in measured if row.get("force_push_count") is not None
@@ -2444,9 +2480,10 @@ def _attempt_out(row):
     attempt["run_url"] = attempt.get("url") or ""
     attempt["duration_display"] = human_duration(attempt.get("duration_seconds"))
     attempt["started_display"] = _short_moment(attempt.get("started_at"))
-    attempt["ejected"] = bool(attempt.get("ejected"))
+    outcome = queue_outcome(attempt)
+    attempt["ejected"] = outcome == "ejected"
     attempt["ejection"] = "ejected" if attempt["ejected"] else "not ejected"
-    attempt["queue_outcome"] = "ejected" if attempt["ejected"] else "passed"
+    attempt["queue_outcome"] = QUEUE_OUTCOME_LABELS[outcome]
     attempt["why"] = _short_reason(attempt.get("ejection_reason") or attempt.get("ejection_kind") or "")
     attempt["why_url"] = attempt.get("comment_url") or attempt["run_url"]
     # The store does not know Tempo. The exporter fills capture_url from the

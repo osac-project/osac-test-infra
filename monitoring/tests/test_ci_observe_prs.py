@@ -1036,7 +1036,10 @@ class TestEndpointDocument:
         assert first["author"] == "author3"
         assert first["url"] == "https://github.com/osac-project/osac/pull/103"
         assert first["queue_attempt_count"] == 3
-        assert first["ejected_attempt_count"] == 2
+        # One failed attempt and one cancelled one: the cancelled entry was
+        # re-queued, the pull request was not ejected for it.
+        assert first["ejected_attempt_count"] == 1
+        assert first["requeued_attempt_count"] == 1
         assert first["age_display"]
         assert first["option_label"].startswith("#103 · merged · ")
         assert "derived, not recorded by GitHub" in doc["derivation"]["ejections"]
@@ -1119,6 +1122,8 @@ class TestEndpointDocument:
         assert doc["attempts"][0]["started_display"] == "03 Oct 09:00"
         assert doc["attempts"][0]["why_url"] == doc["attempts"][0]["comment_url"]
         assert doc["attempts"][1]["why_url"] == doc["attempts"][1]["run_url"]
+        assert [attempt["queue_outcome"] for attempt in doc["attempts"]] == ["ejected", "re-queued", "passed"]
+        assert (doc["pr"]["ejected_attempt_count"], doc["pr"]["requeued_attempt_count"]) == (1, 1)
         assert any("derived" in note for note in doc["notes"])
 
     def test_the_summary_and_chart_name_measured_stages(self, filled: CIObservePRs) -> None:
@@ -1732,7 +1737,8 @@ class TestIndexNumbers:
             {"repo": "osac", "number": 2, "state": "merged", "total_seconds": 7200, "record_version": None,
              "force_push_count": None, "merged_at": "2026-10-06T10:00:00Z"},
         ]
-        attempts_ = {("osac", 1): [{"ejected": 1}, {"ejected": 0}]}
+        attempts_ = {("osac", 1): [{"ejected": 1, "conclusion": "failure"}, {"ejected": 1, "conclusion": "cancelled"},
+                                   {"ejected": 0, "conclusion": "success"}]}
         kpis = prs._kpis(rows_, attempts_)[0]
         assert kpis["rebased_share"] == 1.0
         assert kpis["force_pushes_mean"] == 2.0
@@ -1740,11 +1746,33 @@ class TestIndexNumbers:
         assert kpis["e2e_failed_share"] == 1.0
         assert kpis["ejected_share"] == 1.0
         assert kpis["ejections"] == 1
+        assert kpis["requeues"] == 1
         assert kpis["queued_share"] == 0.5
         assert kpis["measured_prs"] == 1
         weekly = prs._weekly(rows_)
         assert [week["week"] for week in weekly] == ["2026-10-05"]
         assert weekly[0]["merged"] == 2
+
+
+@pytest.mark.parametrize(
+    ("attempt", "outcome"),
+    [
+        ({"ejected": 0, "conclusion": "success"}, "passed"),
+        ({"ejected": 1, "conclusion": "failure", "ejection_kind": "check_failed"}, "ejected"),
+        ({"ejected": 1, "conclusion": "timed_out", "ejection_kind": "timed_out"}, "ejected"),
+        ({"ejected": 1, "conclusion": "startup_failure"}, "ejected"),
+        # Every entry behind a failing one is cancelled and queued again.
+        ({"ejected": 1, "conclusion": "cancelled", "ejection_kind": "cancelled",
+          "ejection_reason": "merge_group entry (run 5102) concluded cancelled"}, "requeued"),
+        # GitHub cancels an entry that ran past the queue's time limit.
+        ({"ejected": 1, "conclusion": "cancelled", "ejection_kind": "cancelled",
+          "ejection_reason": "removed from the merge queue: the required checks timed out"}, "ejected"),
+        # A passed entry that a later attempt replaced.
+        ({"ejected": 1, "conclusion": "success", "ejection_kind": "unknown"}, "requeued"),
+    ],
+)
+def test_queue_outcome(prs, attempt, outcome):
+    assert prs.queue_outcome(attempt) == outcome
 
 
 def test_a_pull_request_suite_run_appears_with_the_commit_it_tested(prs, service):

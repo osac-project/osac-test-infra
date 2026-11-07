@@ -186,6 +186,16 @@ class TestHourlyPass:
         fetches = query(wired, "SELECT state, version FROM run_fetches")
         assert fetches == [{"state": "no_data", "version": wired.PARSER_VERSION}]
 
+    def test_every_pass_is_recorded(self, wired, exporter, github):
+        assert wired.main(["--days", "7"]) == 0
+        assert [row["job"] for row in query(wired, "SELECT job FROM rollup_passes")] == ["trends"], (
+            "a pass with nothing to roll up is still a pass")
+        exporter._upsert_job(run_row(updated_at=recent_iso(days_ago=1)))
+        github.routes[LIST_PATH] = [FakeResponse(payload={"total_count": 0, "artifacts": []})]
+        assert wired.main(["--days", "7"]) == 0
+        assert query(wired, "SELECT job, summary FROM rollup_passes") == [
+            {"job": "trends", "summary": "1 run(s) considered"}]
+
     def test_a_failed_listing_is_retried_on_a_later_pass(self, wired, exporter, github, monkeypatch):
         exporter._upsert_job(run_row())
         github.routes[LIST_PATH] = [FakeResponse(status=502)]

@@ -632,7 +632,7 @@
       "type": "stat",
       "id": 119,
       "title": "Ejected from the queue",
-      "description": "Share of the queued pull requests the merge queue ejected at least once. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: percent.",
+      "description": "Share of the queued pull requests whose own merge-queue checks failed or timed out at least once. A cancelled entry is not an ejection: every entry behind a failing one is cancelled and queued again. Population: pull requests merged in the selected repository that entered the merge queue. Time: merged in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 21,
         "y": 1,
@@ -1255,8 +1255,8 @@
     {
       "type": "stat",
       "id": 127,
-      "title": "Queue ejections",
-      "description": "Merge-queue attempts that ejected a pull request that later merged. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: count of attempts.",
+      "title": "Ejected · re-queued",
+      "description": "Merge-queue attempts that did not merge. Ejected: the attempt's own checks failed or timed out. Re-queued: the attempt was cancelled or replaced by a later one, which happens to every entry behind a failing one, after a new push, or when the pull request is taken out by hand. Population: attempts of pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: count of attempts.",
       "gridPos": {
         "x": 21,
         "y": 5,
@@ -1286,18 +1286,43 @@
           },
           "mappings": []
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ejections"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Ejected"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "requeues"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Re-queued"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^ejections$/",
+          "fields": "/^(ejections|requeues)$/",
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value",
+        "textMode": "value_and_name",
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
@@ -1324,6 +1349,11 @@
             {
               "selector": "ejections",
               "text": "ejections",
+              "type": "number"
+            },
+            {
+              "selector": "requeues",
+              "text": "requeues",
               "type": "number"
             }
           ]
@@ -1537,7 +1567,7 @@
       "type": "table",
       "id": 129,
       "title": "Pull requests",
-      "description": "Every pull request merged or closed, the longest first. Click the number to open it below; the title opens it on GitHub. Authoring: opened to first review. Review: first review to approval. Waiting: approval to the merge queue. Queue: in the merge queue. Population: pull requests merged or closed in the selected repository. Time: merged or closed in the last $days days (the Window above). Unit: duration and count.",
+      "description": "Every pull request merged or closed, the longest first. Click the number to open it below; the title opens it on GitHub. Authoring: opened to first review. Review: first review to approval. Waiting: approval to the merge queue. Queue: in the merge queue. Ejected: queue attempts whose own checks failed. Re-queued: queue attempts cancelled or replaced, not failed. Population: pull requests merged or closed in the selected repository. Time: merged or closed in the last $days days (the Window above). Unit: duration and count.",
       "gridPos": {
         "x": 0,
         "y": 16,
@@ -1939,6 +1969,22 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "requeued_attempt_count"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Re-queued"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "detail_url"
             },
             "properties": [
@@ -2070,6 +2116,11 @@
             {
               "selector": "ejected_attempt_count",
               "text": "ejected_attempt_count",
+              "type": "number"
+            },
+            {
+              "selector": "requeued_attempt_count",
+              "text": "requeued_attempt_count",
               "type": "number"
             },
             {
@@ -2873,7 +2924,7 @@
     },
     {
       "title": "Queue attempts",
-      "description": "Each merge-queue entry, how long it lasted, and why it left.",
+      "description": "Each merge-queue entry, how long it lasted, and how it ended. Ejected: its own checks failed or timed out. Re-queued: cancelled or replaced by a later entry, for example behind a failing pull request. Passed: its checks passed.",
       "type": "table",
       "gridPos": {
         "h": 7,
@@ -2962,11 +3013,18 @@
                     "options": {
                       "ejected": {
                         "text": "Ejected",
-                        "color": "orange"
+                        "color": "#ec835a",
+                        "index": 0
+                      },
+                      "re-queued": {
+                        "text": "Re-queued",
+                        "color": "#898781",
+                        "index": 1
                       },
                       "passed": {
                         "text": "Passed",
-                        "color": "green"
+                        "color": "#0ca30c",
+                        "index": 2
                       }
                     }
                   }

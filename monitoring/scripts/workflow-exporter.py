@@ -1902,6 +1902,10 @@ class WorkflowExporter:
         the timeline; the rest wait for the next cycle. The pass waits while
         the shared GitHub budget is below TIMELINE_BACKFILL_MIN_RATE_LIMIT.
 
+        Only rows of in-scope suite runs (ci_observe_phases.suite_key) are
+        fetched: the ci-observe pages read no other row's timeline, and the
+        dry-run, cancel-stale and netris rows outnumber them.
+
         A row's own jobs are those of its attempt. A suite row of the
         pull-request or merge-queue flow keeps only its suite's jobs, the
         same group _suite_records stored it from. A failed fetch leaves the
@@ -1914,14 +1918,19 @@ class WorkflowExporter:
         if (self._rate_limit_remaining is not None
                 and self._rate_limit_remaining < TIMELINE_BACKFILL_MIN_RATE_LIMIT):
             return 0
+        rows = []
         with self._db() as conn:
-            rows = conn.execute(
+            for row in conn.execute(
                 "SELECT id, repo, run_id, run_attempt, workflow FROM jobs "
                 "WHERE category = 'e2e' AND COALESCE(timeline_json, '') = '' "
                 "AND COALESCE(conclusion, '') != '' AND COALESCE(run_id, '') != '' "
-                "ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+                "ORDER BY created_at DESC"
+            ):
+                if not ci_observe_phases.suite_key(row["workflow"]):
+                    continue
+                rows.append(row)
+                if len(rows) >= limit:
+                    break
         updated = 0
         for row in rows:
             try:

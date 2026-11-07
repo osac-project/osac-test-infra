@@ -1171,8 +1171,10 @@ def main(argv=None):
         logger.info("archived %d E2E job row(s) into suite_runs", archived)
         if not runs:
             logger.info("no stored e2e runs on or after %s: nothing to roll up", start)
+            phases.record_pass(conn, "trends", now, "no stored e2e run to roll up")
             return 0
         _roll_up(conn, runs, args.force, now)
+        phases.record_pass(conn, "trends", now, f"{len(runs)} run(s) considered")
     finally:
         conn.close()
     logger.info("wrote %s", trends_db)

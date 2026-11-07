@@ -62,12 +62,18 @@ from urllib.parse import quote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_observe_phases as phases
+import ci_observe_spans
 
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 KEEP_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
 DEFAULT_DAYS = 7
 CACHE_SECONDS = 120
 CACHE_MAX_ENTRIES = 64
+# How old a source may be before the page says its numbers stop early. The
+# rollups run hourly. The exporter stores every workflow run it polls, and
+# the scheduled E2E workflows alone start one every few hours.
+ROLLUP_STALE_HOURS = 3
+RUNS_STALE_HOURS = 12
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 
 RUN_PAGE = phases.RUN_PAGE
@@ -121,6 +127,13 @@ def change(current, previous):
 
 def iso(moment):
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def wait_group(row):
+    """The signature a stored wait groups under: the stored signature with
+    the current rules applied, so a wait rolled up before a rule existed
+    groups with the same wait rolled up after it."""
+    return ci_observe_spans.wait_signature(row.get("signature") or row.get("name") or "")
 
 
 def message_signature(message):
@@ -293,6 +306,62 @@ class Stores:
                 conn.close()
         return rows, notes
 
+    def suite_run_ids(self, since, until):
+        """The GitHub run ids of the in-scope suite runs created in
+        [since, until), from the exporter's rows and the archive; None when
+        neither store could be read. A pull-request-flow or merge-queue suite
+        row carries its parent run's id, which is the id its JUnit rows have."""
+        ids = set()
+        read = False
+        for path, table in ((self.jobs_db, "jobs"), (self.trends_db, "suite_runs")):
+            conn = self._open(path)
+            if conn is None:
+                continue
+            try:
+                if table not in self._tables(conn):
+                    continue
+                read = True
+                where = "created_at >= ? AND created_at < ?" + (" AND category = 'e2e'" if table == "jobs" else "")
+                for row in conn.execute(f"SELECT id, run_id, workflow FROM {table} WHERE {where}",
+                                        (iso(since), iso(until))):
+                    if phases.suite_key(row["workflow"]):
+                        ids.add(str(row["run_id"] or row["id"]))
+            except sqlite3.Error:
+                continue
+            finally:
+                conn.close()
+        return ids if read else None
+
+    def newest_run(self):
+        """created_at of the newest workflow run the exporter stored, any
+        workflow: when the exporter last saw GitHub. None when unreadable."""
+        conn = self._open(self.jobs_db)
+        if conn is None:
+            return None
+        try:
+            if "jobs" not in self._tables(conn):
+                return None
+            return conn.execute("SELECT MAX(created_at) FROM jobs").fetchone()[0]
+        except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+
+    def rollup_passes(self):
+        """{job: finished_at} of the hourly rollups' last passes."""
+        conn = self._open(self.trends_db)
+        if conn is None:
+            return {}
+        try:
+            if "rollup_passes" not in self._tables(conn):
+                return {}
+            rows = conn.execute("SELECT job, finished_at FROM rollup_passes")
+            return {row["job"]: row["finished_at"] for row in rows}
+        except sqlite3.Error:
+            return {}
+        finally:
+            conn.close()
+
     def captures(self):
         """{run id: [(capture id, attempt, suite), ...]} from the registry."""
         conn = self._open(self.jobs_db)
@@ -454,7 +523,8 @@ class CIObserveInsights:
             try:
                 document = getattr(self, f"_{kind}")(filters, params)
                 document.setdefault("notes", [])
-                document["notes"] = filters.notes + document["notes"]
+                sources, stale = self._freshness(now)
+                document["notes"] = filters.notes + document["notes"] + stale
                 document["window"] = [filters.window()]
                 document["generated_at"] = iso(now)
                 # The one row a page's "About these numbers" panel reads: what
@@ -465,6 +535,7 @@ class CIObserveInsights:
                         f"{filters.window_from:%Y-%m-%d %H:%M} to {filters.window_to:%Y-%m-%d %H:%M} UTC"
                     ),
                     "missing": "; ".join(document["notes"]) or "Nothing is missing in this window.",
+                    "sources": sources,
                     "generated_at": document["generated_at"],
                 }]
                 with self._lock:
@@ -476,6 +547,40 @@ class CIObserveInsights:
                     self._inflight.pop(key, None)
                 event.set()
             return document
+
+    # -- freshness ---------------------------------------------------------
+    def _freshness(self, now):
+        """(text, notes): when each source was last written, and a note for
+        each source older than its schedule allows."""
+        parts, notes = [], []
+        newest = phases.parse_time(self.stores.newest_run())
+        if newest is None:
+            parts.append("Runs: none stored")
+        else:
+            parts.append(f"Runs: up to {newest:%Y-%m-%d %H:%M} UTC")
+            hours = (now - newest).total_seconds() / 3600
+            if hours > RUNS_STALE_HOURS:
+                notes.append(
+                    f"no workflow run has been stored for {hours:.0f} h, so the exporter may not be reading "
+                    "GitHub; newer runs are missing"
+                )
+        passes = self.stores.rollup_passes()
+        for job, label, noun, timer in (
+            ("trends", "Test results", "test results", "ci-observe-trends.timer"),
+            ("spans", "Inside the tests", "inside-the-tests numbers", "ci-observe-spans.timer"),
+        ):
+            finished = phases.parse_time(passes.get(job))
+            if finished is None:
+                parts.append(f"{label}: no pass recorded yet")
+                continue
+            parts.append(f"{label}: updated {finished:%Y-%m-%d %H:%M} UTC")
+            hours = (now - finished).total_seconds() / 3600
+            if hours > ROLLUP_STALE_HOURS:
+                notes.append(
+                    f"{noun} were last updated {hours:.0f} h ago ({timer}), so nothing after "
+                    f"{finished:%Y-%m-%d %H:%M} UTC is counted"
+                )
+        return " · ".join(parts), notes
 
     # -- facts -------------------------------------------------------------
     def _facts(self, filters, since=None, until=None):
@@ -516,15 +621,26 @@ class CIObserveInsights:
         }
 
     def _test_rows(self, filters, since=None, columns="*"):
-        """test_runs rows in the window (and the previous one), filtered."""
+        """test_runs rows in the window (and the previous one), filtered.
+
+        A row counts only when its run is an in-scope suite run. The trends
+        job reads the JUnit of every E2E run and files a row under the suite
+        its artifact names: Staging, Production and Chart Packaging Smoke call
+        the VMaaS full-install workflow, so without this their tests would
+        count as VMaaS on the test pages while the run pages leave them out."""
         since = since or filters.previous_from
         where = "day >= ?"
         args = [since.strftime("%Y-%m-%d")]
+        if columns != "*" and "run_id" not in columns:
+            columns = (*columns, "run_id")
         rows = self.stores.trends_rows("test_runs", where, args, columns)
         if rows is None:
             return None
+        in_scope = self.stores.suite_run_ids(since - timedelta(days=1), filters.window_to + timedelta(days=1))
         out = []
         for row in rows:
+            if in_scope is not None and str(row.get("run_id") or "") not in in_scope:
+                continue
             suite = row.get("suite_key") or phases.suite_key(row.get("workflow")) or ""
             if suite not in filters.suites:
                 continue
@@ -1218,7 +1334,7 @@ class CIObserveInsights:
         waits = [row for row in waits if row["capture_id"] in captures]
         grouped = defaultdict(list)
         for row in waits:
-            grouped[(row["signature"], row["resource_kind"])].append(row)
+            grouped[(wait_group(row), row["resource_kind"])].append(row)
         test_time = sum(row.get("duration_s") or 0 for row in tests)
         for (signature, kind), group in grouped.items():
             durations = [row["duration_s"] for row in group]
@@ -1324,7 +1440,7 @@ class CIObserveInsights:
             for row in summarize(lambda row: row["resource_kind"])
         ]
         signatures = []
-        for row in summarize(lambda row: (row["signature"], row["resource_kind"])):
+        for row in summarize(lambda row: (wait_group(row), row["resource_kind"])):
             signature, kind = row.pop("key")
             signatures.append({"wait": signature, "resource_kind": kind or "(unnamed)", **row})
         fixtures = self.stores.trends_rows("fixture_spans", "day >= ?", [window_day]) or []

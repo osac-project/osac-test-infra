@@ -382,6 +382,31 @@ def seed_tests(stores):
     return run_a, run_b
 
 
+def test_tests_of_out_of_scope_runs_are_not_counted(stores):
+    """Staging Install calls the VMaaS full-install workflow, so its JUnit
+    artifact is filed as VMaaS. The run pages leave the run out; so must the
+    test pages. A merge-queue suite row carries its parent run's id, which is
+    the id its tests are stored under."""
+    created = NOW - timedelta(days=1)
+    in_scope = stores.run(created)
+    staging = stores.run(created, workflow="E2E VMaaS Staging Install")
+    with sqlite3.connect(stores.jobs_db) as conn:
+        conn.execute(
+            "INSERT INTO jobs (id, run_id, repo, workflow, category, conclusion, status, event, created_at)"
+            " VALUES (77, '7000', 'osac', 'E2E vmaas (merge queue)', 'e2e', 'success', 'completed', 'merge_group', ?)",
+            (iso(created),),
+        )
+    for run_id in (in_scope, staging, "7000"):
+        stores.test(run_id, "tests/e2e/vmaas/sanity/test_vm.py::TestVm::test_create", run_id != staging, 100.0,
+                    created)
+
+    tests = get(stores.api(), "tests")["tests"]
+    health = get(stores.api(), "health")["tiles"][0]
+
+    assert [(row["test"], row["runs"]) for row in tests] == [("test_vm::TestVm::test_create", 2)]
+    assert health["failing_tests"] == 0, "the Staging failure is not a VMaaS failure"
+
+
 def test_the_tests_document_ranks_by_time_failures_or_name(stores):
     seed_tests(stores)
     api = stores.api()
@@ -505,6 +530,25 @@ def test_the_repository_filter_reaches_the_span_rollup_through_the_run(stores):
     assert document["coverage"][0]["recorded_runs"] == 1
 
 
+def test_one_wait_on_differently_named_vms_is_one_row(stores):
+    """Each run names its VM with a random suffix ("vm-ssvtr", "vm-9btxs").
+    A signature stored before the suffix rule existed still groups with the
+    signatures stored after it."""
+    run_a, _ = seed_tests(stores)
+    key = "tests.e2e.vmaas.sanity.test_vm::TestVm::test_create"
+    old = span_wait(key, "vm-ssvtr Running", "ComputeInstance", 30.0)
+    old["signature"] = "vm-ssvtr Running"
+    stores.spans("cap", run_a, NOW - timedelta(days=1), [span_test(key, 0.0, 100.0, 0.0, wait_call=90.0)],
+                 [old, span_wait(key, "vm-9btxs Running", "ComputeInstance", 20.0),
+                  span_wait(key, "vm-ltcml Running", "ComputeInstance", 40.0)])
+
+    waits = get(stores.api(), "waits")["waits"]
+    test_waits = get(stores.api(), "test", test=key)["waits"]
+
+    assert [(row["wait"], row["waits"]) for row in waits] == [("<id> Running", 3)]
+    assert [(row["wait"], row["count"]) for row in test_waits] == [("<id> Running", 3)]
+
+
 def test_an_incomplete_trace_adds_no_waits(stores):
     run_id = stores.run(NOW - timedelta(days=1))
     stores.spans("cap", run_id, NOW - timedelta(days=1), [span_test("a", 0.0, 10.0, 0.0, wait_call=10.0)],
@@ -538,6 +582,46 @@ def test_every_document_says_what_it_counts_and_when(stores):
         assert about["population"], kind
         assert about["window"] == "2026-10-24 12:00 to 2026-11-07 12:00 UTC", kind
         assert about["generated_at"] == "2026-11-07T12:00:00Z"
+
+
+def record_passes(stores, **ages):
+    with sqlite3.connect(stores.trends_db) as conn:
+        for job, hours in ages.items():
+            phases.record_pass(conn, job, NOW - timedelta(hours=hours))
+
+
+def test_the_about_row_says_how_old_each_source_is(stores):
+    stores.run(NOW - timedelta(hours=2))
+    record_passes(stores, trends=0.5, spans=1)
+
+    about = get(stores.api(), "health")["about"][0]
+
+    assert about["sources"] == (
+        "Runs: up to 2026-11-07 10:00 UTC · Test results: updated 2026-11-07 11:30 UTC"
+        " · Inside the tests: updated 2026-11-07 11:00 UTC"
+    )
+    assert about["missing"] == "Nothing is missing in this window."
+
+
+def test_a_rollup_that_stopped_says_what_is_missing(stores):
+    """A timer that stops leaves its last pass behind: the page must not
+    claim nothing is missing while its test numbers end a day ago."""
+    stores.run(NOW - timedelta(hours=2))
+    record_passes(stores, trends=26, spans=1)
+
+    for kind in ("health", "tests", "test", "failures", "time", "waits"):
+        missing = get(stores.api(), kind, test="anything")["about"][0]["missing"]
+        assert "test results were last updated 26 h ago (ci-observe-trends.timer)" in missing, kind
+        assert "2026-11-06 10:00 UTC" in missing, kind
+
+
+def test_a_source_never_written_is_named_without_a_note(stores):
+    stores.run(NOW - timedelta(days=2))
+
+    about = get(stores.api(), "health")["about"][0]
+
+    assert "Test results: no pass recorded yet" in about["sources"]
+    assert "no workflow run has been stored for 48 h" in about["missing"]
 
 
 def test_a_document_is_computed_once_per_window_until_it_expires(stores, monkeypatch):

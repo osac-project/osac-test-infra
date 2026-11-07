@@ -159,6 +159,11 @@ CREATE INDEX IF NOT EXISTS idx_fixture_spans_day ON fixture_spans(day);
 # names with random suffixes, UUIDs, hex ids and counts. Replaced so the
 # same wait in two runs groups together.
 UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
+# A name Kubernetes (or a test copying its generateName) made unique with a
+# five-character suffix from its random alphabet, which has no vowels and no
+# 0, 1 or 3: "vm-ssvtr", "ci-x8k2p". The suffix can hold no digit at all,
+# so the digit rule below does not catch every such name.
+GENERATED_NAME_RE = re.compile(r"\b[a-z0-9]+(?:[.-][a-z0-9]+)*-[bcdfghjklmnpqrstvwxz2456789]{5}\b")
 HEX_RE = re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,}\b", re.IGNORECASE)
 NAME_WITH_DIGITS_RE = re.compile(r"\b(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+\b")
 NUMBER_RE = re.compile(r"\b\d+\b")
@@ -168,11 +173,13 @@ QUOTED_RE = re.compile(r"(['\"])[^'\"]{1,80}\1")
 def wait_signature(name, resource_id=""):
     """The wait's description with its instance-specific parts replaced:
     "ComputeInstance <id> to become Ready". Groups the same wait across
-    runs and tests."""
+    runs and tests. Applying it to a signature returns the signature, so a
+    reader can regroup signatures stored before a rule was added."""
     text = " ".join((name or "").split())
     if resource_id and len(resource_id) >= 3:
         text = text.replace(resource_id, "<id>")
     text = UUID_RE.sub("<id>", text)
+    text = GENERATED_NAME_RE.sub("<id>", text)
     text = QUOTED_RE.sub(r"\1<v>\1", text)
     text = NAME_WITH_DIGITS_RE.sub("<id>", text)
     text = HEX_RE.sub("<id>", text)
@@ -572,6 +579,7 @@ def main(argv=None, now=None):
                 summary["capture_id"], summary["state"], summary["tests"], summary["waits"],
             )
         logger.info("read %d capture(s): %s", len(rows), states or "nothing new")
+        phases.record_pass(conn, "spans", now, f"{len(rows)} capture(s) read")
     finally:
         conn.close()
     return 0

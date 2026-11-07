@@ -106,6 +106,24 @@ def test_the_catch_up_fills_old_rows_newest_first(wfe, exporter, github, monkeyp
     assert stored(exporter, 203)["timeline_json"] in ("", None), "a running run is not final yet"
 
 
+def test_the_catch_up_skips_rows_no_page_reads(wfe, exporter, github, monkeypatch):
+    """The dry-run, cancel-stale and netris rows outnumber the suite runs;
+    fetching their jobs would spend the budget on timelines nobody reads."""
+    monkeypatch.setattr(wfe, "TOKEN", "token")
+    exporter._upsert_job(make_job(id=600, run_id="600", created_at="2026-10-10T10:00:00Z",
+                                  workflow="E2E VMaaS Full Install"))
+    for number, name in enumerate(("E2E start (dry run)", "Cancel stale e2e runs on push",
+                                   "E2E VMaaS Netris Full Install", "E2E VMaaS Staging Install"), start=601):
+        exporter._upsert_job(make_job(id=number, run_id=str(number), created_at="2026-10-11T10:00:00Z",
+                                      workflow=name))
+    github.add(f"/repos/{wfe.ORG}/osac/actions/runs/600/attempts/1/jobs?per_page=30",
+               FakeResponse(payload={"jobs": [gh_job()]}))
+    assert exporter._backfill_timelines_if_needed(limit=1) == 1
+    assert stored(exporter, 600)["timeline_json"].startswith("[")
+    assert github.calls == [f"/repos/{wfe.ORG}/osac/actions/runs/600/attempts/1/jobs?per_page=30"]
+    assert exporter._backfill_timelines_if_needed(limit=5) == 0
+
+
 def test_the_catch_up_keeps_a_suite_rows_own_jobs(wfe, exporter, github, monkeypatch):
     monkeypatch.setattr(wfe, "TOKEN", "token")
     exporter._upsert_job(make_job(id=9001, run_id="300", workflow="E2E caas (merge queue)",

@@ -70,6 +70,17 @@ def test_every_step_of_the_in_scope_workflows_has_a_named_phase(phases):
         ("Run pytest suite", "test"),
         ("Mirror images", "build"),
         ("Something nobody named", "other"),
+        # Steps of real runs whose workflows live outside this repository
+        # (osac-ci) or in earlier workflow versions.
+        ("Check e2e readiness", "prepare"),
+        ("Complete stale in_progress gate checks", "prepare"),
+        ("Mark e2e-vmaas-gate pending", "prepare"),
+        ("Mark e2e-bmaas-gate pending", "prepare"),
+        ("Cancel superseded runs for this queue entry", "prepare"),
+        ("Run osac-project/osac-ci/.github/actions/suite-inputs@0d5f2b7c9e1a4b3c8d6e5f4a3b2c1d0e9f8a7b6c", "prepare"),
+        ("Read the ci-observe label", "prepare"),
+        ("Read the pull request", "prepare"),
+        ("Collect agent watcher results", "collect"),
     ],
 )
 def test_step_phase(phases, step, phase):

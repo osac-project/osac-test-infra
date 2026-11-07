@@ -128,7 +128,7 @@ def test_every_page_ends_with_what_it_counts(name):
     assert last["title"] == "About these numbers"
     assert last["targets"][0]["root_selector"] == "about"
     assert [column["selector"] for column in last["targets"][0]["columns"]] == [
-        "population", "window", "missing", "generated_at",
+        "population", "window", "missing", "sources", "generated_at",
     ]
 
 
