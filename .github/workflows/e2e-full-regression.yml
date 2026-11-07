@@ -2,8 +2,8 @@
 # OSAC-4914: one cluster, one OSAC install via the unified Helm profile
 # (osac-installer PROFILE=full-ci). Same sequence as
 # https://github.com/trewest/ai-cloud-validation-dev/blob/main/deploy-osac-env.sh
-# — boot clone, virtual BMHs, install-infra, BMF secrets, install-osac,
-# CaaS agent — then run VMaaS + CaaS + BMaaS pytest on that install.
+# — boot clone, virtual BMHs, install-infra, BMF secrets, install-osac —
+# then run VMaaS + CaaS + BMaaS pytest on that install.
 #
 # Until osac main's values/full-ci matches the per-suite CI profiles, this
 # workflow deep-merges .github/overlays/full-ci-{infra,instance}.yaml into the
@@ -760,8 +760,8 @@ jobs:
           # helm --wait only confirms the *new* pod/ReplicaSet is Ready -- it
           # does not wait for the old pod to finish terminating or for the
           # Service/route's endpoint list to fully converge, so a caller
-          # right after this (e.g. setup-caas-agents.sh registering the
-          # ci-worker host type) can race a stale or not-yet-routable
+          # right after this (e.g. pytest creating tenant-owned CaaS
+          # workers) can race a stale or not-yet-routable
           # backend and get a transient 503 from the gateway. Same fix as
           # e2e-vmaas-full-install.yml's equivalent step (OSAC-2528) --
           # confirm every Deployment has actually finished rolling out,
@@ -904,19 +904,6 @@ jobs:
             exit 1
           fi
           podman build --no-cache "${BUILD_ARGS[@]}" -t "${E2E_IMAGE}" -f Containerfile .
-
-      - name: Setup CaaS agent
-        env:
-          KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          INSTALLER_NAMESPACE: ${{ inputs.namespace }}
-        run: |
-          # INSTALLER_DIR is resolved and persisted by the earlier install step (via $GITHUB_ENV)
-
-          LIBVIRT_NETWORK="test-infra-net-${CLONE_NAME}" \
-          INSTALLER_NAMESPACE="${INSTALLER_NAMESPACE}" \
-          AGENT_VM_NAME="agent-${CLONE_NAME}" \
-          AGENT_VM_STORAGE_DIR="/data/osac-storage" \
-              bash "${INSTALLER_DIR}/scripts/setup-caas-agents.sh"
 
       - name: Create test adapter route for metering tests
         id: metering-adapter
