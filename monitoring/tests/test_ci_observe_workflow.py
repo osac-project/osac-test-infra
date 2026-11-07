@@ -83,6 +83,12 @@ PR_SUITE_STARTERS = {suite: REPO_ROOT / ".github" / "workflows" / f"e2e-pr-{suit
 
 CAPTURE_ACTION = "./.github/actions/ci-observe-capture"
 
+# A `schedule` event leaves the `inputs` context empty, so passing
+# `${{ inputs.ci-observe }}` straight through hands the reusable workflow an
+# empty string where it needs a boolean, and GitHub refuses to start the run.
+# This form passes true on a schedule and the checkbox on a dispatch.
+SCHEDULE_SAFE_CI_OBSERVE = "${{ github.event_name == 'schedule' || inputs.ci-observe }}"
+
 # The -e flags the observed command adds so the action's OTEL exports reach
 # the container under test. Trailing backslash: each is a continued podman
 # argument line inside the invocation.
@@ -1066,7 +1072,31 @@ class TestCallerWiring:
         assert entry["default"] is True
 
     def test_input_is_passed_to_the_reusable_workflow(self, caller: dict) -> None:
-        assert called_workflow_with(caller)["ci-observe"] == "${{ inputs.ci-observe }}"
+        assert called_workflow_with(caller)["ci-observe"] == SCHEDULE_SAFE_CI_OBSERVE
+
+
+def test_every_caller_passes_a_schedule_safe_capture_input() -> None:
+    """A scheduled run starts with an empty `inputs` context. A caller that
+    forwards `ci-observe: ${{ inputs.ci-observe }}` then passes an empty
+    string to a boolean reusable input and GitHub fails the run before any
+    job starts (live run 42353988542). Scheduled callers must ask for
+    capture explicitly; a dispatch must still honor the checkbox."""
+    callers = []
+    for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+        document = yaml.safe_load(path.read_text())
+        for job in (document.get("jobs") or {}).values():
+            uses = job.get("uses")
+            if isinstance(uses, str) and uses.endswith("full-install.yml"):
+                callers.append((path, job))
+    assert callers, "no caller of a full-install workflow was found"
+    for path, job in callers:
+        value = (job.get("with") or {}).get("ci-observe")
+        if value is None:
+            continue
+        assert value != "${{ inputs.ci-observe }}", (
+            f"{path.name} forwards an empty schedule input to ci-observe"
+        )
+        assert value in (True, SCHEDULE_SAFE_CI_OBSERVE), f"{path.name}: unexpected ci-observe {value!r}"
 
 
 @pytest.mark.parametrize("pr_starter", SUITES, indirect=True)

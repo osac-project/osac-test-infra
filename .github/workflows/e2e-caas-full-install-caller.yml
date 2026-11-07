@@ -93,7 +93,7 @@ jobs:
       osac-cli-version: ${{ inputs.osac-cli-version || '' }}
       caas-agent-flow: ${{ inputs.caas-agent-flow || 'hot-pool' }}
       runner-label: ${{ inputs.runner-label || 'osac-ci' }}
-      ci-observe: ${{ inputs.ci-observe }}
+      ci-observe: ${{ github.event_name == 'schedule' || inputs.ci-observe }}
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number || inputs.pr-number }}
