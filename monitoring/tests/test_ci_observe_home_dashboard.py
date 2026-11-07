@@ -1,8 +1,9 @@
-"""Structural tests for the ci-observe entry page.
+"""Structural tests for the ci-observe runs list.
 
-`ci-observe-runs-home.json` lists recent E2E runs and opens one. It has a
-heading and one table. The filters narrow the data, not just the visible
-rows; the table also enables column filters for ad-hoc narrowing.
+`ci-observe-runs-home.json` lists every recent VMaaS, CaaS and BMaaS run and
+opens one; the Overview is the entry page. It has a heading and one table.
+The filters narrow the data, not just the visible rows; the table also
+enables column filters for ad-hoc narrowing.
 
 Every selector is resolved against a fixture document with the same keys as
 `/api/ci-observe/runs`, so a column rename fails here.
@@ -41,6 +42,11 @@ RUNS_DOCUMENT = {
             "failed_step_name": "Build and load component images",
             "failed_step": "vmaas / e2e-vmaas-full-install / build → Build and load component images",
             "details_url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run?var-capture_id=x",
+            "suite_label": "VMaaS",
+            "cause": "build",
+            "cause_label": "Build failed",
+            "cause_area": "Build",
+            "duration_s": 2700,
         },
         {
             "id": "41310072672",
@@ -108,7 +114,7 @@ def link_url(table: dict, field: str) -> str:
 
 def test_identity_and_folder() -> None:
     assert DASHBOARD["uid"] == "ci-observe-runs-home"
-    assert DASHBOARD["title"] == "CI Observe — Start here"
+    assert DASHBOARD["title"] == "CI Observe — Runs"
     assert "ci-observe" in DASHBOARD["tags"]
 
 
@@ -140,12 +146,32 @@ def test_the_filters_are_days_repository_suite_and_result() -> None:
     assert set(variables()) == {"days", "repo", "suite", "result"}
     assert variables()["days"]["current"]["value"] == "30"
     assert {"7", "30"} <= {option["value"] for option in variables()["days"]["options"]}
-    for name in ("repo", "suite", "result"):
+    for name in ("repo", "result"):
         variable = variables()[name]
         assert variable["current"]["value"] == "all", f"{name} defaults to All"
         assert variable["type"] == "custom"
         assert variable["query"].startswith("All : all,"), f"{name} has an All option"
         assert {"text": "All", "value": "all", "selected": True} in variable["options"]
+
+
+def test_the_suites_are_vmaas_caas_and_bmaas(runs) -> None:
+    """The list shows the three suites ci-observe covers; "core" asks the
+    endpoint for all three and nothing else (no Netris, no stretched)."""
+    suite = variables()["suite"]
+    assert suite["current"]["value"] == "core"
+    assert [option["value"] for option in suite["options"]] == ["core", "vmaas", "caas", "bmaas"]
+    assert suite["options"][0]["text"] == "All suites"
+    for option in suite["options"]:
+        assert option["value"] in runs.SUITES, option["value"]
+
+
+def test_a_failed_run_says_why_and_how_long_it_ran() -> None:
+    table = panel("Recent E2E runs, last $days days")
+    assert display_name(table, "suite_label") == "Suite"
+    assert display_name(table, "cause_label") == "Cause"
+    assert display_name(table, "duration_s") == "Ran for"
+    for field in ("suite_label", "cause_label", "duration_s"):
+        assert field in selectors(table)
 
 
 def test_the_result_options_match_the_endpoint(runs) -> None:

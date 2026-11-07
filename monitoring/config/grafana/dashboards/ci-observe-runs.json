@@ -8,14 +8,76 @@
   "graphTooltip": 1,
   "links": [
     {
-      "title": "Start here",
+      "title": "Overview",
       "type": "link",
-      "url": "/d/ci-observe-runs-home/ci-observe-e28094-start-here"
+      "url": "/d/ci-observe-home/ci-observe-e28094-overview",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Where the time goes",
+      "type": "link",
+      "url": "/d/ci-observe-time/ci-observe-e28094-where-the-time-goes",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Why runs fail",
+      "type": "link",
+      "url": "/d/ci-observe-failures/ci-observe-e28094-why-runs-fail",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
     },
     {
       "title": "Test history",
       "type": "link",
-      "url": "/d/ci-observe-trends/ci-observe-e28094-trends"
+      "url": "/d/ci-observe-test/ci-observe-e28094-test-history",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Pull requests",
+      "type": "link",
+      "url": "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests",
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "All runs",
+      "type": "link",
+      "url": "/d/ci-observe-runs-home/ci-observe-e28094-runs",
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
     }
   ],
   "panels": [
@@ -289,6 +351,447 @@
       ]
     },
     {
+      "type": "barchart",
+      "id": 239,
+      "title": "Where this run's time went",
+      "description": "This run's phases: the wait for a runner, then each group of workflow steps (in every job). A merge-queue run has one bar per suite. Population: this run's jobs and steps, from the job timeline GitHub reported. Time: this run, from its first job's creation to its last job's end. Unit: duration.",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 14,
+        "h": 5
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "decimals": 1,
+          "noValue": "Nothing in this window",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "queue"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting for a runner"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prepare"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "CI setup"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cluster"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Cluster and hosts"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "build"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Build"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "install"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Install OSAC"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d55181"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "test"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tests"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "collect"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Logs and teardown"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "other"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Other steps"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "xField": "category",
+        "showValue": "never",
+        "barWidth": 0.75,
+        "groupWidth": 0.75,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none",
+          "hideZeros": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "phases",
+          "columns": [
+            {
+              "selector": "category",
+              "text": "category",
+              "type": "string"
+            },
+            {
+              "selector": "queue",
+              "text": "queue",
+              "type": "number"
+            },
+            {
+              "selector": "prepare",
+              "text": "prepare",
+              "type": "number"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "number"
+            },
+            {
+              "selector": "build",
+              "text": "build",
+              "type": "number"
+            },
+            {
+              "selector": "install",
+              "text": "install",
+              "type": "number"
+            },
+            {
+              "selector": "test",
+              "text": "test",
+              "type": "number"
+            },
+            {
+              "selector": "collect",
+              "text": "collect",
+              "type": "number"
+            },
+            {
+              "selector": "other",
+              "text": "other",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 240,
+      "title": "Time to result",
+      "description": "From GitHub creating the run's first job to its last job finishing, per suite. Population: this run's jobs and steps, from the job timeline GitHub reported. Time: this run, from its first job's creation to its last job's end. Unit: duration.",
+      "gridPos": {
+        "x": 14,
+        "y": 5,
+        "w": 5,
+        "h": 5
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "decimals": 1,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "displayName": "${__data.fields.suite}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^total_s$/",
+          "values": true
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "timing",
+          "columns": [
+            {
+              "selector": "total_s",
+              "text": "total_s",
+              "type": "number"
+            },
+            {
+              "selector": "suite",
+              "text": "suite",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 241,
+      "title": "Waited for a runner",
+      "description": "Time the run's E2E job waited for a self-hosted runner, per suite. Population: this run's jobs and steps, from the job timeline GitHub reported. Time: this run, from its first job's creation to its last job's end. Unit: duration.",
+      "gridPos": {
+        "x": 19,
+        "y": 5,
+        "w": 5,
+        "h": 5
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "decimals": 1,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "displayName": "${__data.fields.suite}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^queue_s$/",
+          "values": true
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "timing",
+          "columns": [
+            {
+              "selector": "queue_s",
+              "text": "queue_s",
+              "type": "number"
+            },
+            {
+              "selector": "suite",
+              "text": "suite",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 14,
       "title": "Failures",
       "description": "",
@@ -297,7 +800,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 10
       },
       "collapsed": true,
       "panels": [
@@ -465,7 +968,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 11
       },
       "collapsed": true,
       "panels": [
@@ -913,14 +1416,14 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 12
       },
       "collapsed": true,
       "panels": [
         {
           "id": 121,
           "title": "All tests",
-          "description": "",
+          "description": "Setup, waiting for the product, test actions and teardown add up to the test's duration (from the trace).",
           "type": "table",
           "gridPos": {
             "h": 12,
@@ -974,7 +1477,7 @@
                         "options": {
                           "pattern": "/(?<=\\/|::|_|\\[)/g",
                           "result": {
-                            "text": "\u200b"
+                            "text": "​"
                           }
                         }
                       }
@@ -1069,6 +1572,102 @@
                     "value": ""
                   }
                 ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "setup_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Setup"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 95
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "wait_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Waiting for product"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 150
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "actions_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Test actions"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "teardown_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Teardown"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 95
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
               }
             ]
           },
@@ -1117,6 +1716,26 @@
                   "selector": "duration_s",
                   "text": "duration_s",
                   "type": "number"
+                },
+                {
+                  "selector": "setup_s",
+                  "text": "setup_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "wait_s",
+                  "text": "wait_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "actions_s",
+                  "text": "actions_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "teardown_s",
+                  "text": "teardown_s",
+                  "type": "number"
                 }
               ]
             }
@@ -1133,7 +1752,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 13
       },
       "collapsed": true,
       "panels": [
@@ -1422,7 +2041,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 14
       },
       "panels": [
         {
@@ -1844,6 +2463,753 @@
           ]
         }
       ]
+    },
+    {
+      "type": "row",
+      "id": 242,
+      "title": "Waits, fixtures and the step timeline",
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": true,
+      "panels": [
+        {
+          "type": "table",
+          "id": 243,
+          "title": "Waits",
+          "description": "Every poll_until wait of the run: what it waited for, how long, and whether it timed out. Population: this run's trace. Time: this run, from its first job's creation to its last job's end. Unit: duration and count.",
+          "gridPos": {
+            "x": 0,
+            "y": 0,
+            "w": 24,
+            "h": 10
+          },
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false,
+                "filterable": true
+              },
+              "noValue": "Nothing in this window"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "name"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Waits for"
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "auto",
+                      "wrapText": true
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "resource_kind"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Kind"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 150
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "worker"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Worker"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 80
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "started_at"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Started"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 160
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsLocal"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Waited"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 105
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "attempts"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Polls"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 70
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "condition_met"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Reached"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 95
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "true": {
+                            "text": "Yes",
+                            "color": "#0ca30c",
+                            "index": 0
+                          },
+                          "false": {
+                            "text": "Timed out",
+                            "color": "#d03b3b",
+                            "index": 1
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false,
+              "reducer": [
+                "sum"
+              ],
+              "countRows": false,
+              "fields": ""
+            },
+            "sortBy": [
+              {
+                "displayName": "Waited",
+                "desc": true
+              }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "workflow-api"
+              },
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "waits",
+              "columns": [
+                {
+                  "selector": "name",
+                  "text": "name",
+                  "type": "string"
+                },
+                {
+                  "selector": "resource_kind",
+                  "text": "resource_kind",
+                  "type": "string"
+                },
+                {
+                  "selector": "worker",
+                  "text": "worker",
+                  "type": "string"
+                },
+                {
+                  "selector": "started_at",
+                  "text": "started_at",
+                  "type": "string"
+                },
+                {
+                  "selector": "duration_s",
+                  "text": "duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "attempts",
+                  "text": "attempts",
+                  "type": "number"
+                },
+                {
+                  "selector": "condition_met",
+                  "text": "condition_met",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 244,
+          "title": "Fixture setups",
+          "description": "Every fixture setup of the run, the slowest first. Population: this run's trace. Time: this run, from its first job's creation to its last job's end. Unit: duration.",
+          "gridPos": {
+            "x": 0,
+            "y": 10,
+            "w": 24,
+            "h": 9
+          },
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false,
+                "filterable": true
+              },
+              "noValue": "Nothing in this window"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "fixture_name"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Fixture"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "scope"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Scope"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "worker"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Worker"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 80
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "started_at"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Started"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 160
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsLocal"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Setup"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 105
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false,
+              "reducer": [
+                "sum"
+              ],
+              "countRows": false,
+              "fields": ""
+            },
+            "sortBy": [
+              {
+                "displayName": "Setup",
+                "desc": true
+              }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "workflow-api"
+              },
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/capture?capture_id=${capture_id:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "fixtures",
+              "columns": [
+                {
+                  "selector": "fixture_name",
+                  "text": "fixture_name",
+                  "type": "string"
+                },
+                {
+                  "selector": "scope",
+                  "text": "scope",
+                  "type": "string"
+                },
+                {
+                  "selector": "worker",
+                  "text": "worker",
+                  "type": "string"
+                },
+                {
+                  "selector": "started_at",
+                  "text": "started_at",
+                  "type": "string"
+                },
+                {
+                  "selector": "duration_s",
+                  "text": "duration_s",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 245,
+          "title": "Step timeline",
+          "description": "Every step of the run's jobs in order, with when it started after the first job was created. Population: this run's jobs and steps, from the job timeline GitHub reported. Time: this run, from its first job's creation to its last job's end. Unit: duration.",
+          "gridPos": {
+            "x": 0,
+            "y": 19,
+            "w": 24,
+            "h": 12
+          },
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false,
+                "filterable": true
+              },
+              "noValue": "Nothing in this window"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "suite"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Suite"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 80
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "job"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Job"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 200
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "step"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Step"
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "auto",
+                      "wrapText": true
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "phase_label"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Phase"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 150
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "start_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Started after"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "duration_s"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Took"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 100
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "—"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "conclusion"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Result"
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "passed": {
+                            "text": "Passed",
+                            "color": "#0ca30c",
+                            "index": 0
+                          },
+                          "failed": {
+                            "text": "Failed",
+                            "color": "#d03b3b",
+                            "index": 1
+                          },
+                          "success": {
+                            "text": "Passed",
+                            "color": "#0ca30c",
+                            "index": 2
+                          },
+                          "failure": {
+                            "text": "Failed",
+                            "color": "#d03b3b",
+                            "index": 3
+                          },
+                          "timed_out": {
+                            "text": "Timed out",
+                            "color": "#d03b3b",
+                            "index": 4
+                          },
+                          "cancelled": {
+                            "text": "Canceled",
+                            "color": "#898781",
+                            "index": 5
+                          },
+                          "skipped": {
+                            "text": "Skipped",
+                            "color": "#898781",
+                            "index": 6
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false,
+              "reducer": [
+                "sum"
+              ],
+              "countRows": false,
+              "fields": ""
+            },
+            "sortBy": [
+              {
+                "displayName": "Started after",
+                "desc": false
+              }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "workflow-api"
+              },
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "url": "http://127.0.0.1:9103/api/ci-observe/run?capture_id=${capture_id:percentencode}",
+              "url_options": {
+                "method": "GET",
+                "data": ""
+              },
+              "root_selector": "timeline",
+              "columns": [
+                {
+                  "selector": "suite",
+                  "text": "suite",
+                  "type": "string"
+                },
+                {
+                  "selector": "job",
+                  "text": "job",
+                  "type": "string"
+                },
+                {
+                  "selector": "step",
+                  "text": "step",
+                  "type": "string"
+                },
+                {
+                  "selector": "phase_label",
+                  "text": "phase_label",
+                  "type": "string"
+                },
+                {
+                  "selector": "start_s",
+                  "text": "start_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "duration_s",
+                  "text": "duration_s",
+                  "type": "number"
+                },
+                {
+                  "selector": "conclusion",
+                  "text": "conclusion",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
@@ -1890,7 +3256,7 @@
     "hidden": true
   },
   "timezone": "browser",
-  "title": "CI Observe \u2014 E2E run",
+  "title": "CI Observe — E2E run",
   "uid": "ci-observe-runs",
   "version": 1,
   "refresh": "1m"

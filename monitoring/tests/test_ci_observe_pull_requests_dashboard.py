@@ -277,18 +277,35 @@ def test_the_chart_is_fitted_to_durations_and_not_a_time_range() -> None:
     assert DASHBOARD["timepicker"]["hidden"] is True
 
 
+# The stages wear the first five ci-observe palette colors in the order a
+# pull request goes through them, here and in the weekly chart above.
+STAGE_COLORS = {
+    "authoring": "#3987e5",
+    "review": "#d95926",
+    "waiting": "#199e70",
+    "queue": "#c98500",
+    "merged": "#d55181",
+}
+
+
 def test_each_stage_series_has_its_name_and_fixed_color() -> None:
     chart = panel("Stage timeline")
-    stages = {
-        "authoring": ("Authoring", "#6e7681"),
-        "review": ("Review", "#a371f7"),
-        "waiting": ("Waiting", "#d29922"),
-        "queue": ("Queue", "#db6d28"),
-        "merged": ("Merge", "#3fb950"),
-    }
-    for stage, (name, color) in stages.items():
+    names = {"authoring": "Authoring", "review": "Review", "waiting": "Waiting", "queue": "Queue", "merged": "Merge"}
+    for stage, name in names.items():
         assert override(chart, stage)["displayName"] == name
-        assert override(chart, stage)["color"] == {"mode": "fixed", "fixedColor": color}
+        assert override(chart, stage)["color"] == {"mode": "fixed", "fixedColor": STAGE_COLORS[stage]}
+
+
+def test_the_weekly_chart_wears_the_stage_colors() -> None:
+    chart = panel("Stage medians per week")
+    fields = {
+        "review_wait_median_s": "authoring",
+        "review_median_s": "review",
+        "waiting_median_s": "waiting",
+        "queue_median_s": "queue",
+    }
+    for field, stage in fields.items():
+        assert override(chart, field)["color"] == {"mode": "fixed", "fixedColor": STAGE_COLORS[stage]}
 
 
 def test_the_bottom_status_table_is_the_only_place_for_explanations() -> None:
@@ -357,10 +374,51 @@ def test_the_browse_tables_are_gone() -> None:
     assert not any(candidate["type"] == "state-timeline" for candidate in walk(DASHBOARD["panels"]))
 
 
+def sections() -> tuple[list[dict], list[dict]]:
+    """(every pull request, one pull request): the panels above and below
+    the "One pull request" row."""
+    top = DASHBOARD["panels"]
+    split = next(index for index, candidate in enumerate(top)
+                 if candidate["type"] == "row" and candidate["title"].startswith("One pull request"))
+    return top[:split], top[split + 1:]
+
+
 def test_every_detail_panel_reads_the_selected_pull_request() -> None:
-    for candidate in walk(DASHBOARD["panels"]):
+    _, detail = sections()
+    for candidate in walk(detail):
         for target in candidate.get("targets", []):
             assert target["url"].startswith(PR_URL), candidate["title"]
+
+
+INDEX_URL = f"{PRS_URL}?days=${{days}}&repo=${{pr_repo}}"
+
+
+def test_the_page_opens_on_every_pull_request_of_the_window() -> None:
+    """Above the one-PR detail: the window's numbers, the stage medians per
+    week and every pull request, all from the index document of the
+    selected repository."""
+    overview, _ = sections()
+    assert overview[0]["type"] == "row"
+    assert overview[0]["title"] == "All pull requests in ${pr_repo}, last $days days"
+    tiles = [candidate for candidate in overview if candidate["type"] == "stat"]
+    assert len(tiles) == 16
+    for tile in tiles:
+        target = tile["targets"][0]
+        assert target["url"] == INDEX_URL, tile["title"]
+        assert target["root_selector"] == "kpis", tile["title"]
+        assert "Population:" in tile["description"] and "Unit:" in tile["description"], tile["title"]
+    fields = {tile["targets"][0]["columns"][0]["selector"] for tile in tiles}
+    assert {"review_wait_median_s", "review_median_s", "waiting_median_s", "queue_median_s", "rebased_share",
+            "force_pushes_mean", "e2e_retests_mean", "ejected_share"} <= fields
+    weekly = panel("Stage medians per week")
+    assert weekly["targets"][0]["root_selector"] == "weekly"
+    assert weekly["targets"][0]["format"] == "timeseries"
+    table = panel("Pull requests")
+    assert table["targets"][0]["url"] == INDEX_URL
+    assert table["targets"][0]["root_selector"] == "prs"
+    assert override(table, "number")["links"][0]["url"] == "${__data.fields.detail_url}"
+    assert override(table, "title")["links"][0]["url"] == "${__data.fields.url}"
+    assert {"force_push_count", "e2e_runs", "e2e_failures"} <= set(selectors(table))
 
 
 def test_every_link_opens_a_dashboard_that_exists() -> None:

@@ -25,7 +25,6 @@ import pytest
 from helpers import make_job
 
 MONITORING = Path(__file__).resolve().parents[1]
-DASHBOARD = MONITORING / "config" / "grafana" / "dashboards" / "ci-observe-trends.json"
 SHA = "9f1c2ab37d54e6f0a1b2c3d4e5f60718293a4b5c"
 OTHER_SHA = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
 TEST_ID = "tests/e2e/vmaas/test_vm.py::test_create"
@@ -305,7 +304,7 @@ class TestTestHistory:
             "tests/e2e/vmaas/test_vm.py::test_create",
             "tests/e2e/vmaas/test_vm.py::test_delete",
         ]
-        assert all(row["history_url"].startswith("/d/ci-observe-trends/") for row in doc["matches"])
+        assert all(row["history_url"].startswith("/d/ci-observe-test/") for row in doc["matches"])
         assert any("2 tests match" in note for note in doc["notes"])
 
     def test_a_single_substring_match_is_used_and_named(self, exporter, history_db):
@@ -380,19 +379,39 @@ class TestJobHistory:
         assert summary["pass_rate"] == 0.5
         assert any("neither pass nor fail" in note for note in doc["notes"])
 
-    def test_the_history_link_carries_the_repository_and_encodes_the_name(self, history):
+    def test_a_job_opens_its_suite_time_page_in_its_repository(self, history):
+        """A job's history is its suite's Where the time goes page: the
+        suite's phases and steps per day, in the job's repository."""
         url = history.history_url("job", "osac / E2E VMaaS", days=7, repo="osac")
 
-        assert url.startswith("/d/ci-observe-trends/")
-        assert "var-kind=job" in url
-        assert "var-name=osac%20%2F%20E2E%20VMaaS" in url
+        assert url.startswith("/d/ci-observe-time/")
+        assert "var-suite=vmaas" in url
         assert "var-days=7" in url
         assert "var-repo=osac" in url
 
-    def test_an_empty_repo_clears_the_variable(self, history):
-        url = history.history_url("test", TEST_ID, days=30)
+    def test_a_job_names_its_suite_by_its_workflow(self, history):
+        url = history.history_url("job", "osac / anything", repo="osac", workflow="E2E suite · caas · #12 · abc1234")
 
-        assert url.endswith("&var-repo=")
+        assert "var-suite=caas" in url
+        assert "var-days=30" in url
+
+    def test_a_job_outside_the_three_suites_opens_all_of_them(self, history):
+        url = history.history_url("job", "osac / E2E Netris Full Install", days=30)
+
+        assert "var-suite=all" in url
+        assert "var-repo=all" in url
+
+    def test_a_test_opens_its_test_history_under_its_canonical_key(self, history):
+        url = history.history_url("test", "tests/e2e/vmaas/sanity/test_vm.py::TestVm::test_create", days=14)
+
+        assert url.startswith("/d/ci-observe-test/")
+        assert "var-test=tests.e2e.vmaas.sanity.test_vm%3A%3ATestVm%3A%3Atest_create" in url
+        assert "var-suite=vmaas" in url
+        assert "var-days=14" in url
+
+    def test_a_window_the_pages_do_not_offer_widens_to_one_they_do(self, history):
+        assert "var-days=30" in history.history_url("test", TEST_ID, days=20)
+        assert "var-days=90" in history.history_url("test", TEST_ID, days=365)
 
     def test_the_summary_uses_true_percentiles_from_the_raw_jobs(self, exporter):
         for index, (duration, conclusion) in enumerate(
@@ -517,7 +536,8 @@ class TestJobsEndpoint:
 
         assert [row["display_name"] for row in doc["jobs"]] == ["osac / E2E VMaaS Full Install"]
         assert doc["jobs"][0]["runs"] == 2
-        assert "var-kind=job" in doc["jobs"][0]["history_url"]
+        assert doc["jobs"][0]["history_url"].startswith("/d/ci-observe-time/")
+        assert "var-suite=vmaas" in doc["jobs"][0]["history_url"]
         assert "var-repo=osac" in doc["jobs"][0]["history_url"]
 
     def test_the_cap_is_a_note(self, exporter):

@@ -1,0 +1,2663 @@
+{
+  "uid": "ci-observe-test",
+  "title": "CI Observe — Test history",
+  "description": "One E2E test over time: duration, results, where its time goes, what it waits for and why it fails.",
+  "tags": [
+    "osac",
+    "ci",
+    "ci-observe"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "15m",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "links": [
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/ci-observe-home/ci-observe-e28094-overview",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Where the time goes",
+      "type": "link",
+      "url": "/d/ci-observe-time/ci-observe-e28094-where-the-time-goes",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Why runs fail",
+      "type": "link",
+      "url": "/d/ci-observe-failures/ci-observe-e28094-why-runs-fail",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Pull requests",
+      "type": "link",
+      "url": "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests",
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "All runs",
+      "type": "link",
+      "url": "/d/ci-observe-runs-home/ci-observe-e28094-runs",
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "days",
+        "label": "Window",
+        "type": "custom",
+        "hide": 0,
+        "query": "7 days : 7,14 days : 14,30 days : 30,90 days : 90",
+        "options": [
+          {
+            "text": "7 days",
+            "value": "7",
+            "selected": false
+          },
+          {
+            "text": "14 days",
+            "value": "14",
+            "selected": false
+          },
+          {
+            "text": "30 days",
+            "value": "30",
+            "selected": true
+          },
+          {
+            "text": "90 days",
+            "value": "90",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "30 days",
+          "value": "30",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "How far back to look. 'vs before' compares with the same span just before it."
+      },
+      {
+        "name": "suite",
+        "label": "Suite",
+        "type": "custom",
+        "hide": 0,
+        "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas",
+        "options": [
+          {
+            "text": "All suites",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "VMaaS",
+            "value": "vmaas",
+            "selected": false
+          },
+          {
+            "text": "CaaS",
+            "value": "caas",
+            "selected": false
+          },
+          {
+            "text": "BMaaS",
+            "value": "bmaas",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "All suites",
+          "value": "all",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "The VMaaS, CaaS and BMaaS E2E suites."
+      },
+      {
+        "name": "trigger",
+        "label": "Started by",
+        "type": "custom",
+        "hide": 0,
+        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual",
+        "options": [
+          {
+            "text": "Any trigger",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "Pull requests",
+            "value": "pr",
+            "selected": false
+          },
+          {
+            "text": "Merge queue",
+            "value": "merge_queue",
+            "selected": false
+          },
+          {
+            "text": "Scheduled",
+            "value": "scheduled",
+            "selected": false
+          },
+          {
+            "text": "Manual",
+            "value": "manual",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "Any trigger",
+          "value": "all",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, or manual runs."
+      },
+      {
+        "name": "repo",
+        "label": "Repository",
+        "type": "custom",
+        "hide": 0,
+        "query": "Both repositories : all,osac : osac,osac-test-infra : osac-test-infra",
+        "options": [
+          {
+            "text": "Both repositories",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "osac",
+            "value": "osac",
+            "selected": false
+          },
+          {
+            "text": "osac-test-infra",
+            "value": "osac-test-infra",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "Both repositories",
+          "value": "all",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "The repository whose CI started the run."
+      },
+      {
+        "name": "test",
+        "label": "Test",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "workflow-api"
+        },
+        "definition": "",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable",
+          "infinityQuery": {
+            "refId": "variable",
+            "type": "json",
+            "source": "url",
+            "parser": "backend",
+            "url": "http://127.0.0.1:9103/api/ci-observe/tests?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&sort=time",
+            "url_options": {
+              "method": "GET",
+              "data": ""
+            },
+            "root_selector": "$.options",
+            "format": "table",
+            "columns": [
+              {
+                "selector": "text",
+                "text": "__text",
+                "type": "string"
+              },
+              {
+                "selector": "value",
+                "text": "__value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "allowCustomValue": true,
+        "multi": false,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "regex": "",
+        "hide": 0,
+        "description": "Every test that ran in the window, the most time-consuming first. Type to search."
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "text",
+      "id": 1,
+      "title": "",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**One test over time.** Pick the *Test* above: type to search; the list starts with the tests that take the most time. Durations and results come from every run's JUnit report. Where the test's own time goes (setup, waiting for the product, test actions, teardown) comes from the recorded runs' traces."
+      },
+      "transparent": true
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Runs",
+      "description": "Runs of this test. Population: runs of the selected test, from the JUnit reports. Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^runs$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "summary",
+          "columns": [
+            {
+              "selector": "runs",
+              "text": "runs",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Failure rate",
+      "description": "Failed runs ÷ runs. Population: runs of the selected test, from the JUnit reports. Time: runs created in the last $days days (the Window above). Unit: percent.",
+      "gridPos": {
+        "x": 4,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.1
+              },
+              {
+                "color": "#d03b3b",
+                "value": 0.25
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^fail_rate$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "summary",
+          "columns": [
+            {
+              "selector": "fail_rate",
+              "text": "fail_rate",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Typical duration",
+      "description": "The median duration. Population: runs of the selected test, from the JUnit reports. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "gridPos": {
+        "x": 8,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "decimals": 1,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^median_s$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "summary",
+          "columns": [
+            {
+              "selector": "median_s",
+              "text": "median_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "Slow runs take",
+      "description": "The 90th percentile: 9 in 10 runs are faster. Population: runs of the selected test, from the JUnit reports. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "gridPos": {
+        "x": 12,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "decimals": 1,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^p90_s$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "summary",
+          "columns": [
+            {
+              "selector": "p90_s",
+              "text": "p90_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 6,
+      "title": "Typical duration vs before",
+      "description": "The median now against the median of the previous window. Red: slower. Population: runs of the selected test, from the JUnit reports. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: percent change.",
+      "gridPos": {
+        "x": 16,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": -0.05
+              },
+              {
+                "color": "#d03b3b",
+                "value": 0.05
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^delta$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "summary",
+          "columns": [
+            {
+              "selector": "delta",
+              "text": "delta",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 7,
+      "title": "Flaky commits",
+      "description": "Commits on which the test both passed and failed. Population: runs of the selected test, from the JUnit reports. Time: runs created in the last $days days (the Window above). Unit: count of commits.",
+      "gridPos": {
+        "x": 20,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^flaky_shas$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "summary",
+          "columns": [
+            {
+              "selector": "flaky_shas",
+              "text": "flaky_shas",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 8,
+      "title": "Duration of every run",
+      "description": "Each point is one run of the test: green passed, red failed. The line is the median per day. Population: runs of the selected test, from the JUnit reports. Time: each run at its creation time; the median per UTC day, last $days days. Unit: duration.",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "decimals": 1,
+          "noValue": "Nothing in this window",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "passed_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Passed"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#0ca30c"
+                }
+              },
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 8
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              },
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 10
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "median_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Daily median"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "runs",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "passed_s",
+              "text": "passed_s",
+              "type": "number"
+            },
+            {
+              "selector": "failed_s",
+              "text": "failed_s",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "daily",
+          "columns": [
+            {
+              "selector": "day",
+              "text": "day",
+              "type": "timestamp"
+            },
+            {
+              "selector": "median_s",
+              "text": "median_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 9,
+      "title": "Passes and failures per day",
+      "description": "Runs of the test per day. Population: runs of the selected test, from the JUnit reports. Time: one point per UTC day the runs were created, last $days days. Unit: count of runs.",
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 10,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Nothing in this window",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "showPoints": "never",
+            "pointSize": 5,
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "passes"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Passed"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#0ca30c"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failures"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "daily",
+          "columns": [
+            {
+              "selector": "day",
+              "text": "day",
+              "type": "timestamp"
+            },
+            {
+              "selector": "passes",
+              "text": "passes",
+              "type": "number"
+            },
+            {
+              "selector": "failures",
+              "text": "failures",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 10,
+      "title": "Where this test's time goes",
+      "description": "The average recorded run of the test: setup (fixtures), waiting for the product (every poll_until wait), test actions (the rest of the test: CLI and API calls, assertions) and teardown. The parts add up to the test's duration. Population: recorded runs of the selected test, from their traces. Time: runs created in the last $days days (the Window above). Unit: duration.",
+      "gridPos": {
+        "x": 10,
+        "y": 15,
+        "w": 14,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "decimals": 1,
+          "noValue": "Nothing in this window",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "setup"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Setup (fixtures)"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "waits"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting for the product"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "actions"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test actions"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "teardown"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Teardown"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "xField": "category",
+        "showValue": "auto",
+        "barWidth": 0.75,
+        "groupWidth": 0.75,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none",
+          "hideZeros": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "breakdown",
+          "columns": [
+            {
+              "selector": "category",
+              "text": "category",
+              "type": "string"
+            },
+            {
+              "selector": "setup",
+              "text": "setup",
+              "type": "number"
+            },
+            {
+              "selector": "waits",
+              "text": "waits",
+              "type": "number"
+            },
+            {
+              "selector": "actions",
+              "text": "actions",
+              "type": "number"
+            },
+            {
+              "selector": "teardown",
+              "text": "teardown",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 11,
+      "title": "Where its time goes, per day",
+      "description": "The same split per day: a band that grows is the part getting slower. Population: recorded runs of the selected test, from their traces. Time: one point per UTC day the runs were created, last $days days. Unit: duration.",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "decimals": 1,
+          "noValue": "Nothing in this window",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "showPoints": "never",
+            "pointSize": 5,
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "setup"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Setup (fixtures)"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "waits"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting for the product"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "actions"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test actions"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "teardown"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Teardown"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "breakdown_daily",
+          "columns": [
+            {
+              "selector": "day",
+              "text": "day",
+              "type": "timestamp"
+            },
+            {
+              "selector": "setup",
+              "text": "setup",
+              "type": "number"
+            },
+            {
+              "selector": "waits",
+              "text": "waits",
+              "type": "number"
+            },
+            {
+              "selector": "actions",
+              "text": "actions",
+              "type": "number"
+            },
+            {
+              "selector": "teardown",
+              "text": "teardown",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 12,
+      "title": "What it waits for",
+      "description": "The test's poll_until waits, grouped by what they wait for: per recorded run, how long, and how often the wait timed out. Population: recorded runs of the selected test, from their traces. Time: runs created in the last $days days (the Window above). Unit: duration, count and percent.",
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 14,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": "Nothing in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wait"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waits for"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "resource_kind"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Kind"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "phase"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Phase"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "per_run"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Per run"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "median_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Median"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p90_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "p90"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "max_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Longest"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "share"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "of the test"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "timeouts"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Timed out"
+              },
+              {
+                "id": "custom.width",
+                "value": 85
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "#d03b3b",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "of the test",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "waits",
+          "columns": [
+            {
+              "selector": "wait",
+              "text": "wait",
+              "type": "string"
+            },
+            {
+              "selector": "resource_kind",
+              "text": "resource_kind",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "per_run",
+              "text": "per_run",
+              "type": "number"
+            },
+            {
+              "selector": "median_s",
+              "text": "median_s",
+              "type": "number"
+            },
+            {
+              "selector": "p90_s",
+              "text": "p90_s",
+              "type": "number"
+            },
+            {
+              "selector": "max_s",
+              "text": "max_s",
+              "type": "number"
+            },
+            {
+              "selector": "share",
+              "text": "share",
+              "type": "number"
+            },
+            {
+              "selector": "timeouts",
+              "text": "timeouts",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 13,
+      "title": "Fixtures it sets up",
+      "description": "Fixtures set up in this test's setup phase. A shared (session, package or module) fixture is charged to the first test that needs it. Population: recorded runs of the selected test, from their traces. Time: runs created in the last $days days (the Window above). Unit: duration and count.",
+      "gridPos": {
+        "x": 14,
+        "y": 31,
+        "w": 10,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": "Nothing in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fixture"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Fixture"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scope"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scope"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "setups"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Setups"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "median_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Median"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p90_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "p90"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Median",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "fixtures",
+          "columns": [
+            {
+              "selector": "fixture",
+              "text": "fixture",
+              "type": "string"
+            },
+            {
+              "selector": "scope",
+              "text": "scope",
+              "type": "string"
+            },
+            {
+              "selector": "setups",
+              "text": "setups",
+              "type": "number"
+            },
+            {
+              "selector": "median_s",
+              "text": "median_s",
+              "type": "number"
+            },
+            {
+              "selector": "p90_s",
+              "text": "p90_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 14,
+      "title": "Why it fails",
+      "description": "The test's failure messages, grouped after replacing names, ids and numbers. Population: runs of the selected test, from the JUnit reports. Time: runs created in the last $days days (the Window above). Unit: count of failures.",
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 24,
+        "h": 6
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": "No failure in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Message"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failures"
+              },
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_seen"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last seen"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "example"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Newest example"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Failures",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "messages",
+          "columns": [
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            },
+            {
+              "selector": "last_seen",
+              "text": "last_seen",
+              "type": "string"
+            },
+            {
+              "selector": "example",
+              "text": "example",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 15,
+      "title": "Every run",
+      "description": "Every run of the test, newest first. 'Run' opens the recorded run, or GitHub. Population: runs of the selected test, from the JUnit reports. Time: runs created in the last $days days (the Window above). Unit: time and duration as named.",
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 24,
+        "h": 12
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "Nothing in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "When"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "result"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Result"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "passed": {
+                        "text": "Passed",
+                        "color": "#0ca30c",
+                        "index": 0
+                      },
+                      "failed": {
+                        "text": "Failed",
+                        "color": "#d03b3b",
+                        "index": 1
+                      },
+                      "success": {
+                        "text": "Passed",
+                        "color": "#0ca30c",
+                        "index": 2
+                      },
+                      "failure": {
+                        "text": "Failed",
+                        "color": "#d03b3b",
+                        "index": 3
+                      },
+                      "timed_out": {
+                        "text": "Timed out",
+                        "color": "#d03b3b",
+                        "index": 4
+                      },
+                      "cancelled": {
+                        "text": "Canceled",
+                        "color": "#898781",
+                        "index": 5
+                      },
+                      "skipped": {
+                        "text": "Skipped",
+                        "color": "#898781",
+                        "index": 6
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trigger_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Started by"
+              },
+              {
+                "id": "custom.width",
+                "value": 115
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pr"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PR"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "short_sha"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Commit"
+              },
+              {
+                "id": "custom.width",
+                "value": 105
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Error"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Run"
+              },
+              {
+                "id": "custom.width",
+                "value": 115
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the run (GitHub when it was not recorded)",
+                    "url": "${__data.fields.details_url}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "details_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "runs",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "string"
+            },
+            {
+              "selector": "result",
+              "text": "result",
+              "type": "string"
+            },
+            {
+              "selector": "duration_s",
+              "text": "duration_s",
+              "type": "number"
+            },
+            {
+              "selector": "suite_label",
+              "text": "suite_label",
+              "type": "string"
+            },
+            {
+              "selector": "trigger_label",
+              "text": "trigger_label",
+              "type": "string"
+            },
+            {
+              "selector": "pr",
+              "text": "pr",
+              "type": "string"
+            },
+            {
+              "selector": "short_sha",
+              "text": "short_sha",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "run",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "details_url",
+              "text": "details_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 16,
+      "title": "About these numbers",
+      "description": "What this page counts, over which window, and what is missing or partial, as the API computed it. Population: the page's own population, named in the first column. Time: the window in the second column. Unit: text.",
+      "gridPos": {
+        "x": 0,
+        "y": 57,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": ""
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "population"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "What is counted"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "window"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Window"
+              },
+              {
+                "id": "custom.width",
+                "value": 290
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "missing"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Missing or partial data"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "generated_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Computed at"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/test?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}&test=${test:percentencode}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "about",
+          "columns": [
+            {
+              "selector": "population",
+              "text": "population",
+              "type": "string"
+            },
+            {
+              "selector": "window",
+              "text": "window",
+              "type": "string"
+            },
+            {
+              "selector": "missing",
+              "text": "missing",
+              "type": "string"
+            },
+            {
+              "selector": "generated_at",
+              "text": "generated_at",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

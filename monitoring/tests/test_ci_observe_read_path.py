@@ -348,7 +348,10 @@ def test_every_measured_url_uses_the_private_window():
     )
 
     measured = {name: url for name, url in plan}
-    assert set(measured) == {"runs", "captures", "cohorts", "capture", "trends", "compare", "prs"}
+    assert set(measured) == {
+        "runs", "captures", "cohorts", "capture", "trends", "compare", "prs",
+        "health", "time", "failures", "tests", "waits",
+    }
     for name, url in measured.items():
         if name == "capture":
             continue

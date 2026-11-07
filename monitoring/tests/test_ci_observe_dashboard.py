@@ -39,6 +39,36 @@ CAPTURE_DOCUMENT = {
             "status": "error",
             "started_at": "2026-11-04T09:13:10Z",
             "duration_s": 95.2,
+            "setup_s": 10.0,
+            "wait_s": 60.0,
+            "actions_s": 20.2,
+            "teardown_s": 5.0,
+            "waits": 3,
+        }
+    ],
+    "waits": [
+        {
+            "name": "wait for ComputeInstance ci-1 to become Ready",
+            "worker": "gw0",
+            "started_at": "2026-11-04T09:13:20Z",
+            "duration_s": 60.0,
+            "status": "ok",
+            "attempts": 12,
+            "condition_met": True,
+            "resource_kind": "ComputeInstance",
+            "resource_id": "ci-1",
+        }
+    ],
+    "fixtures": [
+        {
+            "name": "cluster setup",
+            "fixture_name": "cluster",
+            "scope": "session",
+            "phase": "setup",
+            "worker": "gw0",
+            "started_at": "2026-11-04T09:10:00Z",
+            "duration_s": 180.0,
+            "status": "ok",
         }
     ],
     "identity": {
@@ -64,7 +94,10 @@ RUN_DOCUMENT = {
             "failed_step": "Run E2E tests",
             "failure_reason": "test",
             "url": "https://github.com/osac-project/osac/actions/runs/41709318840/job/1",
-            "history_url": "/d/ci-observe-trends/ci-observe-e28094-trends?var-kind=job&var-repo=osac",
+            "history_url": (
+                "/d/ci-observe-time/ci-observe-e28094-where-the-time-goes"
+                "?var-suite=vmaas&var-days=30&var-repo=osac&var-trigger=all"
+            ),
         }
     ],
     "steps": [
@@ -74,6 +107,18 @@ RUN_DOCUMENT = {
             "duration_s": 1800,
             "conclusion": "failure",
         }
+    ],
+    "phases": [
+        {"category": "VMaaS", "queue": 120.0, "prepare": 60.0, "cluster": 900.0, "build": 700.0,
+         "install": 1500.0, "test": 2400.0, "collect": 300.0, "other": 0.0},
+    ],
+    "timing": [
+        {"suite": "VMaaS", "total_s": 6000.0, "queue_s": 120.0, "source": "timeline",
+         "cause_label": "Tests failed", "cause_area": "Tests", "failed_step": "Run E2E tests"},
+    ],
+    "timeline": [
+        {"suite": "VMaaS", "job": "vmaas / e2e", "step": "Run E2E tests", "phase": "test", "phase_label": "Tests",
+         "start_s": 3300, "duration_s": 2400, "conclusion": "failure"},
     ],
     "native": {
         "failed_tests": [
@@ -147,6 +192,57 @@ def test_the_summary_answers_three_questions() -> None:
     assert [panel(title)["type"] for title in ("Result", "Tests run", "Test time")] == ["stat", "stat", "stat"]
 
 
+def summary_panels() -> list[dict]:
+    """The panels of the open Run summary row, in page order."""
+    top = DASHBOARD["panels"]
+    start = next(index for index, candidate in enumerate(top) if candidate.get("title") == "Run summary")
+    end = next(index for index, candidate in enumerate(top) if index > start and candidate["type"] == "row")
+    return top[start + 1:end]
+
+
+def test_the_summary_shows_where_the_run_spent_its_time() -> None:
+    """Below the result: the run's phases as one stacked bar per suite, its
+    time to result and its wait for a runner, from the job timeline the
+    exporter stored. A merge-queue run has a bar and a number per suite."""
+    titles = [candidate["title"] for candidate in summary_panels()]
+    assert titles == [
+        "Result", "Tests run", "Test time", "Where this run's time went", "Time to result", "Waited for a runner",
+    ]
+    chart = panel("Where this run's time went")
+    assert chart["type"] == "barchart"
+    assert chart["options"]["stacking"] == "normal"
+    assert chart["targets"][0]["url"] == RUN_URL
+    assert chart["targets"][0]["root_selector"] == "phases"
+    assert_selectors_resolve(chart, RUN_DOCUMENT)
+    for title, field in (("Time to result", "total_s"), ("Waited for a runner", "queue_s")):
+        stat = panel(title)
+        assert stat["targets"][0]["root_selector"] == "timing"
+        assert selectors(stat) == [field, "suite"]
+        assert stat["options"]["reduceOptions"]["values"] is True, "one number per suite"
+        assert stat["fieldConfig"]["defaults"]["displayName"] == "${__data.fields.suite}"
+        assert_selectors_resolve(stat, RUN_DOCUMENT)
+
+
+def test_the_tests_split_their_time_four_ways() -> None:
+    table = panel("All tests")
+    names = display_names(table)
+    assert [names[field] for field in ("setup_s", "wait_s", "actions_s", "teardown_s")] == [
+        "Setup", "Waiting for product", "Test actions", "Teardown",
+    ]
+
+
+def test_waits_fixtures_and_the_step_timeline_are_one_collapsed_row() -> None:
+    title = "Waits, fixtures and the step timeline"
+    row = next(candidate for candidate in DASHBOARD["panels"] if candidate.get("title") == title)
+    assert row["collapsed"] is True
+    assert [child["title"] for child in row["panels"]] == ["Waits", "Fixture setups", "Step timeline"]
+    assert panel("Waits")["targets"][0]["url"] == CAPTURE_URL
+    assert_selectors_resolve(panel("Waits"), CAPTURE_DOCUMENT)
+    assert_selectors_resolve(panel("Fixture setups"), CAPTURE_DOCUMENT)
+    assert panel("Step timeline")["targets"][0]["url"] == RUN_URL
+    assert_selectors_resolve(panel("Step timeline"), RUN_DOCUMENT)
+
+
 def test_a_live_capture_reads_as_still_running() -> None:
     result = panel("Result")
     defaults = result["fieldConfig"]["defaults"]
@@ -173,6 +269,7 @@ def test_the_summary_row_is_open_and_detail_rows_are_collapsed() -> None:
     assert rows["Jobs and steps"]["collapsed"] is True
     assert rows["Test list"]["collapsed"] is True
     assert rows["Run info"]["collapsed"] is True
+    assert rows["Waits, fixtures and the step timeline"]["collapsed"] is True
 
 
 def test_jobs_read_the_run_endpoint() -> None:
@@ -192,8 +289,8 @@ def test_jobs_read_the_run_endpoint() -> None:
 
 def test_a_job_name_opens_its_history_not_github() -> None:
     """The question after a run is whether the job is failing more often or
-    getting slower, so the name links to the Trends page with the job
-    preselected. The stored GitHub link stays on the hidden url column."""
+    getting slower, so the name opens its suite's Where the time goes page in
+    its repository. The stored GitHub link stays on the hidden url column."""
     table = panel("Jobs")
     links = {}
     for entry in table["fieldConfig"]["overrides"]:
@@ -203,8 +300,8 @@ def test_a_job_name_opens_its_history_not_github() -> None:
                 links[field] = prop["value"][0]["url"]
     assert links["name"] == "${__data.fields.history_url}"
     assert "history_url" in selectors(table)
-    assert "ci-observe-trends" in RUN_DOCUMENT["jobs"][0]["history_url"]
-    assert "var-kind=job" in RUN_DOCUMENT["jobs"][0]["history_url"]
+    assert RUN_DOCUMENT["jobs"][0]["history_url"].startswith("/d/ci-observe-time/")
+    assert "var-suite=vmaas" in RUN_DOCUMENT["jobs"][0]["history_url"]
     assert "var-repo=osac" in RUN_DOCUMENT["jobs"][0]["history_url"]
 
 

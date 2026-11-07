@@ -58,58 +58,62 @@ The custom `osac.ci.*` names work. New signals should emit the shared name next 
 
 | Signal | Source | Where it appears |
 |---|---|---|
-| Run identity, result, trigger, branch, PR | Workflow exporter SQLite | Start here, Run info |
-| Run links to GitHub, PR and commit | Workflow exporter and capture view | Run info |
-| Test list, failures, error messages | Tempo trace and JUnit artifact | E2E run |
-| Session result and duration | GitHub conclusion, then Tempo | Result, Test time |
-| Job and step durations | Workflow exporter SQLite | Jobs and steps |
+| Run identity, result, trigger, branch, PR | Workflow exporter SQLite, archived in `trends.db` | Every page |
+| Runner wait, job and step start and end | GitHub job timeline stored by the workflow exporter | Where the time goes, E2E run |
+| Phase of every step, cause of every failure | `ci_observe_phases.py` over the stored timeline | Overview, Where the time goes, Why runs fail |
+| Test results, durations and error messages | JUnit artifact, read once into `trends.db` | Why runs fail, Test history |
+| Flaky tests | `trends.db`: passed and failed on one commit | Overview, Why runs fail, Test history |
+| A test's setup, waits, actions and teardown | Tempo trace, rolled up once into `trends.db` | Where the time goes, Test history, E2E run |
+| What the tests wait for in the product | `poll_until` wait spans, grouped by signature | Where the time goes, Test history, E2E run |
+| Test list, failures, error messages of one run | Tempo trace and JUnit artifact | E2E run |
 | Cluster pods, CPU, memory, nodes | ci-observe Prometheus | Cluster row |
-| Pull request stages and queue time | `prs.db` | Pull requests |
-| Every E2E run of a pull request, one code version per commit | Workflow exporter job history | Pull requests |
-| Test history | `trends.db` (daily rollup plus raw per-run rows) | Trends |
-| Job history | Workflow exporter job history, grouped by repository and display name | Trends |
+| Pull request stages, rebases, reviews, queue time | `prs.db` | Pull requests, Overview |
+| Every E2E run of a pull request, one code version per commit | Workflow exporter and the `trends.db` archive | Pull requests |
 | Pod logs and full failure detail | GitHub artifact | Failures link |
 
-Records are kept for 30 days. Tempo accepts a search window of 7 days at a time.
+The archive keeps 90 days; traces, cluster data and the artifact keep 30. Tempo accepts a search window of 7 days at a time.
 
 ## What is still missing
 
 | Gap | Why it matters |
 |---|---|
-| No run waterfall or task timeline | You cannot see queue, provision, build, test and teardown as one picture. |
 | Custom attribute names | Data is harder to join with other CI tools and future telemetry. |
-| No attempts or flake view | A test that failed then passed is invisible. |
 | No Kubernetes events on the run page | A pod that was evicted or OOMKilled is not explained. |
-| No waits table | A slow test with no CPU or API activity is not explained. |
 | No per-test trace and log links | You cannot jump from a failing test row to its spans and logs. |
-| No service call table | API errors and slow calls are not summarized. |
-| No SLO dashboard | Pass rate, feedback time, flake rate and queue time have no targets. |
+| No service call table | API errors and slow calls are not summarized. Beyla samples service spans at 10%. |
+| Product time only through waits | The pages see how long a test waited for OSAC, not which controller step took it. |
+| No SLO targets or alerts | Pass rate, time to result, flake rate and runner wait are shown, but have no targets. |
 | No capture coverage target | Missing recordings are visible but not measured. |
 | No telemetry pipeline health | Dropped spans or ingest lag are not shown. |
 | No sampling policy | Volume is low today, but there is no rule for when it grows. |
-| No long-term rollups | Raw data stops at 30 days, so yearly trends are impossible. |
-| Window percentiles before raw durations | The daily rollup alone cannot give a window p99 or mean. Days rolled up before the raw per-run rows existed keep their counts and daily p50 and p95, and say the window value was not measured. |
+| Runs before job timelines | Runs stored before the exporter kept job timelines have no runner wait and no step start times; their phases come from step durations. |
 
 ## Roadmap
+
+**Done**
+
+- Run timeline: the runner wait and every phase of every run (Where the time goes, E2E run).
+- Waits table and the per-test time split (Where the time goes, Test history, E2E run).
+- Flake view: flaky tests by commit (Why runs fail, Test history).
+- Failure causes by first failed phase (Why runs fail).
+- Rollups beyond 30 days: a 90-day archive.
 
 **P0, traceability**
 
 1. Emit OpenTelemetry CI/CD and test names next to the current fields.
-2. Add a run timeline with queue, provision, build, test and teardown.
-3. Link every test row to its trace and logs.
-4. Keep GitHub as the only source of pass or fail.
+2. Link every test row to its trace and logs.
+3. Keep GitHub as the only source of pass or fail.
 
 **P1, explanation**
 
-5. Add Kubernetes events and waits as collapsed rows.
-6. Add attempts and flake state to the test list.
-7. Add capture coverage and ingest health.
+4. Add Kubernetes events as a collapsed row.
+5. Add spans around the OSAC CLI and API calls the tests make, so test actions split further.
+6. Add capture coverage and ingest health.
 
 **P2, decisions**
 
-8. Add CI SLOs and error budget alerts.
-9. Add outcome-based sampling.
-10. Keep long-term rollups beyond 30 days.
+7. Set CI SLO targets on pass rate, time to result, flake rate and runner wait, with error budget alerts.
+8. Add outcome-based sampling.
 
 ## Rules we keep
 
@@ -117,7 +121,7 @@ Records are kept for 30 days. Tempo accepts a search window of 7 days at a time.
 2. Missing data is missing, never zero.
 3. One page answers one question.
 4. Identifiers are links, not raw text.
-5. A panel names its population and its time range.
+5. A panel names its population, its time range and its unit.
 6. Do not add a panel that cannot change a decision.
 
 ## Sources

@@ -29,8 +29,11 @@ from __future__ import annotations
 import math
 import os
 import sqlite3
+import sys
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ci_observe_phases as phases  # noqa: E402
 
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 
@@ -40,10 +43,6 @@ DEFAULT_RECENT = 50
 DEFAULT_MATCHES = 25
 MAX_MATCHES = 100
 
-# The Trends page, with one unit preselected. `kind` and `name` are the
-# dashboard variables; `days` is repeated so the link opens on the same
-# window the reader was looking at.
-TRENDS_DASHBOARD = "/d/ci-observe-trends/ci-observe-e28094-trends"
 
 # GitHub's own failed conclusions. A cancelled or skipped run counts in
 # Runs but is neither a pass nor a failure, so passes + failures can be
@@ -72,18 +71,20 @@ def mean_value(values):
     return round(sum(values) / len(values), 3)
 
 
-def history_url(kind, name, days=DEFAULT_DAYS, repo=""):
-    """A Trends page link with one unit preselected.
+def history_url(kind, name, days=DEFAULT_DAYS, repo="", workflow=""):
+    """The page that answers "is this failing more often or getting slower?"
+    for one unit.
 
-    `repo` is part of a job's identity, so it travels in the link instead of
-    being parsed back out of the display name. An empty repo is written as an
-    empty variable, which clears a repository left over from a previous link.
+    A test opens its Test history page, from its node id or JUnit id. A job
+    opens Where the time goes for its suite in its repository: that page has
+    the suite's phases and steps per day and how they changed. The workflow
+    names the suite; without it the last part of the display name does. A job
+    outside the three suites opens the page on all of them.
     """
-    return (
-        f"{TRENDS_DASHBOARD}?var-kind={kind}"
-        f"&var-name={quote(name, safe='')}&var-days={days}"
-        f"&var-repo={quote(repo, safe='')}"
-    )
+    if kind == "test":
+        return phases.link_to_test(name, days)
+    suite = phases.suite_key(workflow) or phases.suite_key((name or "").rsplit(" / ", 1)[-1])
+    return phases.link_to_suite(phases.TIME_PAGE, suite or "all", days, repo)
 
 
 def _int_param(params, key, default, low, high):
@@ -711,7 +712,7 @@ def jobs_document(jobs_db, params, now=None):
     Query params: days -- 1..30, default 30; q -- substring of the display
     name (empty lists every job); repo -- optional filter; limit -- 1..200,
     default 50. Each row carries repo, display_name, runs, last_seen and a
-    history_url that opens the Trends page on that job.
+    history_url that opens Where the time goes on that job's suite.
     """
     days = _int_param(params, "days", DEFAULT_DAYS, 1, MAX_DAYS)
     limit = _int_param(params, "limit", 50, 1, 200)

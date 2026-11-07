@@ -13,8 +13,8 @@ Prometheus must be reachable, so only the central host can run it.
 Two rules keep the measurement honest without disturbing production readers.
 
 * Private `days` keys. The exporter caches per window length and the
-  dashboards own 7, 30 and 60, so the harness measures 13 and discovers data
-  under 17. A dashboard reader never lands on a harness cache entry, and a
+  dashboards own 7, 14, 30 and 90, so the harness measures 13 and discovers
+  data under 17. A dashboard reader never lands on a harness cache entry, and a
   harness "cold" sample is a real cache miss.
 * No restart. The harness cannot flush the exporter's in-process cache, so a
   "cold" sample is the first request for a `days` value in this process. A
@@ -66,7 +66,7 @@ CAPTURE_TAG = "resource.osac.ci.capture_id"
 
 # Dashboard window lengths. The harness must not use these, or it would
 # evict the entry page's cache entry and change the number it is measuring.
-DASHBOARD_DAYS = (7, 30)
+DASHBOARD_DAYS = (7, 14, 30, 90)
 PERF_DAYS = 13
 WARM_DAYS = 17
 EXACT_LOOKUP_RUN_ID = "99999999999999"
@@ -96,6 +96,14 @@ BUDGETS = {
     "trends": (0.500, 0.500),
     "compare": (0.500, 0.500),
     "prs": (0.500, 0.500),
+    # The at-a-glance documents read SQLite only and are cached for two
+    # minutes; a cold one reads a window of suite runs and, for the test
+    # documents, its JUnit rows.
+    "health": (1.000, 0.200),
+    "time": (1.000, 0.200),
+    "failures": (2.000, 0.200),
+    "tests": (2.000, 0.200),
+    "waits": (2.000, 0.200),
 }
 
 # Page budgets from the spec, as the sum of the endpoint requests that page
@@ -103,6 +111,8 @@ BUDGETS = {
 # if the sum fits, the page fits.
 PAGE_BUDGETS = {
     "start_here": ((1.000, 0.400), ("runs", "prs")),
+    # The Overview fires these four; the page is as fast as their sum.
+    "overview": ((4.000, 0.600), ("health", "failures", "tests", "prs")),
     "capture_page": ((2.000, 0.800), ("capture", "captures")),
 }
 
@@ -774,6 +784,11 @@ def targets(api_base: str, days: int, capture_id: str, base_sha: str, head_sha: 
         ("trends", f"{api_base}/api/ci-observe/trends?days={days}"),
         ("compare", f"{api_base}/api/ci-observe/trends/compare?{compare}" if base_sha and head_sha else ""),
         ("prs", f"{api_base}/api/ci-observe/prs?days={days}"),
+        ("health", f"{api_base}/api/ci-observe/health?days={days}"),
+        ("time", f"{api_base}/api/ci-observe/time?days={days}"),
+        ("failures", f"{api_base}/api/ci-observe/failures?days={days}"),
+        ("tests", f"{api_base}/api/ci-observe/tests?days={days}&sort=time"),
+        ("waits", f"{api_base}/api/ci-observe/waits?days={days}"),
     ]
     return plan
 

@@ -5,6 +5,18 @@ For an introduction, start with [ci-observe/README.md](ci-observe/README.md).
 
 The application and the individual tests keep their current source and behavior.
 
+## Status at 2026-11-07
+
+The ci-observe pages were redesigned around four across-runs pages. Built and checked against a seeded dataset; not yet deployed:
+
+- **Overview** is the entry page: pass rate, time to result, the wait for a runner, failure causes, flaky and failing tests, the slowest tests, what the tests wait for, and the pull request numbers, per suite and over time.
+- **Where the time goes**, **Why runs fail** and **Test history** replace **Trends**. They read `/api/ci-observe/health`, `time`, `failures`, `tests`, `test` and `waits` (`ci_observe_insights.py`), cached for two minutes.
+- The workflow exporter stores each E2E job's timeline (runner wait, step start and end). `ci_observe_phases.py` maps every step to a phase and every failure to a cause.
+- `ci-observe-trends.timer` runs hourly and reads only runs it has not read; it also archives the suite runs for 90 days. `ci-observe-spans.timer` rolls each recorded run's trace up once into per-test setup, waits, actions and teardown.
+- **Pull requests** gained the window's medians, rebases, reviews, queue ejections and E2E reruns above the one-pull-request detail. `prs.db` keeps 90 days.
+- **Start here** is now **Runs** (the list), filtered to the three suites; **E2E run** shows where the run's time went.
+- `test_ci_observe_dashboard_contract.py` serves the exporter over the seed and resolves every panel query of every page.
+
 ## Status at 2026-11-06
 
 The collector-first path is live. What works now, verified against the central backend on `osac-ci-1`:

@@ -28,7 +28,6 @@ import pytest
 from helpers import FakeResponse, make_job
 
 MONITORING = Path(__file__).resolve().parents[1]
-DASHBOARD = MONITORING / "config" / "grafana" / "dashboards" / "ci-observe-trends.json"
 RUN_ID = 41310072671
 SECOND_RUN_ID = 41310072672
 LIST_PATH = f"/repos/osac-project/osac/actions/runs/{RUN_ID}/artifacts?per_page=100"
@@ -178,7 +177,8 @@ class TestParseJunitOutcomes:
 
         assert reason is None
         assert cases == [
-            {"suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas::test_x", "passed": False, "duration_s": 1.0}
+            {"suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas::test_x", "passed": False, "duration_s": 1.0,
+             "suite_key": "", "message": "boom red"}
         ]
 
     def test_unreadable_time_is_missing_not_zero(self, trends):
@@ -437,15 +437,29 @@ class TestMain:
         coverage = self.coverage(wired)
         assert (coverage["runs_listed"], coverage["runs_parsed"]) == (1, 1)
 
-    def test_rerunning_a_day_replaces_its_rows(self, wired, exporter, github, wfe):
+    def test_an_hourly_pass_never_reads_a_run_twice(self, wired, exporter, github, wfe):
+        """The pass runs every hour: a run already read keeps its stored rows,
+        and its artifact is not downloaded again."""
         exporter._upsert_job(run_row())
 
         assert wired.main(["--days", "7"]) == 0
         first = self.rows(wired)
-        # The second rollup sees a changed artifact; the day's rows must be
-        # replaced, not appended.
+        assert github.count(LIST_PATH) == 1
         github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": junit(passing("a"))})))
         assert wired.main(["--days", "7"]) == 0
+
+        assert github.count(LIST_PATH) == 1, "the second pass reuses the stored rows"
+        assert self.rows(wired) == first
+
+    def test_force_rereads_a_day_and_replaces_its_rows(self, wired, exporter, github, wfe):
+        exporter._upsert_job(run_row())
+
+        assert wired.main(["--days", "7"]) == 0
+        first = self.rows(wired)
+        # The forced pass sees a changed artifact; the day's rows must be
+        # replaced, not appended.
+        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": junit(passing("a"))})))
+        assert wired.main(["--day", today(), "--force"]) == 0
         second = self.rows(wired)
 
         assert len(first) == 3
@@ -830,8 +844,9 @@ class TestEndpoint:
         assert set(doc["tests"][0]) == {
             "test_id", "suite", "repo", "runs", "failures", "history_url",
         }
-        assert doc["tests"][0]["history_url"].startswith("/d/ci-observe-trends/")
-        assert "var-kind=test" in doc["tests"][0]["history_url"]
+        # A test opens its Test history page, under its canonical key.
+        assert doc["tests"][0]["history_url"].startswith("/d/ci-observe-test/")
+        assert "var-test=tests.e2e.vmaas.test_vm%3A%3Atest_restart" in doc["tests"][0]["history_url"]
         assert doc["tests"][0]["runs"] == 4
         assert doc["tests"][0]["failures"] == 1
         assert doc["tests"][0]["suite"] == "tests/e2e/vmaas"
@@ -966,79 +981,6 @@ class TestHTTP:
         assert doc["rows"] == []
         assert any("base and head are required" in note for note in doc["notes"])
 
-@pytest.mark.skipif(not DASHBOARD.exists(), reason="ci-observe-trends.json ships with the dashboard")
-def test_dashboard_queries_resolve_against_the_endpoint(exporter, trends, tmp_path):
-    """Every root_selector and column the Trends dashboard reads from the
-    ci-observe endpoints must exist in the real response, so the two cannot
-    drift apart. The fixture data covers both stores: one rolled-up test
-    with its raw run rows, and the exporter's job history."""
-    import urllib.parse
-
-    conn = trends.open_trends_db(str(tmp_path / "trends.db"))
-    try:
-        trends.write_day(conn, today(), [{
-            "day": today(), "repo": "osac", "workflow": "E2E VMaaS Full Install",
-            "suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas/test_vm::test_restart",
-            "source_sha": SHA, "runs": 2, "passes": 1, "failures": 1,
-            "p50_duration_s": 12.0, "p95_duration_s": 30.0,
-            "p99_duration_s": 31.0, "mean_duration_s": 14.0,
-        }], {
-            "day": today(), "runs_listed": 2, "runs_parsed": 2,
-            "runs_unavailable": 0, "generated_at": recent_iso(),
-        }, [{
-            "day": today(), "repo": "osac", "workflow": "E2E VMaaS Full Install",
-            "suite": "tests/e2e/vmaas", "test_id": "tests/e2e/vmaas/test_vm::test_restart",
-            "source_sha": SHA, "run_id": RUN_ID, "created_at": recent_iso(),
-            "duration_s": 12.0, "passed": 1,
-        }])
-    finally:
-        conn.close()
-    exporter._upsert_job(run_row())
-
-    dashboard = json.loads(DASHBOARD.read_text())
-
-    checked = 0
-    def iter_panels(panels):
-        for panel in panels:
-            yield panel
-            yield from iter_panels(panel.get("panels", []))
-
-    for panel in iter_panels(dashboard["panels"]):
-        if panel["type"] in ("row", "text"):
-            continue
-        for target in panel.get("targets") or []:
-            url = target.get("url", "")
-            if "/api/ci-observe/" not in url:
-                continue
-            checked += 1
-            query_name = "VMaaS" if "/api/ci-observe/jobs" in url else (
-                "tests/e2e/vmaas/test_vm::test_restart"
-            )
-            query = urllib.parse.urlparse(
-                url.replace("${days}", "30")
-                .replace("${repo:percentencode}", "osac")
-                .replace(
-                    "${name:percentencode}", urllib.parse.quote(query_name)
-                )
-            ).query
-            params = urllib.parse.parse_qs(query)
-            if "/api/ci-observe/history" in url:
-                doc = exporter.get_ci_observe_history_json(params)
-            elif "/api/ci-observe/jobs" in url:
-                doc = exporter.get_ci_observe_jobs_json(params)
-            else:
-                doc = exporter.get_ci_observe_trends_json(params)
-            selector = target["root_selector"]
-            node = doc if selector in ("$", "") else doc[selector.split(".", 1)[-1]]
-            rows = node if isinstance(node, list) else [node]
-            assert rows, f"{panel['title']}: {selector} is empty"
-            for column in target["columns"]:
-                assert column["selector"] in rows[0], (
-                    f"{panel['title']}: column {column['selector']} is not in the response"
-                )
-    assert checked >= 8, "the dashboard must query the history, job and rollup endpoints"
-
-
 def test_deployment_copies_the_rollup_script():
     """The rollup runs from the deployed scripts directory and imports its
     sibling module, so monitoring-setup.sh must copy both."""
@@ -1049,10 +991,10 @@ def test_deployment_copies_the_rollup_script():
 
 
 def test_update_central_queues_the_rollup_without_waiting_for_it():
-    """The daily timer is not enough at deploy time. --update-central must
-    queue the rollup once after enabling the timer so the schema migration
-    and the 30-day re-roll start during the deploy. It must not wait for
-    them: the backfill takes many minutes and the deploy would stall."""
+    """--update-central queues the rollup once after enabling the timer so a
+    schema migration and the read of new runs start during the deploy, not
+    at the next hourly run. It must not wait for them: a first backfill takes
+    many minutes and the deploy would stall."""
     setup = (MONITORING / "scripts" / "monitoring-setup.sh").read_text()
     block = setup.split('if [[ "${MODE}" == "update-central" ]]', 1)[1]
     block = block.split('if [[ "${MODE}" == "update-agent" ]]', 1)[0]
@@ -1069,7 +1011,7 @@ def test_update_central_queues_the_rollup_without_waiting_for_it():
         "a start systemd cannot queue must warn, not fail the deploy"
     )
     assert "warn " in block
-    assert "04:15" in block, "the warning says when the next run happens"
+    assert "next hourly timer run" in block, "the warning says when the next run happens"
     # With --no-block the deploy never sees the backfill result, so the
     # warning must not claim the run finished or failed.
     warning = block.split("warn \"", 1)[1].split("\"", 1)[0]
@@ -1077,10 +1019,11 @@ def test_update_central_queues_the_rollup_without_waiting_for_it():
     assert "could not queue" in warning
 
 
-def test_rollup_is_mounted_in_the_exporter_and_scheduled_daily():
+def test_rollup_is_mounted_in_the_exporter_and_scheduled_hourly():
     """The rollup runs inside the exporter container: that is where the token,
-    requests and the /data volume live. A timer runs it daily while the
-    30-day artifact window still has the previous day."""
+    requests and the /data volume live. A timer runs it every hour: a pass
+    reads only the runs it has not read, so the pages are at most an hour
+    behind and the archive never falls behind the exporter's 30 days."""
     quadlet = (MONITORING / "quadlet" / "workflow-exporter.container").read_text()
     assert "ci_observe_trends.py:/app/ci_observe_trends.py" in quadlet
 
@@ -1088,11 +1031,49 @@ def test_rollup_is_mounted_in_the_exporter_and_scheduled_daily():
     assert "podman exec workflow-exporter python3 /app/ci_observe_trends.py --days 30" in service
 
     timer = (MONITORING / "systemd" / "ci-observe-trends.timer").read_text()
-    assert "OnCalendar=*-*-* 04:15:00" in timer
-    assert "Persistent=true" in timer, "a missed day is a permanent hole in per-test history"
+    assert "OnCalendar=*-*-* *:25:00" in timer
+    assert "Persistent=true" in timer, "a missed pass runs when the machine comes back"
 
     setup = (MONITORING / "scripts" / "monitoring-setup.sh").read_text()
     assert "systemd/ci-observe-trends.service" in setup
     assert "systemd/ci-observe-trends.timer" in setup
     assert "systemctl --user enable --now ci-observe-trends.timer" in setup
     assert "systemctl --user enable ci-observe-trends.timer" in setup
+
+
+def test_span_rollup_is_mounted_in_the_exporter_and_scheduled_hourly():
+    """The span rollup reads Tempo from inside the exporter container and
+    writes trends.db on its /data volume. It runs hourly, away from the
+    trends rollup, and every central install and update wires it."""
+    quadlet = (MONITORING / "quadlet" / "workflow-exporter.container").read_text()
+    for module in ("ci_observe_spans.py", "ci_observe_phases.py", "ci_observe_insights.py"):
+        assert f"{module}:/app/{module}" in quadlet, module
+
+    service = (MONITORING / "systemd" / "ci-observe-spans.service").read_text()
+    assert "podman exec workflow-exporter python3 /app/ci_observe_spans.py" in service
+    timer = (MONITORING / "systemd" / "ci-observe-spans.timer").read_text()
+    assert "OnCalendar=*-*-* *:45:00" in timer, "away from the trends rollup at 25 past"
+    assert "Persistent=true" in timer
+
+    setup = (MONITORING / "scripts" / "monitoring-setup.sh").read_text()
+    update = setup.split('if [[ "${MODE}" == "update-central" ]]', 1)[1]
+    update = update.split('if [[ "${MODE}" == "update-agent" ]]', 1)[0]
+    install = setup.split('if [[ "${MODE}" == "update-agent" ]]', 1)[1]
+    for module in ("ci_observe_spans.py", "ci_observe_phases.py", "ci_observe_insights.py"):
+        assert f"scripts/{module}" in update, f"--update-central copies {module}"
+        assert f"scripts/{module}" in install, f"a first install copies {module}"
+    for block in (update, install):
+        assert "systemd/ci-observe-spans.service" in block
+        assert "systemd/ci-observe-spans.timer" in block
+    assert "systemctl --user enable --now ci-observe-spans.timer" in update
+    assert "systemctl --user enable ci-observe-spans.timer" in install
+    assert '"ci-observe-spans.timer"' in install, "a first install starts the timer"
+
+
+def test_the_archive_keeps_ninety_days():
+    """Every ci-observe archive keeps the same 90 days, set once on the
+    exporter container, so a page never compares windows of two lengths."""
+    quadlet = (MONITORING / "quadlet" / "workflow-exporter.container").read_text()
+    assert "Environment=CI_OBSERVE_KEEP_DAYS=90" in quadlet
+    service = (MONITORING / "systemd" / "ci-observe-prs.service").read_text()
+    assert "/app/ci_observe_prs.py --days 90" in service

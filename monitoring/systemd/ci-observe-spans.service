@@ -1,0 +1,22 @@
+# Hourly ci-observe span rollup: where each test's time goes.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-spans.service
+#
+# Triggered by ci-observe-spans.timer. Reads the trace of every recorded run
+# that finished at least 20 minutes ago from Tempo, once, and writes each
+# test's setup, waits, actions and teardown, every poll_until wait and every
+# fixture setup into trends.db (test_spans, wait_spans, fixture_spans). The
+# Where the time goes and Test history pages read those tables.
+#
+# It runs inside the workflow-exporter container because that container
+# reaches Tempo and has the /data volume where trends.db lives. A pass reads
+# at most CI_OBSERVE_SPANS_PER_PASS captures (120), so a backlog drains over
+# a few hours instead of loading Tempo at once. Do not enable it directly;
+# the timer owns the schedule.
+
+[Unit]
+Description=ci-observe span rollup
+After=workflow-exporter.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_spans.py

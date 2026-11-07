@@ -445,9 +445,11 @@ auto-provisioned into two folders. **CI Fleet** holds five: **CI Fleet —
 Runner Health**, **CI Fleet — Runner Status**, **CI Fleet — Workflow Jobs**,
 **CI Fleet — Workflow Metrics**, and **CI Fleet — Health Overview** (a
 team-facing summary -- pass rate trend, flake rate, MTTR -- for standups and
-sprint reviews, see OSAC-2064). **ci-observe** holds the **CI Observe — Start
-here** entry page and three content dashboards: **CI Observe — E2E run**, **CI
-Observe — Pull requests** and **CI Observe — Trends**. See
+sprint reviews, see OSAC-2064). **ci-observe** holds seven pages for the
+VMaaS, CaaS and BMaaS E2E suites: **CI Observe — Overview** (the entry page),
+**CI Observe — Where the time goes**, **CI Observe — Why runs fail**, **CI
+Observe — Test history**, **CI Observe — Pull requests**, **CI Observe — Runs**
+and **CI Observe — E2E run**. See
 [`ci-observe/README.md`](ci-observe/README.md) for the reader guide and
 [`ci-observe/observability.md`](ci-observe/observability.md) for the design
 rules, current gaps and roadmap.
@@ -469,8 +471,10 @@ the shortest store shows gaps, not zeros.
 | Logs (adapter, router) | Loki | 30 days |
 | Run artifact: failed tests, JUnit, `failure.json`, pod logs, cluster snapshots | GitHub | 30 days |
 | Job history | workflow exporter SQLite | 30 days |
-| Pull request history and queue attempts | exporter `prs.db` | 30 days |
-| Per-test daily rollup | `trends.db` | 30 days |
+| VMaaS, CaaS and BMaaS suite runs with their job timelines | `trends.db` (`suite_runs`) | 90 days (`CI_OBSERVE_KEEP_DAYS`) |
+| Per-test results and the daily rollup | `trends.db` | 90 days |
+| Per-test time split, waits and fixtures from the traces | `trends.db` (span rollup) | 90 days |
+| Pull request history, rebases, reviews and queue attempts | exporter `prs.db` | 90 days |
 | Fleet metrics | central Prometheus | 30 days |
 
 ## Troubleshooting

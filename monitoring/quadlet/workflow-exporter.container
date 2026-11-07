@@ -55,6 +55,9 @@ Environment=REPOS=osac,osac-test-infra
 # disk safety net and does not bind at the current event rate.
 Environment=JOBS_HISTORY_DAYS=30
 Environment=JOBS_HISTORY_MAX_COUNT=400000
+# ci-observe keeps its own archive in trends.db and prs.db for 90 days: the
+# VMaaS, CaaS and BMaaS suite runs, their tests and their pull requests.
+Environment=CI_OBSERVE_KEEP_DAYS=90
 
 # Mount the exporter and its sibling modules into the container
 Volume=%h/.monitoring-server/scripts/workflow-exporter.py:/app/workflow-exporter.py:ro,Z
@@ -64,6 +67,9 @@ Volume=%h/.monitoring-server/scripts/ci_observe_capture_view.py:/app/ci_observe_
 Volume=%h/.monitoring-server/scripts/ci_observe_trends.py:/app/ci_observe_trends.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_history.py:/app/ci_observe_history.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_prs.py:/app/ci_observe_prs.py:ro,Z
+Volume=%h/.monitoring-server/scripts/ci_observe_phases.py:/app/ci_observe_phases.py:ro,Z
+Volume=%h/.monitoring-server/scripts/ci_observe_insights.py:/app/ci_observe_insights.py:ro,Z
+Volume=%h/.monitoring-server/scripts/ci_observe_spans.py:/app/ci_observe_spans.py:ro,Z
 # Mount data directory for cache persistence across restarts
 Volume=%h/.monitoring-server/data:/data:Z
 Environment=CACHE_DIR=/data

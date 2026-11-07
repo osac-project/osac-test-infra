@@ -349,26 +349,40 @@ class TestParser:
         assert 5999 in [attempt["run_id"] for attempt in built]
         assert [attempt["run_id"] for attempt in built] == [5001, 5002, 5999]
 
-    def test_retest_count_reads_the_exporter_job_history(self, prs, github, tmp_path):
+    def test_e2e_counts_read_the_exporter_job_history(self, prs, github, tmp_path):
+        """Every E2E run of the pull request counts: the pull_request rows, the
+        merge-queue rows and the suite runs the decision starts with
+        workflow_dispatch, which name the pull request only in their run
+        name. A retest is a run beyond the first of its suite; a version is
+        a distinct commit its pull-request runs tested."""
         jobs_db = tmp_path / "workflow-exporter.db"
         with sqlite3.connect(jobs_db) as conn:
             conn.execute(
-                "CREATE TABLE jobs (id INTEGER PRIMARY KEY, repo TEXT, pr_display TEXT, category TEXT, event TEXT)"
+                "CREATE TABLE jobs (id INTEGER PRIMARY KEY, repo TEXT, pr_display TEXT, category TEXT, event TEXT,"
+                " workflow TEXT, conclusion TEXT, head_sha TEXT, failure_reason TEXT)"
             )
             conn.executemany(
-                "INSERT INTO jobs VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (1, REPO, "#101", "e2e", "pull_request"),
-                    (2, REPO, "#101", "e2e", "pull_request"),
-                    (3, REPO, "#101", "e2e", "pull_request"),
-                    (4, REPO, "#101", "e2e", "schedule"),
-                    (5, REPO, "#102", "e2e", "pull_request"),
+                    (1, REPO, "", "e2e", "workflow_dispatch", "E2E suite · vmaas · #101 · aaaaaaa", "failure",
+                     "main1", ""),
+                    (2, REPO, "", "e2e", "workflow_dispatch", "E2E suite · vmaas · #101 · bbbbbbb", "success",
+                     "main2", ""),
+                    (3, REPO, "", "e2e", "workflow_dispatch", "E2E suite · caas · #101 · bbbbbbb", "success",
+                     "main2", ""),
+                    (4, REPO, "#101", "e2e", "merge_group", "E2E vmaas (merge queue)", "success", "merge", ""),
+                    (5, REPO, "", "e2e", "workflow_dispatch", "E2E suite · vmaas · #1010 · ccccccc", "success",
+                     "main3", ""),
+                    (6, REPO, "#101", "e2e", "pull_request", "E2E caas-gate", "failure", "x", "gate"),
+                    (7, REPO, "#102", "e2e", "pull_request", "E2E VMaaS Full Install", "success", "ddd", ""),
                 ],
             )
         service = prs.CIObservePRs(db_file=str(tmp_path / "prs.db"), api=FakeAPI(github))
         run_backfill(service)
-        assert pr_row(service, 101)["retest_count"] == 2
-        assert pr_row(service, 102)["retest_count"] == 0
+        first = pr_row(service, 101)
+        assert (first["e2e_runs"], first["e2e_failures"], first["e2e_retests"], first["e2e_versions"]) == (4, 1, 2, 2)
+        assert first["retest_count"] == 2
+        assert (pr_row(service, 102)["e2e_runs"], pr_row(service, 102)["retest_count"]) == (1, 0)
 
     def test_retest_count_is_unknown_without_a_jobs_db(self, service):
         run_backfill(service)
@@ -911,9 +925,9 @@ class TestStates:
         assert "not a repository name" in doc["pr_state_message"]
         assert len(github.calls) == before
 
-    def test_outside_window(self, service, github):
+    def test_outside_window(self, prs, service, github):
         run_backfill(service, mode="full")
-        ended = iso(NOW - timedelta(days=DAYS, hours=1))
+        ended = iso(NOW - timedelta(days=prs.PRS_HISTORY_DAYS, hours=1))
         route_live_pr(github, 204, state="closed", merged_at=ended, closed_at=ended)
 
         doc = self.detail(service, 204, NOW)
@@ -1195,7 +1209,7 @@ class TestEndpointDocument:
         assert doc["pr"] is None
 
     def test_days_are_clamped_to_the_retention(self, filled):
-        assert filled.get_json({"days": ["999"]})["days"] == 30
+        assert filled.get_json({"days": ["999"]})["days"] == 90
         assert filled.get_json({"days": ["0"]})["days"] == 1
         assert filled.get_json({"days": ["nonsense"]})["days"] == 30
 
@@ -1616,7 +1630,7 @@ def test_backfill_is_mounted_in_the_exporter_and_scheduled_hourly():
     assert "ci_observe_prs.py:/app/ci_observe_prs.py" in quadlet
 
     service = (monitoring / "systemd" / "ci-observe-prs.service").read_text()
-    assert "podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 30 --mode auto" in service
+    assert "podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 90 --mode auto" in service
 
     timer = (monitoring / "systemd" / "ci-observe-prs.timer").read_text()
     assert "OnCalendar=*-*-* *:05:00" in timer
@@ -1628,3 +1642,182 @@ def test_backfill_is_mounted_in_the_exporter_and_scheduled_hourly():
     assert "systemd/ci-observe-prs.timer" in setup
     assert "systemctl --user enable --now ci-observe-prs.timer" in setup
     assert "systemctl --user enable ci-observe-prs.timer" in setup
+
+
+# ---------------------------------------------------------------------------
+# The second record format: rebases, review rounds, readiness, E2E counts,
+# and the window's headline numbers
+# ---------------------------------------------------------------------------
+class TestRecordFormat:
+    def test_rebases_reviews_and_readiness_are_stored(self, prs, github, service):
+        fixture = load_fixture("merged_pr")
+        timeline = [
+            *fixture["timeline"],
+            {"event": "head_ref_force_pushed", "created_at": "2026-10-01T10:30:00Z"},
+            {"event": "head_ref_force_pushed", "created_at": "2026-10-01T10:40:00Z"},
+            {"event": "ready_for_review", "created_at": "2026-10-01T10:10:00Z"},
+        ]
+        reviews = [
+            *fixture["reviews"],
+            {"state": "CHANGES_REQUESTED", "user": {"login": "reviewer2", "type": "User"},
+             "submitted_at": "2026-10-01T10:25:00Z"},
+        ]
+        github.add(f"/repos/osac-project/{REPO}/issues/101/timeline?per_page=100", FakeResponse(payload=timeline))
+        github.add(f"/repos/osac-project/{REPO}/pulls/101/reviews?per_page=100", FakeResponse(payload=reviews))
+        run_backfill(service)
+        row = pr_row(service, 101)
+        assert row["force_push_count"] == 2
+        assert row["changes_requested_count"] == 1
+        assert row["human_review_count"] == 3
+        assert row["ready_at"] == "2026-10-01T10:10:00Z"
+        assert row["review_wait_seconds"] == 600, "ready at 10:10, first human review at 10:20"
+        assert row["record_version"] == prs.RECORD_VERSION
+
+    def test_a_pull_request_that_was_never_a_draft_is_ready_when_opened(self, service):
+        run_backfill(service)
+        row = pr_row(service, 101)
+        assert row["ready_at"] == row["opened_at"]
+        assert row["force_push_count"] == 0
+
+    def test_a_row_of_the_older_format_is_refetched_a_bounded_number_per_pass(self, prs, service, github,
+                                                                               monkeypatch):
+        # A pass that refetches one pull request asks for the merge-group
+        # runs from that pull request's creation.
+        for name in ("merged_pr", "ejected_pr", "closed_pr"):
+            created = datetime.fromisoformat(load_fixture(name)["pr"]["created_at"].replace("Z", "+00:00"))
+            github.add(runs_window_path(created, NOW), FakeResponse(
+                payload={"total_count": 7, "workflow_runs": load_fixture("merge_group_runs")["runs"]}))
+        run_backfill(service)
+        with sqlite3.connect(service.db_file) as conn:
+            conn.execute("UPDATE pr_events SET record_version = NULL, force_push_count = NULL")
+        monkeypatch.setattr(prs, "LEGACY_REFRESH_PER_PASS", 1)
+        summary = run_backfill(service)
+        assert summary["prs_stored"] == 1
+        assert summary["prs_skipped"] == 2
+        summary = run_backfill(service)
+        assert summary["prs_stored"] == 1
+        upgraded = rows(service, "SELECT number FROM pr_events WHERE record_version = ?", (prs.RECORD_VERSION,))
+        assert len(upgraded) == 2
+
+
+class TestIndexNumbers:
+    def test_the_index_carries_kpis_and_a_weekly_trend(self, service):
+        run_backfill(service)
+        doc = service.get_json({"days": ["30"]})
+        kpis = doc["kpis"][0]
+        assert kpis["prs"] == 3
+        assert kpis["merged"] == 2
+        assert kpis["closed"] == 1
+        assert kpis["lead_median_s"] is not None
+        assert kpis["queued_share"] is not None
+        assert kpis["measured_prs"] == 2
+        assert doc["weekly"], "the merged pull requests fall in at least one week"
+        assert all(week["week"] <= NOW.strftime("%Y-%m-%d") for week in doc["weekly"])
+        assert sum(week["merged"] for week in doc["weekly"]) == 2
+        assert all(row["detail_url"].startswith("/d/ci-observe-pull-requests/") for row in doc["prs"])
+
+    def test_an_empty_window_measures_nothing(self, prs):
+        kpis = prs._kpis([], {})[0]
+        assert kpis["merged"] == 0
+        assert kpis["lead_median_s"] is None
+        assert kpis["rebased_share"] is None
+        assert kpis["e2e_retests_mean"] is None
+        assert prs._weekly([]) == []
+
+    def test_kpis_use_measured_rows_only_for_the_new_counts(self, prs):
+        rows_ = [
+            {"repo": "osac", "number": 1, "state": "merged", "total_seconds": 3600, "record_version": 2,
+             "force_push_count": 2, "e2e_runs": 3, "e2e_retests": 1, "e2e_failures": 1,
+             "changes_requested_count": 0, "merged_at": "2026-10-05T10:00:00Z"},
+            {"repo": "osac", "number": 2, "state": "merged", "total_seconds": 7200, "record_version": None,
+             "force_push_count": None, "merged_at": "2026-10-06T10:00:00Z"},
+        ]
+        attempts_ = {("osac", 1): [{"ejected": 1}, {"ejected": 0}]}
+        kpis = prs._kpis(rows_, attempts_)[0]
+        assert kpis["rebased_share"] == 1.0
+        assert kpis["force_pushes_mean"] == 2.0
+        assert kpis["e2e_retests_mean"] == 1.0
+        assert kpis["e2e_failed_share"] == 1.0
+        assert kpis["ejected_share"] == 1.0
+        assert kpis["ejections"] == 1
+        assert kpis["queued_share"] == 0.5
+        assert kpis["measured_prs"] == 1
+        weekly = prs._weekly(rows_)
+        assert [week["week"] for week in weekly] == ["2026-10-05"]
+        assert weekly[0]["merged"] == 2
+
+
+def test_a_pull_request_suite_run_appears_with_the_commit_it_tested(prs, service):
+    """The decision starts a pull request's suite with workflow_dispatch from
+    the default branch: the row names the pull request and the commit only
+    in its run name."""
+    run_backfill(service)
+    seed_jobs(service, [
+        (900, 900, "E2E suite · vmaas · #101 · 0123456789abcdef0123456789abcdef01234567", "workflow_dispatch",
+         "mainsha", iso(NOW - timedelta(days=2)), "success"),
+    ], pr="")
+    doc = service.get_json({"number": ["101"], "repo": [REPO], "days": ["30"]})
+    assert [run["run_id"] for run in doc["runs"]] == ["900"]
+    assert doc["runs"][0]["head"] == "0123456789ab"
+    assert doc["runs"][0]["code_display"].startswith("v1 · 0123456789ab")
+
+
+class TestE2EHistory:
+    """A pull request's E2E counts come from the exporter's 30 days of jobs
+    and the 90-day run archive in trends.db, and say "not measured" when
+    the stores start after the pull request was opened."""
+
+    def archive(self, service, rows):
+        trends_db = Path(service.db_file).parent / "trends.db"
+        with sqlite3.connect(trends_db) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS suite_runs (id INTEGER PRIMARY KEY, run_id TEXT, repo TEXT,"
+                " workflow TEXT, conclusion TEXT, event TEXT, created_at TEXT, pr_display TEXT, head_sha TEXT,"
+                " failure_reason TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO suite_runs (id, run_id, repo, workflow, conclusion, event, created_at, pr_display,"
+                " head_sha, failure_reason) VALUES (?, ?, 'osac', ?, ?, ?, ?, '#101', ?, '')",
+                rows,
+            )
+
+    def test_runs_older_than_the_exporter_window_come_from_the_archive(self, service):
+        opened = iso(NOW - timedelta(days=50))
+        seed_jobs(service, [
+            (1, 1, "E2E VMaaS Full Install", "workflow_dispatch", "a" * 40, iso(NOW - timedelta(days=20)),
+             "success"),
+        ])
+        self.archive(service, [
+            (1, "1", "E2E VMaaS Full Install", "success", "workflow_dispatch", iso(NOW - timedelta(days=20)), "a" * 40),
+            (2, "2", "E2E VMaaS Full Install", "failure", "workflow_dispatch", iso(NOW - timedelta(days=45)), "b" * 40),
+            (3, "3", "E2E CaaS Full Install", "success", "workflow_dispatch", iso(NOW - timedelta(days=60)), "b" * 40),
+        ])
+        stats = service._e2e_stats("osac", 101, opened_at=opened)
+        assert stats == {"runs": 3, "failures": 1, "retests": 1, "versions": 2}, "a job in both stores counts once"
+
+    def test_a_pull_request_opened_before_the_stores_begin_is_not_measured(self, service):
+        seed_jobs(service, [
+            (1, 1, "E2E VMaaS Full Install", "workflow_dispatch", "a" * 40, iso(NOW - timedelta(days=20)),
+             "success"),
+        ])
+        stats = service._e2e_stats("osac", 101, opened_at=iso(NOW - timedelta(days=40)))
+        assert stats == {"runs": None, "failures": None, "retests": None, "versions": None}
+
+    def test_no_store_is_not_measured(self, service):
+        assert service._e2e_stats("osac", 101)["runs"] is None
+
+    def test_only_the_three_suites_count(self, service):
+        seed_jobs(service, [
+            (1, 1, "E2E VMaaS Full Install", "workflow_dispatch", "a" * 40, iso(NOW - timedelta(days=2)), "success"),
+            (2, 2, "E2E VMaaS Netris Full Install", "workflow_dispatch", "a" * 40, iso(NOW - timedelta(days=2)),
+             "failure"),
+        ])
+        stats = service._e2e_stats("osac", 101)
+        assert (stats["runs"], stats["failures"]) == (1, 0), "Netris is another scenario"
+
+
+def test_the_overview_asks_for_both_repositories(service):
+    run_backfill(service)
+    both = service.get_json({"days": ["30"], "repo": ["all"]})
+    assert both["kpis"] == service.get_json({"days": ["30"]})["kpis"]
+    assert both["kpis"][0]["prs"] == 3

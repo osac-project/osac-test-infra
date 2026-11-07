@@ -1527,6 +1527,8 @@ def test_response_has_the_documented_shape(tmp_path, monkeypatch):
     assert set(document["tests"][0]) == {
         "name", "nodeid", "file", "worker", "started_at", "duration_s",
         "status", "phase_spans",
+        # Where the test's time went, from the span rollup's breakdown.
+        "setup_s", "wait_s", "actions_s", "teardown_s", "waits",
     }
     assert set(document["waits"][0]) == {
         "name", "worker", "started_at", "duration_s", "status", "attempts",

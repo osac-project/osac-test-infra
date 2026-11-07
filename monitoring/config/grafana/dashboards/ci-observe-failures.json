@@ -1,0 +1,3090 @@
+{
+  "uid": "ci-observe-failures",
+  "title": "CI Observe — Why runs fail",
+  "description": "Why E2E runs fail: causes, steps, failing and flaky tests, errors and every failed run.",
+  "tags": [
+    "osac",
+    "ci",
+    "ci-observe"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "15m",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "links": [
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/ci-observe-home/ci-observe-e28094-overview",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Where the time goes",
+      "type": "link",
+      "url": "/d/ci-observe-time/ci-observe-e28094-where-the-time-goes",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Test history",
+      "type": "link",
+      "url": "/d/ci-observe-test/ci-observe-e28094-test-history",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Pull requests",
+      "type": "link",
+      "url": "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests",
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "All runs",
+      "type": "link",
+      "url": "/d/ci-observe-runs-home/ci-observe-e28094-runs",
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "days",
+        "label": "Window",
+        "type": "custom",
+        "hide": 0,
+        "query": "7 days : 7,14 days : 14,30 days : 30,90 days : 90",
+        "options": [
+          {
+            "text": "7 days",
+            "value": "7",
+            "selected": true
+          },
+          {
+            "text": "14 days",
+            "value": "14",
+            "selected": false
+          },
+          {
+            "text": "30 days",
+            "value": "30",
+            "selected": false
+          },
+          {
+            "text": "90 days",
+            "value": "90",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "7 days",
+          "value": "7",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "How far back to look. 'vs before' compares with the same span just before it."
+      },
+      {
+        "name": "suite",
+        "label": "Suite",
+        "type": "custom",
+        "hide": 0,
+        "query": "All suites : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas",
+        "options": [
+          {
+            "text": "All suites",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "VMaaS",
+            "value": "vmaas",
+            "selected": false
+          },
+          {
+            "text": "CaaS",
+            "value": "caas",
+            "selected": false
+          },
+          {
+            "text": "BMaaS",
+            "value": "bmaas",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "All suites",
+          "value": "all",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "The VMaaS, CaaS and BMaaS E2E suites."
+      },
+      {
+        "name": "trigger",
+        "label": "Started by",
+        "type": "custom",
+        "hide": 0,
+        "query": "Any trigger : all,Pull requests : pr,Merge queue : merge_queue,Scheduled : scheduled,Manual : manual",
+        "options": [
+          {
+            "text": "Any trigger",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "Pull requests",
+            "value": "pr",
+            "selected": false
+          },
+          {
+            "text": "Merge queue",
+            "value": "merge_queue",
+            "selected": false
+          },
+          {
+            "text": "Scheduled",
+            "value": "scheduled",
+            "selected": false
+          },
+          {
+            "text": "Manual",
+            "value": "manual",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "Any trigger",
+          "value": "all",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "Pull request suite runs, merge-queue runs, the scheduled runs on main, or manual runs."
+      },
+      {
+        "name": "repo",
+        "label": "Repository",
+        "type": "custom",
+        "hide": 0,
+        "query": "Both repositories : all,osac : osac,osac-test-infra : osac-test-infra",
+        "options": [
+          {
+            "text": "Both repositories",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "osac",
+            "value": "osac",
+            "selected": false
+          },
+          {
+            "text": "osac-test-infra",
+            "value": "osac-test-infra",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "Both repositories",
+          "value": "all",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "The repository whose CI started the run."
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "text",
+      "id": 1,
+      "title": "",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Why E2E runs fail.** A run's cause is the phase of its **first failed step**: *Tests* (a test failed), *Build* or *OSAC install* (the code under test), *CI infrastructure* (cluster, hosts, CI setup, teardown, a timeout, a lost runner) or *Blocked* (an unapproved fork or refused inputs). The failing and flaky tests and their errors come from the JUnit reports."
+      },
+      "transparent": true
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Failed runs",
+      "description": "Runs GitHub marked failed or timed out. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^failed$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "failed",
+              "text": "failed",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Failure rate",
+      "description": "Failed ÷ (passed + failed). Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above). Unit: percent.",
+      "gridPos": {
+        "x": 3,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.1
+              },
+              {
+                "color": "#d03b3b",
+                "value": 0.25
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^failure_rate$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "failure_rate",
+              "text": "failure_rate",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Tests failed",
+      "description": "Failed in a test step. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 6,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^tests$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "tests",
+              "text": "tests",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "Build failed",
+      "description": "Failed building the code under test. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 9,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^build$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "build",
+              "text": "build",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 6,
+      "title": "OSAC install failed",
+      "description": "Failed installing OSAC or its operators. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 12,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^install$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "install",
+              "text": "install",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 7,
+      "title": "CI infrastructure",
+      "description": "Failed in cluster or host setup, CI setup, logs or teardown, timed out, or lost its runner. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 15,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^infra$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "infra",
+              "text": "infra",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 8,
+      "title": "Blocked",
+      "description": "An unapproved fork pull request, or inputs the workflow refused. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 18,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^blocked$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "blocked",
+              "text": "blocked",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 9,
+      "title": "Cancelled",
+      "description": "Not failures: runs cancelled, usually because a newer push replaced them. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 21,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^cancelled$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "cancelled",
+              "text": "cancelled",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "Failed runs per day, by area",
+      "description": "Each bar is one day's failed runs, split by the area of their cause. The Causes table splits CI infrastructure further. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: one point per UTC day the runs were created, last $days days. Unit: count of runs.",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 14,
+        "h": 9
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Nothing in this window",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "showPoints": "never",
+            "pointSize": 5,
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_tests"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tests"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_build"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Build"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_install"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "OSAC install"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_infra"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "CI infrastructure"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_blocked"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Blocked"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d55181"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "daily",
+          "columns": [
+            {
+              "selector": "day",
+              "text": "day",
+              "type": "timestamp"
+            },
+            {
+              "selector": "area_tests",
+              "text": "area_tests",
+              "type": "number"
+            },
+            {
+              "selector": "area_build",
+              "text": "area_build",
+              "type": "number"
+            },
+            {
+              "selector": "area_install",
+              "text": "area_install",
+              "type": "number"
+            },
+            {
+              "selector": "area_infra",
+              "text": "area_infra",
+              "type": "number"
+            },
+            {
+              "selector": "area_blocked",
+              "text": "area_blocked",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 11,
+      "title": "Causes",
+      "description": "Failed runs per cause, their share and the change in count. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs and percent.",
+      "gridPos": {
+        "x": 14,
+        "y": 6,
+        "w": 10,
+        "h": 9
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": "Nothing in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Cause"
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Area"
+              },
+              {
+                "id": "custom.width",
+                "value": 135
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failures"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Runs"
+              },
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "share"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Share"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "delta"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "vs before"
+              },
+              {
+                "id": "custom.width",
+                "value": 85
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#0ca30c",
+                      "value": null
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "#d03b3b",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Runs",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "causes",
+          "columns": [
+            {
+              "selector": "label",
+              "text": "label",
+              "type": "string"
+            },
+            {
+              "selector": "area",
+              "text": "area",
+              "type": "string"
+            },
+            {
+              "selector": "failures",
+              "text": "failures",
+              "type": "number"
+            },
+            {
+              "selector": "share",
+              "text": "share",
+              "type": "number"
+            },
+            {
+              "selector": "delta",
+              "text": "delta",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 12,
+      "title": "Failures by suite",
+      "description": "Failed runs of each suite, split by the area of their cause. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 10,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Nothing in this window",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_tests"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tests"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_build"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Build"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_install"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "OSAC install"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_infra"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "CI infrastructure"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area_blocked"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Blocked"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d55181"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "xField": "category",
+        "showValue": "never",
+        "barWidth": 0.75,
+        "groupWidth": 0.75,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none",
+          "hideZeros": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "by_suite",
+          "columns": [
+            {
+              "selector": "category",
+              "text": "category",
+              "type": "string"
+            },
+            {
+              "selector": "area_tests",
+              "text": "area_tests",
+              "type": "number"
+            },
+            {
+              "selector": "area_build",
+              "text": "area_build",
+              "type": "number"
+            },
+            {
+              "selector": "area_install",
+              "text": "area_install",
+              "type": "number"
+            },
+            {
+              "selector": "area_infra",
+              "text": "area_infra",
+              "type": "number"
+            },
+            {
+              "selector": "area_blocked",
+              "text": "area_blocked",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 13,
+      "title": "Steps that failed",
+      "description": "The step each failed run stopped in, the most frequent first. 'Last failed' opens the newest such run. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: count of runs and percent.",
+      "gridPos": {
+        "x": 10,
+        "y": 15,
+        "w": 14,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "Nothing in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Step"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cause_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Cause"
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failures"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Runs"
+              },
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "share"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Share"
+              },
+              {
+                "id": "custom.width",
+                "value": 65
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suites"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suites"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_failed_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last failed"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "The newest failed run",
+                    "url": "${__data.fields.last_run_url}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_run_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Runs",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "steps",
+          "columns": [
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "string"
+            },
+            {
+              "selector": "cause_label",
+              "text": "cause_label",
+              "type": "string"
+            },
+            {
+              "selector": "failures",
+              "text": "failures",
+              "type": "number"
+            },
+            {
+              "selector": "share",
+              "text": "share",
+              "type": "number"
+            },
+            {
+              "selector": "suites",
+              "text": "suites",
+              "type": "string"
+            },
+            {
+              "selector": "last_failed_at",
+              "text": "last_failed_at",
+              "type": "string"
+            },
+            {
+              "selector": "last_run_url",
+              "text": "last_run_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 14,
+      "title": "Tests that fail",
+      "description": "Every test that failed, the most failures first. Flaky commits: commits on which the test both passed and failed, a sign of flakiness rather than a regression. Click a test for its history. Population: test results in the JUnit reports of the suite runs; a skipped test is not a run. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs, percent and duration.",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "Nothing in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "test"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this test's history",
+                    "url": "${__data.fields.test_url}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "group"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Directory"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed"
+              },
+              {
+                "id": "custom.width",
+                "value": 65
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "runs"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Runs"
+              },
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fail_rate"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Fail rate"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#0ca30c",
+                      "value": null
+                    },
+                    {
+                      "color": "#ec835a",
+                      "value": 0.1
+                    },
+                    {
+                      "color": "#d03b3b",
+                      "value": 0.25
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "flaky_shas"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Flaky commits"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "#ec835a",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_failed_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last failed"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last error"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "test_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Failed",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tests",
+          "columns": [
+            {
+              "selector": "test",
+              "text": "test",
+              "type": "string"
+            },
+            {
+              "selector": "group",
+              "text": "group",
+              "type": "string"
+            },
+            {
+              "selector": "suite_label",
+              "text": "suite_label",
+              "type": "string"
+            },
+            {
+              "selector": "failed",
+              "text": "failed",
+              "type": "number"
+            },
+            {
+              "selector": "runs",
+              "text": "runs",
+              "type": "number"
+            },
+            {
+              "selector": "fail_rate",
+              "text": "fail_rate",
+              "type": "number"
+            },
+            {
+              "selector": "flaky_shas",
+              "text": "flaky_shas",
+              "type": "number"
+            },
+            {
+              "selector": "last_failed_at",
+              "text": "last_failed_at",
+              "type": "string"
+            },
+            {
+              "selector": "last_message",
+              "text": "last_message",
+              "type": "string"
+            },
+            {
+              "selector": "test_url",
+              "text": "test_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 15,
+      "title": "Flaky tests",
+      "description": "Tests that passed and failed on the same commit, the most flaky commits first. Population: test results in the JUnit reports of the suite runs; a skipped test is not a run. Time: runs created in the last $days days (the Window above). Unit: count of commits and runs.",
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 10,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "No test passed and failed on the same commit"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "test"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Test"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this test's history",
+                    "url": "${__data.fields.test_url}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "flaky_shas"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Flaky commits"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed"
+              },
+              {
+                "id": "custom.width",
+                "value": 65
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "runs"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Runs"
+              },
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "test_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Flaky commits",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "flaky",
+          "columns": [
+            {
+              "selector": "test",
+              "text": "test",
+              "type": "string"
+            },
+            {
+              "selector": "suite_label",
+              "text": "suite_label",
+              "type": "string"
+            },
+            {
+              "selector": "flaky_shas",
+              "text": "flaky_shas",
+              "type": "number"
+            },
+            {
+              "selector": "failed",
+              "text": "failed",
+              "type": "number"
+            },
+            {
+              "selector": "runs",
+              "text": "runs",
+              "type": "number"
+            },
+            {
+              "selector": "test_url",
+              "text": "test_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 16,
+      "title": "Error messages",
+      "description": "The failure messages in the JUnit reports, grouped after replacing names, ids and numbers. Tests: how many different tests failed with it. Population: test results in the JUnit reports of the suite runs; a skipped test is not a run. Time: runs created in the last $days days (the Window above). Unit: count of failures.",
+      "gridPos": {
+        "x": 10,
+        "y": 33,
+        "w": 14,
+        "h": 8
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "Nothing in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Message"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failures"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tests"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tests"
+              },
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_seen"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last seen"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "example"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Newest example"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Failures",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "messages",
+          "columns": [
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            },
+            {
+              "selector": "tests",
+              "text": "tests",
+              "type": "number"
+            },
+            {
+              "selector": "last_seen",
+              "text": "last_seen",
+              "type": "string"
+            },
+            {
+              "selector": "example",
+              "text": "example",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 17,
+      "title": "Failed runs",
+      "description": "Every failed run, newest first: its cause, the step it stopped in and, when tests failed, the first failed test and its error. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: time, count and duration as named.",
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 24,
+        "h": 12
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "noValue": "Nothing in this window"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "created_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "When"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 75
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trigger_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Started by"
+              },
+              {
+                "id": "custom.width",
+                "value": 115
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pr"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PR"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this pull request",
+                    "url": "${__data.fields.pr_url}"
+                  }
+                ]
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cause_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Cause"
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "area"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Area"
+              },
+              {
+                "id": "custom.width",
+                "value": 135
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed_step"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed step"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "noValue",
+                "value": "(no step failed)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed_tests"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed tests"
+              },
+              {
+                "id": "custom.width",
+                "value": 95
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "first_failed_test"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "First failed test"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Its error"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Ran for"
+              },
+              {
+                "id": "custom.width",
+                "value": 105
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Run"
+              },
+              {
+                "id": "custom.width",
+                "value": 115
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the run (GitHub when it was not recorded)",
+                    "url": "${__data.fields.details_url}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "details_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pr_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "runs",
+          "columns": [
+            {
+              "selector": "created_at",
+              "text": "created_at",
+              "type": "string"
+            },
+            {
+              "selector": "suite_label",
+              "text": "suite_label",
+              "type": "string"
+            },
+            {
+              "selector": "trigger_label",
+              "text": "trigger_label",
+              "type": "string"
+            },
+            {
+              "selector": "pr",
+              "text": "pr",
+              "type": "string"
+            },
+            {
+              "selector": "cause_label",
+              "text": "cause_label",
+              "type": "string"
+            },
+            {
+              "selector": "area",
+              "text": "area",
+              "type": "string"
+            },
+            {
+              "selector": "failed_step",
+              "text": "failed_step",
+              "type": "string"
+            },
+            {
+              "selector": "failed_tests",
+              "text": "failed_tests",
+              "type": "number"
+            },
+            {
+              "selector": "first_failed_test",
+              "text": "first_failed_test",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "duration_s",
+              "text": "duration_s",
+              "type": "number"
+            },
+            {
+              "selector": "run",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "details_url",
+              "text": "details_url",
+              "type": "string"
+            },
+            {
+              "selector": "pr_url",
+              "text": "pr_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 18,
+      "title": "About these numbers",
+      "description": "What this page counts, over which window, and what is missing or partial, as the API computed it. Population: the page's own population, named in the first column. Time: the window in the second column. Unit: text.",
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": ""
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "population"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "What is counted"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "window"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Window"
+              },
+              {
+                "id": "custom.width",
+                "value": 290
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "missing"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Missing or partial data"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "generated_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Computed at"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/failures?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "about",
+          "columns": [
+            {
+              "selector": "population",
+              "text": "population",
+              "type": "string"
+            },
+            {
+              "selector": "window",
+              "text": "window",
+              "type": "string"
+            },
+            {
+              "selector": "missing",
+              "text": "missing",
+              "type": "string"
+            },
+            {
+              "selector": "generated_at",
+              "text": "generated_at",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

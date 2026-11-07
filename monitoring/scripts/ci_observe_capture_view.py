@@ -36,6 +36,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 import urllib.error
@@ -959,6 +960,7 @@ class CIObserveCaptureView:
             elif entry["class"] == "fixture_use":
                 buckets["fixture_uses"].append(self._fixture_use_row(entry))
 
+        self._add_breakdown(buckets["tests"], spans)
         for rows in buckets.values():
             rows.sort(key=lambda row: (row["started_at"] or "", row["name"], row.get("worker") or ""))
 
@@ -1001,6 +1003,34 @@ class CIObserveCaptureView:
             "service_calls_complete": False,
         }
         return session, buckets, coverage
+
+    @staticmethod
+    def _add_breakdown(tests, spans):
+        """Each test's split into setup, waiting for the product, test
+        actions and teardown (the span rollup's own breakdown, so the run
+        page and the cross-run pages agree). Best-effort: a failure leaves
+        the test rows as they are, it never breaks the document."""
+        try:
+            # The sibling module, wherever this one was loaded from.
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import ci_observe_spans
+
+            rows, _, _, _ = ci_observe_spans.breakdown(spans)
+        except Exception:  # pragma: no cover - the rows stay as they were
+            logger.debug("test breakdown failed", exc_info=True)
+            return
+        by_node = {row["nodeid"]: row for row in rows}
+        for test in tests:
+            parts = by_node.get(test["nodeid"])
+            if parts is None:
+                continue
+            test["setup_s"] = round(max(0.0, (parts["setup_s"] or 0) - parts["wait_setup_s"]), 3)
+            test["wait_s"] = parts["wait_s"]
+            test["actions_s"] = round(max(0.0, (parts["call_s"] or 0) - parts["wait_call_s"]), 3)
+            test["teardown_s"] = round(max(0.0, (parts["teardown_s"] or 0) - parts["wait_teardown_s"]), 3)
+            test["waits"] = parts["waits"]
 
     @staticmethod
     def _iter_spans(payload):

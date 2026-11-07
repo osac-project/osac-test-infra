@@ -5,7 +5,8 @@
 # GitHub token, the `requests` dependency and the /data volume where prs.db
 # lives. --mode auto runs an incremental pass every hour and a full pass with
 # the prune once a day, so a stored pull request is not refetched every hour
-# and the file still covers the retention window.
+# and the file still covers the retention window: 90 days, as long as the
+# run archive the Overview and the Pull requests page compare against.
 
 [Unit]
 Description=ci-observe pull-request backfill
@@ -13,4 +14,4 @@ After=workflow-exporter.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 30 --mode auto
+ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 90 --mode auto

@@ -1,0 +1,18 @@
+# Systemd user timer for the ci-observe span rollup.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-spans.timer
+#
+# Runs hourly at 45 past, away from the trends rollup at 25 past, so the two
+# writers of trends.db rarely meet. Tempo keeps traces for 30 days and the
+# rollup reads a run once, so a missed hour only delays the pages; Persistent
+# runs a missed pass when the machine comes back.
+
+[Unit]
+Description=Run the ci-observe span rollup hourly
+
+[Timer]
+OnCalendar=*-*-* *:45:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

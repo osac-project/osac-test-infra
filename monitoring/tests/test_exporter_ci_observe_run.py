@@ -168,9 +168,10 @@ def test_direct_run_evidence(evidence, github, wfe):
     assert doc["run"]["url"] == f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}"
     assert [j["name"] for j in doc["jobs"]] == ["osac / E2E VMaaS Full Install"]
     assert doc["jobs"][0]["failure_reason"] == "test"
-    assert "var-kind=job" in doc["jobs"][0]["history_url"]
+    # The job name opens its suite's Where the time goes page.
+    assert doc["jobs"][0]["history_url"].startswith("/d/ci-observe-time/")
+    assert "var-suite=vmaas" in doc["jobs"][0]["history_url"]
     assert "var-repo=osac" in doc["jobs"][0]["history_url"]
-    assert "var-name=osac%20%2F%20E2E%20VMaaS%20Full%20Install" in doc["jobs"][0]["history_url"]
     assert doc["steps"] == [
         {
             "job_name": "osac / E2E VMaaS Full Install",
@@ -795,6 +796,11 @@ def test_query_shape_resolves_against_the_endpoint_response(evidence, github, wf
             for part in selector.split("."):
                 node = node[part]  # KeyError means dashboard/endpoint drift
             rows = node if isinstance(node, list) else [node]
+            if not rows and target["root_selector"] == "timeline":
+                # This run was stored before job timelines existed, so it has
+                # no step timeline; test_ci_observe_dashboard_contract checks
+                # the column shape against seeded timelines.
+                continue
             assert rows, f"{panel['title']}: {target['root_selector']} is empty"
             for column in target["columns"]:
                 assert column["selector"] in rows[0], (

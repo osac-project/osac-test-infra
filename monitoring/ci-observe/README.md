@@ -1,109 +1,104 @@
 # CI Observe
 
-CI Observe shows why an E2E run failed and where it spent time.
+CI Observe shows how healthy the VMaaS, CaaS and BMaaS E2E runs are, where their time goes, why they fail, how each test behaves over time, and how long pull requests wait.
 
 ## Open it
 
-Sign in to Grafana with GitHub. Open **ci-observe** and choose **Start here**.
+Sign in to Grafana with GitHub. Open **ci-observe** and choose **Overview**.
 
-- **Start here**: recent E2E runs.
-- **E2E run**: one run.
-- **Pull requests**: review and merge-queue time.
-- **Trends**: one test or one job over time.
-
-## Start here
-
-Filter by **Repository**, **Suite** and **Result** above the table. The filters narrow the data, so the rows stay honest. Every column also has a funnel filter, so **Failed step** narrows the table by step.
-
-The table shows one row per E2E run:
-
-| Column | Meaning |
+| Page | Question |
 |---|---|
-| Run | GitHub run id. Opens the run page when test data was recorded, and GitHub otherwise. |
-| Workflow | Workflow name. |
-| Repository | `osac` or `osac-test-infra`. |
-| PR | Pull request number. Opens the Pull requests page. |
-| Branch | Branch or merge-queue ref. |
-| Started by | Scheduled, manual, push, PR or merge queue. |
-| Result | GitHub pass or fail. |
-| Recorded | Yes when test data arrived, No when the check proved it did not, Unknown when the check could not judge. |
-| Failed step | The exact step the run stopped in, such as `Install OSAC` or `Build and load component images`. Empty for a pass or a cancelled run with no failed step. |
-| Started | When GitHub created the run. |
-| GitHub | Opens the workflow run. |
+| **Overview** | Is E2E CI healthy, and where should I look? |
+| **Where the time goes** | Which phases, steps, tests and product waits take the time, and what got slower? |
+| **Why runs fail** | Did runs fail on tests, the build, the OSAC install or CI infrastructure? Which tests fail or flake? |
+| **Test history** | How long does one test take, is it getting slower, does it fail, and what does it wait for? |
+| **Pull requests** | How long do pull requests wait for review, approval and the merge queue? How often are they rebased and rerun? |
+| **All runs** | Every E2E run, newest first. |
+| **E2E run** | One run: what failed and where its time went. |
 
-`No` under Recorded means no test data. Most `No` rows are runs that failed before the suite ran, for example at image build, fork-PR authorization or chart resolution: no pytest ran, so no test data was expected. **Failed step** names that exact step, and the column filter narrows the table by step. A cancelled run with no failed step is blank. Gate-only runs are not listed in this table.
+The bar at the top of every page opens the others. **Window**, **Suite**, **Started by** and **Repository** carry over between Overview, Where the time goes, Why runs fail and Test history.
 
-The Suite filter uses exact workflow names, not a substring. `VMaaS` is the VMaaS suite only; **E2E VMaaS Production Install**, **E2E VMaaS Staging Install** and **E2E VMaaS Chart Packaging Smoke** are named installs, not suite rows.
+## How to read a number
 
-`Unknown` means the recording check could not judge: the run just ended, the capture list is stale, or the run is older than its coverage. A run with no recording opens GitHub from the Run cell; only a recorded run opens the run page. Netris, full-regression and agentless jobs have no capture wiring yet, so they cannot record.
+- Hover the **ⓘ** of a panel. Every description ends with **Population** (what is counted), **Time** (which window) and **Unit**.
+- **vs before** compares the window with the same span just before it. Red means worse: slower, or failing more.
+- A duration reads `hh:mm:ss`, or `1 d hh:mm:ss` past a day.
+- **not measured** or **—** means the data cannot say. It is never zero.
+- **About these numbers**, at the bottom of a page, says what the page counts, the exact window and what is missing.
+- Names are links. A suite opens its time or failure page, a test opens its Test history, a run opens its run page (or GitHub when the run was not recorded), a pull request opens it.
 
-## E2E run
+## Definitions
 
-The page opens from a **Run** link and covers that run's time range.
+| Term | Meaning |
+|---|---|
+| Suite run | One VMaaS, CaaS or BMaaS suite run, from any trigger. Netris, stretched, agentless and the named installs are other scenarios and are not counted. |
+| Pass rate | Passed runs ÷ (passed + failed). A cancelled run (usually replaced by a newer push) is left out. |
+| Time to result | From GitHub creating the run's first job to its last job finishing. It includes the wait for a runner, because a developer waits for it too. Measured on passing runs: a failed run stops early. |
+| Wait for a runner | The time the run's E2E job waited in GitHub's queue for a self-hosted runner. |
+| Phase | A group of workflow steps: Waiting for a runner, CI setup, Cluster and hosts, Build, Install OSAC, Tests, Logs and teardown. Every step of the three suites' workflows has a phase. |
+| Cause | The phase of a failed run's **first** failed step. Areas: **Tests**, **Build**, **OSAC install**, **CI infrastructure** (cluster, hosts, CI setup, teardown, a timeout, a lost runner) and **Blocked** (an unapproved fork or refused inputs). |
+| Flaky test | A test that passed and failed on the same commit in the window. |
+| A test's time | **Setup** (its fixtures), **waiting for the product** (every `poll_until` wait: OSAC reconciling a resource), **test actions** (the rest: CLI and API calls, assertions) and **teardown**. The four add up to the test's duration. |
+| Rebased | A pull request force-pushed at least once. |
+| E2E reruns | E2E runs of a pull request beyond the first of each suite. |
 
-The summary shows **Result**, **Tests run**, and **Test time**. Result comes from GitHub. A live run shows **Still running** and refreshes every minute.
+## Overview
 
-Open a row for detail:
+Two rows of numbers: pass rate and its change, typical and slow time to result, the typical wait for a runner, the share of failures caused by CI, runs, failed runs, runner hours, the share of hours spent on failed runs, flaky tests and tests with a failure. Below them:
 
-- **Failures**: failed tests, error messages, test time, and a link to the full artifact.
-- **Jobs and steps**: every job that ran, its result and duration, then each job's steps with their durations.
-- **Test list**: every test, result, start time, and duration.
-- **Run info**: GitHub run, pull request, workflow, commit, and test paths. Every identifier is a link.
-- **Cluster**: pods, CPU by pod, memory by pod, node CPU, and node memory during the run.
+- **Suite health**: the same numbers per suite, with links to that suite's time and failure pages.
+- **Where a passing run spends its time** and **Why runs failed**: one bar per suite.
+- **Pass rate per day** and **Typical time to result per day**.
+- **Where the tests' time goes** and **What the tests wait for in the product**: from the recorded runs.
+- **Tests that fail most** and **Tests that take the most time**.
+- **Latest failed runs**, then the pull request numbers of the window.
 
-Cluster graphs are flat at zero before the test cluster is created.
+## Where the time goes
 
-A run without detailed test data shows **Not finished** and no test count. A run whose code details were not saved says **Run details not saved**. A trace with no session end stays **Not finished** until the session span arrives.
+Numbers for the run as a whole, then the average passing run phase by phase, the phase table (average, median, p90, share, change), phase time per day, the wait for a runner per day and every step. **Inside the tests** splits the tests' own time, lists the tests by total time, and lists each `poll_until` wait grouped by what it waits for, with how long it took and how often it timed out, plus the shared fixtures.
+
+## Why runs fail
+
+Failed runs per cause, per day and per suite; the steps runs failed in; every failing test with its fail rate, flaky commits and last error; the flaky tests; the error messages grouped after replacing names, ids and numbers; and every failed run with its cause, failed step and first failed test.
+
+## Test history
+
+Pick the **Test** (type to search; the list starts with the tests that take the most time). The page shows the runs, failure rate, typical and slow duration, the change against the window before, flaky commits, the duration of every run (green passed, red failed) with the daily median, passes and failures per day, where the test's time goes and its change per day, what it waits for, the fixtures it sets up, why it fails, and every run.
 
 ## Pull requests
 
-The page answers one question: how long did this pull request take, and what did it run? Choose one from the list, or type its number. The **Repository** control picks `osac` or `osac-test-infra`. The list holds pull requests that merged or closed in the last 30 days; an open pull request can still be typed. The dropdown is the only browser, so the page has no all-pull-request tables.
+The top half covers every pull request merged or closed in the window, in the chosen **Repository**. It shows the median time to merge, the wait for a first review, review to approval, approval to the queue, time in the merge queue, queue ejections, commits, rebases, force pushes, changes requested, E2E runs, reruns and failed E2E runs, then the stage medians per week and every pull request. Click a number to open that pull request below.
 
-- **Identity line**: the number, title, author and repository are links. State and one date line say whether it is open, or when it merged or closed.
-- **Five numbers**: Total, plus the four long stages (Authoring, Review, Waiting and Queue). A number the data cannot support says **not measured**, never 0.
-- **Stacked stage chart**: all five stages as one horizontal bar on a fitted duration axis, so the whole pull request fits however long it took. A missing stage is absent from the bar, never zero.
-- **Queue attempts**: each merge-queue entry, its duration, whether it passed or was ejected, and why. The entry opens its run; the outcome and reason open the GitHub comment when one exists, and the run otherwise.
-- **E2E runs**: newest first, one row per suite. **Code** is `vN · shortsha`, linked to the commit. A pull-request run shows the commit it tested, so a rebase appears as a new code version. A merge-queue run tests a temporary merge commit and shows no code version. **Test data** says Yes, No or Unknown. **Run** opens the run page when test data was recorded, and GitHub otherwise. The column filter is the search.
-- **Status**: the one place a long explanation appears, such as why a pull request is missing or its history could not be read.
+The bottom half covers one pull request. Its identity line, the total and four long stages (Authoring, Review, Waiting and Queue), the stacked stage bar, the queue attempts with why each one was ejected, and every E2E run with the commit it tested. Queue time ends at the last merge-queue attempt; for an open pull request still in the queue it runs to now. An open pull request is read from GitHub when the page loads.
 
-Queue time ends at the last merge-queue attempt, and the merge runs from that moment to the merge. For an open pull request still in the queue, queue time runs to now. The tiles show the total and the four long stages, so they do not add up by themselves; the merge segment is only in the bar.
+## All runs
 
-A pull request that is still open is read from GitHub when the page loads, so its dates are current. The saved history starts after it merges or closes.
+One row per run, newest first: run, workflow, repository, PR, branch, trigger, result, recorded, suite, cause, failed step, run time and start. **Repository**, **Suite** and **Result** filter the data, and every column has a funnel filter. `No` under Recorded means no test data: most such runs failed before the suite ran. `Unknown` means the check could not judge. A run with no recording opens GitHub.
 
-## Trends
+## E2E run
 
-The page answers "is this test or this job failing more often or getting slower?" for one unit over the last 7 or 30 days. Choose **Days**, choose **Unit** (Test or Job), then type a name or open a row from **Matching tests** or **Matching jobs**. A test is a pytest node id such as `tests/e2e/vmaas/test_vm.py::test_create`. A job is a repository and display name such as `osac / E2E VMaaS Full Install`, so retries and suites of one job count together.
-
-| Section | Contents |
-|---|---|
-| Summary | Runs, Passed, Failed, pass rate, p50, p95, p99 and mean duration, plus the number of measured runs and the measurement basis. Pass rate is passes divided by all stored runs, including cancelled. A value the rollup never measured says **not measured**, never 0. |
-| Daily passes and failures | One point per day for the selected unit. |
-| Duration by day | One point per day: for a test, the median of that day's stored rows for p50, p95 and p99 and a run-weighted mean; for a job, true percentiles over that day's records. Neither is a percentile over the whole window; the Summary row is. |
-| Recent runs | The newest 50 runs: when, result, duration, commit, and a link to the run. |
-| Matching tests and Matching jobs | The units whose name contains what you typed, so a blank box is never the only choice. Opening a row selects that unit. |
-
-The last row keeps the broad search: every test whose id matches the Name box, per day, summed over source runs.
-
-A test's history is the daily JUnit rollup in `trends.db` plus the raw per-run rows behind it. A job's history is the workflow exporter's job records. GitHub owns pass or fail in both.
+The summary shows the result, tests run and test time, then **Where this run's time went** (one bar per suite), the time to result and the wait for a runner. Open a row for detail: failures, jobs and steps, the test list (with each test's setup, waiting, actions and teardown), run info, cluster graphs, and **Waits, fixtures and the step timeline**. A live run shows **Still running** and refreshes every minute.
 
 ## Data
 
-Run details, test reports, cluster data, and pull request history are kept for 30 days. Tempo searches are limited to 7 days. Pod logs stay in the GitHub artifact.
+- The suite runs, their tests, their time split and the pull requests are kept for 90 days.
+- Traces, cluster data and the GitHub artifact (pod logs) are kept for 30 days.
+- New runs reach the pages within the hour: the test rollup runs at 25 past, the time split at 45 past.
 
 ## Missing data
 
 | What you see | What it means |
 |---|---|
+| **not measured** | The data cannot give this value, for example the runner wait of a run stored before job timelines were kept. |
 | **No recording** | The run has no detailed test data. |
 | **Run details not saved** | The run did not save its code or test settings. |
 | **Not finished** | The trace has no end of session. Reload after the run ends. |
-| **No test history** | No readable test report exists for the selected days. |
-| **not measured** | The rollup stored no duration for that day, so p99 or mean is unknown. It is not zero. Older days predate the raw per-run rows, so their window percentile is not measured either. |
+| Empty *Inside the tests* | No recorded run of the window has a complete trace yet. |
 | No pod samples | The capture has no cluster metrics for this time range. |
 
 ## More detail
 
-- [`observability.md`](observability.md): why the system looks like this, what is missing, and the roadmap.
-- [`model.md`](model.md): the three dashboard units and their sections.
-- [`sources.md`](sources.md): where each answer comes from.
+- [`model.md`](model.md): the pages, what each counts, and the keys that join them.
+- [`sources.md`](sources.md): where each answer comes from and how long it is kept.
+- [`observability.md`](observability.md): why it looks like this, what is missing, and the roadmap.
 - [`../ci-observe.md`](../ci-observe.md): deployment and backend checks.

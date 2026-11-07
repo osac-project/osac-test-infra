@@ -40,7 +40,9 @@ from prometheus_client import (
 # this directory on sys.path the way a package import would, so the
 # directory is added here before importing the sibling.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ci_observe_phases
 from ci_observe_capture_view import CIObserveCaptureView
+from ci_observe_insights import CIObserveInsights
 from ci_observe_run_evidence import CIObserveRunEvidence
 from ci_observe_runs import CIObserveRuns
 
@@ -115,8 +117,15 @@ JOB_COLUMNS = [
     "conclusion", "event", "trigger", "duration_s", "duration", "actor",
     "url", "created_at", "updated_at", "run_number", "run_attempt",
     "failed_step", "steps_json", "failure_reason", "runner_name", "head_sha",
-    "run_id",
+    "run_id", "timeline_json",
 ]
+
+# How many stored E2E rows without a timeline get one per poll cycle, and the
+# GitHub budget below which the catch-up waits. One row costs one jobs call;
+# a dozen per 90-second cycle fills a month of E2E history in a few hours
+# without competing with the poller for the shared token.
+TIMELINE_BACKFILL_PER_CYCLE = int(os.getenv("TIMELINE_BACKFILL_PER_CYCLE", "12"))
+TIMELINE_BACKFILL_MIN_RATE_LIMIT = int(os.getenv("TIMELINE_BACKFILL_MIN_RATE_LIMIT", "1500"))
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics
@@ -1150,6 +1159,9 @@ class WorkflowExporter:
                 "url": main.get("html_url") or record.get("url", ""),
                 "runner_name": self._extract_runner_names(group),
                 "steps": self._extract_step_durations(group),
+                # The suite's own jobs, not the run's: a merge-queue run
+                # holds every suite, and each row times only its own.
+                "timeline_json": json.dumps(self._extract_timeline(group), separators=(",", ":")),
                 "failure_reason": "",
                 "failed_step": "",
                 "suite": True,
@@ -1357,6 +1369,9 @@ class WorkflowExporter:
         self._pr_map = {}
         self._pr_map_ts = 0
         self._pr_backfill_done = False
+        # The last X-RateLimit-Remaining GitHub sent, None before the first
+        # call. The timeline catch-up reads it; nothing else does.
+        self._rate_limit_remaining = None
         # Run-evidence lookup for /api/ci-observe/run (see
         # get_ci_observe_run_json and ci_observe_run_evidence.py): parsed
         # native JUnit results and run metadata fetched on demand from
@@ -1377,6 +1392,10 @@ class WorkflowExporter:
         # (see ci_observe_capture_view.py). Cached and single-flighted; the
         # Capture dashboard is the only reader.
         self._capture_view = CIObserveCaptureView(self)
+        # The at-a-glance documents behind the ci-observe Overview, time,
+        # failure and test pages (ci_observe_insights.py): read-only over
+        # this DB and trends.db, cached per parameter set.
+        self._insights = CIObserveInsights(DB_FILE, os.path.join(CACHE_DIR, "trends.db"))
         self._init_db()
 
     # -- SQLite persistence ---------------------------------------------------
@@ -1421,7 +1440,8 @@ class WorkflowExporter:
             # schema, so a DB from before pr_url/pr_display existed needs
             # an explicit migration.
             existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
-            for col in ("pr_url", "pr_display", "failure_reason", "runner_name", "head_sha", "run_id"):
+            for col in ("pr_url", "pr_display", "failure_reason", "runner_name", "head_sha", "run_id",
+                        "timeline_json"):
                 if col not in existing_cols:
                     conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT DEFAULT ''")
             # The run index joins captures to jobs on the GitHub run id. The
@@ -1872,6 +1892,69 @@ class WorkflowExporter:
         if updates:
             logger.info("Backfilled run_id on %d stored job row(s)", len(updates))
 
+    def _backfill_timelines_if_needed(self, limit=None):
+        """Give stored E2E rows the timeline they were stored without.
+
+        Rows written before timeline_json existed have step durations but no
+        job or step timestamps, so the time page cannot tell their wait for
+        a runner or where a timed-out run stopped. A few rows per poll
+        cycle, newest first, refetch their jobs (one call each) and store
+        the timeline; the rest wait for the next cycle. The pass waits while
+        the shared GitHub budget is below TIMELINE_BACKFILL_MIN_RATE_LIMIT.
+
+        A row's own jobs are those of its attempt. A suite row of the
+        pull-request or merge-queue flow keeps only its suite's jobs, the
+        same group _suite_records stored it from. A failed fetch leaves the
+        row for a later cycle; a run with no jobs at all stores "[]" so it
+        is not fetched again. Returns the number of rows updated.
+        """
+        limit = TIMELINE_BACKFILL_PER_CYCLE if limit is None else limit
+        if not TOKEN or limit <= 0:
+            return 0
+        if (self._rate_limit_remaining is not None
+                and self._rate_limit_remaining < TIMELINE_BACKFILL_MIN_RATE_LIMIT):
+            return 0
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT id, repo, run_id, run_attempt, workflow FROM jobs "
+                "WHERE category = 'e2e' AND COALESCE(timeline_json, '') = '' "
+                "AND COALESCE(conclusion, '') != '' AND COALESCE(run_id, '') != '' "
+                "ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        updated = 0
+        for row in rows:
+            try:
+                run_id = int(row["run_id"])
+            except (TypeError, ValueError):
+                continue
+            jobs = self._fetch_run_jobs(row["repo"], run_id, row["run_attempt"] or 1)
+            if jobs is None:
+                continue
+            if row["id"] == run_id:
+                stub = {"workflow": row["workflow"], "category": "e2e"}
+                self._refine_pipeline_category(stub, jobs)
+                group = jobs
+            else:
+                # A suite row: its jobs are the ones under its suite's caller
+                # job ("vmaas / e2e-vmaas-full-install / e2e"), unmarked.
+                suite = (row["workflow"] or "").split(" ", 2)[1] if " " in (row["workflow"] or "") else ""
+                group = [
+                    {**job, "pipeline_suite": False}
+                    for job in jobs
+                    if self._suite_of(job) and self._suite_of(job).lower() == suite.lower()
+                ]
+            timeline = json.dumps(self._extract_timeline(group), separators=(",", ":"))
+            with self._db() as conn:
+                conn.execute(
+                    "UPDATE jobs SET timeline_json = ? WHERE id = ? AND COALESCE(timeline_json, '') = ''",
+                    (timeline, row["id"]),
+                )
+            updated += 1
+        if updated:
+            logger.info("Stored the job timeline of %d earlier E2E row(s)", updated)
+        return updated
+
     def start_capture_poll(self):
         """Start the 60-second capture registry poll on a daemon thread.
 
@@ -1926,6 +2009,9 @@ class WorkflowExporter:
         remaining = resp.headers.get("X-RateLimit-Remaining")
         if remaining is not None:
             api_remaining.labels(org=ORG).set(int(remaining))
+            # Kept for the timeline catch-up, which waits while the shared
+            # budget is low.
+            self._rate_limit_remaining = int(remaining)
 
     def _get(self, url):
         resp = requests.get(url, headers=self.headers, timeout=15)
@@ -2734,6 +2820,52 @@ class WorkflowExporter:
                     pass
         return steps
 
+    def _extract_timeline(self, jobs):
+        """When each job and step of a run happened, for the ci-observe time
+        and failure pages.
+
+        One entry per job that is not plumbing (the same jobs
+        _extract_step_durations reads): when GitHub created it, when a
+        runner picked it up and when it finished, so the wait for a runner
+        is created_at to started_at; and every step with its own start,
+        end, status and conclusion, so a step GitHub cancelled at the job's
+        time limit is visible. Unlike the step durations, steps of a job
+        that did not finish (cancelled, still running) are kept: that is
+        where a timed-out or lost run stopped.
+        """
+        timeline = []
+        for job in jobs or []:
+            if self._is_plumbing(job):
+                continue
+            timeline.append({
+                "name": job.get("name") or "",
+                "status": job.get("status") or "",
+                "conclusion": job.get("conclusion") or "",
+                "created_at": job.get("created_at") or "",
+                "started_at": job.get("started_at") or "",
+                "completed_at": job.get("completed_at") or "",
+                "runner_name": job.get("runner_name") or "",
+                "steps": [
+                    {
+                        "number": step.get("number"),
+                        "name": step.get("name") or "",
+                        "status": step.get("status") or "",
+                        "conclusion": step.get("conclusion") or "",
+                        "started_at": step.get("started_at") or "",
+                        "completed_at": step.get("completed_at") or "",
+                    }
+                    for step in job.get("steps") or []
+                ],
+            })
+        return timeline
+
+    def _timeline_json(self, record, jobs):
+        """The stored timeline of an E2E row, "" for every other category:
+        only the ci-observe pages read it, and they read E2E rows only."""
+        if (record.get("category") or "") != "e2e":
+            return ""
+        return json.dumps(self._extract_timeline(jobs), separators=(",", ":"))
+
     @staticmethod
     def _extract_runner_names(jobs):
         """Extract the machine(s) a run's job(s) executed on.
@@ -2816,6 +2948,7 @@ class WorkflowExporter:
                 if jobs:
                     record["runner_name"] = self._extract_runner_names(jobs)
                     record["steps"] = self._extract_step_durations(jobs)
+                record["timeline_json"] = self._timeline_json(record, jobs)
                 self._apply_ai_status(record, jobs)
                 if conclusion == "failure":
                     # jobs may be [] (fetch succeeded, zero job entries) --
@@ -2892,6 +3025,7 @@ class WorkflowExporter:
             if jobs:
                 record["runner_name"] = self._extract_runner_names(jobs)
                 record["steps"] = self._extract_step_durations(jobs)
+            record["timeline_json"] = self._timeline_json(record, jobs)
             self._apply_ai_status(record, jobs)
             if conclusion == "failure":
                 # jobs may be [] (fetch succeeded, zero job entries) --
@@ -2983,6 +3117,7 @@ class WorkflowExporter:
                     if jobs:
                         record["runner_name"] = self._extract_runner_names(jobs)
                         record["steps"] = self._extract_step_durations(jobs)
+                    record["timeline_json"] = self._timeline_json(record, jobs)
                     self._apply_ai_status(record, jobs)
                     if conclusion == "failure":
                         # jobs may be [] (fetch succeeded, zero job entries)
@@ -3040,6 +3175,7 @@ class WorkflowExporter:
         if jobs:
             record["runner_name"] = self._extract_runner_names(jobs)
             record["steps"] = self._extract_step_durations(jobs)
+        record["timeline_json"] = self._timeline_json(record, jobs)
         self._apply_ai_status(record, jobs)
         if conclusion == "failure":
             # jobs may be [] (fetch succeeded, zero job entries)
@@ -3277,6 +3413,13 @@ class WorkflowExporter:
         with self._lock:
             self.active_runs = current_active
 
+        # Last, after this cycle's own work: older E2E rows get their job
+        # timeline a few at a time. Best-effort; it must never stop a cycle.
+        try:
+            self._backfill_timelines_if_needed()
+        except Exception:
+            logger.exception("Timeline catch-up failed this cycle")
+
         with self._db() as conn:
             total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 
@@ -3348,6 +3491,10 @@ class WorkflowExporter:
         job = dict(row)
         steps_json = job.pop("steps_json", None)
         job["steps"] = json.loads(steps_json) if steps_json else []
+        # The per-job timeline is for the ci-observe pages, which read it
+        # with their own SQL. /api/jobs serves up to the whole history, so it
+        # stays out of every job document here.
+        job.pop("timeline_json", None)
         return job
 
     def get_jobs_json(self, params):
@@ -4502,6 +4649,15 @@ class WorkflowExporter:
     # #<pr> · <sha>", and the Netris callers append " / PR #<n> @ <sha>" to
     # their run name. The PR number and SHA vary, so these are prefixes of
     # one suite's naming scheme, not a substring match on the whole name.
+    # "core" is the standard VMaaS, CaaS and BMaaS suites together: the
+    # population every other ci-observe page reads (ci_observe_phases). The
+    # agentless-net CaaS variant runs on other infrastructure and is not one.
+    CI_OBSERVE_SUITE_WORKFLOWS["core"] = (
+        CI_OBSERVE_SUITE_WORKFLOWS["vmaas"]
+        + tuple(filter(lambda name: "agentless" not in name, CI_OBSERVE_SUITE_WORKFLOWS["caas"]))
+        + CI_OBSERVE_SUITE_WORKFLOWS["bmaas"]
+    )
+
     CI_OBSERVE_SUITE_PREFIXES: ClassVar[dict[str, tuple[str, ...]]] = {
         "vmaas": ("e2e suite · vmaas · ",),
         "caas": ("e2e suite · caas · ",),
@@ -4514,6 +4670,7 @@ class WorkflowExporter:
             "e2e netris full suite / pr #",
         ),
         "stretched": ("e2e suite · stretched-netris · ",),
+        "core": ("e2e suite · vmaas · ", "e2e suite · caas · ", "e2e suite · bmaas · "),
     }
 
     def _ci_observe_run_where(
@@ -4710,6 +4867,10 @@ class WorkflowExporter:
                    MAX(CASE WHEN LOWER(COALESCE(j.conclusion, ''))
                        IN ('failure', 'timed_out', 'startup_failure')
                        THEN j.failed_step END) AS failed_step,
+                   MAX(j.duration_s) AS duration_s,
+                   MAX(CASE WHEN LOWER(COALESCE(j.conclusion, ''))
+                       IN ('failure', 'timed_out', 'startup_failure')
+                       THEN j.timeline_json END) AS failed_timeline,
                    COUNT(*) OVER () AS matched,
                    GROUP_CONCAT(DISTINCT c.capture_id) AS capture_ids,
                    MAX(CASE WHEN c.identity_source = 'info' THEN 1 ELSE 0 END) AS identity_info
@@ -4735,6 +4896,11 @@ class WorkflowExporter:
             failed_step = str(row.pop("failed_step") or "").strip()
             failure_area = self._failure_area(failed_step)
             failed_step_name = self._failed_step_name(failed_step)
+            # The cause the other ci-observe pages name, so the run list and
+            # the failure page agree on why a run failed.
+            cause = ci_observe_phases.failure_cause(
+                row.get("conclusion"), failed_step, ci_observe_phases.load_timeline(row.pop("failed_timeline", ""))
+            )
             workflow = ",".join(sorted(str(row["workflow"] or "").split(",")))
             pr_display = str(row.pop("pr_display") or "").strip()
             pr_url = str(row.pop("pr_url") or "").strip()
@@ -4776,8 +4942,16 @@ class WorkflowExporter:
                     # consumers.
                     "failure_reason": failure_reason,
                     "failure_area": failure_area,
-                    "failed_step_name": failed_step_name,
+                    "failed_step_name": failed_step_name or cause["step"],
                     "failed_step": failed_step,
+                    "cause": cause["cause"],
+                    "cause_label": cause["label"],
+                    "cause_area": cause["area"],
+                    "suite_label": ", ".join(sorted({
+                        ci_observe_phases.suite_label(ci_observe_phases.suite_key(name))
+                        for name in str(row["workflow"] or "").split(",")
+                        if ci_observe_phases.suite_key(name)
+                    })),
                 }
             )
         return {
@@ -4834,7 +5008,7 @@ class WorkflowExporter:
     )
 
     def _trends_history_url(self, kind, name, days=30, repo=""):
-        """A Trends page link with one unit preselected. The builder lives
+        """The history page of one unit (a test opens Test history). The builder lives
         in ci_observe_history, next to the endpoint that serves it."""
         import ci_observe_history
 
@@ -5033,6 +5207,19 @@ class WorkflowExporter:
         return ci_observe_history.jobs_document(DB_FILE, params)
 
     # --- ci-observe history (end) -----------------------------------------
+
+    # --- ci-observe insights (begin) ----------------------------------------
+    # GET /api/ci-observe/{health,time,failures,tests,test,waits}: the
+    # at-a-glance documents. Read-only over this exporter's DB and
+    # trends.db; see ci_observe_insights.py for the parameters and shapes.
+    CI_OBSERVE_INSIGHT_PATHS: ClassVar[dict[str, str]] = {
+        f"/api/ci-observe/{kind}": kind for kind in CIObserveInsights.KINDS
+    }
+
+    def get_ci_observe_insights_json(self, kind, params):
+        return self._insights.get_json(kind, params)
+
+    # --- ci-observe insights (end) ------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -5344,6 +5531,20 @@ class ExporterHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload.encode())
         # --- ci-observe history: end ---------------------------------------
+        # --- ci-observe insights: begin ------------------------------------
+        # GET /api/ci-observe/{health,time,failures,tests,test,waits}. Always
+        # 200: a store that is not written yet is a note in the document.
+        elif parsed.path in WorkflowExporter.CI_OBSERVE_INSIGHT_PATHS:
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            kind = WorkflowExporter.CI_OBSERVE_INSIGHT_PATHS[parsed.path]
+            data = self.exporter.get_ci_observe_insights_json(kind, params)
+            payload = json.dumps(data, default=str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload.encode())
+        # --- ci-observe insights: end --------------------------------------
         # --- ci-observe pull requests: begin (single additive block) --------
         # GET /api/ci-observe/prs?number=<n>&repo=<name>  one PR's life and
         #                                                 its queue attempts

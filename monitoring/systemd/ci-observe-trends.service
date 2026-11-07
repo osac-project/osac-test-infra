@@ -1,13 +1,18 @@
-# Daily ci-observe per-test rollup.
+# Hourly ci-observe per-test rollup and run archive.
 # Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-trends.service
 #
-# Triggered by ci-observe-trends.timer. The rollup runs inside the
-# workflow-exporter container because that container already has the GitHub
-# token, the `requests` dependency and the /data volume where trends.db lives.
-# monitoring-setup.sh --update-central queues it once after a deploy with
-# --no-block, so the schema migration and the 30-day re-rollup start without
-# holding the deploy; the page keeps the previous rollup until they finish.
-# Do not enable it directly; the timer owns the schedule.
+# Triggered by ci-observe-trends.timer. Each pass reads the JUnit artifact of
+# every E2E run of the last 30 days that it has not read yet (GitHub keeps
+# artifacts 30 days), and copies the exporter's VMaaS, CaaS and BMaaS suite
+# runs into the 90-day archive (CI_OBSERVE_KEEP_DAYS). A run already read is
+# not fetched again, so an hourly pass costs only the new runs.
+#
+# The rollup runs inside the workflow-exporter container because that
+# container already has the GitHub token, the `requests` dependency and the
+# /data volume where trends.db lives. monitoring-setup.sh --update-central
+# queues it once after a deploy with --no-block, so a schema migration starts
+# without holding the deploy; the pages keep the previous rollup until it
+# finishes. Do not enable it directly; the timer owns the schedule.
 
 [Unit]
 Description=ci-observe per-test JUnit rollup

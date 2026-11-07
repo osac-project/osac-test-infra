@@ -1,12 +1,13 @@
 """The Grafana dashboards live in two folders, because they are two products.
 
-CI Fleet covers runners, machines, jobs and queue health. ci-observe covers one
-CI run, the pull request and the trends. The split is by filename so the repo
-stays flat and every dashboard test keeps reading its file at one path.
+CI Fleet covers runners, machines, jobs and queue health. ci-observe covers the
+VMaaS, CaaS and BMaaS E2E runs, their tests and the pull requests. The split is
+by filename so the repo stays flat and every dashboard test keeps reading its
+file at one path.
 
-The ci-observe folder holds exactly four files: the entry page (a router) and
-the three model dashboards, Capture, Pull requests and Trends. Compare is a
-section of Trends, not a dashboard of its own.
+The ci-observe folder holds seven pages: the Overview (the entry page), three
+across-runs pages (Where the time goes, Why runs fail, Test history), Pull
+requests, the runs list and one E2E run.
 """
 
 from __future__ import annotations
@@ -46,13 +47,14 @@ def test_every_dashboard_file_belongs_to_a_folder() -> None:
 
 
 def test_known_dashboards_are_in_the_expected_folder() -> None:
-    # The model's three content dashboards plus the entry page, which is a
-    # router and not one of the three. Compare merged into Trends.
     ci_observe = {
-        "ci-observe-runs-home.json",  # entry page
-        "ci-observe-runs.json",  # Capture
+        "ci-observe-home.json",  # Overview, the entry page
+        "ci-observe-time.json",  # Where the time goes
+        "ci-observe-failures.json",  # Why runs fail
+        "ci-observe-test.json",  # Test history
         "ci-observe-pull-requests.json",  # Pull requests
-        "ci-observe-trends.json",  # Trends, including the Compare section
+        "ci-observe-runs-home.json",  # every run
+        "ci-observe-runs.json",  # one E2E run
     }
     ci_fleet = {
         "runner-health.json",
@@ -70,10 +72,13 @@ def test_known_dashboards_are_in_the_expected_folder() -> None:
     assert {path.name for path in DASHBOARDS.glob("ci-observe-*.json")} == ci_observe
     assert {path.name for path in DASHBOARDS.glob("*.json")} == set(expected)
 
-    # Compare and the Run evidence sections are rows on the model dashboards now,
-    # not dashboards of their own.
-    for merged in ("ci-observe-cluster.json", "ci-observe-run-evidence.json", "ci-observe-comparison.json"):
-        assert not (DASHBOARDS / merged).exists(), f"{merged} was merged into a model dashboard"
+    # The Run evidence sections are rows on the run page. Trends became Test
+    # history and Where the time goes.
+    for merged in (
+        "ci-observe-cluster.json", "ci-observe-run-evidence.json", "ci-observe-comparison.json",
+        "ci-observe-trends.json",
+    ):
+        assert not (DASHBOARDS / merged).exists(), f"{merged} was merged into another page"
 
 
 def test_dashboard_titles_name_their_folder() -> None:

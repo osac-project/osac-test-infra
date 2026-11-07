@@ -33,6 +33,8 @@ import xml.etree.ElementTree as ET
 
 import requests
 
+import ci_observe_phases
+
 logger = logging.getLogger(__name__)
 
 # GitHub access mirrors workflow-exporter.py's module-level config: the
@@ -172,7 +174,14 @@ class CIObserveRunEvidence:
                 "SELECT * FROM jobs WHERE id = :run_id OR url LIKE :job_url",
                 {"run_id": run_id, "job_url": f"%/actions/runs/{run_id}/job/%"},
             ).fetchall()
-        return [self.exporter._row_to_job(r) for r in rows]
+        jobs = []
+        for row in rows:
+            job = self.exporter._row_to_job(row)
+            # The job and step timeline is not part of the job document the
+            # exporter serves; the run page reads it as the run's phases.
+            job["timeline"] = ci_observe_phases.load_timeline(dict(row).get("timeline_json"))
+            jobs.append(job)
+        return jobs
 
     @staticmethod
     def _failed_step_names(job):
@@ -208,6 +217,56 @@ class CIObserveRunEvidence:
                 if len(steps) >= CIObserveRunEvidence.EVIDENCE_MAX_STEPS:
                     return steps
         return steps
+
+    @staticmethod
+    def _ci_observe_timing(jobs):
+        """Where the run's time went: one `phases` row per suite row (the
+        bar the run page draws), the run's `timing` (time to result, wait for
+        a runner, failure cause) and its step `timeline`, each step with its
+        start as seconds after the first job was created."""
+        phase_rows = []
+        timing = []
+        timeline_rows = []
+        for job in jobs:
+            timeline = job.get("timeline") or []
+            result = ci_observe_phases.run_phases(timeline, job.get("steps") or [])
+            if not result["measured"]:
+                continue
+            suite = ci_observe_phases.suite_key(job.get("workflow"))
+            label = ci_observe_phases.suite_label(suite) if suite else (job.get("workflow") or "This run")
+            phase_rows.append({"category": label, **result["phases"]})
+            cause = ci_observe_phases.failure_cause(job.get("conclusion"), job.get("failed_step"), timeline)
+            timing.append({
+                "suite": label,
+                "total_s": result["total_s"] if result["total_s"] is not None else job.get("duration_s"),
+                "queue_s": result["queue_s"],
+                "source": result["source"],
+                "cause_label": cause["label"],
+                "cause_area": cause["area"],
+                "failed_step": cause["step"],
+            })
+            created = [ci_observe_phases.parse_time(entry.get("created_at")) for entry in timeline]
+            created = [moment for moment in created if moment]
+            origin = min(created) if created else None
+            for entry in timeline:
+                for step in entry.get("steps") or []:
+                    start = ci_observe_phases.parse_time(step.get("started_at"))
+                    seconds = ci_observe_phases.seconds_between(step.get("started_at"), step.get("completed_at"))
+                    if start is None or seconds is None:
+                        continue
+                    phase = ci_observe_phases.step_phase(step.get("name"), entry.get("name"))
+                    timeline_rows.append({
+                        "suite": label,
+                        "job": entry.get("name") or "",
+                        "step": step.get("name") or "",
+                        "phase": phase,
+                        "phase_label": ci_observe_phases.PHASE_LABELS[phase],
+                        "start_s": round((start - origin).total_seconds()) if origin else None,
+                        "duration_s": round(seconds),
+                        "conclusion": step.get("conclusion") or "",
+                    })
+        timeline_rows.sort(key=lambda row: (row["suite"], row["start_s"] if row["start_s"] is not None else 0))
+        return {"phases": phase_rows, "timing": timing, "timeline": timeline_rows}
 
     def _ci_observe_run_summary(self, rows, run_id, run_attempt):
         """The run-level summary. rows are the stored rows matching the
@@ -657,6 +716,9 @@ class CIObserveRunEvidence:
             "run": None,
             "jobs": [],
             "steps": [],
+            "phases": [],
+            "timing": [],
+            "timeline": [],
             "native": None,
             "coverage": coverage,
         }
@@ -731,17 +793,18 @@ class CIObserveRunEvidence:
                 "failure_reason": j.get("failure_reason") or "",
                 "steps": j.get("steps", []),
                 "url": j.get("url", ""),
-                # The job name opens its Trends history, not GitHub: the
-                # question after a run is "is this job failing more often or
-                # getting slower?" The GitHub link stays on the url field.
+                # The job name opens its suite's Where the time goes page, not
+                # GitHub: the question after a run is "is this job getting
+                # slower, and where?" The GitHub link stays on the url field.
                 "history_url": ci_observe_history.history_url(
                     "job", j.get("display_name") or j.get("workflow", ""),
-                    repo=j.get("repo", ""),
+                    repo=j.get("repo", ""), workflow=j.get("workflow", ""),
                 ),
             }
             for j in jobs
         ]
         doc["steps"] = self._ci_observe_steps(jobs)
+        doc.update(self._ci_observe_timing(jobs))
 
         repo = (doc["run"] or {}).get("repo") or rows[0].get("repo", "")
         doc["native"] = self._ci_observe_native(run_id, run_attempt, repo)

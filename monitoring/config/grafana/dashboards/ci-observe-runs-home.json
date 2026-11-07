@@ -8,14 +8,64 @@
   "graphTooltip": 0,
   "links": [
     {
-      "title": "Pull requests",
+      "title": "Overview",
       "type": "link",
-      "url": "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests"
+      "url": "/d/ci-observe-home/ci-observe-e28094-overview",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Where the time goes",
+      "type": "link",
+      "url": "/d/ci-observe-time/ci-observe-e28094-where-the-time-goes",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Why runs fail",
+      "type": "link",
+      "url": "/d/ci-observe-failures/ci-observe-e28094-why-runs-fail",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
     },
     {
       "title": "Test history",
       "type": "link",
-      "url": "/d/ci-observe-trends/ci-observe-e28094-trends"
+      "url": "/d/ci-observe-test/ci-observe-e28094-test-history",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
+    },
+    {
+      "title": "Pull requests",
+      "type": "link",
+      "url": "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests",
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": ""
     }
   ],
   "panels": [
@@ -36,7 +86,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Recent E2E runs. Filter by repository, suite or result above, or use a column filter. A row with no test data opens GitHub. **No** under Recorded means no test data. **Failed step** names the exact step the run stopped in, such as Install OSAC or Build and load component images; use its filter to narrow by step. The typical No row is a run that failed before the suite started. Netris, full-regression and agentless jobs cannot record yet."
+        "content": "Recent E2E runs. Filter by repository, suite or result above, or use a column filter. A row with no test data opens GitHub. **No** under Recorded means no test data. **Failed step** names the exact step the run stopped in, such as Install OSAC or Build and load component images; use its filter to narrow by step. The typical No row is a run that failed before the suite started. **Cause** says why a failed run failed, as *Why runs fail* counts it. Only the VMaaS, CaaS and BMaaS suites are listed."
       },
       "targets": []
     },
@@ -470,6 +520,66 @@
                 "value": true
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cause_label"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Cause"
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Ran for"
+              },
+              {
+                "id": "custom.width",
+                "value": 105
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
           }
         ]
       },
@@ -538,6 +648,21 @@
               "selector": "capture_state",
               "text": "capture_state",
               "type": "string"
+            },
+            {
+              "selector": "suite_label",
+              "text": "suite_label",
+              "type": "string"
+            },
+            {
+              "selector": "cause_label",
+              "text": "cause_label",
+              "type": "string"
+            },
+            {
+              "selector": "duration_s",
+              "text": "duration_s",
+              "type": "number"
             },
             {
               "selector": "failed_step_name",
@@ -645,11 +770,11 @@
         "label": "Suite",
         "type": "custom",
         "hide": 0,
-        "query": "All : all,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas,Netris : netris,Stretched : stretched",
+        "query": "All suites : core,VMaaS : vmaas,CaaS : caas,BMaaS : bmaas",
         "options": [
           {
-            "text": "All",
-            "value": "all",
+            "text": "All suites",
+            "value": "core",
             "selected": true
           },
           {
@@ -666,25 +791,17 @@
             "text": "BMaaS",
             "value": "bmaas",
             "selected": false
-          },
-          {
-            "text": "Netris",
-            "value": "netris",
-            "selected": false
-          },
-          {
-            "text": "Stretched",
-            "value": "stretched",
-            "selected": false
           }
         ],
         "current": {
-          "text": "All",
-          "value": "all",
+          "text": "All suites",
+          "value": "core",
           "selected": true
         },
+        "includeAll": false,
+        "multi": false,
         "refresh": 0,
-        "description": ""
+        "description": "The VMaaS, CaaS and BMaaS E2E suites."
       },
       {
         "name": "result",
@@ -732,7 +849,7 @@
     "hidden": true
   },
   "timezone": "browser",
-  "title": "CI Observe \u2014 Start here",
+  "title": "CI Observe — Runs",
   "uid": "ci-observe-runs-home",
   "version": 1,
   "weekStart": ""

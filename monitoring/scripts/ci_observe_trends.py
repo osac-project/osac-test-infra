@@ -1,43 +1,48 @@
-"""Daily per-test JUnit rollup behind the ci-observe Trends dashboard.
+"""Per-test JUnit rollup and the ci-observe history archive (trends.db).
 
 The exporter stores job and step history, not test history, so a per-test
 trend over every CI run needs a second store. This script builds it: it
 lists the E2E runs the exporter already knows about, downloads each run's
-JUnit artifact from GitHub, and writes one row per test per day per source
-SHA into a SQLite file of its own, trends.db. The exporter's own DB is
-opened read-only and never altered.
+JUnit artifact from GitHub, and writes one row per test per run
+(`test_runs`) plus one row per test per day per source SHA (`test_rollup`)
+into a SQLite file of its own, trends.db. The exporter's own DB is opened
+read-only and never altered.
 
 Why a rollup and not a live query: GitHub deletes a run's artifacts after
 30 days, so a per-test outcome is only readable for a month. The rollup is
-the only way to keep it. Run it daily; every run of the day accumulates
-into that day's rows, and rerunning a day replaces its rows instead of
-adding to them.
+the only way to keep it, and trends.db keeps it for CI_OBSERVE_KEEP_DAYS
+(90 by default), longer than any GitHub or exporter retention.
+
+The pass is incremental and runs every hour. A run whose JUnit was already
+read (`run_fetches`) is not downloaded again: its stored rows are reused
+when its day is rebuilt. Only finished runs that were never read, runs read
+by an older parser, and runs whose artifact could not be fetched are read.
+Rebuilding a day replaces its rows, so rerunning never doubles a day.
 
     # On the central machine, next to the exporter's data directory:
     set -a; . ~/.monitoring-server/.env; set +a
     CACHE_DIR=~/.monitoring-server/data ./ci_observe_trends.py --days 30
 
-    # Repair a day that is already stored, after a rollup bug (see --force):
+    # Re-read every run of a day and replace it, after a rollup bug:
     CACHE_DIR=~/.monitoring-server/data ./ci_observe_trends.py --day 2026-11-02 --force
 
 One run contributes one artifact set to the rollup. A run whose artifact
 has already expired contributes nothing: it is counted in rollup_days as
-unavailable, never as a green zero. The first rollup therefore covers the
-runs whose artifacts still exist (about the last 30 days), and history from
-before that cannot be recovered.
+unavailable, never as a green zero.
+
+Each test row of a run also says which suite artifact it came from
+(`suite_key`: vmaas, caas, bmaas), why the run happened (`trigger`), the
+pull request (`pr`) and, for a failure, the first line of its JUnit message
+(`message`, the bounded message attribute only, never the stack trace).
+`test_key` is the test's canonical id, the join key to the span rollup.
+
+The same pass copies the exporter's E2E job rows into `suite_runs`, so the
+ci-observe time and failure pages can look back further than the
+exporter's 30-day job history.
 
 The same file holds the read-only compare query behind
 GET /api/ci-observe/trends/compare (see compare_document): two source SHAs,
 one window of days, the tests both revisions ran and how they differ.
-
-Alongside the daily rows it keeps one row per test per run
-(`test_runs`), the raw durations behind the daily percentiles. The daily
-rollup alone cannot answer a true percentile over a whole window (a
-percentile of percentiles is not a percentile), so the history endpoint
-reads these rows for its window summary and its recent-run table. The
-table starts empty on an older database: those days have counts and their
-daily p50 and p95, but no window percentile and no recent run. Missing is
-shown as missing, never as zero.
 
 Reuse: the bounded artifact download and the zip/JUnit extraction come
 from ci_observe_run_evidence.py, imported directly (that module starts no
@@ -64,6 +69,7 @@ import requests
 # The sibling run-evidence module is not a package: add this directory to
 # sys.path the way workflow-exporter.py does before importing it.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ci_observe_phases as phases
 from ci_observe_run_evidence import CIObserveRunEvidence
 
 logging.basicConfig(
@@ -88,6 +94,23 @@ TOKEN = os.getenv("PRIVATE_GITHUB_TOKEN")
 # window.
 ARTIFACT_RETENTION_DAYS = 30
 DEFAULT_DAYS = ARTIFACT_RETENTION_DAYS
+# How long trends.db keeps what it read. The artifacts are gone after 30
+# days, so these rows are the only copy; the archive outlives every other
+# store on purpose, so a trend can look back a quarter.
+KEEP_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
+# The parser version a run was read with. A run read by an older parser is
+# read again while its artifact still exists, so new fields fill in.
+PARSER_VERSION = 2
+# A run with no readable artifact is checked once more when the first check
+# came soon after it ended; an artifact can trail the run's completion.
+NO_DATA_RECHECK_WITHIN = timedelta(hours=3)
+RECHECK_AFTER = timedelta(minutes=50)
+# A failure message is one line: the bounded JUnit message attribute, never
+# the stack trace, so a reader can group failures by what they say.
+MESSAGE_MAX_CHARS = 300
+# Terminal color codes survive in a message as "[31m" once the XML hygiene
+# has dropped the escape byte; they are noise to a reader and to grouping.
+ANSI_CODE_RE = re.compile(r"\x1b?\[[0-9;]*[A-Za-z]")
 # One run normally has one artifact; a pull-request-flow run can have one
 # per suite that ran. The caps keep a single run from dominating a batch.
 MAX_ARTIFACTS_PER_RUN = 4
@@ -106,6 +129,22 @@ ROLLUP_COLUMNS = (
 # alter an existing table, so open_trends_db adds them with ALTER TABLE. A
 # row written before that change keeps NULL there: "not measured", never 0.
 ADDED_ROLLUP_COLUMNS = ("p99_duration_s", "mean_duration_s")
+# test_runs columns added with the hourly pass. A row stored before keeps
+# NULL until its run is read again: unknown, not empty.
+ADDED_RUN_COLUMNS = ("suite_key", "test_key", "trigger", "pr", "message")
+TEST_RUN_COLUMNS = (
+    "day", "repo", "workflow", "suite", "test_id", "source_sha", "run_id",
+    "created_at", "duration_s", "passed", *ADDED_RUN_COLUMNS,
+)
+SUITE_RUN_COLUMNS = (
+    "id", "run_id", "repo", "workflow", "branch", "pr_display", "status",
+    "conclusion", "event", "trigger", "duration_s", "created_at", "updated_at",
+    "run_attempt", "failed_step", "steps_json", "failure_reason", "head_sha",
+    "url", "runner_name", "timeline_json",
+)
+# The artifact a JUnit file came from names the suite: VMaaS uploads
+# osac-logs-full-install-<run id>, the others insert their suite.
+ARTIFACT_SUITE_RE = re.compile(r"^osac-logs-(?:([a-z0-9-]+)-)?full-install-\d+$")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS test_rollup (
@@ -144,6 +183,44 @@ CREATE TABLE IF NOT EXISTS test_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_test_runs_test ON test_runs(test_id, day);
 CREATE INDEX IF NOT EXISTS idx_test_runs_day ON test_runs(day);
+CREATE INDEX IF NOT EXISTS idx_test_runs_run ON test_runs(run_id);
+-- One row per run this script tried to read: whether its JUnit was stored,
+-- and with which parser version. An hourly pass reads only what is new.
+CREATE TABLE IF NOT EXISTS run_fetches (
+    run_id INTEGER PRIMARY KEY,
+    day TEXT NOT NULL,
+    state TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    version INTEGER NOT NULL,
+    checked_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT ''
+);
+-- The exporter's E2E job rows, copied every pass and kept for KEEP_DAYS, so
+-- the time and failure pages outlive the exporter's 30-day job history.
+CREATE TABLE IF NOT EXISTS suite_runs (
+    id INTEGER PRIMARY KEY,
+    run_id TEXT NOT NULL DEFAULT '',
+    repo TEXT NOT NULL DEFAULT '',
+    workflow TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    pr_display TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT '',
+    conclusion TEXT NOT NULL DEFAULT '',
+    event TEXT NOT NULL DEFAULT '',
+    trigger TEXT NOT NULL DEFAULT '',
+    duration_s INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    run_attempt INTEGER,
+    failed_step TEXT NOT NULL DEFAULT '',
+    steps_json TEXT NOT NULL DEFAULT '[]',
+    failure_reason TEXT NOT NULL DEFAULT '',
+    head_sha TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    runner_name TEXT NOT NULL DEFAULT '',
+    timeline_json TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_suite_runs_created ON suite_runs(created_at);
 -- One row per rolled-up day: how many runs the day had, how many of them
 -- still had a readable artifact, and how many did not. A day with
 -- runs_unavailable > 0 is a partial day, not a day without failures.
@@ -197,9 +274,12 @@ def stored_rows(exporter_db, since_day):
     conn = sqlite3.connect(f"file:{exporter_db}?mode=ro", uri=True, timeout=5)
     try:
         conn.row_factory = sqlite3.Row
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+        wanted = ("id", "repo", "workflow", "category", "url", "created_at", "head_sha",
+                  "event", "pr_display", "conclusion", "status", "updated_at")
+        select = ", ".join(column if column in columns else f"'' AS {column}" for column in wanted)
         rows = conn.execute(
-            "SELECT id, repo, workflow, category, url, created_at, head_sha FROM jobs"
-            " WHERE created_at >= ? ORDER BY created_at",
+            f"SELECT {select} FROM jobs WHERE created_at >= ? ORDER BY created_at",
             (since_day,),
         ).fetchall()
         return [dict(row) for row in rows]
@@ -239,8 +319,10 @@ def candidate_runs(rows):
     ended up with source_sha ''.
 
     Returns dicts with run_id, repo, workflow, day, created_at, source_sha,
-    sorted oldest first. Rows with no run id in their url are skipped: the
-    URL is the only stored link from a suite row to its run.
+    trigger, pr, finished and finished_at, sorted oldest first. Rows with no
+    run id in their url are skipped: the URL is the only stored link from a
+    suite row to its run. A run is finished when every one of its E2E rows
+    has a conclusion; until then it has no artifact to read.
     """
     run_rows = {}
     run_shas = {}
@@ -268,7 +350,8 @@ def candidate_runs(rows):
         run_id = int(match.group(1))
         entry = grouped.setdefault(
             run_id,
-            {"run_id": run_id, "repo": "", "workflows": [], "created_at": "", "source_sha": ""},
+            {"run_id": run_id, "repo": "", "workflows": [], "created_at": "", "source_sha": "",
+             "pr": "", "finished": True, "finished_at": "", "events": []},
         )
         entry["repo"] = entry["repo"] or (row.get("repo") or "")
         entry["source_sha"] = entry["source_sha"] or (row.get("head_sha") or "").strip()
@@ -277,6 +360,13 @@ def candidate_runs(rows):
             entry["created_at"] = created
         if row.get("workflow"):
             entry["workflows"].append(row["workflow"])
+        entry["pr"] = entry["pr"] or phases.pr_number(row.get("pr_display"), row.get("workflow"))
+        entry["events"].append((row.get("event") or "", row.get("workflow") or ""))
+        if not (row.get("conclusion") or "").strip():
+            entry["finished"] = False
+        updated = row.get("updated_at") or ""
+        if updated > entry["finished_at"]:
+            entry["finished_at"] = updated
 
     runs = []
     for run_id, entry in grouped.items():
@@ -292,6 +382,14 @@ def candidate_runs(rows):
             workflow = " + ".join(workflows)
         entry["workflow"] = workflow
         entry["repo"] = entry["repo"] or (parent.get("repo") or "")
+        # Why the run happened: the run row says it for a flow run (a merge
+        # group, a pull request); a direct run says it itself.
+        events = entry.pop("events")
+        source = (parent.get("event") or "", parent.get("workflow") or "") if parent else events[0]
+        entry["trigger"] = phases.trigger_key(*source)
+        if entry["trigger"] == "other" and events:
+            entry["trigger"] = phases.trigger_key(*events[0])
+        entry["pr"] = entry["pr"] or phases.pr_number(parent.get("pr_display"), parent.get("workflow"))
         # The run row's SHA wins, then any non-empty SHA of the run's own
         # rows, then any non-empty SHA stored anywhere for that run.
         entry["source_sha"] = (
@@ -306,20 +404,40 @@ def candidate_runs(rows):
     return sorted(runs, key=lambda run: (run["created_at"], run["run_id"]))
 
 
+def failure_message(case):
+    """The first line of a failed testcase's message attribute, bounded, or
+    "" for a pass. Only the attribute: the stack trace inside the element
+    never leaves the artifact, the same rule as the run page."""
+    problem = case.find("failure")
+    if problem is None:
+        problem = case.find("error")
+    if problem is None:
+        return ""
+    text, _ = CIObserveRunEvidence._bound_junit_message(problem.get("message") or "")
+    text = ANSI_CODE_RE.sub("", text)
+    first = next((" ".join(line.split()) for line in text.splitlines() if line.strip()), "")
+    if not first:
+        first = (problem.get("type") or problem.tag or "").strip()
+    return first[:MESSAGE_MAX_CHARS]
+
+
 def parse_junit_outcomes(files):
     """One row per test that ran, from a run's JUnit XML files.
 
     files: [(name, bytes)] as CIObserveRunEvidence._extract_junit_files
-    returns them. Returns (cases, reason): cases is a list of dicts with
-    suite, test_id, passed and duration_s; when a file cannot be parsed at
-    all, cases is None and reason says which file and why.
+    returns them, or [(name, bytes, suite_key)] when the caller knows which
+    suite's artifact a file came from. Returns (cases, reason): cases is a
+    list of dicts with suite, test_id, passed, duration_s, suite_key and
+    message; when a file cannot be parsed at all, cases is None and reason
+    says which file and why.
 
     A testcase holding <failure> or <error> failed; every other testcase
     passed. A <skipped> testcase is left out of both counts: "was not run"
     is neither a pass nor a failure, and counting it as a pass would hide a
-    test that never ran. A test that appears twice in one run (an artifact
-    listed the same file twice, or two suite artifacts of one pull-request
-    run) counts once, and the failure wins over the pass.
+    test that never ran. A test that appears twice in one suite's files (an
+    artifact listed the same file twice) counts once, and the failure wins
+    over the pass. The same test in two suites' artifacts of one run (a
+    reference test the VMaaS and BMaaS suites both run) is two rows.
 
     The XML hygiene (deleting bytes XML forbids rather than refusing the
     whole file) and the time attribute handling are the run-evidence
@@ -327,7 +445,9 @@ def parse_junit_outcomes(files):
     """
     merged = {}
     order = []
-    for name, content in files:
+    for entry in files:
+        name, content = entry[0], entry[1]
+        suite_key = entry[2] if len(entry) > 2 else ""
         if content[:2] in (b"\xff\xfe", b"\xfe\xff"):
             cleaned = content
         else:
@@ -350,21 +470,25 @@ def parse_junit_outcomes(files):
                 failed = case.find("failure") is not None or case.find("error") is not None
                 test_id = f"{case.get('classname') or ''}::{test_name}"
                 duration = CIObserveRunEvidence._junit_time(case)
-                key = (suite_name, test_id)
-                entry = merged.get(key)
-                if entry is None:
+                message = failure_message(case) if failed else ""
+                key = (suite_key, suite_name, test_id)
+                row = merged.get(key)
+                if row is None:
                     merged[key] = {
                         "suite": suite_name,
                         "test_id": test_id,
                         "passed": not failed,
                         "duration_s": duration,
+                        "suite_key": suite_key,
+                        "message": message,
                     }
                     order.append(key)
                     continue
                 if failed:
-                    entry["passed"] = False
-                if duration is not None and (entry["duration_s"] is None or duration > entry["duration_s"]):
-                    entry["duration_s"] = duration
+                    row["passed"] = False
+                    row["message"] = row["message"] or message
+                if duration is not None and (row["duration_s"] is None or duration > row["duration_s"]):
+                    row["duration_s"] = duration
     return [merged[key] for key in order], None
 
 
@@ -415,16 +539,27 @@ def rollup_rows(runs):
 
 
 def test_run_rows(runs):
-    """One row per test per run, for the history endpoint.
+    """One row per test per run, for the history endpoint and the ci-observe
+    test pages.
 
-    runs: the same dicts rollup_rows consumes. A skipped test never reaches
-    here (parse_junit_outcomes leaves it out), so every row is a pass or a
-    failure. A testcase without a duration keeps a NULL duration: it counts
-    in runs but is excluded from every percentile.
+    runs: the same dicts rollup_rows consumes, optionally carrying trigger
+    and pr. A skipped test never reaches here (parse_junit_outcomes leaves it
+    out), so every row is a pass or a failure. A testcase without a duration
+    keeps a NULL duration: it counts in runs but is excluded from every
+    percentile. suite_key falls back from the artifact to the run's workflow
+    and then to the test's own directory, so a merge-queue run's rows still
+    name their suite.
     """
     rows = []
     for run in runs:
+        run_suite = phases.suite_key(run.get("workflow"))
         for case in run.get("cases") or []:
+            key = case.get("test_key") or phases.canonical_test_key(case["test_id"])
+            suite_key = (
+                case.get("suite_key")
+                or run_suite
+                or phases.describe_test(key)["suite"]
+            )
             rows.append({
                 "day": run["day"],
                 "repo": run["repo"],
@@ -436,8 +571,31 @@ def test_run_rows(runs):
                 "created_at": run["created_at"],
                 "duration_s": case["duration_s"],
                 "passed": 1 if case["passed"] else 0,
+                "suite_key": suite_key,
+                "test_key": key,
+                "trigger": run.get("trigger") or "",
+                "pr": run.get("pr") or "",
+                "message": case.get("message") or "",
             })
     return rows
+
+
+def artifact_suite(name):
+    """The suite an osac-logs artifact belongs to ("vmaas", "caas", "bmaas",
+    ...), "" for a name that is not one."""
+    match = ARTIFACT_SUITE_RE.match(name or "")
+    if not match:
+        return ""
+    return match.group(1) or "vmaas"
+
+
+def fetch_state(reason):
+    """"error" for a failure worth retrying (GitHub did not answer), "no_data"
+    for an answer that will not change (no artifact, expired, unparseable)."""
+    text = (reason or "").lower()
+    if text.startswith("artifact listing failed") or "download failed" in text:
+        return "error"
+    return "no_data"
 
 
 class ArtifactFetcher:
@@ -522,7 +680,8 @@ class ArtifactFetcher:
             if artifact_files is None:
                 unfinished.append(f"{name}: {extract_reason}")
                 continue
-            files.extend(artifact_files)
+            suite_key = artifact_suite(name)
+            files.extend((file_name, content, suite_key) for file_name, content in artifact_files)
         if not files:
             return None, "; ".join(unfinished) or "no readable artifact"
         cases, parse_reason = parse_junit_outcomes(files[:MAX_JUNIT_FILES])
@@ -554,8 +713,36 @@ def open_trends_db(path):
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(rollup_days)")}
     if "parsed_run_ids" not in columns:
         conn.execute("ALTER TABLE rollup_days ADD COLUMN parsed_run_ids TEXT NOT NULL DEFAULT '[]'")
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(test_runs)")}
+    added = [column for column in ADDED_RUN_COLUMNS if column not in columns]
+    for column in added:
+        conn.execute(f"ALTER TABLE test_runs ADD COLUMN {column} TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_test_runs_key ON test_runs(test_key, day)")
     conn.commit()
+    _fill_test_keys(conn)
     return conn
+
+
+def _fill_test_keys(conn):
+    """Give rows stored before test_key and suite_key existed the two keys
+    their own columns already imply: the canonical test id, and the suite of
+    the run's workflow or of the test's directory. The trigger, pull request
+    and message stay NULL until the run is read again: they are not in the
+    stored row."""
+    rows = conn.execute(
+        "SELECT rowid, test_id, workflow, suite_key FROM test_runs"
+        " WHERE test_key IS NULL OR suite_key IS NULL"
+    ).fetchall()
+    if not rows:
+        return
+    updates = []
+    for row in rows:
+        key = phases.canonical_test_key(row["test_id"])
+        suite = row["suite_key"] or phases.suite_key(row["workflow"]) or phases.describe_test(key)["suite"]
+        updates.append((key, suite, row["rowid"]))
+    with conn:
+        conn.executemany("UPDATE test_runs SET test_key = ?, suite_key = ? WHERE rowid = ?", updates)
+    logger.info("gave %d stored test row(s) their canonical test key", len(updates))
 
 
 def day_is_superset(previous_ids, current_ids):
@@ -592,13 +779,11 @@ def write_day(conn, day, rows, coverage, runs=None):
         )
         conn.execute("DELETE FROM test_runs WHERE day = ?", (day,))
         if runs:
+            defaults = dict.fromkeys(ADDED_RUN_COLUMNS)
             conn.executemany(
-                "INSERT INTO test_runs"
-                " (day, repo, workflow, suite, test_id, source_sha, run_id,"
-                "  created_at, duration_s, passed)"
-                " VALUES (:day, :repo, :workflow, :suite, :test_id, :source_sha,"
-                "  :run_id, :created_at, :duration_s, :passed)",
-                runs,
+                f"INSERT INTO test_runs ({', '.join(TEST_RUN_COLUMNS)})"
+                f" VALUES ({', '.join(':' + column for column in TEST_RUN_COLUMNS)})",
+                [{**defaults, **row} for row in runs],
             )
         conn.execute("DELETE FROM rollup_days WHERE day = ?", (day,))
         conn.execute(
@@ -610,11 +795,14 @@ def write_day(conn, day, rows, coverage, runs=None):
 
 
 def prune_old_days(conn: sqlite3.Connection, cutoff: str) -> None:
-    """Keep only per-test data from the last 30 days."""
+    """Drop per-test data, read records and archived runs from before the
+    cutoff day (KEEP_DAYS back in a normal pass)."""
     with conn:
         conn.execute("DELETE FROM test_rollup WHERE day < ?", (cutoff,))
         conn.execute("DELETE FROM test_runs WHERE day < ?", (cutoff,))
         conn.execute("DELETE FROM rollup_days WHERE day < ?", (cutoff,))
+        conn.execute("DELETE FROM run_fetches WHERE day < ?", (cutoff,))
+        conn.execute("DELETE FROM suite_runs WHERE created_at < ?", (cutoff,))
 
 
 def prune_trends_db(path: str, cutoff: str) -> None:
@@ -805,12 +993,124 @@ def compare_document(trends_db, base_sha, head_sha, days=COMPARE_DEFAULT_DAYS, n
     return document
 
 
+def archive_suite_runs(conn, exporter_db):
+    """Copy the exporter's E2E job rows into suite_runs (insert or replace).
+
+    Every pass copies the whole stored window, a few thousand rows: a row
+    can change after it was first copied (a rerun attempt, a timeline the
+    exporter filled in later), and the copy is one local transaction. Rows
+    the exporter already pruned stay here until KEEP_DAYS. Returns the
+    number of rows copied; an exporter DB that cannot be read copies none.
+    """
+    try:
+        source = sqlite3.connect(f"file:{exporter_db}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error as exc:
+        logger.warning("the exporter DB could not be opened for the archive: %s", exc)
+        return 0
+    try:
+        source.row_factory = sqlite3.Row
+        columns = {row["name"] for row in source.execute("PRAGMA table_info(jobs)")}
+        select = ", ".join(
+            column if column in columns else f"NULL AS {column}" for column in SUITE_RUN_COLUMNS
+        )
+        rows = [dict(row) for row in source.execute(f"SELECT {select} FROM jobs WHERE category = 'e2e'")]
+    except sqlite3.Error as exc:
+        logger.warning("the exporter DB could not be read for the archive: %s", exc)
+        return 0
+    finally:
+        source.close()
+    for row in rows:
+        for column in SUITE_RUN_COLUMNS:
+            if row.get(column) is None and column not in ("id", "duration_s", "run_attempt"):
+                row[column] = "[]" if column == "steps_json" else ""
+    with conn:
+        conn.executemany(
+            f"INSERT OR REPLACE INTO suite_runs ({', '.join(SUITE_RUN_COLUMNS)})"
+            f" VALUES ({', '.join(':' + column for column in SUITE_RUN_COLUMNS)})",
+            rows,
+        )
+    return len(rows)
+
+
+def load_fetches(conn):
+    """{run id: run_fetches row}."""
+    return {row["run_id"]: dict(row) for row in conn.execute("SELECT * FROM run_fetches")}
+
+
+def load_stored_cases(conn, run_ids):
+    """{run id: [case, ...]} rebuilt from the stored test_runs rows, so a day
+    can be rebuilt without downloading its artifacts again."""
+    cases = {}
+    wanted = set(run_ids)
+    for row in conn.execute(
+        "SELECT run_id, suite, test_id, passed, duration_s, suite_key, test_key, message FROM test_runs"
+    ):
+        if row["run_id"] not in wanted:
+            continue
+        cases.setdefault(row["run_id"], []).append({
+            "suite": row["suite"],
+            "test_id": row["test_id"],
+            "passed": bool(row["passed"]),
+            "duration_s": row["duration_s"],
+            "suite_key": row["suite_key"] or "",
+            "test_key": row["test_key"] or "",
+            "message": row["message"] or "",
+        })
+    return cases
+
+
+def read_decision(run, fetch, has_stored, now, force=False):
+    """What this pass does with one run: "fetch" its artifact, reuse its
+    "stored" rows, or "skip" it (unfinished, or known to have no data).
+
+    A run is read again only when that can change the answer: it was never
+    read, an older parser read it while its artifact may still exist, or
+    GitHub failed to answer. A run known to have no artifact is checked once
+    more when the first check came within NO_DATA_RECHECK_WITHIN of its end.
+    """
+    if force:
+        return "fetch"
+    if not run.get("finished", True):
+        return "skip"
+    if fetch is None:
+        return "fetch"
+    checked = phases.parse_time(fetch.get("checked_at"))
+    state = fetch.get("state")
+    if state == "parsed":
+        if not has_stored:
+            return "fetch"
+        if (fetch.get("version") or 0) < PARSER_VERSION:
+            created = phases.parse_time(run.get("created_at"))
+            if created and now - created < timedelta(days=ARTIFACT_RETENTION_DAYS - 1):
+                return "fetch"
+        return "stored"
+    if state == "no_data":
+        finished = phases.parse_time(fetch.get("finished_at") or run.get("finished_at"))
+        if checked and finished and checked - finished < NO_DATA_RECHECK_WITHIN and now - checked > RECHECK_AFTER:
+            return "fetch"
+        return "skip"
+    if checked is None or now - checked > RECHECK_AFTER:
+        return "fetch"
+    return "skip"
+
+
+def record_fetches(conn, entries):
+    """Insert or replace run_fetches rows."""
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO run_fetches"
+            " (run_id, day, state, reason, version, checked_at, finished_at)"
+            " VALUES (:run_id, :day, :state, :reason, :version, :checked_at, :finished_at)",
+            entries,
+        )
+
+
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Daily per-test JUnit rollup for ci-observe Trends.")
+    parser = argparse.ArgumentParser(description="Per-test JUnit rollup and history archive for ci-observe.")
     parser.add_argument(
         "--days", type=int, default=None,
         help=(
-            f"roll up runs created in the last N days (default {DEFAULT_DAYS}, the artifact "
+            f"read runs created in the last N days (default {DEFAULT_DAYS}, the artifact "
             "retention; a run older than that is recorded as unavailable, because GitHub has "
             "already deleted its artifact)"
         ),
@@ -822,9 +1122,9 @@ def parse_args(argv=None):
     parser.add_argument(
         "--force", action="store_true",
         help=(
-            "replace the stored rows of the requested days even when this pass reads fewer "
-            "runs than the stored rollup did; use it to repair a day already rolled up, and "
-            "expect the rows of runs whose artifact has expired to be dropped"
+            "read every run of the requested days again and replace their rows even when this "
+            "pass reads fewer runs than the stored rollup did; use it to repair a day already "
+            "rolled up, and expect the rows of runs whose artifact has expired to be dropped"
         ),
     )
     parser.add_argument("--exporter-db", default=None, help=f"exporter SQLite file (default {EXPORTER_DB})")
@@ -843,8 +1143,10 @@ def main(argv=None):
         logger.error("the exporter DB %s does not exist", exporter_db)
         return 2
 
-    today = datetime.now(timezone.utc).date()
+    now = datetime.now(timezone.utc)
+    today = now.date()
     retention_start = today - timedelta(days=ARTIFACT_RETENTION_DAYS)
+    keep_start = today - timedelta(days=max(KEEP_DAYS, ARTIFACT_RETENTION_DAYS))
     if args.day:
         try:
             start = datetime.strptime(args.day, "%Y-%m-%d").date()
@@ -861,83 +1163,121 @@ def main(argv=None):
     runs = candidate_runs(stored_rows(exporter_db, start.isoformat()))
     if args.day:
         runs = [run for run in runs if run["day"] == args.day]
-    prune_trends_db(trends_db, retention_start.isoformat())
-    if not runs:
-        logger.info("no stored e2e runs on or after %s: nothing to roll up", start)
-        return 0
-    logger.info("rolling up %d run(s) created on or after %s", len(runs), start)
-
-    fetcher = ArtifactFetcher()
-    listed = {}
-    parsed = {}
-    parsed_ids = {}
-    for position, run in enumerate(runs, 1):
-        cases, reason = fetcher.fetch(run["repo"], run["run_id"])
-        run["cases"] = cases or []
-        listed[run["day"]] = listed.get(run["day"], 0) + 1
-        if cases:
-            parsed[run["day"]] = parsed.get(run["day"], 0) + 1
-            parsed_ids.setdefault(run["day"], []).append(run["run_id"])
-            logger.info("  [%d/%d] %s run %s: %d test(s)", position, len(runs), run["repo"], run["run_id"], len(cases))
-        else:
-            logger.info(
-                "  [%d/%d] %s run %s: no test data (%s)", position, len(runs), run["repo"], run["run_id"], reason
-            )
 
     conn = open_trends_db(trends_db)
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
-        for day in sorted(listed):
-            day_runs = [run for run in runs if run["day"] == day]
-            # Never replace a stored day with a thinner pass. Artifacts expire
-            # after 30 days, so a later run for the same day reads fewer of
-            # them; rewriting would delete rows that are the only copy.
-            previous = conn.execute(
-                "SELECT runs_parsed, parsed_run_ids FROM rollup_days WHERE day = ?", (day,)
-            ).fetchone()
-            current_ids = sorted(parsed_ids.get(day, []))
-            if previous and not args.force:
-                previous_ids = json.loads(previous["parsed_run_ids"] or "[]")
-                if not day_is_superset(previous_ids, current_ids):
-                    logger.warning(
-                        "%s: stored run(s) %s are not all readable now %s; keeping the stored rollup"
-                        " (--force replaces it anyway)",
-                        day, sorted(set(previous_ids) - set(current_ids)), current_ids,
-                    )
-                    continue
-                if previous["runs_parsed"] > parsed.get(day, 0):
-                    logger.warning(
-                        "%s: only %d run(s) readable now, %d were rolled up before; keeping the stored"
-                        " rollup (--force replaces it anyway)",
-                        day, parsed.get(day, 0), previous["runs_parsed"],
-                    )
-                    continue
-            if previous and args.force:
-                previous_ids = json.loads(previous["parsed_run_ids"] or "[]")
-                lost = sorted(set(previous_ids) - set(current_ids))
-                if lost:
-                    logger.warning(
-                        "%s: --force replaces the stored rollup; run(s) %s are not readable now and their"
-                        " rows are dropped",
-                        day, lost,
-                    )
-            rows = rollup_rows(day_runs)
-            write_day(conn, day, rows, {
-                "day": day,
-                "runs_listed": listed[day],
-                "runs_parsed": parsed.get(day, 0),
-                "runs_unavailable": listed[day] - parsed.get(day, 0),
-                "generated_at": generated_at,
-                "parsed_run_ids": current_ids,
-            }, test_run_rows(day_runs))
-            logger.info(
-                "%s: %d run(s) listed, %d parsed, %d without readable test data, %d rollup row(s)",
-                day, listed[day], parsed.get(day, 0), listed[day] - parsed.get(day, 0), len(rows),
-            )
+        prune_old_days(conn, keep_start.isoformat())
+        archived = archive_suite_runs(conn, exporter_db)
+        logger.info("archived %d E2E job row(s) into suite_runs", archived)
+        if not runs:
+            logger.info("no stored e2e runs on or after %s: nothing to roll up", start)
+            return 0
+        _roll_up(conn, runs, args.force, now)
     finally:
         conn.close()
     logger.info("wrote %s", trends_db)
     return 0
+
+
+def _roll_up(conn, runs, force, now):
+    """Read what is new, then rebuild every day whose stored answer changed."""
+    fetches = load_fetches(conn)
+    stored = load_stored_cases(conn, [run["run_id"] for run in runs])
+    checked_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    fetcher = None
+    plan = {"fetch": 0, "stored": 0, "skip": 0}
+    changed_days = set()
+    parsed_now = {}
+    no_data = []
+    for run in runs:
+        run_id = run["run_id"]
+        decision = read_decision(run, fetches.get(run_id), run_id in stored, now, force)
+        plan[decision] += 1
+        if decision == "stored":
+            run["cases"] = stored[run_id]
+            continue
+        if decision == "skip":
+            run["cases"] = []
+            continue
+        fetcher = fetcher or ArtifactFetcher()
+        cases, reason = fetcher.fetch(run["repo"], run_id)
+        entry = {
+            "run_id": run_id, "day": run["day"], "reason": reason or "", "version": PARSER_VERSION,
+            "checked_at": checked_at, "finished_at": run.get("finished_at") or "",
+        }
+        if cases:
+            run["cases"] = cases
+            parsed_now[run_id] = {**entry, "state": "parsed"}
+            changed_days.add(run["day"])
+            logger.info("  %s run %s: %d test(s)", run["repo"], run_id, len(cases))
+            continue
+        logger.info("  %s run %s: no test data (%s)", run["repo"], run_id, reason)
+        if run_id in stored and not force:
+            # An older pass read this run and the artifact is gone now: keep
+            # what was read, and stop asking.
+            run["cases"] = stored[run_id]
+            no_data.append({**entry, "state": "parsed"})
+            continue
+        run["cases"] = []
+        no_data.append({**entry, "state": fetch_state(reason)})
+    logger.info(
+        "%d run(s): %d read now, %d reused from trends.db, %d skipped",
+        len(runs), plan["fetch"], plan["stored"], plan["skip"],
+    )
+    if no_data:
+        record_fetches(conn, no_data)
+
+    generated_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    for day in sorted({run["day"] for run in runs}):
+        day_runs = [run for run in runs if run["day"] == day]
+        parsed_ids = sorted(run["run_id"] for run in day_runs if run.get("cases"))
+        previous = conn.execute(
+            "SELECT runs_listed, runs_parsed, parsed_run_ids FROM rollup_days WHERE day = ?", (day,)
+        ).fetchone()
+        previous_ids = json.loads(previous["parsed_run_ids"] or "[]") if previous else []
+        if previous and not force:
+            unchanged = (
+                day not in changed_days
+                and previous["runs_listed"] == len(day_runs)
+                and sorted(previous_ids) == parsed_ids
+            )
+            if unchanged:
+                continue
+            # Never replace a stored day with a thinner pass. Artifacts expire
+            # after 30 days, so a run read before may not be readable now, and
+            # its stored rows may predate test_runs; rewriting would delete
+            # the only copy.
+            if not day_is_superset(previous_ids, parsed_ids):
+                logger.warning(
+                    "%s: stored run(s) %s are not all readable now %s; keeping the stored rollup"
+                    " (--force replaces it anyway)",
+                    day, sorted(set(previous_ids) - set(parsed_ids)), parsed_ids,
+                )
+                continue
+        if previous and force:
+            lost = sorted(set(previous_ids) - set(parsed_ids))
+            if lost:
+                logger.warning(
+                    "%s: --force replaces the stored rollup; run(s) %s are not readable now and their"
+                    " rows are dropped",
+                    day, lost,
+                )
+        rows = rollup_rows(day_runs)
+        write_day(conn, day, rows, {
+            "day": day,
+            "runs_listed": len(day_runs),
+            "runs_parsed": len(parsed_ids),
+            "runs_unavailable": len(day_runs) - len(parsed_ids),
+            "generated_at": generated_at,
+            "parsed_run_ids": parsed_ids,
+        }, test_run_rows(day_runs))
+        day_parsed = [parsed_now[run_id] for run_id in parsed_ids if run_id in parsed_now]
+        if day_parsed:
+            record_fetches(conn, day_parsed)
+        logger.info(
+            "%s: %d run(s) listed, %d parsed, %d without readable test data, %d rollup row(s)",
+            day, len(day_runs), len(parsed_ids), len(day_runs) - len(parsed_ids), len(rows),
+        )
 
 
 if __name__ == "__main__":

@@ -77,6 +77,9 @@ from urllib.parse import quote
 
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ci_observe_phases as phases
+
 logger = logging.getLogger(__name__)
 
 ORG = os.getenv("GITHUB_ORG", "osac-project")
@@ -95,8 +98,16 @@ PRS_DB_FILE = os.path.join(CACHE_DIR, "prs.db")
 
 # Matches the workflow exporter's 30-day job history, so a pull request and
 # the jobs it produced cover the same window.
-PRS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "30"))
+# How long a pull request's history is kept. Its E2E counts are read from
+# the 30-day job history when the backfill stores it, so a stored row keeps
+# them after the jobs are gone; 90 days matches the trends.db archive.
+PRS_HISTORY_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
 DEFAULT_INDEX_DAYS = 30
+# The record format. A row stored by an older format is refetched once so
+# the new counts fill in, a bounded number per pass so the shared GitHub
+# budget is not spent in one hour.
+RECORD_VERSION = 2
+LEGACY_REFRESH_PER_PASS = 100
 PAGE_SIZE = 100
 # GitHub's actions/runs list stops near 1000 results. Split a merge-group
 # window before it reaches that, the same safe limit the exporter uses.
@@ -497,6 +508,33 @@ def final_stage(state, first_review_at, first_approval_at, queued_at):
 # ---------------------------------------------------------------------------
 # GitHub access
 # ---------------------------------------------------------------------------
+# pr_events columns added with the second record format.
+PR_EVENT_ADDED_COLUMNS = (
+    ("ready_at", "TEXT"),
+    ("review_wait_seconds", "INTEGER"),
+    ("force_push_count", "INTEGER"),
+    ("changes_requested_count", "INTEGER"),
+    ("human_review_count", "INTEGER"),
+    ("e2e_runs", "INTEGER"),
+    ("e2e_failures", "INTEGER"),
+    ("e2e_retests", "INTEGER"),
+    ("e2e_versions", "INTEGER"),
+    ("record_version", "INTEGER"),
+)
+
+
+def pr_runs_where(number):
+    """The SQL condition and arguments for one pull request's E2E rows in the
+    exporter's jobs table. A pull_request or merge_group row carries the
+    number in pr_display; a pull-request suite run is started with
+    workflow_dispatch and names the pull request only in its run name
+    ("E2E suite · vmaas · #12 · <sha>")."""
+    return (
+        "(pr_display = ? OR LOWER(workflow) LIKE ?)",
+        [f"#{number}", f"e2e suite · % · #{number} · %"],
+    )
+
+
 class StandaloneAPI:
     """GitHub access when no exporter is handed in (the manual backfill
     process). The exporter path uses the exporter's own _get, headers and
@@ -530,6 +568,7 @@ class CIObservePRs:
         self.repos_filter = list(repos or [])
         self.api_calls = 0
         self.rate_limit_remaining = None
+        self._legacy_refreshes = 0
 
     # -- SQLite -------------------------------------------------------------
 
@@ -629,6 +668,12 @@ class CIObservePRs:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(pr_queue_attempts)")}
             if "run_ids" not in columns:
                 conn.execute("ALTER TABLE pr_queue_attempts ADD COLUMN run_ids TEXT")
+            # Columns of the second record format. A row stored before keeps
+            # NULL ("not measured") until the backfill refetches it.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(pr_events)")}
+            for column, kind in PR_EVENT_ADDED_COLUMNS:
+                if column not in columns:
+                    conn.execute(f"ALTER TABLE pr_events ADD COLUMN {column} {kind}")
 
     # -- GitHub plumbing ----------------------------------------------------
 
@@ -702,6 +747,7 @@ class CIObservePRs:
         self._init_db()
         self.api_calls = 0
         self.rate_limit_remaining = None
+        self._legacy_refreshes = 0
 
         cutoff = now - timedelta(days=days)
         cutoff_iso = _iso(cutoff)
@@ -996,9 +1042,23 @@ class CIObservePRs:
         return [run for run in runs if run.get("event") == "merge_group"]
 
     def _is_stored(self, repo, number):
+        """Whether the pull request is stored in the current record format.
+
+        A row of an older format counts as stored once this pass has spent
+        its LEGACY_REFRESH_PER_PASS refetches, so the upgrade spreads over a
+        few passes instead of draining the shared token in one."""
         with self._db() as conn:
-            row = conn.execute("SELECT 1 FROM pr_events WHERE repo = ? AND number = ?", (repo, number)).fetchone()
-        return row is not None
+            row = conn.execute(
+                "SELECT COALESCE(record_version, 1) FROM pr_events WHERE repo = ? AND number = ?", (repo, number)
+            ).fetchone()
+        if row is None:
+            return False
+        if row[0] >= RECORD_VERSION:
+            return True
+        if self._legacy_refreshes >= LEGACY_REFRESH_PER_PASS:
+            return True
+        self._legacy_refreshes += 1
+        return False
 
     def _backfill_one(self, repo, pr, merge_runs):
         """Fetch one pull request's timeline, reviews and commits, then
@@ -1067,6 +1127,17 @@ class CIObservePRs:
             if name:
                 labels.add(name)
 
+        # A draft pull request is not waiting for review. It is ready from
+        # its first ready_for_review event, or from the start when it was
+        # never a draft.
+        ready_events = sorted(
+            event.get("created_at") for event in timeline
+            if event.get("event") == "ready_for_review" and event.get("created_at")
+        )
+        ready_at = ready_events[0] if ready_events else pr.get("created_at")
+        force_pushes = sum(1 for event in timeline if event.get("event") == "head_ref_force_pushed")
+        e2e = self._e2e_stats(repo, number, opened_at=pr.get("created_at"))
+
         fetched_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         return {
             "repo": repo,
@@ -1092,9 +1163,22 @@ class CIObservePRs:
             "commit_count": len(commits),
             "review_count": len(reviews),
             "review_request_count": len(review_requesters),
-            "retest_count": self._count_retests(repo, number),
+            "retest_count": e2e["retests"],
             "final_stage": final_stage(state, first_review_at, first_approval_at, None),
             "fetched_at": fetched_at,
+            "ready_at": ready_at,
+            # Ready for review to the first human review: the wait for a
+            # reviewer, without the draft time Authoring includes.
+            "review_wait_seconds": seconds_between(ready_at, first_review_at),
+            # A force push is how a rebase reaches GitHub.
+            "force_push_count": force_pushes,
+            "changes_requested_count": sum(1 for r in human_reviews if r.get("state") == "CHANGES_REQUESTED"),
+            "human_review_count": len(human_reviews),
+            "e2e_runs": e2e["runs"],
+            "e2e_failures": e2e["failures"],
+            "e2e_retests": e2e["retests"],
+            "e2e_versions": e2e["versions"],
+            "record_version": RECORD_VERSION,
         }
 
     def _build_attempts(self, repo, number, merge_runs, timeline) -> list[dict]:
@@ -1221,24 +1305,84 @@ class CIObservePRs:
                 return comment
         return None
 
+    def _e2e_stats(self, repo, number, opened_at=None):
+        """The pull request's VMaaS, CaaS and BMaaS E2E history from the
+        exporter's job history and the 90-day run archive in trends.db: runs
+        (every suite run, pull request and merge queue), failures, retests
+        (runs beyond the first of each suite) and versions (the distinct
+        commits its pull-request runs tested; a merge-queue run tests a
+        temporary merge commit, so it is not a version). Read-only, no API
+        call.
+
+        Every value is None when neither store is there, or when the stores
+        start after the pull request was opened: its early runs are gone, and
+        "unknown" must never render as "no retests"."""
+        empty = {"runs": None, "failures": None, "retests": None, "versions": None}
+        directory = os.path.dirname(self.db_file)
+        condition, args = pr_runs_where(number)
+        rows = {}
+        oldest = []
+        read = False
+        for path, table in (
+            (os.path.join(directory, "workflow-exporter.db"), "jobs"),
+            (os.path.join(directory, "trends.db"), "suite_runs"),
+        ):
+            if not os.path.exists(path):
+                continue
+            try:
+                with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5) as conn:
+                    if not conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+                    ).fetchone():
+                        continue
+                    category = " AND category = 'e2e'" if table == "jobs" else ""
+                    for row in conn.execute(
+                        f"SELECT id, workflow, conclusion, event, head_sha FROM {table} WHERE repo = ?{category}"
+                        f" AND {condition} AND LOWER(workflow) NOT LIKE '%-gate'"
+                        " AND COALESCE(LOWER(failure_reason), '') != 'gate'",
+                        [repo, *args],
+                    ):
+                        # The VMaaS, CaaS and BMaaS suites only: the archive
+                        # keeps nothing else, so the 30 days of jobs must not
+                        # add Netris or stretched runs to the count.
+                        if phases.suite_key(row[1]):
+                            rows.setdefault(row[0], row[1:])
+                    read = True
+                    columns = {column[1] for column in conn.execute(f"PRAGMA table_info({table})")}
+                    first = (
+                        conn.execute(f"SELECT MIN(created_at) FROM {table}").fetchone()[0]
+                        if "created_at" in columns else None
+                    )
+                    if first:
+                        oldest.append(first)
+            except sqlite3.Error:
+                continue
+        if not read:
+            return empty
+        if opened_at and oldest and min(oldest) > opened_at:
+            return empty
+        suites = set()
+        versions = set()
+        failures = 0
+        for workflow, conclusion, event, head_sha in rows.values():
+            suites.add(phases.suite_key(workflow))
+            if phases.result_key(conclusion) == "failed":
+                failures += 1
+            if event != "merge_group" and phases.trigger_key(event, workflow) != "merge_queue":
+                sha = phases.tested_sha(workflow, head_sha)
+                if sha:
+                    versions.add(sha)
+        return {
+            "runs": len(rows),
+            "failures": failures,
+            "retests": max(0, len(rows) - len(suites)),
+            "versions": len(versions),
+        }
+
     def _count_retests(self, repo, number):
-        """E2E pull_request job rows for this PR beyond the first, the same
-        definition as the exporter's pr_merges.retest_count. Reads the
-        exporter's job history read-only; no API call. None when that DB is
-        not there, so "unknown" never renders as "no retests"."""
-        jobs_db = os.path.join(os.path.dirname(self.db_file), "workflow-exporter.db")
-        if not os.path.exists(jobs_db):
-            return None
-        try:
-            with sqlite3.connect(jobs_db, timeout=5) as conn:
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM jobs WHERE repo = ? AND pr_display = ? "
-                    "AND category = 'e2e' AND event = 'pull_request'",
-                    (repo, f"#{number}"),
-                ).fetchone()
-        except sqlite3.Error:
-            return None
-        return max(0, (row[0] if row else 0) - 1)
+        """E2E runs of this pull request beyond the first of each suite.
+        None when the job history is not there."""
+        return self._e2e_stats(repo, number)["retests"]
 
     def _write_pr(self, record, attempts):
         """One transaction: the PR row, then its attempts and their stage
@@ -1328,6 +1472,9 @@ class CIObservePRs:
         if not os.path.exists(self.db_file):
             return self._empty_index_document(days, now)
         repo = _param(params, "repo")
+        # The Overview page's Repository filter sends "all" for both.
+        if repo.lower() == "all":
+            repo = ""
         return self.index_document(days, now, repo or None)
 
     # The endpoint is read-only: it never creates prs.db. A missing file is
@@ -1373,6 +1520,8 @@ class CIObservePRs:
             "days": days,
             "prs": [],
             "funnel": _funnel([]),
+            "kpis": _kpis([], {}),
+            "weekly": [],
             # The detail panels query this same endpoint with an empty
             # number. Present keys let them render "enter a number" instead
             # of a root-not-found error.
@@ -1687,6 +1836,7 @@ class CIObservePRs:
             return [], "the job history has not been written yet, so this pull request has no recorded runs"
         days = max(1, days)
         cutoff = _iso(now - timedelta(days=days))
+        condition, condition_args = pr_runs_where(number)
         try:
             with sqlite3.connect(jobs_db, timeout=5) as conn:
                 conn.row_factory = sqlite3.Row
@@ -1697,12 +1847,12 @@ class CIObservePRs:
                         " duration_s, url, created_at, updated_at, run_attempt, head_sha,"
                         " failed_step, failure_reason"
                         " FROM jobs"
-                        " WHERE repo = ? AND pr_display = ? AND category = 'e2e' AND run_id != ''"
+                        f" WHERE repo = ? AND {condition} AND category = 'e2e' AND run_id != ''"
                         "   AND created_at >= ?"
                         "   AND LOWER(workflow) NOT LIKE '%-gate'"
                         "   AND COALESCE(LOWER(failure_reason), '') != 'gate'"
                         " ORDER BY created_at, id",
-                        (repo, f"#{number}", cutoff),
+                        (repo, *condition_args, cutoff),
                     )
                 ]
         except sqlite3.Error as exc:
@@ -1712,7 +1862,9 @@ class CIObservePRs:
         versions = {}
         rows = []
         for row in stored:
-            sha = row.get("head_sha") or ""
+            # A pull-request suite run starts from the default branch; the
+            # commit it tested is in its run name, not in head_sha.
+            sha = phases.tested_sha(row.get("workflow"), row.get("head_sha"))
             is_queue = row.get("event") == "merge_group"
             # A merge-queue run tests a temporary merge commit, not the pull
             # request head. It is not a code version of the pull request.
@@ -1971,6 +2123,8 @@ class CIObservePRs:
                 attempts.setdefault((attempt["repo"], attempt["number"]), []).append(dict(attempt))
 
         funnel = _funnel(rows)
+        kpis = _kpis(rows, attempts)
+        weekly = _weekly(rows)
         prs = []
         for row in rows:
             row_attempts = attempts.get((row["repo"], row["number"]), [])
@@ -1987,6 +2141,11 @@ class CIObservePRs:
             row["queue_attempt_count"] = len(row_attempts)
             row["ejected_attempt_count"] = sum(1 for a in row_attempts if a["ejected"])
             row["age_display"] = human_duration(row["age_seconds"])
+            # The Pull requests page opens this pull request's own section.
+            row["detail_url"] = (
+                "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests"
+                f"?var-pr_repo={quote(row['repo'], safe='')}&var-pr_number={row['number']}&var-days={days}"
+            )
             # The Pull requests page turns this list into a drop-down. The
             # label carries the three things a reader needs to choose.
             row["option_label"] = f"#{row['number']} · {row['final_stage']} · {row['title']}"
@@ -2010,6 +2169,8 @@ class CIObservePRs:
             "days": days,
             "prs": prs,
             "funnel": funnel,
+            "kpis": kpis,
+            "weekly": weekly,
             "pr": None,
             "stages": [],
             "summary": [],
@@ -2168,6 +2329,110 @@ def _funnel(rows):
     return funnel
 
 
+def _median(values):
+    values = sorted(value for value in values if value is not None)
+    return percentile(values, 50) if values else None
+
+
+def _share(flags):
+    flags = [flag for flag in flags if flag is not None]
+    return round(sum(1 for flag in flags if flag) / len(flags), 4) if flags else None
+
+
+def _kpis(rows, attempts):
+    """The one row of headline numbers for the pull requests in the window.
+
+    Lead times use the merged pull requests only: a closed pull request has
+    no merge to measure to. A value no row could measure is None ("not
+    measured"), never 0. Rows stored before the second record format have
+    no rebase or E2E counts, so those numbers cover the rows that do, and
+    `measured_prs` says how many.
+    """
+    merged = [row for row in rows if row.get("state") == "merged"]
+    measured = [row for row in merged if (row.get("record_version") or 1) >= RECORD_VERSION]
+
+    def ejected(row):
+        return any(a["ejected"] for a in attempts.get((row["repo"], row["number"]), []))
+
+    def queued(row):
+        return bool(attempts.get((row["repo"], row["number"])))
+
+    lead = sorted(row["total_seconds"] for row in merged if row.get("total_seconds") is not None)
+    review_wait = [
+        row.get("review_wait_seconds") if row.get("review_wait_seconds") is not None else row.get("authoring_seconds")
+        for row in merged
+    ]
+    return [{
+        "prs": len(rows),
+        "merged": len(merged),
+        "closed": sum(1 for row in rows if row.get("state") == "closed"),
+        "lead_median_s": percentile(lead, 50) if lead else None,
+        "lead_p90_s": percentile(lead, 90) if lead else None,
+        "review_wait_median_s": _median(review_wait),
+        "review_median_s": _median(row.get("review_seconds") for row in merged),
+        "waiting_median_s": _median(row.get("waiting_seconds") for row in merged),
+        "queue_median_s": _median(row.get("queue_seconds") for row in merged),
+        "merge_median_s": _median(row.get("merged_seconds") for row in merged),
+        "queued_share": _share(queued(row) for row in merged),
+        "ejected_share": _share(ejected(row) for row in merged if queued(row)),
+        "ejections": sum(
+            1 for row in merged for a in attempts.get((row["repo"], row["number"]), []) if a["ejected"]
+        ),
+        "commits_median": _median(row.get("commit_count") for row in merged),
+        "rebased_share": _share(
+            (row.get("force_push_count") or 0) > 0 for row in measured if row.get("force_push_count") is not None
+        ),
+        "force_pushes_mean": (
+            round(sum(row["force_push_count"] for row in measured if row.get("force_push_count") is not None)
+                  / len([row for row in measured if row.get("force_push_count") is not None]), 2)
+            if any(row.get("force_push_count") is not None for row in measured) else None
+        ),
+        "changes_requested_share": _share(
+            (row.get("changes_requested_count") or 0) > 0 for row in measured
+            if row.get("changes_requested_count") is not None
+        ),
+        "e2e_runs_median": _median(row.get("e2e_runs") for row in measured),
+        "e2e_retests_mean": (
+            round(sum(row["e2e_retests"] for row in measured if row.get("e2e_retests") is not None)
+                  / len([row for row in measured if row.get("e2e_retests") is not None]), 2)
+            if any(row.get("e2e_retests") is not None for row in measured) else None
+        ),
+        "e2e_failed_share": _share(
+            (row.get("e2e_failures") or 0) > 0 for row in measured if row.get("e2e_failures") is not None
+        ),
+        "measured_prs": len(measured),
+    }]
+
+
+def _weekly(rows):
+    """Per ISO week of the merge: merged pull requests and the median of
+    each stage, oldest week first. `week` is the Monday, as a date the
+    dashboards read as a time axis."""
+    weeks = {}
+    for row in rows:
+        merged = parse_iso(row.get("merged_at")) if row.get("state") == "merged" else None
+        if merged is None:
+            continue
+        monday = (merged - timedelta(days=merged.weekday())).strftime("%Y-%m-%d")
+        weeks.setdefault(monday, []).append(row)
+    out = []
+    for week in sorted(weeks):
+        group = weeks[week]
+        out.append({
+            "week": week,
+            "merged": len(group),
+            "lead_median_s": _median(row.get("total_seconds") for row in group),
+            "review_wait_median_s": _median(
+                row.get("review_wait_seconds") if row.get("review_wait_seconds") is not None
+                else row.get("authoring_seconds") for row in group
+            ),
+            "review_median_s": _median(row.get("review_seconds") for row in group),
+            "waiting_median_s": _median(row.get("waiting_seconds") for row in group),
+            "queue_median_s": _median(row.get("queue_seconds") for row in group),
+        })
+    return out
+
+
 def _attempt_out(row):
     """The queue-attempt row as the dashboard reads it."""
     attempt = dict(row)
@@ -2207,7 +2472,8 @@ def _stored_run_ids(value, run_id):
 # ---------------------------------------------------------------------------
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Backfill ci-observe pull-request history into prs.db")
-    parser.add_argument("--days", type=int, default=PRS_HISTORY_DAYS, help="window in days (default 30)")
+    parser.add_argument("--days", type=int, default=PRS_HISTORY_DAYS,
+                        help=f"window in days (default {PRS_HISTORY_DAYS})")
     parser.add_argument("--repo", action="append", default=[], help="repository name; repeatable")
     parser.add_argument("--limit", type=int, default=None, help="stop after this many pull requests")
     parser.add_argument("--force", action="store_true", help="refetch pull requests already stored")

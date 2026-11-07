@@ -1,17 +1,18 @@
 # Systemd user timer for the ci-observe per-test rollup.
 # Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-trends.timer
 #
-# Runs once a day, early enough that the previous day's runs are complete and
-# still inside GitHub's 30-day artifact window. Persistent=true means a missed
-# run (machine down) starts when the machine comes back, which matters because
-# a missed day is a permanent hole in per-test history.
+# Runs hourly at 25 past, so a finished run's tests reach the pages within the
+# hour and the archive never falls behind the exporter's 30 days. Persistent
+# means a missed pass (machine down) runs when the machine comes back; a run
+# whose artifact is still inside GitHub's 30-day window is read late, not
+# lost.
 
 [Unit]
-Description=Run the ci-observe per-test rollup daily
+Description=Run the ci-observe per-test rollup hourly
 
 [Timer]
-OnCalendar=*-*-* 04:15:00
-RandomizedDelaySec=600
+OnCalendar=*-*-* *:25:00
+RandomizedDelaySec=300
 Persistent=true
 
 [Install]
