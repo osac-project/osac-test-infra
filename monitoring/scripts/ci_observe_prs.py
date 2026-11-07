@@ -73,6 +73,7 @@ import sqlite3
 import sys
 import time
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 import requests
 
@@ -266,6 +267,67 @@ def human_duration(seconds):
         return f"{hours}h {minutes}m"
     days, hours = divmod(hours, 24)
     return f"{days}d {hours}h"
+
+
+def _short_moment(value: str | None) -> str:
+    """A clock reading a reader can scan, e.g. 12 Mar 09:10."""
+    moment = parse_iso(value)
+    if moment is None:
+        return ""
+    return moment.astimezone(UTC).strftime("%d %b %H:%M")
+
+
+def dates_display(
+    state: str | None,
+    opened_at: str | None,
+    merged_at: str | None,
+    closed_at: str | None,
+) -> str:
+    """One line for the identity row: opened, then merged, closed or open."""
+    opened = _short_moment(opened_at)
+    parts = [f"Opened {opened}" if opened else "Opened unknown"]
+    if merged_at:
+        parts.append(f"Merged {_short_moment(merged_at)}")
+    elif closed_at or state == "closed":
+        closed = _short_moment(closed_at)
+        parts.append(f"Closed {closed}" if closed else "Closed")
+    else:
+        parts.append("Open")
+    return " · ".join(parts)
+
+
+def _short_reason(text: str | None, limit: int = 90) -> str:
+    """The first line of a queue reason, short enough for one table cell."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _failed_step_name(failed_step: str | None, failure_area: str = "") -> str:
+    """The exact step the table should name.
+
+    A run stores "job → step; job2 → step2". Normally the first entry is the
+    first failure. When the stored area is "test", a pytest step explains the
+    missing test data better than an earlier install step, so prefer the
+    first test-step entry.
+    """
+    entries = [entry for entry in (failed_step or "").split("; ") if entry]
+    if not entries:
+        return ""
+    if failure_area == "test":
+        for entry in entries:
+            step = entry.rsplit(" → ", 1)[-1].strip()
+            if step in TEST_STEP_NAMES:
+                return step
+    return entries[0].rsplit(" → ", 1)[-1].strip()
+
+
+TEST_STEP_NAMES = frozenset({
+    "Run E2E tests",
+    "Run E2E tests (ci-observe capture)",
+    "Run CaaS e2e tests",
+})
 
 
 # A short suite name for the E2E runs table. The stored workflow name is
@@ -1186,8 +1248,10 @@ class CIObservePRs:
             record["last_attempt_at"] = max(completed) if completed else None
             record["queued_at"] = attempts[0]["started_at"]
             record["waiting_seconds"] = seconds_between(record["first_approval_at"], record["queued_at"])
-            queue_end = record["merged_at"] or record["last_attempt_at"] or record["closed_at"]
-            record["queue_seconds"] = seconds_between(record["queued_at"], queue_end)
+            # The queue ends when its last attempt ends. The merge then runs
+            # from that moment to merged_at; using merged_at for both would
+            # count the same time twice.
+            record["queue_seconds"] = seconds_between(record["queued_at"], record["last_attempt_at"])
             record["merged_seconds"] = seconds_between(record["last_attempt_at"], record["merged_at"])
             record["final_stage"] = final_stage(
                 record["state"], record["first_review_at"], record["first_approval_at"], record["queued_at"]
@@ -1288,9 +1352,12 @@ class CIObservePRs:
             "days": days,
             "pr": None,
             "stages": [],
+            "summary": [],
+            "chart": [],
             "attempts": [],
             "pr_state": state,
             "pr_state_message": reason,
+            "status_message": reason,
             "source": "none",
             "states": _states_document(),
             "notes": notes,
@@ -1311,12 +1378,15 @@ class CIObservePRs:
             # of a root-not-found error.
             "pr": None,
             "stages": [],
+            "summary": [],
+            "chart": [],
             "attempts": [],
             # The detail panels query this endpoint with an empty number.
             # These keys let the resolved-state panel say "enter a number"
             # instead of showing a root-not-found error.
             "pr_state": NO_SELECTION_STATE,
             "pr_state_message": NO_SELECTION_MESSAGE,
+            "status_message": "",
             "source": "none",
             "notes": [
                 "prs.db has not been backfilled yet: run monitoring/scripts/ci_observe_prs.py "
@@ -1519,22 +1589,24 @@ class CIObservePRs:
                 "the pull request was found, but its review history could not be read, so only its identity is shown",
             )
         record = self._build_pr_record(repo, live, timeline, reviews, commits, now)
+        # A live pull request is still moving. The page needs one "now" so an
+        # open stage ends where its stat says it ends.
+        record["as_of"] = _iso(now)
         merge_runs = [run for run in runs if run.get("event") == "merge_group"]
         if merge_runs:
             record["queued_at"] = min(run["created_at"] for run in merge_runs)
             record["waiting_seconds"] = seconds_between(record["first_approval_at"], record["queued_at"])
             done = max((run.get("done_at_ms") or 0) for run in merge_runs)
             record["last_attempt_at"] = _iso_from_ms(done) if done else None
-            if record["state"] == "open":
-                # The pull request is still in the queue: its queue time runs
-                # to now, not to the end of its last attempt.
-                queue_end = _iso(now)
-            else:
-                queue_end = record.get("closed_at") or record.get("merged_at") or _iso(now)
+            # A pull request still in the queue runs to now; an ended one
+            # stops at its last attempt, leaving the merge as its own stage.
+            queue_end = _iso(now) if record["state"] == "open" else record["last_attempt_at"]
             record["queue_seconds"] = seconds_between(record["queued_at"], queue_end)
         elif record["state"] == "open" and record["first_approval_at"]:
             # Approved but not queued yet: the wait is still running.
             record["waiting_seconds"] = seconds_between(record["first_approval_at"], _iso(now))
+        if record["state"] == "merged" and record["last_attempt_at"] and record["merged_at"]:
+            record["merged_seconds"] = seconds_between(record["last_attempt_at"], record["merged_at"])
         record["final_stage"] = final_stage(
             record["state"], record["first_review_at"], record["first_approval_at"], record["queued_at"]
         )
@@ -1622,7 +1694,8 @@ class CIObservePRs:
                     dict(row)
                     for row in conn.execute(
                         "SELECT id, run_id, workflow, branch, status, conclusion, event, trigger,"
-                        " duration_s, url, created_at, updated_at, run_attempt, head_sha"
+                        " duration_s, url, created_at, updated_at, run_attempt, head_sha,"
+                        " failed_step, failure_reason"
                         " FROM jobs"
                         " WHERE repo = ? AND pr_display = ? AND category = 'e2e' AND run_id != ''"
                         "   AND created_at >= ?"
@@ -1647,6 +1720,15 @@ class CIObservePRs:
                 versions[sha] = len(versions) + 1
             started = parse_iso(row.get("created_at"))
             done = parse_iso(row.get("updated_at"))
+            failure_area = (row.get("failure_reason") or "").strip().lower()
+            failed_step_name = _failed_step_name(row.get("failed_step"), failure_area)
+            conclusion = row.get("conclusion") or ""
+            status = row.get("status") or ""
+            status_display = conclusion
+            if not status_display and status in ("in_progress", "running"):
+                status_display = "Running"
+            elif not status_display and status in ("queued", "waiting", "pending"):
+                status_display = "Queued"
             rows.append(
                 {
                     "id": row.get("id"),
@@ -1656,18 +1738,30 @@ class CIObservePRs:
                     "suite": _suite_label(row.get("workflow") or ""),
                     "suite_key": _suite_key(row.get("workflow") or ""),
                     "branch": row.get("branch") or "",
-                    "status": row.get("status") or "",
-                    "conclusion": row.get("conclusion") or "",
+                    "status": status,
+                    "conclusion": conclusion,
+                    "status_display": status_display,
                     "event": row.get("event") or "",
                     "trigger": row.get("trigger") or "",
                     "created_at": row.get("created_at") or "",
+                    "created_display": _short_moment(row.get("created_at")),
                     "duration_s": row.get("duration_s"),
                     "duration_display": human_duration(row.get("duration_s")),
                     "head_sha": sha,
                     "head": "" if is_queue else sha[:12],
                     "commit_url": "" if is_queue or not sha else f"https://github.com/{ORG}/{repo}/commit/{sha}",
                     "version": "" if is_queue else versions.get(sha, ""),
+                    "code_display": (
+                        f"v{versions[sha]} · {sha[:12]}" if not is_queue and sha in versions else ""
+                    ),
+                    "failed_step": row.get("failed_step") or "",
+                    "failed_step_name": failed_step_name,
+                    "failure_area": failure_area,
                     "url": row.get("url") or "",
+                    "run_display": str(row.get("run_id") or ""),
+                    # The exporter replaces this with the run page when it has
+                    # a capture; until then GitHub is the honest entry point.
+                    "run_link": row.get("url") or "",
                     "started_at_ms": int(started.timestamp() * 1000) if started else None,
                     "done_at_ms": int(done.timestamp() * 1000) if done else None,
                     # The exporter fills these from the capture registry; the
@@ -1678,6 +1772,8 @@ class CIObservePRs:
                     "run_url": "",
                 }
             )
+        # The newest run is the one a reader wants first.
+        rows.reverse()
         return rows, ""
 
     # -- detail -------------------------------------------------------------
@@ -1723,6 +1819,7 @@ class CIObservePRs:
         pr_state = "stored" if row is not None else ""
         pr_state_message = ""
         live = None
+        live_error = ""
         if row is None:
             if repo:
                 live, live_error = self._live_detail(repo, number, runs, now)
@@ -1741,6 +1838,12 @@ class CIObservePRs:
         pr = dict(row) if row is not None else live
         if pr is not None:
             pr["url"] = pr.get("url") or pr_url(pr["repo"], pr["number"])
+            author = pr.get("author") or ""
+            pr["author_url"] = f"https://github.com/{quote(author, safe='')}" if author else ""
+            pr["repo_url"] = f"https://github.com/{ORG}/{pr['repo']}"
+            pr["dates_display"] = dates_display(
+                pr.get("state"), pr.get("opened_at"), pr.get("merged_at"), pr.get("closed_at")
+            )
             pr["age_seconds"] = pr.get("total_seconds")
             if pr["age_seconds"] is None:
                 pr["age_seconds"] = seconds_between(pr["opened_at"], _iso(now))
@@ -1770,16 +1873,30 @@ class CIObservePRs:
         if runs_note:
             notes.append(runs_note)
 
+        status_message = ""
+        if pr is None:
+            status_message = " ".join(
+                part for part in (pr_state_message, runs_note) if part
+            )
+        elif pr.get("history_unavailable"):
+            status_message = live_error
+        elif runs_note.startswith("the job history"):
+            status_message = runs_note
+
+        stages = _stages(pr) if pr is not None and not pr.get("history_unavailable") else []
         return {
             "mode": "pr",
             "generated_at": _utc_now(),
             "days": days,
             "pr": pr,
-            "stages": _stages(pr) if pr is not None and not pr.get("history_unavailable") else [],
+            "stages": stages,
+            "summary": _summary(pr, stages),
+            "chart": _chart(pr, stages),
             "runs": runs,
             "attempts": [_attempt_out(attempt) for attempt in attempts],
             "pr_state": pr_state,
             "pr_state_message": pr_state_message,
+            "status_message": status_message,
             "source": source,
             "states": _states_document(),
             "notes": notes,
@@ -1858,6 +1975,12 @@ class CIObservePRs:
         for row in rows:
             row_attempts = attempts.get((row["repo"], row["number"]), [])
             row["url"] = row.get("url") or pr_url(row["repo"], row["number"])
+            author = row.get("author") or ""
+            row["author_url"] = f"https://github.com/{quote(author, safe='')}" if author else ""
+            row["repo_url"] = f"https://github.com/{ORG}/{row['repo']}"
+            row["dates_display"] = dates_display(
+                row.get("state"), row.get("opened_at"), row.get("merged_at"), row.get("closed_at")
+            )
             row["age_seconds"] = row.get("total_seconds")
             if row["age_seconds"] is None:
                 row["age_seconds"] = seconds_between(row["opened_at"], _iso(now))
@@ -1889,11 +2012,14 @@ class CIObservePRs:
             "funnel": funnel,
             "pr": None,
             "stages": [],
+            "summary": [],
+            "chart": [],
             "runs": [],
             "attempts": [],
             # No number selected: the resolved-state panel says so.
             "pr_state": NO_SELECTION_STATE,
             "pr_state_message": NO_SELECTION_MESSAGE,
+            "status_message": "",
             "source": "none",
             "states": _states_document(),
             "notes": notes,
@@ -1920,11 +2046,18 @@ def _stages(pr):
     stage the pull request never reached is 'not_reached'."""
     if pr is None:
         return []
+    # An open pull request is still moving. Its current stage ends at the
+    # as-of moment, the same moment its stat measures to.
+    as_of = pr.get("as_of") if pr.get("state") == "open" else None
+    waiting_end = pr.get("queued_at")
+    if as_of and pr.get("first_approval_at") and not pr.get("queued_at"):
+        waiting_end = as_of
+    queue_end = as_of if as_of and pr.get("queued_at") else pr.get("last_attempt_at")
     boundaries = {
         "authoring": (pr.get("opened_at"), pr.get("first_review_at"), pr.get("authoring_seconds")),
         "review": (pr.get("first_review_at"), pr.get("first_approval_at"), pr.get("review_seconds")),
-        "waiting": (pr.get("first_approval_at"), pr.get("queued_at"), pr.get("waiting_seconds")),
-        "queue": (pr.get("queued_at"), pr.get("merged_at") or pr.get("last_attempt_at"), pr.get("queue_seconds")),
+        "waiting": (pr.get("first_approval_at"), waiting_end, pr.get("waiting_seconds")),
+        "queue": (pr.get("queued_at"), queue_end, pr.get("queue_seconds")),
         "merged": (pr.get("last_attempt_at"), pr.get("merged_at"), pr.get("merged_seconds")),
     }
     reasons = {
@@ -1968,6 +2101,54 @@ def _stages(pr):
     return stages
 
 
+def _summary(pr: dict | None, stages: list[dict]) -> list[dict]:
+    """The five numbers at the top of the page, as display strings.
+
+    A number the data cannot support says "not measured". A zero would claim
+    a stage took no time, which is a different and false statement.
+    """
+    if pr is None:
+        return []
+    by_stage = {stage["stage"]: stage for stage in stages}
+
+    def display(stage_key: str) -> str:
+        stage = by_stage.get(stage_key)
+        if stage is None or stage["state"] != "measured" or stage["seconds"] is None:
+            return "not measured"
+        return human_duration(stage["seconds"])
+
+    total = pr.get("total_seconds")
+    return [
+        {
+            "total": human_duration(total) if total is not None else "not measured",
+            "authoring": display("authoring"),
+            "review": display("review"),
+            "waiting": display("waiting"),
+            "queue": display("queue"),
+        }
+    ]
+
+
+def _chart(pr: dict | None, stages: list[dict]) -> list[dict]:
+    """The stacked bar's one row: each measured stage in hours.
+
+    The chart is a duration axis, so the whole pull request fits whatever its
+    length. A stage the data cannot measure stays null and is absent from
+    the bar; it is never drawn as zero.
+    """
+    if pr is None:
+        return []
+    by_stage = {stage["stage"]: stage for stage in stages}
+    row: dict[str, str | float | None] = {"category": f"PR #{pr['number']}"}
+    for key, _ in STAGES:
+        stage = by_stage.get(key)
+        if stage is None or stage["state"] != "measured" or stage["seconds"] is None:
+            row[key] = None
+        else:
+            row[key] = round(stage["seconds"] / 3600, 3)
+    return [row]
+
+
 def _funnel(rows):
     """Median and p95 duration per stage over the rows in the window. A row
     without that stage is not a zero: it is excluded from the sample, and
@@ -1997,9 +2178,12 @@ def _attempt_out(row):
     ]
     attempt["run_url"] = attempt.get("url") or ""
     attempt["duration_display"] = human_duration(attempt.get("duration_seconds"))
+    attempt["started_display"] = _short_moment(attempt.get("started_at"))
     attempt["ejected"] = bool(attempt.get("ejected"))
     attempt["ejection"] = "ejected" if attempt["ejected"] else "not ejected"
     attempt["queue_outcome"] = "ejected" if attempt["ejected"] else "passed"
+    attempt["why"] = _short_reason(attempt.get("ejection_reason") or attempt.get("ejection_kind") or "")
+    attempt["why_url"] = attempt.get("comment_url") or attempt["run_url"]
     # The store does not know Tempo. The exporter fills capture_url from the
     # run cache when a capture exists; an empty value is the store-only view.
     attempt["capture_url"] = ""

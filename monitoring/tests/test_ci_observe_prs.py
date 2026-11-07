@@ -39,10 +39,14 @@ import urllib.request
 from datetime import UTC, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import requests
 from helpers import FakeGitHub, FakeResponse, iso
+
+if TYPE_CHECKING:
+    from ci_observe_prs import CIObservePRs
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ci_observe_prs"
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
@@ -247,9 +251,20 @@ class TestParser:
         assert row["authoring_seconds"] == 20 * 60
         assert row["review_seconds"] == 30 * 60
         assert row["waiting_seconds"] == 10 * 60
-        assert row["queue_seconds"] == 35 * 60
+        assert row["queue_seconds"] == 34 * 60
         assert row["merged_seconds"] == 60
         assert row["total_seconds"] == 95 * 60
+
+    def test_measured_stages_sum_to_the_total(self, service: CIObservePRs) -> None:
+        """The queue ends at the last attempt and the merge starts there, so
+        the five stages account for the whole life without overlap."""
+        run_backfill(service)
+        row = pr_row(service, 101)
+        measured = sum(
+            row[key]
+            for key in ("authoring_seconds", "review_seconds", "waiting_seconds", "queue_seconds", "merged_seconds")
+        )
+        assert abs(measured - row["total_seconds"]) <= 60
 
     def test_merged_pull_request_keeps_both_attempts(self, service):
         run_backfill(service)
@@ -1069,7 +1084,7 @@ class TestEndpointDocument:
         assert funnel["review"]["samples"] == 2
         assert funnel["review"]["median_seconds"] == 1500
         assert funnel["queue"]["samples"] == 2
-        assert funnel["queue"]["median_seconds"] == 2850
+        assert funnel["queue"]["median_seconds"] == 2520
         assert funnel["merged"]["median_seconds"] == 330
 
     def test_one_pull_request_document(self, filled):
@@ -1087,7 +1102,71 @@ class TestEndpointDocument:
         assert doc["attempts"][0]["ejected"] is True
         assert doc["attempts"][0]["capture_url"] == ""
         assert doc["attempts"][0]["ejection"] == "ejected"
+        assert doc["attempts"][0]["started_display"] == "03 Oct 09:00"
+        assert doc["attempts"][0]["why_url"] == doc["attempts"][0]["comment_url"]
+        assert doc["attempts"][1]["why_url"] == doc["attempts"][1]["run_url"]
         assert any("derived" in note for note in doc["notes"])
+
+    def test_the_summary_and_chart_name_measured_stages(self, filled: CIObservePRs) -> None:
+        doc = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})
+
+        assert doc["summary"] == [
+            {"total": "1h 35m", "authoring": "20m", "review": "30m", "waiting": "10m", "queue": "34m"}
+        ]
+        assert doc["chart"] == [
+            {
+                "category": "PR #101",
+                "authoring": 0.333,
+                "review": 0.5,
+                "waiting": 0.167,
+                "queue": 0.567,
+                "merged": 0.017,
+            }
+        ]
+
+    def test_the_identity_line_links_and_dates(self, filled: CIObservePRs) -> None:
+        pr = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})["pr"]
+
+        assert pr["author_url"] == "https://github.com/author1"
+        assert pr["repo_url"] == "https://github.com/osac-project/osac"
+        assert pr["dates_display"] == "Opened 01 Oct 10:00 · Merged 01 Oct 11:35"
+
+    def test_a_bot_login_is_url_encoded(self, filled: CIObservePRs) -> None:
+        with sqlite3.connect(filled.db_file) as conn:
+            conn.execute("UPDATE pr_events SET author = ? WHERE number = 101", ("dependabot[bot]",))
+
+        pr = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})["pr"]
+
+        assert pr["author_url"] == "https://github.com/dependabot%5Bbot%5D"
+
+    def test_missing_stages_say_not_measured_and_are_absent_from_the_chart(self, filled: CIObservePRs) -> None:
+        doc = filled.get_json({"number": ["102"]})
+
+        assert doc["summary"][0]["review"] == "not measured"
+        assert doc["summary"][0]["queue"] == "not measured"
+        assert doc["chart"] == [
+            {
+                "category": "PR #102",
+                "authoring": 0.5,
+                "review": None,
+                "waiting": None,
+                "queue": None,
+                "merged": None,
+            }
+        ]
+
+    def test_a_normal_stored_pull_request_has_no_status_message(self, filled: CIObservePRs) -> None:
+        seed_jobs(filled, [])
+        doc = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})
+
+        assert doc["status_message"] == ""
+
+    def test_a_missing_pull_request_status_says_why(self, filled: CIObservePRs) -> None:
+        doc = filled.get_json({"number": ["999"]})
+
+        assert doc["pr"] is None
+        assert doc["status_message"]
+        assert doc["status_message"] == doc["pr_state_message"]
 
     def test_closed_pull_request_says_no_queue_history(self, filled):
         doc = filled.get_json({"number": ["102"]})
@@ -1137,6 +1216,7 @@ class TestEndpointDocument:
         assert one["pr"] is None
         assert one["pr_state"] == "not_yet_fetched"
         assert "does not exist yet" in one["notes"][-1]
+        assert "does not exist yet" in one["status_message"]
         assert not db_file.exists(), "the read path must not create prs.db"
 
     def test_no_token_or_header_leaks(self, filled):
@@ -1167,18 +1247,61 @@ class TestRuns:
         )
         doc = service.get_json({"number": ["101"]})
 
-        assert [run["run_id"] for run in doc["runs"]] == ["9001", "9002", "9003"]
-        assert [run["version"] for run in doc["runs"]] == [1, 2, ""]
+        assert [run["run_id"] for run in doc["runs"]] == ["9003", "9002", "9001"]
+        assert [run["version"] for run in doc["runs"]] == ["", 2, 1]
         assert [run["suite"] for run in doc["runs"]] == ["VMaaS", "VMaaS", "VMaaS"]
-        assert [run["event"] for run in doc["runs"]] == ["pull_request", "pull_request", "merge_group"]
+        assert [run["event"] for run in doc["runs"]] == ["merge_group", "pull_request", "pull_request"]
         # A merge-queue run tests a temporary merge commit, not the PR head:
         # it is not a code version and has no commit link.
-        assert doc["runs"][2]["head"] == ""
-        assert doc["runs"][2]["commit_url"] == ""
+        assert doc["runs"][0]["head"] == ""
+        assert doc["runs"][0]["commit_url"] == ""
         # The gate row and another pull request's row are not e2e results.
         assert all(run["run_id"] != "9004" for run in doc["runs"])
         assert doc["runs"][0]["recorded"] == ""
         assert doc["runs"][0]["run_url"] == ""
+
+    def test_a_failed_run_names_its_exact_step_and_area(self, service: CIObservePRs) -> None:
+        run_backfill(service)
+        seed_jobs(
+            service,
+            [(2, 9002, "E2E vmaas (pull requests)", "pull_request", "b" * 40, "2026-10-02T10:00:00Z", "failure")],
+        )
+        with sqlite3.connect(Path(service.db_file).parent / "workflow-exporter.db") as conn:
+            conn.execute(
+                "UPDATE jobs SET failed_step = ?, failure_reason = ? WHERE id = 2",
+                (
+                    "vmaas / e2e-vmaas-full-install / e2e → Install OSAC; "
+                    "vmaas / e2e-vmaas-full-install / test → Run E2E tests",
+                    "test",
+                ),
+            )
+        doc = service.get_json({"number": ["101"]})
+
+        # The stored area is "test", so the pytest step wins over the
+        # earlier install step even though install is the first entry.
+        assert doc["runs"][0]["failed_step_name"] == "Run E2E tests"
+        assert doc["runs"][0]["failure_area"] == "test"
+        assert doc["runs"][0]["code_display"] == "v1 · " + "b" * 12
+        assert doc["runs"][0]["created_display"] == "02 Oct 10:00"
+        assert doc["runs"][0]["status_display"] == "failure"
+        assert doc["runs"][0]["run_link"] == "https://github.com/osac-project/osac/actions/runs/9002"
+
+        # A non-test area keeps the first failed step.
+        with sqlite3.connect(Path(service.db_file).parent / "workflow-exporter.db") as conn:
+            conn.execute("UPDATE jobs SET failure_reason = 'setup' WHERE id = 2")
+        doc = service.get_json({"number": ["101"]})
+        assert doc["runs"][0]["failed_step_name"] == "Install OSAC"
+
+    def test_a_passed_run_has_no_failed_step(self, service: CIObservePRs) -> None:
+        run_backfill(service)
+        seed_jobs(
+            service,
+            [(1, 9001, "E2E VMaaS Full Install", "pull_request", "a" * 40, "2026-10-01T10:00:00Z", "success")],
+        )
+        doc = service.get_json({"number": ["101"]})
+
+        assert doc["runs"][0]["failed_step_name"] == ""
+        assert doc["runs"][0]["failure_area"] == ""
 
     def test_a_missing_duration_is_empty_not_zero(self, service):
         run_backfill(service)
@@ -1229,9 +1352,14 @@ class TestRuns:
         assert doc["stages"][1]["state"] == "measured"
         assert doc["pr"]["queued_at"] == "2026-10-06T11:00:00Z"
         assert doc["pr"]["final_stage"] == "open in queue"
-        # Queue time runs to now while the pull request is still queued.
+        # Queue time runs to the live as-of moment while the pull request is
+        # still queued. The stage, the stat and the bar all end there.
+        assert doc["pr"]["as_of"] == "2026-10-15T00:00:00Z"
         assert doc["stages"][3]["state"] == "measured"
+        assert doc["stages"][3]["end_at"] == "2026-10-15T00:00:00Z"
         assert doc["stages"][3]["seconds"] > 0
+        assert doc["summary"][0]["queue"] == doc["stages"][3]["time_display"]
+        assert doc["chart"][0]["queue"] == round(doc["stages"][3]["seconds"] / 3600, 3)
         assert doc["stages"][4]["state"] == "not_reached"
         assert len(doc["runs"]) == 3
         # The queue history comes from the stored merge_group runs. The two
@@ -1243,6 +1371,33 @@ class TestRuns:
         assert doc["attempts"][0]["run_id"] == 9102
         assert doc["attempts"][0]["ejected"] is True
         assert doc["attempts"][0]["ejection_kind"] == "check_failed"
+
+    def test_an_approved_pull_request_not_in_the_queue_ends_waiting_at_as_of(
+        self, service: CIObservePRs, github: FakeGitHub
+    ) -> None:
+        run_backfill(service)
+        fixture = load_fixture("merged_pr")
+        open_pr = dict(fixture["pr"])
+        open_pr.update({"number": 778, "state": "open", "merged_at": None, "closed_at": None})
+        github.add(f"/repos/osac-project/{REPO}/pulls/778", FakeResponse(payload=open_pr))
+        route_pr(github, {**fixture, "pr": open_pr}, number=778)
+        seed_jobs(
+            service,
+            [(21, 9201, "E2E vmaas (pull requests)", "pull_request", "a" * 40, "2026-10-05T10:00:00Z", "success")],
+            pr=778,
+        )
+
+        doc = service.get_json({"number": ["778"], "repo": [REPO]})
+
+        waiting = next(stage for stage in doc["stages"] if stage["stage"] == "waiting")
+        queue = next(stage for stage in doc["stages"] if stage["stage"] == "queue")
+        assert doc["pr"]["as_of"] == "2026-10-15T00:00:00Z"
+        assert waiting["state"] == "measured"
+        assert waiting["end_at"] == "2026-10-15T00:00:00Z"
+        assert waiting["seconds"] > 0
+        assert queue["state"] == "not_reached"
+        assert doc["summary"][0]["waiting"] == waiting["time_display"]
+        assert doc["chart"][0]["waiting"] == round(waiting["seconds"] / 3600, 3)
 
     def test_an_unreadable_review_history_does_not_invent_stages(self, service, github):
         run_backfill(service)
@@ -1259,6 +1414,32 @@ class TestRuns:
         # An unreadable history is missing, not "never reviewed".
         assert doc["stages"] == []
         assert any("review history could not be read" in note for note in doc["notes"])
+        assert "review history could not be read" in doc["status_message"]
+
+    def test_a_live_merged_pull_request_measures_its_merge_segment(
+        self, service: CIObservePRs, github: FakeGitHub
+    ) -> None:
+        run_backfill(service)
+        fixture = load_fixture("merged_pr")
+        merged_pr = dict(fixture["pr"])
+        merged_pr.update({"number": 779, "state": "closed", "created_at": "2026-10-06T10:00:00Z"})
+        merged_pr.update({"merged_at": "2026-10-06T12:00:00Z", "closed_at": "2026-10-06T12:00:00Z"})
+        github.add(f"/repos/osac-project/{REPO}/pulls/779", FakeResponse(payload=merged_pr))
+        route_pr(github, {**fixture, "pr": merged_pr}, number=779)
+        seed_jobs(
+            service,
+            [(31, 9301, "E2E vmaas (merge queue)", "merge_group", "b" * 40, "2026-10-06T11:00:00Z", "success")],
+            pr=779,
+        )
+
+        doc = service.get_json({"number": ["779"], "repo": [REPO]})
+
+        merged = next(stage for stage in doc["stages"] if stage["stage"] == "merged")
+        assert doc["pr"]["state"] == "merged"
+        assert doc["pr"]["merged_seconds"] == 3600
+        assert merged["state"] == "measured"
+        assert merged["end_at"] == "2026-10-06T12:00:00Z"
+        assert doc["chart"][0]["merged"] == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -1406,23 +1587,24 @@ def test_dashboard_selectors_resolve_against_the_real_response(service):
     checked = 0
     for panel in iter_panels(dashboard["panels"]):
         for target in panel.get("targets", []):
-            doc = documents["index"] if "days=" in target["url"] else documents["pr"]
+            doc = documents["pr"] if "number=" in target["url"] else documents["index"]
             selector = target["root_selector"]
             if selector == "$":
-                continue
-            if selector.startswith("$."):
-                selector = selector[2:]
-            node = doc
-            for part in selector.split("."):
-                node = node[part]
-            assert node, f"{panel['title']}: {target['root_selector']} is empty"
-            sample = node[0] if isinstance(node, list) else node
+                sample = doc
+            else:
+                if selector.startswith("$."):
+                    selector = selector[2:]
+                node = doc
+                for part in selector.split("."):
+                    node = node[part]
+                assert node, f"{panel['title']}: {target['root_selector']} is empty"
+                sample = node[0] if isinstance(node, list) else node
             for column in target["columns"]:
                 assert column["selector"] in sample, (
                     f"{panel['title']}: column {column['selector']} is not in the endpoint response"
                 )
             checked += 1
-    assert checked >= 3, "the page has three tables"
+    assert checked >= 9, "the page has an identity row, five tiles, a chart and three tables"
 
 
 def test_backfill_is_mounted_in_the_exporter_and_scheduled_hourly():

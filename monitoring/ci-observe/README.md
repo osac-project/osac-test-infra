@@ -57,13 +57,16 @@ A run without detailed test data shows **Not finished** and no test count. A run
 
 ## Pull requests
 
-The page starts with one pull request. Choose one from the list, or type its number. The **Repository** control picks `osac` or `osac-test-infra`. The list holds pull requests that merged or closed in the last 30 days; an open pull request can still be typed.
+The page answers one question: how long did this pull request take, and what did it run? Choose one from the list, or type its number. The **Repository** control picks `osac` or `osac-test-infra`. The list holds pull requests that merged or closed in the last 30 days; an open pull request can still be typed. The dropdown is the only browser, so the page has no all-pull-request tables.
 
-- **Selected pull request**: its identity and dates. Opened, first review, approved, entered the queue, last queue attempt, merged or closed.
-- **Time in each stage**: where the time went, with the reason a stage could not be measured.
-- **E2E runs**: every run the pull request made, oldest first. One row per suite. A pull-request run shows the commit it tested, so a rebase appears as a new code version. A merge-queue run tests a temporary merge commit and shows no code version. Each row opens the run page when test data was recorded, and the GitHub run always.
-- **Queue attempts**: each merge-queue entry, how long it lasted, and why it left.
-- **Recent pull requests** and **Stage times**: the browse tables for all pull requests in the selected days.
+- **Identity line**: the number, title, author and repository are links. State and one date line say whether it is open, or when it merged or closed.
+- **Five numbers**: Total, plus the four long stages (Authoring, Review, Waiting and Queue). A number the data cannot support says **not measured**, never 0.
+- **Stacked stage chart**: all five stages as one horizontal bar on a fitted duration axis, so the whole pull request fits however long it took. A missing stage is absent from the bar, never zero.
+- **Queue attempts**: each merge-queue entry, its duration, whether it passed or was ejected, and why. The entry opens its run; the outcome and reason open the GitHub comment when one exists, and the run otherwise.
+- **E2E runs**: newest first, one row per suite. **Code** is `vN · shortsha`, linked to the commit. A pull-request run shows the commit it tested, so a rebase appears as a new code version. A merge-queue run tests a temporary merge commit and shows no code version. **Test data** says Yes, No or Unknown. **Run** opens the run page when test data was recorded, and GitHub otherwise. The column filter is the search.
+- **Status**: the one place a long explanation appears, such as why a pull request is missing or its history could not be read.
+
+Queue time ends at the last merge-queue attempt, and the merge runs from that moment to the merge. For an open pull request still in the queue, queue time runs to now. The tiles show the total and the four long stages, so they do not add up by themselves; the merge segment is only in the bar.
 
 A pull request that is still open is read from GitHub when the page loads, so its dates are current. The saved history starts after it merges or closes.
 

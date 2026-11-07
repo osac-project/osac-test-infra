@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "One pull request: its lifecycle, every E2E run it made, and its merge-queue attempts.",
+  "description": "One pull request: its identity, five stage numbers, a stacked stage chart, every E2E run, and its merge-queue attempts.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -20,49 +20,16 @@
   ],
   "panels": [
     {
-      "title": "",
+      "title": "Pull request",
       "description": "",
-      "type": "text",
+      "type": "table",
       "gridPos": {
-        "h": 4,
+        "h": 3,
         "w": 24,
         "x": 0,
         "y": 0
       },
       "id": 1,
-      "options": {
-        "mode": "markdown",
-        "content": "**Start with a pull request.** Choose one above, or type its number. The list holds pull requests that merged or closed in the last 30 days.\n\nThe page shows where its time went, every E2E run it made, and every merge-queue attempt. A run after a rebase appears as a new code version. Open a run for its jobs, steps and tests.\n\nA pull request that is still open is read from GitHub when the page loads. The saved history starts after it merges or closes. Data is kept for 30 days."
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      }
-    },
-    {
-      "title": "Selected pull request",
-      "type": "row",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 4
-      },
-      "id": 2,
-      "panels": []
-    },
-    {
-      "title": "Details",
-      "description": "",
-      "type": "table",
-      "gridPos": {
-        "h": 4,
-        "w": 24,
-        "x": 0,
-        "y": 5
-      },
-      "id": 3,
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "workflow-api"
@@ -92,6 +59,15 @@
               {
                 "id": "custom.width",
                 "value": 70
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the pull request",
+                    "url": "${__data.fields.url}"
+                  }
+                ]
               }
             ]
           },
@@ -107,7 +83,16 @@
               },
               {
                 "id": "custom.width",
-                "value": 320
+                "value": 420
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the pull request",
+                    "url": "${__data.fields.url}"
+                  }
+                ]
               }
             ]
           },
@@ -123,7 +108,16 @@
               },
               {
                 "id": "custom.width",
-                "value": 130
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the author",
+                    "url": "${__data.fields.author_url}"
+                  }
+                ]
               }
             ]
           },
@@ -139,7 +133,16 @@
               },
               {
                 "id": "custom.width",
-                "value": 110
+                "value": 130
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the repository",
+                    "url": "${__data.fields.repo_url}"
+                  }
+                ]
               }
             ]
           },
@@ -184,152 +187,16 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "opened_at"
+              "options": "dates_display"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Opened"
+                "value": "Dates"
               },
               {
                 "id": "custom.width",
-                "value": 160
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "first_review_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "First review"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "first_approval_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Approved"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "queued_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Entered queue"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "last_attempt_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Last queue attempt"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "merged_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Merged"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "closed_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Closed"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "total_display"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Total time"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
+                "value": 300
               }
             ]
           },
@@ -340,28 +207,39 @@
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "GitHub"
-              },
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "author_url"
+            },
+            "properties": [
               {
-                "id": "custom.width",
-                "value": 80
-              },
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "repo_url"
+            },
+            "properties": [
               {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open on GitHub",
-                    "url": "${__value.raw}"
-                  }
-                ]
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           }
         ]
       },
       "options": {
-        "showHeader": true,
+        "showHeader": false,
         "cellHeight": "sm",
         "footer": {
           "show": false
@@ -373,6 +251,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
+          "parser": "backend",
           "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
           "url_options": {
             "method": "GET",
@@ -380,6 +259,11 @@
           },
           "root_selector": "$.pr",
           "columns": [
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            },
             {
               "selector": "number",
               "text": "number",
@@ -396,8 +280,18 @@
               "type": "string"
             },
             {
+              "selector": "author_url",
+              "text": "author_url",
+              "type": "string"
+            },
+            {
               "selector": "repo",
               "text": "repo",
+              "type": "string"
+            },
+            {
+              "selector": "repo_url",
+              "text": "repo_url",
               "type": "string"
             },
             {
@@ -406,48 +300,8 @@
               "type": "string"
             },
             {
-              "selector": "opened_at",
-              "text": "opened_at",
-              "type": "string"
-            },
-            {
-              "selector": "first_review_at",
-              "text": "first_review_at",
-              "type": "string"
-            },
-            {
-              "selector": "first_approval_at",
-              "text": "first_approval_at",
-              "type": "string"
-            },
-            {
-              "selector": "queued_at",
-              "text": "queued_at",
-              "type": "string"
-            },
-            {
-              "selector": "last_attempt_at",
-              "text": "last_attempt_at",
-              "type": "string"
-            },
-            {
-              "selector": "merged_at",
-              "text": "merged_at",
-              "type": "string"
-            },
-            {
-              "selector": "closed_at",
-              "text": "closed_at",
-              "type": "string"
-            },
-            {
-              "selector": "total_display",
-              "text": "total_display",
-              "type": "string"
-            },
-            {
-              "selector": "url",
-              "text": "url",
+              "selector": "dates_display",
+              "text": "dates_display",
               "type": "string"
             }
           ]
@@ -455,16 +309,499 @@
       ]
     },
     {
-      "title": "Time in each stage",
-      "description": "",
-      "type": "table",
+      "title": "Total",
+      "description": "Opened to merged or closed. Not measured when a boundary is missing.",
+      "type": "stat",
       "gridPos": {
-        "h": 5,
-        "w": 24,
+        "h": 4,
+        "w": 4,
         "x": 0,
-        "y": 9
+        "y": 3
+      },
+      "id": 2,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Not measured."
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.summary",
+          "columns": [
+            {
+              "selector": "total",
+              "text": "total",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Authoring",
+      "description": "Opened to the first human review.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 4,
+        "y": 3
+      },
+      "id": 3,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Not measured."
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.summary",
+          "columns": [
+            {
+              "selector": "authoring",
+              "text": "authoring",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Review",
+      "description": "First human review to the first human approval.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 9,
+        "y": 3
       },
       "id": 4,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Not measured."
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.summary",
+          "columns": [
+            {
+              "selector": "review",
+              "text": "review",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Waiting",
+      "description": "First human approval to the first merge-queue attempt.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 14,
+        "y": 3
+      },
+      "id": 5,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Not measured."
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.summary",
+          "columns": [
+            {
+              "selector": "waiting",
+              "text": "waiting",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Queue",
+      "description": "First merge-queue attempt to the last.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 19,
+        "y": 3
+      },
+      "id": 6,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Not measured."
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.summary",
+          "columns": [
+            {
+              "selector": "queue",
+              "text": "queue",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Stage timeline",
+      "description": "Where the time went. A missing stage is absent, never zero.",
+      "type": "barchart",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "id": 7,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "noValue": "No measured stage.",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "authoring"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Authoring"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#6e7681"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "review"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Review"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#a371f7"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "waiting"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d29922"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "queue"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Queue"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#db6d28"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "merged"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Merge"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3fb950"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "xField": "category",
+        "showValue": "auto",
+        "barWidth": 0.7,
+        "groupWidth": 0.7,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "$.chart",
+          "columns": [
+            {
+              "selector": "category",
+              "text": "category",
+              "type": "string"
+            },
+            {
+              "selector": "authoring",
+              "text": "authoring",
+              "type": "number"
+            },
+            {
+              "selector": "review",
+              "text": "review",
+              "type": "number"
+            },
+            {
+              "selector": "waiting",
+              "text": "waiting",
+              "type": "number"
+            },
+            {
+              "selector": "queue",
+              "text": "queue",
+              "type": "number"
+            },
+            {
+              "selector": "merged",
+              "text": "merged",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Queue attempts",
+      "description": "Each merge-queue entry, how long it lasted, and why it left.",
+      "type": "table",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 8,
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "workflow-api"
@@ -476,92 +813,62 @@
             "cellOptions": {
               "type": "auto"
             },
-            "inspect": false
+            "inspect": false,
+            "filterable": true
           },
-          "noValue": "No stage data for this pull request yet."
+          "noValue": "No queue attempt is stored for this pull request. That is no queue history, not no ejections."
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "label"
+              "options": "started_display"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Stage"
+                "value": "Entered"
               },
               {
                 "id": "custom.width",
-                "value": 120
+                "value": 180
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the queue run",
+                    "url": "${__data.fields.run_url}"
+                  }
+                ]
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "start_at"
+              "options": "duration_display"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "From"
+                "value": "Duration"
               },
               {
                 "id": "custom.width",
-                "value": 170
-              },
-              {
-                "id": "noValue",
-                "value": ""
+                "value": 110
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "end_at"
+              "options": "queue_outcome"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "To"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "time_display"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Time"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "state"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "State"
+                "value": "Outcome"
               },
               {
                 "id": "custom.width",
@@ -573,19 +880,24 @@
                   {
                     "type": "value",
                     "options": {
-                      "measured": {
-                        "text": "Measured",
-                        "color": "green"
-                      },
-                      "unknown": {
-                        "text": "Unknown",
+                      "ejected": {
+                        "text": "Ejected",
                         "color": "orange"
                       },
-                      "not_reached": {
-                        "text": "Not reached",
-                        "color": "grey"
+                      "passed": {
+                        "text": "Passed",
+                        "color": "green"
                       }
                     }
+                  }
+                ]
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the queue comment or run",
+                    "url": "${__data.fields.why_url}"
                   }
                 ]
               }
@@ -594,20 +906,65 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "missing_reason"
+              "options": "why"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Why not measured"
+                "value": "Why"
               },
               {
                 "id": "custom.width",
-                "value": 300
+                "value": 380
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the queue comment or run",
+                    "url": "${__data.fields.why_url}"
+                  }
+                ]
               },
               {
                 "id": "noValue",
                 "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "comment_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "why_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           }
@@ -626,41 +983,47 @@
           "type": "json",
           "source": "url",
           "format": "table",
+          "parser": "backend",
           "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
           "url_options": {
             "method": "GET",
             "data": ""
           },
-          "root_selector": "$.stages",
+          "root_selector": "$.attempts",
           "columns": [
             {
-              "selector": "label",
-              "text": "label",
+              "selector": "started_display",
+              "text": "started_display",
               "type": "string"
             },
             {
-              "selector": "start_at",
-              "text": "start_at",
+              "selector": "duration_display",
+              "text": "duration_display",
               "type": "string"
             },
             {
-              "selector": "end_at",
-              "text": "end_at",
+              "selector": "queue_outcome",
+              "text": "queue_outcome",
               "type": "string"
             },
             {
-              "selector": "time_display",
-              "text": "time_display",
+              "selector": "why",
+              "text": "why",
               "type": "string"
             },
             {
-              "selector": "state",
-              "text": "state",
+              "selector": "run_url",
+              "text": "run_url",
               "type": "string"
             },
             {
-              "selector": "missing_reason",
-              "text": "missing_reason",
+              "selector": "comment_url",
+              "text": "comment_url",
+              "type": "string"
+            },
+            {
+              "selector": "why_url",
+              "text": "why_url",
               "type": "string"
             }
           ]
@@ -669,15 +1032,15 @@
     },
     {
       "title": "E2E runs",
-      "description": "",
+      "description": "Newest first. One row per suite. A run with test data opens the run page; every other run opens GitHub.",
       "type": "table",
       "gridPos": {
-        "h": 10,
+        "h": 12,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 24
       },
-      "id": 5,
+      "id": 9,
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "workflow-api"
@@ -692,115 +1055,22 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "No E2E run for this pull request in the last 30 days."
+          "noValue": "No E2E runs. The job history may not be written yet."
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "version"
+              "options": "status_display"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Code version"
+                "value": "Status"
               },
               {
                 "id": "custom.width",
                 "value": 110
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "head"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Commit"
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the commit",
-                    "url": "${__data.fields.commit_url}"
-                  }
-                ]
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "commit_url"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "suite"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Suite"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "trigger"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Why it ran"
-              },
-              {
-                "id": "custom.width",
-                "value": 170
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "conclusion"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Result"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
               },
               {
                 "id": "mappings",
@@ -809,11 +1079,11 @@
                     "type": "value",
                     "options": {
                       "success": {
-                        "text": "Success",
+                        "text": "Passed",
                         "color": "green"
                       },
                       "failure": {
-                        "text": "Failure",
+                        "text": "Failed",
                         "color": "red"
                       },
                       "cancelled": {
@@ -835,6 +1105,22 @@
                       "queued": {
                         "text": "Queued",
                         "color": "blue"
+                      },
+                      "startup_failure": {
+                        "text": "Startup failure",
+                        "color": "red"
+                      },
+                      "action_required": {
+                        "text": "Action required",
+                        "color": "orange"
+                      },
+                      "Running": {
+                        "text": "Running",
+                        "color": "blue"
+                      },
+                      "Queued": {
+                        "text": "Queued",
+                        "color": "blue"
                       }
                     }
                   }
@@ -849,16 +1135,81 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "failed_step_name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed step"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "code_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Code"
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the commit",
+                    "url": "${__data.fields.commit_url}"
+                  }
+                ]
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suite"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suite"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "recorded"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Recorded"
+                "value": "Test data"
               },
               {
                 "id": "custom.width",
-                "value": 100
+                "value": 110
               },
               {
                 "id": "mappings",
@@ -887,7 +1238,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "created_at"
+              "options": "created_display"
             },
             "properties": [
               {
@@ -896,7 +1247,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 160
+                "value": 170
               }
             ]
           },
@@ -912,30 +1263,30 @@
               },
               {
                 "id": "custom.width",
-                "value": 100
+                "value": 110
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "run_url"
+              "options": "run_display"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Open run"
+                "value": "Run"
               },
               {
                 "id": "custom.width",
-                "value": 90
+                "value": 100
               },
               {
                 "id": "links",
                 "value": [
                   {
-                    "title": "Open the E2E run page",
-                    "url": "${__value.raw}"
+                    "title": "Open the run",
+                    "url": "${__data.fields.run_link}"
                   }
                 ]
               },
@@ -948,25 +1299,84 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "version"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "head"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "commit_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "url"
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "GitHub"
-              },
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run_url"
+            },
+            "properties": [
               {
-                "id": "custom.width",
-                "value": 80
-              },
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run_link"
+            },
+            "properties": [
               {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open on GitHub",
-                    "url": "${__value.raw}"
-                  }
-                ]
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "conclusion"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           }
@@ -985,13 +1395,34 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}&days=${days}",
           "url_options": {
             "method": "GET",
             "data": ""
           },
           "root_selector": "$.runs",
           "columns": [
+            {
+              "selector": "status_display",
+              "text": "conclusion",
+              "type": "string"
+            },
+            {
+              "selector": "failed_step_name",
+              "text": "failed_step_name",
+              "type": "string"
+            },
+            {
+              "selector": "code_display",
+              "text": "code_display",
+              "type": "string"
+            },
+            {
+              "selector": "commit_url",
+              "text": "commit_url",
+              "type": "string"
+            },
             {
               "selector": "version",
               "text": "version",
@@ -1003,23 +1434,8 @@
               "type": "string"
             },
             {
-              "selector": "commit_url",
-              "text": "commit_url",
-              "type": "string"
-            },
-            {
               "selector": "suite",
               "text": "suite",
-              "type": "string"
-            },
-            {
-              "selector": "trigger",
-              "text": "trigger",
-              "type": "string"
-            },
-            {
-              "selector": "conclusion",
-              "text": "conclusion",
               "type": "string"
             },
             {
@@ -1028,7 +1444,7 @@
               "type": "string"
             },
             {
-              "selector": "created_at",
+              "selector": "created_display",
               "text": "created_at",
               "type": "string"
             },
@@ -1038,679 +1454,45 @@
               "type": "string"
             },
             {
-              "selector": "run_url",
-              "text": "run_url",
+              "selector": "run_display",
+              "text": "run_display",
+              "type": "string"
+            },
+            {
+              "selector": "run_link",
+              "text": "run_link",
               "type": "string"
             },
             {
               "selector": "url",
               "text": "url",
               "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "title": "Queue attempts",
-      "description": "",
-      "type": "table",
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 24
-      },
-      "id": 6,
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false,
-            "filterable": true
-          },
-          "noValue": "No queue attempt in the last 30 days. That is no queue history, not no ejections."
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "started_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Entered queue"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "completed_at"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Left queue"
-              },
-              {
-                "id": "custom.width",
-                "value": 160
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "conclusion"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Result"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "success": {
-                        "text": "Success",
-                        "color": "green"
-                      },
-                      "failure": {
-                        "text": "Failure",
-                        "color": "red"
-                      },
-                      "cancelled": {
-                        "text": "Cancelled",
-                        "color": "orange"
-                      },
-                      "timed_out": {
-                        "text": "Timed out",
-                        "color": "red"
-                      },
-                      "skipped": {
-                        "text": "Skipped",
-                        "color": "grey"
-                      },
-                      "in_progress": {
-                        "text": "Running",
-                        "color": "blue"
-                      },
-                      "queued": {
-                        "text": "Queued",
-                        "color": "blue"
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "run_count"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Runs"
-              },
-              {
-                "id": "custom.width",
-                "value": 70
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "queue_outcome"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Queue"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "ejected": {
-                        "text": "Ejected",
-                        "color": "orange"
-                      },
-                      "passed": {
-                        "text": "Passed",
-                        "color": "green"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ejection_kind"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Why it left"
-              },
-              {
-                "id": "custom.width",
-                "value": 120
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ejection_reason"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Reason"
-              },
-              {
-                "id": "custom.width",
-                "value": 300
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration_display"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "run_url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "GitHub run"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the queue run",
-                    "url": "${__value.raw}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "comment_url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Comment"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the queue comment",
-                    "url": "${__value.raw}"
-                  }
-                ]
-              },
-              {
-                "id": "noValue",
-                "value": ""
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.attempts",
-          "columns": [
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "string"
             },
             {
-              "selector": "completed_at",
-              "text": "completed_at",
+              "selector": "run_url",
+              "text": "run_url",
               "type": "string"
             },
             {
               "selector": "conclusion",
               "text": "conclusion",
               "type": "string"
-            },
-            {
-              "selector": "run_count",
-              "text": "run_count",
-              "type": "number"
-            },
-            {
-              "selector": "queue_outcome",
-              "text": "queue_outcome",
-              "type": "string"
-            },
-            {
-              "selector": "ejection_kind",
-              "text": "ejection_kind",
-              "type": "string"
-            },
-            {
-              "selector": "ejection_reason",
-              "text": "ejection_reason",
-              "type": "string"
-            },
-            {
-              "selector": "duration_display",
-              "text": "duration_display",
-              "type": "string"
-            },
-            {
-              "selector": "run_url",
-              "text": "run_url",
-              "type": "string"
-            },
-            {
-              "selector": "comment_url",
-              "text": "comment_url",
-              "type": "string"
             }
           ]
         }
       ]
     },
     {
-      "title": "All pull requests",
-      "type": "row",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 30
-      },
-      "id": 7,
-      "panels": []
-    },
-    {
-      "title": "Recent pull requests, last $days days",
+      "title": "Status",
       "description": "",
       "type": "table",
       "gridPos": {
-        "h": 9,
+        "h": 3,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 36
       },
-      "id": 8,
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "workflow-api"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false,
-            "filterable": true
-          },
-          "noValue": "No pull request data for these days"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "number"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "PR"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open this pull request above",
-                    "url": "/d/ci-observe-pull-requests/ci-observe-pull-requests?var-pr_number=${__value.raw}&var-pr_repo=${__data.fields.repo}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "repo"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Repository"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "title"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Title"
-              },
-              {
-                "id": "custom.width",
-                "value": 320
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "final_stage"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Last stage"
-              },
-              {
-                "id": "custom.width",
-                "value": 150
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "merged": {
-                        "text": "Merged",
-                        "color": "green"
-                      },
-                      "open": {
-                        "text": "Open",
-                        "color": "blue"
-                      },
-                      "open in queue": {
-                        "text": "Open, in queue",
-                        "color": "purple"
-                      },
-                      "closed in queue": {
-                        "text": "Closed in queue",
-                        "color": "orange"
-                      },
-                      "closed after approval": {
-                        "text": "Closed after approval",
-                        "color": "orange"
-                      },
-                      "closed in review": {
-                        "text": "Closed in review",
-                        "color": "red"
-                      },
-                      "closed in authoring": {
-                        "text": "Closed before review",
-                        "color": "red"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "age_display"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Age"
-              },
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "queue_attempt_count"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Queue runs"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ejected_attempt_count"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Left queue"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "url"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "GitHub"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open on GitHub",
-                    "url": "${__value.raw}"
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "root_selector": "$.prs",
-          "columns": [
-            {
-              "selector": "number",
-              "text": "number",
-              "type": "number"
-            },
-            {
-              "selector": "repo",
-              "text": "repo",
-              "type": "string"
-            },
-            {
-              "selector": "title",
-              "text": "title",
-              "type": "string"
-            },
-            {
-              "selector": "final_stage",
-              "text": "final_stage",
-              "type": "string"
-            },
-            {
-              "selector": "age_display",
-              "text": "age_display",
-              "type": "string"
-            },
-            {
-              "selector": "queue_attempt_count",
-              "text": "queue_attempt_count",
-              "type": "number"
-            },
-            {
-              "selector": "ejected_attempt_count",
-              "text": "ejected_attempt_count",
-              "type": "number"
-            },
-            {
-              "selector": "url",
-              "text": "url",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "title": "Stage times",
-      "description": "",
-      "type": "table",
-      "gridPos": {
-        "h": 5,
-        "w": 24,
-        "x": 0,
-        "y": 40
-      },
-      "id": 9,
+      "id": 10,
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "workflow-api"
@@ -1724,85 +1506,12 @@
             },
             "inspect": false
           },
-          "noValue": "No stage data for these days"
+          "noValue": ""
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "label"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Stage"
-              },
-              {
-                "id": "custom.width",
-                "value": 140
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "samples"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "PRs"
-              },
-              {
-                "id": "custom.width",
-                "value": 80
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "median_seconds"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Typical"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "p95_seconds"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Slow end"
-              },
-              {
-                "id": "custom.width",
-                "value": 110
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
-        "showHeader": true,
+        "showHeader": false,
         "cellHeight": "sm",
         "footer": {
           "show": false
@@ -1814,32 +1523,18 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "parser": "backend",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
           "url_options": {
             "method": "GET",
             "data": ""
           },
-          "root_selector": "$.funnel",
+          "root_selector": "$",
           "columns": [
             {
-              "selector": "label",
-              "text": "label",
+              "selector": "status_message",
+              "text": "status_message",
               "type": "string"
-            },
-            {
-              "selector": "samples",
-              "text": "samples",
-              "type": "number"
-            },
-            {
-              "selector": "median_seconds",
-              "text": "median_seconds",
-              "type": "number"
-            },
-            {
-              "selector": "p95_seconds",
-              "text": "p95_seconds",
-              "type": "number"
             }
           ]
         }

@@ -5399,6 +5399,9 @@ class ExporterHandler(BaseHTTPRequestHandler):
                         if run.get("started_at_ms") and run.get("done_at_ms"):
                             query += f"&from={run['started_at_ms']}&to={run['done_at_ms']}"
                         run["run_url"] = "/d/ci-observe-runs/ci-observe-e28094-e2e-run" + query
+                    # One link for the Run column: the run page when there is
+                    # a capture, GitHub otherwise.
+                    run["run_link"] = run.get("run_url") or run.get("url") or ""
             payload = json.dumps(data, default=str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

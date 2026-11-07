@@ -41,15 +41,18 @@ A run has detailed data only when its recording arrived. A missing recording doe
 
 ## Pull requests
 
-Choose the pull request from the list, or type its number, and pick the repository. The list holds pull requests that merged or closed in the last 30 days.
+Choose the pull request from the list, or type its number, and pick the repository. The list holds pull requests that merged or closed in the last 30 days. The dropdown is the browser; this page has no browse tables.
 
 | Section | Contents |
 |---|---|
-| Selected pull request | Identity, state, and the dates of each stage. |
-| Time in each stage | Authoring, review, waiting, queue and merge, with the reason a stage is unknown. |
-| E2E runs | Every run the pull request made, oldest first, one row per suite. A pull-request run shows its commit, so a rebase is a new code version. A merge-queue run tests a temporary merge commit and shows no code version. Rows open the run page or GitHub. |
-| Queue attempts | Each merge-queue entry, its duration, and whether it was ejected and why. |
-| Recent pull requests and stage times | The browse tables for the selected days. |
+| Identity | The number, title, author and repository, each a link, plus the state and one date line ("Opened 12 Mar 09:10 · Merged 13 Mar 16:02"). |
+| Five numbers | Total, plus the four long stages (Authoring, Review, Waiting and Queue). A value the data cannot support says **not measured**, never 0. |
+| Stacked stage chart | All five stages as one horizontal bar on a fitted duration axis. A missing stage is absent from the bar, never zero. |
+| Queue attempts | Each merge-queue entry, its duration, Passed or Ejected, and a short reason. The entry opens its run; the outcome and reason open the GitHub comment when one exists, and the run otherwise. |
+| E2E runs | Newest first, one row per suite: status, exact failed step, code (`vN · shortsha`, linked to the commit), suite, test data (Yes, No or Unknown), start, duration, and the run page or GitHub. A merge-queue run tests a temporary merge commit and shows no code version. The column filter is the search. |
+| Status | The one place a long explanation appears, such as why a pull request is missing or its history could not be read. |
+
+Queue time ends at the last merge-queue attempt, and the merge runs from that moment to the merge. For an open pull request still in the queue, queue time runs to now. The tiles show the total and the four long stages, so they do not add up by themselves; the merge segment is only in the bar.
 
 An open pull request is read from GitHub when the page loads. Its runs are
 already stored; the saved stage history starts after it ends.

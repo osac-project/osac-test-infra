@@ -1,8 +1,10 @@
 """Structural tests for the ci-observe Pull requests page.
 
-`ci-observe-pull-requests.json` starts from one pull request: its lifecycle,
-its E2E runs, and its merge-queue attempts. A second section lists recent
-pull requests and the stage funnel for browsing.
+`ci-observe-pull-requests.json` answers one question for one pull request:
+where did its time go, what did it run, and what did the merge queue do?
+The page reads the same endpoint as before, but its top is an identity line,
+five numbers and a stacked stage chart; the tables below hold queue attempts and
+E2E runs. The dropdown is the browser, so the page has no browse tables.
 
 Every selector is resolved against a fixture document with the same keys as
 `/api/ci-observe/prs`.
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "config" / "grafana" / "dashboards"
@@ -19,88 +22,74 @@ DASHBOARD = json.loads((DASHBOARDS_DIR / "ci-observe-pull-requests.json").read_t
 PRS_URL = "http://127.0.0.1:9103/api/ci-observe/prs"
 PR_URL = f"{PRS_URL}?number=${{pr_number}}&repo=${{pr_repo}}"
 
-INDEX_DOCUMENT = {
-    "prs": [
-        {
-            "repo": "osac",
-            "number": 101,
-            "title": "Add VM restart coverage",
-            "final_stage": "merged",
-            "age_display": "1d 1h",
-            "queue_attempt_count": 2,
-            "ejected_attempt_count": 1,
-            "option_label": "#101 · merged · Add VM restart coverage",
-            "url": "https://github.com/osac-project/osac/pull/101",
-        }
-    ],
-    "funnel": [
-        {"label": "Review", "samples": 2, "median_seconds": 1500, "p95_seconds": 1770},
-    ],
-}
-
 PR_DOCUMENT = {
     "pr": {
         "number": 101,
         "title": "Add VM restart coverage",
         "author": "author1",
+        "author_url": "https://github.com/author1",
         "repo": "osac",
+        "repo_url": "https://github.com/osac-project/osac",
         "state": "merged",
-        "final_stage": "merged",
-        "opened_at": "2026-10-01T10:00:00Z",
-        "first_review_at": "2026-10-01T10:20:00Z",
-        "first_approval_at": "2026-10-01T10:50:00Z",
-        "queued_at": "2026-10-01T11:00:00Z",
-        "last_attempt_at": "2026-10-01T11:05:00Z",
-        "merged_at": "2026-10-01T11:06:00Z",
-        "closed_at": None,
-        "total_display": "1h 6m",
+        "dates_display": "Opened 01 Oct 10:00 · Merged 01 Oct 11:35",
         "url": "https://github.com/osac-project/osac/pull/101",
     },
-    "stages": [
+    "summary": [
         {
-            "label": "Review",
-            "start_at": "2026-10-01T10:20:00Z",
-            "end_at": "2026-10-01T10:50:00Z",
-            "seconds": 1800,
-            "time_display": "30m",
-            "state": "measured",
-            "missing_reason": "",
+            "total": "1h 35m",
+            "authoring": "20m",
+            "review": "30m",
+            "waiting": "10m",
+            "queue": "34m",
         }
     ],
+    "chart": [
+        {
+            "category": "PR #101",
+            "authoring": 0.333,
+            "review": 0.5,
+            "waiting": 0.167,
+            "queue": 0.567,
+            "merged": 0.017,
+        }
+    ],
+    "status_message": "",
     "runs": [
         {
+            "conclusion": "success",
+            "status_display": "success",
+            "failed_step_name": "",
+            "code_display": "v1 · 1234567890ab",
+            "commit_url": "https://github.com/osac-project/osac/commit/1234567890ab",
             "version": 1,
             "head": "1234567890ab",
-            "commit_url": "https://github.com/osac-project/osac/commit/1234567890ab",
             "suite": "VMaaS",
-            "trigger": "PR #101",
-            "conclusion": "success",
             "recorded": "yes",
             "created_at": "2026-10-01T10:30:00Z",
+            "created_display": "01 Oct 10:30",
             "duration_display": "12m",
+            "run_display": "9001",
+            "run_link": "/d/ci-observe-runs/ci-observe-e28094-e2e-run?var-capture_id=x",
+            "url": "https://github.com/osac-project/osac/actions/runs/9001",
             "run_url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run?var-capture_id=x",
-            "url": "https://github.com/osac-project/osac/actions/runs/1",
         }
     ],
     "attempts": [
         {
             "started_at": "2026-10-01T11:00:00Z",
-            "completed_at": "2026-10-01T11:05:00Z",
-            "conclusion": "failure",
-            "run_count": 2,
-            "ejected": True,
-            "queue_outcome": "ejected",
-            "ejection_kind": "check_failed",
-            "ejection_reason": "merge group failed",
+            "started_display": "01 Oct 11:00",
             "duration_display": "5m",
-            "run_url": "https://github.com/osac-project/osac/actions/runs/2",
+            "queue_outcome": "ejected",
+            "why": "The e2e / vmaas check failed.",
+            "run_url": "https://github.com/osac-project/osac/actions/runs/5001",
             "comment_url": "https://github.com/osac-project/osac/pull/101#issuecomment-1",
+            "why_url": "https://github.com/osac-project/osac/pull/101#issuecomment-1",
         }
     ],
 }
 
 
-def walk(panels: list[dict]):
+def walk(panels: list[dict]) -> Iterator[dict]:
     for panel in panels:
         yield panel
         yield from walk(panel.get("panels", []))
@@ -126,6 +115,13 @@ def display_names(table: dict) -> dict[str, str]:
             if prop["id"] == "displayName":
                 names[field] = prop["value"]
     return names
+
+
+def override(table: dict, field: str) -> dict:
+    for entry in table["fieldConfig"]["overrides"]:
+        if entry["matcher"].get("options") == field:
+            return {prop["id"]: prop["value"] for prop in entry["properties"]}
+    raise AssertionError(f"{table['title']}: no override for {field}")
 
 
 def resolve(document: dict, root_selector: str) -> dict:
@@ -183,139 +179,188 @@ def test_the_pull_request_control_lists_saved_pull_requests() -> None:
 
 
 def test_the_pull_request_options_resolve_against_the_index() -> None:
-    row = INDEX_DOCUMENT["prs"][0]
+    row = {
+        "repo": "osac",
+        "number": 101,
+        "title": "Add VM restart coverage",
+        "final_stage": "merged",
+        "option_label": "#101 · merged · Add VM restart coverage",
+    }
     for column in variables()["pr_number"]["query"]["infinityQuery"]["columns"]:
         assert column["selector"] in row, column["selector"]
 
 
-def test_the_page_asks_for_a_pull_request_until_one_is_chosen() -> None:
-    assert panel("Details")["fieldConfig"]["defaults"]["noValue"] == "Choose a pull request above."
-    heading = next(candidate for candidate in DASHBOARD["panels"] if candidate["type"] == "text")
-    assert "Choose one above" in heading["options"]["content"]
-
-
-def test_the_selected_pull_request_comes_first_and_is_open() -> None:
-    row = next(candidate for candidate in DASHBOARD["panels"] if candidate.get("title") == "Selected pull request")
-    assert row["type"] == "row"
-    assert row["collapsed"] is False
-    assert DASHBOARD["panels"].index(row) < next(
-        index
-        for index, candidate in enumerate(DASHBOARD["panels"])
-        if candidate.get("title") == "All pull requests"
-    )
-
-
-def test_the_details_table_reads_one_pr() -> None:
-    table = panel("Details")
+def test_the_identity_line_is_one_linkable_row() -> None:
+    table = panel("Pull request")
     target = table["targets"][0]
+    assert table["type"] == "table"
     assert target["url"] == PR_URL
     assert target["root_selector"] == "$.pr"
     assert_selectors_resolve(table, PR_DOCUMENT)
+    assert table["options"]["showHeader"] is False
     assert display_names(table) == {
         "number": "PR",
         "title": "Title",
         "author": "Author",
         "repo": "Repository",
         "state": "State",
-        "opened_at": "Opened",
-        "first_review_at": "First review",
-        "first_approval_at": "Approved",
-        "queued_at": "Entered queue",
-        "last_attempt_at": "Last queue attempt",
-        "merged_at": "Merged",
-        "closed_at": "Closed",
-        "total_display": "Total time",
-        "url": "GitHub",
+        "dates_display": "Dates",
     }
 
+    for field, url_field in (("number", "url"), ("title", "url"), ("author", "author_url"), ("repo", "repo_url")):
+        links = override(table, field)["links"]
+        assert links == [{"title": links[0]["title"], "url": f"${{__data.fields.{url_field}}}"}], field
+    for helper in ("url", "author_url", "repo_url"):
+        assert override(table, helper)["custom.hidden"] is True, helper
 
-def test_the_stage_table_reads_the_selected_pr_stages() -> None:
-    table = panel("Time in each stage")
+
+def test_five_stat_tiles_read_the_summary_row() -> None:
+    tiles = {
+        "Total": "total",
+        "Authoring": "authoring",
+        "Review": "review",
+        "Waiting": "waiting",
+        "Queue": "queue",
+    }
+    for title, field in tiles.items():
+        tile = panel(title)
+        assert tile["type"] == "stat"
+        target = tile["targets"][0]
+        assert target["url"] == PR_URL
+        assert target["root_selector"] == "$.summary"
+        assert selectors(tile) == [field]
+        assert tile["fieldConfig"]["defaults"]["noValue"].startswith("Not measured"), title
+        row = resolve(PR_DOCUMENT, "$.summary")
+        assert row[field], f"{title} must resolve"
+
+
+def test_missing_states_have_no_status_zero() -> None:
+    assert panel("Pull request")["fieldConfig"]["defaults"]["noValue"] == "Choose a pull request above."
+    assert panel("Total")["fieldConfig"]["defaults"]["noValue"] == "Not measured."
+    assert (
+        panel("E2E runs")["fieldConfig"]["defaults"]["noValue"]
+        == "No E2E runs. The job history may not be written yet."
+    )
+
+
+def test_the_stage_chart_is_a_stacked_horizontal_bar() -> None:
+    chart = panel("Stage timeline")
+    assert chart["type"] == "barchart"
+    assert chart["description"] == "Where the time went. A missing stage is absent, never zero."
+    target = chart["targets"][0]
+    assert target["url"] == PR_URL
+    assert target["root_selector"] == "$.chart"
+    assert target["format"] == "table"
+    assert target["parser"] == "backend"
+    columns = {column["selector"]: column["type"] for column in target["columns"]}
+    assert columns == {
+        "category": "string",
+        "authoring": "number",
+        "review": "number",
+        "waiting": "number",
+        "queue": "number",
+        "merged": "number",
+    }
+    assert selectors(chart)[1:] == ["authoring", "review", "waiting", "queue", "merged"]
+    assert_selectors_resolve(chart, PR_DOCUMENT)
+
+
+def test_the_chart_is_fitted_to_durations_and_not_a_time_range() -> None:
+    options = panel("Stage timeline")["options"]
+    assert options["orientation"] == "horizontal"
+    assert options["stacking"] == "normal"
+    assert options["xField"] == "category"
+    assert options["legend"] == {"showLegend": True, "displayMode": "list", "placement": "bottom", "calcs": []}
+    assert options["tooltip"]["mode"] == "single"
+    assert panel("Stage timeline")["fieldConfig"]["defaults"]["unit"] == "h"
+    assert DASHBOARD["time"]["from"] == "now-30d"
+    assert DASHBOARD["timepicker"]["hidden"] is True
+
+
+def test_each_stage_series_has_its_name_and_fixed_color() -> None:
+    chart = panel("Stage timeline")
+    stages = {
+        "authoring": ("Authoring", "#6e7681"),
+        "review": ("Review", "#a371f7"),
+        "waiting": ("Waiting", "#d29922"),
+        "queue": ("Queue", "#db6d28"),
+        "merged": ("Merge", "#3fb950"),
+    }
+    for stage, (name, color) in stages.items():
+        assert override(chart, stage)["displayName"] == name
+        assert override(chart, stage)["color"] == {"mode": "fixed", "fixedColor": color}
+
+
+def test_the_bottom_status_table_is_the_only_place_for_explanations() -> None:
+    table = panel("Status")
+    assert table["type"] == "table"
+    assert table["options"]["showHeader"] is False
+    assert table["fieldConfig"]["defaults"]["noValue"] == ""
+    assert table["gridPos"]["y"] == max(candidate["gridPos"]["y"] for candidate in walk(DASHBOARD["panels"]))
     target = table["targets"][0]
     assert target["url"] == PR_URL
-    assert target["root_selector"] == "$.stages"
-    assert_selectors_resolve(table, PR_DOCUMENT)
-    assert display_names(table) == {
-        "label": "Stage",
-        "start_at": "From",
-        "end_at": "To",
-        "time_display": "Time",
-        "state": "State",
-        "missing_reason": "Why not measured",
-    }
+    assert target["root_selector"] == "$"
+    assert selectors(table) == ["status_message"]
 
 
-def test_the_e2e_runs_table_reads_the_runs() -> None:
-    table = panel("E2E runs")
-    target = table["targets"][0]
-    assert target["url"] == PR_URL
-    assert target["root_selector"] == "$.runs"
-    assert_selectors_resolve(table, PR_DOCUMENT)
-    assert display_names(table) == {
-        "version": "Code version",
-        "head": "Commit",
-        "suite": "Suite",
-        "trigger": "Why it ran",
-        "conclusion": "Result",
-        "recorded": "Recorded",
-        "created_at": "Started",
-        "duration_display": "Duration",
-        "run_url": "Open run",
-        "url": "GitHub",
-    }
-
-
-def test_the_queue_attempts_table_reads_the_attempts() -> None:
+def test_the_queue_table_names_four_columns() -> None:
     table = panel("Queue attempts")
-    target = table["targets"][0]
-    assert target["url"] == PR_URL
-    assert target["root_selector"] == "$.attempts"
+    assert table["targets"][0]["root_selector"] == "$.attempts"
+    assert table["targets"][0]["url"] == PR_URL
     assert_selectors_resolve(table, PR_DOCUMENT)
     assert display_names(table) == {
-        "started_at": "Entered queue",
-        "completed_at": "Left queue",
-        "conclusion": "Result",
-        "run_count": "Runs",
-        "queue_outcome": "Queue",
-        "ejection_kind": "Why it left",
-        "ejection_reason": "Reason",
+        "started_display": "Entered",
         "duration_display": "Duration",
-        "run_url": "GitHub run",
-        "comment_url": "Comment",
+        "queue_outcome": "Outcome",
+        "why": "Why",
     }
+    assert override(table, "started_display")["links"][0]["url"] == "${__data.fields.run_url}"
+    assert override(table, "queue_outcome")["links"][0]["url"] == "${__data.fields.why_url}"
+    assert override(table, "why")["links"][0]["url"] == "${__data.fields.why_url}"
+    for helper in ("run_url", "comment_url", "why_url"):
+        assert override(table, helper)["custom.hidden"] is True
 
 
-def test_the_browse_section_keeps_the_index_and_funnel() -> None:
-    recent = panel("Recent pull requests, last $days days")
-    assert recent["targets"][0]["url"] == f"{PRS_URL}?days=${{days}}&repo=${{pr_repo}}"
-    assert recent["targets"][0]["root_selector"] == "$.prs"
-    assert_selectors_resolve(recent, INDEX_DOCUMENT)
-    assert display_names(recent) == {
-        "number": "PR",
-        "repo": "Repository",
-        "title": "Title",
-        "final_stage": "Last stage",
-        "age_display": "Age",
-        "queue_attempt_count": "Queue runs",
-        "ejected_attempt_count": "Left queue",
-        "url": "GitHub",
+def test_the_runs_table_is_newest_first_and_linkable() -> None:
+    table = panel("E2E runs")
+    assert table["targets"][0]["root_selector"] == "$.runs"
+    assert table["targets"][0]["url"] == f"{PR_URL}&days=${{days}}"
+    assert_selectors_resolve(table, PR_DOCUMENT)
+    assert display_names(table) == {
+        "status_display": "Status",
+        "failed_step_name": "Failed step",
+        "code_display": "Code",
+        "suite": "Suite",
+        "recorded": "Test data",
+        "created_display": "Started",
+        "duration_display": "Duration",
+        "run_display": "Run",
     }
-
-    stages = panel("Stage times")
-    assert stages["targets"][0]["url"] == f"{PRS_URL}?days=${{days}}&repo=${{pr_repo}}"
-    assert stages["targets"][0]["root_selector"] == "$.funnel"
-    assert_selectors_resolve(stages, INDEX_DOCUMENT)
-    assert display_names(stages) == {
-        "label": "Stage",
-        "samples": "PRs",
-        "median_seconds": "Typical",
-        "p95_seconds": "Slow end",
-    }
+    assert override(table, "code_display")["links"][0]["url"] == "${__data.fields.commit_url}"
+    assert override(table, "run_display")["links"][0]["url"] == "${__data.fields.run_link}"
+    for helper in ("conclusion", "version", "head", "commit_url", "url", "run_url", "run_link"):
+        assert override(table, helper)["custom.hidden"] is True, helper
+    assert table["fieldConfig"]["defaults"]["custom"]["filterable"] is True
 
 
-def test_the_tables_can_be_filtered() -> None:
-    for title in ("E2E runs", "Queue attempts", "Recent pull requests, last $days days"):
-        assert panel(title)["fieldConfig"]["defaults"]["custom"]["filterable"] is True, title
+def test_the_browse_tables_are_gone() -> None:
+    titles = {candidate.get("title") for candidate in walk(DASHBOARD["panels"])}
+    for removed in (
+        "Details",
+        "Time in each stage",
+        "All pull requests",
+        "Recent pull requests, last $days days",
+        "Stage times",
+    ):
+        assert removed not in titles, removed
+    assert not any(candidate["type"] == "text" for candidate in walk(DASHBOARD["panels"]))
+    assert not any(candidate["type"] == "state-timeline" for candidate in walk(DASHBOARD["panels"]))
+
+
+def test_every_detail_panel_reads_the_selected_pull_request() -> None:
+    for candidate in walk(DASHBOARD["panels"]):
+        for target in candidate.get("targets", []):
+            assert target["url"].startswith(PR_URL), candidate["title"]
 
 
 def test_every_link_opens_a_dashboard_that_exists() -> None:
