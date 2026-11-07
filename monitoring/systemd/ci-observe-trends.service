@@ -4,9 +4,10 @@
 # Triggered by ci-observe-trends.timer. The rollup runs inside the
 # workflow-exporter container because that container already has the GitHub
 # token, the `requests` dependency and the /data volume where trends.db lives.
-# monitoring-setup.sh --update-central starts it once after a deploy so the
-# schema migration and the 30-day re-rollup happen before the page reads the
-# DB. Do not enable it directly; the timer owns the schedule.
+# monitoring-setup.sh --update-central queues it once after a deploy with
+# --no-block, so the schema migration and the 30-day re-rollup start without
+# holding the deploy; the page keeps the previous rollup until they finish.
+# Do not enable it directly; the timer owns the schedule.
 
 [Unit]
 Description=ci-observe per-test JUnit rollup

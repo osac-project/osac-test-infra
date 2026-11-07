@@ -676,14 +676,15 @@ if [[ "${MODE}" == "update-central" ]]; then
     systemctl --user restart service-health-textfile.timer
     systemctl --user enable --now ci-observe-trends.timer
     systemctl --user enable --now ci-observe-prs.timer
-    # The timer only fires at 04:15. Start the rollup once now: this deploy
-    # may have replaced monitoring-setup.sh and the rollup script while
-    # trends.db still has the old schema, and the live Trends page must not
-    # read an unmigrated file. Type=oneshot, so start waits for the pass and
-    # returns its exit code. A failure must not fail the whole deploy: the
-    # read path tolerates the old schema and the timer retries tomorrow.
-    if ! systemctl --user start ci-observe-trends.service; then
-        warn "ci-observe-trends.service did not finish; trends.db stays on its old schema and the 30-day backfill waits for the next 04:15 timer run"
+    # The timer only fires at 04:15. Queue the rollup once now so this deploy
+    # starts the trends.db migration and the 30-day re-roll instead of
+    # leaving them for tomorrow. --no-block returns as soon as the unit is
+    # queued; the backfill itself can take many minutes. Until it finishes
+    # the page keeps showing p50/p95 from the previous rollup, and the read
+    # path tolerates the old schema. A failure here only means systemd could
+    # not queue the unit, and the timer retries tomorrow.
+    if ! systemctl --user start --no-block ci-observe-trends.service; then
+        warn "could not queue ci-observe-trends.service; trends.db keeps its old schema until the next 04:15 timer run"
     fi
 
     info "Central update complete."

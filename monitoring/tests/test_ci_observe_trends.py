@@ -1048,22 +1048,33 @@ def test_deployment_copies_the_rollup_script():
     assert "ci_observe_run_evidence.py" in setup
 
 
-def test_update_central_runs_the_rollup_once_before_the_page_reads_it():
+def test_update_central_queues_the_rollup_without_waiting_for_it():
     """The daily timer is not enough at deploy time. --update-central must
-    start the rollup once after enabling the timer, so trends.db is migrated
-    and re-rolled before the live page reads it. A failure only warns."""
+    queue the rollup once after enabling the timer so the schema migration
+    and the 30-day re-roll start during the deploy. It must not wait for
+    them: the backfill takes many minutes and the deploy would stall."""
     setup = (MONITORING / "scripts" / "monitoring-setup.sh").read_text()
     block = setup.split('if [[ "${MODE}" == "update-central" ]]', 1)[1]
     block = block.split('if [[ "${MODE}" == "update-agent" ]]', 1)[0]
 
     enable = block.index("systemctl --user enable --now ci-observe-trends.timer")
-    start = block.index("systemctl --user start ci-observe-trends.service")
-    assert enable < start, "the timer is installed before the one-shot runs"
-    assert "if ! systemctl --user start ci-observe-trends.service" in block, (
-        "a failed one-shot must warn, not fail the deploy"
+    start = block.index(
+        "systemctl --user start --no-block ci-observe-trends.service"
+    )
+    assert enable < start, "the timer is installed before the one-shot starts"
+    assert "systemctl --user start ci-observe-trends.service" not in block, (
+        "a blocking start makes the deploy wait for the whole 30-day backfill"
+    )
+    assert "if ! systemctl --user start --no-block ci-observe-trends.service" in block, (
+        "a start systemd cannot queue must warn, not fail the deploy"
     )
     assert "warn " in block
     assert "04:15" in block, "the warning says when the next run happens"
+    # With --no-block the deploy never sees the backfill result, so the
+    # warning must not claim the run finished or failed.
+    warning = block.split("warn \"", 1)[1].split("\"", 1)[0]
+    assert "did not finish" not in warning
+    assert "could not queue" in warning
 
 
 def test_rollup_is_mounted_in_the_exporter_and_scheduled_daily():
