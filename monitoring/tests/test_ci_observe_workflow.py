@@ -1086,6 +1086,52 @@ class TestPrStarterWiring:
         assert suite_job["with"]["ci-observe"] is True
 
 
+class TestFullInstallCallerSecrets:
+    """Every caller of a capture-wired full-install workflow passes the live
+    capture secret.
+
+    A caller that omits it still runs the tests, but the capture action has
+    no password and degrades to no telemetry: the run then shows "Recorded:
+    No" on the entry page although pytest ran. Production Install and the
+    chart packaging smoke shipped exactly that gap.
+    """
+
+    CAPTURE_WIRED = {f"./.github/workflows/e2e-{suite}-full-install.yml" for suite in SUITES}
+
+    def calling_workflows(self) -> list[tuple[Path, dict]]:
+        callers = []
+        for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+            document = yaml.safe_load(path.read_text())
+            for job in (document.get("jobs") or {}).values():
+                if job.get("uses") in self.CAPTURE_WIRED:
+                    callers.append((path, job))
+        return callers
+
+    def test_every_caller_passes_the_capture_secret(self) -> None:
+        callers = self.calling_workflows()
+        assert callers, "no caller of a capture-wired full-install workflow was found"
+        for path, job in callers:
+            assert job.get("secrets", {}).get("ci-observe-otlp-password") == (
+                "${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}"
+            ), f"{path.name} does not pass the capture secret"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "e2e-vmaas-prod-install-caller.yml",
+            "e2e-vmaas-staging-install-caller.yml",
+            "e2e-vmaas-chart-packaging-smoke-caller.yml",
+            "e2e-vmaas-ci-large-caller.yml",
+        ],
+    )
+    def test_a_named_install_turns_capture_on_explicitly(self, name: str) -> None:
+        """These are not suite rows (see the suite filter), so they do not
+        inherit the suite callers' wiring. They must ask for capture."""
+        document = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text())
+        job = next(job for job in document["jobs"].values() if "uses" in job)
+        assert job["with"]["ci-observe"] is True
+
+
 class TestSyncWorkflow:
     """The backend wiring: ci-observe-sync.yml on monitoring-central."""
 

@@ -28,8 +28,10 @@ from urllib.parse import quote
 # value that cannot be a repository should not silently match everything.
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 
-# The suites the run table can filter on. The stored workflow name carries
-# the suite word, so the filter is a substring match over a closed set.
+# The suites the run table can filter on. Each suite maps to the exact
+# workflow names that belong to it (see the exporter's
+# CI_OBSERVE_SUITE_WORKFLOWS); the stored name is not a substring match, so
+# "VMaaS" cannot fold Production Install or Chart Packaging Smoke into vmaas.
 SUITES = {"vmaas", "caas", "bmaas", "netris", "stretched"}
 
 # The stored conclusions the page can filter on. A timed-out run is grouped
@@ -96,6 +98,11 @@ class CIObserveRuns:
         capture_reason (empty unless unknown), identity_source, started_at,
         finished_at, pr_number (digits, for the Pull requests link) and
         details_url (the run page, or the GitHub run when no capture exists).
+        failure_reason ("test", "infra" or "gate") and failed_step say why a
+        failed run has no test data; failure_area is the display value
+        derived from the failed step ("test", "setup", "gate", or "" for a
+        pass or a cancelled run with no step). failure_area is empty when
+        there is no failed step.
         """
         now = datetime.now(UTC)
         days = self._int_param(params, "days", self.DEFAULT_DAYS, 1, self.MAX_DAYS)

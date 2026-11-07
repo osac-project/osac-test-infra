@@ -36,7 +36,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Recent E2E runs. Filter by repository, suite or result above, or use a column filter. A row with no test data opens GitHub. **No** under Recorded means the job sent no test data; Netris, full-regression and agentless jobs cannot record yet."
+        "content": "Recent E2E runs. Filter by repository, suite or result above, or use a column filter. A row with no test data opens GitHub. **No** under Recorded means no test data. **Failed in** shows whether the run failed before the tests (Setup / Infra), in the tests (Test), or at the gate (Gate); the typical No row is a run that failed before the suite started. Netris, full-regression and agentless jobs cannot record yet."
       },
       "targets": []
     },
@@ -44,7 +44,7 @@
       "type": "table",
       "id": 12,
       "title": "Recent E2E runs, last $days days",
-      "description": "",
+      "description": "One row per E2E run. No under Recorded means no test data. Failed in shows whether the run failed before the tests, in the tests, or at the gate.",
       "gridPos": {
         "h": 22,
         "w": 24,
@@ -194,6 +194,70 @@
                     }
                   }
                 ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failure_area"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed in"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "noValue",
+                "value": ""
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "test": {
+                        "text": "Test",
+                        "color": "red"
+                      },
+                      "setup": {
+                        "text": "Setup / Infra",
+                        "color": "orange"
+                      },
+                      "gate": {
+                        "text": "Gate",
+                        "color": "text"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed_step"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Failed step"
+              },
+              {
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           },
@@ -493,6 +557,16 @@
             {
               "selector": "capture_state",
               "text": "capture_state",
+              "type": "string"
+            },
+            {
+              "selector": "failure_area",
+              "text": "failure_area",
+              "type": "string"
+            },
+            {
+              "selector": "failed_step",
+              "text": "failed_step",
               "type": "string"
             },
             {

@@ -73,7 +73,15 @@ jobs:
       # reachability.
       id-token: write
     uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    secrets:
+      # Live OTLP push credential; without it ci-observe degrades to no
+      # telemetry and the run shows "Recorded: No" on the entry page.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
     with:
+      # The chart packaging smoke is not one of the vmaas suite runs (see
+      # the suite filter), but it runs the same full-install workflow and
+      # records its tests. Keep capture on here explicitly.
+      ci-observe: true
       test-suite: vmaas
       test-marker: "sanity and not requires_caas and not requires_bmaas"
       chart-oci-repo: quay.io/redhat-user-workloads/osac-tenant/osac-chart

@@ -435,6 +435,165 @@ def test_a_suite_filter_narrows_the_window(client, exporter, fresh):
     assert [run["id"] for run in doc["runs"]] == [str(SECOND_RUN_ID)]
 
 
+def test_the_vmaas_suite_filter_is_exact(client, exporter, fresh):
+    """vmaas is the VMaaS suite, not every workflow with VMaaS in its name.
+    Production Install, Staging Install and Chart Packaging Smoke run the
+    same full-install workflow but test another scenario, so they are not
+    suite rows."""
+    clear_captures(exporter)
+    rows = {
+        1001: "E2E VMaaS Full Install",
+        1002: "E2E vmaas (pull requests)",
+        1003: "E2E vmaas (merge queue)",
+        1004: "E2E VMaaS Production Install",
+        1005: "E2E VMaaS Chart Packaging Smoke",
+        # The osac-ci dispatcher's historical run name for the same suite.
+        1006: "E2E suite · vmaas · #1620 · " + "a" * 40,
+        # The older caller workflow's name.
+        1007: "E2E VMaaS",
+        1008: "E2E VMaaS Staging Install",
+    }
+    for run_id, workflow in rows.items():
+        exporter._upsert_job(run_job(run_id, workflow=workflow))
+
+    doc = client.get_json({"days": ["7"], "suite": ["vmaas"], "limit": ["50"]})
+
+    assert {run["id"] for run in doc["runs"]} == {"1001", "1002", "1003", "1006", "1007"}
+
+
+def test_the_caas_suite_filter_includes_the_agentless_net_install(client, exporter, fresh):
+    clear_captures(exporter)
+    rows = {
+        1501: "E2E CaaS Full Install",
+        1502: "E2E CaaS PR suite",
+        1503: "E2E CaaS Agentless-Net Full Install",
+        1504: "E2E VMaaS Full Install",
+    }
+    for run_id, workflow in rows.items():
+        exporter._upsert_job(run_job(run_id, workflow=workflow))
+
+    doc = client.get_json({"days": ["7"], "suite": ["caas"], "limit": ["50"]})
+
+    assert {run["id"] for run in doc["runs"]} == {"1501", "1502", "1503"}
+
+
+def test_the_netris_suite_filter_excludes_vmaas(client, exporter, fresh):
+    clear_captures(exporter)
+    rows = {
+        2001: "E2E VMaaS Netris Full Install",
+        2002: "E2E BMaaS Netris Full Install",
+        2003: "E2E VMaaS Netris PR suite",
+        2004: "E2E BMaaS Netris PR suite",
+        2005: "E2E VMaaS Full Install",
+        2006: "E2E netris (pull requests)",
+        2007: "E2E netris (merge queue)",
+        2008: "E2E Netris Full Suite",
+        # The Netris callers append the PR revision to their run name.
+        2009: "E2E VMaaS Netris Full Install / PR #123 @ " + "b" * 40,
+        2010: "E2E BMaaS Netris Full Install / PR #124 @ " + "c" * 40,
+        2011: "E2E VMaaS Production Install",
+    }
+    for run_id, workflow in rows.items():
+        exporter._upsert_job(run_job(run_id, workflow=workflow))
+
+    doc = client.get_json({"days": ["7"], "suite": ["netris"], "limit": ["50"]})
+
+    assert {run["id"] for run in doc["runs"]} == {
+        "2001", "2002", "2003", "2004", "2006", "2007", "2008", "2009", "2010",
+    }
+
+
+def test_the_stretched_suite_filter_is_its_own_set(client, exporter, fresh):
+    clear_captures(exporter)
+    rows = {
+        3001: "E2E Stretched Netris Full Install",
+        3002: "E2E Stretched Netris PR suite",
+        3003: "E2E VMaaS Netris Full Install",
+        3004: "E2E VMaaS Full Install",
+    }
+    for run_id, workflow in rows.items():
+        exporter._upsert_job(run_job(run_id, workflow=workflow))
+
+    doc = client.get_json({"days": ["7"], "suite": ["stretched"], "limit": ["50"]})
+
+    assert {run["id"] for run in doc["runs"]} == {"3001", "3002"}
+
+
+@pytest.mark.parametrize(
+    ("failed_step", "area"),
+    [
+        ("vmaas / e2e-vmaas-full-install / build → Install OSAC", "setup"),
+        (
+            "vmaas / e2e-vmaas-full-install / build → Build and load component images",
+            "setup",
+        ),
+        ("vmaas / e2e-vmaas-full-install / e2e → Run E2E tests", "test"),
+        (
+            "vmaas / e2e-vmaas-full-install / e2e → Run E2E tests (ci-observe capture)",
+            "test",
+        ),
+        ("vmaas / e2e-vmaas-gate → Fail on an upstream failure", "gate"),
+    ],
+)
+def test_the_failed_area_comes_from_the_failed_step(client, exporter, fresh, failed_step, area):
+    """The column reads the step, not the stored failure_reason: the exporter
+    counts install steps as "test" and predates the capture step's name."""
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, conclusion="failure", failed_step=failed_step))
+
+    row = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"][0]
+
+    assert row["failed_step"] == failed_step
+    assert row["failure_area"] == area
+
+
+def test_the_area_ignores_the_stored_failure_reason(client, exporter, fresh):
+    """Install OSAC is in TEST_STEPS, so the stored reason says "test" even
+    though no pytest ran. The area must still say setup."""
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(
+        RUN_ID,
+        conclusion="failure",
+        failure_reason="test",
+        failed_step="vmaas / e2e-vmaas-full-install / build → Install OSAC",
+    ))
+
+    row = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"][0]
+
+    assert row["failure_reason"] == "test"
+    assert row["failure_area"] == "setup"
+
+
+def test_a_grouped_run_prefers_the_test_step(client, exporter, fresh):
+    """A multi-suite run stores several "job → step" entries. If any suite
+    reached pytest, that is the area that explains the missing data."""
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(
+        RUN_ID,
+        conclusion="failure",
+        failed_step=(
+            "vmaas / e2e-vmaas-full-install / build → Install OSAC; "
+            "caas / e2e-caas-full-install / e2e → Run E2E tests"
+        ),
+    ))
+
+    row = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"][0]
+
+    assert row["failure_area"] == "test"
+
+
+@pytest.mark.parametrize(("conclusion", "failed_step"), [("success", ""), ("cancelled", "")])
+def test_a_run_with_no_failed_step_has_a_blank_area(client, exporter, fresh, conclusion, failed_step):
+    """A pass and a cancelled run have nothing to explain, so the cell is
+    blank, not "Test"."""
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(RUN_ID, conclusion=conclusion, failed_step=failed_step))
+
+    row = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"][0]
+
+    assert row["failure_area"] == ""
+
+
 def test_a_result_filter_uses_the_grouped_conclusion(client, exporter, fresh):
     """A run with one failed suite is not a success, even when the result
     filter is applied to its rows."""

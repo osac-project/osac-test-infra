@@ -62,7 +62,16 @@ jobs:
     # picks the matching Vault credential (see
     # e2e-vmaas-full-install.yml's own input/step comments).
     uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    secrets:
+      # Live OTLP push credential; without it ci-observe degrades to no
+      # telemetry and the run shows "Recorded: No" on the entry page.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
     with:
+      # A production install is not one of the vmaas suite runs (see the
+      # suite filter), but it still runs the same full-install workflow and
+      # records its tests. Keep capture on here, not only by the reusable
+      # workflow's default.
+      ci-observe: true
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}
       # The references module contains CaaS and BMaaS tests too. Those

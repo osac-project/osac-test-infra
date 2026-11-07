@@ -1240,6 +1240,49 @@ class WorkflowExporter:
                 return "test"
         return "infra"
 
+    # The steps that run pytest. TEST_STEPS above also holds install steps
+    # (the exporter counts them as "test" for its failure stats), and it
+    # predates the capture wrapper's own step name. The entry page's
+    # "Failed in" column reads only these: a run that died in install has no
+    # test data, so calling it "Test" would explain nothing.
+    TEST_AREA_STEPS = frozenset({
+        "Run E2E tests",
+        "Run E2E tests (ci-observe capture)",
+        "Run CaaS e2e tests",
+    })
+
+    @staticmethod
+    def _failure_area(failed_step):
+        """The area a failed run stopped in, from its stored failed-step text
+        ("job → step; job2 → step2"): "test", "setup", "gate", or "" when
+        there is no failed step (a pass, or a cancelled run with no step).
+
+        Read from the step, not failure_reason: that value counts install
+        steps as "test" and does not know the capture wrapper's step name.
+        A test step wins over a setup step when a grouped run has both.
+        """
+        entries = [entry for entry in (failed_step or "").split("; ") if entry]
+        if not entries:
+            return ""
+        areas = set()
+        for entry in entries:
+            job, _, step = entry.partition(" → ")
+            job_name = job.strip().lower()
+            gate_job = WorkflowExporter._is_gate_job(job_name) or (
+                job_name.rsplit(" / ", 1)[-1] in WorkflowExporter.GATE_JOB_NAMES
+            )
+            if step in WorkflowExporter.TEST_AREA_STEPS:
+                areas.add("test")
+            elif gate_job or WorkflowExporter._is_gate_name(step):
+                areas.add("gate")
+            else:
+                areas.add("setup")
+        if "test" in areas:
+            return "test"
+        if "setup" in areas:
+            return "setup"
+        return "gate"
+
     @staticmethod
     def _apply_ai_status(record, jobs):
         """Set record["failure_reason"] to "ran"/"skipped"/"n/a" for
@@ -4401,6 +4444,68 @@ class WorkflowExporter:
     # registry's captures on run_id, paged by run id (ids increase with
     # creation time), with the total computed by a window function so no
     # second count query is needed. No Tempo.
+
+    # The suite filter's closed vocabulary: suite key -> the exact stored
+    # workflow names (lowercased). A full-install reusable workflow run, the
+    # PR starter that dispatches it, and the merge-queue suite row all name
+    # the same suite. The named installs (Production, Staging, Chart
+    # Packaging Smoke, CI Large) run the same workflow but test a different
+    # scenario, so they are not suites: a substring match on "VMaaS" used to
+    # fold them into vmaas here.
+    CI_OBSERVE_SUITE_WORKFLOWS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "vmaas": (
+            "e2e vmaas",
+            "e2e vmaas full install",
+            "e2e vmaas pr suite",
+            "e2e vmaas (pull requests)",
+            "e2e vmaas (merge queue)",
+        ),
+        "caas": (
+            "e2e caas full install",
+            "e2e caas pr suite",
+            "e2e caas (pull requests)",
+            "e2e caas (merge queue)",
+            "e2e caas agentless-net full install",
+        ),
+        "bmaas": (
+            "e2e bmaas full install",
+            "e2e bmaas pr suite",
+            "e2e bmaas (pull requests)",
+            "e2e bmaas (merge queue)",
+        ),
+        "netris": (
+            "e2e vmaas netris full install",
+            "e2e bmaas netris full install",
+            "e2e vmaas netris pr suite",
+            "e2e bmaas netris pr suite",
+            "e2e netris full suite",
+            "e2e netris (pull requests)",
+            "e2e netris (merge queue)",
+        ),
+        "stretched": (
+            "e2e stretched netris full install",
+            "e2e stretched netris pr suite",
+        ),
+    }
+
+    # The osac-ci dispatcher names a PR suite run "E2E suite · <suite> ·
+    # #<pr> · <sha>", and the Netris callers append " / PR #<n> @ <sha>" to
+    # their run name. The PR number and SHA vary, so these are prefixes of
+    # one suite's naming scheme, not a substring match on the whole name.
+    CI_OBSERVE_SUITE_PREFIXES: ClassVar[dict[str, tuple[str, ...]]] = {
+        "vmaas": ("e2e suite · vmaas · ",),
+        "caas": ("e2e suite · caas · ",),
+        "bmaas": ("e2e suite · bmaas · ",),
+        "netris": (
+            "e2e suite · vmaas-netris · ",
+            "e2e suite · bmaas-netris · ",
+            "e2e vmaas netris full install / pr #",
+            "e2e bmaas netris full install / pr #",
+            "e2e netris full suite / pr #",
+        ),
+        "stretched": ("e2e suite · stretched-netris · ",),
+    }
+
     def _ci_observe_run_where(self, window_from, window_to, before="", run_id="", repo="", suite=""):
         """The WHERE clause every run-level ci-observe query shares.
 
@@ -4437,8 +4542,21 @@ class WorkflowExporter:
                 where.append("j.repo = :repo")
                 args["repo"] = repo
             if suite:
-                where.append("LOWER(j.workflow) LIKE '%' || :suite || '%'")
-                args["suite"] = suite
+                clauses = []
+                names = self.CI_OBSERVE_SUITE_WORKFLOWS.get(suite, ())
+                if names:
+                    placeholders = []
+                    for index, name in enumerate(names):
+                        key = f"suite_name_{index}"
+                        placeholders.append(f":{key}")
+                        args[key] = name
+                    clauses.append(f"LOWER(j.workflow) IN ({', '.join(placeholders)})")
+                for index, prefix in enumerate(self.CI_OBSERVE_SUITE_PREFIXES.get(suite, ())):
+                    key = f"suite_prefix_{index}"
+                    clauses.append(f"LOWER(j.workflow) LIKE :{key}")
+                    args[key] = prefix + "%"
+                if clauses:
+                    where.append("(" + " OR ".join(clauses) + ")")
             if before:
                 # Keyset paging on the indexed text column. Run ids are
                 # fixed-length digit strings, so text order is numeric order.
@@ -4565,6 +4683,12 @@ class WorkflowExporter:
                    MIN(j.created_at) AS created_at,
                    MAX(j.updated_at) AS updated_at,
                    {self.CI_OBSERVE_RUN_URL} AS url,
+                   MAX(CASE WHEN LOWER(COALESCE(j.conclusion, ''))
+                       IN ('failure', 'timed_out', 'startup_failure')
+                       THEN j.failure_reason END) AS failure_reason,
+                   MAX(CASE WHEN LOWER(COALESCE(j.conclusion, ''))
+                       IN ('failure', 'timed_out', 'startup_failure')
+                       THEN j.failed_step END) AS failed_step,
                    COUNT(*) OVER () AS matched,
                    GROUP_CONCAT(DISTINCT c.capture_id) AS capture_ids,
                    MAX(CASE WHEN c.identity_source = 'info' THEN 1 ELSE 0 END) AS identity_info
@@ -4586,6 +4710,9 @@ class WorkflowExporter:
                 capture_id for capture_id in (row.pop("capture_ids") or "").split(",") if capture_id
             )
             row.pop("matched", None)
+            failure_reason = str(row.pop("failure_reason") or "").strip().lower()
+            failed_step = str(row.pop("failed_step") or "").strip()
+            failure_area = self._failure_area(failed_step)
             workflow = ",".join(sorted(str(row["workflow"] or "").split(",")))
             pr_display = str(row.pop("pr_display") or "").strip()
             pr_url = str(row.pop("pr_url") or "").strip()
@@ -4620,6 +4747,13 @@ class WorkflowExporter:
                     "pr_url": pr_url,
                     "capture_ids": capture_ids,
                     "identity_source": "info" if row.pop("identity_info") else "none",
+                    # Why the run has no test data, when it failed. The
+                    # dashboard reads failure_area (from the failed step);
+                    # failure_reason is the older, coarser classification
+                    # and stays for API consumers.
+                    "failure_reason": failure_reason,
+                    "failure_area": failure_area,
+                    "failed_step": failed_step,
                 }
             )
         return {

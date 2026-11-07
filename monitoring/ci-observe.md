@@ -121,7 +121,13 @@ capture identity) live to the central backend while the test runs:
   `ci-observe-otlp-password`, and the capture action renders it into the
   gateway as a precomputed `Authorization` header. An empty password or
   endpoint degrades to running the test without telemetry — never an
-  unauthenticated push.
+  unauthenticated push. Every caller of the capture-wired full-install
+  workflows passes the secret: the suite callers (full install, pull
+  request and merge queue) and the named installs (`e2e-vmaas-prod-install-caller.yml`,
+  `e2e-vmaas-staging-install-caller.yml`, `e2e-vmaas-chart-packaging-smoke-caller.yml`,
+  `e2e-vmaas-ci-large-caller.yml`). A caller that omits it still runs the
+  tests but records nothing, which reads as "Recorded: No" on the entry
+  page.
 - The capture action does not upload telemetry to GitHub. The separate failure
   gather step still uploads a redacted artifact. A telemetry failure never
   changes the test result.

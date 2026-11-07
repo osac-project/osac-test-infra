@@ -36,6 +36,9 @@ RUNS_DOCUMENT = {
             "url": "https://github.com/osac-project/osac/actions/runs/41310072671",
             "capture_state": "capture",
             "capture_id": "vmaas-pr123-41310072671-a1",
+            "failure_reason": "infra",
+            "failure_area": "setup",
+            "failed_step": "vmaas / e2e-vmaas-full-install / build → Build and load component images",
             "details_url": "/d/ci-observe-runs/ci-observe-e28094-e2e-run?var-capture_id=x",
         },
         {
@@ -52,6 +55,9 @@ RUNS_DOCUMENT = {
             "url": "https://github.com/osac-project/osac/actions/runs/41310072672",
             "capture_state": "not collected",
             "capture_id": "",
+            "failure_reason": "",
+            "failure_area": "",
+            "failed_step": "",
             "details_url": "https://github.com/osac-project/osac/actions/runs/41310072672",
         },
     ],
@@ -113,6 +119,18 @@ def test_the_heading_explains_the_filters_and_the_github_fallback() -> None:
     content = heading["options"]["content"].lower()
     assert "filter by repository, suite or result" in content
     assert "no test data opens github" in content
+    # "Recorded: No" is not a mystery: the heading names the column that says
+    # where the run failed, before the tests or in them.
+    assert "**no** under recorded means no test data" in content
+    assert "failed in" in content
+
+
+def test_the_table_description_explains_recorded_and_failed_in() -> None:
+    table = panel("Recent E2E runs, last $days days")
+    description = table["description"].lower()
+    assert "no under recorded means no test data" in description
+    assert "failed in" in description
+    assert "before the tests" in description
 
 
 def test_the_filters_are_days_repository_suite_and_result() -> None:
@@ -168,6 +186,31 @@ def test_the_link_fields_are_hidden() -> None:
         assert hidden is True, field
 
 
+def test_the_failed_step_is_available_but_hidden() -> None:
+    table = panel("Recent E2E runs, last $days days")
+    assert "failed_step" in selectors(table)
+    entry = override(table, "failed_step")
+    hidden = next(prop["value"] for prop in entry["properties"] if prop["id"] == "custom.hidden")
+    assert hidden is True
+
+
+def test_the_failed_in_column_resolves_and_maps() -> None:
+    """A failed run says why it has no test data: before the tests, in the
+    tests, or at the gate. A pass or a cancelled run leaves the cell blank."""
+    table = panel("Recent E2E runs, last $days days")
+    assert display_name(table, "failure_area") == "Failed in"
+    assert "failure_area" in selectors(table)
+    entry = override(table, "failure_area")
+    properties = {prop["id"]: prop["value"] for prop in entry["properties"]}
+    assert properties["noValue"] == "", "a blank area must not show the table's empty message"
+    options = properties["mappings"][0]["options"]
+    assert {value: options[value]["text"] for value in ("test", "setup", "gate")} == {
+        "test": "Test",
+        "setup": "Setup / Infra",
+        "gate": "Gate",
+    }
+
+
 def test_the_newest_run_is_first() -> None:
     table = panel("Recent E2E runs, last $days days")
     assert table["options"]["sortBy"] == [{"displayName": "Started", "desc": True}]
@@ -184,13 +227,14 @@ def test_column_labels_are_plain_words() -> None:
         "trigger": "Started by",
         "conclusion": "Result",
         "capture_state": "Recorded",
+        "failure_area": "Failed in",
         "created_at": "Started",
         "url": "GitHub",
     } == {
         field: display_name(table, field)
         for field in (
             "id", "workflow", "repo", "pr", "branch", "trigger",
-            "conclusion", "capture_state", "created_at", "url",
+            "conclusion", "capture_state", "failure_area", "created_at", "url",
         )
     }
 

@@ -12,7 +12,19 @@ The principles behind the pages, the current gaps, and the roadmap are in [`obse
 
 ## Start here
 
-One table of recent E2E runs: Run, Workflow, Repository, PR, Branch, Started by, Result, Recorded, Started and GitHub. Repository, Suite and Result filter the data; every column also has a filter. Every identifier is a link. `No` under Recorded means the job sent no test data; `Unknown` means the check could not judge, and a row with no recording opens GitHub.
+One table of recent E2E runs: Run, Workflow, Repository, PR, Branch, Started by, Result, Recorded, Failed in, Started and GitHub. Repository, Suite and Result filter the data; every column also has a filter. Every identifier is a link. `No` under Recorded means no test data. Failed in is derived from the exact failed step: **Test** for a pytest step (`Run E2E tests` or `Run E2E tests (ci-observe capture)`), **Setup / Infra** for any other step, and **Gate** for a gate/precondition job. It is blank for a pass or a cancelled run with no failed step. Most `No` rows are runs that failed before the suite started, so no pytest ran and no test data was expected. Gate-only runs are left out of the table, so Gate is rare. `Unknown` means the check could not judge, and a row with no recording opens GitHub.
+
+The Suite filter uses exact workflow names, not a substring. A suite is the suite's full-install workflow, its PR starter and its merge-queue row:
+
+| Suite | Workflows |
+|---|---|
+| VMaaS | E2E VMaaS, E2E VMaaS Full Install, E2E VMaaS PR suite, E2E vmaas rows of the pull-request and merge-queue flows |
+| CaaS | E2E CaaS Full Install, E2E CaaS PR suite, E2E CaaS Agentless-Net Full Install, E2E caas rows of the pull-request and merge-queue flows |
+| BMaaS | E2E BMaaS Full Install, E2E BMaaS PR suite, E2E bmaas rows of the pull-request and merge-queue flows |
+| Netris | E2E VMaaS Netris Full Install, E2E BMaaS Netris Full Install, and their PR suites |
+| Stretched | E2E Stretched Netris Full Install and its PR suite |
+
+The named installs (**E2E VMaaS Production Install**, **E2E VMaaS Staging Install**, **E2E VMaaS Chart Packaging Smoke**, **OSAC CI Large**) run the same full-install workflow but test another scenario, so they are not suite rows. They still record: their callers pass the capture secret.
 
 ## E2E run
 

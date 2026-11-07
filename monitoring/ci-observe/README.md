@@ -27,10 +27,15 @@ The table shows one row per E2E run:
 | Started by | Scheduled, manual, push, PR or merge queue. |
 | Result | GitHub pass or fail. |
 | Recorded | Yes when test data arrived, No when the check proved it did not, Unknown when the check could not judge. |
+| Failed in | Where a failed run stopped: **Setup / Infra** before the tests, **Test** in the tests, or **Gate** at a gate. Empty for a pass or a cancelled run with no failed step. |
 | Started | When GitHub created the run. |
 | GitHub | Opens the workflow run. |
 
-`No` under Recorded means the job sent no test data. `Unknown` means the recording check could not judge: the run just ended, the capture list is stale, or the run is older than its coverage. A run with no recording opens GitHub from the Run cell; only a recorded run opens the run page. Netris, full-regression and agentless jobs have no capture wiring yet, so they cannot record.
+`No` under Recorded means no test data. Most `No` rows are runs that failed before the suite ran, for example at image build, fork-PR authorization or chart resolution: no pytest ran, so no test data was expected. **Failed in** names that case, and the row data carries the exact failed step. A cancelled run with no failed step is blank. Gate-only runs are not listed in this table, so **Gate** is rare.
+
+The Suite filter uses exact workflow names, not a substring. `VMaaS` is the VMaaS suite only; **E2E VMaaS Production Install**, **E2E VMaaS Staging Install** and **E2E VMaaS Chart Packaging Smoke** are named installs, not suite rows.
+
+`Unknown` means the recording check could not judge: the run just ended, the capture list is stale, or the run is older than its coverage. A run with no recording opens GitHub from the Run cell; only a recorded run opens the run page. Netris, full-regression and agentless jobs have no capture wiring yet, so they cannot record.
 
 ## E2E run
 
