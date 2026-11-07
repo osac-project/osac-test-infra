@@ -1242,14 +1242,24 @@ class WorkflowExporter:
 
     # The steps that run pytest. TEST_STEPS above also holds install steps
     # (the exporter counts them as "test" for its failure stats), and it
-    # predates the capture wrapper's own step name. The entry page's
-    # "Failed in" column reads only these: a run that died in install has no
-    # test data, so calling it "Test" would explain nothing.
+    # predates the capture wrapper's own step name. failure_area reads only
+    # these: a run that died in install has no test data, so calling it
+    # "Test" would explain nothing.
     TEST_AREA_STEPS = frozenset({
         "Run E2E tests",
         "Run E2E tests (ci-observe capture)",
         "Run CaaS e2e tests",
     })
+
+    @staticmethod
+    def _failed_step_name(failed_step: str) -> str:
+        """The exact step a failed run stopped in, from its stored failed-step
+        text ("job → step; job2 → step2"): the first entry's step. Empty when
+        there is no failed step."""
+        entries = [entry for entry in (failed_step or "").split("; ") if entry]
+        if not entries:
+            return ""
+        return entries[0].rsplit("→", 1)[-1].strip()
 
     @staticmethod
     def _failure_area(failed_step):
@@ -4506,7 +4516,10 @@ class WorkflowExporter:
         "stretched": ("e2e suite · stretched-netris · ",),
     }
 
-    def _ci_observe_run_where(self, window_from, window_to, before="", run_id="", repo="", suite=""):
+    def _ci_observe_run_where(
+        self, window_from, window_to, before="", run_id="", repo="", suite="",
+        failed_step: str = "",
+    ):
         """The WHERE clause every run-level ci-observe query shares.
 
         A full-install run has one e2e row whose id is the run id. A
@@ -4516,9 +4529,10 @@ class WorkflowExporter:
         groups by run_id and a run is visible either way. The gated runs are
         not E2E.
 
-        `repo` and `suite` narrow the rows before grouping. The result
-        filter runs on the grouped conclusion in the caller, so a run with
-        one failed suite cannot appear as a success.
+        `repo`, `suite` and `failed_step` narrow the rows before grouping.
+        `failed_step` is a case-insensitive substring of the stored text.
+        The result filter runs on the grouped conclusion in the caller, so a
+        run with one failed suite cannot appear as a success.
         """
         where = [
             "j.category = 'e2e'",
@@ -4557,6 +4571,9 @@ class WorkflowExporter:
                     args[key] = prefix + "%"
                 if clauses:
                     where.append("(" + " OR ".join(clauses) + ")")
+            if failed_step:
+                where.append("LOWER(j.failed_step) LIKE :failed_step")
+                args["failed_step"] = f"%{failed_step.lower()}%"
             if before:
                 # Keyset paging on the indexed text column. Run ids are
                 # fixed-length digit strings, so text order is numeric order.
@@ -4609,7 +4626,7 @@ class WorkflowExporter:
     def _iso_utc(value):
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def get_ci_observe_run_window(self, days, repo="", suite="", result=""):
+    def get_ci_observe_run_window(self, days, repo="", suite="", result="", failed_step: str = ""):
         """Every run-level row in the window, one per run.
 
         The entry page's verdict cards count the whole window, so they cannot
@@ -4619,7 +4636,7 @@ class WorkflowExporter:
         now = datetime.now(timezone.utc)
         window_from = now - timedelta(days=days)
         where, args = self._ci_observe_run_where(
-            window_from, now, repo=repo, suite=suite
+            window_from, now, repo=repo, suite=suite, failed_step=failed_step
         )
         having = ""
         if result:
@@ -4648,20 +4665,24 @@ class WorkflowExporter:
             )
         return rows
 
-    def get_ci_observe_run_page(self, days, limit, before="", run_id="", repo="", suite="", result=""):
+    def get_ci_observe_run_page(
+        self, days, limit, before="", run_id="", repo="", suite="", result="",
+        failed_step: str = "",
+    ):
         """One page of run-level E2E rows, joined to their captures.
 
         Returns rows, matched, truncated, window_from, window_to. `before` is
         the id of the last run on the previous page: real keyset paging, so a
         page neither repeats nor skips a run. `run_id` is an exact lookup and
-        ignores the window, so an old run still resolves. `repo` and `suite`
-        narrow the rows; `result` filters the grouped conclusion, so a run
-        with one failed suite cannot appear as a success.
+        ignores the window, so an old run still resolves. `repo`, `suite` and
+        `failed_step` narrow the rows; `result` filters the grouped
+        conclusion, so a run with one failed suite cannot appear as a success.
         """
         now = datetime.now(timezone.utc)
         window_from = now - timedelta(days=days)
         where_sql, args = self._ci_observe_run_where(
-            window_from, now, before, run_id, repo=repo, suite=suite
+            window_from, now, before, run_id, repo=repo, suite=suite,
+            failed_step=failed_step,
         )
         having = ""
         if result:
@@ -4713,6 +4734,7 @@ class WorkflowExporter:
             failure_reason = str(row.pop("failure_reason") or "").strip().lower()
             failed_step = str(row.pop("failed_step") or "").strip()
             failure_area = self._failure_area(failed_step)
+            failed_step_name = self._failed_step_name(failed_step)
             workflow = ",".join(sorted(str(row["workflow"] or "").split(",")))
             pr_display = str(row.pop("pr_display") or "").strip()
             pr_url = str(row.pop("pr_url") or "").strip()
@@ -4748,11 +4770,13 @@ class WorkflowExporter:
                     "capture_ids": capture_ids,
                     "identity_source": "info" if row.pop("identity_info") else "none",
                     # Why the run has no test data, when it failed. The
-                    # dashboard reads failure_area (from the failed step);
-                    # failure_reason is the older, coarser classification
-                    # and stays for API consumers.
+                    # dashboard reads failed_step_name (the exact step);
+                    # failure_area is the older classification and
+                    # failure_reason the older still, both kept for API
+                    # consumers.
                     "failure_reason": failure_reason,
                     "failure_area": failure_area,
+                    "failed_step_name": failed_step_name,
                     "failed_step": failed_step,
                 }
             )

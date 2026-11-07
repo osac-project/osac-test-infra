@@ -12,7 +12,7 @@ The principles behind the pages, the current gaps, and the roadmap are in [`obse
 
 ## Start here
 
-One table of recent E2E runs: Run, Workflow, Repository, PR, Branch, Started by, Result, Recorded, Failed in, Started and GitHub. Repository, Suite and Result filter the data; every column also has a filter. Every identifier is a link. `No` under Recorded means no test data. Failed in is derived from the exact failed step: **Test** for a pytest step (`Run E2E tests` or `Run E2E tests (ci-observe capture)`), **Setup / Infra** for any other step, and **Gate** for a gate/precondition job. It is blank for a pass or a cancelled run with no failed step. Most `No` rows are runs that failed before the suite started, so no pytest ran and no test data was expected. Gate-only runs are left out of the table, so Gate is rare. `Unknown` means the check could not judge, and a row with no recording opens GitHub.
+One table of recent E2E runs: Run, Workflow, Repository, PR, Branch, Started by, Result, Recorded, Failed step, Started and GitHub. Repository, Suite and Result filter the data; every column also has a filter, so Failed step narrows by step. Every identifier is a link. `No` under Recorded means no test data. Failed step names the exact step the run stopped in, such as `Install OSAC`, `Build and load component images` or `Authorize fork PR`. It is blank for a pass or a cancelled run with no failed step. Most `No` rows are runs that failed before the suite started, so no pytest ran and no test data was expected. `Unknown` means the check could not judge, and a row with no recording opens GitHub.
 
 The Suite filter uses exact workflow names, not a substring. A suite is the suite's full-install workflow, its PR starter and its merge-queue row:
 

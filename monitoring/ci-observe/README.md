@@ -13,7 +13,7 @@ Sign in to Grafana with GitHub. Open **ci-observe** and choose **Start here**.
 
 ## Start here
 
-Filter by **Repository**, **Suite** and **Result** above the table. The filters narrow the data, so the rows stay honest. Every column also has a funnel filter.
+Filter by **Repository**, **Suite** and **Result** above the table. The filters narrow the data, so the rows stay honest. Every column also has a funnel filter, so **Failed step** narrows the table by step.
 
 The table shows one row per E2E run:
 
@@ -27,11 +27,11 @@ The table shows one row per E2E run:
 | Started by | Scheduled, manual, push, PR or merge queue. |
 | Result | GitHub pass or fail. |
 | Recorded | Yes when test data arrived, No when the check proved it did not, Unknown when the check could not judge. |
-| Failed in | Where a failed run stopped: **Setup / Infra** before the tests, **Test** in the tests, or **Gate** at a gate. Empty for a pass or a cancelled run with no failed step. |
+| Failed step | The exact step the run stopped in, such as `Install OSAC` or `Build and load component images`. Empty for a pass or a cancelled run with no failed step. |
 | Started | When GitHub created the run. |
 | GitHub | Opens the workflow run. |
 
-`No` under Recorded means no test data. Most `No` rows are runs that failed before the suite ran, for example at image build, fork-PR authorization or chart resolution: no pytest ran, so no test data was expected. **Failed in** names that case, and the row data carries the exact failed step. A cancelled run with no failed step is blank. Gate-only runs are not listed in this table, so **Gate** is rare.
+`No` under Recorded means no test data. Most `No` rows are runs that failed before the suite ran, for example at image build, fork-PR authorization or chart resolution: no pytest ran, so no test data was expected. **Failed step** names that exact step, and the column filter narrows the table by step. A cancelled run with no failed step is blank. Gate-only runs are not listed in this table.
 
 The Suite filter uses exact workflow names, not a substring. `VMaaS` is the VMaaS suite only; **E2E VMaaS Production Install**, **E2E VMaaS Staging Install** and **E2E VMaaS Chart Packaging Smoke** are named installs, not suite rows.
 

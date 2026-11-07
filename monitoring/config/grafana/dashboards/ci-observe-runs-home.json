@@ -36,7 +36,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Recent E2E runs. Filter by repository, suite or result above, or use a column filter. A row with no test data opens GitHub. **No** under Recorded means no test data. **Failed in** shows whether the run failed before the tests (Setup / Infra), in the tests (Test), or at the gate (Gate); the typical No row is a run that failed before the suite started. Netris, full-regression and agentless jobs cannot record yet."
+        "content": "Recent E2E runs. Filter by repository, suite or result above, or use a column filter. A row with no test data opens GitHub. **No** under Recorded means no test data. **Failed step** names the exact step the run stopped in, such as Install OSAC or Build and load component images; use its filter to narrow by step. The typical No row is a run that failed before the suite started. Netris, full-regression and agentless jobs cannot record yet."
       },
       "targets": []
     },
@@ -44,7 +44,7 @@
       "type": "table",
       "id": 12,
       "title": "Recent E2E runs, last $days days",
-      "description": "One row per E2E run. No under Recorded means no test data. Failed in shows whether the run failed before the tests, in the tests, or at the gate.",
+      "description": "One row per E2E run. No under Recorded means no test data. Failed step names the exact step the run stopped in, and the column filter narrows by it.",
       "gridPos": {
         "h": 22,
         "w": 24,
@@ -200,48 +200,28 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "failure_area"
+              "options": "failed_step_name"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Failed in"
+                "value": "Failed step"
               },
               {
                 "id": "custom.width",
-                "value": 120
+                "value": 220
               },
               {
                 "id": "custom.cellOptions",
                 "value": {
-                  "type": "color-text"
+                  "type": "auto",
+                  "wrapText": true,
+                  "dynamicHeight": true
                 }
               },
               {
                 "id": "noValue",
                 "value": ""
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "test": {
-                        "text": "Test",
-                        "color": "red"
-                      },
-                      "setup": {
-                        "text": "Setup / Infra",
-                        "color": "orange"
-                      },
-                      "gate": {
-                        "text": "Gate",
-                        "color": "text"
-                      }
-                    }
-                  }
-                ]
               }
             ]
           },
@@ -560,8 +540,8 @@
               "type": "string"
             },
             {
-              "selector": "failure_area",
-              "text": "failure_area",
+              "selector": "failed_step_name",
+              "text": "failed_step_name",
               "type": "string"
             },
             {

@@ -592,6 +592,65 @@ def test_a_run_with_no_failed_step_has_a_blank_area(client, exporter, fresh, con
     row = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"][0]
 
     assert row["failure_area"] == ""
+    assert row["failed_step_name"] == ""
+
+
+def test_the_failed_step_name_takes_the_first_entry(client, exporter, fresh) -> None:  # noqa: ANN001
+    """A grouped run stores one entry per suite. The column names the first
+    one; the full text stays in failed_step."""
+    clear_captures(exporter)
+    failed_step = (
+        "vmaas / e2e-vmaas-full-install / build → Build and load "
+        "component images; "
+        "caas / e2e-caas-full-install / e2e → Run E2E tests"
+    )
+    exporter._upsert_job(run_job(RUN_ID, conclusion="failure", failed_step=failed_step))
+
+    row = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"][0]
+
+    assert row["failed_step_name"] == "Build and load component images"
+    assert row["failed_step"] == failed_step
+
+
+def test_the_failed_step_name_handles_a_single_entry(client, exporter, fresh) -> None:  # noqa: ANN001
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(
+        RUN_ID,
+        conclusion="failure",
+        failed_step="vmaas / e2e-vmaas-full-install / build → Install OSAC",
+    ))
+
+    row = exporter.get_ci_observe_run_page(days=7, limit=10)["rows"][0]
+
+    assert row["failed_step_name"] == "Install OSAC"
+
+
+def test_a_failed_step_filter_matches_a_step(client, exporter, fresh) -> None:  # noqa: ANN001
+    clear_captures(exporter)
+    exporter._upsert_job(run_job(
+        RUN_ID,
+        conclusion="failure",
+        failed_step="vmaas / e2e-vmaas-full-install / build → Install OSAC",
+    ))
+    exporter._upsert_job(run_job(
+        SECOND_RUN_ID,
+        conclusion="failure",
+        failed_step=(
+            "caas / e2e-caas-full-install / build → "
+            "Build and load component images"
+        ),
+    ))
+
+    doc = client.get_json({"days": ["7"], "failed_step": ["install osac"]})
+
+    assert [run["id"] for run in doc["runs"]] == [str(RUN_ID)]
+
+
+def test_a_malformed_failed_step_filter_is_ignored_with_a_note(client, jobs, fresh) -> None:  # noqa: ANN001
+    doc = client.get_json({"days": ["7"], "failed_step": ["Install OSAC' OR 1=1"]})
+
+    assert {run["id"] for run in doc["runs"]} == {str(RUN_ID), str(SECOND_RUN_ID)}
+    assert any("failed step" in note and "ignored" in note for note in doc["notes"])
 
 
 def test_a_result_filter_uses_the_grouped_conclusion(client, exporter, fresh):
