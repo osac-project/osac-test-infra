@@ -548,6 +548,7 @@ jobs:
           fi
 
       - name: Boot cluster clone
+        timeout-minutes: 15
         env:
           FLAVOR_NAME: ${{ inputs.flavor-name }}
           CLUSTER_TOPOLOGY: ${{ inputs.cluster-topology }}
