@@ -21,6 +21,7 @@ environment variables (set through FakeBins.env):
 
 Run indirectly: imported by the test_*.py suites.
 """
+
 from __future__ import annotations
 
 import os
@@ -78,7 +79,17 @@ FAKE_VIRSH = textwrap.dedent(
     echo "${cmd} $*" >> "${CALLS_FILE}"
     case "${cmd}" in
       net-info) exit 0 ;;
+      net-dumpxml) echo '<network><ip address="192.0.2.1"/></network>'; exit 0 ;;
+      dominfo)
+        [[ "${VIRSH_COLLISION:-}" == "true" ]] && exit 0
+        [[ -n "${FAKE_DOMAIN_DIR:-}" && -f "${FAKE_DOMAIN_DIR}/${1}.xml" ]] && exit 0
+        exit 1
+        ;;
       dumpxml)
+        if [[ -n "${FAKE_DOMAIN_DIR:-}" && -f "${FAKE_DOMAIN_DIR}/${1}.xml" ]]; then
+          cat "${FAKE_DOMAIN_DIR}/${1}.xml"
+          exit 0
+        fi
         # dumpxml: the owned disk, plus a shared CD-ROM that must survive
         # deletion.
         echo "<domain type='kvm'>"
@@ -100,6 +111,10 @@ FAKE_VIRSH = textwrap.dedent(
       define)
         n=$(ls "${CAPTURE_DIR}" 2>/dev/null | grep -c '^vm-' || true)
         cat > "${CAPTURE_DIR}/vm-${n}.xml"
+        if [[ -n "${FAKE_DOMAIN_DIR:-}" ]]; then
+          name=$(sed -n 's:.*<name>\\(.*\\)</name>.*:\\1:p' "${CAPTURE_DIR}/vm-${n}.xml")
+          cp "${CAPTURE_DIR}/vm-${n}.xml" "${FAKE_DOMAIN_DIR}/${name}.xml"
+        fi
         exit 0
         ;;
       start) exit 0 ;;
@@ -128,6 +143,7 @@ FAKE_QEMU_IMG = textwrap.dedent(
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "${1}" == "create" ]]; then
+      echo "qemu-img $*" >> "${CALLS_FILE}"
       : > "${4}"
       exit 0
     fi
