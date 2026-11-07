@@ -1155,6 +1155,79 @@ class TestEndpointDocument:
             }
         ]
 
+    def test_a_merged_pull_request_with_a_missing_stage_is_incomplete(
+        self, filled: CIObservePRs
+    ) -> None:
+        with sqlite3.connect(filled.db_file) as conn:
+            conn.execute("UPDATE pr_events SET queued_at = NULL, queue_seconds = NULL WHERE number = 101")
+
+        doc = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})
+
+        assert doc["pr"]["state"] == "merged"
+        assert doc["data_status"] == "incomplete"
+        assert "merged PR has no queue boundary" in doc["data_error"]
+        queue = next(stage for stage in doc["stages"] if stage["stage"] == "queue")
+        assert queue["state"] == "unknown"
+        assert queue["missing_reason"] == "merged PR has no queue boundary"
+        # The tile still refuses to invent a number; the document now says
+        # the row is incomplete instead of hiding it.
+        assert doc["summary"][0]["queue"] == "not measured"
+        assert doc["chart"][0]["queue"] is None
+
+    def test_an_open_pull_request_has_not_reached_stages_without_a_data_error(
+        self, service: CIObservePRs, github: FakeGitHub
+    ) -> None:
+        run_backfill(service)
+        fixture = load_fixture("merged_pr")
+        open_pr = dict(fixture["pr"])
+        open_pr.update({"number": 780, "state": "open", "merged_at": None, "closed_at": None})
+        github.add(f"/repos/osac-project/{REPO}/pulls/780", FakeResponse(payload=open_pr))
+        route_pr(github, {**fixture, "pr": open_pr}, number=780)
+        github.add(f"/repos/osac-project/{REPO}/pulls/780/reviews?per_page=100", FakeResponse(payload=[]))
+
+        doc = service.get_json({"number": ["780"], "repo": [REPO]})
+
+        assert doc["source"] == "live"
+        assert doc["pr"]["state"] == "open"
+        assert doc["data_status"] == "complete"
+        assert doc["data_error"] == ""
+        stages = {stage["stage"]: stage for stage in doc["stages"]}
+        assert stages["authoring"]["state"] == "not_reached"
+        assert stages["authoring"]["missing_reason"] == "no review yet"
+        assert stages["review"]["state"] == "not_reached"
+        assert stages["review"]["missing_reason"] == "no review yet"
+        assert stages["waiting"]["missing_reason"] == "not approved yet"
+        assert stages["queue"]["missing_reason"] == "not queued yet"
+        assert stages["merged"]["missing_reason"] == "not merged yet"
+        assert all(stage["state"] != "unknown" for stage in doc["stages"])
+
+    def test_an_unknown_stage_is_a_data_error(self, prs) -> None:
+        pr = {
+            "number": 1,
+            "state": "open",
+            "opened_at": "2026-10-01T10:00:00Z",
+            "first_approval_at": "2026-10-01T11:00:00Z",
+            "waiting_seconds": 60,
+            "as_of": "2026-10-15T00:00:00Z",
+        }
+        stages = prs._stages(pr)
+        status, error = prs._data_quality(pr, stages)
+        review = next(stage for stage in stages if stage["stage"] == "review")
+
+        assert review["state"] == "unknown"
+        assert status == "incomplete"
+        assert "open PR has no review boundary" in error
+
+    def test_a_pull_request_with_no_opened_at_is_a_data_error(self, prs) -> None:
+        pr = {"number": 1, "state": "open", "as_of": "2026-10-15T00:00:00Z"}
+        stages = prs._stages(pr)
+        status, error = prs._data_quality(pr, stages)
+        authoring = next(stage for stage in stages if stage["stage"] == "authoring")
+
+        assert authoring["state"] == "unknown"
+        assert status == "incomplete"
+        assert "open PR has no authoring boundary" in error
+
     def test_a_normal_stored_pull_request_has_no_status_message(self, filled: CIObservePRs) -> None:
         seed_jobs(filled, [])
         doc = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})

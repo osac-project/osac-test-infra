@@ -152,6 +152,28 @@ STAGES = (
     ("merged", "Merged"),
 )
 
+# The stored column that starts and ends each stage, the duration column, and
+# the name a data error uses. Waiting and queue end at the as-of moment for a
+# live open pull request, but their stored end boundary stays queued_at and
+# last_attempt_at.
+STAGE_PARTS = {
+    "authoring": ("authoring", "opened_at", "first_review_at", "authoring_seconds"),
+    "review": ("review", "first_review_at", "first_approval_at", "review_seconds"),
+    "waiting": ("waiting", "first_approval_at", "queued_at", "waiting_seconds"),
+    "queue": ("queue", "queued_at", "last_attempt_at", "queue_seconds"),
+    "merged": ("merge", "last_attempt_at", "merged_at", "merged_seconds"),
+}
+
+# A boundary that comes after a stage proves the stage's earlier boundary
+# must exist. Its absence is an inconsistent row, not an unreached stage.
+LATER_BOUNDARIES = {
+    "authoring": ("first_approval_at", "queued_at", "last_attempt_at", "merged_at"),
+    "review": ("queued_at", "last_attempt_at", "merged_at"),
+    "waiting": ("last_attempt_at", "merged_at"),
+    "queue": ("merged_at",),
+    "merged": (),
+}
+
 # What the dashboard prints next to the derived numbers. Kept here so the
 # endpoint and the dashboard state the same limit.
 DERIVATION = {
@@ -1354,6 +1376,8 @@ class CIObservePRs:
             "stages": [],
             "summary": [],
             "chart": [],
+            "data_status": "unavailable",
+            "data_error": reason,
             "attempts": [],
             "pr_state": state,
             "pr_state_message": reason,
@@ -1380,6 +1404,8 @@ class CIObservePRs:
             "stages": [],
             "summary": [],
             "chart": [],
+            "data_status": "not_applicable",
+            "data_error": "",
             "attempts": [],
             # The detail panels query this endpoint with an empty number.
             # These keys let the resolved-state panel say "enter a number"
@@ -1884,6 +1910,7 @@ class CIObservePRs:
             status_message = runs_note
 
         stages = _stages(pr) if pr is not None and not pr.get("history_unavailable") else []
+        data_status, data_error = _data_quality(pr, stages)
         return {
             "mode": "pr",
             "generated_at": _utc_now(),
@@ -1892,6 +1919,8 @@ class CIObservePRs:
             "stages": stages,
             "summary": _summary(pr, stages),
             "chart": _chart(pr, stages),
+            "data_status": data_status,
+            "data_error": data_error,
             "runs": runs,
             "attempts": [_attempt_out(attempt) for attempt in attempts],
             "pr_state": pr_state,
@@ -2014,6 +2043,8 @@ class CIObservePRs:
             "stages": [],
             "summary": [],
             "chart": [],
+            "data_status": "not_applicable",
+            "data_error": "",
             "runs": [],
             "attempts": [],
             # No number selected: the resolved-state panel says so.
@@ -2042,13 +2073,20 @@ def _utc_now():
 
 def _stages(pr):
     """The five stages, always all five, with their measured duration or the
-    reason it could not be measured. A missing boundary is 'unknown'; a
-    stage the pull request never reached is 'not_reached'."""
+    reason it could not be measured.
+
+    A stage the pull request never reached is 'not_reached' with a plain
+    reason. A row whose boundaries disagree (a later boundary exists without
+    an earlier one, or a duration is missing next to both boundaries) is
+    'unknown'. For a merged pull request every stage must be measured; a
+    missing part is 'unknown' and the document says the data is incomplete.
+    """
     if pr is None:
         return []
+    state = pr.get("state") or ""
     # An open pull request is still moving. Its current stage ends at the
     # as-of moment, the same moment its stat measures to.
-    as_of = pr.get("as_of") if pr.get("state") == "open" else None
+    as_of = pr.get("as_of") if state == "open" else None
     waiting_end = pr.get("queued_at")
     if as_of and pr.get("first_approval_at") and not pr.get("queued_at"):
         waiting_end = as_of
@@ -2060,32 +2098,10 @@ def _stages(pr):
         "queue": (pr.get("queued_at"), queue_end, pr.get("queue_seconds")),
         "merged": (pr.get("last_attempt_at"), pr.get("merged_at"), pr.get("merged_seconds")),
     }
-    reasons = {
-        "authoring": "no human review after the pull request opened",
-        "review": "the pull request was never reviewed by a human",
-        "waiting": "the pull request was never approved by a human",
-        "queue": "the pull request has no merge_group attempt",
-        "merged": "the pull request did not merge",
-    }
     stages = []
     for key, label in STAGES:
         start, end, seconds = boundaries[key]
-        if key == "merged":
-            if pr.get("state") != "merged":
-                state = "not_reached"
-            elif not pr.get("last_attempt_at"):
-                # A direct merge has no queue attempt to measure from. That
-                # is unknown, not a zero-length stage.
-                state = "unknown"
-                reasons["merged"] = "the pull request merged without a merge_group attempt"
-            else:
-                state = "measured"
-        elif (key == "queue" and not pr.get("queued_at")) or (key in ("review", "waiting") and not start):
-            state = "not_reached"
-        elif seconds is None:
-            state = "unknown"
-        else:
-            state = "measured"
+        stage_state, reason = _classify_stage(pr, key, start, end, seconds)
         stages.append(
             {
                 "stage": key,
@@ -2094,11 +2110,81 @@ def _stages(pr):
                 "end_at": end,
                 "seconds": seconds,
                 "time_display": human_duration(seconds),
-                "state": state,
-                "missing_reason": "" if state == "measured" else reasons[key],
+                "state": stage_state,
+                "missing_reason": reason,
             }
         )
     return stages
+
+
+def _classify_stage(pr, key, start, end, seconds):
+    """One stage's state and, when it is not measured, the plain reason."""
+    state = pr.get("state") or ""
+    name, _, _, _ = STAGE_PARTS[key]
+    if state == "merged":
+        # A merged pull request ran through every boundary. A missing one is
+        # an incomplete stored row, never an unreached stage.
+        if start is None or end is None:
+            return "unknown", f"merged PR has no {name} boundary"
+        if seconds is None:
+            return "unknown", f"merged PR has no {name} duration"
+        return "measured", ""
+    if key == "merged":
+        reason = "not merged yet" if state == "open" else "the pull request did not merge"
+        return "not_reached", reason
+    later_exists = any(pr.get(field) for field in LATER_BOUNDARIES[key])
+    if start is None:
+        # A pull request always opened, so a missing authoring start is a
+        # broken row. A later stage may simply not have started yet.
+        if key == "authoring" or end is not None or later_exists:
+            return "unknown", f"{state} PR has no {name} boundary"
+        return "not_reached", _not_reached_reason(key, state, start_present=False)
+    if end is None:
+        if later_exists:
+            return "unknown", f"{state} PR has no {name} boundary"
+        return "not_reached", _not_reached_reason(key, state, start_present=True)
+    if seconds is None:
+        return "unknown", f"{state} PR has no {name} duration"
+    return "measured", ""
+
+
+def _not_reached_reason(key, state, start_present):
+    """Why a stage has no duration. An open pull request is still moving, so
+    the reason is short; an ended one says what never happened."""
+    if state == "open":
+        return {
+            "authoring": "no review yet",
+            "review": "not approved yet" if start_present else "no review yet",
+            "waiting": "not queued yet" if start_present else "not approved yet",
+            "queue": "no merge attempt yet" if start_present else "not queued yet",
+            "merged": "not merged yet",
+        }[key]
+    reviewed = "the pull request was never reviewed by a human"
+    approved = "the pull request was never approved by a human"
+    return {
+        "authoring": reviewed,
+        "review": approved if start_present else reviewed,
+        "waiting": "the pull request was never queued" if start_present else approved,
+        "queue": "the pull request has no merge_group attempt",
+        "merged": "the pull request did not merge",
+    }[key]
+
+
+def _data_quality(pr, stages):
+    """Whether the stored row has every part the stages need.
+
+    A merged pull request must measure all five stages. An open or closed
+    pull request may stop before a stage; that is not a data error. An
+    'unknown' stage is always a data error, and the message names it.
+    """
+    if pr is None:
+        return "unavailable", "no stored or live row for this pull request"
+    if not stages:
+        return "incomplete", "the review history could not be read, so the stages are missing"
+    broken = [stage for stage in stages if stage["state"] == "unknown"]
+    if not broken:
+        return "complete", ""
+    return "incomplete", "; ".join(stage["missing_reason"] for stage in broken)
 
 
 def _summary(pr: dict | None, stages: list[dict]) -> list[dict]:

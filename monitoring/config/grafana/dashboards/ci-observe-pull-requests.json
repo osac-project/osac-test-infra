@@ -334,7 +334,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "total",
           "values": false
         },
         "orientation": "auto",
@@ -392,7 +392,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "authoring",
           "values": false
         },
         "orientation": "auto",
@@ -450,7 +450,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "review",
           "values": false
         },
         "orientation": "auto",
@@ -508,7 +508,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "waiting",
           "values": false
         },
         "orientation": "auto",
@@ -566,7 +566,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "queue",
           "values": false
         },
         "orientation": "auto",

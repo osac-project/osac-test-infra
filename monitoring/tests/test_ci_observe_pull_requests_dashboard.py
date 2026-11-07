@@ -214,7 +214,7 @@ def test_the_identity_line_is_one_linkable_row() -> None:
         assert override(table, helper)["custom.hidden"] is True, helper
 
 
-def test_five_stat_tiles_read_the_summary_row() -> None:
+def test_five_stat_tiles_read_their_own_summary_field() -> None:
     tiles = {
         "Total": "total",
         "Authoring": "authoring",
@@ -230,6 +230,12 @@ def test_five_stat_tiles_read_the_summary_row() -> None:
         assert target["root_selector"] == "$.summary"
         assert selectors(tile) == [field]
         assert tile["fieldConfig"]["defaults"]["noValue"].startswith("Not measured"), title
+        # An empty field matcher means "numeric fields only" in Grafana, and
+        # the summary values are strings. Select the string field by name.
+        reduce = tile["options"]["reduceOptions"]
+        assert reduce["fields"] == field, f"{title} must select its string field"
+        assert reduce["calcs"] == ["lastNotNull"], f"{title} needs a string-safe reducer"
+        assert reduce["values"] is False
         row = resolve(PR_DOCUMENT, "$.summary")
         assert row[field], f"{title} must resolve"
 
