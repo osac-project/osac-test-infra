@@ -1001,6 +1001,10 @@
                   {
                     "id": "displayName",
                     "value": "Test time"
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dtdhms"
                   }
                 ]
               },
@@ -1304,7 +1308,7 @@
                   },
                   {
                     "id": "unit",
-                    "value": "s"
+                    "value": "dtdhms"
                   },
                   {
                     "id": "noValue",
@@ -1549,7 +1553,7 @@
                   },
                   {
                     "id": "unit",
-                    "value": "s"
+                    "value": "dtdhms"
                   },
                   {
                     "id": "noValue",
@@ -1907,7 +1911,7 @@
                   },
                   {
                     "id": "unit",
-                    "value": "s"
+                    "value": "dtdhms"
                   },
                   {
                     "id": "decimals",

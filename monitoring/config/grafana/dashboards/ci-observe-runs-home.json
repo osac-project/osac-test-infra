@@ -389,6 +389,10 @@
               {
                 "id": "noValue",
                 "value": "–"
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
               }
             ]
           },

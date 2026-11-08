@@ -1130,16 +1130,17 @@ class TestEndpointDocument:
         doc = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})
 
         assert doc["summary"] == [
-            {"total": "1h 35m", "authoring": "20m", "review": "30m", "waiting": "10m", "queue": "34m"}
+            {"total": "1h 35m", "authoring": "20m", "review": "30m", "waiting": "10m", "queue": "34m",
+             "total_s": 5700, "authoring_s": 1200, "review_s": 1800, "waiting_s": 600, "queue_s": 2040}
         ]
         assert doc["chart"] == [
             {
                 "category": "PR #101",
-                "authoring": 0.333,
-                "review": 0.5,
-                "waiting": 0.167,
-                "queue": 0.567,
-                "merged": 0.017,
+                "authoring": 1200,
+                "review": 1800,
+                "waiting": 600,
+                "queue": 2040,
+                "merged": 60,
             }
         ]
 
@@ -1150,23 +1151,26 @@ class TestEndpointDocument:
         assert pr["repo_url"] == "https://github.com/osac-project/osac"
         assert pr["dates_display"] == "Opened 01 Oct 10:00 · Merged 01 Oct 11:35"
 
-    def test_a_bot_login_is_url_encoded(self, filled: CIObservePRs) -> None:
+    def test_a_bot_login_goes_into_its_link_unescaped(self, filled: CIObservePRs) -> None:
+        """Grafana escapes a data link's "[" and "]" itself; an escaped login
+        would arrive as dependabot%255Bbot%255D."""
         with sqlite3.connect(filled.db_file) as conn:
             conn.execute("UPDATE pr_events SET author = ? WHERE number = 101", ("dependabot[bot]",))
 
         pr = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})["pr"]
 
-        assert pr["author_url"] == "https://github.com/dependabot%5Bbot%5D"
+        assert pr["author_url"] == "https://github.com/dependabot[bot]"
 
     def test_missing_stages_say_not_measured_and_are_absent_from_the_chart(self, filled: CIObservePRs) -> None:
         doc = filled.get_json({"number": ["102"]})
 
         assert doc["summary"][0]["review"] == "not measured"
         assert doc["summary"][0]["queue"] == "not measured"
+        assert (doc["summary"][0]["review_s"], doc["summary"][0]["queue_s"]) == (None, None)
         assert doc["chart"] == [
             {
                 "category": "PR #102",
-                "authoring": 0.5,
+                "authoring": 1800,
                 "review": None,
                 "waiting": None,
                 "queue": None,
@@ -1378,7 +1382,7 @@ class TestRuns:
         assert doc["stages"][3]["end_at"] == "2026-10-15T00:00:00Z"
         assert doc["stages"][3]["seconds"] > 0
         assert doc["summary"][0]["queue"] == doc["stages"][3]["time_display"]
-        assert doc["chart"][0]["queue"] == round(doc["stages"][3]["seconds"] / 3600, 3)
+        assert doc["chart"][0]["queue"] == round(doc["stages"][3]["seconds"])
         assert doc["stages"][4]["state"] == "not_reached"
         assert len(doc["runs"]) == 3
         # The queue history comes from the stored merge_group runs. The two
@@ -1416,7 +1420,7 @@ class TestRuns:
         assert waiting["seconds"] > 0
         assert queue["state"] == "not_reached"
         assert doc["summary"][0]["waiting"] == waiting["time_display"]
-        assert doc["chart"][0]["waiting"] == round(waiting["seconds"] / 3600, 3)
+        assert doc["chart"][0]["waiting"] == round(waiting["seconds"])
 
     def test_an_unreadable_review_history_does_not_invent_stages(self, service, github):
         run_backfill(service)
@@ -1458,7 +1462,7 @@ class TestRuns:
         assert doc["pr"]["merged_seconds"] == 3600
         assert merged["state"] == "measured"
         assert merged["end_at"] == "2026-10-06T12:00:00Z"
-        assert doc["chart"][0]["merged"] == 1.0
+        assert doc["chart"][0]["merged"] == 3600
 
 
 # ---------------------------------------------------------------------------

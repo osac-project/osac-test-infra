@@ -665,6 +665,22 @@ def test_without_stored_runs_before_the_window_nothing_is_compared(stores):
     assert "vs before" not in week["about"][0]["missing"]
 
 
+def test_a_window_longer_than_the_stored_test_results_says_so(stores):
+    """Runs reach back further than the JUnit reports read from them; the
+    test pages must not look like the tests started running last week."""
+    stored_since(stores)
+    run_id = stores.run(NOW - timedelta(days=3))
+    stores.test(run_id, "tests/e2e/vmaas/sanity/test_vm.py::TestVm::test_create", True, 100.0, NOW - timedelta(days=3))
+
+    month = get(stores.api(), "tests", days="30")["about"][0]["missing"]
+    week = get(stores.api(), "tests", days="7")["about"][0]["missing"]
+    time = get(stores.api(), "time", days="30")["about"][0]["missing"]
+
+    assert "test results are stored from 2026-11-04: the test numbers do not cover 2026-10-08 to 2026-11-04" in month
+    assert "test results are stored from 2026-11-04" in week
+    assert "test results are stored from 2026-11-04" in time, "its test table counts tests"
+
+
 def test_a_rollup_that_stopped_says_what_is_missing(stores):
     """A timer that stops leaves its last pass behind: the page must not
     claim nothing is missing while its test numbers end a day ago."""

@@ -150,6 +150,15 @@ def variable_values(document, served):
             value_column = next(column["selector"] for column in infinity["columns"] if column["text"] == "__value")
             assert rows, f"variable {variable['name']} has no options on the seed"
             values[variable["name"]] = str(rows[0][value_column])
+            if variable["name"] == "pr_number":
+                # The newest pull request may have run no E2E suite, which the
+                # page shows as such; check the panels against one that did.
+                def ran_e2e(number):
+                    url = f"{API}/api/ci-observe/prs?number={number}&repo=${{pr_repo}}&days=${{days}}"
+                    return bool(served.get(interpolate(url, values)).get("runs"))
+
+                numbers = [str(row[value_column]) for row in rows]
+                values["pr_number"] = next((number for number in numbers if ran_e2e(number)), numbers[0])
         elif variable["name"] == "capture_id":
             conn = sqlite3.connect(served.seeded["jobs_db"])
             values["capture_id"] = conn.execute("SELECT capture_id FROM captures ORDER BY capture_id").fetchone()[0]

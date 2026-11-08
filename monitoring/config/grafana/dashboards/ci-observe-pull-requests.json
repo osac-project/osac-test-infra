@@ -72,7 +72,7 @@
     {
       "type": "row",
       "id": 111,
-      "title": "All pull requests in ${pr_repo}, last $days days",
+      "title": "All pull requests in ${pr_repo}, last ${days:text}",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -2966,7 +2966,8 @@
                 }
               }
             }
-          ]
+          ],
+          "unit": "dtdhms"
         },
         "overrides": []
       },
@@ -2975,7 +2976,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^total$/",
+          "fields": "/^total_s$/",
           "values": false
         },
         "orientation": "auto",
@@ -2999,9 +3000,9 @@
           "root_selector": "$.summary",
           "columns": [
             {
-              "selector": "total",
-              "text": "total",
-              "type": "string"
+              "selector": "total_s",
+              "text": "total_s",
+              "type": "number"
             }
           ]
         }
@@ -3047,7 +3048,8 @@
                 }
               }
             }
-          ]
+          ],
+          "unit": "dtdhms"
         },
         "overrides": []
       },
@@ -3056,7 +3058,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^authoring$/",
+          "fields": "/^authoring_s$/",
           "values": false
         },
         "orientation": "auto",
@@ -3080,9 +3082,9 @@
           "root_selector": "$.summary",
           "columns": [
             {
-              "selector": "authoring",
-              "text": "authoring",
-              "type": "string"
+              "selector": "authoring_s",
+              "text": "authoring_s",
+              "type": "number"
             }
           ]
         }
@@ -3128,7 +3130,8 @@
                 }
               }
             }
-          ]
+          ],
+          "unit": "dtdhms"
         },
         "overrides": []
       },
@@ -3137,7 +3140,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^review$/",
+          "fields": "/^review_s$/",
           "values": false
         },
         "orientation": "auto",
@@ -3161,9 +3164,9 @@
           "root_selector": "$.summary",
           "columns": [
             {
-              "selector": "review",
-              "text": "review",
-              "type": "string"
+              "selector": "review_s",
+              "text": "review_s",
+              "type": "number"
             }
           ]
         }
@@ -3209,7 +3212,8 @@
                 }
               }
             }
-          ]
+          ],
+          "unit": "dtdhms"
         },
         "overrides": []
       },
@@ -3218,7 +3222,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^waiting$/",
+          "fields": "/^waiting_s$/",
           "values": false
         },
         "orientation": "auto",
@@ -3242,9 +3246,9 @@
           "root_selector": "$.summary",
           "columns": [
             {
-              "selector": "waiting",
-              "text": "waiting",
-              "type": "string"
+              "selector": "waiting_s",
+              "text": "waiting_s",
+              "type": "number"
             }
           ]
         }
@@ -3290,7 +3294,8 @@
                 }
               }
             }
-          ]
+          ],
+          "unit": "dtdhms"
         },
         "overrides": []
       },
@@ -3299,7 +3304,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^queue$/",
+          "fields": "/^queue_s$/",
           "values": false
         },
         "orientation": "auto",
@@ -3323,9 +3328,9 @@
           "root_selector": "$.summary",
           "columns": [
             {
-              "selector": "queue",
-              "text": "queue",
-              "type": "string"
+              "selector": "queue_s",
+              "text": "queue_s",
+              "type": "number"
             }
           ]
         }
@@ -3348,7 +3353,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "h",
+          "unit": "dtdhms",
           "noValue": "No measured stage.",
           "custom": {
             "lineWidth": 1,
@@ -4298,6 +4303,10 @@
               {
                 "id": "noValue",
                 "value": "–"
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
               }
             ]
           }

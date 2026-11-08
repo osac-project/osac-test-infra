@@ -24,7 +24,7 @@ The bar at the top of every page opens the others. **Window**, **Suite**, **Star
 - **vs before** compares the window with the same span just before it. Red means worse: slower, or failing more. It stays empty (–) until that whole earlier span is stored; About these numbers then says from which day it will be.
 - A duration reads `hh:mm:ss`, or `1 d hh:mm:ss` past a day.
 - **not measured**, **no earlier data** or **–** means the data cannot say. It is never zero.
-- **About these numbers**, at the bottom of a page, says what the page counts, the exact window, what is missing, and **Data as of**: the newest stored run and when the hourly test-result and span rollups last ran. A rollup more than 3 hours old, or no new run for 12 hours, is listed under missing data with the timer to check.
+- **About these numbers**, at the bottom of a page, says what the page counts, the exact window, what is missing (including the day test results start, when the window reaches further back), and **Data as of**: the newest stored run and when the hourly test-result and span rollups last ran. A rollup more than 3 hours old, or no new run for 12 hours, is listed under missing data with the timer to check.
 - Names are links. A suite opens its time or failure page, a test opens its Test history, a run opens its run page (or GitHub when the run was not recorded), a pull request opens it.
 
 ## Definitions

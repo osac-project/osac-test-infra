@@ -555,6 +555,14 @@ PR_EVENT_ADDED_COLUMNS = (
 )
 
 
+def github_profile_url(login: str | None) -> str:
+    """A GitHub profile link for a data link. Grafana runs a data link's
+    URL through encodeURI, which escapes "[" and "]" itself and would escape
+    the "%" of an escaped login a second time, so a login (letters, digits,
+    hyphens, and "[bot]" for an app) goes in unescaped."""
+    return f"https://github.com/{login}" if login else ""
+
+
 def pr_runs_where(number):
     """The SQL condition and arguments for one pull request's E2E rows in the
     exporter's jobs table. A pull_request or merge_group row carries the
@@ -2023,7 +2031,7 @@ class CIObservePRs:
         if pr is not None:
             pr["url"] = pr.get("url") or pr_url(pr["repo"], pr["number"])
             author = pr.get("author") or ""
-            pr["author_url"] = f"https://github.com/{quote(author, safe='')}" if author else ""
+            pr["author_url"] = github_profile_url(author)
             pr["repo_url"] = f"https://github.com/{ORG}/{pr['repo']}"
             pr["dates_display"] = dates_display(
                 pr.get("state"), pr.get("opened_at"), pr.get("merged_at"), pr.get("closed_at")
@@ -2163,7 +2171,7 @@ class CIObservePRs:
             row_attempts = attempts.get((row["repo"], row["number"]), [])
             row["url"] = row.get("url") or pr_url(row["repo"], row["number"])
             author = row.get("author") or ""
-            row["author_url"] = f"https://github.com/{quote(author, safe='')}" if author else ""
+            row["author_url"] = github_profile_url(author)
             row["repo_url"] = f"https://github.com/{ORG}/{row['repo']}"
             row["dates_display"] = dates_display(
                 row.get("state"), row.get("opened_at"), row.get("merged_at"), row.get("closed_at")
@@ -2297,35 +2305,34 @@ def _stages(pr):
 
 
 def _summary(pr: dict | None, stages: list[dict]) -> list[dict]:
-    """The five numbers at the top of the page, as display strings.
+    """The five numbers at the top of the page: each in seconds (`<name>_s`,
+    which the page shows as every other duration) and as a display string.
 
-    A number the data cannot support says "not measured". A zero would claim
-    a stage took no time, which is a different and false statement.
+    A number the data cannot support is null and says "not measured". A zero
+    would claim a stage took no time, which is a different and false statement.
     """
     if pr is None:
         return []
     by_stage = {stage["stage"]: stage for stage in stages}
 
-    def display(stage_key: str) -> str:
+    def seconds(stage_key: str) -> float | None:
         stage = by_stage.get(stage_key)
         if stage is None or stage["state"] != "measured" or stage["seconds"] is None:
-            return "not measured"
-        return human_duration(stage["seconds"])
+            return None
+        return stage["seconds"]
 
-    total = pr.get("total_seconds")
-    return [
-        {
-            "total": human_duration(total) if total is not None else "not measured",
-            "authoring": display("authoring"),
-            "review": display("review"),
-            "waiting": display("waiting"),
-            "queue": display("queue"),
-        }
-    ]
+    values = {"total": pr.get("total_seconds")}
+    values.update({key: seconds(key) for key in ("authoring", "review", "waiting", "queue")})
+    row: dict[str, str | float | None] = {}
+    for key, value in values.items():
+        row[key] = human_duration(value) if value is not None else "not measured"
+        row[f"{key}_s"] = round(value) if value is not None else None
+    return [row]
 
 
 def _chart(pr: dict | None, stages: list[dict]) -> list[dict]:
-    """The stacked bar's one row: each measured stage in hours.
+    """The stacked bar's one row: each measured stage in seconds, which the
+    page shows as hh:mm:ss like every other duration.
 
     The chart is a duration axis, so the whole pull request fits whatever its
     length. A stage the data cannot measure stays null and is absent from
@@ -2340,7 +2347,7 @@ def _chart(pr: dict | None, stages: list[dict]) -> list[dict]:
         if stage is None or stage["state"] != "measured" or stage["seconds"] is None:
             row[key] = None
         else:
-            row[key] = round(stage["seconds"] / 3600, 3)
+            row[key] = round(stage["seconds"])
     return [row]
 
 

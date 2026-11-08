@@ -352,6 +352,21 @@ class Stores:
                 conn.close()
         return min(oldest) if oldest else None
 
+    def oldest_test_day(self):
+        """The first day with a stored test result (YYYY-MM-DD); None when
+        there is none."""
+        conn = self._open(self.trends_db)
+        if conn is None:
+            return None
+        try:
+            if "test_runs" not in self._tables(conn):
+                return None
+            return conn.execute("SELECT MIN(day) FROM test_runs").fetchone()[0]
+        except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+
     def newest_run(self):
         """created_at of the newest workflow run the exporter stored, any
         workflow: when the exporter last saw GitHub. None when unreadable."""
@@ -545,7 +560,7 @@ class CIObserveInsights:
                 document = getattr(self, f"_{kind}")(filters, params)
                 document.setdefault("notes", [])
                 sources, stale = self._freshness(now)
-                document["notes"] = filters.notes + document["notes"] + stale
+                document["notes"] = filters.notes + document["notes"] + stale + self._test_history_notes(kind, filters)
                 document["window"] = [filters.window()]
                 document["generated_at"] = iso(now)
                 # The one row a page's "About these numbers" panel reads: what
@@ -588,6 +603,18 @@ class CIObserveInsights:
             reason = (f"the stored runs start on {oldest:%Y-%m-%d}, so the {filters.days} days before the window "
                       f"are stored from {ready:%Y-%m-%d}")
         filters.notes.append(f"'vs before' is empty: {reason}")
+
+    def _test_history_notes(self, kind, filters):
+        """Test numbers come from the JUnit reports, stored since the trends
+        job first read them; a window reaching further back counts fewer days
+        of tests than of runs, and the page says so."""
+        if kind not in ("health", "time", "failures", "tests", "test"):
+            return []
+        first = self.stores.oldest_test_day()
+        start = filters.window_from.strftime("%Y-%m-%d")
+        if first is None or first <= start:
+            return []
+        return [f"test results are stored from {first}: the test numbers do not cover {start} to {first}"]
 
     # -- freshness ---------------------------------------------------------
     def _freshness(self, now):

@@ -41,16 +41,21 @@ PR_DOCUMENT = {
             "review": "30m",
             "waiting": "10m",
             "queue": "34m",
+            "total_s": 5700,
+            "authoring_s": 1200,
+            "review_s": 1800,
+            "waiting_s": 600,
+            "queue_s": 2040,
         }
     ],
     "chart": [
         {
             "category": "PR #101",
-            "authoring": 0.333,
-            "review": 0.5,
-            "waiting": 0.167,
-            "queue": 0.567,
-            "merged": 0.017,
+            "authoring": 1200,
+            "review": 1800,
+            "waiting": 600,
+            "queue": 2040,
+            "merged": 60,
         }
     ],
     "status_message": "",
@@ -215,16 +220,18 @@ def test_the_identity_line_is_one_linkable_row() -> None:
 
 
 def test_five_stat_tiles_read_the_summary_row() -> None:
+    # Seconds, shown as every other duration on the pages (hh:mm:ss).
     tiles = {
-        "Total": "total",
-        "Authoring": "authoring",
-        "Review": "review",
-        "Waiting": "waiting",
-        "Queue": "queue",
+        "Total": "total_s",
+        "Authoring": "authoring_s",
+        "Review": "review_s",
+        "Waiting": "waiting_s",
+        "Queue": "queue_s",
     }
     for title, field in tiles.items():
         tile = panel(title)
         assert tile["type"] == "stat"
+        assert tile["fieldConfig"]["defaults"]["unit"] == "dtdhms", title
         target = tile["targets"][0]
         assert target["url"] == PR_URL
         assert target["root_selector"] == "$.summary"
@@ -272,7 +279,7 @@ def test_the_chart_is_fitted_to_durations_and_not_a_time_range() -> None:
     assert options["xField"] == "category"
     assert options["legend"] == {"showLegend": True, "displayMode": "list", "placement": "bottom", "calcs": []}
     assert options["tooltip"]["mode"] == "single"
-    assert panel("Stage timeline")["fieldConfig"]["defaults"]["unit"] == "h"
+    assert panel("Stage timeline")["fieldConfig"]["defaults"]["unit"] == "dtdhms"
     assert DASHBOARD["time"]["from"] == "now-30d"
     assert DASHBOARD["timepicker"]["hidden"] is True
 
@@ -399,7 +406,8 @@ def test_the_page_opens_on_every_pull_request_of_the_window() -> None:
     selected repository."""
     overview, _ = sections()
     assert overview[0]["type"] == "row"
-    assert overview[0]["title"] == "All pull requests in ${pr_repo}, last $days days"
+    # A row title shows a variable's text ("30 days"), not its value.
+    assert overview[0]["title"] == "All pull requests in ${pr_repo}, last ${days:text}"
     tiles = [candidate for candidate in overview if candidate["type"] == "stat"]
     assert len(tiles) == 16
     for tile in tiles:
