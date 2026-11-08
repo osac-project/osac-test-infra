@@ -114,7 +114,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -192,7 +214,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -270,7 +314,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -348,7 +414,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -426,7 +514,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -504,7 +614,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -582,7 +714,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -660,7 +814,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -738,7 +914,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -816,7 +1014,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -894,7 +1114,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -972,7 +1214,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -1022,7 +1286,7 @@
       "type": "stat",
       "id": 124,
       "title": "E2E runs per PR",
-      "description": "Median E2E suite runs of a merged pull request (pull-request and merge-queue runs). Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: runs per pull request.",
+      "description": "Median E2E suite runs of a pull request that ran E2E. Population: merged pull requests in the selected repository with at least one VMaaS, CaaS or BMaaS E2E run (pull-request and merge-queue runs); most pull requests change nothing a suite tests. Time: merged in the last $days days (the Window above). Unit: runs per pull request.",
       "gridPos": {
         "x": 12,
         "y": 5,
@@ -1050,7 +1314,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -1100,7 +1386,7 @@
       "type": "stat",
       "id": 125,
       "title": "E2E reruns per PR",
-      "description": "Average E2E runs beyond the first of each suite. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: runs per pull request.",
+      "description": "Median E2E runs beyond the first of each suite (a re-run or a new run of the same suite) of a pull request that ran E2E. Population: merged pull requests in the selected repository with at least one VMaaS, CaaS or BMaaS E2E run (pull-request and merge-queue runs); most pull requests change nothing a suite tests. Time: merged in the last $days days (the Window above). Unit: runs per pull request.",
       "gridPos": {
         "x": 15,
         "y": 5,
@@ -1128,7 +1414,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -1137,7 +1445,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^e2e_retests_mean$/",
+          "fields": "/^e2e_retests_median$/",
           "values": false
         },
         "orientation": "auto",
@@ -1166,8 +1474,8 @@
           "root_selector": "kpis",
           "columns": [
             {
-              "selector": "e2e_retests_mean",
-              "text": "e2e_retests_mean",
+              "selector": "e2e_retests_median",
+              "text": "e2e_retests_median",
               "type": "number"
             }
           ]
@@ -1178,7 +1486,7 @@
       "type": "stat",
       "id": 126,
       "title": "PRs with a failed E2E",
-      "description": "Share of the merged pull requests with at least one failed E2E run. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: percent.",
+      "description": "Share of the pull requests that ran E2E with at least one failed E2E run. Population: merged pull requests in the selected repository with at least one VMaaS, CaaS or BMaaS E2E run (pull-request and merge-queue runs); most pull requests change nothing a suite tests. Time: merged in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 18,
         "y": 5,
@@ -1206,7 +1514,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -1284,7 +1614,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -1318,7 +1670,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^(ejections|requeues)$/",
+          "fields": "/^(Ejected|Re-queued)$/",
           "values": false
         },
         "orientation": "auto",
@@ -1567,7 +1919,7 @@
       "type": "table",
       "id": 129,
       "title": "Pull requests",
-      "description": "Every pull request merged or closed, the longest first. Click the number to open it below; the title opens it on GitHub. Authoring: opened to first review. Review: first review to approval. Waiting: approval to the merge queue. Queue: in the merge queue. Ejected: queue attempts whose own checks failed. Re-queued: queue attempts cancelled or replaced, not failed. Population: pull requests merged or closed in the selected repository. Time: merged or closed in the last $days days (the Window above). Unit: duration and count.",
+      "description": "Every pull request merged or closed, the longest first. Click the number to open it below; the title opens it on GitHub. Authoring: opened to first review. Review: first review to approval. Waiting: approval to the merge queue. Queue: in the merge queue. Ejected: queue attempts whose own checks failed. Re-queued: queue attempts cancelled or replaced, not failed. Newest first; click a column header to sort. Population: pull requests merged or closed in the selected repository. Time: merged or closed in the last $days days (the Window above). Unit: duration and count.",
       "gridPos": {
         "x": 0,
         "y": 16,
@@ -1588,7 +1940,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -1641,6 +2016,10 @@
                     "url": "${__data.fields.url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1657,6 +2036,10 @@
               {
                 "id": "custom.width",
                 "value": 120
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1689,8 +2072,33 @@
                         "index": 1
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1991,6 +2399,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2003,6 +2415,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -2019,12 +2435,7 @@
           "countRows": false,
           "fields": ""
         },
-        "sortBy": [
-          {
-            "displayName": "Total",
-            "desc": true
-          }
-        ]
+        "sortBy": []
       },
       "targets": [
         {
@@ -2140,7 +2551,7 @@
     {
       "type": "row",
       "id": 130,
-      "title": "One pull request: ${pr_repo} #${pr_number}",
+      "title": "One pull request: ${pr_repo} ${pr_number:text}",
       "gridPos": {
         "x": 0,
         "y": 28,
@@ -2174,7 +2585,30 @@
             },
             "inspect": false
           },
-          "noValue": "Choose a pull request above."
+          "noValue": "Choose a pull request above.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -2224,6 +2658,10 @@
                     "url": "${__data.fields.url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2249,6 +2687,10 @@
                     "url": "${__data.fields.author_url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2274,6 +2716,10 @@
                     "url": "${__data.fields.repo_url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2310,8 +2756,33 @@
                         "color": "orange"
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2328,6 +2799,10 @@
               {
                 "id": "custom.width",
                 "value": 300
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2340,6 +2815,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2352,6 +2831,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2364,6 +2847,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -2456,7 +2943,30 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
+          "noValue": "Not measured.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -2465,7 +2975,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^total$/",
           "values": false
         },
         "orientation": "auto",
@@ -2514,7 +3024,30 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
+          "noValue": "Not measured.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -2523,7 +3056,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^authoring$/",
           "values": false
         },
         "orientation": "auto",
@@ -2572,7 +3105,30 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
+          "noValue": "Not measured.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -2581,7 +3137,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^review$/",
           "values": false
         },
         "orientation": "auto",
@@ -2630,7 +3186,30 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
+          "noValue": "Not measured.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -2639,7 +3218,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^waiting$/",
           "values": false
         },
         "orientation": "auto",
@@ -2688,7 +3267,30 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "Not measured."
+          "noValue": "Not measured.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -2697,7 +3299,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^queue$/",
           "values": false
         },
         "orientation": "auto",
@@ -2947,7 +3549,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "No queue attempt is stored for this pull request. That is no queue history, not no ejections."
+          "noValue": "No queue attempt is stored for this pull request. That is no queue history, not no ejections.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -2972,6 +3597,10 @@
                     "url": "${__data.fields.run_url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2988,6 +3617,10 @@
               {
                 "id": "custom.width",
                 "value": 110
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3027,6 +3660,27 @@
                         "index": 2
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
               },
@@ -3038,6 +3692,10 @@
                     "url": "${__data.fields.why_url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3079,6 +3737,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3091,6 +3753,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3103,6 +3769,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -3193,7 +3863,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "No E2E runs. The job history may not be written yet."
+          "noValue": "No E2E run is stored for this pull request: it ran none, or ran them before the stored history began.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -3259,6 +3952,27 @@
                       "Queued": {
                         "text": "Queued",
                         "color": "blue"
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
                       }
                     }
                   }
@@ -3332,6 +4046,10 @@
               {
                 "id": "custom.width",
                 "value": 100
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3368,8 +4086,33 @@
                         "color": "orange"
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3402,6 +4145,10 @@
               {
                 "id": "custom.width",
                 "value": 110
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3455,6 +4202,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3467,6 +4218,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3479,6 +4234,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3491,6 +4250,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3503,6 +4266,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3515,6 +4282,22 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "created_at"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -3644,7 +4427,30 @@
             },
             "inspect": false
           },
-          "noValue": ""
+          "noValue": "",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },

@@ -239,7 +239,7 @@ def test_missing_states_have_no_status_zero() -> None:
     assert panel("Total")["fieldConfig"]["defaults"]["noValue"] == "Not measured."
     assert (
         panel("E2E runs")["fieldConfig"]["defaults"]["noValue"]
-        == "No E2E runs. The job history may not be written yet."
+        == "No E2E run is stored for this pull request: it ran none, or ran them before the stored history began."
     )
 
 
@@ -409,7 +409,7 @@ def test_the_page_opens_on_every_pull_request_of_the_window() -> None:
         assert "Population:" in tile["description"] and "Unit:" in tile["description"], tile["title"]
     fields = {tile["targets"][0]["columns"][0]["selector"] for tile in tiles}
     assert {"review_wait_median_s", "review_median_s", "waiting_median_s", "queue_median_s", "rebased_share",
-            "force_pushes_mean", "e2e_retests_mean", "ejected_share"} <= fields
+            "force_pushes_mean", "e2e_retests_median", "ejected_share"} <= fields
     weekly = panel("Stage medians per week")
     assert weekly["targets"][0]["root_selector"] == "weekly"
     assert weekly["targets"][0]["format"] == "timeseries"

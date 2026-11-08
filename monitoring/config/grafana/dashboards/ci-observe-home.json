@@ -266,7 +266,7 @@
       "gridPos": {
         "x": 0,
         "y": 2,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -298,7 +298,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -346,13 +368,121 @@
     },
     {
       "type": "stat",
+      "id": 34,
+      "title": "First-try pass rate",
+      "description": "Runs that passed without a re-run ÷ (passed + failed). A run someone re-ran on GitHub counts as not passing the first time, even when the re-run passed. Pass rate counts only a run's last attempt, so the gap between the two tiles is failures that a re-run hid. Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above). Unit: percent.",
+      "gridPos": {
+        "x": 3,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.75
+              },
+              {
+                "color": "#0ca30c",
+                "value": 0.9
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^first_try_pass_rate$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/health?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "first_try_pass_rate",
+              "text": "first_try_pass_rate",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
       "id": 3,
       "title": "Pass rate change",
       "description": "This window's pass rate minus the previous window's, in percentage points. Green: better. Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: percent.",
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 2,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -384,7 +514,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "no earlier data",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "no earlier data",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -432,13 +584,113 @@
     },
     {
       "type": "stat",
+      "id": 35,
+      "title": "Runs re-run",
+      "description": "Runs someone re-ran on GitHub (Re-run jobs). Pass rate shows only their last attempt, so a failure before the re-run is not in it. Population: finished VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: count of runs.",
+      "gridPos": {
+        "x": 9,
+        "y": 2,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^reruns$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/health?days=${days}&suite=${suite}&repo=${repo}&trigger=${trigger}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "tiles",
+          "columns": [
+            {
+              "selector": "reruns",
+              "text": "reruns",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
       "id": 4,
       "title": "Typical time to result",
       "description": "Median time from GitHub creating a run's first job to its last job finishing: what a developer waits for a green result, the wait for a runner included. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
-        "x": 8,
+        "x": 12,
         "y": 2,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -462,7 +714,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -514,9 +788,9 @@
       "title": "Slow runs take",
       "description": "The 90th percentile: 9 in 10 passing runs finish faster than this. Population: passing VMaaS, CaaS and BMaaS suite runs. Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
-        "x": 12,
+        "x": 15,
         "y": 2,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -540,7 +814,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -592,9 +888,9 @@
       "title": "Typical wait for a runner",
       "description": "Median time a run's E2E job waited in GitHub's queue for a self-hosted runner. Population: finished suite runs with a stored job timeline (runs stored before timelines existed have no runner wait). Time: runs created in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
-        "x": 16,
+        "x": 18,
         "y": 2,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -626,7 +922,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -678,9 +996,9 @@
       "title": "Failures caused by CI",
       "description": "Share of the failed runs whose first failed step was CI infrastructure (cluster or hosts, CI setup, logs or teardown, a timeout, a lost runner), not the tests, the build or the OSAC install. Population: failed VMaaS, CaaS and BMaaS suite runs (GitHub said failure or timed out). Time: runs created in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
-        "x": 20,
+        "x": 21,
         "y": 2,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -712,7 +1030,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Why runs fail",
@@ -796,7 +1136,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -878,7 +1240,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Why runs fail",
@@ -962,7 +1346,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Where the time goes",
@@ -1054,7 +1460,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -1140,7 +1568,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Flaky tests",
@@ -1228,7 +1678,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Tests that fail",
@@ -1284,7 +1756,7 @@
       "type": "table",
       "id": 14,
       "title": "Suite health",
-      "description": "One row per suite and one for all three. 'Time' and 'Failures' open that suite's pages. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs, percent and duration as named.",
+      "description": "One row per suite and one for all three. 'Time' and 'Failures' open that suite's pages. First try: share that passed without a re-run. Re-runs: runs someone re-ran on GitHub. Population: finished VMaaS, CaaS and BMaaS suite runs (passed, failed or cancelled). Time: runs created in the last $days days (the Window above); 'vs before' compares with the $days days before. Unit: count of runs, percent and duration as named.",
       "gridPos": {
         "x": 0,
         "y": 9,
@@ -1305,7 +1777,30 @@
             "inspect": false,
             "filterable": false
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -1321,6 +1816,10 @@
               {
                 "id": "custom.width",
                 "value": 100
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1483,6 +1982,76 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "first_try_pass_rate"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "First try"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#d03b3b",
+                      "value": null
+                    },
+                    {
+                      "color": "#ec835a",
+                      "value": 0.75
+                    },
+                    {
+                      "color": "#0ca30c",
+                      "value": 0.9
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "reruns"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Re-runs"
+              },
+              {
+                "id": "custom.width",
+                "value": 75
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "median_result_s"
             },
             "properties": [
@@ -1618,7 +2187,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 210
+                "value": 180
               },
               {
                 "id": "noValue",
@@ -1688,8 +2257,33 @@
                         "text": "Time ›"
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1727,8 +2321,33 @@
                         "text": "Failures ›"
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -1791,6 +2410,16 @@
             {
               "selector": "pass_rate_delta",
               "text": "pass_rate_delta",
+              "type": "number"
+            },
+            {
+              "selector": "first_try_pass_rate",
+              "text": "first_try_pass_rate",
+              "type": "number"
+            },
+            {
+              "selector": "reruns",
+              "text": "reruns",
               "type": "number"
             },
             {
@@ -2315,7 +2944,7 @@
       "type": "timeseries",
       "id": 17,
       "title": "Pass rate per day",
-      "description": "Passed ÷ (passed + failed) per day, per suite and for all three. Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: one point per UTC day the runs were created, last $days days. Unit: percent.",
+      "description": "Passed ÷ (passed + failed) per day, per suite and for all three; the dashed line is the first-try pass rate of all three (a run that needed a re-run counts as not passing). Population: passed and failed VMaaS, CaaS and BMaaS suite runs; cancelled runs are left out. Time: one point per UTC day the runs were created, last $days days. Unit: percent.",
       "gridPos": {
         "x": 0,
         "y": 22,
@@ -2371,6 +3000,39 @@
               {
                 "id": "custom.lineWidth",
                 "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "first_try_pass_rate"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "All suites, first try"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
               }
             ]
           },
@@ -2470,6 +3132,11 @@
             {
               "selector": "pass_rate",
               "text": "pass_rate",
+              "type": "number"
+            },
+            {
+              "selector": "first_try_pass_rate",
+              "text": "first_try_pass_rate",
               "type": "number"
             },
             {
@@ -2978,7 +3645,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -3006,6 +3696,10 @@
                   "type": "auto",
                   "wrapText": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3022,6 +3716,10 @@
               {
                 "id": "custom.width",
                 "value": 70
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3158,6 +3856,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -3262,7 +3964,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -3290,6 +4015,10 @@
                   "type": "auto",
                   "wrapText": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3306,6 +4035,10 @@
               {
                 "id": "custom.width",
                 "value": 70
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3448,6 +4181,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -3552,7 +4289,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -3592,6 +4352,10 @@
               {
                 "id": "custom.width",
                 "value": 75
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3608,6 +4372,10 @@
               {
                 "id": "custom.width",
                 "value": 115
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3653,6 +4421,10 @@
               {
                 "id": "custom.width",
                 "value": 190
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3669,6 +4441,10 @@
               {
                 "id": "custom.width",
                 "value": 135
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3741,6 +4517,10 @@
                     "url": "${__data.fields.details_url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3753,6 +4533,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -3765,6 +4549,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -3909,7 +4697,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Pull requests",
@@ -3993,7 +4803,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Pull requests",
@@ -4077,7 +4909,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Pull requests",
@@ -4161,7 +5015,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Pull requests",
@@ -4245,7 +5121,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Pull requests",
@@ -4329,7 +5227,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Pull requests",
@@ -4413,7 +5333,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Pull requests",
@@ -4469,7 +5411,7 @@
       "type": "stat",
       "id": 32,
       "title": "E2E reruns per PR",
-      "description": "Average E2E runs per merged pull request beyond the first of each suite. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: runs per pull request.",
+      "description": "Median E2E runs beyond the first of each suite (a re-run or a new run of the same suite) of a merged pull request that ran E2E. Population: pull requests merged in the selected repository with at least one VMaaS, CaaS or BMaaS E2E run. Time: merged in the last $days days (the Window above). Unit: runs per pull request.",
       "gridPos": {
         "x": 21,
         "y": 57,
@@ -4497,7 +5439,29 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
           "links": [
             {
               "title": "Pull requests",
@@ -4512,7 +5476,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^e2e_retests_mean$/",
+          "fields": "/^e2e_retests_median$/",
           "values": false
         },
         "orientation": "auto",
@@ -4541,8 +5505,8 @@
           "root_selector": "kpis",
           "columns": [
             {
-              "selector": "e2e_retests_mean",
-              "text": "e2e_retests_mean",
+              "selector": "e2e_retests_median",
+              "text": "e2e_retests_median",
               "type": "number"
             }
           ]
@@ -4574,7 +5538,30 @@
             "inspect": false,
             "filterable": false
           },
-          "noValue": ""
+          "noValue": "",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {

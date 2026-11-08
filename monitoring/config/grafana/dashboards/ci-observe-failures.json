@@ -294,7 +294,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -380,7 +402,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -458,7 +502,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -536,7 +602,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -614,7 +702,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -692,7 +802,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -770,7 +902,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -848,7 +1002,29 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -1118,7 +1294,30 @@
             "inspect": false,
             "filterable": false
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -1134,6 +1333,10 @@
               {
                 "id": "custom.width",
                 "value": 200
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1150,6 +1353,10 @@
               {
                 "id": "custom.width",
                 "value": 135
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1539,7 +1746,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -1558,6 +1788,10 @@
                   "type": "auto",
                   "wrapText": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1574,6 +1808,10 @@
               {
                 "id": "custom.width",
                 "value": 190
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1634,6 +1872,10 @@
               {
                 "id": "custom.width",
                 "value": 130
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1679,6 +1921,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -1783,7 +2029,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -1811,6 +2080,10 @@
                   "type": "auto",
                   "wrapText": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1827,6 +2100,10 @@
               {
                 "id": "custom.width",
                 "value": 140
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -1843,6 +2120,10 @@
               {
                 "id": "custom.width",
                 "value": 70
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2026,6 +2307,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -2145,7 +2430,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "No test passed and failed on the same commit"
+          "noValue": "No test passed and failed on the same commit",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -2173,6 +2481,10 @@
                   "type": "auto",
                   "wrapText": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2189,6 +2501,10 @@
               {
                 "id": "custom.width",
                 "value": 70
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2249,6 +2565,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -2348,7 +2668,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -2367,6 +2710,10 @@
                   "type": "auto",
                   "wrapText": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2442,6 +2789,10 @@
                   "type": "auto",
                   "wrapText": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -2536,7 +2887,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "Nothing in this window"
+          "noValue": "Nothing in this window",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -2576,6 +2950,10 @@
               {
                 "id": "custom.width",
                 "value": 75
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2592,6 +2970,10 @@
               {
                 "id": "custom.width",
                 "value": 115
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2637,6 +3019,10 @@
               {
                 "id": "custom.width",
                 "value": 190
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2653,6 +3039,10 @@
               {
                 "id": "custom.width",
                 "value": 135
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2791,6 +3181,10 @@
                     "url": "${__data.fields.details_url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2803,6 +3197,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -2815,6 +3213,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           }
@@ -2954,7 +3356,30 @@
             "inspect": false,
             "filterable": false
           },
-          "noValue": ""
+          "noValue": "",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {

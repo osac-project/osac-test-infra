@@ -332,6 +332,26 @@ class Stores:
                 conn.close()
         return ids if read else None
 
+    def oldest_run(self):
+        """created_at of the oldest E2E row either run store holds; None when
+        neither holds one."""
+        oldest = []
+        for path, table, where in ((self.jobs_db, "jobs", " WHERE category = 'e2e'"),
+                                   (self.trends_db, "suite_runs", "")):
+            conn = self._open(path)
+            if conn is None:
+                continue
+            try:
+                if table in self._tables(conn):
+                    value = conn.execute(f"SELECT MIN(created_at) FROM {table}{where}").fetchone()[0]
+                    if value:
+                        oldest.append(value)
+            except sqlite3.Error:
+                continue
+            finally:
+                conn.close()
+        return min(oldest) if oldest else None
+
     def newest_run(self):
         """created_at of the newest workflow run the exporter stored, any
         workflow: when the exporter last saw GitHub. None when unreadable."""
@@ -521,6 +541,7 @@ class CIObserveInsights:
                 event.wait(timeout=60)
                 continue
             try:
+                self._limit_to_stored_history(filters)
                 document = getattr(self, f"_{kind}")(filters, params)
                 document.setdefault("notes", [])
                 sources, stale = self._freshness(now)
@@ -547,6 +568,26 @@ class CIObserveInsights:
                     self._inflight.pop(key, None)
                 event.set()
             return document
+
+    def _limit_to_stored_history(self, filters):
+        """'vs before' compares with the same span just before the window,
+        which is only stored once the stores reach back to its start (a day
+        of slack). A partly stored span would make every count look like
+        growth, and an unstored one like everything new, so the comparison
+        is left empty and the page says when it starts."""
+        if not filters.has_previous:
+            return
+        oldest = phases.parse_time(self.stores.oldest_run())
+        if oldest is not None and oldest <= filters.previous_from + timedelta(days=1):
+            return
+        filters.has_previous = False
+        if oldest is None:
+            reason = "the stores hold no run yet"
+        else:
+            ready = oldest + timedelta(days=2 * filters.days - 1)
+            reason = (f"the stored runs start on {oldest:%Y-%m-%d}, so the {filters.days} days before the window "
+                      f"are stored from {ready:%Y-%m-%d}")
+        filters.notes.append(f"'vs before' is empty: {reason}")
 
     # -- freshness ---------------------------------------------------------
     def _freshness(self, now):
@@ -604,9 +645,15 @@ class CIObserveInsights:
 
     @staticmethod
     def _rates(facts):
+        """Pass rate counts each run's last attempt: GitHub keeps one row per
+        run and a re-run replaces its outcome. First-try pass rate counts a
+        run someone re-ran as not passing the first time, so the gap between
+        the two is the failures a re-run hid."""
         passed = sum(1 for fact in facts if fact["result"] == "passed")
         failed = sum(1 for fact in facts if fact["result"] == "failed")
         cancelled = sum(1 for fact in facts if fact["result"] == "cancelled")
+        first_try = sum(1 for fact in facts if fact["result"] == "passed" and (fact["attempt"] or 1) == 1)
+        reruns = sum(1 for fact in facts if (fact["attempt"] or 1) > 1)
         passing_times = [fact["total_s"] for fact in facts if fact["result"] == "passed"]
         return {
             "runs": passed + failed + cancelled,
@@ -614,6 +661,9 @@ class CIObserveInsights:
             "failed": failed,
             "cancelled": cancelled,
             "pass_rate": ratio(passed, passed + failed),
+            "first_try_pass_rate": ratio(first_try, passed + failed),
+            "reruns": reruns,
+            "rerun_share": ratio(reruns, passed + failed + cancelled),
             "median_result_s": percentile(passing_times, 0.5),
             "p90_result_s": percentile(passing_times, 0.9),
             "median_queue_s": percentile([fact["queue_s"] for fact in facts], 0.5),
@@ -702,7 +752,6 @@ class CIObserveInsights:
             "failures_blocked": by_area["Blocked"],
             "infra_share": ratio(by_area["CI infrastructure"], len(failed)),
             "tests_share": ratio(by_area["Tests"], len(failed)),
-            "reruns": sum(1 for fact in finished if fact["attempt"] > 1),
             "runner_hours": round(runner_seconds / 3600, 1),
             "failed_runner_hours": round(failed_seconds / 3600, 1),
             "failed_runner_share": ratio(failed_seconds, runner_seconds),
@@ -1172,7 +1221,8 @@ class CIObserveInsights:
         except ValueError:
             limit = 500
         options = [
-            {"text": f"{row['suite_label']} · {row['group']} · {row['test']}", "value": row["test_key"]}
+            {"text": f"{row['suite_label']} · {row['group']} · {row['test']}",
+             "value": phases.test_link_value(row["test_key"])}
             for row in sorted(tests, key=orders["time"])
         ]
         return {
@@ -1191,6 +1241,9 @@ class CIObserveInsights:
         keys = {row["test_key"] for row in rows}
         if wanted in keys:
             return wanted, ""
+        if wanted.startswith("~"):
+            key = phases.test_for_link_value(wanted, keys)
+            return (key, "") if key else ("", f"no test in this window matches the link {wanted!r}")
         canonical = phases.canonical_test_key(wanted)
         if canonical in keys:
             return canonical, ""

@@ -143,6 +143,39 @@ class TestParseCaptureId:
         assert wfe.WorkflowExporter._parse_capture_id(capture_id) == (parsed, run_id, attempt)
 
 
+def test_a_step_result_comes_from_the_job_timeline(evidence, github, wfe):
+    """Step durations are stored without a result; the job timeline has one
+    per step. Without it the Result column could only say failed or nothing."""
+    timeline = [{
+        "name": "e2e", "created_at": "2026-04-17T10:00:00Z",
+        "steps": [
+            {"name": "Set up job", "conclusion": "success",
+             "started_at": "2026-04-17T10:00:05Z", "completed_at": "2026-04-17T10:00:06Z"},
+            {"name": "Authorize fork PR", "conclusion": "skipped",
+             "started_at": "2026-04-17T10:00:06Z", "completed_at": "2026-04-17T10:00:06Z"},
+            {"name": "Run E2E tests", "conclusion": "failure",
+             "started_at": "2026-04-17T10:00:07Z", "completed_at": "2026-04-17T10:08:27Z"},
+        ],
+    }]
+    seed_direct_run(
+        evidence,
+        steps=[{"name": "Set up job", "duration_s": 1}, {"name": "Authorize fork PR", "duration_s": 0},
+               {"name": "Run E2E tests", "duration_s": 500}, {"name": "Teardown", "duration_s": 30}],
+        failed_step="e2e → Run E2E tests",
+        timeline_json=json.dumps(timeline),
+    )
+    github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+    github.add(LIST_PATH, artifact_payload(wfe.API_URL))
+    github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+    doc = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})
+
+    assert [(step["step_name"], step["conclusion"]) for step in doc["steps"]] == [
+        ("Set up job", "success"), ("Authorize fork PR", "skipped"), ("Run E2E tests", "failure"),
+        ("Teardown", None),
+    ]
+
+
 def test_direct_run_evidence(evidence, github, wfe):
     seed_direct_run(
         evidence,
@@ -168,6 +201,7 @@ def test_direct_run_evidence(evidence, github, wfe):
     assert doc["run"]["url"] == f"https://github.com/osac-project/osac/actions/runs/{RUN_ID}"
     assert [j["name"] for j in doc["jobs"]] == ["osac / E2E VMaaS Full Install"]
     assert doc["jobs"][0]["failure_reason"] == "test"
+    assert doc["jobs"][0]["cause_label"] == "Tests failed", "the cause Why runs fail gives the same failure"
     # The job name opens its suite's Where the time goes page.
     assert doc["jobs"][0]["history_url"].startswith("/d/ci-observe-time/")
     assert "var-suite=vmaas" in doc["jobs"][0]["history_url"]

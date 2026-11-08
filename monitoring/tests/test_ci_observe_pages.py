@@ -212,7 +212,8 @@ def test_the_overview_answers_every_question_on_one_page():
     overview = page("ci-observe-home.json")
     titles = [panel["title"] for panel in data_panels(overview)]
     for title in (
-        "Pass rate", "Typical time to result", "Typical wait for a runner", "Failures caused by CI",
+        "Pass rate", "First-try pass rate", "Runs re-run", "Typical time to result", "Typical wait for a runner",
+        "Failures caused by CI",
         "Suite health", "Where a passing run spends its time", "Why runs failed", "Pass rate per day",
         "Where the tests' time goes", "What the tests wait for in the product", "Tests that fail most",
         "Tests that take the most time", "Latest failed runs", "Wait for first review", "In the merge queue",
@@ -288,3 +289,80 @@ def test_panels_do_not_overlap(name):
         assert not cells & taken, panel.get("title")
         assert position["x"] + position["w"] <= 24, panel.get("title")
         taken |= cells
+
+
+ALL_PAGES = sorted(DASHBOARDS.glob("ci-observe-*.json"))
+
+
+def every_panel(panels):
+    for item in panels:
+        yield item
+        yield from every_panel(item.get("panels") or [])
+
+
+def display_names(item):
+    """The display name of each column a panel's query returns: Grafana's
+    stat field regex matches these, not the column names."""
+    config = item.get("fieldConfig", {})
+    default = config.get("defaults", {}).get("displayName")
+    renamed = {
+        override["matcher"]["options"]: prop["value"]
+        for override in config.get("overrides", [])
+        if override["matcher"].get("id") == "byName"
+        for prop in override["properties"] if prop["id"] == "displayName"
+    }
+    columns = [column for target in item.get("targets", []) for column in target.get("columns", [])]
+    return [(renamed.get(column["text"]) or default or column["text"], column.get("type")) for column in columns]
+
+
+@pytest.mark.parametrize("path", ALL_PAGES, ids=lambda path: path.name)
+def test_every_stat_shows_a_field_it_queries(path):
+    """A stat shows the fields its regex matches by display name, numeric
+    fields only when there is no regex. Either way it must reach a column, or
+    it reads "not measured" forever."""
+    for item in every_panel(json.loads(path.read_text())["panels"]):
+        if item.get("type") != "stat" or not item.get("targets"):
+            continue
+        pattern = item["options"]["reduceOptions"].get("fields") or ""
+        names = display_names(item)
+        if pattern:
+            slashed = re.fullmatch(r"/(.*)/", pattern)
+            regex = re.compile(slashed.group(1) if slashed else f"^{re.escape(pattern)}$")
+            assert any(regex.search(name) for name, _ in names), (item["title"], pattern, names)
+        else:
+            assert any(kind == "number" for _, kind in names), (item["title"], "shows numbers only", names)
+
+
+@pytest.mark.parametrize("path", ALL_PAGES, ids=lambda path: path.name)
+def test_a_missing_value_reads_as_missing_on_every_panel(path):
+    """The datasource hands a null number to Grafana as the text "null".
+    Every stat and table maps it, and a true null, to words or a dash."""
+    for item in every_panel(json.loads(path.read_text())["panels"]):
+        if item.get("type") not in ("stat", "table"):
+            continue
+        mapping_sets = [item["fieldConfig"]["defaults"].get("mappings") or []] + [
+            prop["value"] for override in item["fieldConfig"].get("overrides", [])
+            for prop in override["properties"] if prop["id"] == "mappings"
+        ]
+        for mappings in mapping_sets:
+            assert any(m["type"] == "special" and m["options"]["match"] in ("null", "null+nan") for m in mappings), (
+                item["title"])
+            assert any(m["type"] == "value" and "null" in m["options"] for m in mappings), item["title"]
+
+
+@pytest.mark.parametrize("path", ALL_PAGES, ids=lambda path: path.name)
+def test_an_empty_text_cell_is_a_dash_not_the_tables_message(path):
+    """Grafana shows a table's "no value" text in every empty cell too, and on
+    these tables it is a sentence for an empty table."""
+    for item in every_panel(json.loads(path.read_text())["panels"]):
+        if item.get("type") != "table" or not item["fieldConfig"]["defaults"].get("noValue"):
+            continue
+        own = {
+            override["matcher"]["options"]
+            for override in item["fieldConfig"]["overrides"]
+            if any(prop["id"] == "noValue" for prop in override["properties"])
+        }
+        for target in item.get("targets", []):
+            for column in target.get("columns", []):
+                if column.get("type") == "string":
+                    assert column["text"] in own, (item["title"], column["text"])

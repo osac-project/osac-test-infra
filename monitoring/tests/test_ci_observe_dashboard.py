@@ -93,6 +93,7 @@ RUN_DOCUMENT = {
             "duration_s": 3600,
             "failed_step": "Run E2E tests",
             "failure_reason": "test",
+            "cause_label": "Tests failed",
             "url": "https://github.com/osac-project/osac/actions/runs/41709318840/job/1",
             "history_url": (
                 "/d/ci-observe-time/ci-observe-e28094-where-the-time-goes"
@@ -219,7 +220,9 @@ def test_the_summary_shows_where_the_run_spent_its_time() -> None:
         assert stat["targets"][0]["root_selector"] == "timing"
         assert selectors(stat) == [field, "suite"]
         assert stat["options"]["reduceOptions"]["values"] is True, "one number per suite"
-        assert stat["fieldConfig"]["defaults"]["displayName"] == "${__data.fields.suite}"
+        # No display name: the stat's field regex matches the display name,
+        # so a template one hid the value. The suite string names each row.
+        assert "displayName" not in stat["fieldConfig"]["defaults"]
         assert_selectors_resolve(stat, RUN_DOCUMENT)
 
 
@@ -283,7 +286,7 @@ def test_jobs_read_the_run_endpoint() -> None:
         "conclusion": "Result",
         "duration_s": "Duration",
         "failed_step": "Failed step",
-        "failure_reason": "Failure kind",
+        "cause_label": "Cause",
     }
 
 

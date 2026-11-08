@@ -4,6 +4,7 @@ failure causes (ci_observe_phases.py)."""
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -224,13 +225,34 @@ def test_a_link_opens_the_smallest_window_that_covers_it(phases, days, window):
 def test_a_test_link_opens_its_history_under_its_canonical_key(phases):
     url = phases.link_to_test("tests/e2e/caas/test_cluster.py::TestCluster::test_create[a b]", days=10)
 
+    # Unescaped: Grafana's data links run the URL through encodeURI, which
+    # encodes "[", "]" and the space itself and would turn a "%3A" into "%253A".
     assert url == (
         phases.TEST_PAGE
-        + "?var-test=tests.e2e.caas.test_cluster%3A%3ATestCluster%3A%3Atest_create%5Ba%20b%5D"
+        + "?var-test=tests.e2e.caas.test_cluster::TestCluster::test_create[a b]"
         + "&var-days=14&var-suite=caas"
     )
     assert phases.link_to_test("test_x", suite="bmaas").endswith("&var-suite=bmaas")
     assert phases.link_to_test("test_x").endswith("&var-suite=all"), "a test outside the suites opens all"
+
+
+@pytest.mark.parametrize("key", ["tests.e2e.vmaas.test_vm::test_create[a&b]", "tests.e2e.x::t[50%]",
+                                 "tests.e2e.x::t[a=b]", "tests.e2e.x::t[#1]", "tests.e2e.x::t[a+b]"])
+def test_a_key_a_link_cannot_carry_goes_as_its_hash(phases, key):
+    value = phases.test_link_value(key)
+
+    assert value.startswith("~") and re.fullmatch(r"~[0-9a-f]{16}", value)
+    assert phases.test_for_link_value(value, {key, "tests.e2e.other::t"}) == key
+    assert f"var-test={value}&" in phases.link_to_test(key)
+
+
+def test_every_url_a_data_link_carries_is_free_of_percent_escapes(phases):
+    """Grafana encodes a data link's "%" again; no link may contain one."""
+    for url in (
+        phases.link_to_test("tests/e2e/caas/test_cluster.py::TestCluster::test_create[a b]"),
+        phases.link_to_suite(phases.TIME_PAGE, "caas", 30, "osac-test-infra", "merge_queue"),
+    ):
+        assert "%" not in url, url
 
 
 def test_a_suite_link_keeps_the_readers_filters(phases):

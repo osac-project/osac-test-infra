@@ -196,23 +196,35 @@ class CIObserveRunEvidence:
 
     def _ci_observe_steps(self, jobs):
         """Flattened step rows for the jobs list, capped at
-        EVIDENCE_MAX_STEPS. conclusion is "failure" when the step name
-        appears in that job's failed_step text, None otherwise: per-step
-        conclusions are not stored, and identically named steps of
-        different jobs in one row cannot be told apart from the stored
-        text alone."""
+        EVIDENCE_MAX_STEPS. A step's conclusion comes from the job timeline
+        when the row has one: "failure" when any step of that name failed,
+        otherwise the conclusion its steps share. Without a timeline it is
+        "failure" when the name appears in the row's failed_step text and
+        None (not stored) otherwise."""
         steps = []
         for job in jobs:
             failed = self._failed_step_names(job)
+            reported = {}
+            for entry in job.get("timeline") or []:
+                for step in entry.get("steps") or []:
+                    if step.get("name") and step.get("conclusion"):
+                        reported.setdefault(step["name"], set()).add(step["conclusion"])
             for step in job.get("steps", []):
                 name = step.get("name", "")
                 if not name:
                     continue
+                seen = reported.get(name, set())
+                if "failure" in seen or name in failed:
+                    conclusion = "failure"
+                elif len(seen) == 1:
+                    conclusion = next(iter(seen))
+                else:
+                    conclusion = None
                 steps.append({
                     "job_name": job.get("display_name") or job.get("workflow", ""),
                     "step_name": name,
                     "duration_s": step.get("duration_s", 0),
-                    "conclusion": "failure" if name in failed else None,
+                    "conclusion": conclusion,
                 })
                 if len(steps) >= CIObserveRunEvidence.EVIDENCE_MAX_STEPS:
                     return steps
@@ -791,6 +803,14 @@ class CIObserveRunEvidence:
                 "duration_s": j.get("duration_s", 0),
                 "failed_step": j.get("failed_step", ""),
                 "failure_reason": j.get("failure_reason") or "",
+                # The cause the other ci-observe pages give this failure
+                # (the phase of its first failed step), not the exporter's
+                # older failure_reason, so the run page and Why runs fail agree.
+                "cause_label": (
+                    ci_observe_phases.failure_cause(j.get("conclusion"), j.get("failed_step"), j.get("timeline"))[
+                        "label"]
+                    if ci_observe_phases.result_key(j.get("conclusion")) == "failed" else ""
+                ),
                 "steps": j.get("steps", []),
                 "url": j.get("url", ""),
                 # The job name opens its suite's Where the time goes page, not

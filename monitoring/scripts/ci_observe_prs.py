@@ -2395,6 +2395,7 @@ def _kpis(rows, attempts):
         return bool(attempts.get((row["repo"], row["number"])))
 
     lead = sorted(row["total_seconds"] for row in merged if row.get("total_seconds") is not None)
+    ran_e2e = [row for row in measured if (row.get("e2e_runs") or 0) > 0]
     review_wait = [
         row.get("review_wait_seconds") if row.get("review_wait_seconds") is not None else row.get("authoring_seconds")
         for row in merged
@@ -2427,15 +2428,18 @@ def _kpis(rows, attempts):
             (row.get("changes_requested_count") or 0) > 0 for row in measured
             if row.get("changes_requested_count") is not None
         ),
-        "e2e_runs_median": _median(row.get("e2e_runs") for row in measured),
+        # Most merged pull requests change nothing an E2E suite tests, so a
+        # median over all of them reads 0. The E2E numbers describe the pull
+        # requests that ran at least one suite run; e2e_ran_share says how many.
+        "e2e_ran_share": _share((row.get("e2e_runs") or 0) > 0 for row in measured if row.get("e2e_runs") is not None),
+        "e2e_runs_median": _median(row["e2e_runs"] for row in ran_e2e),
+        "e2e_retests_median": _median(row.get("e2e_retests") for row in ran_e2e),
         "e2e_retests_mean": (
             round(sum(row["e2e_retests"] for row in measured if row.get("e2e_retests") is not None)
                   / len([row for row in measured if row.get("e2e_retests") is not None]), 2)
             if any(row.get("e2e_retests") is not None for row in measured) else None
         ),
-        "e2e_failed_share": _share(
-            (row.get("e2e_failures") or 0) > 0 for row in measured if row.get("e2e_failures") is not None
-        ),
+        "e2e_failed_share": _share((row.get("e2e_failures") or 0) > 0 for row in ran_e2e),
         "measured_prs": len(measured),
     }]
 

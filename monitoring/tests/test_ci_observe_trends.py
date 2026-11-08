@@ -846,7 +846,7 @@ class TestEndpoint:
         }
         # A test opens its Test history page, under its canonical key.
         assert doc["tests"][0]["history_url"].startswith("/d/ci-observe-test/")
-        assert "var-test=tests.e2e.vmaas.test_vm%3A%3Atest_restart" in doc["tests"][0]["history_url"]
+        assert "var-test=tests.e2e.vmaas.test_vm::test_restart&" in doc["tests"][0]["history_url"]
         assert doc["tests"][0]["runs"] == 4
         assert doc["tests"][0]["failures"] == 1
         assert doc["tests"][0]["suite"] == "tests/e2e/vmaas"

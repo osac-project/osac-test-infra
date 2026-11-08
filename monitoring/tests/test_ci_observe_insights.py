@@ -192,6 +192,23 @@ def test_pass_rate_leaves_cancelled_runs_out(stores):
     assert tile["pass_rate"] == 0.75
 
 
+def test_a_failure_hidden_by_a_re_run_shows_in_the_first_try_pass_rate(stores):
+    """GitHub keeps one row per run and a re-run replaces its outcome: a run
+    that failed and passed on its second attempt reads as passed."""
+    stores.run(NOW - timedelta(hours=3), "success")
+    stores.run(NOW - timedelta(hours=6), "success", attempt=2)
+    stores.run(NOW - timedelta(hours=9), "failure", failed="Run E2E tests")
+    stores.run(NOW - timedelta(hours=12), "cancelled")
+
+    document = get(stores.api(), "health")
+    tile, all_suites = document["tiles"][0], document["suites"][-1]
+
+    assert (tile["pass_rate"], tile["first_try_pass_rate"]) == (round(2 / 3, 4), round(1 / 3, 4))
+    assert (tile["reruns"], tile["rerun_share"]) == (1, 0.25)
+    assert (all_suites["first_try_pass_rate"], all_suites["reruns"]) == (round(1 / 3, 4), 1)
+    assert document["daily"][0]["first_try_pass_rate"] == round(1 / 3, 4)
+
+
 def test_time_to_result_counts_the_wait_for_a_runner(stores):
     """From the first job's creation to the last job's end: the 300 seconds
     in GitHub's queue are part of what the developer waits for."""
@@ -253,6 +270,7 @@ def test_a_flaky_test_passed_and_failed_on_the_same_commit(stores):
 
 
 def test_the_window_is_compared_with_the_one_before(stores):
+    stored_since(stores)
     for days_ago, conclusion in ((1, "success"), (2, "failure"), (8, "failure"), (9, "failure"), (10, "success")):
         failed = "Install OSAC" if conclusion == "failure" else None
         stores.run(NOW - timedelta(days=days_ago), conclusion, failed=failed)
@@ -369,7 +387,14 @@ def test_runner_hours_count_every_run_and_name_the_failed_share(stores):
 # -- tests and one test --------------------------------------------------------------------------------
 
 
+def stored_since(stores, days_ago=61):
+    """A run older than any window compared here: the stores reach back to
+    it, so 'vs before' has a fully stored span to compare with."""
+    stores.run(NOW - timedelta(days=days_ago))
+
+
 def seed_tests(stores):
+    stored_since(stores)
     run_a = stores.run(NOW - timedelta(days=2))
     run_b = stores.run(NOW - timedelta(days=1))
     old = stores.run(NOW - timedelta(days=9))
@@ -380,6 +405,23 @@ def seed_tests(stores):
                     message="StuckState: VM vm-1234 not Ready after 600s")
     stores.test(old, "tests/e2e/vmaas/sanity/test_vm.py::TestVm::test_create", True, 80.0, created_old)
     return run_a, run_b
+
+
+def test_every_test_link_and_option_reaches_its_test(stores):
+    """Grafana runs a data link's URL through encodeURI: a percent-escaped
+    key would arrive escaped twice and match no test. Links and the Test
+    drop-down carry the key unescaped, or its hash when a URL cannot."""
+    run_id = stores.run(NOW - timedelta(days=1))
+    stores.test(run_id, "tests/e2e/vmaas/sanity/test_vm.py::TestVm::test_create", True, 100.0, NOW - timedelta(days=1))
+    stores.test(run_id, "tests/e2e/vmaas/sanity/test_p.py::test_p[a&b]", True, 10.0, NOW - timedelta(days=1))
+    api = stores.api()
+
+    document = get(api, "tests")
+
+    for row in document["tests"]:
+        assert "%" not in row["test_url"], row["test_url"]
+    for option in document["options"]:
+        assert get(api, "test", test=option["value"])["summary"], option
 
 
 def test_tests_of_out_of_scope_runs_are_not_counted(stores):
@@ -591,6 +633,7 @@ def record_passes(stores, **ages):
 
 
 def test_the_about_row_says_how_old_each_source_is(stores):
+    stored_since(stores)
     stores.run(NOW - timedelta(hours=2))
     record_passes(stores, trends=0.5, spans=1)
 
@@ -601,6 +644,25 @@ def test_the_about_row_says_how_old_each_source_is(stores):
         " · Inside the tests: updated 2026-11-07 11:00 UTC"
     )
     assert about["missing"] == "Nothing is missing in this window."
+
+
+def test_without_stored_runs_before_the_window_nothing_is_compared(stores):
+    """The stores hold three weeks; a 30-day window has no earlier window.
+    Comparing with nothing would make every count read as all new."""
+    stores.run(NOW - timedelta(days=21), "failure", failed="Run E2E tests")
+    stores.run(NOW - timedelta(days=10), "success")
+    stores.run(NOW - timedelta(days=2), "failure", failed="Run E2E tests")
+    stores.run(NOW - timedelta(days=1), "success")
+
+    month = get(stores.api(), "health", days="30")
+    causes = get(stores.api(), "failures", days="30")["causes"]
+    week = get(stores.api(), "health", days="7")
+
+    assert month["tiles"][0]["pass_rate_delta"] is None
+    assert all(row["delta"] is None for row in causes)
+    assert "'vs before' is empty: the stored runs start on 2026-10-17" in month["about"][0]["missing"]
+    assert week["tiles"][0]["pass_rate_delta"] is not None, "a week ago is stored"
+    assert "vs before" not in week["about"][0]["missing"]
 
 
 def test_a_rollup_that_stopped_says_what_is_missing(stores):

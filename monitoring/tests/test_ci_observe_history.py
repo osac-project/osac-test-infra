@@ -405,7 +405,7 @@ class TestJobHistory:
         url = history.history_url("test", "tests/e2e/vmaas/sanity/test_vm.py::TestVm::test_create", days=14)
 
         assert url.startswith("/d/ci-observe-test/")
-        assert "var-test=tests.e2e.vmaas.sanity.test_vm%3A%3ATestVm%3A%3Atest_create" in url
+        assert "var-test=tests.e2e.vmaas.sanity.test_vm::TestVm::test_create&" in url
         assert "var-suite=vmaas" in url
         assert "var-days=14" in url
 

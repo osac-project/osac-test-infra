@@ -23,6 +23,7 @@ fall into "other".
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import UTC, datetime
@@ -201,12 +202,35 @@ def describe_test(key: str) -> dict:
     return {"name": f"{leaf}::{rest}" if rest else leaf, "group": group, "suite": suite}
 
 
+# A data link's URL reaches the browser through Grafana's encodeURI, which
+# percent-encodes the "%" of an already encoded value once more: "%3A" arrives
+# as "%3A" and the page looks for a test that does not exist. So a key goes
+# into a link as itself when encodeURI turns it into a valid query value
+# (it encodes "[", "]" and spaces, and leaves these characters alone), and
+# otherwise as "~" and a hash of the key, which test_for_link_value maps back.
+LINK_SAFE_KEY_RE = re.compile(r"[A-Za-z0-9._:/\-\[\]()@!*',;$ ]+")
+
+
+def test_link_value(key: str) -> str:
+    """The form of a canonical test key that a page link and the Test drop-down carry."""
+    if LINK_SAFE_KEY_RE.fullmatch(key or ""):
+        return key
+    return "~" + hashlib.sha1((key or "").encode()).hexdigest()[:16]
+
+
+def test_for_link_value(value: str, keys) -> str:
+    """The key among `keys` a link value names; "" when none does."""
+    if not value.startswith("~"):
+        return value if value in keys else ""
+    return next((key for key in keys if test_link_value(key) == value), "")
+
+
 def link_to_test(test_id: str | None, days=30, suite: str = "") -> str:
     """The Test history page of one test, from any of its three names."""
     key = canonical_test_key(test_id)
     if suite not in SUITES:
         suite = describe_test(key)["suite"] or "all"
-    return f"{TEST_PAGE}?var-test={quote(key, safe='')}&var-days={window_days(days)}&var-suite={suite}"
+    return f"{TEST_PAGE}?var-test={test_link_value(key)}&var-days={window_days(days)}&var-suite={suite}"
 
 
 def link_to_suite(page: str, suite: str = "all", days=7, repo: str = "", trigger: str = "all") -> str:

@@ -115,7 +115,30 @@
             "inspect": false,
             "filterable": true
           },
-          "noValue": "No E2E runs match these filters"
+          "noValue": "No E2E runs match these filters",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": [
           {
@@ -148,6 +171,10 @@
                     "url": "${__data.fields.details_url}"
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -198,8 +225,33 @@
                         "color": "red"
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -242,8 +294,33 @@
                         "color": "text"
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -288,6 +365,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -304,6 +385,10 @@
               {
                 "id": "custom.width",
                 "value": 170
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -341,8 +426,33 @@
                         "text": "Open"
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -367,6 +477,10 @@
                   "wrapText": true,
                   "dynamicHeight": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -383,6 +497,10 @@
               {
                 "id": "custom.width",
                 "value": 110
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -407,6 +525,10 @@
                   "wrapText": true,
                   "dynamicHeight": true
                 }
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -463,8 +585,33 @@
                         "text": "Merge queue"
                       }
                     }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null+nan",
+                      "result": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 90
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "null": {
+                        "text": "–",
+                        "color": "#898781",
+                        "index": 91
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -506,6 +653,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -518,6 +669,10 @@
               {
                 "id": "custom.hidden",
                 "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -534,6 +689,10 @@
               {
                 "id": "custom.width",
                 "value": 80
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },

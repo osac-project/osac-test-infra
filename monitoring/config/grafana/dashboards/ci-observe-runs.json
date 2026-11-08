@@ -144,6 +144,27 @@
                   "index": 4
                 }
               }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "Not finished",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Not finished",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
             }
           ],
           "thresholds": {
@@ -222,6 +243,27 @@
                   "index": 0
                 }
               }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "Test count not available",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Test count not available",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
             }
           ],
           "thresholds": {
@@ -298,6 +340,27 @@
                 "null": {
                   "text": "Test time unavailable",
                   "index": 0
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "Test time unavailable",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "Test time unavailable",
+                  "color": "#898781",
+                  "index": 91
                 }
               }
             }
@@ -655,8 +718,29 @@
               }
             ]
           },
-          "mappings": [],
-          "displayName": "${__data.fields.suite}"
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -739,8 +823,29 @@
               }
             ]
           },
-          "mappings": [],
-          "displayName": "${__data.fields.suite}"
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -821,7 +926,30 @@
           },
           "fieldConfig": {
             "defaults": {
-              "noValue": "No failures."
+              "noValue": "No failures.",
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null+nan",
+                    "result": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 90
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "null": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 91
+                    }
+                  }
+                }
+              ]
             },
             "overrides": [
               {
@@ -837,6 +965,10 @@
                   {
                     "id": "custom.width",
                     "value": 260
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -904,6 +1036,27 @@
                           "pattern": ".*",
                           "result": {
                             "text": "Open details"
+                          }
+                        }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
                           }
                         }
                       }
@@ -975,7 +1128,7 @@
         {
           "id": 136,
           "title": "Jobs",
-          "description": "",
+          "description": "The run's GitHub jobs. Cause: why a failed job failed, as Why runs fail names it (the phase of its first failed step). Population: this run's jobs. Time: this run. Unit: duration.",
           "type": "table",
           "gridPos": {
             "h": 6,
@@ -989,7 +1142,30 @@
           },
           "fieldConfig": {
             "defaults": {
-              "noValue": "No stored jobs for this run."
+              "noValue": "No stored jobs for this run.",
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null+nan",
+                    "result": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 90
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "null": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 91
+                    }
+                  }
+                }
+              ]
             },
             "overrides": [
               {
@@ -1014,6 +1190,10 @@
                         "url": "${__data.fields.history_url}"
                       }
                     ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1030,6 +1210,10 @@
                   {
                     "id": "custom.width",
                     "value": 260
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1074,8 +1258,33 @@
                             "color": "grey"
                           }
                         }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
+                          }
+                        }
                       }
                     ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1126,12 +1335,12 @@
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "failure_reason"
+                  "options": "cause_label"
                 },
                 "properties": [
                   {
                     "id": "displayName",
-                    "value": "Failure kind"
+                    "value": "Cause"
                   },
                   {
                     "id": "custom.width",
@@ -1152,6 +1361,10 @@
                   {
                     "id": "custom.hidden",
                     "value": true
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1164,6 +1377,10 @@
                   {
                     "id": "custom.hidden",
                     "value": true
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               }
@@ -1215,8 +1432,8 @@
                   "type": "string"
                 },
                 {
-                  "selector": "failure_reason",
-                  "text": "failure_reason",
+                  "selector": "cause_label",
+                  "text": "cause_label",
                   "type": "string"
                 },
                 {
@@ -1250,7 +1467,30 @@
           },
           "fieldConfig": {
             "defaults": {
-              "noValue": "No stored step timings for this run. Steps are collected for new runs only."
+              "noValue": "No stored step timings for this run. Steps are collected for new runs only.",
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null+nan",
+                    "result": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 90
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "null": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 91
+                    }
+                  }
+                }
+              ]
             },
             "overrides": [
               {
@@ -1266,6 +1506,10 @@
                   {
                     "id": "custom.width",
                     "value": 280
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1282,6 +1526,10 @@
                   {
                     "id": "custom.width",
                     "value": 380
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1348,6 +1596,27 @@
                           "skipped": {
                             "text": "Skipped",
                             "color": "grey"
+                          }
+                        }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
                           }
                         }
                       }
@@ -1444,7 +1713,30 @@
                 },
                 "inspect": false
               },
-              "noValue": "Test list not available"
+              "noValue": "Test list not available",
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null+nan",
+                    "result": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 90
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "null": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 91
+                    }
+                  }
+                }
+              ]
             },
             "overrides": [
               {
@@ -1480,8 +1772,33 @@
                             "text": "​"
                           }
                         }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
+                          }
+                        }
                       }
                     ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1520,12 +1837,37 @@
                             "color": "text"
                           }
                         }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
+                          }
+                        }
                       }
                     ]
                   },
                   {
                     "id": "custom.width",
                     "value": 90
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1546,6 +1888,10 @@
                   {
                     "id": "noValue",
                     "value": ""
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsLocal"
                   }
                 ]
               },
@@ -1780,7 +2126,30 @@
                 },
                 "inspect": false
               },
-              "noValue": "Run details not saved"
+              "noValue": "Run details not saved",
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null+nan",
+                    "result": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 90
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "null": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 91
+                    }
+                  }
+                }
+              ]
             },
             "overrides": [
               {
@@ -1801,6 +2170,10 @@
                         "url": "${__data.fields.run_url}"
                       }
                     ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1825,6 +2198,27 @@
                             "color": "text"
                           }
                         }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
+                          }
+                        }
                       }
                     ]
                   },
@@ -1836,6 +2230,10 @@
                         "url": "${__data.fields.pr_url}"
                       }
                     ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1848,6 +2246,10 @@
                   {
                     "id": "displayName",
                     "value": "Test paths"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1860,6 +2262,10 @@
                   {
                     "id": "displayName",
                     "value": "Workflow"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -1897,8 +2303,33 @@
                             "text": "Open commit"
                           }
                         }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
+                          }
+                        }
                       }
                     ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2501,7 +2932,30 @@
                 "inspect": false,
                 "filterable": true
               },
-              "noValue": "Nothing in this window"
+              "noValue": "Nothing in this window",
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null+nan",
+                    "result": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 90
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "null": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 91
+                    }
+                  }
+                }
+              ]
             },
             "overrides": [
               {
@@ -2520,6 +2974,10 @@
                       "type": "auto",
                       "wrapText": true
                     }
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2536,6 +2994,10 @@
                   {
                     "id": "custom.width",
                     "value": 150
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2552,6 +3014,10 @@
                   {
                     "id": "custom.width",
                     "value": 80
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2656,8 +3122,33 @@
                             "index": 1
                           }
                         }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
+                          }
+                        }
                       }
                     ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               }
@@ -2762,7 +3253,30 @@
                 "inspect": false,
                 "filterable": true
               },
-              "noValue": "Nothing in this window"
+              "noValue": "Nothing in this window",
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null+nan",
+                    "result": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 90
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "null": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 91
+                    }
+                  }
+                }
+              ]
             },
             "overrides": [
               {
@@ -2774,6 +3288,10 @@
                   {
                     "id": "displayName",
                     "value": "Fixture"
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2790,6 +3308,10 @@
                   {
                     "id": "custom.width",
                     "value": 90
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2806,6 +3328,10 @@
                   {
                     "id": "custom.width",
                     "value": 80
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2948,7 +3474,30 @@
                 "inspect": false,
                 "filterable": true
               },
-              "noValue": "Nothing in this window"
+              "noValue": "Nothing in this window",
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null+nan",
+                    "result": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 90
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "null": {
+                      "text": "–",
+                      "color": "#898781",
+                      "index": 91
+                    }
+                  }
+                }
+              ]
             },
             "overrides": [
               {
@@ -2964,6 +3513,10 @@
                   {
                     "id": "custom.width",
                     "value": 80
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2980,6 +3533,10 @@
                   {
                     "id": "custom.width",
                     "value": 200
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -2999,6 +3556,10 @@
                       "type": "auto",
                       "wrapText": true
                     }
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -3015,6 +3576,10 @@
                   {
                     "id": "custom.width",
                     "value": 150
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               },
@@ -3128,8 +3693,33 @@
                             "index": 6
                           }
                         }
+                      },
+                      {
+                        "type": "special",
+                        "options": {
+                          "match": "null+nan",
+                          "result": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 90
+                          }
+                        }
+                      },
+                      {
+                        "type": "value",
+                        "options": {
+                          "null": {
+                            "text": "–",
+                            "color": "#898781",
+                            "index": 91
+                          }
+                        }
                       }
                     ]
+                  },
+                  {
+                    "id": "noValue",
+                    "value": "–"
                   }
                 ]
               }

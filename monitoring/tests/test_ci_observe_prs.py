@@ -1729,6 +1729,22 @@ class TestIndexNumbers:
         assert kpis["e2e_retests_mean"] is None
         assert prs._weekly([]) == []
 
+    def test_the_e2e_numbers_describe_the_pull_requests_that_ran_e2e(self, prs):
+        """Most pull requests run no suite: a median over all of them is 0."""
+        def merged(number, runs, retests, failures):
+            return {"repo": "osac", "number": number, "state": "merged", "total_seconds": 3600, "record_version": 2,
+                    "e2e_runs": runs, "e2e_retests": retests, "e2e_failures": failures,
+                    "merged_at": "2026-10-05T10:00:00Z"}
+
+        rows_ = [merged(1, 0, 0, 0), merged(2, 0, 0, 0), merged(3, 0, 0, 0), merged(4, 3, 0, 0),
+                 merged(5, 9, 6, 2), merged(6, None, None, None)]
+        kpis = prs._kpis(rows_, {})[0]
+
+        assert kpis["e2e_ran_share"] == 0.4
+        assert kpis["e2e_runs_median"] == 6
+        assert kpis["e2e_retests_median"] == 3
+        assert kpis["e2e_failed_share"] == 0.5
+
     def test_kpis_use_measured_rows_only_for_the_new_counts(self, prs):
         rows_ = [
             {"repo": "osac", "number": 1, "state": "merged", "total_seconds": 3600, "record_version": 2,
