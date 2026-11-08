@@ -3451,7 +3451,7 @@
         "orientation": "horizontal",
         "stacking": "normal",
         "xField": "category",
-        "showValue": "auto",
+        "showValue": "never",
         "barWidth": 0.75,
         "groupWidth": 0.75,
         "fullHighlight": false,
@@ -5410,7 +5410,7 @@
     {
       "type": "stat",
       "id": 32,
-      "title": "E2E reruns per PR",
+      "title": "Extra E2E runs per PR",
       "description": "Median E2E runs beyond the first of each suite (a re-run or a new run of the same suite) of a merged pull request that ran E2E. Population: pull requests merged in the selected repository with at least one VMaaS, CaaS or BMaaS E2E run. Time: merged in the last $days days (the Window above). Unit: runs per pull request.",
       "gridPos": {
         "x": 21,
@@ -5522,7 +5522,7 @@
         "x": 0,
         "y": 61,
         "w": 24,
-        "h": 4
+        "h": 7
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",

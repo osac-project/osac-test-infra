@@ -191,6 +191,8 @@ def test_the_only_variable_is_the_recording() -> None:
 
 def test_the_summary_answers_three_questions() -> None:
     assert [panel(title)["type"] for title in ("Result", "Tests run", "Test time")] == ["stat", "stat", "stat"]
+    # A duration reads as d hh:mm:ss here as on every other page, not "2.87 hours".
+    assert panel("Test time")["fieldConfig"]["defaults"]["unit"] == "dtdhms"
 
 
 def summary_panels() -> list[dict]:

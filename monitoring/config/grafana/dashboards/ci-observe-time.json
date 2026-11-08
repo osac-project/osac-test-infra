@@ -2278,7 +2278,7 @@
         "orientation": "horizontal",
         "stacking": "normal",
         "xField": "category",
-        "showValue": "auto",
+        "showValue": "never",
         "barWidth": 0.75,
         "groupWidth": 0.75,
         "fullHighlight": false,
@@ -3879,7 +3879,7 @@
         "x": 0,
         "y": 71,
         "w": 24,
-        "h": 4
+        "h": 7
       },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",

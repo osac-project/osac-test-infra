@@ -1385,7 +1385,7 @@
     {
       "type": "stat",
       "id": 125,
-      "title": "E2E reruns per PR",
+      "title": "Extra E2E runs per PR",
       "description": "Median E2E runs beyond the first of each suite (a re-run or a new run of the same suite) of a pull request that ran E2E. Population: merged pull requests in the selected repository with at least one VMaaS, CaaS or BMaaS E2E run (pull-request and merge-queue runs); most pull requests change nothing a suite tests. Time: merged in the last $days days (the Window above). Unit: runs per pull request.",
       "gridPos": {
         "x": 15,
@@ -1919,7 +1919,7 @@
       "type": "table",
       "id": 129,
       "title": "Pull requests",
-      "description": "Every pull request merged or closed, the longest first. Click the number to open it below; the title opens it on GitHub. Authoring: opened to first review. Review: first review to approval. Waiting: approval to the merge queue. Queue: in the merge queue. Ejected: queue attempts whose own checks failed. Re-queued: queue attempts cancelled or replaced, not failed. Newest first; click a column header to sort. Population: pull requests merged or closed in the selected repository. Time: merged or closed in the last $days days (the Window above). Unit: duration and count.",
+      "description": "Every pull request merged or closed, the newest first; click a column header to sort, Total for the longest. Click the number to open it below; the title opens it on GitHub. Authoring: opened to first review. Review: first review to approval. Waiting: approval to the merge queue. Queue: in the merge queue. Ejected: queue attempts whose own checks failed. Re-queued: queue attempts cancelled or replaced, not failed. Population: pull requests merged or closed in the selected repository. Time: merged or closed in the last $days days (the Window above). Unit: duration and count.",
       "gridPos": {
         "x": 0,
         "y": 16,
@@ -2924,6 +2924,26 @@
             }
           ]
         }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "url": 0,
+              "number": 1,
+              "title": 2,
+              "author": 3,
+              "author_url": 4,
+              "repo": 5,
+              "repo_url": 6,
+              "state": 7,
+              "dates_display": 8
+            },
+            "renameByName": {}
+          }
+        }
       ]
     },
     {
@@ -3463,7 +3483,7 @@
         "orientation": "horizontal",
         "stacking": "normal",
         "xField": "category",
-        "showValue": "auto",
+        "showValue": "never",
         "barWidth": 0.7,
         "groupWidth": 0.7,
         "fullHighlight": false,
@@ -3526,6 +3546,23 @@
               "type": "number"
             }
           ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "category": 0,
+              "authoring": 1,
+              "review": 2,
+              "waiting": 3,
+              "queue": 4,
+              "merged": 5
+            },
+            "renameByName": {}
+          }
         }
       ]
     },
@@ -3841,6 +3878,24 @@
             }
           ]
         }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "started_display": 0,
+              "duration_display": 1,
+              "queue_outcome": 2,
+              "why": 3,
+              "run_url": 4,
+              "comment_url": 5,
+              "why_url": 6
+            },
+            "renameByName": {}
+          }
+        }
       ]
     },
     {
@@ -4134,6 +4189,10 @@
               {
                 "id": "custom.width",
                 "value": 170
+              },
+              {
+                "id": "noValue",
+                "value": "–"
               }
             ]
           },
@@ -4293,22 +4352,6 @@
                 "value": "–"
               }
             ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "created_at"
-            },
-            "properties": [
-              {
-                "id": "noValue",
-                "value": "–"
-              },
-              {
-                "id": "unit",
-                "value": "dateTimeAsLocal"
-              }
-            ]
           }
         ]
       },
@@ -4335,7 +4378,7 @@
           "columns": [
             {
               "selector": "status_display",
-              "text": "conclusion",
+              "text": "status_display",
               "type": "string"
             },
             {
@@ -4375,7 +4418,7 @@
             },
             {
               "selector": "created_display",
-              "text": "created_at",
+              "text": "created_display",
               "type": "string"
             },
             {
@@ -4409,6 +4452,32 @@
               "type": "string"
             }
           ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "status_display": 0,
+              "failed_step_name": 1,
+              "code_display": 2,
+              "commit_url": 3,
+              "version": 4,
+              "head": 5,
+              "suite": 6,
+              "recorded": 7,
+              "created_display": 8,
+              "duration_display": 9,
+              "run_display": 10,
+              "run_link": 11,
+              "url": 12,
+              "run_url": 13,
+              "conclusion": 14
+            },
+            "renameByName": {}
+          }
         }
       ]
     },

@@ -44,7 +44,7 @@ The bar at the top of every page opens the others. **Window**, **Suite**, **Star
 | A wait | One `poll_until` wait, grouped across runs by what it waits for: resource names that differ per run (`vm-ssvtr`, UUIDs, numbers) are replaced, so `vm-ssvtr Running` and `vm-9btxs Running` are one wait, `<id> Running`. |
 | A test's time | **Setup** (its fixtures), **waiting for the product** (every `poll_until` wait: OSAC reconciling a resource), **test actions** (the rest: CLI and API calls, assertions) and **teardown**. The four add up to the test's duration. |
 | Rebased | A pull request force-pushed at least once. |
-| E2E reruns | E2E runs of a pull request beyond the first of each suite. |
+| Extra E2E runs | E2E runs of a pull request beyond the first of each suite: a run after a new push, a re-run, or the merge-queue run. |
 
 ## Overview
 
@@ -71,7 +71,7 @@ Pick the **Test** (type to search; the list starts with the tests that take the 
 
 ## Pull requests
 
-The top half covers every pull request merged or closed in the window, in the chosen **Repository**. It shows the median time to merge, the wait for a first review, review to approval, approval to the queue, time in the merge queue, queue ejections and re-queues, commits, rebases, force pushes, changes requested, E2E runs, reruns and failed E2E runs, then the stage medians per week and every pull request, newest first. The E2E numbers describe the pull requests that ran at least one suite run: most change nothing a suite tests. Click a number to open that pull request below. An attempt is **ejected** when its own checks failed or timed out, and **re-queued** when it was cancelled or replaced by a later attempt: every entry behind a failing one is re-queued, so a re-queue is not the pull request's failure.
+The top half covers every pull request merged or closed in the window, in the chosen **Repository**. It shows the median time to merge, the wait for a first review, review to approval, approval to the queue, time in the merge queue, queue ejections and re-queues, commits, rebases, force pushes, changes requested, E2E runs, extra E2E runs and failed E2E runs, then the stage medians per week and every pull request, newest first. The E2E numbers describe the pull requests that ran at least one suite run: most change nothing a suite tests. Click a number to open that pull request below. An attempt is **ejected** when its own checks failed or timed out, and **re-queued** when it was cancelled or replaced by a later attempt: every entry behind a failing one is re-queued, so a re-queue is not the pull request's failure.
 
 The bottom half covers one pull request. Its identity line, the total and four long stages (Authoring, Review, Waiting and Queue), the stacked stage bar, the queue attempts with how each one ended (ejected, re-queued or passed), and every E2E run with the commit it tested. Queue time ends at the last merge-queue attempt; for an open pull request still in the queue it runs to now. An open pull request is read from GitHub when the page loads.
 

@@ -254,21 +254,31 @@ def test_the_test_picker_lists_tests_by_the_time_they_take():
 
 
 def test_the_part_to_whole_bars_add_up():
-    """Where the tests' time goes: four shares of one whole, labeled on the
-    bar. Where this test's time goes: four durations that add up to the
-    test's duration."""
+    """Where the tests' time goes: four shares of one whole per suite, the
+    values in the tooltip. Where this test's time goes: four durations that
+    add up to the test's duration, one labeled bar each: on a stacked bar
+    Grafana prints each value past its part's end, over the next part."""
     shares = find(page("ci-observe-time.json"), "Where the tests' time goes")
     assert [column["selector"] for column in shares["targets"][0]["columns"][1:]] == [
         "setup_share", "waits_share", "actions_share", "teardown_share",
     ]
     assert shares["fieldConfig"]["defaults"]["unit"] == "percentunit"
     assert shares["fieldConfig"]["defaults"]["max"] == 1
-    assert shares["options"]["showValue"] == "auto"
+    assert shares["options"]["showValue"] == "never"
     split = find(page("ci-observe-test.json"), "Where this test's time goes")
     assert [column["selector"] for column in split["targets"][0]["columns"][1:]] == [
         "setup", "waits", "actions", "teardown",
     ]
-    assert split["options"]["stacking"] == "normal"
+    assert (split["options"]["stacking"], split["options"]["showValue"]) == ("none", "always")
+
+
+def test_no_stacked_bar_prints_its_values():
+    """A stacked bar's labels land on the next part; the tooltip and the
+    tiles carry the numbers instead."""
+    for path in ALL_PAGES:
+        for item in every_panel(json.loads(path.read_text())["panels"]):
+            if item.get("type") == "barchart" and item["options"].get("stacking") not in (None, "none"):
+                assert item["options"].get("showValue") == "never", (path.name, item["title"])
 
 
 @pytest.mark.parametrize("name", sorted(PAGES))
@@ -366,3 +376,36 @@ def test_an_empty_text_cell_is_a_dash_not_the_tables_message(path):
             for column in target.get("columns", []):
                 if column.get("type") == "string":
                     assert column["text"] in own, (item["title"], column["text"])
+
+
+@pytest.mark.parametrize("path", ALL_PAGES, ids=lambda path: path.name)
+def test_every_override_reaches_a_field_and_no_two_fields_share_a_name(path):
+    """A query column's field is named by its text. An override naming
+    anything else changes nothing, and two fields of one name are both
+    hidden or both shown: the PR page's result column vanished that way."""
+    for item in every_panel(json.loads(path.read_text())["panels"]):
+        columns = [column for target in item.get("targets", []) for column in target.get("columns", [])]
+        if not columns:
+            continue
+        names = [column["text"] for column in columns]
+        assert len(names) == len(set(names)), (item["title"], names)
+        for override in item.get("fieldConfig", {}).get("overrides", []):
+            if override["matcher"].get("id") == "byName":
+                assert override["matcher"]["options"] in names, (item["title"], override["matcher"]["options"])
+
+
+@pytest.mark.parametrize("path", ALL_PAGES, ids=lambda path: path.name)
+def test_backend_parsed_panels_keep_their_column_order(path):
+    """The datasource's backend parser hands the fields over by name, A to Z:
+    the PR page showed its stages as Authoring, Merge, Queue, Review, Waiting
+    and its identity row author first. Such a panel puts the fields back in
+    the order of its columns."""
+    for item in every_panel(json.loads(path.read_text())["panels"]):
+        for target in item.get("targets", []):
+            columns = target.get("columns", [])
+            if target.get("parser") != "backend" or len(columns) < 2:
+                continue
+            organize = [step for step in item.get("transformations") or [] if step["id"] == "organize"]
+            assert organize, (path.name, item["title"])
+            order = {column["text"]: index for index, column in enumerate(columns)}
+            assert organize[0]["options"]["indexByName"] == order, (path.name, item["title"])

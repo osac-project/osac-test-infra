@@ -331,7 +331,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "dtdhms",
           "noValue": "Test time unavailable",
           "mappings": [
             {
