@@ -86,7 +86,7 @@
       "type": "stat",
       "id": 112,
       "title": "Merged",
-      "description": "Pull requests merged. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: count.",
+      "description": "Pull requests merged. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: count.",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -166,7 +166,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -186,7 +186,7 @@
       "type": "stat",
       "id": 113,
       "title": "Open to merge",
-      "description": "Median time from opening to merge. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "description": "Median time from opening to merge. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 3,
         "y": 1,
@@ -266,7 +266,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -286,7 +286,7 @@
       "type": "stat",
       "id": 114,
       "title": "Open to merge, slow",
-      "description": "The 90th percentile: 9 in 10 merged pull requests took less. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "description": "The 90th percentile: 9 in 10 merged pull requests took less. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 6,
         "y": 1,
@@ -366,7 +366,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -386,7 +386,7 @@
       "type": "stat",
       "id": 115,
       "title": "Wait for first review",
-      "description": "Median time from ready for review (or opening) to the first human review. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "description": "Median time from ready for review (or opening) to the first human review. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 9,
         "y": 1,
@@ -466,7 +466,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -486,7 +486,7 @@
       "type": "stat",
       "id": 116,
       "title": "Review to approval",
-      "description": "Median time from the first human review to the first approval. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "description": "Median time from the first human review to the first approval. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -566,7 +566,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -585,8 +585,8 @@
     {
       "type": "stat",
       "id": 117,
-      "title": "Approval to queue",
-      "description": "Median time from approval to entering the merge queue. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "title": "First approval to queue",
+      "description": "Median time from the first approval to entering the merge queue. A pull request that needs two working groups waits here for the second one; Last approval to queue, below, starts at the last approval. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 15,
         "y": 1,
@@ -666,7 +666,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -686,7 +686,7 @@
       "type": "stat",
       "id": 118,
       "title": "In the merge queue",
-      "description": "Median time from entering the merge queue to the end of its last attempt. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "description": "Median time from entering the merge queue to the end of its last attempt. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 18,
         "y": 1,
@@ -766,7 +766,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -866,7 +866,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -886,7 +886,7 @@
       "type": "stat",
       "id": 120,
       "title": "Commits per PR",
-      "description": "Median commits of a merged pull request. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: commits.",
+      "description": "Median commits of a merged pull request. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: commits.",
       "gridPos": {
         "x": 0,
         "y": 5,
@@ -966,7 +966,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -986,7 +986,7 @@
       "type": "stat",
       "id": 121,
       "title": "Rebased",
-      "description": "Share of the merged pull requests force-pushed at least once (a rebase or a rewrite). Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: percent.",
+      "description": "Share of the merged pull requests force-pushed at least once (a rebase or a rewrite). Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 3,
         "y": 5,
@@ -1066,7 +1066,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1086,7 +1086,7 @@
       "type": "stat",
       "id": 122,
       "title": "Force pushes per PR",
-      "description": "Average force pushes of a merged pull request. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: force pushes per pull request.",
+      "description": "Average force pushes of a merged pull request. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: force pushes per pull request.",
       "gridPos": {
         "x": 6,
         "y": 5,
@@ -1166,7 +1166,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1186,7 +1186,7 @@
       "type": "stat",
       "id": 123,
       "title": "Changes requested",
-      "description": "Share of the merged pull requests that got a 'changes requested' review. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: percent.",
+      "description": "Share of the merged pull requests that got a 'changes requested' review. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 9,
         "y": 5,
@@ -1266,7 +1266,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1366,7 +1366,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1466,7 +1466,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1566,7 +1566,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1586,7 +1586,7 @@
       "type": "stat",
       "id": 127,
       "title": "Ejected · re-queued",
-      "description": "Merge-queue attempts that did not merge. Ejected: the attempt's own checks failed or timed out. Re-queued: the attempt was cancelled or replaced by a later one, which happens to every entry behind a failing one, after a new push, or when the pull request is taken out by hand. Population: attempts of pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: count of attempts.",
+      "description": "Merge-queue attempts that did not merge. Ejected: the attempt's own checks failed or timed out. Re-queued: the attempt was cancelled or replaced by a later one, which happens to every entry behind a failing one, after a new push, or when the pull request is taken out by hand. Population: attempts of pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: count of attempts.",
       "gridPos": {
         "x": 21,
         "y": 5,
@@ -1691,7 +1691,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1713,13 +1713,843 @@
       ]
     },
     {
-      "type": "timeseries",
-      "id": 128,
-      "title": "Stage medians per week",
-      "description": "The median of each stage per week of the merge. A rising line is a stage pull requests wait longer in. Population: pull requests merged in the selected repository. Time: one point per week of the merge (the Monday), last $days days. Unit: duration.",
+      "type": "stat",
+      "id": 140,
+      "title": "Review rounds",
+      "description": "Median number of versions of the code that got a human review, per pull request. A review records the commit it looked at, so a rebase does not hide a round. Population: merged pull requests read with the lifecycle (Lifecycle measured), in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: count.",
       "gridPos": {
         "x": 0,
         "y": 8,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^review_rounds_median$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "kpis",
+          "columns": [
+            {
+              "selector": "review_rounds_median",
+              "text": "review_rounds_median",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 141,
+      "title": "Re-approved after a push",
+      "description": "Share of the pull requests that had to be approved again after the code changed: an approval by a reviewer, or for a team, that had approved an earlier version. Population: merged pull requests read with the lifecycle (Lifecycle measured), in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: percent.",
+      "gridPos": {
+        "x": 3,
+        "y": 8,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^reapproved_share$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "kpis",
+          "columns": [
+            {
+              "selector": "reapproved_share",
+              "text": "reapproved_share",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 142,
+      "title": "Re-review after a rebase",
+      "description": "Share of the pull requests approved again after a force push (a rebase or a rewrite) came between the two approvals. Population: merged pull requests read with the lifecycle (Lifecycle measured), in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: percent.",
+      "gridPos": {
+        "x": 6,
+        "y": 8,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^rebase_rereview_share$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "kpis",
+          "columns": [
+            {
+              "selector": "rebase_rereview_share",
+              "text": "rebase_rereview_share",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 143,
+      "title": "Wait for a re-approval",
+      "description": "Median time from the last push to the approval of it, over the pull requests that were re-approved (their longest such wait). Population: merged pull requests read with the lifecycle (Lifecycle measured), in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "gridPos": {
+        "x": 9,
+        "y": 8,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^rereview_median_s$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "kpis",
+          "columns": [
+            {
+              "selector": "rereview_median_s",
+              "text": "rereview_median_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 144,
+      "title": "Last approval to queue",
+      "description": "Median time from the last approval before the merge queue to entering it. The first approval to queue tile above starts at the first approval, which for a pull request that needs two working groups is the first of them. Population: merged pull requests read with the lifecycle (Lifecycle measured), in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^last_approval_wait_median_s$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "kpis",
+          "columns": [
+            {
+              "selector": "last_approval_wait_median_s",
+              "text": "last_approval_wait_median_s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 145,
+      "title": "Files per PR",
+      "description": "Median number of files a pull request changed, as GitHub counts them. Population: merged pull requests with their size and code-owner teams read, in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: count.",
+      "gridPos": {
+        "x": 15,
+        "y": 8,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^files_median$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "kpis",
+          "columns": [
+            {
+              "selector": "files_median",
+              "text": "files_median",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 146,
+      "title": "Needed 2+ WGs",
+      "description": "Share of the pull requests that needed two or more working groups (code-owner teams) to approve. Population: merged pull requests with their size and code-owner teams read, in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: percent.",
+      "gridPos": {
+        "x": 18,
+        "y": 8,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^multi_wg_share$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "kpis",
+          "columns": [
+            {
+              "selector": "multi_wg_share",
+              "text": "multi_wg_share",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 147,
+      "title": "Lifecycle measured",
+      "description": "Merged pull requests whose lifecycle is read (event list, review rounds, working groups), out of all merged. A row stored before the lifecycle existed is read again by the backfill. Population: merged pull requests in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: count.",
+      "gridPos": {
+        "x": 21,
+        "y": 8,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "not measured",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "not measured",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ],
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lifecycle_prs"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Measured"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "merged"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Merged"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^(Measured|Merged)$/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "kpis",
+          "columns": [
+            {
+              "selector": "lifecycle_prs",
+              "text": "lifecycle_prs",
+              "type": "number"
+            },
+            {
+              "selector": "merged",
+              "text": "merged",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 128,
+      "title": "Stage medians per week",
+      "description": "The median of each stage per week of the merge. A rising line is a stage pull requests wait longer in. Population: pull requests merged in the selected repository, author and working groups. Time: one point per week of the merge (the Monday), last $days days. Unit: duration.",
+      "gridPos": {
+        "x": 0,
+        "y": 11,
         "w": 24,
         "h": 8
       },
@@ -1820,7 +2650,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Approval to queue"
+                "value": "First approval to queue"
               },
               {
                 "id": "color",
@@ -1874,7 +2704,7 @@
           "type": "json",
           "source": "url",
           "format": "timeseries",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -1913,16 +2743,2084 @@
             }
           ]
         }
+      ],
+      "timeFrom": "${days}d",
+      "hideTimeOverride": true
+    },
+    {
+      "type": "xychart",
+      "id": 150,
+      "title": "Every merged pull request: time to merge",
+      "description": "One dot per merged pull request: when it merged, across, and how long it took from opening to merge, up, on a log scale (each line is ten times the one below). The color is how many working groups had to approve it. Hover a dot for the pull request; click it to open it below. Population: merged pull requests in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: hours.",
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 16,
+        "h": 11
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "show": "points",
+            "pointShape": "circle",
+            "pointSize": {
+              "fixed": 7
+            },
+            "pointStrokeWidth": 1,
+            "fillOpacity": 60,
+            "axisPlacement": "auto",
+            "axisBorderShow": false,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#898781"
+          },
+          "links": [
+            {
+              "title": "Open this pull request below",
+              "url": "${__data.fields.detail_url}"
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "merged_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Merged"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "hours"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix:h"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "displayName",
+                "value": "Open to merge"
+              },
+              {
+                "id": "custom.scaleDistribution",
+                "value": {
+                  "type": "log",
+                  "log": 10
+                }
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "hours from opening to merge (log scale)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pull_request"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Pull request"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "author"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Author"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "teams"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Working groups"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "files"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Files"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "detail_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": true,
+                  "viz": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d55181"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "E"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#898781"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "mapping": "manual",
+        "series": [
+          {
+            "frame": {
+              "matcher": {
+                "id": "byIndex",
+                "options": 0
+              }
+            },
+            "x": {
+              "matcher": {
+                "id": "byName",
+                "options": "merged_at"
+              }
+            },
+            "y": {
+              "matcher": {
+                "id": "byName",
+                "options": "hours"
+              }
+            },
+            "name": {
+              "fixed": "No code owner"
+            }
+          },
+          {
+            "frame": {
+              "matcher": {
+                "id": "byIndex",
+                "options": 1
+              }
+            },
+            "x": {
+              "matcher": {
+                "id": "byName",
+                "options": "merged_at"
+              }
+            },
+            "y": {
+              "matcher": {
+                "id": "byName",
+                "options": "hours"
+              }
+            },
+            "name": {
+              "fixed": "1 WG"
+            }
+          },
+          {
+            "frame": {
+              "matcher": {
+                "id": "byIndex",
+                "options": 2
+              }
+            },
+            "x": {
+              "matcher": {
+                "id": "byName",
+                "options": "merged_at"
+              }
+            },
+            "y": {
+              "matcher": {
+                "id": "byName",
+                "options": "hours"
+              }
+            },
+            "name": {
+              "fixed": "2 WGs"
+            }
+          },
+          {
+            "frame": {
+              "matcher": {
+                "id": "byIndex",
+                "options": 3
+              }
+            },
+            "x": {
+              "matcher": {
+                "id": "byName",
+                "options": "merged_at"
+              }
+            },
+            "y": {
+              "matcher": {
+                "id": "byName",
+                "options": "hours"
+              }
+            },
+            "name": {
+              "fixed": "3 or more WGs"
+            }
+          },
+          {
+            "frame": {
+              "matcher": {
+                "id": "byIndex",
+                "options": 4
+              }
+            },
+            "x": {
+              "matcher": {
+                "id": "byName",
+                "options": "merged_at"
+              }
+            },
+            "y": {
+              "matcher": {
+                "id": "byName",
+                "options": "hours"
+              }
+            },
+            "name": {
+              "fixed": "Not measured yet"
+            }
+          }
+        ],
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "scatter_wg0",
+          "columns": [
+            {
+              "selector": "merged_at",
+              "text": "merged_at",
+              "type": "timestamp"
+            },
+            {
+              "selector": "hours",
+              "text": "hours",
+              "type": "number"
+            },
+            {
+              "selector": "pull_request",
+              "text": "pull_request",
+              "type": "string"
+            },
+            {
+              "selector": "author",
+              "text": "author",
+              "type": "string"
+            },
+            {
+              "selector": "teams",
+              "text": "teams",
+              "type": "string"
+            },
+            {
+              "selector": "files",
+              "text": "files",
+              "type": "number"
+            },
+            {
+              "selector": "detail_url",
+              "text": "detail_url",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "scatter_wg1",
+          "columns": [
+            {
+              "selector": "merged_at",
+              "text": "merged_at",
+              "type": "timestamp"
+            },
+            {
+              "selector": "hours",
+              "text": "hours",
+              "type": "number"
+            },
+            {
+              "selector": "pull_request",
+              "text": "pull_request",
+              "type": "string"
+            },
+            {
+              "selector": "author",
+              "text": "author",
+              "type": "string"
+            },
+            {
+              "selector": "teams",
+              "text": "teams",
+              "type": "string"
+            },
+            {
+              "selector": "files",
+              "text": "files",
+              "type": "number"
+            },
+            {
+              "selector": "detail_url",
+              "text": "detail_url",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "scatter_wg2",
+          "columns": [
+            {
+              "selector": "merged_at",
+              "text": "merged_at",
+              "type": "timestamp"
+            },
+            {
+              "selector": "hours",
+              "text": "hours",
+              "type": "number"
+            },
+            {
+              "selector": "pull_request",
+              "text": "pull_request",
+              "type": "string"
+            },
+            {
+              "selector": "author",
+              "text": "author",
+              "type": "string"
+            },
+            {
+              "selector": "teams",
+              "text": "teams",
+              "type": "string"
+            },
+            {
+              "selector": "files",
+              "text": "files",
+              "type": "number"
+            },
+            {
+              "selector": "detail_url",
+              "text": "detail_url",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "scatter_wg3plus",
+          "columns": [
+            {
+              "selector": "merged_at",
+              "text": "merged_at",
+              "type": "timestamp"
+            },
+            {
+              "selector": "hours",
+              "text": "hours",
+              "type": "number"
+            },
+            {
+              "selector": "pull_request",
+              "text": "pull_request",
+              "type": "string"
+            },
+            {
+              "selector": "author",
+              "text": "author",
+              "type": "string"
+            },
+            {
+              "selector": "teams",
+              "text": "teams",
+              "type": "string"
+            },
+            {
+              "selector": "files",
+              "text": "files",
+              "type": "number"
+            },
+            {
+              "selector": "detail_url",
+              "text": "detail_url",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "scatter_unknown",
+          "columns": [
+            {
+              "selector": "merged_at",
+              "text": "merged_at",
+              "type": "timestamp"
+            },
+            {
+              "selector": "hours",
+              "text": "hours",
+              "type": "number"
+            },
+            {
+              "selector": "pull_request",
+              "text": "pull_request",
+              "type": "string"
+            },
+            {
+              "selector": "author",
+              "text": "author",
+              "type": "string"
+            },
+            {
+              "selector": "teams",
+              "text": "teams",
+              "type": "string"
+            },
+            {
+              "selector": "files",
+              "text": "files",
+              "type": "number"
+            },
+            {
+              "selector": "detail_url",
+              "text": "detail_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "heatmap",
+      "id": 151,
+      "title": "Time to merge, week by week",
+      "description": "Each column is a week of merges, each cell the pull requests merged that week whose time from opening to merge falls in that band, the fastest at the bottom; the darker, the more. A column whose cells climb is a week of slower merges. Population: merged pull requests in the selected repository, author and working groups. Time: one column per week of the merge (the Monday), last $days days. Unit: count of pull requests.",
+      "gridPos": {
+        "x": 16,
+        "y": 19,
+        "w": 8,
+        "h": 11
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "timeFrom": "${days}d",
+      "hideTimeOverride": true,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "cellGap": 2,
+        "cellValues": {
+          "decimals": 0,
+          "unit": "none"
+        },
+        "color": {
+          "mode": "opacity",
+          "scheme": "Blues",
+          "fill": "#3987e5",
+          "scale": "exponential",
+          "exponent": 0.5,
+          "steps": 64,
+          "reverse": false,
+          "min": 0
+        },
+        "filterValues": {
+          "le": 1e-09
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "unknown",
+          "value": "Pull requests"
+        },
+        "showValue": "never",
+        "tooltip": {
+          "mode": "single",
+          "yHistogram": false,
+          "showColorScale": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "merge_time_heatmap",
+          "columns": [
+            {
+              "selector": "week",
+              "text": "week",
+              "type": "timestamp"
+            },
+            {
+              "selector": "under_1h",
+              "text": "under 1h",
+              "type": "number"
+            },
+            {
+              "selector": "h1_4",
+              "text": "1 to 4h",
+              "type": "number"
+            },
+            {
+              "selector": "h4_24",
+              "text": "4 to 24h",
+              "type": "number"
+            },
+            {
+              "selector": "d1_3",
+              "text": "1 to 3 days",
+              "type": "number"
+            },
+            {
+              "selector": "d3_7",
+              "text": "3 to 7 days",
+              "type": "number"
+            },
+            {
+              "selector": "d7_plus",
+              "text": "7 days or more",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 152,
+      "title": "Where the time goes, by working groups to approve",
+      "description": "The average time a merged pull request spent in each state, by how many working groups had to approve it. A bar is the average time from opening to merge and its parts add up to it. Waiting for another WG runs from the first working group's approval to the last one's. The label counts the pull requests. Population: merged pull requests read with the lifecycle, in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "noValue": "No pull request read with the lifecycle in this window.",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "gradientMode": "none"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "draft"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Draft"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#898781"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "waiting_review"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting for a reviewer"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "with_author"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "With the author"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "partly_approved"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting for another WG"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "approved"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Approved, not queued"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "in_queue"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "In the merge queue"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "out_of_queue"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Out of the queue"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "xField": "group",
+        "showValue": "never",
+        "barWidth": 0.7,
+        "groupWidth": 0.7,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none",
+          "hideZeros": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "time_by_wgs",
+          "columns": [
+            {
+              "selector": "group",
+              "text": "group",
+              "type": "string"
+            },
+            {
+              "selector": "draft",
+              "text": "draft",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review",
+              "text": "waiting_review",
+              "type": "number"
+            },
+            {
+              "selector": "with_author",
+              "text": "with_author",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved",
+              "text": "partly_approved",
+              "type": "number"
+            },
+            {
+              "selector": "approved",
+              "text": "approved",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue",
+              "text": "in_queue",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue",
+              "text": "out_of_queue",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 153,
+      "title": "Where the time goes, by files changed",
+      "description": "The average time a merged pull request spent in each state, by how many files it changed. A bar is the average time from opening to merge and its parts add up to it. Waiting for another WG runs from the first working group's approval to the last one's. The label counts the pull requests. Population: merged pull requests read with the lifecycle, in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "gridPos": {
+        "x": 12,
+        "y": 30,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "noValue": "No pull request read with the lifecycle in this window.",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "gradientMode": "none"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "draft"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Draft"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#898781"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "waiting_review"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting for a reviewer"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "with_author"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "With the author"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "partly_approved"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting for another WG"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "approved"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Approved, not queued"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "in_queue"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "In the merge queue"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "out_of_queue"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Out of the queue"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "xField": "group",
+        "showValue": "never",
+        "barWidth": 0.7,
+        "groupWidth": 0.7,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none",
+          "hideZeros": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "time_by_files",
+          "columns": [
+            {
+              "selector": "group",
+              "text": "group",
+              "type": "string"
+            },
+            {
+              "selector": "draft",
+              "text": "draft",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review",
+              "text": "waiting_review",
+              "type": "number"
+            },
+            {
+              "selector": "with_author",
+              "text": "with_author",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved",
+              "text": "partly_approved",
+              "type": "number"
+            },
+            {
+              "selector": "approved",
+              "text": "approved",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue",
+              "text": "in_queue",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue",
+              "text": "out_of_queue",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 154,
+      "title": "Review rounds per pull request",
+      "description": "How many versions of the code got a human review before the merge. Population: merged pull requests read with the lifecycle, in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: count of pull requests.",
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "No pull request read with the lifecycle in this window.",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "axisLabel": ""
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bucket"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Review rounds"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prs"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Pull requests"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "stacking": "none",
+        "xField": "bucket",
+        "showValue": "auto",
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "rounds_histogram",
+          "columns": [
+            {
+              "selector": "bucket",
+              "text": "bucket",
+              "type": "string"
+            },
+            {
+              "selector": "prs",
+              "text": "prs",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 155,
+      "title": "Times in the merge queue",
+      "description": "How many times a pull request entered the merge queue before it merged; more than once is a removal (failed checks, a conflict, taken out by hand) and a new try. Population: merged pull requests read with the lifecycle, in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: count of pull requests.",
+      "gridPos": {
+        "x": 8,
+        "y": 39,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "No pull request read with the lifecycle in this window.",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "axisLabel": ""
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bucket"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Queue entries"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prs"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Pull requests"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "stacking": "none",
+        "xField": "bucket",
+        "showValue": "auto",
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "queue_histogram",
+          "columns": [
+            {
+              "selector": "bucket",
+              "text": "bucket",
+              "type": "string"
+            },
+            {
+              "selector": "prs",
+              "text": "prs",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 156,
+      "title": "Working groups that had to approve",
+      "description": "How many working groups (code-owner teams) had to approve a pull request, as GitHub reports them. Population: merged pull requests read with the lifecycle, in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: count of pull requests.",
+      "gridPos": {
+        "x": 16,
+        "y": 39,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "No pull request read with the lifecycle in this window.",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "axisLabel": ""
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bucket"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Working groups"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prs"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Pull requests"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "stacking": "none",
+        "xField": "bucket",
+        "showValue": "auto",
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "wgs_histogram",
+          "columns": [
+            {
+              "selector": "bucket",
+              "text": "bucket",
+              "type": "string"
+            },
+            {
+              "selector": "prs",
+              "text": "prs",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 157,
+      "title": "The slowest pull requests, stretch by stretch",
+      "description": "The 20 merged pull requests that took longest from opening to merge, each bar its whole way, every stretch colored by where the pull request was. Read a bar left to right; a color that comes back is the pull request going around again: another review round, a re-review after a push, another try in the merge queue. After eight rounds the rest is added to the eighth. Click a bar to open the pull request below. Population: the 20 slowest merged pull requests read with the lifecycle, in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 24,
+        "h": 14
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdhms",
+          "noValue": "No pull request read with the lifecycle in this window.",
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 90,
+            "gradientMode": "none"
+          },
+          "links": [
+            {
+              "title": "Open this pull request below",
+              "url": "${__data.fields.detail_url}"
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Draft( \\(\\d+\\))?$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#898781"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Waiting for a reviewer( \\(\\d+\\))?$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^With the author( \\(\\d+\\))?$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Waiting for another WG( \\(\\d+\\))?$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Approved, not queued( \\(\\d+\\))?$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^In the merge queue( \\(\\d+\\))?$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Out of the queue( \\(\\d+\\))?$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/ \\(\\d+\\)$/"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": false,
+                  "viz": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "xField": "pull_request",
+        "showValue": "never",
+        "barWidth": 0.75,
+        "groupWidth": 0.7,
+        "fullHighlight": false,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "xTickLabelMaxLength": 40,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "lifecycles",
+          "columns": [
+            {
+              "selector": "pull_request",
+              "text": "pull_request",
+              "type": "string"
+            },
+            {
+              "selector": "detail_url",
+              "text": "detail_url",
+              "type": "string"
+            },
+            {
+              "selector": "draft_1",
+              "text": "Draft",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review_1",
+              "text": "Waiting for a reviewer",
+              "type": "number"
+            },
+            {
+              "selector": "with_author_1",
+              "text": "With the author",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved_1",
+              "text": "Waiting for another WG",
+              "type": "number"
+            },
+            {
+              "selector": "approved_1",
+              "text": "Approved, not queued",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue_1",
+              "text": "In the merge queue",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue_1",
+              "text": "Out of the queue",
+              "type": "number"
+            },
+            {
+              "selector": "draft_2",
+              "text": "Draft (2)",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review_2",
+              "text": "Waiting for a reviewer (2)",
+              "type": "number"
+            },
+            {
+              "selector": "with_author_2",
+              "text": "With the author (2)",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved_2",
+              "text": "Waiting for another WG (2)",
+              "type": "number"
+            },
+            {
+              "selector": "approved_2",
+              "text": "Approved, not queued (2)",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue_2",
+              "text": "In the merge queue (2)",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue_2",
+              "text": "Out of the queue (2)",
+              "type": "number"
+            },
+            {
+              "selector": "draft_3",
+              "text": "Draft (3)",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review_3",
+              "text": "Waiting for a reviewer (3)",
+              "type": "number"
+            },
+            {
+              "selector": "with_author_3",
+              "text": "With the author (3)",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved_3",
+              "text": "Waiting for another WG (3)",
+              "type": "number"
+            },
+            {
+              "selector": "approved_3",
+              "text": "Approved, not queued (3)",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue_3",
+              "text": "In the merge queue (3)",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue_3",
+              "text": "Out of the queue (3)",
+              "type": "number"
+            },
+            {
+              "selector": "draft_4",
+              "text": "Draft (4)",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review_4",
+              "text": "Waiting for a reviewer (4)",
+              "type": "number"
+            },
+            {
+              "selector": "with_author_4",
+              "text": "With the author (4)",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved_4",
+              "text": "Waiting for another WG (4)",
+              "type": "number"
+            },
+            {
+              "selector": "approved_4",
+              "text": "Approved, not queued (4)",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue_4",
+              "text": "In the merge queue (4)",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue_4",
+              "text": "Out of the queue (4)",
+              "type": "number"
+            },
+            {
+              "selector": "draft_5",
+              "text": "Draft (5)",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review_5",
+              "text": "Waiting for a reviewer (5)",
+              "type": "number"
+            },
+            {
+              "selector": "with_author_5",
+              "text": "With the author (5)",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved_5",
+              "text": "Waiting for another WG (5)",
+              "type": "number"
+            },
+            {
+              "selector": "approved_5",
+              "text": "Approved, not queued (5)",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue_5",
+              "text": "In the merge queue (5)",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue_5",
+              "text": "Out of the queue (5)",
+              "type": "number"
+            },
+            {
+              "selector": "draft_6",
+              "text": "Draft (6)",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review_6",
+              "text": "Waiting for a reviewer (6)",
+              "type": "number"
+            },
+            {
+              "selector": "with_author_6",
+              "text": "With the author (6)",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved_6",
+              "text": "Waiting for another WG (6)",
+              "type": "number"
+            },
+            {
+              "selector": "approved_6",
+              "text": "Approved, not queued (6)",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue_6",
+              "text": "In the merge queue (6)",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue_6",
+              "text": "Out of the queue (6)",
+              "type": "number"
+            },
+            {
+              "selector": "draft_7",
+              "text": "Draft (7)",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review_7",
+              "text": "Waiting for a reviewer (7)",
+              "type": "number"
+            },
+            {
+              "selector": "with_author_7",
+              "text": "With the author (7)",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved_7",
+              "text": "Waiting for another WG (7)",
+              "type": "number"
+            },
+            {
+              "selector": "approved_7",
+              "text": "Approved, not queued (7)",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue_7",
+              "text": "In the merge queue (7)",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue_7",
+              "text": "Out of the queue (7)",
+              "type": "number"
+            },
+            {
+              "selector": "draft_8",
+              "text": "Draft (8)",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_review_8",
+              "text": "Waiting for a reviewer (8)",
+              "type": "number"
+            },
+            {
+              "selector": "with_author_8",
+              "text": "With the author (8)",
+              "type": "number"
+            },
+            {
+              "selector": "partly_approved_8",
+              "text": "Waiting for another WG (8)",
+              "type": "number"
+            },
+            {
+              "selector": "approved_8",
+              "text": "Approved, not queued (8)",
+              "type": "number"
+            },
+            {
+              "selector": "in_queue_8",
+              "text": "In the merge queue (8)",
+              "type": "number"
+            },
+            {
+              "selector": "out_of_queue_8",
+              "text": "Out of the queue (8)",
+              "type": "number"
+            }
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "id": 129,
       "title": "Pull requests",
-      "description": "Every pull request merged or closed, the newest first; click a column header to sort, Total for the longest. Click the number to open it below; the title opens it on GitHub. Authoring: opened to first review. Review: first review to approval. Waiting: approval to the merge queue. Queue: in the merge queue. Ejected: queue attempts whose own checks failed. Re-queued: queue attempts cancelled or replaced, not failed. Population: pull requests merged or closed in the selected repository. Time: merged or closed in the last $days days (the Window above). Unit: duration and count.",
+      "description": "Every pull request merged or closed, the newest first; click a column header to sort, Total for the longest. Click the number to open it below; the title opens it on GitHub. Files: files changed. WGs: working groups that had to approve, and which. Rounds: versions of the code that got a review. Re-approved: approvals given again after the code changed. Authoring: opened to first review. Review: first review to approval. Waiting: approval to the merge queue. Queue: in the merge queue. Ejected: queue attempts whose own checks failed. Re-queued: queue attempts cancelled or replaced, not failed. Population: pull requests merged or closed in the selected repository, author and working groups. Time: merged or closed in the last $days days (the Window above). Unit: duration and count.",
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 60,
         "w": 24,
         "h": 12
       },
@@ -2040,6 +4938,106 @@
               {
                 "id": "noValue",
                 "value": "–"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "files_changed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Files"
+              },
+              {
+                "id": "custom.width",
+                "value": 65
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wgs_required"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "WGs"
+              },
+              {
+                "id": "custom.width",
+                "value": 60
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "teams_display"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Working groups"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "noValue",
+                "value": "–"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "review_rounds"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Rounds"
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "reapprovals"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Re-approved"
+              },
+              {
+                "id": "custom.width",
+                "value": 95
+              },
+              {
+                "id": "noValue",
+                "value": "—"
               }
             ]
           },
@@ -2447,7 +5445,7 @@
           "type": "json",
           "source": "url",
           "format": "table",
-          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
           "url_options": {
             "method": "GET",
             "data": ""
@@ -2468,6 +5466,31 @@
               "selector": "author",
               "text": "author",
               "type": "string"
+            },
+            {
+              "selector": "files_changed",
+              "text": "files_changed",
+              "type": "number"
+            },
+            {
+              "selector": "wgs_required",
+              "text": "wgs_required",
+              "type": "number"
+            },
+            {
+              "selector": "teams_display",
+              "text": "teams_display",
+              "type": "string"
+            },
+            {
+              "selector": "review_rounds",
+              "text": "review_rounds",
+              "type": "number"
+            },
+            {
+              "selector": "reapprovals",
+              "text": "reapprovals",
+              "type": "number"
             },
             {
               "selector": "state",
@@ -2554,7 +5577,7 @@
       "title": "One pull request: ${pr_repo} ${pr_number:text}",
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 72,
         "w": 24,
         "h": 1
       },
@@ -2569,7 +5592,7 @@
         "h": 3,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 73
       },
       "id": 1,
       "datasource": {
@@ -2954,7 +5977,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 32
+        "y": 76
       },
       "id": 2,
       "datasource": {
@@ -3036,7 +6059,7 @@
         "h": 4,
         "w": 5,
         "x": 4,
-        "y": 32
+        "y": 76
       },
       "id": 3,
       "datasource": {
@@ -3118,7 +6141,7 @@
         "h": 4,
         "w": 5,
         "x": 9,
-        "y": 32
+        "y": 76
       },
       "id": 4,
       "datasource": {
@@ -3200,7 +6223,7 @@
         "h": 4,
         "w": 5,
         "x": 14,
-        "y": 32
+        "y": 76
       },
       "id": 5,
       "datasource": {
@@ -3282,7 +6305,7 @@
         "h": 4,
         "w": 5,
         "x": 19,
-        "y": 32
+        "y": 76
       },
       "id": 6,
       "datasource": {
@@ -3357,16 +6380,16 @@
       ]
     },
     {
-      "title": "Stage timeline",
-      "description": "Where the time went. A missing stage is absent, never zero.",
       "type": "barchart",
-      "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 36
-      },
       "id": 7,
+      "title": "Lifecycle",
+      "description": "Where the pull request was at every moment from opening to merge, stretch by stretch, numbered in order: a draft, waiting for a reviewer, with the author after review comments, waiting for another working group, approved but not queued, in the merge queue, out of the queue after a removal. The legend lists the stretches with their durations; What happened, below, lists the events that moved it. Population: the selected pull request. Time: opened to merged or closed; an open pull request to now. Unit: duration.",
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 24,
+        "h": 9
+      },
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "workflow-api"
@@ -3374,24 +6397,35 @@
       "fieldConfig": {
         "defaults": {
           "unit": "dtdhms",
-          "noValue": "No measured stage.",
+          "noValue": "Not measured yet: the backfill reads this pull request again.",
           "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 80,
+            "lineWidth": 0,
+            "fillOpacity": 90,
             "gradientMode": "none"
           }
         },
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "authoring"
+              "id": "byRegexp",
+              "options": "/· Draft$/"
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "Authoring"
-              },
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#898781"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/· Waiting for a reviewer$/"
+            },
+            "properties": [
               {
                 "id": "color",
                 "value": {
@@ -3403,14 +6437,10 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "review"
+              "id": "byRegexp",
+              "options": "/· With the author$/"
             },
             "properties": [
-              {
-                "id": "displayName",
-                "value": "Review"
-              },
               {
                 "id": "color",
                 "value": {
@@ -3422,14 +6452,25 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "waiting"
+              "id": "byRegexp",
+              "options": "/· Waiting for another WG$/"
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "Waiting"
-              },
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/· Approved, not queued$/"
+            },
+            "properties": [
               {
                 "id": "color",
                 "value": {
@@ -3441,14 +6482,10 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "queue"
+              "id": "byRegexp",
+              "options": "/· In the merge queue$/"
             },
             "properties": [
-              {
-                "id": "displayName",
-                "value": "Queue"
-              },
               {
                 "id": "color",
                 "value": {
@@ -3460,19 +6497,15 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "merged"
+              "id": "byRegexp",
+              "options": "/· Out of the queue$/"
             },
             "properties": [
-              {
-                "id": "displayName",
-                "value": "Merge"
-              },
               {
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#d55181"
+                  "fixedColor": "#e66767"
                 }
               }
             ]
@@ -3484,85 +6517,409 @@
         "stacking": "normal",
         "xField": "category",
         "showValue": "never",
-        "barWidth": 0.7,
+        "barWidth": 0.6,
         "groupWidth": 0.7,
         "fullHighlight": false,
         "xTickLabelRotation": 0,
         "xTickLabelSpacing": 0,
         "legend": {
           "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ],
+          "width": 360
         },
         "tooltip": {
           "mode": "single",
           "sort": "none",
-          "hideZeros": false
+          "hideZeros": true
         }
       },
       "targets": [
         {
           "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
           "type": "json",
           "source": "url",
           "format": "table",
-          "parser": "backend",
           "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
           "url_options": {
             "method": "GET",
             "data": ""
           },
-          "root_selector": "$.chart",
+          "root_selector": "lifecycle",
+          "columns": []
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 158,
+      "title": "What happened",
+      "description": "Every event of the pull request, oldest first: opened, ready, review requests, reviews and who they counted for, pushes, force pushes (rebases), the base branch merged in, dismissed approvals, merge when ready, entries into and removals from the merge queue with GitHub's reason, the merge. Click an event to open it on GitHub. Population: the selected pull request. Time: opened to merged or closed. Unit: time after opening, d hh:mm:ss.",
+      "gridPos": {
+        "x": 0,
+        "y": 89,
+        "w": 15,
+        "h": 13
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": "Not measured yet: the backfill reads this pull request again.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "when"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "When"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "noValue",
+                "value": "–"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "since_open_s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "After opening"
+              },
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "what"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "What happened"
+              },
+              {
+                "id": "custom.width",
+                "value": 230
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open on GitHub",
+                    "url": "${__data.fields.url}"
+                  }
+                ]
+              },
+              {
+                "id": "noValue",
+                "value": "–"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "who"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Who"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "noValue",
+                "value": "–"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "detail"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Detail"
+              },
+              {
+                "id": "noValue",
+                "value": "–"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              },
+              {
+                "id": "noValue",
+                "value": "–"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "events",
           "columns": [
             {
-              "selector": "category",
-              "text": "category",
+              "selector": "when",
+              "text": "when",
               "type": "string"
             },
             {
-              "selector": "authoring",
-              "text": "authoring",
+              "selector": "since_open_s",
+              "text": "since_open_s",
               "type": "number"
             },
             {
-              "selector": "review",
-              "text": "review",
-              "type": "number"
+              "selector": "what",
+              "text": "what",
+              "type": "string"
             },
             {
-              "selector": "waiting",
-              "text": "waiting",
-              "type": "number"
+              "selector": "who",
+              "text": "who",
+              "type": "string"
             },
             {
-              "selector": "queue",
-              "text": "queue",
-              "type": "number"
+              "selector": "detail",
+              "text": "detail",
+              "type": "string"
             },
             {
-              "selector": "merged",
-              "text": "merged",
-              "type": "number"
+              "selector": "url",
+              "text": "url",
+              "type": "string"
             }
           ]
         }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {},
-            "indexByName": {
-              "category": 0,
-              "authoring": 1,
-              "review": 2,
-              "waiting": 3,
-              "queue": 4,
-              "merged": 5
+      ]
+    },
+    {
+      "type": "table",
+      "id": 159,
+      "title": "This pull request in numbers",
+      "description": "Its size, the working groups that had to approve it, its review rounds and re-approvals, its pushes and its times in the merge queue. Population: the selected pull request. Time: opened to merged or closed. Unit: as each line says.",
+      "gridPos": {
+        "x": 15,
+        "y": 89,
+        "w": 9,
+        "h": 13
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
             },
-            "renameByName": {}
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": "Choose a pull request above.",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fact"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 230
+              },
+              {
+                "id": "noValue",
+                "value": "–"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "value"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "–"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
           }
+        ]
+      },
+      "options": {
+        "showHeader": false,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?number=${pr_number}&repo=${pr_repo}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "facts",
+          "columns": [
+            {
+              "selector": "fact",
+              "text": "fact",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "string"
+            }
+          ]
         }
       ]
     },
@@ -3574,7 +6931,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 102
       },
       "id": 8,
       "datasource": {
@@ -3906,7 +7263,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 53
+        "y": 109
       },
       "id": 9,
       "datasource": {
@@ -4489,7 +7846,7 @@
         "h": 3,
         "w": 24,
         "x": 0,
-        "y": 65
+        "y": 121
       },
       "id": 10,
       "datasource": {
@@ -4636,6 +7993,102 @@
         "description": ""
       },
       {
+        "name": "pr_author",
+        "label": "Author",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "workflow-api"
+        },
+        "definition": "",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable",
+          "infinityQuery": {
+            "refId": "variable",
+            "type": "json",
+            "source": "url",
+            "parser": "backend",
+            "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+            "url_options": {
+              "method": "GET",
+              "data": ""
+            },
+            "root_selector": "$.authors",
+            "format": "table",
+            "columns": [
+              {
+                "selector": "label",
+                "text": "__text",
+                "type": "string"
+              },
+              {
+                "selector": "author",
+                "text": "__value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": "all",
+        "multi": false,
+        "sort": 0,
+        "current": {
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "options": [],
+        "regex": "",
+        "hide": 0,
+        "description": "The pull requests of one author, with how many each has in the window. All: everyone."
+      },
+      {
+        "name": "wgs",
+        "label": "Working groups to approve",
+        "type": "custom",
+        "hide": 0,
+        "query": "Any : all,No code owner : 0,1 WG : 1,2 WGs : 2,3+ WGs : 3plus",
+        "options": [
+          {
+            "text": "Any",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "No code owner",
+            "value": "0",
+            "selected": false
+          },
+          {
+            "text": "1 WG",
+            "value": "1",
+            "selected": false
+          },
+          {
+            "text": "2 WGs",
+            "value": "2",
+            "selected": false
+          },
+          {
+            "text": "3+ WGs",
+            "value": "3plus",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "Any",
+          "value": "all",
+          "selected": true
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 0,
+        "description": "The pull requests that needed this many working groups (code-owner teams) to approve, as GitHub reports them. A pull request stored before the lifecycle existed has no count yet and shows under Any only."
+      },
+      {
         "name": "pr_number",
         "label": "Pull request",
         "type": "query",
@@ -4652,7 +8105,7 @@
             "type": "json",
             "source": "url",
             "parser": "backend",
-            "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}",
+            "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
             "url_options": {
               "method": "GET",
               "data": ""
@@ -4682,7 +8135,7 @@
         "options": [],
         "regex": "",
         "hide": 0,
-        "description": "Saved pull requests from the last $days days. Type a number to open an open or older pull request."
+        "description": "Saved pull requests from the last $days days, of the author and working groups chosen. Type a number to open an open or older pull request."
       }
     ]
   },

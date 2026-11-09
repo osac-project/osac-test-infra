@@ -25,6 +25,18 @@ What is fetched, per pull request (one pass, no repeats):
     merged/closed fallbacks)
   - the reviews (first human review and first human approval)
   - the commits (commit count)
+  - one GraphQL query (LIFECYCLE_QUERY): files and lines changed, the
+    code-owner teams each review counted for and the code-owner requests
+    still pending, and the merge-queue and auto-merge events with GitHub's
+    removal reasons
+
+Together they give the lifecycle: every event in order (pr_timeline), where
+the pull request was at every moment (draft, waiting for a reviewer, with
+the author, waiting for another working group, approved, in the queue, out
+of the queue), review rounds, re-approvals after a push or a rebase, and the
+working groups that had to approve. GraphQL has its own hourly budget; a
+pass stops when it runs low, and a pull request whose query failed is
+stored in the previous record format and read again later.
 
 Merge-queue runs are fetched once per repository, not per pull request:
 `GET /repos/{org}/{repo}/actions/runs?event=merge_group&created=<start>..<now>`,
@@ -39,13 +51,13 @@ requests while its branch names only one. One queue entry starts several
 workflows that share (head_branch, head_sha); those runs become one queue
 attempt, so a clean multi-workflow pass is not counted as ejections.
 
-GitHub keeps no merge-queue history: an ejected entry disappears. How an
-attempt ended is therefore derived (queue_outcome): ejected when its own
-merge_group runs failed or timed out, re-queued when it was cancelled or
-replaced by a later attempt (every entry behind a failing one is), passed
-otherwise. `Enqueued` is the start of the
-pull request's first merge_group run; GitHub has no durable enqueue
-timestamp. Both choices are the ci-observe model's, not GitHub's.
+GitHub records when a pull request entered and left the merge queue (the
+GraphQL timeline), but not how each merge_group attempt ended. That is
+derived (queue_outcome): ejected when its own merge_group runs failed or
+timed out, re-queued when it was cancelled or replaced by a later attempt
+(every entry behind a failing one is), passed otherwise. `Enqueued` is
+GitHub's added-to-merge-queue time; a row read without the GraphQL answer
+uses the start of the pull request's first merge_group run.
 
 Idempotency: rows are keyed by (repo, number) and (repo, number, run_id)
 and written with INSERT OR REPLACE in one transaction per pull request. A
@@ -62,6 +74,8 @@ Manual use:
     python3 monitoring/scripts/ci_observe_prs.py --days 60
     python3 monitoring/scripts/ci_observe_prs.py --days 60 --mode full
     python3 monitoring/scripts/ci_observe_prs.py --days 60 --repo osac --force
+    # once, after an upgrade of the record format: read every older row now
+    python3 monitoring/scripts/ci_observe_prs.py --days 90 --refresh-old
 """
 
 from __future__ import annotations
@@ -73,6 +87,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
@@ -86,6 +101,7 @@ logger = logging.getLogger(__name__)
 
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 API_URL = os.getenv("API_URL", "https://api.github.com")
+GRAPHQL_URL = os.getenv("GRAPHQL_URL", f"{API_URL}/graphql")
 # A GitHub repository name: letters, digits, dot, dash and underscore. It
 # never contains a slash, a dot segment, a query or a fragment, so it cannot
 # move a live lookup to another path.
@@ -107,9 +123,17 @@ PRS_HISTORY_DAYS = int(os.getenv("CI_OBSERVE_KEEP_DAYS", "90"))
 DEFAULT_INDEX_DAYS = 30
 # The record format. A row stored by an older format is refetched once so
 # the new counts fill in, a bounded number per pass so the shared GitHub
-# budget is not spent in one hour.
-RECORD_VERSION = 2
+# budget is not spent in one hour. Version 3 adds the lifecycle: the event
+# list, the code-owner teams, the size of the change and the merge-queue
+# entries as GitHub records them. --refresh-old lifts the per-pass bound
+# for a one-time catch-up.
+RECORD_VERSION = 3
+# The format that added the rebase and E2E counts. A version 2 row has them
+# even when its lifecycle is not measured yet.
+COUNTS_RECORD_VERSION = 2
 LEGACY_REFRESH_PER_PASS = 100
+# GraphQL has its own hourly budget, separate from the REST one.
+MIN_GRAPHQL_REMAINING = 100
 PAGE_SIZE = 100
 # GitHub's actions/runs list stops near 1000 results. Split a merge-group
 # window before it reaches that, the same safe limit the exporter uses.
@@ -169,14 +193,43 @@ STAGES = (
 # endpoint and the dashboard state the same limit.
 DERIVATION = {
     "enqueued": (
-        "Enqueued is the start of the pull request's first merge_group run. "
-        "GitHub exposes no durable enqueue timestamp."
+        "Enqueued is GitHub's own added-to-merge-queue time, read with one GraphQL query per pull request. "
+        "A row stored before that query existed, or whose query failed, uses the start of its first "
+        "merge_group run until the backfill reads it again."
     ),
     "ejections": (
-        "Queue outcomes are derived, not recorded by GitHub. Ejected: the entry's own merge_group runs "
-        "failed or timed out. Re-queued: the entry was cancelled or replaced by a later one, which is what "
-        "happens behind a failing entry, after a new push or when the pull request is taken out by hand. "
-        "GitHub keeps no merge-queue history."
+        "Removed from the queue, and why, is GitHub's removed-from-merge-queue event and its reason. The "
+        "queue attempts table derives each attempt's outcome from its merge_group runs: Ejected, the entry's "
+        "own runs failed or timed out; Re-queued, the entry was cancelled or replaced by a later one, which "
+        "is what happens behind a failing entry, after a new push or when the pull request is taken out by hand."
+    ),
+    "lifecycle": (
+        "The lifecycle walks the pull request's events in order. Draft until ready for review. Waiting for "
+        "a reviewer until a human reviews. Changes requested, or comments while it waits, hand it to the "
+        "author until the next push. An approval makes it Waiting for another WG until every working group "
+        "that has to approve did, then Approved, not queued. A push after the approval sends it back to the "
+        "reviewers when GitHub dismissed the approval or when an approval follows before the next queue "
+        "entry (a re-review). In the merge queue from GitHub's added event; Out of the queue from a removal "
+        "other than the merge, until it is added again. The author's own replies in review threads are not "
+        "reviews."
+    ),
+    "working_groups": (
+        "Working groups that had to approve are the code-owner teams GitHub reports on the pull request: the "
+        "teams each review was made on behalf of, plus the code-owner review requests still pending. GitHub "
+        "keeps no list of a requirement once it is met, so this is read from who approved for whom, not "
+        "from CODEOWNERS. maintainers, the parent of the wg-* teams, adds nothing next to a working group; "
+        "alone it is one working group, any of them. A team review requested by hand looks the same as a "
+        "code-owner request once the team reviewed."
+    ),
+    "review_rounds": (
+        "A review round is one version of the code that got a human review: a review records the commit it "
+        "looked at. A re-approval is an approval by a reviewer, or for a team, that had approved an earlier "
+        "version; after a rebase when a force push came between the two."
+    ),
+    "pushes": (
+        "Pushes come from the commits on the branch now and GitHub's force-push events. A rebase replaces "
+        "the commits, so the pushes before the last rebase show only as that force push. Commits a few "
+        "minutes apart are one push; a merge commit is the base branch merged in."
     ),
     "queue_pr_number": (
         "A merge_group run carries no pull request number of its own. The run is linked to a pull "
@@ -226,6 +279,14 @@ PR_STATE_MESSAGES = (
 # Live lookups are read-only and never touch prs.db. The cache lives on the
 # module because the exporter builds a CIObservePRs per request.
 _LIVE_PR_CACHE = {}
+# The index document, built once for the dozens of panels that ask for it
+# together; see CIObservePRs._cached_index.
+INDEX_CACHE_SECONDS = 15
+_INDEX_CACHE = {}
+_INDEX_BUILDING = {}
+_INDEX_CACHE_LOCK = threading.Lock()
+# Index row columns the across-PR views read and no panel shows.
+INDEX_UNSHOWN_COLUMNS = ("lifecycle", "lifecycle_seconds", "removal_reasons", "owner_teams")
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +311,18 @@ def seconds_between(start, end):
     if start_dt is None or end_dt is None:
         return None
     return max(0, round((end_dt - start_dt).total_seconds()))
+
+
+def ordered_seconds(start, end):
+    """Seconds from start to end when end is not before start; None when
+    either is missing or the order is reversed. A stage whose end comes
+    first did not happen in that order, and a zero would claim it took no
+    time."""
+    start_dt = parse_iso(start)
+    end_dt = parse_iso(end)
+    if start_dt is None or end_dt is None or end_dt < start_dt:
+        return None
+    return round((end_dt - start_dt).total_seconds())
 
 
 def percentile(sorted_values, p):
@@ -538,9 +611,703 @@ def final_stage(state, first_review_at, first_approval_at, queued_at):
 
 
 # ---------------------------------------------------------------------------
+# Lifecycle: what a pull request went through, in order
+# ---------------------------------------------------------------------------
+# GitHub records each of these on the pull request. The REST timeline,
+# reviews and commits give reviews, pushes, dismissals and draft changes;
+# one GraphQL query adds what REST does not have: the merge-queue entries
+# and removals with GitHub's reason, the code-owner teams a review counted
+# for, and the size of the change.
+LIFECYCLE_QUERY = """
+query PullRequestLifecycle($owner: String!, $name: String!, $number: Int!, $after: String) {
+  rateLimit { cost remaining }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      changedFiles
+      additions
+      deletions
+      reviewRequests(first: 100) {
+        nodes {
+          asCodeOwner
+          requestedReviewer { __typename ... on Team { slug } ... on User { login } }
+        }
+      }
+      reviews(first: 100) {
+        nodes {
+          fullDatabaseId
+          state
+          submittedAt
+          author { login }
+          onBehalfOf(first: 25) { nodes { slug } }
+        }
+      }
+      timelineItems(
+        first: 100
+        after: $after
+        itemTypes: [
+          ADDED_TO_MERGE_QUEUE_EVENT
+          REMOVED_FROM_MERGE_QUEUE_EVENT
+          AUTO_MERGE_ENABLED_EVENT
+          AUTO_MERGE_DISABLED_EVENT
+        ]
+      ) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          __typename
+          ... on AddedToMergeQueueEvent { createdAt actor { login } enqueuer { login } }
+          ... on RemovedFromMergeQueueEvent { createdAt actor { login } reason }
+          ... on AutoMergeEnabledEvent { createdAt actor { login } }
+          ... on AutoMergeDisabledEvent { createdAt actor { login } reason }
+        }
+      }
+    }
+  }
+}
+"""
+LIFECYCLE_QUERY_MAX_PAGES = 10
+
+# The states a pull request moves through. The order is the order of one
+# review cycle, which is also the order the across-PR bars stack in.
+LIFECYCLE_STATES = (
+    ("draft", "Draft"),
+    ("waiting_review", "Waiting for a reviewer"),
+    ("with_author", "With the author"),
+    ("partly_approved", "Waiting for another WG"),
+    ("approved", "Approved, not queued"),
+    ("in_queue", "In the merge queue"),
+    ("out_of_queue", "Out of the queue"),
+)
+LIFECYCLE_LABELS = dict(LIFECYCLE_STATES)
+LIFECYCLE_ORDER = {key: index for index, (key, _) in enumerate(LIFECYCLE_STATES)}
+# A removal from the queue this close to the merge is the merge itself.
+QUEUE_MERGE_SLACK = timedelta(minutes=5)
+# Commits this close together went up in one push.
+COMMIT_PUSH_GAP = timedelta(minutes=5)
+
+# The team whose approval any working group can give: the parent of the
+# wg-* teams. A pull request that needs only this team needs one working
+# group, any of them; next to a specific working group it adds nothing,
+# because that working group's member approves for both.
+ANY_WG_TEAMS = frozenset(
+    team.strip() for team in os.getenv("CI_OBSERVE_ANY_WG_TEAMS", "maintainers").split(",") if team.strip()
+)
+
+REVIEW_STATES = ("APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED")
+# Order of events that share a timestamp: a push before the review it
+# prompted, a review before the queue entry it allowed, the merge last.
+EVENT_PRIORITY = {
+    "opened": 0,
+    "ready": 1,
+    "draft": 1,
+    "review_requested": 2,
+    "commit": 3,
+    "merge_commit": 3,
+    "force_push": 3,
+    "review": 4,
+    "dismissed": 5,
+    "auto_merge_on": 6,
+    "auto_merge_off": 6,
+    "queued": 7,
+    "dequeued": 8,
+    "reopened": 9,
+    "merged": 10,
+    "closed": 10,
+}
+EVENT_LABELS = {
+    "opened": "Opened",
+    "opened_draft": "Opened as a draft",
+    "ready": "Ready for review",
+    "draft": "Converted to a draft",
+    "review_requested": "Review requested",
+    "commit": "Pushed",
+    "merge_commit": "Merged the base branch in",
+    "force_push": "Force-pushed (rebase or rewrite)",
+    "review_approved": "Approved",
+    "review_changes_requested": "Changes requested",
+    "review_commented": "Reviewed with comments",
+    "review_dismissed": "Review dismissed",
+    "dismissed": "Approval dismissed",
+    "auto_merge_on": "Merge when ready turned on",
+    "auto_merge_off": "Merge when ready turned off",
+    "queued": "Added to the merge queue",
+    "dequeued": "Removed from the merge queue",
+    "reopened": "Reopened",
+    "merged": "Merged",
+    "closed": "Closed",
+}
+
+
+def queue_reason_text(reason):
+    """GitHub's removal reason as a reader reads it: FAILED_CHECKS and
+    failed_checks both become "failed checks"."""
+    text = " ".join((reason or "").replace("_", " ").split())
+    return text.lower() if text.isupper() or "_" in (reason or "") else text
+
+
+def wgs_required(teams):
+    """How many working groups had to approve, from the code-owner teams
+    GitHub reports. None when the teams are unknown."""
+    if teams is None:
+        return None
+    specific = {team for team in teams if team not in ANY_WG_TEAMS}
+    if specific:
+        return len(specific)
+    return 1 if teams else 0
+
+
+def wgs_display(teams):
+    """The teams for a table cell: "wg-caas, wg-infra", "any WG", "none"."""
+    if teams is None:
+        return ""
+    specific = sorted(team for team in teams if team not in ANY_WG_TEAMS)
+    if specific:
+        return ", ".join(specific)
+    return "any WG" if teams else "none"
+
+
+def owner_teams(graph):
+    """The code-owner teams of a pull request, as GitHub reports them: the
+    teams each review was made on behalf of, plus the code-owner requests
+    still pending. GitHub keeps no list of the requirement itself once it
+    is met; a satisfied team request leaves the review's onBehalfOf. None
+    when the GraphQL answer is missing."""
+    if graph is None or graph.get("teams_unknown"):
+        return None
+    teams = set()
+    for review in (graph.get("reviews") or {}).get("nodes") or []:
+        for team in (review.get("onBehalfOf") or {}).get("nodes") or []:
+            if team and team.get("slug"):
+                teams.add(team["slug"])
+    for request in (graph.get("reviewRequests") or {}).get("nodes") or []:
+        reviewer = request.get("requestedReviewer") or {}
+        if request.get("asCodeOwner") and reviewer.get("__typename") == "Team" and reviewer.get("slug"):
+            teams.add(reviewer["slug"])
+    return sorted(teams)
+
+
+def _login(node):
+    return (node or {}).get("login") or ""
+
+
+def _review_id(review):
+    """The REST id of a GraphQL review. fullDatabaseId is a BigInt, which
+    GitHub sends as a string; databaseId is the deprecated 32-bit form."""
+    value = review.get("fullDatabaseId", review.get("databaseId"))
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _graph_timeline(graph):
+    """The merge-queue and auto-merge events of the GraphQL answer: every
+    page _fetch_lifecycle read, or the one page of a raw answer."""
+    if not graph:
+        return []
+    if "timeline" in graph:
+        # None: GitHub refused the events; the runs stand in for them.
+        return graph["timeline"] or []
+    return (graph.get("timelineItems") or {}).get("nodes") or []
+
+
+def _commit_time(commit):
+    detail = commit.get("commit") or {}
+    return (detail.get("committer") or {}).get("date") or (detail.get("author") or {}).get("date")
+
+
+def _first_line(text, limit=90):
+    line = next((part.strip() for part in (text or "").splitlines() if part.strip()), "")
+    return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
+
+
+def team_members(graph):
+    """Who is known to review for which code-owner team: every login a
+    review was made on behalf of a team for. A later approval by the same
+    person counts for that team even when GitHub left its onBehalfOf
+    empty because the team request was already met."""
+    members = {}
+    for review in ((graph or {}).get("reviews") or {}).get("nodes") or []:
+        login = _login(review.get("author"))
+        for team in (review.get("onBehalfOf") or {}).get("nodes") or []:
+            if login and team and team.get("slug"):
+                members.setdefault(login, set()).add(team["slug"])
+    return members
+
+
+def required_teams(graph):
+    """The working groups that had to approve, as a set; empty when any
+    one approval was enough; None when the code-owner teams are unknown."""
+    teams = owner_teams(graph)
+    if teams is None:
+        return None
+    return {team for team in teams if team not in ANY_WG_TEAMS}
+
+
+def _push_events(commits, opened_at, force_pushes, repo_url):
+    """One event per push, not one per commit.
+
+    The commits endpoint lists the commits on the branch now, with the
+    time each was committed. Commits a few minutes apart went up in one
+    push; commits made just before a force push are the rewritten branch
+    that push sent, so they fold into it. A merge commit (the base branch
+    merged in, usually GitHub's "Update branch") stays its own event."""
+    items = []
+    for commit in commits:
+        moment = parse_iso(_commit_time(commit))
+        if moment is None or (opened_at and moment <= parse_iso(opened_at)):
+            # Work done before the pull request opened is not a push to it.
+            continue
+        items.append((moment, commit))
+    items.sort(key=lambda item: item[0])
+    groups = []
+    for moment, commit in items:
+        merge = len(commit.get("parents") or []) > 1
+        last = groups[-1] if groups else None
+        if last and not merge and not last["merge"] and moment - last["last"] <= COMMIT_PUSH_GAP:
+            last["commits"].append(commit)
+            last["last"] = moment
+        else:
+            groups.append({"merge": merge, "first": moment, "last": moment, "commits": [commit]})
+    pushes = []
+    for group in groups:
+        folded = None
+        if not group["merge"]:
+            folded = next(
+                (push for push in force_pushes if abs(push["moment"] - group["last"]) <= COMMIT_PUSH_GAP), None
+            )
+        if folded is not None:
+            folded["commits"] += len(group["commits"])
+            continue
+        commit = group["commits"][-1]
+        sha = commit.get("sha") or ""
+        message = _first_line((commit.get("commit") or {}).get("message"))
+        count = len(group["commits"])
+        detail = f"{sha[:7]} {message}".strip()
+        if count > 1:
+            detail = f"{count} commits, last {detail}"
+        author = _login(commit.get("author")) or ((commit.get("commit") or {}).get("author") or {}).get("name") or ""
+        pushes.append({
+            "at": _iso(group["last"]),
+            "kind": "merge_commit" if group["merge"] else "commit",
+            "actor": author,
+            "detail": detail,
+            "url": f"{repo_url}/commit/{sha}" if repo_url and sha else "",
+        })
+    return pushes
+
+
+def lifecycle_events(pr, timeline, reviews, commits, graph, attempts):
+    """Every event of the pull request, oldest first, as dicts with at,
+    kind, actor, detail, url and the raw fields the state machine reads.
+
+    Merge-queue entries come from GitHub's own added/removed events. A
+    pull request read without them (the GraphQL answer failed) falls back
+    to its merge_group attempts: entered when the first run started,
+    removed when an ejected or re-queued attempt ended."""
+    repo_url = (pr.get("html_url") or "").split("/pull/")[0]
+    opened_at = pr.get("created_at")
+    author = _login(pr.get("user"))
+    events = []
+
+    def add(at, kind, actor="", detail="", url="", **extra):
+        moment = parse_iso(at)
+        if moment is not None:
+            # One text form for every source, so the events sort as text.
+            events.append({"at": _iso(moment), "kind": kind, "actor": actor, "detail": detail, "url": url, **extra})
+
+    draft_events = sorted(
+        (event.get("created_at"), event.get("event"))
+        for event in timeline
+        if event.get("event") in ("ready_for_review", "convert_to_draft") and event.get("created_at")
+    )
+    opened_as_draft = (draft_events[0][1] == "ready_for_review") if draft_events else bool(pr.get("draft"))
+    add(opened_at, "opened", author, "draft" if opened_as_draft else "", pr.get("html_url") or "",
+        draft=opened_as_draft)
+
+    reviewer_of = {review.get("id"): _login(review.get("user")) for review in reviews}
+    original_states = {}
+    force_pushes = []
+    for event in timeline:
+        if event.get("event") == "review_dismissed":
+            dismissed = event.get("dismissed_review") or {}
+            if dismissed.get("review_id") is not None:
+                original_states[dismissed["review_id"]] = (dismissed.get("state") or "").upper()
+    for event in timeline:
+        kind = event.get("event")
+        at = event.get("created_at")
+        actor = _login(event.get("actor"))
+        if kind == "ready_for_review":
+            add(at, "ready", actor)
+        elif kind == "convert_to_draft":
+            add(at, "draft", actor)
+        elif kind == "review_requested":
+            team = event.get("requested_team") or {}
+            reviewer = team.get("slug") or team.get("name") or _login(event.get("requested_reviewer"))
+            if reviewer and not reviewer.endswith("[bot]"):
+                add(at, "review_requested", actor, reviewer)
+        elif kind == "head_ref_force_pushed":
+            moment = parse_iso(at)
+            if moment is not None:
+                force_pushes.append({"moment": moment, "actor": actor, "sha": event.get("commit_id") or "",
+                                     "commits": 0})
+        elif kind == "review_dismissed":
+            dismissed = event.get("dismissed_review") or {}
+            review_id = dismissed.get("review_id")
+            state = original_states.get(review_id, "")
+            reviewer = reviewer_of.get(review_id, "")
+            message = _first_line(dismissed.get("dismissal_message"))
+            whose = f"{reviewer}'s review" if reviewer else ""
+            add(at, "dismissed", actor, " · ".join(part for part in (whose, message) if part),
+                review_id=review_id, state=state, reviewer=reviewer)
+        elif kind == "reopened":
+            add(at, "reopened", actor)
+
+    members = team_members(graph)
+    behalf = {}
+    for review in ((graph or {}).get("reviews") or {}).get("nodes") or []:
+        review_id = _review_id(review)
+        if review_id is not None:
+            behalf[review_id] = [
+                team.get("slug") for team in (review.get("onBehalfOf") or {}).get("nodes") or [] if team
+            ]
+    for review in reviews:
+        login = _login(review.get("user"))
+        if not review.get("submitted_at") or is_bot(review.get("user")) or (author and login == author):
+            # The author's own "review" is a reply in a review thread, not a
+            # review of the change.
+            continue
+        state = review.get("state")
+        if state not in REVIEW_STATES:
+            continue
+        if state == "DISMISSED":
+            state = original_states.get(review.get("id")) or "DISMISSED"
+        named = [team for team in behalf.get(review.get("id")) or [] if team]
+        detail = f"for {', '.join(named)}" if named else ""
+        add(review["submitted_at"], "review", login, detail, review.get("html_url") or "",
+            state=state, review_id=review.get("id"), commit=review.get("commit_id") or "",
+            teams=sorted(members.get(login, set())))
+
+    # The pushes first: they count the commits each force push carried.
+    for push in _push_events(commits, opened_at, force_pushes, repo_url):
+        add(push["at"], push["kind"], push["actor"], push["detail"], push["url"])
+    for push in force_pushes:
+        sha = push["sha"]
+        detail = f"to {sha[:7]}" if sha else ""
+        if push["commits"]:
+            detail = f"{detail}, {push['commits']} commit{'s' if push['commits'] != 1 else ''}".lstrip(", ")
+        add(_iso(push["moment"]), "force_push", push["actor"], detail,
+            f"{repo_url}/commit/{sha}" if repo_url and sha else "")
+
+    timeline_nodes = [node for node in _graph_timeline(graph) if node]
+    queue_items = [
+        node for node in timeline_nodes
+        if node.get("__typename") in ("AddedToMergeQueueEvent", "RemovedFromMergeQueueEvent")
+    ]
+    for node in timeline_nodes:
+        name = node.get("__typename")
+        actor = _login(node.get("actor"))
+        if name == "AddedToMergeQueueEvent":
+            add(node.get("createdAt"), "queued", _login(node.get("enqueuer")) or actor, source="github")
+        elif name == "RemovedFromMergeQueueEvent":
+            reason = node.get("reason") or ""
+            add(node.get("createdAt"), "dequeued", actor, queue_reason_text(reason), reason=reason, source="github")
+        elif name == "AutoMergeEnabledEvent":
+            add(node.get("createdAt"), "auto_merge_on", actor)
+        elif name == "AutoMergeDisabledEvent":
+            add(node.get("createdAt"), "auto_merge_off", actor, queue_reason_text(node.get("reason")))
+    if not queue_items:
+        for attempt in attempts or []:
+            add(attempt.get("started_at"), "queued", "", "", attempt.get("url") or "", source="runs")
+            if queue_outcome(attempt) != "passed" and attempt.get("completed_at"):
+                why = _short_reason(attempt.get("ejection_reason") or attempt.get("ejection_kind") or "")
+                add(attempt["completed_at"], "dequeued", "", why, attempt.get("url") or "", reason=why, source="runs")
+
+    if pr.get("merged_at"):
+        add(pr["merged_at"], "merged", _login(pr.get("merged_by")))
+    elif pr.get("closed_at"):
+        add(pr["closed_at"], "closed")
+    events.sort(key=lambda event: (event["at"], EVENT_PRIORITY.get(event["kind"], 5)))
+    return events
+
+
+def _until_end(events):
+    """The events up to the merge or the close; what follows (a comment on
+    a merged pull request) is not part of its way in."""
+    out = []
+    for event in events:
+        out.append(event)
+        if event["kind"] in ("merged", "closed"):
+            break
+    return out
+
+
+def lifecycle_from_events(events, end_at, required=None):
+    """Walk the events and say where the pull request was at every moment.
+
+    Draft until ready. Waiting for a reviewer until a human reviews; a
+    review that asks for changes, or comments while the pull request
+    waits, hands it to the author until the next push. An approval moves
+    it to Approved, not queued once every required working group has
+    approved (`required`: the set of teams, empty when one approval is
+    enough, None when unknown); before that it is Waiting for another WG.
+    A push after the approval sends it back to the reviewer when GitHub
+    dismissed the approval, or when an approval follows before the pull
+    request reaches the queue again: that is a re-review. Added to the
+    merge queue: In the merge queue. Removed other than by the merge: Out
+    of the queue, until it is added again. Returns (segments, facts)."""
+    events = _until_end(events)
+    if not events:
+        return [], {}
+    opened = events[0]
+    state = "draft" if opened.get("draft") else "waiting_review"
+    started = opened["at"]
+    end_dt = parse_iso(end_at)
+    segments = []
+    approvals = {}
+    blocked = set()
+    rereview = False
+
+    def go(new_state, at):
+        nonlocal state, started
+        if new_state == state:
+            return
+        segments.append((state, started, at))
+        state, started = new_state, at
+
+    def with_reviewers():
+        """Where a ready pull request outside the queue waits right now."""
+        if blocked or rereview or not approvals:
+            return "waiting_review"
+        if required:
+            covered = set().union(*approvals.values()) & required
+            if covered == required:
+                return "approved"
+            return "partly_approved" if covered else "waiting_review"
+        return "approved"
+
+    def approval_before_next_queue(index):
+        for later in events[index + 1:]:
+            if later["kind"] == "queued":
+                return False
+            if later["kind"] == "review" and later.get("state") == "APPROVED":
+                return True
+        return False
+
+    merged_dt = parse_iso(next((event["at"] for event in events if event["kind"] == "merged"), None))
+    movable = ("waiting_review", "with_author", "partly_approved", "approved", "out_of_queue")
+    for index, event in enumerate(events[1:], start=1):
+        kind = event["kind"]
+        at = event["at"]
+        moment = parse_iso(at)
+        if end_dt is not None and moment is not None and moment > end_dt:
+            break
+        if kind == "ready" and state == "draft":
+            go(with_reviewers(), at)
+        elif kind == "draft" and state != "in_queue":
+            go("draft", at)
+        elif kind == "review":
+            review_state = event.get("state")
+            if review_state == "APPROVED":
+                key = event.get("review_id") or (event.get("actor"), at)
+                approvals[key] = set(event.get("teams") or [])
+                blocked.discard(event.get("actor"))
+                rereview = False
+                if state in movable:
+                    go(with_reviewers(), at)
+            elif review_state == "CHANGES_REQUESTED":
+                blocked.add(event.get("actor"))
+                if state in movable:
+                    go("with_author", at)
+            elif review_state == "COMMENTED" and state in ("waiting_review", "partly_approved"):
+                go("with_author", at)
+        elif kind == "dismissed":
+            approvals.pop(event.get("review_id"), None)
+            if event.get("state") == "CHANGES_REQUESTED":
+                blocked.discard(event.get("reviewer"))
+            if state in ("approved", "partly_approved"):
+                go(with_reviewers(), at)
+        elif kind in ("commit", "merge_commit", "force_push"):
+            if state == "with_author":
+                go(with_reviewers(), at)
+            elif state in ("approved", "out_of_queue") and approval_before_next_queue(index):
+                rereview = True
+                go("waiting_review", at)
+        elif kind == "queued":
+            rereview = False
+            go("in_queue", at)
+        elif kind == "dequeued" and state == "in_queue":
+            if merged_dt is not None and moment is not None and timedelta(0) <= merged_dt - moment <= QUEUE_MERGE_SLACK:
+                continue
+            go("out_of_queue", at)
+        elif kind in ("merged", "closed"):
+            break
+    final = end_at or events[-1]["at"]
+    final_dt = parse_iso(final)
+    started_dt = parse_iso(started)
+    if final_dt is not None and started_dt is not None and final_dt > started_dt:
+        segments.append((state, started, final))
+    out = []
+    for key, start, end in segments:
+        seconds = seconds_between(start, end)
+        if not seconds:
+            continue
+        if out and out[-1]["state"] == key:
+            out[-1]["end"] = end
+            out[-1]["seconds"] += seconds
+            continue
+        out.append({"state": key, "label": LIFECYCLE_LABELS[key], "start": start, "end": end, "seconds": seconds})
+    return out, lifecycle_facts(events)
+
+
+def _reapproval_of(approval, earlier):
+    """The earlier approval this one renews: the latest one by the same
+    reviewer, or for one of the same code-owner teams."""
+    teams = set(approval.get("teams") or [])
+    for previous in reversed(earlier):
+        if previous.get("actor") == approval.get("actor") or teams & set(previous.get("teams") or []):
+            return previous
+    return None
+
+
+def lifecycle_facts(events):
+    """The counts the pages read: review rounds, re-approvals after the code
+    changed, the ones that followed a force push and how long the longest
+    took, the last approval before the queue, and the queue entries and
+    removals with GitHub's reasons."""
+    events = _until_end(events)
+    reviews = [event for event in events if event["kind"] == "review"]
+    pushes = [event for event in events if event["kind"] in ("commit", "merge_commit", "force_push")]
+    approvals = [event for event in reviews if event.get("state") == "APPROVED"]
+    # A round is one version of the code that got a human review. A review
+    # records the commit it looked at, which survives a rebase; the commit
+    # list does not, so the push count is only the fallback.
+    rounds = set()
+    for review in reviews:
+        epoch = sum(1 for push in pushes if push["at"] <= review["at"])
+        rounds.add(review.get("commit") or f"push-{epoch}")
+    reapprovals = 0
+    rebase_rereviews = 0
+    rereview_waits = []
+    for index, approval in enumerate(approvals):
+        previous = _reapproval_of(approval, approvals[:index])
+        if previous is None:
+            continue
+        between = [push for push in pushes if previous["at"] < push["at"] <= approval["at"]]
+        changed = bool(between) or (
+            bool(previous.get("commit")) and bool(approval.get("commit")) and previous["commit"] != approval["commit"]
+        )
+        if not changed:
+            continue
+        reapprovals += 1
+        if any(push["kind"] == "force_push" for push in between):
+            rebase_rereviews += 1
+        if between:
+            # From the last change to the approval of it.
+            rereview_waits.append(seconds_between(between[-1]["at"], approval["at"]) or 0)
+    queued = [event for event in events if event["kind"] == "queued"]
+    merged = next((event for event in events if event["kind"] == "merged"), None)
+
+    def is_the_merge(event):
+        if merged is None:
+            return False
+        gap = parse_iso(merged["at"]) - parse_iso(event["at"])
+        return timedelta(0) <= gap <= QUEUE_MERGE_SLACK
+
+    removals = [event for event in events if event["kind"] == "dequeued" and not is_the_merge(event)]
+    first_queue = queued[0]["at"] if queued else None
+    before_queue = [approval for approval in approvals if first_queue is None or approval["at"] <= first_queue]
+    return {
+        "review_rounds": len(rounds),
+        "approval_count": len(approvals),
+        "reapprovals": reapprovals,
+        "rebase_rereviews": rebase_rereviews,
+        "rereview_seconds": max(rereview_waits) if rereview_waits else None,
+        "approvals_dismissed": sum(
+            1 for event in events if event["kind"] == "dismissed" and event.get("state") == "APPROVED"
+        ),
+        "merge_commits": sum(1 for event in events if event["kind"] == "merge_commit"),
+        "force_pushes": sum(1 for event in events if event["kind"] == "force_push"),
+        "pushes": len(pushes),
+        "last_approval_at": before_queue[-1]["at"] if before_queue else None,
+        "enqueued_at": first_queue,
+        "queue_entries": len(queued),
+        "queue_removals": len(removals),
+        "removal_reasons": [event.get("detail") or "unknown" for event in removals],
+        "auto_merge": 1 if any(event["kind"] == "auto_merge_on" for event in events) else 0,
+    }
+
+
+def lifecycle_columns(events, end_at, graph):
+    """The pr_events lifecycle columns of one pull request and its
+    pr_timeline rows. `graph` is the GraphQL answer, or None: then the size
+    and the code-owner teams are NULL ("not measured")."""
+    segments, facts = lifecycle_from_events(events, end_at, required_teams(graph))
+    teams = owner_teams(graph)
+    size = graph or {}
+    columns = {
+        "files_changed": size.get("changedFiles"),
+        "additions": size.get("additions"),
+        "deletions": size.get("deletions"),
+        "owner_teams": json.dumps(teams) if teams is not None else None,
+        "wgs_required": wgs_required(teams),
+        "review_rounds": facts.get("review_rounds"),
+        "approval_count": facts.get("approval_count"),
+        "reapprovals": facts.get("reapprovals"),
+        "rebase_rereviews": facts.get("rebase_rereviews"),
+        "rereview_seconds": facts.get("rereview_seconds"),
+        "approvals_dismissed": facts.get("approvals_dismissed"),
+        "merge_commits": facts.get("merge_commits"),
+        "last_approval_at": facts.get("last_approval_at"),
+        "enqueued_at": facts.get("enqueued_at"),
+        "queue_entries": facts.get("queue_entries"),
+        "queue_removals": facts.get("queue_removals"),
+        "removal_reasons": json.dumps(facts.get("removal_reasons") or []),
+        "auto_merge": facts.get("auto_merge"),
+        "lifecycle": json.dumps(segments),
+        "lifecycle_seconds": json.dumps(lifecycle_seconds(segments)),
+    }
+    opened_at = events[0]["at"] if events else None
+    return columns, event_rows(events, opened_at)
+
+
+def lifecycle_seconds(segments):
+    """Seconds per state over the whole pull request, every state present."""
+    totals = {key: 0 for key, _ in LIFECYCLE_STATES}
+    for segment in segments:
+        totals[segment["state"]] += segment["seconds"]
+    return totals
+
+
+def event_rows(events, opened_at):
+    """The stored event list: what happened, who did it, when, and how long
+    after the pull request opened."""
+    rows = []
+    for event in events:
+        kind = event["kind"]
+        if kind == "opened" and event.get("draft"):
+            label = EVENT_LABELS["opened_draft"]
+        elif kind == "review":
+            label = EVENT_LABELS.get(f"review_{(event.get('state') or 'dismissed').lower()}", "Reviewed")
+        elif kind == "dismissed" and event.get("state") != "APPROVED":
+            label = EVENT_LABELS["review_dismissed"]
+        else:
+            label = EVENT_LABELS.get(kind, kind)
+        rows.append({
+            "at": event["at"],
+            "kind": kind,
+            "label": label,
+            "actor": event.get("actor") or "",
+            "detail": event.get("detail") or "",
+            "url": event.get("url") or "",
+            "since_open_s": seconds_between(opened_at, event["at"]),
+        })
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # GitHub access
 # ---------------------------------------------------------------------------
-# pr_events columns added with the second record format.
+# pr_events columns added after the first record format.
 PR_EVENT_ADDED_COLUMNS = (
     ("ready_at", "TEXT"),
     ("review_wait_seconds", "INTEGER"),
@@ -552,6 +1319,28 @@ PR_EVENT_ADDED_COLUMNS = (
     ("e2e_retests", "INTEGER"),
     ("e2e_versions", "INTEGER"),
     ("record_version", "INTEGER"),
+    # Third record format: the lifecycle.
+    ("files_changed", "INTEGER"),
+    ("additions", "INTEGER"),
+    ("deletions", "INTEGER"),
+    ("owner_teams", "TEXT"),
+    ("wgs_required", "INTEGER"),
+    ("review_rounds", "INTEGER"),
+    ("approval_count", "INTEGER"),
+    ("reapprovals", "INTEGER"),
+    ("rebase_rereviews", "INTEGER"),
+    ("rereview_seconds", "INTEGER"),
+    ("approvals_dismissed", "INTEGER"),
+    ("merge_commits", "INTEGER"),
+    ("last_approval_at", "TEXT"),
+    ("last_approval_wait_seconds", "INTEGER"),
+    ("enqueued_at", "TEXT"),
+    ("queue_entries", "INTEGER"),
+    ("queue_removals", "INTEGER"),
+    ("removal_reasons", "TEXT"),
+    ("auto_merge", "INTEGER"),
+    ("lifecycle", "TEXT"),
+    ("lifecycle_seconds", "TEXT"),
 )
 
 
@@ -590,6 +1379,9 @@ class StandaloneAPI:
     def _get(self, url):
         return requests.get(url, headers=self.headers, timeout=15)
 
+    def _post(self, url, body):
+        return requests.post(url, json=body, headers=self.headers, timeout=30)
+
 
 # ---------------------------------------------------------------------------
 # Pull-request backfill and read side
@@ -608,7 +1400,17 @@ class CIObservePRs:
         self.repos_filter = list(repos or [])
         self.api_calls = 0
         self.rate_limit_remaining = None
+        self.graphql_calls = 0
+        self.graphql_remaining = None
+        # Set when a GraphQL request fails: the rest of the pass stores new
+        # pull requests without it and leaves older rows for the next pass,
+        # because refetching them could not upgrade them.
+        self._graphql_down = False
         self._legacy_refreshes = 0
+        # --refresh-old: refetch every older record in this pass, not a
+        # bounded number. Each refetched row counts as stored, so a run
+        # stopped by the rate limit resumes where it stopped.
+        self.refresh_old = False
 
     # -- SQLite -------------------------------------------------------------
 
@@ -699,6 +1501,22 @@ class CIObservePRs:
                     ok INTEGER NOT NULL DEFAULT 0
                 )
             """)
+            # The lifecycle event list: one row per event, in order.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pr_timeline (
+                    repo TEXT NOT NULL,
+                    number INTEGER NOT NULL,
+                    seq INTEGER NOT NULL,
+                    at TEXT,
+                    kind TEXT,
+                    label TEXT,
+                    actor TEXT,
+                    detail TEXT,
+                    url TEXT,
+                    since_open_s INTEGER,
+                    PRIMARY KEY (repo, number, seq)
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_events_merged_at ON pr_events(merged_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_events_closed_at ON pr_events(closed_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pr_queue_attempts_pr ON pr_queue_attempts(repo, number)")
@@ -708,7 +1526,7 @@ class CIObservePRs:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(pr_queue_attempts)")}
             if "run_ids" not in columns:
                 conn.execute("ALTER TABLE pr_queue_attempts ADD COLUMN run_ids TEXT")
-            # Columns of the second record format. A row stored before keeps
+            # Columns of the later record formats. A row stored before keeps
             # NULL ("not measured") until the backfill refetches it.
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(pr_events)")}
             for column, kind in PR_EVENT_ADDED_COLUMNS:
@@ -750,6 +1568,75 @@ class CIObservePRs:
             items.extend(page)
         return items
 
+    def _graphql(self, query, variables):
+        """One GraphQL request: (data, errors). data is None when the
+        request failed; GitHub can also answer with part of the data and an
+        error for each field it would not resolve (a token that may not read
+        teams, say). GraphQL has its own hourly budget; its remaining points
+        are tracked apart from the REST counter."""
+        post = getattr(self.api, "_post", None)
+        if post is None:
+            return None, [{"message": "this API object cannot post"}]
+        try:
+            resp = post(GRAPHQL_URL, {"query": query, "variables": variables})
+        except requests.RequestException as exc:
+            logger.warning("GitHub GraphQL request failed: %s", exc)
+            return None, [{"message": str(exc)}]
+        self.graphql_calls += 1
+        if not resp.ok:
+            logger.warning("GitHub GraphQL returned %s: %s", resp.status_code, resp.text[:200])
+            return None, [{"message": f"HTTP {resp.status_code}"}]
+        try:
+            payload = resp.json()
+        except ValueError:
+            return None, [{"message": "not JSON"}]
+        errors = payload.get("errors") or []
+        if errors:
+            logger.warning("GitHub GraphQL errors: %s", str(errors)[:300])
+        data = payload.get("data")
+        remaining = ((data or {}).get("rateLimit") or {}).get("remaining")
+        if remaining is not None:
+            self.graphql_remaining = int(remaining)
+        return data, errors
+
+    def _fetch_lifecycle(self, repo, number):
+        """The GraphQL half of a pull request's history: size, code-owner
+        teams, and the merge-queue and auto-merge events. None when GitHub
+        did not answer; the record is then stored in the older format and
+        read again by a later pass.
+
+        An answer with some fields refused keeps the rest: refused teams
+        make the working groups unknown ("not measured", never "none"),
+        and refused queue events fall back to the merge_group runs."""
+        if self._graphql_down:
+            return None
+        nodes = []
+        first = None
+        after = None
+        refused = []
+        for _ in range(LIFECYCLE_QUERY_MAX_PAGES):
+            data, errors = self._graphql(
+                LIFECYCLE_QUERY, {"owner": ORG, "name": repo, "number": number, "after": after}
+            )
+            pull = ((data or {}).get("repository") or {}).get("pullRequest")
+            paths = [error.get("path") for error in errors]
+            if pull is None or any(not path for path in paths):
+                if data is None:
+                    self._graphql_down = True
+                return None
+            refused += [part for path in paths for part in path if isinstance(part, str)]
+            first = first or pull
+            items = pull.get("timelineItems") or {}
+            nodes.extend(items.get("nodes") or [])
+            page = items.get("pageInfo") or {}
+            if not page.get("hasNextPage") or not page.get("endCursor"):
+                break
+            after = page["endCursor"]
+        graph = dict(first)
+        graph["timeline"] = None if "timelineItems" in refused else nodes
+        graph["teams_unknown"] = bool({"reviews", "onBehalfOf", "reviewRequests", "requestedReviewer"} & set(refused))
+        return graph
+
     def _list_repos(self):
         """Repository names, or None when the org listing failed. A failed
         listing is not an org with no repositories: the caller must not
@@ -787,6 +1674,9 @@ class CIObservePRs:
         self._init_db()
         self.api_calls = 0
         self.rate_limit_remaining = None
+        self.graphql_calls = 0
+        self.graphql_remaining = None
+        self._graphql_down = False
         self._legacy_refreshes = 0
 
         cutoff = now - timedelta(days=days)
@@ -809,6 +1699,8 @@ class CIObservePRs:
             "attempts_stored": 0,
             "api_calls": 0,
             "rate_limit_remaining": None,
+            "graphql_calls": 0,
+            "graphql_remaining": None,
             "stopped_early": "",
             "listing_complete": True,
             "ok": True,
@@ -858,6 +1750,13 @@ class CIObservePRs:
                     )
                     logger.warning(summary["stopped_early"])
                     stopped = True
+                elif self.graphql_remaining is not None and self.graphql_remaining < MIN_GRAPHQL_REMAINING:
+                    summary["stopped_early"] = (
+                        f"stopped in {repo} after {stored} pull request(s): GraphQL points remaining "
+                        f"{self.graphql_remaining} is below {MIN_GRAPHQL_REMAINING}. Re-run to resume."
+                    )
+                    logger.warning(summary["stopped_early"])
+                    stopped = True
                 if limit is not None and summary["prs_stored"] + repo_summary["prs_stored"] >= limit:
                     summary["stopped_early"] = f"stopped after --limit {limit} pull request(s)."
                     stopped = True
@@ -890,6 +1789,8 @@ class CIObservePRs:
             )
         summary["api_calls"] = self.api_calls
         summary["rate_limit_remaining"] = self.rate_limit_remaining
+        summary["graphql_calls"] = self.graphql_calls
+        summary["graphql_remaining"] = self.graphql_remaining
         # ok says the pass stored everything it listed. Coverage advances
         # only when the listing window was read completely, so a pass that
         # stopped early leaves coverage where it was: the pull requests it
@@ -898,12 +1799,14 @@ class CIObservePRs:
         self._record_run(summary, now)
         self._prune_runs(now - timedelta(days=days))
         logger.info(
-            "Pull-request backfill (%s): %d stored, %d already present, %d attempts, %d API calls",
+            "Pull-request backfill (%s): %d stored, %d already present, %d attempts, %d API calls, "
+            "%d GraphQL calls",
             resolved_mode,
             summary["prs_stored"],
             summary["prs_skipped"],
             summary["attempts_stored"],
             summary["api_calls"],
+            summary["graphql_calls"],
         )
         return summary
 
@@ -1095,7 +1998,10 @@ class CIObservePRs:
             return False
         if row[0] >= RECORD_VERSION:
             return True
-        if self._legacy_refreshes >= LEGACY_REFRESH_PER_PASS:
+        if self._graphql_down:
+            # Refetching it now would store the same older format again.
+            return True
+        if not self.refresh_old and self._legacy_refreshes >= LEGACY_REFRESH_PER_PASS:
             return True
         self._legacy_refreshes += 1
         return False
@@ -1119,10 +2025,28 @@ class CIObservePRs:
             logger.warning("Skipping %s#%s: a GitHub page failed", repo, number)
             return None
 
+        graph = self._fetch_lifecycle(repo, number)
         record = self._build_pr_record(repo, pr, timeline, reviews, commits)
         attempts = self._build_attempts(repo, number, merge_runs, timeline)
-        self._write_pr(record, attempts)
+        events = self._apply_lifecycle(record, pr, timeline, reviews, commits, graph, attempts)
+        self._write_pr(record, attempts, events)
         return len(attempts)
+
+    def _apply_lifecycle(self, record, pr, timeline, reviews, commits, graph, attempts, now=None):
+        """Fill the lifecycle columns and return the event rows.
+
+        Without the GraphQL answer the lifecycle is read from the REST
+        history alone: the queue entries from the merge_group runs, no
+        size and no code-owner teams (NULL, "not measured"). The record is
+        then stored in the previous format, so a later pass reads it
+        again."""
+        events = lifecycle_events(pr, timeline, reviews, commits, graph, attempts)
+        end_at = record.get("merged_at") or record.get("closed_at") or _iso(now or datetime.now(UTC))
+        columns, rows = lifecycle_columns(events, end_at, graph)
+        if graph is None:
+            record["record_version"] = COUNTS_RECORD_VERSION
+        record.update(columns)
+        return rows
 
     # -- record building ----------------------------------------------------
 
@@ -1138,16 +2062,33 @@ class CIObservePRs:
             state = "open"
         now = now or datetime.now(UTC)
 
+        author = (pr.get("user") or {}).get("login") or ""
+        # The author's own "review" is a reply in a review thread; it does
+        # not end the wait for a reviewer.
         human_reviews = [
             r
             for r in reviews
             if r.get("submitted_at")
             and not is_bot(r.get("user"))
+            and not (author and (r.get("user") or {}).get("login") == author)
             and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED")
         ]
         human_reviews.sort(key=lambda r: r["submitted_at"])
         first_review_at = human_reviews[0]["submitted_at"] if human_reviews else None
-        approvals = [r for r in human_reviews if r.get("state") == "APPROVED"]
+        # A dismissed review reads DISMISSED; the dismissal event keeps what
+        # it was. An approval dismissed by a later push was still the first
+        # approval.
+        dismissed_as = {
+            (event.get("dismissed_review") or {}).get("review_id"):
+                ((event.get("dismissed_review") or {}).get("state") or "").upper()
+            for event in timeline
+            if event.get("event") == "review_dismissed"
+        }
+        approvals = [
+            r for r in human_reviews
+            if r.get("state") == "APPROVED"
+            or (r.get("state") == "DISMISSED" and dismissed_as.get(r.get("id")) == "APPROVED")
+        ]
         first_approval_at = approvals[0]["submitted_at"] if approvals else None
 
         review_requesters = {
@@ -1424,14 +2365,19 @@ class CIObservePRs:
         None when the job history is not there."""
         return self._e2e_stats(repo, number)["retests"]
 
-    def _write_pr(self, record, attempts):
-        """One transaction: the PR row, then its attempts and their stage
-        timings. Replacing by key makes a --force re-run idempotent."""
-        if attempts:
+    def _write_pr(self, record, attempts, events=()):
+        """One transaction: the PR row, then its attempts, their stage
+        timings and the event list. Replacing by key makes a --force re-run
+        idempotent."""
+        if attempts or record.get("enqueued_at"):
             completed = [a["completed_at"] for a in attempts if a["completed_at"]]
             record["last_attempt_at"] = max(completed) if completed else None
-            record["queued_at"] = attempts[0]["started_at"]
-            record["waiting_seconds"] = seconds_between(record["first_approval_at"], record["queued_at"])
+            # GitHub's own added_to_merge_queue time when the lifecycle has
+            # it; before that, the start of the first merge_group run.
+            record["queued_at"] = record.get("enqueued_at") or attempts[0]["started_at"]
+            # An approval after the queue entry (a repository that allows
+            # it, an admin) is not a zero wait: it is no wait to measure.
+            record["waiting_seconds"] = ordered_seconds(record["first_approval_at"], record["queued_at"])
             # The queue ends when its last attempt ends. The merge then runs
             # from that moment to merged_at; using merged_at for both would
             # count the same time twice.
@@ -1440,6 +2386,8 @@ class CIObservePRs:
             record["final_stage"] = final_stage(
                 record["state"], record["first_review_at"], record["first_approval_at"], record["queued_at"]
             )
+        if record.get("last_approval_at") and record.get("queued_at"):
+            record["last_approval_wait_seconds"] = ordered_seconds(record["last_approval_at"], record["queued_at"])
 
         columns = list(record.keys())
         placeholders = ", ".join(f":{column}" for column in columns)
@@ -1456,6 +2404,16 @@ class CIObservePRs:
                     f"VALUES ({attempt_placeholders})",
                     attempts,
                 )
+            conn.execute("DELETE FROM pr_timeline WHERE repo = ? AND number = ?", (record["repo"], record["number"]))
+            conn.executemany(
+                "INSERT INTO pr_timeline (repo, number, seq, at, kind, label, actor, detail, url, since_open_s) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (record["repo"], record["number"], seq, event["at"], event["kind"], event["label"],
+                     event["actor"], event["detail"], event["url"], event["since_open_s"])
+                    for seq, event in enumerate(events)
+                ],
+            )
 
     def _prune(self, repo, cutoff_iso):
         """Drop pull requests that left the retention window, and their
@@ -1467,6 +2425,7 @@ class CIObservePRs:
             ).fetchall()
             for row in stale:
                 conn.execute("DELETE FROM pr_queue_attempts WHERE repo = ? AND number = ?", (repo, row["number"]))
+                conn.execute("DELETE FROM pr_timeline WHERE repo = ? AND number = ?", (repo, row["number"]))
             conn.execute(
                 "DELETE FROM pr_events WHERE repo = ? AND COALESCE(merged_at, closed_at, opened_at) < ?",
                 (repo, cutoff_iso),
@@ -1515,7 +2474,50 @@ class CIObservePRs:
         # The Overview page's Repository filter sends "all" for both.
         if repo.lower() == "all":
             repo = ""
-        return self.index_document(days, now, repo or None)
+        author = _param(params, "author")
+        if author.lower() in ("all", "$__all", "*"):
+            author = ""
+        wgs = wgs_filter(_param(params, "wgs"))
+        return self._cached_index(
+            (days, repo, author, wgs, int(now.timestamp() // INDEX_CACHE_SECONDS)),
+            lambda: self.index_document(days, now, repo or None, author=author or None, wgs=wgs or None),
+        )
+
+    def _cached_index(self, key, build):
+        """Every panel of the Pull requests page asks for the same index
+        document at the same moment. The first request builds it; the
+        others wait for it and reuse it for a few seconds. The key carries
+        the store's size and modification time, so a backfill write is
+        never hidden."""
+        try:
+            stat = os.stat(self.db_file)
+        except OSError:
+            return build()
+        # prs.db is in WAL mode: a write lands in the -wal file first.
+        try:
+            wal = os.stat(f"{self.db_file}-wal")
+            wal_stamp = (wal.st_mtime_ns, wal.st_size)
+        except OSError:
+            wal_stamp = None
+        key = (os.path.abspath(self.db_file), stat.st_mtime_ns, stat.st_size, wal_stamp, *key)
+        with _INDEX_CACHE_LOCK:
+            cached = _INDEX_CACHE.get(key)
+            if cached is not None and time.monotonic() - cached[0] < INDEX_CACHE_SECONDS:
+                return cached[1]
+            building = _INDEX_BUILDING.setdefault(key, threading.Lock())
+        with building:
+            with _INDEX_CACHE_LOCK:
+                cached = _INDEX_CACHE.get(key)
+                if cached is not None and time.monotonic() - cached[0] < INDEX_CACHE_SECONDS:
+                    return cached[1]
+            document = build()
+            with _INDEX_CACHE_LOCK:
+                moment = time.monotonic()
+                for old in [old for old, (built, _) in _INDEX_CACHE.items() if moment - built >= INDEX_CACHE_SECONDS]:
+                    del _INDEX_CACHE[old]
+                _INDEX_CACHE[key] = (moment, document)
+                _INDEX_BUILDING.pop(key, None)
+        return document
 
     # The endpoint is read-only: it never creates prs.db. A missing file is
     # the state before the backfill has run, and it says so instead of
@@ -1541,6 +2543,9 @@ class CIObservePRs:
             "stages": [],
             "summary": [],
             "chart": [],
+            "lifecycle": [],
+            "events": [],
+            "facts": [],
             "attempts": [],
             "pr_state": state,
             "pr_state_message": reason,
@@ -1558,10 +2563,14 @@ class CIObservePRs:
             "mode": "index",
             "generated_at": _utc_now(),
             "days": days,
+            "author": "",
+            "wgs": "",
+            "authors": [],
             "prs": [],
             "funnel": _funnel([]),
             "kpis": _kpis([], {}),
             "weekly": [],
+            **across_prs([], now, days),
             # The detail panels query this same endpoint with an empty
             # number. Present keys let them render "enter a number" instead
             # of a root-not-found error.
@@ -1799,6 +2808,15 @@ class CIObservePRs:
         record["final_stage"] = final_stage(
             record["state"], record["first_review_at"], record["first_approval_at"], record["queued_at"]
         )
+        # The lifecycle of a pull request still moving ends now. One GraphQL
+        # query when the API object can post; without it the merge-queue
+        # entries come from the queue runs the job history holds.
+        graph = self._fetch_lifecycle(repo, number)
+        live_attempts = self._attempts_from_runs(repo, number, runs)
+        record["events"] = self._apply_lifecycle(record, live, timeline, reviews, commits, graph, live_attempts, now)
+        record["last_approval_wait_seconds"] = ordered_seconds(
+            record.get("last_approval_at"), record.get("enqueued_at") or record.get("queued_at")
+        )
         record["source"] = "live"
         return self._remember_live(key, record, "")
 
@@ -1983,11 +3001,19 @@ class CIObservePRs:
                 row = rows[0] if rows else None
                 matches = len(rows)
             attempts = []
+            stored_events = []
             if row is not None:
                 attempts = [
                     dict(r)
                     for r in conn.execute(
                         "SELECT * FROM pr_queue_attempts WHERE repo = ? AND number = ? ORDER BY started_at",
+                        (row["repo"], number),
+                    )
+                ]
+                stored_events = [
+                    dict(r)
+                    for r in conn.execute(
+                        "SELECT * FROM pr_timeline WHERE repo = ? AND number = ? ORDER BY seq",
                         (row["repo"], number),
                     )
                 ]
@@ -2027,7 +3053,8 @@ class CIObservePRs:
             pr_state, pr_state_message = self._miss_state(number, live, live_error, freshness, now)
             notes.append(pr_state_message)
 
-        pr = dict(row) if row is not None else live
+        # A copy: the live record is cached, and the page reshapes this one.
+        pr = dict(row) if row is not None else (dict(live) if live is not None else None)
         if pr is not None:
             pr["url"] = pr.get("url") or pr_url(pr["repo"], pr["number"])
             author = pr.get("author") or ""
@@ -2077,6 +3104,13 @@ class CIObservePRs:
             status_message = runs_note
 
         stages = _stages(pr) if pr is not None and not pr.get("history_unavailable") else []
+        if row is None:
+            stored_events = (pr or {}).pop("events", None) or []
+        if pr is not None and pr.get("lifecycle") is None and not pr.get("history_unavailable"):
+            notes.append(
+                "This pull request was stored before the lifecycle was read: the backfill reads it again "
+                "and fills in the lifecycle, the event list and the review numbers."
+            )
         return {
             "mode": "pr",
             "generated_at": _utc_now(),
@@ -2085,6 +3119,9 @@ class CIObservePRs:
             "stages": stages,
             "summary": _summary(pr, stages),
             "chart": _chart(pr, stages),
+            "lifecycle": lifecycle_chart(pr),
+            "events": events_document(stored_events),
+            "facts": facts_document(pr),
             "runs": runs,
             "attempts": [_attempt_out(attempt) for attempt in attempts],
             "pr_state": pr_state,
@@ -2146,7 +3183,14 @@ class CIObservePRs:
             f"The daily full pass retries it; the next hourly run is by {freshness['next_run_at']}."
         )
 
-    def index_document(self, days, now=None, repo=None):
+    def index_document(self, days, now=None, repo=None, author=None, wgs=None):
+        """Every pull request of the window, and what they have in common.
+
+        `author` keeps one author's pull requests; `wgs` keeps the ones that
+        needed that many working groups ("0", "1", "2", "3plus", or
+        "unknown" for rows not read with the lifecycle yet). `authors`
+        lists every author of the window and repository before either
+        filter, so the author drop-down never empties itself."""
         now = now or datetime.now(UTC)
         cutoff = _iso(now - timedelta(days=days))
         with self._db() as conn:
@@ -2163,6 +3207,14 @@ class CIObservePRs:
             for attempt in conn.execute("SELECT * FROM pr_queue_attempts WHERE started_at >= ?", (cutoff,)):
                 attempts.setdefault((attempt["repo"], attempt["number"]), []).append(dict(attempt))
 
+        authors = _authors(rows)
+        if author:
+            rows = [row for row in rows if (row.get("author") or "") == author]
+        if wgs:
+            rows = [
+                row for row in rows
+                if (wg_group(row.get("wgs_required")) or "unknown") == wgs
+            ]
         funnel = _funnel(rows)
         kpis = _kpis(rows, attempts)
         weekly = _weekly(rows)
@@ -2184,15 +3236,30 @@ class CIObservePRs:
             row["requeued_attempt_count"] = sum(1 for a in row_attempts if queue_outcome(a) == "requeued")
             row["age_display"] = human_duration(row["age_seconds"])
             # The Pull requests page opens this pull request's own section.
+            # The filters ride along, so opening a pull request keeps the
+            # list above it as it was.
             row["detail_url"] = (
                 "/d/ci-observe-pull-requests/ci-observe-e28094-pull-requests"
                 f"?var-pr_repo={quote(row['repo'], safe='')}&var-pr_number={row['number']}&var-days={days}"
+                f"&var-pr_author={quote(author, safe='') if author else '$__all'}&var-wgs={wgs or 'all'}"
             )
             # The Pull requests page turns this list into a drop-down. The
             # label carries the three things a reader needs to choose.
             row["option_label"] = f"#{row['number']} · {row['final_stage']} · {row['title']}"
+            teams = _json_value(row.get("owner_teams"))
+            row["teams_display"] = wgs_display(teams) if teams is not None else ""
+            if row.get("files_changed") is not None:
+                row["lines_display"] = f"+{row.get('additions') or 0} -{row.get('deletions') or 0}"
+            else:
+                row["lines_display"] = ""
             prs.append(row)
 
+        views = across_prs(prs, now, days)
+        # The raw lifecycle columns are the views' input; the list does not
+        # show them, and every panel of the page fetches this document.
+        for row in prs:
+            for column in INDEX_UNSHOWN_COLUMNS:
+                row.pop(column, None)
         fields = self._freshness_fields(now)
         freshness = fields["freshness"]
         notes = []
@@ -2205,14 +3272,27 @@ class CIObservePRs:
                 f"The backfill is stale: {freshness['message']} Rows older than the last completed window "
                 "may be missing."
             )
+        if author or wgs:
+            notes.append(
+                "Filtered: "
+                + ", ".join(part for part in (
+                    f"author {author}" if author else "",
+                    f"working groups {dict(WG_GROUPS).get(wgs, wgs)}" if wgs else "",
+                ) if part)
+                + "."
+            )
         return {
             "mode": "index",
             "generated_at": _utc_now(),
             "days": days,
+            "author": author or "",
+            "wgs": wgs or "",
+            "authors": authors,
             "prs": prs,
             "funnel": funnel,
             "kpis": kpis,
             "weekly": weekly,
+            **views,
             "pr": None,
             "stages": [],
             "summary": [],
@@ -2390,7 +3470,8 @@ def _kpis(rows, attempts):
     `measured_prs` says how many.
     """
     merged = [row for row in rows if row.get("state") == "merged"]
-    measured = [row for row in merged if (row.get("record_version") or 1) >= RECORD_VERSION]
+    measured = [row for row in merged if (row.get("record_version") or 1) >= COUNTS_RECORD_VERSION]
+    lifecycle = _measured_lifecycle(rows)
 
     def outcomes(row):
         return [queue_outcome(a) for a in attempts.get((row["repo"], row["number"]), [])]
@@ -2448,7 +3529,379 @@ def _kpis(rows, attempts):
         ),
         "e2e_failed_share": _share((row.get("e2e_failures") or 0) > 0 for row in ran_e2e),
         "measured_prs": len(measured),
+        # The lifecycle numbers cover the merged rows read with the lifecycle
+        # (record format 3); lifecycle_prs says how many.
+        "review_rounds_median": _median(row.get("review_rounds") for row in lifecycle),
+        "reapproved_share": _share((row.get("reapprovals") or 0) > 0 for row in lifecycle),
+        "rebase_rereview_share": _share((row.get("rebase_rereviews") or 0) > 0 for row in lifecycle),
+        "rereview_median_s": _median(row.get("rereview_seconds") for row in lifecycle),
+        "last_approval_wait_median_s": _median(row.get("last_approval_wait_seconds") for row in lifecycle),
+        "files_median": _median(row.get("files_changed") for row in merged),
+        "multi_wg_share": _share(
+            row["wgs_required"] >= 2 for row in merged if row.get("wgs_required") is not None
+        ),
+        "lifecycle_prs": len(lifecycle),
     }]
+
+
+# How many working groups had to approve: the filter values and the
+# across-PR groups. "3plus" because a "+" in a query string reads as a space.
+WG_GROUPS = (
+    ("0", "No code owner"),
+    ("1", "1 WG"),
+    ("2", "2 WGs"),
+    ("3plus", "3+ WGs"),
+)
+FILE_BUCKETS = (
+    (2, "up to 2 files"),
+    (5, "3 to 5 files"),
+    (10, "6 to 10 files"),
+    (25, "11 to 25 files"),
+    (None, "26 files or more"),
+)
+# Time to merge, for the weekly heatmap; fastest first, so it is the bottom row.
+MERGE_TIME_BUCKETS = (
+    ("under_1h", 3600, "under 1h"),
+    ("h1_4", 4 * 3600, "1 to 4h"),
+    ("h4_24", 24 * 3600, "4 to 24h"),
+    ("d1_3", 3 * 86400, "1 to 3 days"),
+    ("d3_7", 7 * 86400, "3 to 7 days"),
+    ("d7_plus", None, "7 days or more"),
+)
+# The across-PR lifecycle bars keep the order of events by cycles: a cycle
+# runs through the states in their order, and a state that comes back
+# starts the next one. After this many cycles the rest is summed into the
+# last one.
+LIFECYCLE_CYCLES = 8
+LONGEST_PRS = 20
+
+
+def across_prs(rows, now, days):
+    """The across-PR views of the index, and the empty one-PR lists the
+    detail panels read when no pull request is chosen."""
+    return {
+        **_scatter(rows),
+        "time_by_wgs": _time_by_wgs(rows),
+        "time_by_files": _time_by_files(rows),
+        "rounds_histogram": _rounds_histogram(rows),
+        "queue_histogram": _queue_histogram(rows),
+        "wgs_histogram": _wgs_histogram(rows),
+        "merge_time_heatmap": _merge_time_heatmap(rows, now, days),
+        "lifecycles": _longest_lifecycles(rows),
+        "lifecycle": [],
+        "events": [],
+        "facts": [],
+    }
+
+
+def _authors(rows):
+    """The authors of the rows, for the author drop-down: login and a
+    label with the count, alphabetical."""
+    counts = {}
+    for row in rows:
+        login = row.get("author") or ""
+        if login:
+            counts[login] = counts.get(login, 0) + 1
+    return [
+        {"author": login, "label": f"{login} ({counts[login]})"}
+        for login in sorted(counts, key=str.lower)
+    ]
+
+
+def wg_group(value):
+    """The WG group key of a wgs_required value; None when not measured."""
+    if value is None:
+        return None
+    return "3plus" if value >= 3 else str(max(0, value))
+
+
+def wgs_filter(value):
+    """The wgs= parameter as a group key, or "" for every pull request.
+    "3+" arrives as "3" when Grafana does not encode the plus."""
+    text = (value or "").strip().lower()
+    if text in ("", "all", "$__all", "any", "*"):
+        return ""
+    if text in ("3", "3+", "3plus"):
+        return "3plus"
+    if text in ("0", "1", "2", "unknown"):
+        return text
+    return ""
+
+
+def _json_value(text, default=None):
+    if not text:
+        return default
+    try:
+        return json.loads(text)
+    except ValueError:
+        return default
+
+
+def _lifecycle_totals(row):
+    """Seconds per lifecycle state, or None for a row stored before the
+    lifecycle existed."""
+    totals = _json_value(row.get("lifecycle_seconds"))
+    return totals if isinstance(totals, dict) else None
+
+
+def _measured_lifecycle(rows):
+    return [row for row in rows if row.get("state") == "merged" and _lifecycle_totals(row) is not None]
+
+
+def file_bucket(files):
+    if files is None:
+        return None
+    for limit, label in FILE_BUCKETS:
+        if limit is None or files <= limit:
+            return label
+    return FILE_BUCKETS[-1][1]
+
+
+def _plural(count, word):
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def _mean_time_per_state(label, rows):
+    """One bar of "where a pull request's time goes": the mean seconds in
+    each state over the rows, which add up to their mean time to merge."""
+    totals = [_lifecycle_totals(row) for row in rows]
+    totals = [total for total in totals if total is not None]
+    entry = {"group": f"{label} · {_plural(len(totals), 'PR')}", "prs": len(totals)}
+    for state, _ in LIFECYCLE_STATES:
+        entry[state] = round(sum(total.get(state) or 0 for total in totals) / len(totals)) if totals else None
+    return entry
+
+
+def _time_by_wgs(rows):
+    measured = _measured_lifecycle(rows)
+    return [
+        _mean_time_per_state(label, [row for row in measured if wg_group(row.get("wgs_required")) == key])
+        for key, label in WG_GROUPS
+    ]
+
+
+def _time_by_files(rows):
+    measured = _measured_lifecycle(rows)
+    return [
+        _mean_time_per_state(label, [row for row in measured if file_bucket(row.get("files_changed")) == label])
+        for _, label in FILE_BUCKETS
+    ]
+
+
+def _histogram(values, buckets):
+    """[(label, test)] over the values: one row per bucket, empty buckets
+    included so the axis does not jump."""
+    return [{"bucket": label, "prs": sum(1 for value in values if test(value))} for label, test in buckets]
+
+
+def _count_buckets(top):
+    """0, 1, ... top-1 and "top+"."""
+    buckets = [(str(n), lambda value, n=n: value == n) for n in range(top)]
+    buckets.append((f"{top}+", lambda value: value >= top))
+    return buckets
+
+
+def _rounds_histogram(rows):
+    values = [row["review_rounds"] for row in _measured_lifecycle(rows) if row.get("review_rounds") is not None]
+    return _histogram(values, _count_buckets(5))
+
+
+def _queue_histogram(rows):
+    values = [row["queue_entries"] for row in _measured_lifecycle(rows) if row.get("queue_entries") is not None]
+    return _histogram(values, _count_buckets(4))
+
+
+def _wgs_histogram(rows):
+    groups = [wg_group(row.get("wgs_required")) for row in _measured_lifecycle(rows)]
+    return [{"bucket": label, "prs": groups.count(key)} for key, label in WG_GROUPS]
+
+
+def _monday(moment):
+    day = moment - timedelta(days=moment.weekday())
+    return day.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _merge_time_heatmap(rows, now, days):
+    """Merged pull requests per week of the merge and time to merge. Every
+    week of the window is a row, an empty one too, so the weeks stay evenly
+    spaced."""
+    first = _monday(now - timedelta(days=days))
+    weeks = {}
+    week = first
+    while week <= now:
+        weeks[week.strftime("%Y-%m-%d")] = {key: 0 for key, _, _ in MERGE_TIME_BUCKETS}
+        week += timedelta(days=7)
+    for row in rows:
+        merged = parse_iso(row.get("merged_at")) if row.get("state") == "merged" else None
+        seconds = row.get("total_seconds")
+        if merged is None or seconds is None:
+            continue
+        counts = weeks.get(_monday(merged).strftime("%Y-%m-%d"))
+        if counts is None:
+            continue
+        for key, limit, _ in MERGE_TIME_BUCKETS:
+            if limit is None or seconds < limit:
+                counts[key] += 1
+                break
+    return [{"week": week, **counts} for week, counts in sorted(weeks.items())]
+
+
+def _scatter(rows):
+    """Every merged pull request as a point: merge time against hours to
+    merge, one list per WG group for the chart's colors."""
+    groups = {f"scatter_wg{key}": [] for key, _ in WG_GROUPS}
+    groups["scatter_unknown"] = []
+    for row in rows:
+        merged = parse_iso(row.get("merged_at")) if row.get("state") == "merged" else None
+        if merged is None or row.get("total_seconds") is None:
+            continue
+        key = wg_group(row.get("wgs_required"))
+        teams = _json_value(row.get("owner_teams"))
+        groups[f"scatter_wg{key}" if key else "scatter_unknown"].append({
+            "merged_at": _iso(merged),
+            "hours": round(row["total_seconds"] / 3600, 2),
+            "pull_request": f"#{row['number']} {row.get('title') or ''}".strip(),
+            "author": row.get("author") or "",
+            "teams": wgs_display(teams) if teams is not None else "not measured yet",
+            "files": row.get("files_changed"),
+            "detail_url": row.get("detail_url") or "",
+        })
+    return groups
+
+
+def _cycle_fields():
+    """The field names of the across-PR lifecycle bars, in stacking order."""
+    return [f"{state}_{cycle}" for cycle in range(1, LIFECYCLE_CYCLES + 1) for state, _ in LIFECYCLE_STATES]
+
+
+def lifecycle_cycles(segments):
+    """Seconds per (state, cycle). A cycle runs through the states in their
+    order; a state at or before the previous one starts the next cycle, so
+    stacking the fields in order keeps the events in order."""
+    row = dict.fromkeys(_cycle_fields())
+    cycle = 1
+    last = -1
+    for segment in segments or []:
+        order = LIFECYCLE_ORDER.get(segment.get("state"))
+        if order is None:
+            continue
+        if order <= last and cycle < LIFECYCLE_CYCLES:
+            cycle += 1
+        last = order
+        field = f"{segment['state']}_{cycle}"
+        row[field] = (row[field] or 0) + (segment.get("seconds") or 0)
+    return row
+
+
+def _longest_lifecycles(rows):
+    """The longest merged pull requests, each as one bar of its lifecycle."""
+    measured = sorted(
+        (row for row in _measured_lifecycle(rows) if row.get("total_seconds") is not None),
+        key=lambda row: row["total_seconds"],
+        reverse=True,
+    )[:LONGEST_PRS]
+    out = []
+    for row in measured:
+        title = row.get("title") or ""
+        if len(title) > 48:
+            title = title[:47].rstrip() + "…"
+        out.append({
+            "pull_request": f"#{row['number']} {title}".strip(),
+            "detail_url": row.get("detail_url") or "",
+            **lifecycle_cycles(_json_value(row.get("lifecycle"), [])),
+        })
+    return out
+
+
+def lifecycle_chart(pr):
+    """The one-PR lifecycle bar: one field per stretch, numbered in order,
+    so the legend reads as the story and each stretch wears its state's
+    color."""
+    segments = _json_value(pr.get("lifecycle"), []) if pr else []
+    if not segments:
+        return []
+    row = {"category": f"PR #{pr['number']}"}
+    for index, segment in enumerate(segments, start=1):
+        row[f"{index:02d} · {segment['label']}"] = segment["seconds"]
+    return [row]
+
+
+def _when(moment):
+    dt = parse_iso(moment)
+    return dt.strftime("%d %b %H:%M") if dt else ""
+
+
+def events_document(events):
+    """The event list as the page reads it."""
+    return [
+        {
+            "at": event["at"],
+            "when": _when(event["at"]),
+            "since_open_s": event.get("since_open_s"),
+            "what": event["label"],
+            "who": event.get("actor") or "",
+            "detail": event.get("detail") or "",
+            "url": event.get("url") or "",
+            "kind": event.get("kind") or "",
+        }
+        for event in events
+    ]
+
+
+def facts_document(pr):
+    """The pull request in numbers, one fact per row, as text."""
+    if pr is None:
+        return []
+    not_yet = "not measured yet: the backfill reads it again"
+    measured = pr.get("lifecycle") is not None
+    teams = _json_value(pr.get("owner_teams"))
+    if teams is None:
+        wgs = not_yet
+    else:
+        count = wgs_required(teams)
+        wgs = f"{count} ({wgs_display(teams)})" if count else "none: no code owner"
+    if pr.get("files_changed") is None:
+        size = not_yet
+    else:
+        size = (f"{_plural(pr['files_changed'], 'file')}, "
+                f"+{pr.get('additions') or 0} -{pr.get('deletions') or 0} lines")
+
+    def count(field):
+        value = pr.get(field)
+        return not_yet if value is None or not measured else str(value)
+
+    if measured and pr.get("reapprovals") is not None:
+        reapproved = str(pr["reapprovals"])
+        if pr["reapprovals"]:
+            reapproved += f" ({pr.get('rebase_rereviews') or 0} after a rebase)"
+            if pr.get("rereview_seconds") is not None:
+                reapproved += f"; the longest took {human_duration(pr['rereview_seconds'])}"
+    else:
+        reapproved = not_yet
+    if measured and pr.get("queue_entries") is not None:
+        reasons = _json_value(pr.get("removal_reasons"), []) or []
+        queue = f"{pr['queue_entries']} {'entry' if pr['queue_entries'] == 1 else 'entries'}"
+        if pr.get("queue_removals"):
+            times = "once" if pr["queue_removals"] == 1 else f"{pr['queue_removals']} times"
+            queue += f", removed {times} ({'; '.join(reason for reason in reasons if reason)})"
+    else:
+        queue = not_yet
+    last_wait = pr.get("last_approval_wait_seconds")
+    rows = [
+        ("Author", pr.get("author") or "unknown"),
+        ("Size", size),
+        ("Working groups that had to approve", wgs),
+        ("Review rounds", count("review_rounds")),
+        ("Approvals", count("approval_count")),
+        ("Re-approved after the code changed", reapproved),
+        ("Approvals dismissed", count("approvals_dismissed")),
+        ("Force pushes", str(pr.get("force_push_count")) if pr.get("force_push_count") is not None else not_yet),
+        ("Base branch merged in", count("merge_commits")),
+        ("Last approval to the queue", human_duration(last_wait) if last_wait is not None else "not measured"),
+        ("Merge queue", queue),
+        ("Merge when ready", ("used" if pr.get("auto_merge") else "not used") if measured else not_yet),
+    ]
+    return [{"fact": fact, "value": value} for fact, value in rows]
 
 
 def _weekly(rows):
@@ -2532,11 +3985,24 @@ def main(argv=None):
         default="auto",
         help="auto runs a full pass once a day and incremental passes the rest of the hours",
     )
+    parser.add_argument(
+        "--refresh-old",
+        action="store_true",
+        help=(
+            "a one-time catch-up: refetch every row stored in an older record format in this pass instead of "
+            f"{LEGACY_REFRESH_PER_PASS} per pass. Lists the whole window (--mode auto becomes full). A pass "
+            "stopped by the rate limit resumes on the next run."
+        ),
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
     service = CIObservePRs(db_file=args.db, api=StandaloneAPI(), repos=args.repo)
-    summary = service.backfill(days=args.days, force=args.force, limit=args.limit, mode=args.mode)
+    service.refresh_old = args.refresh_old
+    # An incremental pass lists only what changed lately; the catch-up
+    # needs every pull request of the window.
+    mode = "full" if args.refresh_old and args.mode == "auto" else args.mode
+    summary = service.backfill(days=args.days, force=args.force, limit=args.limit, mode=mode)
     print(json.dumps(summary, indent=2))
     return 0
 

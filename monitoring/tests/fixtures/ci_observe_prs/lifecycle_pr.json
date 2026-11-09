@@ -1,0 +1,227 @@
+{
+  "pr": {
+    "number": 104,
+    "title": "Restart VMs from the console",
+    "state": "closed",
+    "created_at": "2026-10-05T08:00:00Z",
+    "updated_at": "2026-10-05T16:00:00Z",
+    "merged_at": "2026-10-05T16:00:00Z",
+    "closed_at": "2026-10-05T16:00:00Z",
+    "draft": false,
+    "html_url": "https://github.com/osac-project/osac/pull/104",
+    "user": {"login": "author4", "type": "User"},
+    "labels": []
+  },
+  "timeline": [
+    {"event": "ready_for_review", "created_at": "2026-10-05T09:00:00Z", "actor": {"login": "author4"}},
+    {
+      "event": "review_requested",
+      "created_at": "2026-10-05T09:00:00Z",
+      "actor": {"login": "author4"},
+      "requested_team": {"slug": "wg-vmaas", "name": "wg-vmaas"}
+    },
+    {
+      "event": "review_requested",
+      "created_at": "2026-10-05T09:00:00Z",
+      "actor": {"login": "author4"},
+      "requested_team": {"slug": "wg-caas", "name": "wg-caas"}
+    },
+    {
+      "event": "reviewed",
+      "submitted_at": "2026-10-05T10:00:00Z",
+      "state": "commented",
+      "user": {"login": "rev-vm"}
+    },
+    {
+      "event": "head_ref_force_pushed",
+      "created_at": "2026-10-05T14:30:00Z",
+      "actor": {"login": "author4"},
+      "commit_id": "f00d1234567890abcdef"
+    },
+    {
+      "event": "review_dismissed",
+      "created_at": "2026-10-05T14:30:00Z",
+      "actor": {"login": "author4"},
+      "dismissed_review": {
+        "state": "approved",
+        "review_id": 9402,
+        "dismissal_message": null,
+        "dismissal_commit_id": "f00d1234567890abcdef"
+      }
+    },
+    {
+      "event": "review_dismissed",
+      "created_at": "2026-10-05T14:30:00Z",
+      "actor": {"login": "author4"},
+      "dismissed_review": {
+        "state": "approved",
+        "review_id": 9403,
+        "dismissal_message": null,
+        "dismissal_commit_id": "f00d1234567890abcdef"
+      }
+    },
+    {"event": "merged", "created_at": "2026-10-05T16:00:00Z", "actor": {"login": "author4"}}
+  ],
+  "reviews": [
+    {
+      "id": 9401,
+      "state": "COMMENTED",
+      "submitted_at": "2026-10-05T10:00:00Z",
+      "user": {"login": "rev-vm", "type": "User"},
+      "commit_id": "aaa0000000000000000000000000000000000000",
+      "html_url": "https://github.com/osac-project/osac/pull/104#pullrequestreview-9401"
+    },
+    {
+      "id": 9404,
+      "state": "COMMENTED",
+      "submitted_at": "2026-10-05T10:15:00Z",
+      "user": {"login": "author4", "type": "User"},
+      "commit_id": "aaa0000000000000000000000000000000000000"
+    },
+    {
+      "id": 9402,
+      "state": "DISMISSED",
+      "submitted_at": "2026-10-05T11:00:00Z",
+      "user": {"login": "rev-vm", "type": "User"},
+      "commit_id": "bbb0000000000000000000000000000000000000"
+    },
+    {
+      "id": 9403,
+      "state": "DISMISSED",
+      "submitted_at": "2026-10-05T13:00:00Z",
+      "user": {"login": "rev-caas", "type": "User"},
+      "commit_id": "ccc0000000000000000000000000000000000000"
+    },
+    {
+      "id": 9405,
+      "state": "APPROVED",
+      "submitted_at": "2026-10-05T15:00:00Z",
+      "user": {"login": "rev-vm", "type": "User"},
+      "commit_id": "ddd0000000000000000000000000000000000000"
+    },
+    {
+      "id": 9406,
+      "state": "APPROVED",
+      "submitted_at": "2026-10-05T15:10:00Z",
+      "user": {"login": "rev-caas", "type": "User"},
+      "commit_id": "eee0000000000000000000000000000000000000"
+    }
+  ],
+  "commits": [
+    {
+      "sha": "d1d1000000000000000000000000000000000000",
+      "parents": [{"sha": "p0"}],
+      "author": {"login": "author4"},
+      "commit": {
+        "message": "Add the restart action\n\nbody",
+        "author": {"name": "Author Four", "date": "2026-10-05T07:40:00Z"},
+        "committer": {"name": "Author Four", "date": "2026-10-05T14:28:00Z"}
+      }
+    },
+    {
+      "sha": "ddd0000000000000000000000000000000000000",
+      "parents": [{"sha": "d1d1"}],
+      "author": {"login": "author4"},
+      "commit": {
+        "message": "Address review",
+        "author": {"name": "Author Four", "date": "2026-10-05T10:20:00Z"},
+        "committer": {"name": "Author Four", "date": "2026-10-05T14:29:00Z"}
+      }
+    },
+    {
+      "sha": "eee0000000000000000000000000000000000000",
+      "parents": [{"sha": "ddd0"}, {"sha": "main1"}],
+      "author": {"login": "author4"},
+      "commit": {
+        "message": "Merge branch 'main' into restart",
+        "author": {"name": "Author Four", "date": "2026-10-05T15:05:00Z"},
+        "committer": {"name": "GitHub", "date": "2026-10-05T15:05:00Z"}
+      }
+    }
+  ],
+  "graph": {
+    "changedFiles": 7,
+    "additions": 240,
+    "deletions": 31,
+    "reviewRequests": {"nodes": []},
+    "reviews": {
+      "nodes": [
+        {
+          "fullDatabaseId": "9401",
+          "state": "COMMENTED",
+          "submittedAt": "2026-10-05T10:00:00Z",
+          "author": {"login": "rev-vm"},
+          "onBehalfOf": {"nodes": [{"slug": "wg-vmaas"}]}
+        },
+        {
+          "fullDatabaseId": "9404",
+          "state": "COMMENTED",
+          "submittedAt": "2026-10-05T10:15:00Z",
+          "author": {"login": "author4"},
+          "onBehalfOf": {"nodes": []}
+        },
+        {
+          "fullDatabaseId": "9402",
+          "state": "DISMISSED",
+          "submittedAt": "2026-10-05T11:00:00Z",
+          "author": {"login": "rev-vm"},
+          "onBehalfOf": {"nodes": []}
+        },
+        {
+          "fullDatabaseId": "9403",
+          "state": "DISMISSED",
+          "submittedAt": "2026-10-05T13:00:00Z",
+          "author": {"login": "rev-caas"},
+          "onBehalfOf": {"nodes": [{"slug": "wg-caas"}, {"slug": "maintainers"}]}
+        },
+        {
+          "fullDatabaseId": "9405",
+          "state": "APPROVED",
+          "submittedAt": "2026-10-05T15:00:00Z",
+          "author": {"login": "rev-vm"},
+          "onBehalfOf": {"nodes": []}
+        },
+        {
+          "fullDatabaseId": "9406",
+          "state": "APPROVED",
+          "submittedAt": "2026-10-05T15:10:00Z",
+          "author": {"login": "rev-caas"},
+          "onBehalfOf": {"nodes": []}
+        }
+      ]
+    },
+    "timelineItems": {
+      "pageInfo": {"hasNextPage": false, "endCursor": null},
+      "nodes": [
+        {
+          "__typename": "AutoMergeEnabledEvent",
+          "createdAt": "2026-10-05T13:05:00Z",
+          "actor": {"login": "author4"}
+        },
+        {
+          "__typename": "AddedToMergeQueueEvent",
+          "createdAt": "2026-10-05T13:05:00Z",
+          "actor": {"login": "author4"},
+          "enqueuer": {"login": "author4"}
+        },
+        {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-10-05T13:50:00Z",
+          "actor": {"login": "github-merge-queue"},
+          "reason": "FAILED_CHECKS"
+        },
+        {
+          "__typename": "AutoMergeEnabledEvent",
+          "createdAt": "2026-10-05T15:12:00Z",
+          "actor": {"login": "author4"}
+        },
+        {
+          "__typename": "AddedToMergeQueueEvent",
+          "createdAt": "2026-10-05T15:12:00Z",
+          "actor": {"login": "author4"},
+          "enqueuer": {"login": "author4"}
+        }
+      ]
+    }
+  }
+}

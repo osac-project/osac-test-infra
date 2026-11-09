@@ -2027,6 +2027,12 @@ class WorkflowExporter:
         self._update_rate_limit(resp)
         return resp
 
+    def _post(self, url, body):
+        """A POST to the GitHub API: the GraphQL query the Pull requests
+        page sends for an open pull request's lifecycle. GraphQL has its own
+        budget, so the REST rate-limit counters are left as they are."""
+        return requests.post(url, json=body, headers=self.headers, timeout=30)
+
     # -- repo listing --------------------------------------------------------
 
     def get_repos(self):

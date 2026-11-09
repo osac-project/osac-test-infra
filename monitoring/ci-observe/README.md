@@ -12,7 +12,7 @@ Sign in to Grafana with GitHub. Open **ci-observe** and choose **Overview**.
 | **Where the time goes** | Which phases, steps, tests and product waits take the time, and what got slower? |
 | **Why runs fail** | Did runs fail on tests, the build, the OSAC install or CI infrastructure? Which tests fail or flake? |
 | **Test history** | How long does one test take, is it getting slower, does it fail, and what does it wait for? |
-| **Pull requests** | How long do pull requests wait for review, approval and the merge queue? How often are they rebased and rerun? |
+| **Pull requests** | How long do pull requests wait for review, approval and the merge queue? Where does each one's time go, event by event? How often are they rebased, re-reviewed and rerun, and does needing more working groups slow them down? |
 | **All runs** | Every E2E run, newest first. |
 | **E2E run** | One run: what failed and where its time went. |
 
@@ -71,9 +71,21 @@ Pick the **Test** (type to search; the list starts with the tests that take the 
 
 ## Pull requests
 
-The top half covers every pull request merged or closed in the window, in the chosen **Repository**. It shows the median time to merge, the wait for a first review, review to approval, approval to the queue, time in the merge queue, queue ejections and re-queues, commits, rebases, force pushes, changes requested, E2E runs, extra E2E runs and failed E2E runs, then the stage medians per week and every pull request, newest first. The E2E numbers describe the pull requests that ran at least one suite run: most change nothing a suite tests. Click a number to open that pull request below. An attempt is **ejected** when its own checks failed or timed out, and **re-queued** when it was cancelled or replaced by a later attempt: every entry behind a failing one is re-queued, so a re-queue is not the pull request's failure.
+**Repository**, **Author** and **Working groups to approve** filter everything on the page except the one pull request below. Working groups are the code-owner teams GitHub reports on the pull request (see [`model.md`](model.md#pull-requests)).
 
-The bottom half covers one pull request. Its identity line, the total and four long stages (Authoring, Review, Waiting and Queue), the stacked stage bar, the queue attempts with how each one ended (ejected, re-queued or passed), and every E2E run with the commit it tested. Queue time ends at the last merge-queue attempt; for an open pull request still in the queue it runs to now. An open pull request is read from GitHub when the page loads.
+The top half covers every pull request merged or closed in the window. The tiles show the median time to merge, the wait for a first review, review to approval, first approval to the queue, time in the merge queue, queue ejections and re-queues, commits, rebases, force pushes, changes requested, E2E runs and failed E2E runs, then review rounds, re-approvals after a push and after a rebase, the wait for a re-approval, last approval to the queue, files per pull request, the share that needed two or more working groups, and how many pull requests have their lifecycle read. Below them:
+
+- **Stage medians per week**.
+- **Every merged pull request**: one dot each, merge date against time to merge on a log scale, colored by how many working groups had to approve it. Hover for the pull request; click to open it below.
+- **Time to merge, week by week**: a heatmap, fastest at the bottom.
+- **Where the time goes**, by working groups and by files changed: the average time in each state, which adds up to the average time to merge.
+- **Review rounds**, **times in the merge queue** and **working groups** per pull request.
+- **The slowest pull requests, stretch by stretch**: the 20 slowest, each bar its whole life in order, colored by state.
+- Every pull request, newest first, with its files, working groups, review rounds and re-approvals. Click a number to open it below.
+
+The E2E numbers describe the pull requests that ran at least one suite run: most change nothing a suite tests. An attempt is **ejected** when its own checks failed or timed out, and **re-queued** when it was cancelled or replaced by a later attempt: every entry behind a failing one is re-queued, so a re-queue is not the pull request's failure.
+
+The bottom half covers one pull request: its identity line, the total and four long stages (Authoring, Review, Waiting and Queue), the **Lifecycle** bar (every stretch in order: draft, waiting for a reviewer, with the author, waiting for another working group, approved but not queued, in the merge queue, out of the queue), **What happened** (every event, with who and when: reviews and the teams they counted for, pushes, rebases, the base branch merged in, dismissed approvals, merge when ready, queue entries and removals with GitHub's reason, the merge), **This pull request in numbers**, the queue attempts with how each ended, and every E2E run with the commit it tested. An open pull request is read from GitHub when the page loads; its lifecycle runs to now.
 
 ## All runs
 

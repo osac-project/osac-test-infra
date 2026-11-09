@@ -43,6 +43,7 @@ class FakeGitHub:
         self.api_url = api_url
         self.routes = {}
         self.calls = []
+        self.posts = []
 
     def add(self, path, *responses):
         self.routes[path] = list(responses)
@@ -60,6 +61,26 @@ class FakeGitHub:
 
     def count(self, path):
         return self.calls.count(path)
+
+    def add_graphql(self, repo, number, *responses):
+        """Route the lifecycle GraphQL query for one pull request."""
+        self.routes[f"graphql:{repo}#{number}"] = list(responses)
+
+    def post(self, url, body=None, json=None, headers=None, timeout=None):
+        """A GraphQL POST, routed by the repository and pull request in its
+        variables. POSTs are kept apart from `calls`, which counts the REST
+        budget. Called as requests.post(url, json=...) or as an API
+        object's _post(url, body)."""
+        variables = (body or json or {}).get("variables") or {}
+        key = f"graphql:{variables.get('name')}#{variables.get('number')}"
+        self.posts.append(key)
+        queue = self.routes.get(key)
+        if not queue:
+            return FakeResponse(404, text="not routed")
+        result = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
 
 def iso(dt):

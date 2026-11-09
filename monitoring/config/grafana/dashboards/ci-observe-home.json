@@ -5092,8 +5092,8 @@
     {
       "type": "stat",
       "id": 29,
-      "title": "Approval to queue",
-      "description": "Median time from the first approval to entering the merge queue. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "title": "First approval to queue",
+      "description": "Median time from the first approval to entering the merge queue. The Pull requests page also shows the last approval to queue. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 12,
         "y": 57,

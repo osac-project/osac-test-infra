@@ -14,6 +14,11 @@ The ci-observe pages were redesigned around four across-runs pages. Built and ch
 - The workflow exporter stores each E2E job's timeline (runner wait, step start and end). `ci_observe_phases.py` maps every step to a phase and every failure to a cause.
 - `ci-observe-trends.timer` runs hourly and reads only runs it has not read; it also archives the suite runs for 90 days. `ci-observe-spans.timer` rolls each recorded run's trace up once into per-test setup, waits, actions and teardown.
 - **Pull requests** gained the window's medians, rebases, reviews, queue ejections and E2E reruns above the one-pull-request detail. `prs.db` keeps 90 days.
+- **Pull requests** gained each pull request's lifecycle: every event (`pr_timeline`), the stretches it spent in each state, review rounds, re-approvals, files changed and the working groups that had to approve; Author and Working groups filters; and the across-pull-request views (every merged pull request as a dot, time to merge per week, where the time goes by working groups and by files, the slowest pull requests stretch by stretch). The backfill reads them with one GraphQL query per pull request on top of the REST calls; GraphQL has its own hourly budget, and the pass stops when fewer than 100 points remain. Rows stored before are read again 100 per pass. To read them all at once, run the one-time catch-up on the central host (re-run it if it stops on the rate limit; it resumes):
+
+  ```bash
+  podman exec workflow-exporter python3 /app/ci_observe_prs.py --days 90 --refresh-old
+  ```
 - **Start here** is now **Runs** (the list), filtered to the three suites; **E2E run** shows where the run's time went.
 - `test_ci_observe_dashboard_contract.py` serves the exporter over the seed and resolves every panel query of every page.
 

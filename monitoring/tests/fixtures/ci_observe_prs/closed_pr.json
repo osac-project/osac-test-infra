@@ -36,6 +36,7 @@
   ],
   "reviews": [
     {
+      "id": 9201,
       "user": {"login": "reviewer1", "type": "User"},
       "state": "COMMENTED",
       "submitted_at": "2026-10-02T09:30:00Z"
@@ -43,5 +44,29 @@
   ],
   "commits": [
     {"sha": "ddd4444"}
-  ]
+  ],
+  "graph": {
+    "changedFiles": 12,
+    "additions": 410,
+    "deletions": 95,
+    "reviewRequests": {
+      "nodes": [
+        {"asCodeOwner": true, "requestedReviewer": {"__typename": "Team", "slug": "wg-connectivity"}},
+        {"asCodeOwner": true, "requestedReviewer": {"__typename": "Team", "slug": "wg-infra"}},
+        {"asCodeOwner": false, "requestedReviewer": {"__typename": "User", "login": "reviewer1"}}
+      ]
+    },
+    "reviews": {
+      "nodes": [
+        {
+          "fullDatabaseId": "9201",
+          "state": "COMMENTED",
+          "submittedAt": "2026-10-02T09:30:00Z",
+          "author": {"login": "reviewer1"},
+          "onBehalfOf": {"nodes": []}
+        }
+      ]
+    },
+    "timelineItems": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+  }
 }

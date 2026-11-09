@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from helpers import FakeResponse, make_gh_job, make_job, make_run, make_step
@@ -94,7 +96,11 @@ class TestCollect:
         github.add(R("osac/actions/runs/21"), FakeResponse(payload=make_run(id=21, status="in_progress")))
         github.add(R("osac/actions/runs/22"), RuntimeError("boom"))
 
-        exporter._upsert_job(make_job(id=50, event="merge_group", branch="gh-readonly-queue/main/pr-5-ab"))
+        # Recent: the cycle evicts jobs older than the 30-day job history,
+        # and a fixed date stops being recent.
+        recent = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        exporter._upsert_job(make_job(id=50, event="merge_group", branch="gh-readonly-queue/main/pr-5-ab",
+                                      created_at=recent, updated_at=recent))
         exporter.collect()
 
         assert gauge(wfe.queued_runs, org=org, repo="osac") == 1

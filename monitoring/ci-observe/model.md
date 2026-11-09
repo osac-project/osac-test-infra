@@ -8,7 +8,7 @@ CI Observe covers the VMaaS, CaaS and BMaaS E2E suites. Four pages look across r
 | **Where the time goes** | All suite runs in a window | Which phases, steps, tests and product waits take the time? What got slower? |
 | **Why runs fail** | All failed suite runs in a window | Tests, build, install or CI infrastructure? Which tests fail or flake, and with what error? |
 | **Test history** | One test over a window | How long does it take, is it getting slower, does it fail, what does it wait for? |
-| **Pull requests** | All pull requests in a window, then one pull request | How long do review, approval and the merge queue take? How often are pull requests rebased and rerun? |
+| **Pull requests** | All pull requests in a window, then one pull request | How long do review, approval and the merge queue take? Where does each pull request's time go? How often are pull requests rebased, re-reviewed and rerun? |
 | **All runs** | Every run | Which runs ran, and which one do I open? |
 | **E2E run** | One GitHub Actions run | Did it pass, what failed, and where did its time go? |
 
@@ -96,10 +96,31 @@ A test is keyed by its canonical name, `tests.e2e.vmaas.sanity.test_vm::TestVm::
 
 | Section | Contents |
 |---|---|
-| All pull requests | The window's medians (open to merge, wait for first review, review to approval, approval to queue, in the queue), ejections, commits, rebases, force pushes, changes requested, E2E runs, reruns and failed E2E runs; stage medians per week; every pull request. |
-| One pull request | Identity line, the total and four long stages, the stacked stage bar, queue attempts with how each ended and why, every E2E run with the commit it tested, status. |
+| Filters | Window, repository, author, working groups to approve (any, none, 1, 2, 3 or more). |
+| All pull requests | The window's medians (open to merge, wait for first review, review to approval, first and last approval to queue, in the queue), ejections, commits, rebases, force pushes, changes requested, review rounds, re-approvals, files, working groups, E2E runs, reruns and failed E2E runs; stage medians per week; every merged pull request as a dot; time to merge per week; where the time goes by working groups and by files; review rounds, queue entries and working groups per pull request; the 20 slowest pull requests stretch by stretch; every pull request. |
+| One pull request | Identity line, the total and four long stages, the lifecycle bar, every event, its numbers, queue attempts with how each ended and why, every E2E run with the commit it tested, status. |
 
-Authoring runs from opening to the first human review, review to the first approval, waiting to the merge queue, queue to the end of the last attempt. A queue attempt ends **ejected** when its own merge_group runs failed or timed out (explained by the GitHub comment when one exists), **re-queued** when it was cancelled or replaced by a later attempt (every entry behind a failing one is, and so is an entry whose pull request got a new push or was taken out by hand), and **passed** otherwise. GitHub keeps no queue history, so all three are derived. An open pull request is read from GitHub when the page loads.
+Authoring runs from opening to the first human review, review to the first approval, waiting to the merge queue, queue to the end of the last attempt. The first approval is the first one given, even when a later push dismissed it; the author's own replies in review threads are not reviews. The merge queue entry is GitHub's added-to-merge-queue time; a row stored before it was read uses the start of the first merge_group run.
+
+The **lifecycle** says where a pull request was at every moment, from its events in order:
+
+| State | From | Until |
+|---|---|---|
+| Draft | Opened as a draft, or converted to one | Ready for review |
+| Waiting for a reviewer | Ready, or a push after review comments | A human review |
+| With the author | Changes requested, or comments while it waited | The next push |
+| Waiting for another WG | An approval while other working groups still have to approve | The last working group's approval |
+| Approved, not queued | Every working group approved | Added to the merge queue |
+| In the merge queue | GitHub's added event | Merged, or removed |
+| Out of the queue | Removed for any reason but the merge (GitHub's reason is kept) | Added again |
+
+A push after the approval sends the pull request back to Waiting for a reviewer when GitHub dismissed the approval, or when an approval follows before the next queue entry: that is a re-review. A change request holds it there until the same reviewer approves.
+
+**Working groups to approve** are the code-owner teams GitHub reports: the teams each review was made on behalf of, plus the code-owner review requests still pending. GitHub keeps no list of a requirement once it is met, so it is read from who approved for whom, not computed from CODEOWNERS. `maintainers`, the parent of the `wg-*` teams, adds nothing next to a working group; alone it counts as one (any working group). A team review requested by hand reads the same as a code-owner request once that team reviewed.
+
+A **review round** is one version of the code that got a human review (a review records the commit it looked at, which survives a rebase). A **re-approval** is an approval by a reviewer, or for a team, that had approved an earlier version; it follows a rebase when a force push came between the two. Pushes come from the commits on the branch now and GitHub's force-push events: a rebase replaces the commits, so the pushes before the last rebase show only as that force push.
+
+A queue attempt ends **ejected** when its own merge_group runs failed or timed out (explained by the GitHub comment when one exists), **re-queued** when it was cancelled or replaced by a later attempt (every entry behind a failing one is, and so is an entry whose pull request got a new push or was taken out by hand), and **passed** otherwise. The attempts are derived from the runs; the removals and their reasons in the event list are GitHub's own. An open pull request is read from GitHub when the page loads.
 
 ## All runs
 

@@ -119,7 +119,9 @@ def served(wfe, tmp_path_factory):
     patch.setattr(wfe, "TOKEN", None)
     patch.setattr(wfe, "REPOS_FILTER", [])
     # Nothing leaves the test: every GitHub call is a 404.
-    patch.setattr(wfe.requests, "get", FakeGitHub(wfe.API_URL).get)
+    github = FakeGitHub(wfe.API_URL)
+    patch.setattr(wfe.requests, "get", github.get)
+    patch.setattr(wfe.requests, "post", github.post)
     exporter = wfe.WorkflowExporter()
     patch.setattr(wfe.ExporterHandler, "exporter", exporter)
     server = ThreadingHTTPServer(("127.0.0.1", 0), wfe.ExporterHandler)
@@ -149,6 +151,10 @@ def variable_values(document, served):
             rows = resolve(served.get(interpolate(infinity["url"], values)), infinity["root_selector"])
             value_column = next(column["selector"] for column in infinity["columns"] if column["text"] == "__value")
             assert rows, f"variable {variable['name']} has no options on the seed"
+            if variable.get("includeAll") and (variable.get("current") or {}).get("value") == "$__all":
+                # A page that opens on All sends the variable's All value.
+                values[variable["name"]] = variable["allValue"]
+                continue
             values[variable["name"]] = str(rows[0][value_column])
             if variable["name"] == "pr_number":
                 # The newest pull request may have run no E2E suite, which the

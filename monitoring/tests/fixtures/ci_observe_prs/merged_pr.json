@@ -48,16 +48,19 @@
   ],
   "reviews": [
     {
+      "id": 9001,
       "user": {"login": "coderabbitai[bot]", "type": "Bot"},
       "state": "COMMENTED",
       "submitted_at": "2026-10-01T10:05:00Z"
     },
     {
+      "id": 9002,
       "user": {"login": "reviewer1", "type": "User"},
       "state": "COMMENTED",
       "submitted_at": "2026-10-01T10:20:00Z"
     },
     {
+      "id": 9003,
       "user": {"login": "reviewer1", "type": "User"},
       "state": "APPROVED",
       "submitted_at": "2026-10-01T10:50:00Z"
@@ -67,5 +70,37 @@
     {"sha": "aaa1111"},
     {"sha": "bbb2222"},
     {"sha": "ccc3333"}
-  ]
+  ],
+  "graph": {
+    "changedFiles": 3,
+    "additions": 120,
+    "deletions": 14,
+    "reviewRequests": {"nodes": []},
+    "reviews": {
+      "nodes": [
+        {
+          "fullDatabaseId": "9001",
+          "state": "COMMENTED",
+          "submittedAt": "2026-10-01T10:05:00Z",
+          "author": {"login": "coderabbitai"},
+          "onBehalfOf": {"nodes": []}
+        },
+        {
+          "fullDatabaseId": "9002",
+          "state": "COMMENTED",
+          "submittedAt": "2026-10-01T10:20:00Z",
+          "author": {"login": "reviewer1"},
+          "onBehalfOf": {"nodes": [{"slug": "wg-vmaas"}]}
+        },
+        {
+          "fullDatabaseId": "9003",
+          "state": "APPROVED",
+          "submittedAt": "2026-10-01T10:50:00Z",
+          "author": {"login": "reviewer1"},
+          "onBehalfOf": {"nodes": []}
+        }
+      ]
+    },
+    "timelineItems": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+  }
 }

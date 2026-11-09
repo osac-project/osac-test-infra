@@ -68,6 +68,8 @@ def runs():
 def github(wfe, monkeypatch):
     fake = FakeGitHub(wfe.API_URL)
     monkeypatch.setattr(wfe.requests, "get", fake.get)
+    # The Pull requests page's GraphQL query: unrouted, a 404.
+    monkeypatch.setattr(wfe.requests, "post", fake.post)
     return fake
 
 

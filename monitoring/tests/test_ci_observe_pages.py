@@ -382,13 +382,17 @@ def test_an_empty_text_cell_is_a_dash_not_the_tables_message(path):
 def test_every_override_reaches_a_field_and_no_two_fields_share_a_name(path):
     """A query column's field is named by its text. An override naming
     anything else changes nothing, and two fields of one name are both
-    hidden or both shown: the PR page's result column vanished that way."""
+    hidden or both shown: the PR page's result column vanished that way.
+    A panel of several queries (one frame each, the same columns) names its
+    fields once per frame."""
     for item in every_panel(json.loads(path.read_text())["panels"]):
         columns = [column for target in item.get("targets", []) for column in target.get("columns", [])]
         if not columns:
             continue
+        for target in item.get("targets", []):
+            names = [column["text"] for column in target.get("columns", [])]
+            assert len(names) == len(set(names)), (item["title"], names)
         names = [column["text"] for column in columns]
-        assert len(names) == len(set(names)), (item["title"], names)
         for override in item.get("fieldConfig", {}).get("overrides", []):
             if override["matcher"].get("id") == "byName":
                 assert override["matcher"]["options"] in names, (item["title"], override["matcher"]["options"])

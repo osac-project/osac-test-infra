@@ -14,15 +14,16 @@ Each question has one authoritative source.
 | How many pods, how much CPU and memory? | ci-observe Prometheus kubelet metrics | 30 days |
 | Which run, pull request and commit is this? | Workflow exporter, joined by run id | 30 days |
 | Which E2E runs did this pull request make? | Workflow exporter and the `trends.db` archive, joined by pull request number | 90 days |
-| When was this pull request ready, reviewed, approved, queued, rebased? | `prs.db`; for an open pull request, GitHub read when the page loads | 90 days |
-| Why did this pull request leave the queue? | Failed queue run plus the GitHub comment in `prs.db` | 90 days |
+| When was this pull request ready, reviewed, approved, queued, rebased? | `prs.db` (`pr_events`, and every event in `pr_timeline`), from GitHub's REST timeline, reviews and commits plus one GraphQL query; for an open pull request, GitHub read when the page loads | 90 days |
+| Which working groups had to approve it, and how big is it? | The GraphQL query: the teams each review counted for (`onBehalfOf`), the pending code-owner requests (`asCodeOwner`), files and lines changed | 90 days |
+| Why did this pull request leave the queue? | GitHub's removed-from-merge-queue event and its reason; each attempt's outcome from its merge_group runs plus the GitHub comment | 90 days |
 | What did the pod log? | GitHub artifact; Loki does not receive pod logs | 30 days |
 
 ## Rules
 
 1. GitHub owns pass or fail. A recording explains a result but never overrides it.
 2. A test report that is missing is missing data, not a pass.
-3. A pull request that left the queue is inferred from its failed queue run and a GitHub comment. GitHub keeps no queue history.
+3. A pull request's queue entries and removals are GitHub's own events. How each attempt ended (ejected, re-queued, passed) is inferred from its merge_group runs and a GitHub comment.
 4. Cluster graphs show the cluster under test, not the runner. A flat zero before the cluster is created is correct.
 5. Every link is built from the stored repository, run id, pull request number or commit. Do not guess a URL from a workflow name.
 6. A run is read once. The JUnit rollup and the span rollup record what they read, so an hourly pass costs only the new runs.

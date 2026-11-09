@@ -4,7 +4,8 @@
 shaped exactly like production: the workflow exporter's workflow-exporter.db
 (E2E job rows with job and step timelines, and the capture registry),
 trends.db (the JUnit rows of every run, the run archive and the span
-rollup) and prs.db (pull requests and their queue attempts).
+rollup) and prs.db (pull requests, their lifecycles and their queue
+attempts).
 
 The numbers follow the real workflows: a VMaaS full install is about 100
 minutes on a runner, CaaS and BMaaS about two and a half hours, tests are
@@ -441,6 +442,111 @@ def _tests_for(rng, suite, failed, progress, capture, sha):
     return cases, (tests, waits, fixtures)
 
 
+PR_AUTHORS = ("akshay-n", "bella-ops", "carlos-qe", "dana-net", "eitan-dev", "fiona-ui")
+WG_TEAMS = ("wg-vmaas", "wg-caas", "wg-bmaas", "wg-infra", "wg-connectivity", "wg-ui")
+
+
+def _pr_story(rng, opened):
+    """One pull request's way to the merge, as the lifecycle events the
+    backfill derives from GitHub: reviews, pushes, approvals for each
+    working group, a rebase that dismissed them, the queue and its
+    ejections. Returns (events, graph, numbers)."""
+    wgs = rng.choices((0, 1, 2, 3), weights=(1, 10, 5, 2))[0]
+    teams = rng.sample(WG_TEAMS, wgs)
+    any_wg = wgs == 1 and rng.random() < 0.4
+    if any_wg:
+        teams = []
+    behalf = (["maintainers"] if any_wg else teams[:])
+    files = max(1, int(rng.lognormvariate(1.0 + 0.6 * wgs, 0.7)))
+    graph = {
+        "changedFiles": files,
+        "additions": files * rng.randint(5, 60),
+        "deletions": files * rng.randint(0, 20),
+        "reviewRequests": {"nodes": []},
+        "reviews": {"nodes": []},
+    }
+    events = []
+    review_id = [0]
+
+    def at(moment):
+        return _iso(moment)
+
+    def review(moment, reviewer, state, team=None):
+        review_id[0] += 1
+        teams_of = [team] if team else []
+        events.append({"at": at(moment), "kind": "review", "actor": reviewer, "state": state,
+                       "detail": f"for {team}" if team else "", "url": "", "review_id": review_id[0],
+                       "commit": f"c{len([e for e in events if e['kind'] in ('commit', 'force_push')])}",
+                       "teams": teams_of})
+        if team:
+            graph["reviews"]["nodes"].append({"fullDatabaseId": str(review_id[0]), "author": {"login": reviewer},
+                                              "onBehalfOf": {"nodes": [{"slug": team}]}})
+        return review_id[0]
+
+    def push(moment, kind="commit"):
+        events.append({"at": at(moment), "kind": kind, "actor": "", "detail": "", "url": ""})
+
+    hours = lambda value: timedelta(hours=value)  # noqa: E731
+    draft = rng.random() < 0.15
+    events.append({"at": at(opened), "kind": "opened", "actor": "", "detail": "draft" if draft else "", "url": "",
+                   "draft": draft})
+    t = opened
+    if draft:
+        t += hours(rng.expovariate(1 / 6))
+        events.append({"at": at(t), "kind": "ready", "actor": "", "detail": "", "url": ""})
+    owners = behalf or ["maintainers"]
+    reviewer_of = {team: f"{team.removeprefix('wg-')}-reviewer" for team in owners}
+    first_team = owners[0]
+    t += hours(rng.expovariate(1 / 8))
+    review(t, reviewer_of[first_team], rng.choice(("COMMENTED", "COMMENTED", "CHANGES_REQUESTED")),
+           first_team if behalf else None)
+    for _ in range(rng.choices((0, 1, 2, 3), weights=(5, 3, 2, 1))[0]):
+        t += hours(rng.expovariate(1 / 5))
+        push(t)
+        t += hours(rng.expovariate(1 / 6))
+        review(t, reviewer_of[first_team], rng.choice(("COMMENTED", "CHANGES_REQUESTED")),
+               first_team if behalf else None)
+    t += hours(rng.expovariate(1 / 4))
+    push(t)
+    approvals = []
+    for index, team in enumerate(owners):
+        t += hours(rng.expovariate(1 / (4 + 8 * index)))
+        approvals.append((review(t, reviewer_of[team], "APPROVED", team if behalf else None), team))
+    if rng.random() < 0.25:
+        t += hours(rng.expovariate(1 / 3))
+        push(t, "merge_commit")
+    if rng.random() < 0.35:
+        # A rebase after the approvals; GitHub dismissed them as stale.
+        t += hours(rng.expovariate(1 / 3))
+        push(t, "force_push")
+        for approval_id, team in approvals:
+            events.append({"at": at(t), "kind": "dismissed", "actor": "", "detail": "", "url": "",
+                           "review_id": approval_id, "state": "APPROVED", "reviewer": reviewer_of[team]})
+        for _, team in approvals:
+            t += hours(rng.expovariate(1 / 4))
+            review(t, reviewer_of[team], "APPROVED", team if behalf else None)
+    if rng.random() < 0.6:
+        events.append({"at": at(t), "kind": "auto_merge_on", "actor": "", "detail": "", "url": ""})
+        t += timedelta(minutes=1)
+    else:
+        t += hours(rng.expovariate(1 / 3))
+    entries = 1 + (1 if rng.random() < 0.2 else 0) + (1 if rng.random() < 0.05 else 0)
+    attempts = []
+    for entry in range(entries):
+        events.append({"at": at(t), "kind": "queued", "actor": "", "detail": "", "url": ""})
+        start = t
+        t += hours(1.7)
+        attempts.append((start, t, entry < entries - 1))
+        if entry < entries - 1:
+            events.append({"at": at(t), "kind": "dequeued", "actor": "github-merge-queue",
+                           "detail": "failed checks", "url": ""})
+            t += hours(rng.expovariate(1 / 2))
+    merged = t + timedelta(minutes=rng.uniform(1, 10))
+    events.append({"at": at(merged), "kind": "merged", "actor": "", "detail": "", "url": ""})
+    events.sort(key=lambda event: event["at"])
+    return events, graph, {"attempts": attempts, "merged": merged}
+
+
 def _seed_prs(path, rng, now, days, pr_runs):
     prs = _load("ci_observe_prs", "ci_observe_prs.py")
     service = prs.CIObservePRs(db_file=str(path))
@@ -448,18 +554,25 @@ def _seed_prs(path, rng, now, days, pr_runs):
     with service._db() as conn:
         for number in sorted(pr_runs):
             opened = now - timedelta(days=rng.uniform(1, days), hours=rng.uniform(0, 20))
-            first_review = opened + timedelta(hours=rng.expovariate(1 / 9))
-            approval = first_review + timedelta(hours=rng.expovariate(1 / 14))
-            queued = approval + timedelta(hours=rng.expovariate(1 / 3))
-            attempts = 1 + (1 if rng.random() < 0.2 else 0)
-            last_attempt = queued + timedelta(hours=1.8 * attempts + rng.uniform(0, 1))
-            merged = last_attempt + timedelta(minutes=rng.uniform(1, 10))
+            events, graph, story = _pr_story(rng, opened)
+            merged = story["merged"]
             if merged > now:
                 continue
+            reviews = [event for event in events if event["kind"] == "review"]
+            approvals = [event for event in reviews if event["state"] == "APPROVED"]
+            first_review = datetime.fromisoformat(reviews[0]["at"].replace("Z", "+00:00"))
+            approval = datetime.fromisoformat(approvals[0]["at"].replace("Z", "+00:00"))
+            queued = story["attempts"][0][0]
+            last_attempt = story["attempts"][-1][1]
+            ready = next((event["at"] for event in events if event["kind"] == "ready"), _iso(opened))
             runs = pr_runs[number]
             suites = {suite for suite, _, _ in runs}
+            # A few rows were stored before the lifecycle existed: the page
+            # says "not measured yet" for them.
+            legacy = rng.random() < 0.08
             record = {
-                "repo": "osac", "number": number, "title": f"OSAC-{number}: change {number}", "author": "dev",
+                "repo": "osac", "number": number, "title": f"OSAC-{number}: change {number}",
+                "author": rng.choice(PR_AUTHORS),
                 "url": f"https://github.com/osac-project/osac/pull/{number}", "state": "merged", "labels": "",
                 "opened_at": _iso(opened), "first_review_at": _iso(first_review), "first_approval_at": _iso(approval),
                 "queued_at": _iso(queued), "merged_at": _iso(merged), "closed_at": _iso(merged),
@@ -470,24 +583,40 @@ def _seed_prs(path, rng, now, days, pr_runs):
                 "queue_seconds": round((last_attempt - queued).total_seconds()),
                 "merged_seconds": round((merged - last_attempt).total_seconds()),
                 "total_seconds": round((merged - opened).total_seconds()),
-                "commit_count": rng.randint(1, 8), "review_count": rng.randint(1, 5),
+                "commit_count": 1 + sum(1 for event in events if event["kind"] == "commit"),
+                "review_count": len(reviews),
                 "review_request_count": 1, "retest_count": max(0, len(runs) - len(suites)),
-                "final_stage": "merged", "fetched_at": _iso(now), "ready_at": _iso(opened),
-                "review_wait_seconds": round((first_review - opened).total_seconds()),
-                "force_push_count": rng.choice([0, 0, 1, 1, 2, 3]), "changes_requested_count": rng.choice([0, 0, 1]),
-                "human_review_count": rng.randint(1, 4), "e2e_runs": len(runs),
+                "final_stage": "merged", "fetched_at": _iso(now), "ready_at": ready,
+                "review_wait_seconds": round(
+                    (first_review - datetime.fromisoformat(ready.replace("Z", "+00:00"))).total_seconds()
+                ),
+                "force_push_count": sum(1 for event in events if event["kind"] == "force_push"),
+                "changes_requested_count": sum(1 for event in reviews if event["state"] == "CHANGES_REQUESTED"),
+                "human_review_count": len(reviews), "e2e_runs": len(runs),
                 "e2e_failures": sum(1 for _, conclusion, _ in runs if conclusion == "failure"),
                 "e2e_retests": max(0, len(runs) - len(suites)),
-                "e2e_versions": len({sha for _, _, sha in runs}), "record_version": prs.RECORD_VERSION,
+                "e2e_versions": len({sha for _, _, sha in runs}),
+                "record_version": prs.COUNTS_RECORD_VERSION if legacy else prs.RECORD_VERSION,
             }
-            columns = list(record)
+            timeline = []
+            if not legacy:
+                columns, timeline = prs.lifecycle_columns(events, _iso(merged), graph)
+                record.update(columns)
+                record["last_approval_wait_seconds"] = prs.ordered_seconds(
+                    record["last_approval_at"], record["queued_at"]
+                )
+            names = list(record)
             conn.execute(
-                f"INSERT INTO pr_events ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
-                [record[column] for column in columns],
+                f"INSERT INTO pr_events ({', '.join(names)}) VALUES ({', '.join('?' for _ in names)})",
+                [record[name] for name in names],
             )
-            for attempt in range(attempts):
-                start = queued + timedelta(hours=1.8 * attempt)
-                ejected = attempt < attempts - 1
+            conn.executemany(
+                "INSERT INTO pr_timeline (repo, number, seq, at, kind, label, actor, detail, url, since_open_s)"
+                " VALUES ('osac', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(number, seq, row["at"], row["kind"], row["label"], row["actor"], row["detail"], row["url"],
+                  row["since_open_s"]) for seq, row in enumerate(timeline)],
+            )
+            for attempt, (start, end, ejected) in enumerate(story["attempts"]):
                 conn.execute(
                     "INSERT INTO pr_queue_attempts (repo, number, run_id, run_number, run_attempt, branch, head_sha,"
                     " run_ids, conclusion, started_at, completed_at, duration_seconds, url, ejected,"
@@ -495,7 +624,7 @@ def _seed_prs(path, rng, now, days, pr_runs):
                     " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (number, 50_000_000 + number * 10 + attempt, f"gh-readonly-queue/main/pr-{number}-abc", "abc",
                      json.dumps([50_000_000 + number * 10 + attempt]), "failure" if ejected else "success",
-                     _iso(start), _iso(start + timedelta(hours=1.7)), round(1.7 * 3600),
+                     _iso(start), _iso(end), round((end - start).total_seconds()),
                      "https://github.com/osac-project/osac/actions/runs/1", 1 if ejected else 0,
                      "E2E VMaaS failed in the merge queue" if ejected else "", "failed_check" if ejected else "",
                      "run" if ejected else "", _iso(now)),

@@ -93,7 +93,8 @@ def runs_window_path(since, until):
 
 
 class FakeAPI:
-    """The exporter-shaped API surface the backfill uses: _get and headers."""
+    """The exporter-shaped API surface the backfill uses: _get, _post (the
+    lifecycle GraphQL query) and headers."""
 
     def __init__(self, github):
         self.github = github
@@ -101,6 +102,16 @@ class FakeAPI:
 
     def _get(self, url):
         return self.github.get(url)
+
+    def _post(self, url, body):
+        return self.github.post(url, body)
+
+
+def graphql_response(graph, remaining=4990):
+    """The GraphQL answer for one pull request, as GitHub wraps it."""
+    return FakeResponse(
+        payload={"data": {"rateLimit": {"cost": 1, "remaining": remaining}, "repository": {"pullRequest": graph}}}
+    )
 
 
 def route_pr(github, fixture, number=None):
@@ -114,6 +125,8 @@ def route_pr(github, fixture, number=None):
     github.add(
         f"/repos/osac-project/{REPO}/pulls/{number}/commits?per_page=100", FakeResponse(payload=fixture["commits"])
     )
+    if "graph" in fixture:
+        github.add_graphql(REPO, number, graphql_response(fixture["graph"]))
 
 
 @pytest.fixture
@@ -1042,7 +1055,9 @@ class TestEndpointDocument:
         assert first["requeued_attempt_count"] == 1
         assert first["age_display"]
         assert first["option_label"].startswith("#103 · merged · ")
-        assert "derived, not recorded by GitHub" in doc["derivation"]["ejections"]
+        # Removals and their reasons are GitHub's; attempt outcomes stay derived.
+        assert "removed-from-merge-queue event" in doc["derivation"]["ejections"]
+        assert "derives each attempt's outcome" in doc["derivation"]["ejections"]
 
     def test_index_filters_by_repository(self, filled):
         with sqlite3.connect(filled.db_file) as conn:
@@ -1124,7 +1139,7 @@ class TestEndpointDocument:
         assert doc["attempts"][1]["why_url"] == doc["attempts"][1]["run_url"]
         assert [attempt["queue_outcome"] for attempt in doc["attempts"]] == ["ejected", "re-queued", "passed"]
         assert (doc["pr"]["ejected_attempt_count"], doc["pr"]["requeued_attempt_count"]) == (1, 1)
-        assert any("derived" in note for note in doc["notes"])
+        assert any("derives each attempt's outcome" in note for note in doc["notes"])
 
     def test_the_summary_and_chart_name_measured_stages(self, filled: CIObservePRs) -> None:
         doc = filled.get_json({"number": ["101"], "repo": [REPO], "days": [str(DAYS)]})
@@ -1620,6 +1635,10 @@ def test_dashboard_selectors_resolve_against_the_real_response(service):
                 node = doc
                 for part in selector.split("."):
                     node = node[part]
+                if not node and selector.startswith("scatter_"):
+                    # A working-group group with no pull request is empty;
+                    # every group's rows have one shape, so check another.
+                    node = next(doc[key] for key in doc if key.startswith("scatter_") and doc[key])
                 assert node, f"{panel['title']}: {target['root_selector']} is empty"
                 sample = node[0] if isinstance(node, list) else node
             for column in target["columns"]:
@@ -1869,3 +1888,538 @@ def test_the_overview_asks_for_both_repositories(service):
     both = service.get_json({"days": ["30"], "repo": ["all"]})
     assert both["kpis"] == service.get_json({"days": ["30"]})["kpis"]
     assert both["kpis"][0]["prs"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: the events, the states, the working groups
+# ---------------------------------------------------------------------------
+LIFECYCLE = "lifecycle_pr"
+
+
+def lifecycle_of(prs, name=LIFECYCLE, graph=True, attempts=()):
+    fixture = load_fixture(name)
+    return prs.lifecycle_events(fixture["pr"], fixture["timeline"], fixture["reviews"], fixture["commits"],
+                                fixture["graph"] if graph else None, list(attempts))
+
+
+def at(clock, day="2026-10-05"):
+    return f"{day}T{clock}:00Z"
+
+
+def event(clock, kind, **fields):
+    return {"at": at(clock), "kind": kind, "actor": fields.pop("actor", ""), "detail": "", "url": "", **fields}
+
+
+def states(segments):
+    return [(segment["state"], segment["start"][11:16], segment["end"][11:16]) for segment in segments]
+
+
+@pytest.fixture
+def lifecycle_github(wfe):
+    """GitHub with one pull request, #104, and its whole story."""
+    fake = FakeGitHub(wfe.API_URL)
+    fixture = load_fixture(LIFECYCLE)
+    route_pr(fake, fixture)
+    fake.add(REPOS_PATH, FakeResponse(payload=[{"name": REPO}]))
+    fake.add(PULLS_PATH, FakeResponse(payload=[fixture["pr"]]))
+    created = datetime.fromisoformat(fixture["pr"]["created_at"].replace("Z", "+00:00"))
+    fake.add(runs_window_path(created, NOW), FakeResponse(payload={"total_count": 0, "workflow_runs": []}))
+    return fake
+
+
+@pytest.fixture
+def lifecycle_service(prs, lifecycle_github, tmp_path):
+    prs._LIVE_PR_CACHE.clear()
+    return prs.CIObservePRs(db_file=str(tmp_path / "prs.db"), api=FakeAPI(lifecycle_github))
+
+
+class TestLifecycle:
+    def test_the_events_tell_the_story_in_order(self, prs):
+        events = lifecycle_of(prs)
+        assert [(item["at"][11:16], item["kind"]) for item in events] == [
+            ("08:00", "opened"), ("09:00", "ready"), ("09:00", "review_requested"), ("09:00", "review_requested"),
+            ("10:00", "review"), ("11:00", "review"), ("13:00", "review"), ("13:05", "auto_merge_on"),
+            ("13:05", "queued"), ("13:50", "dequeued"), ("14:30", "force_push"), ("14:30", "dismissed"),
+            ("14:30", "dismissed"), ("15:00", "review"), ("15:05", "merge_commit"), ("15:10", "review"),
+            ("15:12", "auto_merge_on"), ("15:12", "queued"), ("16:00", "merged"),
+        ]
+        assert events[0]["draft"] is True, "the first draft event is ready_for_review: it opened as a draft"
+        assert "author4" not in [item["actor"] for item in events if item["kind"] == "review"], (
+            "the author's reply in a review thread is not a review"
+        )
+        force_push = next(item for item in events if item["kind"] == "force_push")
+        assert force_push["detail"] == "to f00d123, 2 commits", "the rebased commits fold into their push"
+        assert not [item for item in events if item["kind"] == "commit"]
+        removed = next(item for item in events if item["kind"] == "dequeued")
+        assert (removed["detail"], removed["reason"], removed["source"]) == ("failed checks", "FAILED_CHECKS", "github")
+        dismissed = [item for item in events if item["kind"] == "dismissed"]
+        assert [item["detail"] for item in dismissed] == ["rev-vm's review", "rev-caas's review"]
+        assert {item["state"] for item in dismissed} == {"APPROVED"}, "the dismissal keeps what the review was"
+        approvals = [item for item in events if item["kind"] == "review" and item["state"] == "APPROVED"]
+        assert [item["teams"] for item in approvals] == [
+            ["wg-vmaas"], ["maintainers", "wg-caas"], ["wg-vmaas"], ["maintainers", "wg-caas"],
+        ], "GitHub left the later approvals without onBehalfOf; the reviewers' teams still count them"
+        assert approvals[1]["detail"] == "for wg-caas, maintainers"
+
+    def test_the_states_follow_the_events(self, prs):
+        fixture = load_fixture(LIFECYCLE)
+        segments, _ = prs.lifecycle_from_events(
+            lifecycle_of(prs), fixture["pr"]["merged_at"], prs.required_teams(fixture["graph"])
+        )
+        assert states(segments) == [
+            ("draft", "08:00", "09:00"),
+            ("waiting_review", "09:00", "10:00"),
+            ("with_author", "10:00", "11:00"),
+            # wg-vmaas approved; wg-caas had not.
+            ("partly_approved", "11:00", "13:00"),
+            ("approved", "13:00", "13:05"),
+            ("in_queue", "13:05", "13:50"),
+            ("out_of_queue", "13:50", "14:30"),
+            # The rebase dismissed both approvals.
+            ("waiting_review", "14:30", "15:00"),
+            ("partly_approved", "15:00", "15:10"),
+            ("approved", "15:10", "15:12"),
+            ("in_queue", "15:12", "16:00"),
+        ]
+        assert sum(segment["seconds"] for segment in segments) == 8 * 3600, "every moment, once"
+        assert prs.lifecycle_seconds(segments) == {
+            "draft": 3600, "waiting_review": 5400, "with_author": 3600, "partly_approved": 7800,
+            "approved": 420, "in_queue": 5580, "out_of_queue": 2400,
+        }
+
+    def test_the_numbers_of_the_story(self, prs):
+        _, facts = prs.lifecycle_from_events(lifecycle_of(prs), at("16:00"), {"wg-vmaas", "wg-caas"})
+        assert facts == {
+            # aaa, bbb, ccc, ddd and eee each got a review.
+            "review_rounds": 5,
+            "approval_count": 4,
+            "reapprovals": 2,
+            "rebase_rereviews": 2,
+            # rev-vm re-approved 30 minutes after the rebase; rev-caas 5
+            # minutes after "Update branch". The longest counts.
+            "rereview_seconds": 1800,
+            "approvals_dismissed": 2,
+            "merge_commits": 1,
+            "force_pushes": 1,
+            "pushes": 2,
+            "last_approval_at": at("13:00"),
+            "enqueued_at": at("13:05"),
+            "queue_entries": 2,
+            "queue_removals": 1,
+            "removal_reasons": ["failed checks"],
+            "auto_merge": 1,
+        }
+
+    def test_one_approval_is_enough_when_no_working_group_is_named(self, prs):
+        for required in (set(), None):
+            segments, _ = prs.lifecycle_from_events(lifecycle_of(prs), at("16:00"), required)
+            assert "partly_approved" not in {segment["state"] for segment in segments}, required
+            assert states(segments)[3] == ("approved", "11:00", "13:05")
+
+    def test_a_change_request_holds_until_its_reviewer_approves(self, prs):
+        events = [
+            event("10:00", "opened"),
+            event("11:00", "review", actor="r1", state="CHANGES_REQUESTED", review_id=1),
+            event("12:00", "commit"),
+            event("13:00", "review", actor="r2", state="APPROVED", review_id=2),
+            event("14:00", "review", actor="r1", state="APPROVED", review_id=3),
+            event("15:00", "merged"),
+        ]
+        segments, _ = prs.lifecycle_from_events(events, at("15:00"))
+        assert states(segments) == [
+            ("waiting_review", "10:00", "11:00"),
+            ("with_author", "11:00", "12:00"),
+            ("waiting_review", "12:00", "14:00"),
+            ("approved", "14:00", "15:00"),
+        ]
+
+    def test_a_push_after_the_approval_is_a_re_review_only_when_an_approval_follows(self, prs):
+        base = [
+            event("10:00", "opened"),
+            event("11:00", "review", actor="r1", state="APPROVED", review_id=1),
+            event("12:00", "commit"),
+        ]
+        kept, _ = prs.lifecycle_from_events(
+            [*base, event("13:00", "queued"), event("14:00", "merged")], at("14:00")
+        )
+        assert states(kept) == [("waiting_review", "10:00", "11:00"), ("approved", "11:00", "13:00"),
+                                ("in_queue", "13:00", "14:00")]
+        renewed, facts = prs.lifecycle_from_events(
+            [*base, event("12:30", "review", actor="r1", state="APPROVED", review_id=2), event("13:00", "queued"),
+             event("14:00", "merged")], at("14:00"),
+        )
+        assert states(renewed) == [("waiting_review", "10:00", "11:00"), ("approved", "11:00", "12:00"),
+                                   ("waiting_review", "12:00", "12:30"), ("approved", "12:30", "13:00"),
+                                   ("in_queue", "13:00", "14:00")]
+        assert (facts["reapprovals"], facts["rebase_rereviews"], facts["rereview_seconds"]) == (1, 0, 1800)
+
+    def test_the_removal_by_the_merge_is_not_a_removal(self, prs):
+        events = [
+            event("10:00", "opened"),
+            event("10:10", "review", actor="r1", state="APPROVED", review_id=1),
+            event("10:20", "queued"),
+            event("10:58", "dequeued", detail="merged"),
+            event("11:00", "merged"),
+        ]
+        segments, facts = prs.lifecycle_from_events(events, at("11:00"))
+        assert states(segments)[-1] == ("in_queue", "10:20", "11:00")
+        assert (facts["queue_entries"], facts["queue_removals"]) == (1, 0)
+
+    def test_a_comment_after_the_merge_is_not_part_of_its_way_in(self, prs):
+        events = [event("10:00", "opened"), event("11:00", "merged"),
+                  event("12:00", "review", actor="r1", state="COMMENTED", review_id=1, commit="abc")]
+        _, facts = prs.lifecycle_from_events(events, at("11:00"))
+        assert facts["review_rounds"] == 0
+
+    def test_without_graphql_the_queue_comes_from_the_runs(self, prs):
+        attempts = [
+            {"started_at": at("13:05"), "completed_at": at("13:50"), "ejected": 1, "conclusion": "failure",
+             "ejection_kind": "check_failed", "ejection_reason": "e2e / vmaas failed", "url": "https://run/1"},
+            {"started_at": at("15:12"), "completed_at": at("15:59"), "ejected": 0, "conclusion": "success",
+             "url": "https://run/2"},
+        ]
+        events = lifecycle_of(prs, graph=False, attempts=attempts)
+        queue = [(item["at"][11:16], item["kind"], item["source"], item["detail"])
+                 for item in events if item["kind"] in ("queued", "dequeued")]
+        assert queue == [("13:05", "queued", "runs", ""), ("13:50", "dequeued", "runs", "e2e / vmaas failed"),
+                         ("15:12", "queued", "runs", "")]
+        assert not [item for item in events if item["kind"] == "auto_merge_on"], "auto-merge is GraphQL only"
+        assert all(item["teams"] == [] for item in events if item["kind"] == "review")
+
+    def test_working_groups_come_from_who_approved_for_whom(self, prs):
+        cases = {
+            # reviewer1 commented for wg-vmaas, then approved.
+            "merged_pr": (["wg-vmaas"], 1, "wg-vmaas"),
+            # Only the parent of the working groups: any one of them.
+            "ejected_pr": (["maintainers"], 1, "any WG"),
+            # Two code-owner requests still pending at the close; a request
+            # for a person is not a team.
+            "closed_pr": (["wg-connectivity", "wg-infra"], 2, "wg-connectivity, wg-infra"),
+            # maintainers next to working groups adds nothing.
+            LIFECYCLE: (["maintainers", "wg-caas", "wg-vmaas"], 2, "wg-caas, wg-vmaas"),
+        }
+        for name, (teams, count, display) in cases.items():
+            graph = load_fixture(name)["graph"]
+            assert prs.owner_teams(graph) == teams, name
+            assert prs.wgs_required(prs.owner_teams(graph)) == count, name
+            assert prs.wgs_display(prs.owner_teams(graph)) == display, name
+        assert prs.owner_teams(None) is None and prs.wgs_required(None) is None
+        assert (prs.wgs_required([]), prs.wgs_display([])) == (0, "none")
+        assert prs.required_teams(load_fixture(LIFECYCLE)["graph"]) == {"wg-caas", "wg-vmaas"}
+
+    def test_the_wgs_filter_reads_the_plus_however_it_arrives(self, prs):
+        assert [prs.wgs_filter(value) for value in ("", "all", "$__all", "0", "1", "2", "3", "3+", "3plus", "x")] == [
+            "", "", "", "0", "1", "2", "3plus", "3plus", "3plus", "",
+        ]
+
+    def test_the_cycles_keep_the_order_of_the_stretches(self, prs):
+        segments = [
+            {"state": "waiting_review", "seconds": 10}, {"state": "with_author", "seconds": 20},
+            {"state": "waiting_review", "seconds": 30}, {"state": "approved", "seconds": 40},
+            {"state": "in_queue", "seconds": 50},
+        ]
+        row = prs.lifecycle_cycles(segments)
+        assert list(row) == prs._cycle_fields()
+        assert {key: value for key, value in row.items() if value} == {
+            "waiting_review_1": 10, "with_author_1": 20, "waiting_review_2": 30, "approved_2": 40, "in_queue_2": 50,
+        }
+        many = [{"state": state, "seconds": 1} for _ in range(12) for state in ("waiting_review", "with_author")]
+        row = prs.lifecycle_cycles(many)
+        last = prs.LIFECYCLE_CYCLES
+        assert row[f"waiting_review_{last}"] == 12 - last + 1, "the rounds past the last cycle add up in it"
+        assert sum(value or 0 for value in row.values()) == 24
+
+
+class TestLifecycleStored:
+    def test_the_backfill_stores_the_lifecycle_and_its_events(self, prs, lifecycle_service, lifecycle_github):
+        summary = run_backfill(lifecycle_service)
+        assert summary["prs_stored"] == 1
+        assert summary["graphql_calls"] == 1
+        assert summary["graphql_remaining"] == 4990
+        assert lifecycle_github.posts == ["graphql:osac#104"]
+        row = pr_row(lifecycle_service, 104)
+        assert row["record_version"] == prs.RECORD_VERSION
+        assert (row["files_changed"], row["additions"], row["deletions"]) == (7, 240, 31)
+        assert json.loads(row["owner_teams"]) == ["maintainers", "wg-caas", "wg-vmaas"]
+        assert row["wgs_required"] == 2
+        assert (row["review_rounds"], row["reapprovals"], row["rebase_rereviews"]) == (5, 2, 2)
+        assert (row["approvals_dismissed"], row["merge_commits"], row["auto_merge"]) == (2, 1, 1)
+        assert (row["queue_entries"], row["queue_removals"]) == (2, 1)
+        assert json.loads(row["removal_reasons"]) == ["failed checks"]
+        # The queue entry is GitHub's own time; no merge_group run is needed.
+        assert row["enqueued_at"] == row["queued_at"] == at("13:05")
+        # A dismissed approval was still the first one.
+        assert row["first_approval_at"] == at("11:00")
+        assert row["waiting_seconds"] == 2 * 3600 + 5 * 60, "first approval to the queue"
+        assert row["last_approval_wait_seconds"] == 5 * 60, "last approval before the queue to the queue"
+        assert row["first_review_at"] == at("10:00")
+        assert [segment["state"] for segment in json.loads(row["lifecycle"])][:4] == [
+            "draft", "waiting_review", "with_author", "partly_approved",
+        ]
+        timeline = rows(lifecycle_service, "SELECT * FROM pr_timeline WHERE number = 104 ORDER BY seq")
+        assert len(timeline) == 19
+        assert (timeline[0]["kind"], timeline[0]["label"], timeline[0]["since_open_s"]) == (
+            "opened", "Opened as a draft", 0,
+        )
+        assert (timeline[-1]["kind"], timeline[-1]["since_open_s"]) == ("merged", 8 * 3600)
+        assert next(item for item in timeline if item["kind"] == "dequeued")["detail"] == "failed checks"
+
+    def test_a_force_run_rewrites_the_events_in_place(self, lifecycle_service):
+        run_backfill(lifecycle_service)
+        run_backfill(lifecycle_service, force=True)
+        assert len(rows(lifecycle_service, "SELECT * FROM pr_timeline WHERE number = 104")) == 19
+
+    def test_the_pull_request_document_carries_the_lifecycle(self, lifecycle_service):
+        run_backfill(lifecycle_service)
+        doc = lifecycle_service.get_json({"number": ["104"], "repo": [REPO]})
+        chart = doc["lifecycle"][0]
+        assert list(chart)[:4] == ["category", "01 · Draft", "02 · Waiting for a reviewer", "03 · With the author"]
+        assert chart["04 · Waiting for another WG"] == 7200
+        assert list(chart)[-1] == "11 · In the merge queue"
+        assert doc["events"][0] == {
+            "at": at("08:00"), "when": "05 Oct 08:00", "since_open_s": 0, "what": "Opened as a draft",
+            "who": "author4", "detail": "draft", "url": "https://github.com/osac-project/osac/pull/104",
+            "kind": "opened",
+        }
+        facts = {row["fact"]: row["value"] for row in doc["facts"]}
+        assert facts["Size"] == "7 files, +240 -31 lines"
+        assert facts["Working groups that had to approve"] == "2 (wg-caas, wg-vmaas)"
+        assert facts["Review rounds"] == "5"
+        assert facts["Re-approved after the code changed"] == "2 (2 after a rebase); the longest took 30m"
+        assert facts["Merge queue"] == "2 entries, removed once (failed checks)"
+        assert facts["Merge when ready"] == "used"
+        assert facts["Last approval to the queue"] == "5m"
+
+    def test_a_row_stored_before_the_lifecycle_says_not_measured(self, prs, lifecycle_service):
+        run_backfill(lifecycle_service)
+        with sqlite3.connect(lifecycle_service.db_file) as conn:
+            columns = [name for name, _ in prs.PR_EVENT_ADDED_COLUMNS if name not in (
+                "ready_at", "review_wait_seconds", "force_push_count", "changes_requested_count",
+                "human_review_count", "e2e_runs", "e2e_failures", "e2e_retests", "e2e_versions", "record_version")]
+            conn.execute(f"UPDATE pr_events SET {', '.join(f'{name} = NULL' for name in columns)}")
+            conn.execute("DELETE FROM pr_timeline")
+        doc = lifecycle_service.get_json({"number": ["104"], "repo": [REPO]})
+        assert doc["lifecycle"] == [] and doc["events"] == []
+        facts = {row["fact"]: row["value"] for row in doc["facts"]}
+        assert facts["Review rounds"].startswith("not measured yet")
+        assert facts["Working groups that had to approve"].startswith("not measured yet")
+        assert any("stored before the lifecycle" in note for note in doc["notes"])
+
+    def test_a_failed_graphql_answer_stores_the_older_format_and_retries(self, prs, lifecycle_service,
+                                                                         lifecycle_github):
+        lifecycle_github.add_graphql(REPO, 104, FakeResponse(502, text="bad gateway"))
+        summary = run_backfill(lifecycle_service)
+        assert summary["prs_stored"] == 1
+        row = pr_row(lifecycle_service, 104)
+        assert row["record_version"] == prs.COUNTS_RECORD_VERSION, "read again by a later pass"
+        assert row["wgs_required"] is None and row["files_changed"] is None, "not measured, not zero"
+        # The REST history still gives the lifecycle, without the queue.
+        assert json.loads(row["lifecycle"])[0]["state"] == "draft"
+        lifecycle_github.add_graphql(REPO, 104, graphql_response(load_fixture(LIFECYCLE)["graph"]))
+        run_backfill(lifecycle_service)
+        row = pr_row(lifecycle_service, 104)
+        assert (row["record_version"], row["wgs_required"]) == (prs.RECORD_VERSION, 2)
+
+    def test_a_refused_team_field_leaves_the_working_groups_unknown(self, prs, lifecycle_service,
+                                                                   lifecycle_github):
+        graph = load_fixture(LIFECYCLE)["graph"]
+        refused = {**graph, "reviews": {"nodes": [{**node, "onBehalfOf": None} for node in graph["reviews"]["nodes"]]}}
+        lifecycle_github.add_graphql(REPO, 104, FakeResponse(payload={
+            "data": {"rateLimit": {"cost": 1, "remaining": 4000}, "repository": {"pullRequest": refused}},
+            "errors": [{"type": "FORBIDDEN", "message": "Resource not accessible by integration",
+                        "path": ["repository", "pullRequest", "reviews", "nodes", 0, "onBehalfOf"]}],
+        }))
+        run_backfill(lifecycle_service)
+        row = pr_row(lifecycle_service, 104)
+        assert row["record_version"] == prs.RECORD_VERSION, "a refusal is the token's scope: reading again won't help"
+        assert row["wgs_required"] is None and row["owner_teams"] is None, "unknown, not 'no code owner'"
+        assert (row["files_changed"], row["queue_entries"], row["auto_merge"]) == (7, 2, 1), "the rest is kept"
+
+    def test_refused_queue_events_fall_back_to_the_runs(self, prs):
+        graph = {**load_fixture(LIFECYCLE)["graph"], "timeline": None}
+        fixture = load_fixture(LIFECYCLE)
+        attempt = {"started_at": at("13:06"), "completed_at": at("15:59"), "ejected": 0, "conclusion": "success",
+                   "url": "https://run/1"}
+        events = prs.lifecycle_events(fixture["pr"], fixture["timeline"], fixture["reviews"], fixture["commits"],
+                                      graph, [attempt])
+        assert [(item["at"][11:16], item["source"]) for item in events if item["kind"] == "queued"] == [
+            ("13:06", "runs"),
+        ]
+
+    def test_the_exporter_posts_the_query(self, wfe, exporter, github, monkeypatch):
+        # This module's github fixture does not patch requests; the POST
+        # must not leave the test.
+        monkeypatch.setattr(wfe.requests, "post", github.post)
+        github.add_graphql(REPO, 7, graphql_response({"changedFiles": 1}))
+        resp = exporter._post(f"{wfe.API_URL}/graphql", {"query": "query", "variables": {"name": REPO, "number": 7}})
+        assert resp.ok
+        assert github.posts == [f"graphql:{REPO}#7"]
+
+    def test_a_graphql_error_payload_is_a_failed_answer(self, prs, lifecycle_service, lifecycle_github):
+        lifecycle_github.add_graphql(REPO, 104, FakeResponse(payload={"errors": [{"message": "rate limited"}]}))
+        run_backfill(lifecycle_service)
+        assert pr_row(lifecycle_service, 104)["record_version"] == prs.COUNTS_RECORD_VERSION
+
+    def test_a_low_graphql_budget_stops_the_pass(self, prs, lifecycle_service, lifecycle_github):
+        lifecycle_github.add_graphql(REPO, 104, graphql_response(load_fixture(LIFECYCLE)["graph"], remaining=50))
+        summary = run_backfill(lifecycle_service)
+        assert "GraphQL points remaining 50" in summary["stopped_early"]
+        assert summary["listing_complete"] is False
+
+    def test_refresh_old_refetches_every_older_row_in_one_pass(self, prs, service, github, monkeypatch):
+        for name in ("merged_pr", "ejected_pr", "closed_pr"):
+            created = datetime.fromisoformat(load_fixture(name)["pr"]["created_at"].replace("Z", "+00:00"))
+            github.add(runs_window_path(created, NOW), FakeResponse(
+                payload={"total_count": 7, "workflow_runs": load_fixture("merge_group_runs")["runs"]}))
+        run_backfill(service)
+        with sqlite3.connect(service.db_file) as conn:
+            conn.execute("UPDATE pr_events SET record_version = 2")
+        monkeypatch.setattr(prs, "LEGACY_REFRESH_PER_PASS", 1)
+        service.refresh_old = True
+        summary = run_backfill(service)
+        assert summary["prs_stored"] == 3, "no per-pass bound"
+        upgraded = rows(service, "SELECT number FROM pr_events WHERE record_version = ?", (prs.RECORD_VERSION,))
+        assert len(upgraded) == 3
+
+    def test_the_command_line_refresh_old_runs_a_full_pass(self, prs, monkeypatch, tmp_path):
+        seen = {}
+
+        def backfill(self, days, force, limit, mode):
+            seen.update(days=days, mode=mode, refresh_old=self.refresh_old)
+            return {"ok": True}
+
+        monkeypatch.setattr(prs.CIObservePRs, "backfill", backfill)
+        monkeypatch.setattr(prs, "StandaloneAPI", lambda: object())
+        assert prs.main(["--days", "90", "--refresh-old", "--db", str(tmp_path / "prs.db")]) == 0
+        assert seen == {"days": 90, "mode": "full", "refresh_old": True}
+        assert prs.main(["--days", "90", "--db", str(tmp_path / "prs.db")]) == 0
+        assert seen == {"days": 90, "mode": "auto", "refresh_old": False}
+
+    def test_an_open_pull_request_gets_its_lifecycle_to_now(self, prs, service, github):
+        run_backfill(service)
+        fixture = load_fixture(LIFECYCLE)
+        open_pr = {**fixture["pr"], "number": 905, "state": "open", "merged_at": None, "closed_at": None}
+        github.add(f"/repos/osac-project/{REPO}/pulls/905", FakeResponse(payload=open_pr))
+        timeline = [item for item in fixture["timeline"] if item.get("event") != "merged"]
+        route_pr(github, {**fixture, "pr": open_pr, "timeline": timeline}, number=905)
+        graph = {**fixture["graph"], "timelineItems": {"pageInfo": {"hasNextPage": False}, "nodes": [
+            node for node in fixture["graph"]["timelineItems"]["nodes"] if node["createdAt"] < at("15:00")
+        ]}}
+        github.add_graphql(REPO, 905, graphql_response(graph))
+
+        doc = service.get_json({"number": ["905"], "repo": [REPO]})
+
+        assert doc["source"] == "live"
+        chart = doc["lifecycle"][0]
+        last = list(chart)[-1]
+        # Re-approved by both working groups at 15:10 and not queued again:
+        # approved, not queued, up to the page's now.
+        assert last.endswith("Approved, not queued")
+        assert chart[last] == round((NOW - datetime(2026, 10, 5, 15, 10, tzinfo=UTC)).total_seconds())
+        assert doc["events"][-1]["what"] == "Approved"
+        assert {row["fact"]: row["value"] for row in doc["facts"]}["Working groups that had to approve"] == (
+            "2 (wg-caas, wg-vmaas)"
+        )
+
+
+class TestAcrossPullRequests:
+    @pytest.fixture
+    def filled(self, service, lifecycle_github, github):
+        """The three fixture pull requests and #104 in one store."""
+        run_backfill(service)
+        fixture = load_fixture(LIFECYCLE)
+        route_pr(github, fixture)
+        github.add(PULLS_PATH, FakeResponse(payload=[fixture["pr"]]))
+        created = datetime.fromisoformat(fixture["pr"]["created_at"].replace("Z", "+00:00"))
+        github.add(runs_window_path(created, NOW), FakeResponse(payload={"total_count": 0, "workflow_runs": []}))
+        run_backfill(service)
+        return service
+
+    def test_the_index_filters_by_author_and_working_groups(self, filled):
+        everything = filled.get_json({"days": ["30"]})
+        assert [row["number"] for row in everything["prs"]] == [104, 103, 102, 101]
+        assert everything["authors"] == [
+            {"author": "author1", "label": "author1 (1)"}, {"author": "author2", "label": "author2 (1)"},
+            {"author": "author3", "label": "author3 (1)"}, {"author": "author4", "label": "author4 (1)"},
+        ]
+        one = filled.get_json({"days": ["30"], "author": ["author4"]})
+        assert [row["number"] for row in one["prs"]] == [104]
+        assert one["authors"] == everything["authors"], "the author list does not filter itself"
+        assert one["kpis"][0]["prs"] == 1
+        assert "author author4" in one["notes"][-1]
+        two = filled.get_json({"days": ["30"], "wgs": ["2"]})
+        assert [row["number"] for row in two["prs"]] == [104, 102]
+        assert [row["number"] for row in filled.get_json({"days": ["30"], "wgs": ["1"]})["prs"]] == [103, 101]
+        assert filled.get_json({"days": ["30"], "wgs": ["3+"]})["prs"] == []
+        assert len(filled.get_json({"days": ["30"], "author": ["all"], "wgs": ["all"]})["prs"]) == 4
+        assert "var-pr_author=author4&var-wgs=all" in one["prs"][0]["detail_url"], "the filters ride along"
+
+    def test_the_index_serves_every_across_pr_view(self, filled):
+        doc = filled.get_json({"days": ["30"]})
+        assert [point["pull_request"] for point in doc["scatter_wg1"]] == [
+            "#103 Retry the metrics exporter", "#101 Add VM restart coverage",
+        ]
+        assert [point["hours"] for point in doc["scatter_wg2"]] == [8.0]
+        assert doc["scatter_wg2"][0]["teams"] == "wg-caas, wg-vmaas"
+        assert doc["scatter_wg0"] == doc["scatter_wg3plus"] == doc["scatter_unknown"] == []
+        by_wgs = {row["group"]: row for row in doc["time_by_wgs"]}
+        assert by_wgs["2 WGs · 1 PR"]["partly_approved"] == 7800
+        assert by_wgs["No code owner · 0 PRs"]["draft"] is None, "no pull request is not zero"
+        assert doc["time_by_files"][0]["group"].startswith("up to 2 files")
+        assert doc["rounds_histogram"] == [
+            {"bucket": "0", "prs": 0}, {"bucket": "1", "prs": 2}, {"bucket": "2", "prs": 0},
+            {"bucket": "3", "prs": 0}, {"bucket": "4", "prs": 0}, {"bucket": "5+", "prs": 1},
+        ]
+        assert [row["prs"] for row in doc["queue_histogram"]] == [0, 0, 2, 1, 0]
+        assert doc["wgs_histogram"] == [
+            {"bucket": "No code owner", "prs": 0}, {"bucket": "1 WG", "prs": 2},
+            {"bucket": "2 WGs", "prs": 1}, {"bucket": "3+ WGs", "prs": 0},
+        ]
+        weeks = [row["week"] for row in doc["merge_time_heatmap"]]
+        assert weeks == sorted(weeks) and len(weeks) == 5, "every week of the window, the empty ones too"
+        merged_week = next(row for row in doc["merge_time_heatmap"] if row["week"] == "2026-10-05")
+        assert merged_week["h4_24"] == 1, "#104 took 8 hours"
+        slowest = doc["lifecycles"]
+        assert slowest[0]["pull_request"].startswith("#104 ")
+        assert slowest[0]["partly_approved_1"] == 7200 and slowest[0]["partly_approved_2"] == 600
+        kpis = doc["kpis"][0]
+        assert kpis["lifecycle_prs"] == 3
+        assert kpis["multi_wg_share"] == round(1 / 3, 4)
+        assert kpis["reapproved_share"] == round(1 / 3, 4)
+        assert kpis["last_approval_wait_median_s"] == 600
+
+    def test_the_index_is_built_once_for_the_panels_that_ask_together(self, prs, filled, monkeypatch):
+        calls = []
+        original = prs.CIObservePRs.index_document
+
+        def counting(self, *args, **kwargs):
+            calls.append(args)
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(prs.CIObservePRs, "index_document", counting)
+        prs._INDEX_CACHE.clear()
+        first = filled.get_json({"days": ["30"]})
+        assert filled.get_json({"days": ["30"]}) is first
+        assert len(calls) == 1
+        filled.get_json({"days": ["30"], "author": ["author1"]})
+        assert len(calls) == 2, "another filter is another document"
+        with sqlite3.connect(filled.db_file) as conn:
+            conn.execute("UPDATE pr_events SET title = 'Renamed' WHERE number = 101")
+        assert next(row for row in filled.get_json({"days": ["30"]})["prs"] if row["number"] == 101)["title"] == (
+            "Renamed"
+        ), "a write to the store is never hidden"
+        assert len(calls) == 3
+
+    def test_the_list_leaves_out_the_raw_lifecycle(self, filled):
+        row = filled.get_json({"days": ["30"]})["prs"][0]
+        for column in ("lifecycle", "lifecycle_seconds", "removal_reasons", "owner_teams"):
+            assert column not in row, column
+        assert row["teams_display"] == "wg-caas, wg-vmaas"
+        assert row["lines_display"] == "+240 -31"
+
+    def test_an_empty_store_still_answers_every_view(self, prs, tmp_path):
+        doc = prs.CIObservePRs(db_file=str(tmp_path / "missing.db")).get_json({"days": ["30"]})
+        for key in ("authors", "scatter_wg1", "time_by_wgs", "rounds_histogram", "merge_time_heatmap",
+                    "lifecycles", "lifecycle", "events", "facts"):
+            assert key in doc, key
+        assert doc["lifecycles"] == [] and doc["authors"] == []

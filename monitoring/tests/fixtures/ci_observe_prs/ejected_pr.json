@@ -36,11 +36,13 @@
   ],
   "reviews": [
     {
+      "id": 9101,
       "user": {"login": "reviewer1", "type": "User"},
       "state": "COMMENTED",
       "submitted_at": "2026-10-03T08:10:00Z"
     },
     {
+      "id": 9102,
       "user": {"login": "reviewer1", "type": "User"},
       "state": "APPROVED",
       "submitted_at": "2026-10-03T08:30:00Z"
@@ -49,5 +51,30 @@
   "commits": [
     {"sha": "eee5555"},
     {"sha": "fff6666"}
-  ]
+  ],
+  "graph": {
+    "changedFiles": 2,
+    "additions": 30,
+    "deletions": 4,
+    "reviewRequests": {"nodes": []},
+    "reviews": {
+      "nodes": [
+        {
+          "fullDatabaseId": "9101",
+          "state": "COMMENTED",
+          "submittedAt": "2026-10-03T08:10:00Z",
+          "author": {"login": "reviewer1"},
+          "onBehalfOf": {"nodes": [{"slug": "maintainers"}]}
+        },
+        {
+          "fullDatabaseId": "9102",
+          "state": "APPROVED",
+          "submittedAt": "2026-10-03T08:30:00Z",
+          "author": {"login": "reviewer1"},
+          "onBehalfOf": {"nodes": []}
+        }
+      ]
+    },
+    "timelineItems": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+  }
 }
