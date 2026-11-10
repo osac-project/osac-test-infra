@@ -658,7 +658,7 @@
         id: "{{ _bmi_template.json.id }}"
       published: true
       fields:
-        ssh_public_key:
+        ssh_key:
           editable: {}
         instance_type:
           editable: {}
@@ -688,7 +688,7 @@
         id: "{{ _bmi_template.json.id }}"
       published: true
       fields:
-        ssh_public_key:
+        ssh_key:
           editable: {}
         instance_type:
           editable: {}
