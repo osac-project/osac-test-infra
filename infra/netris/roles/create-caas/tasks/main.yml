@@ -126,6 +126,28 @@
   no_log: false
   when: _cluster_exists.stdout | default('') != 'exists'
 
+# --ssh-key takes the name of a registered SSH public-key Secret.
+- name: Register the cluster SSH public key
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      if osac --tenant "$TENANT" describe secret "$SSH_KEY_NAME" >/dev/null 2>&1; then
+        echo exists
+      else
+        osac --tenant "$TENANT" create secret --name "$SSH_KEY_NAME" \
+          --type ssh-public-key --from-file "public_key=$SSH_KEY_FILE"
+        echo created
+      fi
+  args:
+    executable: /bin/bash
+  environment:
+    TENANT: "{{ osac_test_tenant_name }}"
+    SSH_KEY_NAME: "{{ caas_cluster_name }}-ssh-key"
+    SSH_KEY_FILE: "{{ ssh_public_key_path }}"
+  register: _caas_ssh_key_secret
+  changed_when: "'created' in _caas_ssh_key_secret.stdout_lines"
+  when: _cluster_exists.stdout | default('') != 'exists'
+
 # The selected catalog item uses its template defaults.
 - name: Create cluster from catalog item with selected BareMetalInstanceType
   no_log: false
@@ -134,7 +156,7 @@
     --catalog-item {{ caas_catalog_item | quote }}
     --version {{ caas_cluster_version | quote }}
     --pull-secret {{ _caas_pull_secret_name | quote }}
-    --ssh-public-key-file {{ ssh_public_key_path | quote }}
+    --ssh-key {{ (caas_cluster_name ~ '-ssh-key') | quote }}
     --name {{ caas_cluster_name | quote }}
     --set version.shared=true
     --set {{ ('node_sets.workers.size=' ~ (caas_worker_count | int | string)) | quote }}

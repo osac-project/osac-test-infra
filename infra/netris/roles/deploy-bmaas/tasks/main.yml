@@ -64,10 +64,15 @@
        elif .metadata? then [.] else [] end)
       | any(.metadata.name == $name)' <<< "$instances")
     if [[ "$exists" == false ]]; then
+      # --ssh-key takes the name of a registered SSH public-key Secret.
+      if ! osac --tenant "$TENANT" describe secret "$SSH_KEY_NAME" >/dev/null 2>&1; then
+        osac --tenant "$TENANT" create secret --name "$SSH_KEY_NAME" \
+          --type ssh-public-key --from-file "public_key=$SSH_KEY_FILE"
+      fi
       osac --tenant "$TENANT" create baremetalinstance --name "$BMI_NAME" \
         --catalog-item "$CATALOG" --disk-image "$DISK_NAME" \
         --set disk_image.shared=true \
-        --ssh-key "$SSH_KEY" --instance-type "$TYPE_NAME" --run-strategy always
+        --ssh-key "$SSH_KEY_NAME" --instance-type "$TYPE_NAME" --run-strategy always
       echo created
     fi
   args:
@@ -77,7 +82,8 @@
     BMI_NAME: "{{ bmaas_deploy_bmi_name_prefix }}-{{ item }}"
     CATALOG: "{{ bmaas_catalog_item }}"
     DISK_NAME: "{{ bmaas_deploy_disk_image_name }}"
-    SSH_KEY: "{{ lookup('file', ssh_public_key_path) | trim }}"
+    SSH_KEY_NAME: "{{ bmaas_deploy_bmi_name_prefix }}-{{ item }}-ssh-key"
+    SSH_KEY_FILE: "{{ ssh_public_key_path }}"
     TYPE_NAME: "{{ bmaas_bmit_name }}"
   loop: "{{ bmaas_deploy_tenants }}"
   register: _bmaas_bmis
