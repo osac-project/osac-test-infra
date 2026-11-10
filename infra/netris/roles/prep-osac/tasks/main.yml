@@ -279,10 +279,6 @@
             }},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
-              'NETRIS_USERNAME': netris_username,
-              'NETRIS_SITE_ID': _netris_site_id | string,
-              'NETRIS_TENANT_ID': '1',
-              'NETRIS_TENANT_NAME': 'Admin',
               'EXTERNAL_ACCESS_BASE_DOMAIN': ocp_base_domain,
               'EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS': ocp_base_domain,
               'EXTERNAL_ACCESS_API_INTERNAL_NETWORK': 'hypershift',
@@ -306,16 +302,6 @@
                                      'secret': {'NETRIS_PASSWORD': netris_password}}
           }}
          }
-         | combine(({'aap': {'instanceGroups': {'clusterFulfillment': {
-               'config': {
-                 'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
-                 'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
-                 'NETRIS_RESOURCE_CLASS_MAP': _netris_resource_class_map | to_json,
-                 'NETWORK_CLASS': 'netris',
-                 'NETWORK_STEPS_COLLECTION': 'netris.steps'
-               },
-               'secret': {'NETRIS_PASSWORD': netris_password}
-             }}}} if _caas_enabled else {}), recursive=true)
          | combine(({'operator': {'image': {
                'repository': osac_operator_image | regex_replace(':([^/]+)$', ''),
                'tag': (osac_operator_image | regex_search(':([^/]+)$', '\1') | first | default('latest')),
@@ -342,8 +328,6 @@
                'projectGitUri': aap_project_git_uri | default(osac_repo, true),
                'projectGitBranch': aap_project_git_branch | default(osac_branch, true)}}}, recursive=true)
       }}
-  vars:
-    _caas_enabled: "{{ _profile_values.global.services.caas.enabled | default(false) | bool }}"
   no_log: true
 
 # The forwarded ingress is reconciled after the install by the
