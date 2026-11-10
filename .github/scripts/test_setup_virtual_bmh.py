@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SETUP_SCRIPT = ROOT / ".github/scripts/setup-virtual-bmh.sh"
 SUSHY_SCRIPT = ROOT / ".github/scripts/setup-sushy-tools.sh"
 TEARDOWN_SCRIPT = ROOT / ".github/scripts/teardown.sh"
+CAAS_WORKFLOW = ROOT / ".github/workflows/e2e-caas-full-install.yml"
 
 
 class SetupVirtualBmhTests(unittest.TestCase):
@@ -24,6 +25,20 @@ class SetupVirtualBmhTests(unittest.TestCase):
         self.assertIn('if [[ "${BMH_DISK_ROOT}" != /* ]]', teardown)
         self.assertIn('BMH_DISK_DIR="${BMH_DISK_ROOT%/}/virtual-bmh-disks-${CLONE_NAME}"', teardown)
         self.assertIn("--cgroup-manager=cgroupfs", sushy)
+
+    def test_vm_resources_are_configurable(self) -> None:
+        setup = SETUP_SCRIPT.read_text()
+
+        self.assertIn('BMH_CPU="${BMH_CPU:-4}"', setup)
+        self.assertIn('BMH_MEMORY_MIB="${BMH_MEMORY_MIB:-8192}"', setup)
+        self.assertIn('  --cpu "${BMH_CPU}"', setup)
+        self.assertIn('  --memory-mib "${BMH_MEMORY_MIB}"', setup)
+
+    def test_caas_uses_larger_virtual_bmh_resources(self) -> None:
+        workflow = CAAS_WORKFLOW.read_text()
+
+        self.assertIn('BMH_CPU: "8"', workflow)
+        self.assertIn('BMH_MEMORY_MIB: "16384"', workflow)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@
 # Optional env:
 #   BMH_NAMESPACE    — namespace for BMH resources (default: host-inventory)
 #   BMH_COUNT        — number of virtual BMHs to create (default: 2)
+#   BMH_CPU          — vCPUs per virtual BMH (default: 4)
+#   BMH_MEMORY_MIB   — memory per virtual BMH in MiB (default: 8192)
 #   SUSHY_PORT       — sushy-tools listen port (default: 8000)
 #   SUSHY_CACHE_PORT — nginx ISO cache listen port (default: 8080)
 #   VM_DISK_DIR      — parent directory for the clone's BMH disks
@@ -34,6 +36,8 @@ set -euo pipefail
 
 BMH_NAMESPACE="${BMH_NAMESPACE:-host-inventory}"
 BMH_COUNT="${BMH_COUNT:-2}"
+BMH_CPU="${BMH_CPU:-4}"
+BMH_MEMORY_MIB="${BMH_MEMORY_MIB:-8192}"
 SUSHY_PORT="${SUSHY_PORT:-8000}"
 SUSHY_CACHE_PORT="${SUSHY_CACHE_PORT:-8080}"
 
@@ -91,6 +95,8 @@ VM_ARGS=(
   --redfish-host "${GW_IP}"
   --redfish-port "${SUSHY_PORT}"
   --count "${BMH_COUNT}"
+  --cpu "${BMH_CPU}"
+  --memory-mib "${BMH_MEMORY_MIB}"
 )
 python3 "${SCRIPT_DIR}/manage-virtual-bmh-vms.py" create "${VM_ARGS[@]}"
 
