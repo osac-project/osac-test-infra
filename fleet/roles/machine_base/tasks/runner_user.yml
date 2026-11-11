@@ -18,6 +18,7 @@
     - osac-hosts-entry
     - osac-compact-dns
     - cluster-tool-compact-boot
+    - cluster-tool-update
     - osac-compact-boot-diagnostics
     - osac-compact-kubeconfig
 

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Install the latest official cluster-tool for CI Large.
+set -euo pipefail
+
+[[ $# -eq 0 ]] || { echo "Usage: cluster-tool-update" >&2; exit 2; }
+[[ ${EUID} -eq 0 && "${SUDO_USER:-}" == github-runner ]] ||
+  { echo "This command must be run through sudo by github-runner" >&2; exit 1; }
+
+source_dir=$(/usr/bin/mktemp -d /var/tmp/cluster-tool-update.XXXXXXXX)
+binary_tmp=
+cleanup() {
+  if [[ -n "${binary_tmp}" ]]; then
+    /usr/bin/rm -f -- "${binary_tmp}"
+  fi
+  /usr/bin/rm -rf -- "${source_dir}"
+}
+trap cleanup EXIT
+
+/usr/bin/git clone --quiet --depth 1 --branch main \
+  https://github.com/osac-project/cluster-tool.git "${source_dir}/repo"
+[[ -f "${source_dir}/repo/cluster-tool" && ! -L "${source_dir}/repo/cluster-tool" ]] ||
+  { echo "cluster-tool source is not a regular file" >&2; exit 1; }
+
+binary_tmp=$(/usr/bin/mktemp /usr/local/bin/.cluster-tool.XXXXXXXX)
+/usr/bin/install -o root -g root -m 0755 "${source_dir}/repo/cluster-tool" "${binary_tmp}"
+/usr/bin/mv -fT -- "${binary_tmp}" /usr/local/bin/cluster-tool
+binary_tmp=
+echo "Updated cluster-tool to $(/usr/bin/git -C "${source_dir}/repo" rev-parse HEAD)"

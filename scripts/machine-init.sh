@@ -177,7 +177,7 @@ create_runner_user() {
     # Ansible's script module copies only machine-init.sh, so the fleet role
     # installs these root-owned helpers separately.
     for helper in \
-        osac-hosts-entry osac-compact-dns cluster-tool-compact-boot \
+        osac-hosts-entry osac-compact-dns cluster-tool-compact-boot cluster-tool-update \
         osac-compact-boot-diagnostics osac-compact-kubeconfig; do
         if [[ -f "${SCRIPT_DIR}/${helper}" ]]; then
             install -m 0755 "${SCRIPT_DIR}/${helper}" "/usr/local/sbin/${helper}"
@@ -197,8 +197,8 @@ create_runner_user() {
     # so re-running this script on an already-provisioned host heals a
     # stale policy, consistent with how monitoring-setup.sh --update-central
     # treats config as declarative (vs. secrets, which are preserved).
-    # Manual/admin operations (systemctl, journalctl, virsh, editing
-    # /opt/cluster-tool, setup-runner-podman.sh) are intentionally NOT
+    # Manual/admin operations (systemctl, journalctl, virsh, arbitrary edits
+    # to /opt/cluster-tool, setup-runner-podman.sh) are intentionally NOT
     # covered -- see docs/new-ci-machine-setup.md, use root SSH for those.
     SUDOERS_FILE="/etc/sudoers.d/${RUNNER_USER}"
     SUDOERS_STAGING=$(mktemp /etc/sudoers.d/.github-runner.XXXXXX)
@@ -235,6 +235,7 @@ Cmnd_Alias CLUSTER_TOOL_DESTROY         = /usr/bin/python3 ${CLUSTER_TOOL_BIN} d
 Cmnd_Alias CLUSTER_TOOL_BOOT            = /usr/bin/python3 ${CLUSTER_TOOL_BIN} boot --flavor * --name *
 # The wrapper validates runner arguments and always supplies --host local.
 Cmnd_Alias CLUSTER_TOOL_COMPACT_BOOT    = /usr/local/sbin/cluster-tool-compact-boot *
+Cmnd_Alias CLUSTER_TOOL_UPDATE          = /usr/local/sbin/cluster-tool-update ""
 Cmnd_Alias COMPACT_BOOT_DIAGNOSTICS     = /usr/local/sbin/osac-compact-boot-diagnostics *
 Cmnd_Alias CLUSTER_TOOL_CLEANUP_HAPROXY = /usr/bin/python3 ${CLUSTER_TOOL_BIN} cleanup-haproxy
 
@@ -257,7 +258,7 @@ ${KUBECONFIG_COPY_ALIAS}
 ${KUBECONFIG_CHOWN_ALIAS}
 
 ${RUNNER_USER} ALL=(root) NOPASSWD: CLUSTER_TOOL_FLAVORS, CLUSTER_TOOL_FLAVORS_DELETE, \\
-    CLUSTER_TOOL_PULL, CLUSTER_TOOL_DESTROY, CLUSTER_TOOL_BOOT, CLUSTER_TOOL_COMPACT_BOOT, COMPACT_BOOT_DIAGNOSTICS, CLUSTER_TOOL_CLEANUP_HAPROXY, \\
+    CLUSTER_TOOL_PULL, CLUSTER_TOOL_DESTROY, CLUSTER_TOOL_BOOT, CLUSTER_TOOL_COMPACT_BOOT, CLUSTER_TOOL_UPDATE, COMPACT_BOOT_DIAGNOSTICS, CLUSTER_TOOL_CLEANUP_HAPROXY, \\
     BRIDGE_DOWN, BRIDGE_DELETE, \\
     AUTH_JSON_MKDIR, AUTH_JSON_COPY, AUTH_JSON_CHMOD, AUTH_JSON_RM, \\
     HOSTS_ENTRY_ADD, HOSTS_ENTRY_REMOVE, COMPACT_DNS_ADD, COMPACT_DNS_REMOVE, \\

@@ -117,22 +117,22 @@ and that filesystem must support reflinks: `compact-boot` creates disk copies
 with `cp --reflink=always`. Before the first run, verify the selected runner's
 mount layout and reflink support. On that dedicated host, register with
 `LABELS="self-hosted,osac-ci-large"` so ordinary E2E jobs cannot use its
-capacity. Install `guestfs-tools`, update the host's cluster-tool to a version
-with `compact-boot`, and regenerate the scoped sudo rules:
+capacity. From an updated checkout on each host, install `guestfs-tools` and
+regenerate the scoped sudo rules and helpers. CI Large then installs the latest
+cluster-tool from the official repository before MNO boot:
 
 ```bash
 sudo dnf install -y guestfs-tools
-sudo git -C /opt/cluster-tool pull --ff-only
-sudo install -m 0755 /opt/cluster-tool/cluster-tool /usr/local/bin/cluster-tool
 sudo ./scripts/machine-init.sh runner-user
 sudo ./scripts/machine-init.sh cluster-tool
 ```
 
 The `cluster-tool` step initializes local cluster-tool state and configures
 NetworkManager to use dnsmasq, including its configuration directory. The
-runner-user step installs the root-owned `cluster-tool-compact-boot`,
-`osac-compact-dns`, `osac-compact-boot-diagnostics`, and
-`osac-compact-kubeconfig` helpers and refreshes sudoers. The boot wrapper
+runner-user step installs the root-owned `cluster-tool-update`,
+`cluster-tool-compact-boot`, `osac-compact-dns`,
+`osac-compact-boot-diagnostics`, and `osac-compact-kubeconfig` helpers and
+refreshes sudoers. The boot wrapper
 validates runner arguments and always keeps compact boot local. The DNS helper
 makes the clone's API and `*.apps` routes resolve on the runner host. The
 kubeconfig helper validates the clone and runner temp directory before staging

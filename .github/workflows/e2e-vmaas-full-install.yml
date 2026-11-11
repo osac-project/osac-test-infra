@@ -49,6 +49,11 @@ on:
         required: false
         type: string
         default: "sno"
+      update-cluster-tool:
+        description: "Install the latest cluster-tool from official main before the job"
+        required: false
+        type: boolean
+        default: false
       image-overrides:
         description: "JSON object mapping Helm value paths to image refs, e.g. '{\"service.images.service.repository\":\"ghcr.io/osac-project/fulfillment-service\"}'"
         required: false
@@ -420,6 +425,15 @@ jobs:
             chmod +x "${TOOL_DIR}/yq"
           fi
           echo "${TOOL_DIR}" >> "$GITHUB_PATH"
+
+      - name: Update cluster-tool
+        if: inputs.update-cluster-tool
+        run: |
+          if [[ ! -x /usr/local/sbin/cluster-tool-update ]]; then
+            echo "::error::This runner needs cluster-tool-update from machine-init.sh runner-user."
+            exit 1
+          fi
+          sudo -n /usr/local/sbin/cluster-tool-update
 
       - name: Prepare cluster environment
         env:
