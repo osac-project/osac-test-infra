@@ -622,7 +622,7 @@ jobs:
           # different xdist worker (pytest -n 4 --dist loadfile).
           BMH_COUNT: "3"
           # Add-on operator installation needs more capacity than the
-          # default BMaaS test hosts, especially for serverless and NFD.
+          # default BMaaS test hosts.
           BMH_CPU: "8"
           BMH_MEMORY_MIB: "16384"
         run: bash .github/scripts/setup-virtual-bmh.sh
