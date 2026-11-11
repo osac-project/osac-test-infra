@@ -19,6 +19,11 @@ import yaml
 
 FAKE_TEST_AUTH_B64 = "ZmFrZTp0ZXN0"
 FAKE_TEST_QUAY_PASSWORD = "fake-test-password"
+FAKE_TEST_QUAY_USER = "fake-test-user"
+FAKE_TEST_REPO_AUTH = "FAKE_TEST_REPO"
+FAKE_TEST_OLD_AUTH = "FAKE_TEST_OLD"
+FAKE_TEST_IDENTITY_TOKEN = "FAKE_TEST_PRESERVED"
+FAKE_TEST_NEW_AUTH = "FAKE_TEST_NEW"
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 PIPELINES = (
@@ -340,11 +345,11 @@ class FlavorRegistryTests(unittest.TestCase):
                 sudo.chmod(0o700)
                 fake_pull = {
                     "auths": {
-                        "quay.io/osac-project/cluster-flavors": {"auth": "FAKE_TEST_REPO"},
-                        "quay.io": {"auth": "FAKE_TEST_OLD", "identitytoken": "FAKE_TEST_PRESERVED"},
+                        "quay.io/osac-project/cluster-flavors": {"auth": FAKE_TEST_REPO_AUTH},
+                        "quay.io": {"auth": FAKE_TEST_OLD_AUTH, "identitytoken": FAKE_TEST_IDENTITY_TOKEN},
                     }
                 }
-                fake_snapshot = {"auths": {"quay.io": {"auth": "FAKE_TEST_NEW"}}}
+                fake_snapshot = {"auths": {"quay.io": {"auth": FAKE_TEST_NEW_AUTH}}}
                 env = {
                     **os.environ,
                     "HOME": temporary,
@@ -354,7 +359,7 @@ class FlavorRegistryTests(unittest.TestCase):
                         scenario, json.dumps(fake_pull)
                     ),
                     "SNAPSHOT_REGISTRY_AUTH": json.dumps(fake_snapshot),
-                    "QUAY_USER": "" if scenario == "missing-user" else "fake-test-user",
+                    "QUAY_USER": "" if scenario == "missing-user" else FAKE_TEST_QUAY_USER,
                     "QUAY_PASSWORD": "" if scenario == "missing-password" else FAKE_TEST_QUAY_PASSWORD,
                     "AAP_LICENSE": "",
                     "FAKE_POLICY": scenario,
@@ -374,9 +379,9 @@ class FlavorRegistryTests(unittest.TestCase):
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     merged = json.loads((root / "fake-root-auth.json").read_text())["auths"]
-                    self.assertEqual(merged["quay.io"]["auth"], "FAKE_TEST_NEW")
-                    self.assertEqual(merged["quay.io"]["identitytoken"], "FAKE_TEST_PRESERVED")
-                    self.assertEqual(merged["quay.io/osac-project/cluster-flavors"]["auth"], "FAKE_TEST_REPO")
+                    self.assertEqual(merged["quay.io"]["auth"], FAKE_TEST_NEW_AUTH)
+                    self.assertEqual(merged["quay.io"]["identitytoken"], FAKE_TEST_IDENTITY_TOKEN)
+                    self.assertEqual(merged["quay.io/osac-project/cluster-flavors"]["auth"], FAKE_TEST_REPO_AUTH)
                     self.assertIn("quay.io/osac-project", merged)
                     self.assertEqual(
                         (root / "containers-auth-base.json").read_bytes(), (root / "fake-root-auth.json").read_bytes()
