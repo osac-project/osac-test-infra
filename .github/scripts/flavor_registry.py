@@ -6,23 +6,23 @@ import base64
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 
 class RegistryError(Exception):
     pass
 
 
-def diagnostic(message):
+def diagnostic(message: str) -> None:
     print(f"flavor-registry: {message}", file=sys.stderr, flush=True)
 
 
-def auths_from_json(content):
+def auths_from_json(content: str | bytes) -> dict:
     try:
         document = json.loads(content)
     except (ValueError, UnicodeError):
@@ -31,25 +31,34 @@ def auths_from_json(content):
     if not isinstance(auths, dict):
         raise RegistryError("auth-malformed")
     for key, entry in auths.items():
-        if not key or not isinstance(entry, dict) or not isinstance(entry.get("auth"), str):
+        if not key or not isinstance(entry, dict):
+            raise RegistryError("auth-malformed")
+        if any(not isinstance(entry.get(field, ""), str) for field in ("auth", "identitytoken")):
             raise RegistryError("auth-malformed")
         try:
-            decoded = base64.b64decode(entry["auth"], validate=True)
+            base64.b64decode(entry.get("auth", "").replace("\r", "").replace("\n", ""), validate=True)
         except ValueError:
             raise RegistryError("auth-malformed") from None
-        if b":" not in decoded:
-            raise RegistryError("auth-malformed")
     return auths
 
 
-def initialize():
+def merge_objects(base: dict, overlay: dict) -> dict:
+    for key, value in overlay.items():
+        if isinstance(base.get(key), dict) and isinstance(value, dict):
+            merge_objects(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def initialize() -> None:
     auths = auths_from_json(os.environ.get("PULL_SECRET", ""))
-    auths.update(auths_from_json(os.environ.get("SNAPSHOT_REGISTRY_AUTH", "")))
+    merge_objects(auths, auths_from_json(os.environ.get("SNAPSHOT_REGISTRY_AUTH", "")))
     user = os.environ.get("QUAY_USER", "")
     password = os.environ.get("QUAY_PASSWORD", "")
     if not user or not password:
         raise RegistryError("auth-missing")
-    auths["quay.io/osac-project"] = {"auth": base64.b64encode(f"{user}:{password}".encode()).decode()}
+    merge_objects(auths, {"quay.io/osac-project": {"auth": base64.b64encode(f"{user}:{password}".encode()).decode()}})
     directory = Path(tempfile.mkdtemp(prefix="flavor-registry-", dir=os.environ["RUNNER_TEMP"]))
     authfile = directory / "auth.json"
     try:
@@ -64,7 +73,38 @@ def initialize():
     diagnostic("operation=init source=job-file ready=true directory_mode=0700 file_mode=0600")
 
 
-def selected_authfile():
+def auth_scope(auths: dict, image: str) -> str:
+    reference = image.split("@", 1)[0]
+    registry, separator, repository = reference.partition("/")
+    if not separator:
+        return "unresolved-reference"
+    key = registry + "/" + repository.rsplit(":", 1)[0]
+    candidate = key
+    while True:
+        if candidate in auths:
+            if candidate == registry:
+                return "registry"
+            return "repository" if candidate == key else "namespace"
+        if "/" not in candidate:
+            break
+        candidate = candidate.rsplit("/", 1)[0]
+
+    def normalize(host: str) -> str:
+        return "index.docker.io" if host in ("docker.io", "registry-1.docker.io") else host
+
+    matches = 0
+    for key in auths:
+        normalized = key
+        for scheme in ("http://", "https://"):
+            if normalized.startswith(scheme):
+                normalized = normalized[len(scheme) :].split("/", 1)[0]
+                break
+        if normalize(normalized) == normalize(registry):
+            matches += 1
+    return "legacy-registry" if matches == 1 else "ambiguous-registry" if matches else "unmatched"
+
+
+def selected_authfile(image: str = "") -> str:
     selected = os.environ.get("FLAVOR_REGISTRY_AUTH_FILE")
     if not selected:
         raise RegistryError("auth-missing")
@@ -90,16 +130,41 @@ def selected_authfile():
     except PermissionError:
         raise RegistryError("auth-unreadable") from None
     diagnostic(f"source=job-file ready=true entries={len(auths)} uid={os.geteuid()} gid={os.getegid()}")
+    diagnostic(f"authfile_scope={auth_scope(auths, image)}")
     return str(authfile)
 
 
-def failure_category(stderr):
+def failure_category(stderr: str) -> str:
     error = stderr.lower()
+    if "sudo:" in error and any(
+        signature in error
+        for signature in (
+            "not allowed to set",
+            "not allowed to preserve",
+            "not allowed to execute",
+            "a password is required",
+        )
+    ):
+        return "execution-policy"
+    auth_denied = any(
+        signature in error
+        for signature in (
+            "unauthorized",
+            "authentication required",
+            "requested access to the resource is denied",
+            "status code: 401",
+            "status code: 403",
+        )
+    )
+    if re.search(r"\b(?:manifest[ _]unknown|name[ _]unknown|404)\b", error):
+        return "image-not-found-or-auth" if auth_denied else "image-not-found"
+    if "permission denied" in error:
+        return "permission-denied"
+    if auth_denied:
+        return "auth-denied"
     for category, signatures in (
-        ("auth-denied", ("unauthorized", "authentication required", "denied", "status code: 401", "status code: 403")),
         ("tls", ("x509", "tls handshake", "certificate")),
         ("network", ("timeout", "timed out", "no such host", "connection refused", "network is unreachable")),
-        ("image-not-found", ("manifest unknown", "name unknown", "status code: 404")),
         ("registry-unavailable", ("status code: 500", "status code: 502", "status code: 503", "too many requests")),
     ):
         if any(signature in error for signature in signatures):
@@ -107,37 +172,52 @@ def failure_category(stderr):
     return "unclassified"
 
 
-def run_captured(command, *, env=None):
+def run_captured(command: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(command, capture_output=True, text=True, errors="replace", check=False, env=env)
     except FileNotFoundError:
         raise RegistryError("tool-missing") from None
 
 
-def versions():
+def versions() -> None:
     result = run_captured(["skopeo", "--version"])
-    version = re.match(r"skopeo version ([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)", result.stdout)
+    version = re.match(r"skopeo version ([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})(?:\s|$)", result.stdout)
     safe_version = version.group(1) if version and result.returncode == 0 else "unknown"
     diagnostic(f"skopeo_version={safe_version} python_version={sys.version_info.major}.{sys.version_info.minor}")
 
 
-def registry_operation(operation, image):
-    authfile = selected_authfile()
+def registry_operation(operation: str, image: str) -> int:
+    authfile = selected_authfile(image)
     if not image or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._:/@-]*", image):
         raise RegistryError("image-invalid")
     versions()
     if operation == "inspect":
         command = ["skopeo", "inspect", "--authfile", authfile, f"docker://{image}", "--format", "{{.Digest}}"]
     else:
-        if os.geteuid() != 0:
-            raise RegistryError("privileged-context-required")
         cluster_tool = Path("/usr/local/bin/cluster-tool")
-        diagnostic(f"context=local-root cluster_tool_sha256={hashlib.sha256(cluster_tool.read_bytes()).hexdigest()}")
-        command = ["python3", str(cluster_tool), "pull", image, "--server", "local"]
-    diagnostic(f"operation={operation} context={'local-root' if operation == 'pull' else 'runner'} starting=true")
+        diagnostic(
+            f"target_uid=0 server=local cluster_tool_sha256={hashlib.sha256(cluster_tool.read_bytes()).hexdigest()}"
+        )
+        command = [
+            "sudo",
+            "-n",
+            "-u",
+            "root",
+            f"REGISTRY_AUTH_FILE={authfile}",
+            "/usr/bin/python3",
+            str(cluster_tool),
+            "pull",
+            image,
+            "--server",
+            "local",
+        ]
+    diagnostic(f"operation={operation} context=runner starting=true")
     result = run_captured(command, env={**os.environ, "REGISTRY_AUTH_FILE": authfile})
     category = "ok" if result.returncode == 0 else failure_category(result.stderr)
-    diagnostic(f"operation={operation} exit={result.returncode} category={category}")
+    diagnostic(
+        f"operation={operation} exit={result.returncode} category={category} "
+        f"hint={str(bool(result.returncode)).lower()}"
+    )
     if result.returncode:
         return 1
     if operation == "inspect":
@@ -148,7 +228,7 @@ def registry_operation(operation, image):
     return 0
 
 
-def cleanup():
+def cleanup() -> None:
     selected = os.environ.get("FLAVOR_REGISTRY_AUTH_FILE")
     if not selected:
         return
@@ -168,7 +248,7 @@ def cleanup():
     diagnostic("operation=cleanup removed=true")
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("init", "inspect", "pull", "cleanup"))
     args = parser.parse_args()

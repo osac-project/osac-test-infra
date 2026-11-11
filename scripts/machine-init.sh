@@ -231,6 +231,7 @@ create_runner_user() {
 Cmnd_Alias CLUSTER_TOOL_FLAVORS         = /usr/bin/python3 ${CLUSTER_TOOL_BIN} flavors
 Cmnd_Alias CLUSTER_TOOL_FLAVORS_DELETE  = /usr/bin/python3 ${CLUSTER_TOOL_BIN} flavors --delete *
 Cmnd_Alias CLUSTER_TOOL_PULL            = /usr/bin/python3 ${CLUSTER_TOOL_BIN} pull *
+Defaults!CLUSTER_TOOL_PULL env_keep += "REGISTRY_AUTH_FILE"
 Cmnd_Alias CLUSTER_TOOL_DESTROY         = /usr/bin/python3 ${CLUSTER_TOOL_BIN} destroy *
 Cmnd_Alias CLUSTER_TOOL_BOOT            = /usr/bin/python3 ${CLUSTER_TOOL_BIN} boot --flavor * --name *
 # The wrapper validates runner arguments and always supplies --host local.

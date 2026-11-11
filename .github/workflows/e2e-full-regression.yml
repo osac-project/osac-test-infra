@@ -335,7 +335,7 @@ jobs:
           fi
 
           if ${NEED_PULL}; then
-            sudo --preserve-env=FLAVOR_REGISTRY_AUTH_FILE,FLAVOR_IMAGE python3 .github/scripts/flavor_registry.py pull 9>&-
+            python3 .github/scripts/flavor_registry.py pull 9>&-
             if [[ -n "${REMOTE_DIGEST}" ]]; then
               echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
             fi
