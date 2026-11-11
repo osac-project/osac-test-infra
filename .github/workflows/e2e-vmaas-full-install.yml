@@ -477,8 +477,14 @@ jobs:
           # children from inheriting the fd — if this step is cancelled
           # and sudo is orphaned, the lock is still released when the
           # shell exits (fd 9 closes).
-          DIGEST_FILE="/tmp/cluster-tool-flavor-${FLAVOR_NAME}.digest"
-          REMOTE_DIGEST=$(skopeo inspect "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' 2>/dev/null || echo "")
+          # Outside /tmp so reboots do not lose it: a missing digest file
+          # means the cached flavor is unverifiable and must be refreshed.
+          DIGEST_DIR="${HOME}/.config/osac-test-infra/flavor-digests"
+          DIGEST_FILE="${DIGEST_DIR}/${FLAVOR_NAME}.digest"
+          mkdir -p "${DIGEST_DIR}"
+          REMOTE_DIGEST=$(skopeo inspect \
+            --authfile "${RUNNER_TEMP}/flavor-registry-auth.json" \
+            "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' 2>/dev/null || echo "")
 
           exec 9>"${FLAVOR_LOCK}"
           flock --exclusive 9
@@ -496,22 +502,17 @@ jobs:
           fi
 
           NEED_PULL=false
-          if ${FLAVOR_EXISTS}; then
-            if [[ -n "${REMOTE_DIGEST}" ]] && [[ "${REMOTE_DIGEST}" == "${LOCAL_DIGEST}" ]]; then
-              echo "Flavor '${FLAVOR_NAME}' is up to date (digest: ${LOCAL_DIGEST}) — skipping pull."
-            elif [[ -n "${REMOTE_DIGEST}" ]] && [[ -z "${LOCAL_DIGEST}" ]]; then
-              echo "Flavor '${FLAVOR_NAME}' already present, seeding digest file (${REMOTE_DIGEST})."
-              echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
-            elif [[ -n "${REMOTE_DIGEST}" ]]; then
-              echo "Flavor '${FLAVOR_NAME}' exists but image changed (local: ${LOCAL_DIGEST}, remote: ${REMOTE_DIGEST}) — deleting and re-pulling..."
-              sudo python3 /usr/local/bin/cluster-tool flavors --delete "${FLAVOR_NAME}" 9>&- || true
-              NEED_PULL=true
-            else
-              echo "Flavor '${FLAVOR_NAME}' already present, could not check remote digest — skipping pull."
-            fi
-          else
+          if ! ${FLAVOR_EXISTS}; then
             echo "Flavor '${FLAVOR_NAME}' not found — pulling..."
             NEED_PULL=true
+          elif [[ -z "${REMOTE_DIGEST}" ]]; then
+            echo "::warning::Could not check the remote digest for flavor '${FLAVOR_NAME}'; using the cached flavor."
+          elif [[ "${REMOTE_DIGEST}" != "${LOCAL_DIGEST}" ]]; then
+            echo "Flavor '${FLAVOR_NAME}' outdated (local digest: ${LOCAL_DIGEST:-none}) — deleting and re-pulling..."
+            sudo python3 /usr/local/bin/cluster-tool flavors --delete "${FLAVOR_NAME}" 9>&- || true
+            NEED_PULL=true
+          else
+            echo "Flavor '${FLAVOR_NAME}' is up to date — skipping pull."
           fi
 
           if ${NEED_PULL}; then

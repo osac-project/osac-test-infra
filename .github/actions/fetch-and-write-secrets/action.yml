@@ -58,17 +58,33 @@ runs:
         QUAY_USER: ${{ steps.vault.outputs.QUAY_USER }}
         QUAY_PASSWORD: ${{ steps.vault.outputs.QUAY_PASSWORD }}
       run: |
+        set +x
+        umask 077
         echo "::group::Write pull secret and registry auth"
         mkdir -p "${HOME}/.config/containers"
+        # Single-credential authfile for the private flavor registry: the
+        # bot under the plain quay.io hostname key, written directly to the
+        # job-scoped path the workflows' digest check reads via --authfile
+        # (the top-priority override in the containers/image credential
+        # search order).
+        jq -n \
+          '{auths: {"quay.io": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}}}' \
+          > "$RUNNER_TEMP/flavor-registry-auth.json"
+        chmod 600 "$RUNNER_TEMP/flavor-registry-auth.json"
+        # Root's copy feeds only sudo'd cluster-tool flavor pulls. The
+        # sudoers policy allows copying to root only from the shared path
+        # below, so stage the single-credential file through it and restore
+        # the merged content right after.
+        sudo mkdir -p /root/.config/containers
+        cp "$RUNNER_TEMP/flavor-registry-auth.json" "${HOME}/.config/containers/auth.json"
+        sudo cp "${HOME}/.config/containers/auth.json" /root/.config/containers/auth.json
+        sudo chmod 600 /root/.config/containers/auth.json
         jq -s \
           '.[0].auths * .[1].auths * {"quay.io/osac-project": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}} | {auths: .}' \
           <(printf '%s' "${PULL_SECRET}") \
           <(printf '%s' "${SNAPSHOT_REGISTRY_AUTH}") \
           > "${HOME}/.config/containers/auth.json"
         chmod 600 "${HOME}/.config/containers/auth.json"
-        sudo mkdir -p /root/.config/containers
-        sudo cp "${HOME}/.config/containers/auth.json" /root/.config/containers/auth.json
-        sudo chmod 600 /root/.config/containers/auth.json
         # Job-scoped copy, purely additive: fetch-stage-registry-secret reads
         # this as its merge base instead of the shared path above, which a
         # concurrent job's own fetch-and-write-secrets/teardown call can
