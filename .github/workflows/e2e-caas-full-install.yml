@@ -283,6 +283,7 @@ jobs:
         id: secrets
         uses: ./.github/actions/fetch-and-write-secrets
         with:
+          flavor-registry-auth: "true"
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
@@ -318,7 +319,7 @@ jobs:
           fi
 
           DIGEST_FILE="/tmp/cluster-tool-flavor-${FLAVOR_NAME}.digest"
-          REMOTE_DIGEST=$(skopeo inspect "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' 2>/dev/null || echo "")
+          REMOTE_DIGEST=$(python3 .github/scripts/flavor_registry.py inspect || true)
 
           exec 9>"${FLAVOR_LOCK}"
           flock --exclusive 9
@@ -355,7 +356,7 @@ jobs:
           fi
 
           if ${NEED_PULL}; then
-            sudo python3 /usr/local/bin/cluster-tool pull "${FLAVOR_IMAGE}" 9>&-
+            sudo --preserve-env=FLAVOR_REGISTRY_AUTH_FILE,FLAVOR_IMAGE python3 .github/scripts/flavor_registry.py pull 9>&-
             if [[ -n "${REMOTE_DIGEST}" ]]; then
               echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
             fi
@@ -371,6 +372,10 @@ jobs:
             sudo ip link set "${br}" down 2>/dev/null || true
             sudo ip link delete "${br}" 2>/dev/null || true
           done
+
+      - name: Remove isolated flavor credentials
+        if: always()
+        run: python3 .github/scripts/flavor_registry.py cleanup
 
       - name: Boot cluster clone
         env:

@@ -7,6 +7,9 @@ inputs:
     required: true
   secret-id:
     required: true
+  flavor-registry-auth:
+    description: Create isolated credentials for local cluster-tool flavor operations
+    default: "false"
 
 outputs:
   SLACK_WEBHOOK_URL:
@@ -48,6 +51,18 @@ runs:
           secret/data/osac/monitoring/slack-bot bot_token | SLACK_BOT_TOKEN ;
           secret/data/osac/monitoring/slack-bot channel_id | SLACK_CHANNEL_ID ;
           secret/data/osac/monitoring/slack-bot chai_bot_user_id | CHAI_BOT_USER_ID
+
+    - name: Write isolated flavor registry auth
+      if: inputs.flavor-registry-auth == 'true'
+      shell: bash
+      env:
+        PULL_SECRET: ${{ steps.vault.outputs.PULL_SECRET }}
+        SNAPSHOT_REGISTRY_AUTH: ${{ steps.vault.outputs.SNAPSHOT_REGISTRY_AUTH }}
+        QUAY_USER: ${{ steps.vault.outputs.QUAY_USER }}
+        QUAY_PASSWORD: ${{ steps.vault.outputs.QUAY_PASSWORD }}
+      run: |
+        set +x
+        python3 .github/scripts/flavor_registry.py init
 
     - name: Write secrets to disk
       shell: bash
