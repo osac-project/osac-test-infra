@@ -17,6 +17,9 @@ from pathlib import Path
 
 import yaml
 
+FAKE_TEST_AUTH_B64 = "ZmFrZTp0ZXN0"
+FAKE_TEST_QUAY_PASSWORD = "fake-test-password"
+
 WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 PIPELINES = (
     "e2e-caas-full-install.yml",
@@ -138,11 +141,72 @@ class CLIImageParityTests(unittest.TestCase):
 
 
 class FlavorRegistryTests(unittest.TestCase):
+    def test_full_prepare_allocation_failure_preserves_existing_flavor(self) -> None:
+        """Run both complete preparation steps and fail allocation before any consumer can change a flavor."""
+        for workflow in (PIPELINES[0], PIPELINES[-1]):
+            with self.subTest(workflow=workflow), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                config = root / ".config/cluster-tool"
+                config.mkdir(parents=True)
+                for name in ("servers.json", "state.json"):
+                    (config / name).write_text("{}")
+                flavor = root / "fake-test-existing-flavor"
+                marker = root / "cluster-tool-flavor-fake-test.digest"
+                flavor.write_text("FAKE_TEST_EXISTING_FLAVOR")
+                marker.write_text("sha256:" + "a" * 64)
+                original_flavor, original_marker = flavor.read_bytes(), marker.read_bytes()
+                calls = root / "consumer-calls"
+                stubs = {
+                    "mktemp": '#!/bin/bash\nprintf "FAKE_TEST_ALLOCATION_ERROR" >&2\nexit 73\n',
+                    **dict.fromkeys(
+                        ("sudo", "skopeo", "flock", "ip"),
+                        '#!/bin/bash\nprintf "%s\\n" "$0 $*" >> "$FAKE_TEST_CALLS"\n'
+                        'if [[ "$*" == *"flavors --delete"* ]]; then\n'
+                        '  /bin/rm -f -- "$FAKE_TEST_FLAVOR" "$FAKE_TEST_MARKER"\nfi\nexit 91\n',
+                    ),
+                }
+                for name, content in stubs.items():
+                    executable = root / name
+                    executable.write_text(content)
+                    executable.chmod(0o700)
+                document = yaml.safe_load((WORKFLOWS / workflow).read_text())
+                prepare = next(
+                    step["run"]
+                    for step in document["jobs"]["e2e"]["steps"]
+                    if step.get("name") == "Prepare cluster environment"
+                )
+                self.assertEqual(prepare.count('DIGEST_FILE="/tmp/'), 1)
+                prepare = prepare.replace('DIGEST_FILE="/tmp/', 'DIGEST_FILE="${RUNNER_TEMP}/')
+                env = {
+                    **os.environ,
+                    "HOME": temporary,
+                    "RUNNER_TEMP": temporary,
+                    "TMPDIR": temporary,
+                    "PATH": temporary + os.pathsep + os.environ["PATH"],
+                    "FLAVOR_NAME": "fake-test",
+                    "FLAVOR_IMAGE": "quay.io/osac-project/cluster-flavors:fake-test",
+                    "FLAVOR_LOCK": str(root / "flavor.lock"),
+                    "CLONE_NAME": "fake-test-clone",
+                    "FAKE_TEST_CALLS": str(calls),
+                    "FAKE_TEST_FLAVOR": str(flavor),
+                    "FAKE_TEST_MARKER": str(marker),
+                }
+                result = subprocess.run(
+                    ["bash", "-eo", "pipefail", "-c", prepare], env=env, capture_output=True, text=True, timeout=10
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("status=1 evidence=local-temp-failure", result.stderr)
+                self.assertNotIn("FAKE_TEST_ALLOCATION_ERROR", result.stdout + result.stderr)
+                self.assertFalse(calls.exists(), "Preparation invoked a consumer before diagnostics were ready")
+                self.assertEqual(flavor.read_bytes(), original_flavor)
+                self.assertEqual(marker.read_bytes(), original_marker)
+
     def test_real_registry_commands_with_fake_dependencies(self) -> None:
+        """Exercise extracted inspect/pull snippets with fake failures and credential non-disclosure canaries."""
         fake_digest = "sha256:" + "a" * 64
         fake_canaries = (
             "FAKE_TEST_PASSWORD\nAuthorization: Bearer FAKE_TEST_TOKEN\nCookie: FAKE_TEST_COOKIE\n"
-            "::error::FAKE_TEST_COMMAND\nZmFrZTp0ZXN0"
+            f"::error::FAKE_TEST_COMMAND\n{FAKE_TEST_AUTH_B64}"
         )
         cases = (
             (0, fake_digest, "", "", "valid"),
@@ -187,7 +251,7 @@ class FlavorRegistryTests(unittest.TestCase):
                     root = Path(temporary)
                     authfile = root / ".config/containers/auth.json"
                     authfile.parent.mkdir(parents=True)
-                    fake_auth = '{"auths":{"quay.io/osac-project":{"auth":"ZmFrZTp0ZXN0"}}}'
+                    fake_auth = json.dumps({"auths": {"quay.io/osac-project": {"auth": FAKE_TEST_AUTH_B64}}})
                     if auth != "missing":
                         authfile.write_text("{FAKE_TEST_INVALID" if auth == "malformed" else fake_auth)
                         if auth == "unreadable":
@@ -230,7 +294,7 @@ class FlavorRegistryTests(unittest.TestCase):
                         self.assertIn("registry-access", result.stderr)
                     if auth == "valid":
                         self.assertIn(f"--authfile {authfile}", (root / "args").read_text())
-                    for canary in ("FAKE_TEST", "Authorization:", "Cookie:", "::error::", "ZmFrZTp0ZXN0"):
+                    for canary in ("FAKE_TEST", "Authorization:", "Cookie:", "::error::", FAKE_TEST_AUTH_B64):
                         self.assertNotIn(canary, result.stdout + result.stderr)
                     result = subprocess.run(["bash", "-euc", functions + pull], env=env, capture_output=True, text=True)
                     self.assertEqual(result.returncode, status)
@@ -243,7 +307,7 @@ class FlavorRegistryTests(unittest.TestCase):
                         "python3 /usr/local/bin/cluster-tool pull " + env["FLAVOR_IMAGE"],
                     )
                     self.assertNotIn("FAKE_TEST", result.stderr)
-                    self.assertNotIn("ZmFrZTp0ZXN0", result.stderr)
+                    self.assertNotIn(FAKE_TEST_AUTH_B64, result.stderr)
                     if status:
                         self.assertIn(f"status={status}", result.stderr)
                         self.assertIn(evidence, result.stderr)
@@ -252,6 +316,7 @@ class FlavorRegistryTests(unittest.TestCase):
                         self.assertTrue(authfile.exists())
 
     def test_real_secret_merge_and_existing_root_copy(self) -> None:
+        """Execute the secret-writing action with fake inputs/root copies and verify merge and failure boundaries."""
         action = yaml.safe_load((WORKFLOWS.parent / "actions/fetch-and-write-secrets/action.yml").read_text())
         script = next(step["run"] for step in action["runs"]["steps"] if step.get("name") == "Write secrets to disk")
         for scenario in (
@@ -290,7 +355,7 @@ class FlavorRegistryTests(unittest.TestCase):
                     ),
                     "SNAPSHOT_REGISTRY_AUTH": json.dumps(fake_snapshot),
                     "QUAY_USER": "" if scenario == "missing-user" else "fake-test-user",
-                    "QUAY_PASSWORD": "" if scenario == "missing-password" else "fake-test-password",
+                    "QUAY_PASSWORD": "" if scenario == "missing-password" else FAKE_TEST_QUAY_PASSWORD,
                     "AAP_LICENSE": "",
                     "FAKE_POLICY": scenario,
                 }
@@ -298,7 +363,7 @@ class FlavorRegistryTests(unittest.TestCase):
                     env.pop("QUAY_USER" if scenario == "unset-user" else "QUAY_PASSWORD")
                 result = subprocess.run(["bash", "-xeuc", script], env=env, capture_output=True, text=True)
                 self.assertNotIn("FAKE_TEST", result.stdout + result.stderr)
-                self.assertNotIn("fake-test-password", result.stdout + result.stderr)
+                self.assertNotIn(FAKE_TEST_QUAY_PASSWORD, result.stdout + result.stderr)
                 if scenario == "policy":
                     self.assertEqual(result.returncode, 77)
                     self.assertFalse((root / "fake-root-auth.json").exists())
