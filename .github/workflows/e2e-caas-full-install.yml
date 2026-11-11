@@ -283,7 +283,6 @@ jobs:
         id: secrets
         uses: ./.github/actions/fetch-and-write-secrets
         with:
-          flavor-registry-auth: "true"
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
@@ -318,8 +317,64 @@ jobs:
             exit 1
           fi
 
+          set +x
+          registry_command() (
+            operation=$1
+            shift
+            umask 077
+            diagnostics=$(mktemp -d 2>/dev/null) || { echo "Registry ${operation}: status=1 evidence=local-temp-failure" >&2; exit 1; }
+            trap 'rm -rf -- "$diagnostics"' EXIT
+            if [[ "$operation" == inspect ]]; then
+              echo "Registry inspect: uid=${EUID} auth=user-config-explicit" >&2
+              if [[ ! -f "$HOME/.config/containers/auth.json" ]]; then
+                echo "Registry inspect: status=66 evidence=missing-authfile" >&2
+                exit 66
+              fi
+              if [[ ! -r "$HOME/.config/containers/auth.json" ]]; then
+                echo "Registry inspect: status=77 evidence=authfile-unreadable" >&2
+                exit 77
+              fi
+              if ! jq -e '.auths | type == "object" and length > 0' \
+                "$HOME/.config/containers/auth.json" > /dev/null 2>&1; then
+                echo "Registry inspect: status=65 evidence=malformed-or-empty-authfile" >&2
+                exit 65
+              fi
+              echo "Registry inspect: authfile=readable-json credential-validity=unchecked" >&2
+            else
+              echo "Registry pull: caller-uid=${EUID} consumer=sudo-cluster-tool auth=root-default-discovery" >&2
+            fi
+            status=0
+            "$@" > "$diagnostics/stdout" 2> "$diagnostics/stderr" || status=$?
+            if [[ "$status" == 0 && "$operation" == inspect ]]; then
+              digest=$(cat "$diagnostics/stdout")
+              if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                printf '%s\n' "$digest"
+              else
+                echo "Registry inspect: status=65 evidence=invalid-digest-output" >&2
+                exit 65
+              fi
+            fi
+            if [[ "$status" != 0 ]]; then
+              evidence=""
+              output=$(cat "$diagnostics/stdout" "$diagnostics/stderr")
+              output=${output,,}
+              case "$output" in
+                *sudo:*|*not\ allowed\ to\ execute*|*a\ password\ is\ required*) evidence+=sudo-policy-or-execution, ;;
+              esac
+              case "$output" in *open*permission\ denied*|*operation\ not\ permitted*) evidence+=local-permission, ;; esac
+              case "$output" in *unauthorized*|*authentication\ required*) evidence+=registry-auth, ;; esac
+              case "$output" in
+                *manifest\ unknown*|*name\ unknown*|*status\ code:\ 404*) evidence+=image-not-found-or-hidden, ;;
+              esac
+              case "$output" in *x509:*|*tls\ handshake*|*certificate\ signed*) evidence+=tls, ;; esac
+              case "$output" in *timeout*|*timed\ out*|*no\ such\ host*|*connection\ refused*) evidence+=network, ;; esac
+              echo "Registry ${operation}: status=${status} evidence=${evidence:-unclassified} (raw output withheld)" >&2
+            fi
+            exit "$status"
+          )
           DIGEST_FILE="/tmp/cluster-tool-flavor-${FLAVOR_NAME}.digest"
-          REMOTE_DIGEST=$(python3 .github/scripts/flavor_registry.py inspect || true)
+          REMOTE_DIGEST=$(registry_command inspect skopeo inspect --authfile "$HOME/.config/containers/auth.json" \
+            "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' || true)
 
           exec 9>"${FLAVOR_LOCK}"
           flock --exclusive 9
@@ -356,7 +411,7 @@ jobs:
           fi
 
           if ${NEED_PULL}; then
-            python3 .github/scripts/flavor_registry.py pull 9>&-
+            registry_command pull sudo python3 /usr/local/bin/cluster-tool pull "${FLAVOR_IMAGE}" 9>&-
             if [[ -n "${REMOTE_DIGEST}" ]]; then
               echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
             fi
@@ -372,10 +427,6 @@ jobs:
             sudo ip link set "${br}" down 2>/dev/null || true
             sudo ip link delete "${br}" 2>/dev/null || true
           done
-
-      - name: Remove isolated flavor credentials
-        if: always()
-        run: python3 .github/scripts/flavor_registry.py cleanup
 
       - name: Boot cluster clone
         env:

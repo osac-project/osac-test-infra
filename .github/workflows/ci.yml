@@ -37,16 +37,7 @@ jobs:
           python-version: "3.14"
       - name: Install script test dependencies
         run: python3 -m pip install 'PyYAML>=6.0,<7'
-      - name: Checkout cluster-tool consumer contract
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          repository: osac-project/cluster-tool
-          ref: 34263b05f86ee3ec663d8319bfb56768369268f8
-          path: .ci-cluster-tool
-          persist-credentials: false
       - name: Python script tests
-        env:
-          CLUSTER_TOOL_SOURCE: ${{ github.workspace }}/.ci-cluster-tool/cluster-tool
         run: |
           set -euo pipefail
           python3 -I .github/scripts/redact_test.py
@@ -62,8 +53,6 @@ jobs:
           python3 -I .github/scripts/test_upsert_pr_comment.py
           python3 -I .github/scripts/netris_catalog_test.py
           python3 -I .github/scripts/export_vm_allowlist_test.py
-          python3 -I .github/scripts/test_flavor_registry.py
-          python3 -I .github/scripts/test_flavor_registry_consumer.py
       - name: Shell script tests
         run: |
           set -euo pipefail

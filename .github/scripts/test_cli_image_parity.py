@@ -7,6 +7,7 @@ These are infrastructure unit tests, not the E2E suites owned by the monorepo.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -134,6 +135,157 @@ class CLIImageParityTests(unittest.TestCase):
                     self.assertEqual(github_env.read_text(), "")
                     self.assertFalse(image_cli.exists())
                     self.assertEqual(log.read_text().splitlines()[-1], "rm test-container")
+
+
+class FlavorRegistryTests(unittest.TestCase):
+    def test_real_registry_commands_with_fake_dependencies(self) -> None:
+        fake_digest = "sha256:" + "a" * 64
+        fake_canaries = (
+            "FAKE_TEST_PASSWORD\nAuthorization: Bearer FAKE_TEST_TOKEN\nCookie: FAKE_TEST_COOKIE\n"
+            "::error::FAKE_TEST_COMMAND\nZmFrZTp0ZXN0"
+        )
+        cases = (
+            (0, fake_digest, "", "", "valid"),
+            (42, "", "unauthorized", "registry-auth", "valid"),
+            (43, "", "manifest unknown", "image-not-found-or-hidden", "valid"),
+            (44, "", "status code: 404 (Not Found); unauthorized", "image-not-found-or-hidden", "valid"),
+            (45, "", "open auth.json: permission denied", "local-permission", "valid"),
+            (46, "", "sudo: a password is required", "sudo-policy-or-execution", "valid"),
+            (47, "", "x509: certificate signed by unknown authority", "tls", "valid"),
+            (48, "", "connection refused", "network", "valid"),
+            (49, "", "denied; FAKE_TEST_404", "unclassified", "valid"),
+            (0, fake_canaries, "", "invalid-digest-output", "valid"),
+            (0, fake_digest, "", "missing-authfile", "missing"),
+            (0, fake_digest, "", "malformed-or-empty-authfile", "malformed"),
+        )
+        for workflow in (PIPELINES[0], PIPELINES[-1]):
+            document = yaml.safe_load((WORKFLOWS / workflow).read_text())
+            prepare = next(
+                step["run"]
+                for step in document["jobs"]["e2e"]["steps"]
+                if step.get("name") == "Prepare cluster environment"
+            )
+            functions = prepare[prepare.index("set +x") : prepare.index("DIGEST_FILE=")]
+            probe = prepare[prepare.index("REMOTE_DIGEST=$(") : prepare.index("exec 9>")]
+            pull = next(line.strip() for line in prepare.splitlines() if "registry_command pull" in line)
+            self.assertNotIn("REGISTRY_AUTH_FILE", pull)
+            for status, stdout, stderr, evidence, auth in cases:
+                with (
+                    self.subTest(workflow=workflow, status=status, evidence=evidence),
+                    tempfile.TemporaryDirectory() as temporary,
+                ):
+                    root = Path(temporary)
+                    authfile = root / ".config/containers/auth.json"
+                    authfile.parent.mkdir(parents=True)
+                    fake_auth = '{"auths":{"quay.io/osac-project":{"auth":"ZmFrZTp0ZXN0"}}}'
+                    if auth != "missing":
+                        authfile.write_text(fake_auth if auth == "valid" else "{FAKE_TEST_INVALID")
+                    for executable in ("skopeo", "sudo"):
+                        stub = root / executable
+                        stub.write_text(
+                            '#!/bin/bash\nprintf "%s\\n" "$*" > "$FAKE_ARGS"\n'
+                            'printf "%s" "$FAKE_STDOUT"\nprintf "%s" "$FAKE_STDERR" >&2\nexit "$FAKE_STATUS"\n'
+                        )
+                        stub.chmod(0o700)
+                    env = {
+                        **os.environ,
+                        "HOME": temporary,
+                        "TMPDIR": temporary,
+                        "PATH": temporary + os.pathsep + os.environ["PATH"],
+                        "FLAVOR_IMAGE": "quay.io/osac-project/cluster-flavors:fake-test",
+                        "FAKE_STATUS": str(status),
+                        "FAKE_STDOUT": stdout,
+                        "FAKE_STDERR": stderr + "\n" + fake_canaries,
+                        "FAKE_ARGS": str(root / "args"),
+                    }
+                    result = subprocess.run(
+                        ["bash", "-xeuc", functions + probe + 'printf "%s" "$REMOTE_DIGEST"'],
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, fake_digest if not evidence else "")
+                    self.assertIn(evidence, result.stderr)
+                    if status and auth == "valid":
+                        self.assertIn(f"status={status}", result.stderr)
+                    if status == 44:
+                        self.assertIn("registry-auth", result.stderr)
+                    if auth == "valid":
+                        self.assertIn(f"--authfile {authfile}", (root / "args").read_text())
+                    for canary in ("FAKE_TEST", "Authorization:", "Cookie:", "::error::", "ZmFrZTp0ZXN0"):
+                        self.assertNotIn(canary, result.stdout + result.stderr)
+                    result = subprocess.run(["bash", "-euc", functions + pull], env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, status)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("consumer=sudo-cluster-tool auth=root-default-discovery", result.stderr)
+                    self.assertEqual(
+                        (root / "args").read_text().strip(),
+                        "python3 /usr/local/bin/cluster-tool pull " + env["FLAVOR_IMAGE"],
+                    )
+                    self.assertNotIn("FAKE_TEST", result.stderr)
+                    self.assertNotIn("ZmFrZTp0ZXN0", result.stderr)
+                    if status:
+                        self.assertIn(f"status={status}", result.stderr)
+                        self.assertIn(evidence, result.stderr)
+                    self.assertEqual(list(root.glob("tmp.*")), [])
+                    if auth != "missing":
+                        self.assertTrue(authfile.exists())
+
+    def test_real_secret_merge_and_existing_root_copy(self) -> None:
+        action = yaml.safe_load((WORKFLOWS.parent / "actions/fetch-and-write-secrets/action.yml").read_text())
+        script = next(step["run"] for step in action["runs"]["steps"] if step.get("name") == "Write secrets to disk")
+        for scenario in ("valid", "malformed", "missing", "policy"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                sudo = root / "sudo"
+                sudo.write_text(
+                    '#!/bin/bash\nprintf "%s\\n" "$*" >> "$HOME/sudo-calls"\n'
+                    'if [[ "$FAKE_POLICY" == policy ]]; then exit 77; fi\n'
+                    'if [[ "$1" == cp ]]; then cp "$2" "$HOME/fake-root-auth.json"; fi\n'
+                )
+                sudo.chmod(0o700)
+                fake_pull = {
+                    "auths": {
+                        "quay.io/osac-project/cluster-flavors": {"auth": "FAKE_TEST_REPO"},
+                        "quay.io": {"auth": "FAKE_TEST_OLD"},
+                    }
+                }
+                fake_snapshot = {"auths": {"quay.io": {"auth": "FAKE_TEST_NEW"}}}
+                env = {
+                    **os.environ,
+                    "HOME": temporary,
+                    "RUNNER_TEMP": temporary,
+                    "PATH": temporary + os.pathsep + os.environ["PATH"],
+                    "PULL_SECRET": {"malformed": "{FAKE_TEST_INVALID", "missing": ""}.get(
+                        scenario, json.dumps(fake_pull)
+                    ),
+                    "SNAPSHOT_REGISTRY_AUTH": json.dumps(fake_snapshot),
+                    "QUAY_USER": "fake-test-user",
+                    "QUAY_PASSWORD": "fake-test-password",
+                    "AAP_LICENSE": "",
+                    "FAKE_POLICY": scenario,
+                }
+                result = subprocess.run(["bash", "-xeuc", script], env=env, capture_output=True, text=True)
+                self.assertNotIn("FAKE_TEST", result.stdout + result.stderr)
+                self.assertNotIn("fake-test-password", result.stdout + result.stderr)
+                if scenario == "policy":
+                    self.assertEqual(result.returncode, 77)
+                    self.assertFalse((root / "fake-root-auth.json").exists())
+                elif scenario != "valid":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("invalid-auth-input", result.stderr)
+                    self.assertFalse((root / "sudo-calls").exists())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    merged = json.loads((root / "fake-root-auth.json").read_text())["auths"]
+                    self.assertEqual(merged["quay.io"]["auth"], "FAKE_TEST_NEW")
+                    self.assertEqual(merged["quay.io/osac-project/cluster-flavors"]["auth"], "FAKE_TEST_REPO")
+                    self.assertIn("quay.io/osac-project", merged)
+                    self.assertEqual(
+                        (root / "containers-auth-base.json").read_bytes(), (root / "fake-root-auth.json").read_bytes()
+                    )
+                    self.assertEqual((root / ".config/containers/auth.json").stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

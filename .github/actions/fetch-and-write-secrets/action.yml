@@ -7,9 +7,6 @@ inputs:
     required: true
   secret-id:
     required: true
-  flavor-registry-auth:
-    description: Create isolated credentials for local cluster-tool flavor operations
-    default: "false"
 
 outputs:
   SLACK_WEBHOOK_URL:
@@ -52,18 +49,6 @@ runs:
           secret/data/osac/monitoring/slack-bot channel_id | SLACK_CHANNEL_ID ;
           secret/data/osac/monitoring/slack-bot chai_bot_user_id | CHAI_BOT_USER_ID
 
-    - name: Write isolated flavor registry auth
-      if: inputs.flavor-registry-auth == 'true'
-      shell: bash
-      env:
-        PULL_SECRET: ${{ steps.vault.outputs.PULL_SECRET }}
-        SNAPSHOT_REGISTRY_AUTH: ${{ steps.vault.outputs.SNAPSHOT_REGISTRY_AUTH }}
-        QUAY_USER: ${{ steps.vault.outputs.QUAY_USER }}
-        QUAY_PASSWORD: ${{ steps.vault.outputs.QUAY_PASSWORD }}
-      run: |
-        set +x
-        python3 .github/scripts/flavor_registry.py init
-
     - name: Write secrets to disk
       shell: bash
       env:
@@ -73,17 +58,30 @@ runs:
         QUAY_USER: ${{ steps.vault.outputs.QUAY_USER }}
         QUAY_PASSWORD: ${{ steps.vault.outputs.QUAY_PASSWORD }}
       run: |
+        set +x
+        umask 077
         echo "::group::Write pull secret and registry auth"
         mkdir -p "${HOME}/.config/containers"
-        jq -s \
-          '.[0].auths * .[1].auths * {"quay.io/osac-project": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}} | {auths: .}' \
+        if jq -es \
+          'if length != 2 or any(.[]; (.auths | type) != "object") or
+            env.QUAY_USER == "" or env.QUAY_PASSWORD == "" then error("invalid auth inputs") else
+            .[0].auths * .[1].auths * {"quay.io/osac-project": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}} | {auths: .} end' \
           <(printf '%s' "${PULL_SECRET}") \
           <(printf '%s' "${SNAPSHOT_REGISTRY_AUTH}") \
-          > "${HOME}/.config/containers/auth.json"
+          2>/dev/null > "${HOME}/.config/containers/auth.json"; then
+          echo "Registry auth: merged user config ready; credential validity not checked"
+        else
+          status=$?
+          evidence=invalid-auth-input
+          if [[ "${status}" == 1 ]]; then evidence=authfile-write-or-permission; fi
+          echo "::error::Registry auth merge failed: status=${status} evidence=${evidence}" >&2
+          exit "${status}"
+        fi
         chmod 600 "${HOME}/.config/containers/auth.json"
         sudo mkdir -p /root/.config/containers
         sudo cp "${HOME}/.config/containers/auth.json" /root/.config/containers/auth.json
         sudo chmod 600 /root/.config/containers/auth.json
+        echo "Registry auth: root default config copied and chmod completed; discovery/authorization unchecked"
         # Job-scoped copy, purely additive: fetch-stage-registry-secret reads
         # this as its merge base instead of the shared path above, which a
         # concurrent job's own fetch-and-write-secrets/teardown call can
