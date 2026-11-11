@@ -154,9 +154,19 @@ class FlavorRegistryTests(unittest.TestCase):
             (47, "", "x509: certificate signed by unknown authority", "tls", "valid"),
             (48, "", "connection refused", "network", "valid"),
             (49, "", "denied; FAKE_TEST_404", "unclassified", "valid"),
+            (50, "", "invalid username/password", "registry-auth", "valid"),
+            (51, "", "invalid username or password", "registry-auth", "valid"),
+            (52, "", "denied: requested access to the resource is denied", "registry-access", "valid"),
+            (53, "", "denied: access forbidden", "registry-access", "valid"),
+            (54, "", "status code: 401", "registry-auth", "valid"),
+            (55, "", "status code: 403 (Forbidden)", "registry-access", "valid"),
+            (56, "", "status code: 404; status code: 403", "image-not-found-or-hidden", "valid"),
+            (126, "", "", "command-not-executable", "valid"),
+            (127, "", "", "command-not-found", "valid"),
             (0, fake_canaries, "", "invalid-digest-output", "valid"),
             (0, fake_digest, "", "missing-authfile", "missing"),
             (0, fake_digest, "", "malformed-or-empty-authfile", "malformed"),
+            (0, fake_digest, "", "authfile-unreadable", "unreadable"),
         )
         for workflow in (PIPELINES[0], PIPELINES[-1]):
             document = yaml.safe_load((WORKFLOWS / workflow).read_text())
@@ -179,11 +189,16 @@ class FlavorRegistryTests(unittest.TestCase):
                     authfile.parent.mkdir(parents=True)
                     fake_auth = '{"auths":{"quay.io/osac-project":{"auth":"ZmFrZTp0ZXN0"}}}'
                     if auth != "missing":
-                        authfile.write_text(fake_auth if auth == "valid" else "{FAKE_TEST_INVALID")
+                        authfile.write_text("{FAKE_TEST_INVALID" if auth == "malformed" else fake_auth)
+                        if auth == "unreadable":
+                            authfile.chmod(0)
+                    (root / "fake-test-not-executable").write_text("not executable")
                     for executable in ("skopeo", "sudo"):
                         stub = root / executable
                         stub.write_text(
                             '#!/bin/bash\nprintf "%s\\n" "$*" > "$FAKE_ARGS"\n'
+                            'if [[ "$FAKE_STATUS" == 126 ]]; then exec "$HOME/fake-test-not-executable"; fi\n'
+                            'if [[ "$FAKE_STATUS" == 127 ]]; then exec "$HOME/fake-test-missing-command"; fi\n'
                             'printf "%s" "$FAKE_STDOUT"\nprintf "%s" "$FAKE_STDERR" >&2\nexit "$FAKE_STATUS"\n'
                         )
                         stub.chmod(0o700)
@@ -211,6 +226,8 @@ class FlavorRegistryTests(unittest.TestCase):
                         self.assertIn(f"status={status}", result.stderr)
                     if status == 44:
                         self.assertIn("registry-auth", result.stderr)
+                    if status == 56:
+                        self.assertIn("registry-access", result.stderr)
                     if auth == "valid":
                         self.assertIn(f"--authfile {authfile}", (root / "args").read_text())
                     for canary in ("FAKE_TEST", "Authorization:", "Cookie:", "::error::", "ZmFrZTp0ZXN0"):
@@ -218,7 +235,9 @@ class FlavorRegistryTests(unittest.TestCase):
                     result = subprocess.run(["bash", "-euc", functions + pull], env=env, capture_output=True, text=True)
                     self.assertEqual(result.returncode, status)
                     self.assertEqual(result.stdout, "")
-                    self.assertIn("consumer=sudo-cluster-tool auth=root-default-discovery", result.stderr)
+                    self.assertIn(
+                        "consumer=sudo-cluster-tool auth=consumer-default server-and-env=unverified", result.stderr
+                    )
                     self.assertEqual(
                         (root / "args").read_text().strip(),
                         "python3 /usr/local/bin/cluster-tool pull " + env["FLAVOR_IMAGE"],
@@ -235,7 +254,16 @@ class FlavorRegistryTests(unittest.TestCase):
     def test_real_secret_merge_and_existing_root_copy(self) -> None:
         action = yaml.safe_load((WORKFLOWS.parent / "actions/fetch-and-write-secrets/action.yml").read_text())
         script = next(step["run"] for step in action["runs"]["steps"] if step.get("name") == "Write secrets to disk")
-        for scenario in ("valid", "malformed", "missing", "policy"):
+        for scenario in (
+            "valid",
+            "malformed",
+            "missing",
+            "missing-user",
+            "missing-password",
+            "unset-user",
+            "unset-password",
+            "policy",
+        ):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 sudo = root / "sudo"
@@ -248,7 +276,7 @@ class FlavorRegistryTests(unittest.TestCase):
                 fake_pull = {
                     "auths": {
                         "quay.io/osac-project/cluster-flavors": {"auth": "FAKE_TEST_REPO"},
-                        "quay.io": {"auth": "FAKE_TEST_OLD"},
+                        "quay.io": {"auth": "FAKE_TEST_OLD", "identitytoken": "FAKE_TEST_PRESERVED"},
                     }
                 }
                 fake_snapshot = {"auths": {"quay.io": {"auth": "FAKE_TEST_NEW"}}}
@@ -261,11 +289,13 @@ class FlavorRegistryTests(unittest.TestCase):
                         scenario, json.dumps(fake_pull)
                     ),
                     "SNAPSHOT_REGISTRY_AUTH": json.dumps(fake_snapshot),
-                    "QUAY_USER": "fake-test-user",
-                    "QUAY_PASSWORD": "fake-test-password",
+                    "QUAY_USER": "" if scenario == "missing-user" else "fake-test-user",
+                    "QUAY_PASSWORD": "" if scenario == "missing-password" else "fake-test-password",
                     "AAP_LICENSE": "",
                     "FAKE_POLICY": scenario,
                 }
+                if scenario in ("unset-user", "unset-password"):
+                    env.pop("QUAY_USER" if scenario == "unset-user" else "QUAY_PASSWORD")
                 result = subprocess.run(["bash", "-xeuc", script], env=env, capture_output=True, text=True)
                 self.assertNotIn("FAKE_TEST", result.stdout + result.stderr)
                 self.assertNotIn("fake-test-password", result.stdout + result.stderr)
@@ -280,12 +310,14 @@ class FlavorRegistryTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     merged = json.loads((root / "fake-root-auth.json").read_text())["auths"]
                     self.assertEqual(merged["quay.io"]["auth"], "FAKE_TEST_NEW")
+                    self.assertEqual(merged["quay.io"]["identitytoken"], "FAKE_TEST_PRESERVED")
                     self.assertEqual(merged["quay.io/osac-project/cluster-flavors"]["auth"], "FAKE_TEST_REPO")
                     self.assertIn("quay.io/osac-project", merged)
                     self.assertEqual(
                         (root / "containers-auth-base.json").read_bytes(), (root / "fake-root-auth.json").read_bytes()
                     )
                     self.assertEqual((root / ".config/containers/auth.json").stat().st_mode & 0o777, 0o600)
+                    self.assertEqual((root / "pull-secret.json").read_text(), env["PULL_SECRET"])
 
 
 if __name__ == "__main__":

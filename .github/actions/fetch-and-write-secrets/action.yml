@@ -64,7 +64,7 @@ runs:
         mkdir -p "${HOME}/.config/containers"
         if jq -es \
           'if length != 2 or any(.[]; (.auths | type) != "object") or
-            env.QUAY_USER == "" or env.QUAY_PASSWORD == "" then error("invalid auth inputs") else
+            (env.QUAY_USER // "") == "" or (env.QUAY_PASSWORD // "") == "" then error("invalid auth inputs") else
             .[0].auths * .[1].auths * {"quay.io/osac-project": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}} | {auths: .} end' \
           <(printf '%s' "${PULL_SECRET}") \
           <(printf '%s' "${SNAPSHOT_REGISTRY_AUTH}") \

@@ -297,12 +297,12 @@ jobs:
           fi
 
           set +x
+          diagnostics=$(mktemp -d 2>/dev/null) || { echo "Registry diagnostics: status=1 evidence=local-temp-failure" >&2; exit 1; }
+          trap 'rm -rf -- "$diagnostics"' EXIT
           registry_command() (
             operation=$1
             shift
             umask 077
-            diagnostics=$(mktemp -d 2>/dev/null) || { echo "Registry ${operation}: status=1 evidence=local-temp-failure" >&2; exit 1; }
-            trap 'rm -rf -- "$diagnostics"' EXIT
             if [[ "$operation" == inspect ]]; then
               echo "Registry inspect: uid=${EUID} auth=user-config-explicit" >&2
               if [[ ! -f "$HOME/.config/containers/auth.json" ]]; then
@@ -320,7 +320,7 @@ jobs:
               fi
               echo "Registry inspect: authfile=readable-json credential-validity=unchecked" >&2
             else
-              echo "Registry pull: caller-uid=${EUID} consumer=sudo-cluster-tool auth=root-default-discovery" >&2
+              echo "Registry pull: caller-uid=${EUID} consumer=sudo-cluster-tool auth=consumer-default server-and-env=unverified" >&2
             fi
             status=0
             "$@" > "$diagnostics/stdout" 2> "$diagnostics/stderr" || status=$?
@@ -335,13 +335,21 @@ jobs:
             fi
             if [[ "$status" != 0 ]]; then
               evidence=""
+              case "$status" in 126) evidence+=command-not-executable, ;; 127) evidence+=command-not-found, ;; esac
               output=$(cat "$diagnostics/stdout" "$diagnostics/stderr")
               output=${output,,}
               case "$output" in
                 *sudo:*|*not\ allowed\ to\ execute*|*a\ password\ is\ required*) evidence+=sudo-policy-or-execution, ;;
               esac
               case "$output" in *open*permission\ denied*|*operation\ not\ permitted*) evidence+=local-permission, ;; esac
-              case "$output" in *unauthorized*|*authentication\ required*) evidence+=registry-auth, ;; esac
+              case "$output" in
+                *unauthorized*|*authentication\ required*|*invalid\ username/password*|*invalid\ username\ or\ password*|\
+                *status\ code:\ 401|*status\ code:\ 401[!0-9]*) evidence+=registry-auth, ;;
+              esac
+              case "$output" in
+                *denied:\ requested\ access\ to\ the\ resource\ is\ denied*|*denied:\ access\ forbidden*|\
+                *status\ code:\ 403|*status\ code:\ 403[!0-9]*) evidence+=registry-access, ;;
+              esac
               case "$output" in
                 *manifest\ unknown*|*name\ unknown*|*status\ code:\ 404*) evidence+=image-not-found-or-hidden, ;;
               esac
