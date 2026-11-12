@@ -4,20 +4,21 @@ name: E2E BMaaS Agentless-Net Full Install
 permissions:
   contents: read
 
-# Manual environment for one virtual BMH on the Agentless containerlab fabric.
-# Each dispatch gets its own EC2 box and runner label. Teardown always
-# terminates that box, including after failure or cancellation. Nightly and
-# pull-request triggers belong to the follow-on connectivity story.
+# One virtual BMH on the Agentless containerlab fabric. Triggers live on the
+# caller. A pull-request run checks out that pull request's commit.
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
+      deploy-suite:
+        description: "Deployment scenario recorded on the diagnostics artifact"
+        required: false
+        type: string
+        default: "bmaas-agentless"
       instance-type:
         description: "EC2 instance type"
         required: false
-        type: choice
-        options:
-          - c5n.metal
-        default: c5n.metal
+        type: string
+        default: "c5n.metal"
       aws-region:
         description: "AWS region to launch into"
         required: false
@@ -43,13 +44,120 @@ on:
         required: false
         type: string
         default: ""
-
-concurrency:
-  group: e2e-bmaas-agentless-net-${{ github.run_id }}
-  cancel-in-progress: false
+      test-infra-repository:
+        description: "Repository to checkout for actions and scripts"
+        required: false
+        type: string
+        default: ""
+      test-infra-ref:
+        description: "Branch, tag, or commit of the test-infra repository to checkout"
+        required: false
+        type: string
+        default: ""
+      test-infra-sha:
+        description: "Exact commit SHA of the test-infra repository to checkout"
+        required: false
+        type: string
+        default: ""
+      pr-repository:
+        description: "Repository containing the expected PR head"
+        required: false
+        type: string
+        default: ""
+      pr-ref:
+        description: "Expected PR head branch/ref"
+        required: false
+        type: string
+        default: ""
+      pr-sha:
+        description: "Expected immutable PR head SHA"
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: "PR author_association from the caller"
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: "GitHub login of the PR author"
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: "PR number"
+        required: false
+        type: string
+        default: ""
 
 jobs:
+  authorize:
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || job.workflow_repository }}
+          ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Validate pull request metadata
+        if: (inputs.pr-number == '' && inputs.pr-sha != '') || (inputs.pr-number != '' && inputs.pr-sha == '')
+        shell: bash
+        run: |
+          echo "::error::pr-number and pr-sha must be supplied together."
+          exit 1
+
+      - name: Authorize fork PR
+        if: inputs.fork-pr-author-association != ''
+        uses: ./.github/actions/authorize-fork-pr
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          fork-pr-author: ${{ inputs.fork-pr-author }}
+          pr-number: ${{ inputs.pr-number }}
+
+      - name: Validate pull request revision
+        if: inputs.pr-number != '' && inputs.pr-sha != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          EXPECTED_SHA: ${{ inputs.pr-sha }}
+          EXPECTED_REF: ${{ inputs.pr-ref }}
+          EXPECTED_REPOSITORY: ${{ inputs.pr-repository }}
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          actual_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+          actual_ref=$(jq -r '.head.ref' <<<"${pr_json}")
+          actual_repository=$(jq -r '.head.repo.full_name' <<<"${pr_json}")
+          [[ "${actual_sha}" == "${EXPECTED_SHA}" ]] || {
+            echo "::error::PR head SHA changed; refusing to provision."
+            exit 1
+          }
+          [[ -z "${EXPECTED_REPOSITORY}" || "${actual_repository}" == "${EXPECTED_REPOSITORY}" ]] || {
+            echo "::error::PR head repository changed; refusing to provision."
+            exit 1
+          }
+          [[ -z "${EXPECTED_REF}" || "${actual_ref}" == "${EXPECTED_REF}" ]] || {
+            echo "::error::PR head ref changed; refusing to provision."
+            exit 1
+          }
+
   provision:
+    needs: authorize
     uses: ./.github/workflows/ec2-runner-provision.yml
     permissions:
       contents: read
@@ -58,6 +166,9 @@ jobs:
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
       tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
+      test-infra-repository: ${{ inputs.test-infra-repository }}
+      test-infra-ref: ${{ inputs.test-infra-ref }}
+      test-infra-sha: ${{ inputs.test-infra-sha }}
 
   push-secrets:
     needs: provision
@@ -71,6 +182,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ inputs.test-infra-repository || job.workflow_repository }}
+          ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
           persist-credentials: false
 
       - name: Validate and bootstrap
@@ -143,6 +256,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ inputs.test-infra-repository || job.workflow_repository }}
+          ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
           persist-credentials: false
 
       - name: Stage secrets into place
@@ -213,7 +328,7 @@ jobs:
         if: always() && steps.sanitize.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bmaas-agentless-diagnostics-${{ github.run_id }}
+          name: ${{ inputs.deploy-suite }}-diagnostics-${{ github.run_id }}
           path: infra/agentless-net/logs-sanitized
           if-no-files-found: warn
 
@@ -234,3 +349,6 @@ jobs:
       runner-id: ${{ needs.provision.outputs.runner-id }}
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+      test-infra-repository: ${{ inputs.test-infra-repository }}
+      test-infra-ref: ${{ inputs.test-infra-ref }}
+      test-infra-sha: ${{ inputs.test-infra-sha }}

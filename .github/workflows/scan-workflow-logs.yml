@@ -24,6 +24,8 @@ on:
       - E2E VMaaS
       - E2E VMaaS Full Install
       - E2E BMaaS Netris Full Install
+      - E2E BMaaS Agentless-Net Full Install
+      - E2E BMaaS Agentless PR suite
       - E2E VMaaS Netris Full Install
       - E2E BMaaS Netris PR suite
       - E2E VMaaS Netris PR suite

@@ -41,6 +41,12 @@ jobs:
     suite: bmaas-netris
     workflow: e2e-pr-bmaas-netris.yml  # a run of its own, started by the decision
     manual_only: true
+  e2e-bmaas-agentless:
+    kind: e2e
+    check: "E2E / BMaaS Agentless Full Install"
+    suite: bmaas-agentless
+    workflow: e2e-pr-bmaas-agentless.yml  # a run of its own, started by the decision
+    manual_only: true
   e2e-vmaas-netris:
     kind: e2e
     check: "E2E / VMaaS Netris Full Install"
