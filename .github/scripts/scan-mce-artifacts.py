@@ -16,17 +16,38 @@ MAX_FILE_BYTES = 32 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
 ARCHIVE_PREFIXES = (b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00", b"PK", b"\x28\xb5\x2f\xfd", b"7z\xbc\xaf", b"Rar!")
 ARCHIVE_SUFFIXES = (".tar", ".tgz", ".gz", ".bz2", ".xz", ".zip", ".zst", ".7z", ".rar")
+CREDENTIAL_NAMES = {
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "auth.json",
+    ".dockerconfigjson",
+    "credentials",
+    "credentials.json",
+    "token",
+    "password",
+    "kubeadmin-password",
+}
+
+
+def traversal_error(error: OSError) -> None:
+    raise error
 
 
 def prepare(root: pathlib.Path) -> int:
     withheld = 0
     total = 0
-    for directory, subdirs, files in os.walk(root, followlinks=False):
+    for directory, subdirs, files in os.walk(root, followlinks=False, onerror=traversal_error):
         base = pathlib.Path(directory)
         for name in subdirs[:]:
             path = base / name
             if path.is_symlink():
                 path.unlink()
+                subdirs.remove(name)
+                withheld += 1
+            elif name == ".git":
+                shutil.rmtree(path)
                 subdirs.remove(name)
                 withheld += 1
         for name in files:
@@ -49,7 +70,9 @@ def prepare(root: pathlib.Path) -> int:
                 not text
                 or name.lower().endswith((*ARCHIVE_SUFFIXES, ".key", ".kubeconfig"))
                 or "kubeconfig" in name.lower()
-                or name.lower() == "kubeadmin-password"
+                or name.lower() in CREDENTIAL_NAMES
+                or (name.lower() == "config.json" and base.name == ".docker")
+                or b"PRIVATE KEY-----" in data
                 or data.startswith(ARCHIVE_PREFIXES)
                 or data[257:262] == b"ustar"
             ):
@@ -71,7 +94,7 @@ def main() -> None:
         withheld = prepare(root)
         with (root / "scan-status.txt").open("w") as stream:
             stream.write(f"uninspectable_files_withheld={withheld}\n")
-        engine = shutil.which("docker") or shutil.which("podman")
+        engine = shutil.which("podman") or shutil.which("docker")
         if not engine:
             raise ValueError("pattern scanner runtime unavailable")
         config = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / ".github/scripts/.gitleaks.toml"
@@ -79,6 +102,7 @@ def main() -> None:
         suffix = ",Z" if selinux.is_file() and selinux.read_text().strip() == "1" else ""
         with tempfile.TemporaryDirectory(prefix="mce-scan-", dir=temporary) as private:
             report = pathlib.Path(private) / "findings.json"
+            (pathlib.Path(private) / ".gitleaksignore").touch(mode=0o600)
             subprocess.run(
                 [
                     engine,
@@ -98,6 +122,8 @@ def main() -> None:
                     "dir",
                     "/scan",
                     "--config=/gitleaks.toml",
+                    "--ignore-gitleaks-allow",
+                    "--gitleaks-ignore-path=/out/.gitleaksignore",
                     "--report-format=json",
                     "--report-path=/out/findings.json",
                     "--exit-code=0",

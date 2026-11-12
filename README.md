@@ -43,7 +43,10 @@ artifact. Raw collector logs are not printed to Actions logs. All retained files
 pass existing recursive redaction, a mandatory private MCE pattern scan, and the
 known-secret release gate before upload. Archives (including unexpected
 `hypershift-dump.tar.gz`), binary/oversized files, links and special files are
-withheld rather than allowed to bypass member scanning. The MCE scan limits files
+withheld rather than allowed to bypass member scanning.
+Credential files are also withheld before redaction. MCE text is excluded from
+the shared failure summary so a failed scan cannot leave copied content behind.
+The MCE scan limits files
 to 32 MiB and the payload to 256 MiB; it has a 180-second cap. Missing/failed scans,
 invalid/missing reports, or remaining findings withhold the MCE payload, even if
 the ordinary artifact pattern scan is disabled. A safe withholding notice remains
