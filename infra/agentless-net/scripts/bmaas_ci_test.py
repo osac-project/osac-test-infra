@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -275,6 +276,42 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("bridge sysctl is 0", cleaned)
         self.assertIn("done: yes", cleaned)
 
+    def test_unquoted_secret_values_keep_no_trailing_words(self) -> None:
+        test_secret = "hunter2"
+        raw = f"password: {test_secret} still secret\nbridge sysctl is 0\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn(test_secret, cleaned)
+        self.assertNotIn("still secret", cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+
+    def test_explicit_block_indent_is_redacted_and_unknown_headers_fail(self) -> None:
+        test_literal = "indented-secret"
+        test_folded = "folded-secret"
+        raw = f"password: |2\n  {test_literal}\nbridge sysctl is 0\ntoken: >2-\n  {test_folded}\ndone: yes\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn(test_literal, cleaned)
+        self.assertNotIn(test_folded, cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+        self.assertIn("done: yes", cleaned)
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            source.mkdir()
+            (source / "job.log").write_text("password: |10\n  leftover\n")
+            with self.assertRaises(RuntimeError):
+                sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
+
     def test_private_key_header_without_an_end_marker_fails(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
         with tempfile.TemporaryDirectory() as tmp:
@@ -347,6 +384,28 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("failed to read virtual BMH inventory", destroy)
         self.assertIn("failed to delete BareMetalHost", destroy)
         self.assertNotIn("|| true", destroy)
+        self.assertLess(destroy.index("failed to read virtual BMH inventory"), destroy.index('if [[ -n "${BMH_NAME:-}" ]]'))
+        self.assertEqual(destroy.count("exit 1"), 1)
+        leak_script = (ROOT / ".github" / "scripts" / "comment-pr-leak-findings.sh").read_text()
+        self.assertIn("display_title", leak_script)
+        self.assertIn("workflow_dispatch", leak_script)
+        self.assertIn("SUITE_RUN_VALIDATED", leak_script)
+        title = "E2E suite · bmaas-agentless · #795 · " + ("a" * 40)
+        parsed = subprocess.check_output(
+            [
+                "jq",
+                "-Rn",
+                "--arg",
+                "title",
+                title,
+                r'$title | capture("^E2E suite \u00b7 (?<suite>[A-Za-z0-9-]+) \u00b7 #(?<pr>[0-9]+) \u00b7 (?<sha>[0-9a-fA-F]{40})$")',
+            ],
+            text=True,
+        )
+        identity = json.loads(parsed)
+        self.assertEqual(identity["suite"], "bmaas-agentless")
+        self.assertEqual(identity["pr"], "795")
+        self.assertEqual(identity["sha"], "a" * 40)
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
         bridges = (INFRA / "scripts" / "prepare-host-bridges.sh").read_text()

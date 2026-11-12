@@ -33,16 +33,17 @@ if [[ -f "$STATE_FILE" ]]; then
 fi
 
 INVENTORY_NAMES=()
+inventory_unreadable=0
 if [[ -f "$INVENTORY_FILE" ]]; then
     if ! inventory_text=$(python3 -c 'import json,sys; print("\n".join(h["name"] for h in json.load(open(sys.argv[1])).get("hosts", [])))' "$INVENTORY_FILE"); then
         echo "ERROR: failed to read virtual BMH inventory ${INVENTORY_FILE}" >&2
-        exit 1
-    fi
-    if [[ -n "$inventory_text" ]]; then
+        cleanup_failed=1
+        inventory_unreadable=1
+    elif [[ -n "$inventory_text" ]]; then
         mapfile -t INVENTORY_NAMES <<< "$inventory_text"
     fi
 fi
-if [[ ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
+if [[ "$inventory_unreadable" -eq 0 && ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
     for name in "${INVENTORY_NAMES[@]}"; do
         info "Deleting BareMetalHost ${name}"
         if ! oc -n "$BMH_NAMESPACE" delete baremetalhost "$name" --ignore-not-found --wait=false; then

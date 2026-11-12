@@ -14,6 +14,12 @@
 #   HEAD_BRANCH, HEAD_OWNER  -- workflow_run head repo owner (fork-aware)
 #   PR_FROM_EVENT  -- workflow_run.pull_requests[0].number
 #   UPLOAD_OK  -- 'true' if redacted-logs artifact uploaded on the scan run
+#
+# workflow_dispatch PR suites run the workflow file from the default branch,
+# so workflow_run.head_sha is that branch, not the tested commit. Their run
+# name is "E2E suite · <suite> · #<pr> · <sha>". That identity is used only
+# after the pull request is open and the SHA is its head, or GitHub lists
+# that commit on the pull request.
 set -euo pipefail
 
 : "${GH_TOKEN:?}"
@@ -151,13 +157,48 @@ if [[ -z "${PR_NUMBER}" ]]; then
   fi
 fi
 
+# Dispatch suites do not put the tested commit in workflow_run.head_sha.
+# The run name is produced by the default-branch workflow. Accept it only
+# when the named pull request is open and the named commit belongs to it.
+SUITE_RUN_VALIDATED=false
+if [[ -z "${PR_NUMBER}" ]]; then
+  if run_json=$(gh api "repos/${REPO}/actions/runs/${E2E_RUN_ID}"); then
+    run_event=$(jq -r '.event // ""' <<<"${run_json}")
+    run_title=$(jq -r '.display_title // ""' <<<"${run_json}")
+    if [[ "${run_event}" == "workflow_dispatch" ]] \
+      && suite_identity=$(jq -Rn --arg title "${run_title}" '$title | capture("^E2E suite \u00b7 (?<suite>[A-Za-z0-9-]+) \u00b7 #(?<pr>[0-9]+) \u00b7 (?<sha>[0-9a-fA-F]{40})$")'); then
+      candidate_pr=$(jq -r '.pr' <<<"${suite_identity}")
+      tested_sha=$(jq -r '.sha' <<<"${suite_identity}" | tr '[:upper:]' '[:lower:]')
+      pr_meta=$(gh api "repos/${REPO}/pulls/${candidate_pr}" --jq '{st: .state, s: (.head.sha // "")}') || pr_meta=""
+      if [[ -n "${pr_meta}" && "$(jq -r '.st' <<<"${pr_meta}")" == "open" \
+        && "$(jq -r '.s' <<<"${pr_meta}")" == "${tested_sha}" ]]; then
+        PR_NUMBER="${candidate_pr}"
+        SUITE_RUN_VALIDATED=true
+        echo "Using PR #${PR_NUMBER} from the suite run name; tested commit ${tested_sha} is its head."
+      elif [[ -n "${pr_meta}" && "$(jq -r '.st' <<<"${pr_meta}")" == "open" ]] \
+        && associated_prs=$(gh api --paginate "repos/${REPO}/commits/${tested_sha}/pulls" \
+          --jq '.[] | select(.state == "open") | .number') \
+        && grep -qx "${candidate_pr}" <<<"${associated_prs}"; then
+        PR_NUMBER="${candidate_pr}"
+        SUITE_RUN_VALIDATED=true
+        echo "Using PR #${PR_NUMBER} from the suite run name; tested commit ${tested_sha} is on that pull request."
+      else
+        echo "Suite run name PR #${candidate_pr} does not contain ${tested_sha}; ignoring."
+      fi
+    fi
+  else
+    echo "::warning::Could not read e2e run ${E2E_RUN_ID}; suite run-name fallback skipped."
+  fi
+fi
+
 if [[ -z "${PR_NUMBER}" ]]; then
   echo "::warning::Unable to resolve an open PR for ${HEAD_SHA} (${HEAD_BRANCH}); skipping PR comment."
   exit 0
 fi
 
-# Final guard: association or tip match before post.
-if ! pr_ok_for_comment "${PR_NUMBER}"; then
+# Final guard: association or tip match before post. A suite run name that
+# already matched the tested commit does not use workflow_run.head_sha.
+if [[ "${SUITE_RUN_VALIDATED}" != "true" ]] && ! pr_ok_for_comment "${PR_NUMBER}"; then
   echo "::warning::Resolved PR #${PR_NUMBER} not associated with ${HEAD_SHA}; skipping PR comment."
   exit 0
 fi
