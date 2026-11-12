@@ -71,8 +71,15 @@ class ProofPayloadTest(unittest.TestCase):
         self.assertEqual(prove_bmi.discovered_address(camel), "10.100.1.50")
         self.assertTrue(prove_bmi.is_ready(ready))
         running = {"status": {"state": "BARE_METAL_INSTANCE_STATE_RUNNING", "network_attachments": [{"ip_address": "10.100.1.193"}]}}
-        self.assertTrue(prove_bmi.is_ready(running))
+        self.assertTrue(prove_bmi.is_bmi_running(running))
+        self.assertFalse(prove_bmi.is_bmi_running(ready))
+        self.assertFalse(prove_bmi.is_ready(running))
         self.assertEqual(prove_bmi.discovered_address(running), "10.100.1.193")
+        command = prove_bmi.grpcurl_command(
+            address="api.example:443", token="token", ca_file="/tmp/ca.crt", service="osac.public.v1.BareMetalInstances/Get"
+        )
+        self.assertNotIn("-insecure", command)
+        self.assertIn("-cacert", command)
         self.assertFalse(prove_bmi.is_ready({"status": {"state": "BARE_METAL_INSTANCE_STATE_NOT_READY"}}))
         self.assertFalse(prove_bmi.is_ready({"status": {"state": "BARE_METAL_INSTANCE_STATE_PROVISIONING"}}))
         self.assertFalse(prove_bmi.is_ready({"status": {"state": "BARE_METAL_INSTANCE_STATE_FAILED"}}))
@@ -88,6 +95,8 @@ class SanitizeTest(unittest.TestCase):
             "c2VjcmV0a2V5ZGF0YQ==\n"
             f"{end}\n"
             "password: hunter2\n"
+            'PASSWORD="my secret"\n'
+            '"password": "hunter2"\n'
             "Authorization: Bearer abc.def.ghi\n"
             "client-key-data: bXlrZXk=\n"
             "bridge sysctl is 0\n"
@@ -101,6 +110,7 @@ class SanitizeTest(unittest.TestCase):
             cleaned = (destination / "job.log").read_text()
         self.assertNotIn("c2VjcmV0a2V5ZGF0YQ==", cleaned)
         self.assertNotIn("hunter2", cleaned)
+        self.assertNotIn("my secret", cleaned)
         self.assertNotIn("abc.def.ghi", cleaned)
         self.assertNotIn("bXlrZXk=", cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
@@ -129,6 +139,8 @@ class WorkflowContractTest(unittest.TestCase):
 
         upload = next(step for step in document["jobs"]["e2e"]["steps"] if step.get("name") == "Upload sanitized diagnostics")
         self.assertIn("steps.sanitize.outcome == 'success'", upload["if"])
+        checkout = next(step for step in document["jobs"]["e2e"]["steps"] if step.get("name") == "Checkout repository")
+        self.assertFalse(checkout["with"]["persist-credentials"])
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
         bridges = (INFRA / "scripts" / "prepare-host-bridges.sh").read_text()
@@ -147,8 +159,11 @@ class WorkflowContractTest(unittest.TestCase):
         deploy = (INFRA / "scripts" / "deploy-osac.sh").read_text()
         self.assertIn('PROFILE="$OSAC_PROFILE"', deploy)
         self.assertIn("VALUES_FILE=values/agentless-net-ci/values.yaml", deploy)
+        self.assertLess(deploy.index('if [[ -z "${OSAC_PROFILE:-}" ]];'), deploy.index("Merging values overlay"))
         fabric = (INFRA / "scripts" / "deploy-fabric.sh").read_text()
         self.assertIn("prepare-host-bridges.sh", fabric)
+        self.assertIn("caas-l2-advertisement", fabric)
+        self.assertIn("--ignore-not-found", fabric)
 
 
 if __name__ == "__main__":

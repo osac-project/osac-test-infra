@@ -49,9 +49,13 @@ else
 fi
 
 # ---------- merge values overlay ----------
+# Profile installs read values/<profile>/instance.yaml. The legacy CaaS file
+# is not part of that layout, so the merge runs only for the CaaS path.
 
 MERGED_VALUES_DIR="${INSTALLER_DIR}/values/agentless-net-ci"
 MERGED_VALUES="${MERGED_VALUES_DIR}/values.yaml"
+
+if [[ -z "${OSAC_PROFILE:-}" ]]; then
 mkdir -p "$MERGED_VALUES_DIR"
 
 info "Merging values overlay with ${OSAC_VALUES_FILE}..."
@@ -84,6 +88,7 @@ print(f'  Merged {sys.argv[1]} + {sys.argv[2]} -> {sys.argv[3]}')
 AAP_LICENSE="${AAP_LICENSE_PATH:-/root/aap-license.zip}"
 cp "$PULL_SECRET" "${MERGED_VALUES_DIR}/pull-secret.json"
 cp "$AAP_LICENSE" "${MERGED_VALUES_DIR}/license.zip"
+fi
 
 # ---------- step 8: install OSAC ----------
 
