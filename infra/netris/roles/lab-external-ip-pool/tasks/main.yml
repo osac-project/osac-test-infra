@@ -1,0 +1,134 @@
+---
+# Ensure the Netris lab ExternalIPPool exists and is READY.
+#
+# With provider networking enabled, tenant default networking takes its
+# `default-nat` ExternalIP from a READY IPv4 pool, so every tenant onboarding
+# needs one before it can reach DefaultNetworkingReady. This role used to be
+# inline in setup-caas, which made a VMaaS or BMaaS-only deploy depend on a
+# pool left behind by an earlier CaaS run: with none present, tenant onboarding
+# waits forever and the suite fails in its session setup.
+#
+# Every deploy-suite setup playbook includes this role, so the prerequisite is
+# owned once and ordered before the E2E session gate that requires it.
+#
+# Inputs (inventory/group_vars/all.yml):
+#   osac_external_ip_pool_name  name of the lab pool
+#   osac_external_ip_pool_cidr  CIDR the host routes toward the softgate/ISP
+#   osac_namespace              namespace of the OSAC release
+#   kubeconfig_path             OCP kubeconfig (defaults to the runner's)
+#
+# Output:
+#   lab_external_ip_pool_id     API ID of the READY lab pool
+
+- name: Get fulfillment internal API URL for the lab ExternalIPPool
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - route/fulfillment-internal-api
+      - -n
+      - "{{ osac_namespace }}"
+      - -o
+      - jsonpath={.status.ingress[0].host}
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  register: _lab_pool_fulfillment_host
+  changed_when: false
+  until: _lab_pool_fulfillment_host.rc == 0 and _lab_pool_fulfillment_host.stdout | length > 0
+  retries: 10
+  delay: 15
+
+- name: Get a service account token for the lab ExternalIPPool
+  ansible.builtin.command:
+    argv: [oc, create, token, -n, "{{ osac_namespace }}", admin]
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+  register: _lab_pool_sa_token
+  changed_when: false
+  no_log: true
+  until: _lab_pool_sa_token.rc == 0 and _lab_pool_sa_token.stdout | length > 0
+  retries: 10
+  delay: 15
+
+# OSAC creates the Netris IPAM allocation when the shared pool is reconciled.
+# Tenant default networking and tenant egress use this shared pool; cluster API
+# and ingress use the existing Netris external-access flow.
+- name: List OSAC ExternalIPPools
+  ansible.builtin.uri:
+    url: "https://{{ _lab_pool_fulfillment_host.stdout }}/api/private/v1/external_ip_pools"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _lab_pool_sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _lab_pool_pools
+  no_log: true
+
+- name: Find the lab ExternalIPPool
+  ansible.builtin.set_fact:
+    _lab_pool_by_cidr: >-
+      {{ _lab_pool_pools.json.get('items', [])
+         | selectattr('spec.cidrs', 'equalto', [osac_external_ip_pool_cidr]) | list }}
+    _lab_pool_by_name: >-
+      {{ _lab_pool_pools.json.get('items', [])
+         | selectattr('metadata.name', 'equalto', osac_external_ip_pool_name) | list }}
+
+- name: Reject conflicting ExternalIPPool definitions
+  ansible.builtin.assert:
+    that:
+      - _lab_pool_by_cidr | length <= 1
+      - _lab_pool_by_name | length <= 1
+      - >-
+        (_lab_pool_by_name | length == 0) or
+        ((_lab_pool_by_name | first).get('spec', {}).get('cidrs', []) == [osac_external_ip_pool_cidr])
+    fail_msg: >-
+      ExternalIPPool name/CIDR conflicts with the Netris lab configuration.
+
+- name: Create the Netris lab ExternalIPPool when missing
+  ansible.builtin.uri:
+    url: "https://{{ _lab_pool_fulfillment_host.stdout }}/api/private/v1/external_ip_pools"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _lab_pool_sa_token.stdout }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      metadata:
+        name: "{{ osac_external_ip_pool_name }}"
+      spec:
+        cidrs: ["{{ osac_external_ip_pool_cidr }}"]
+        ip_family: IP_FAMILY_IPV4
+    validate_certs: false
+    status_code: [200, 201]
+  register: _lab_pool_created
+  when: _lab_pool_by_cidr | length == 0
+  no_log: true
+
+- name: Select the Netris lab ExternalIPPool ID
+  ansible.builtin.set_fact:
+    lab_external_ip_pool_id: >-
+      {{ (_lab_pool_by_cidr | first).id if _lab_pool_by_cidr | length > 0
+         else (_lab_pool_created.json.get('object', _lab_pool_created.json)).id }}
+
+- name: Wait for the Netris lab ExternalIPPool to be ready
+  ansible.builtin.uri:
+    url: "https://{{ _lab_pool_fulfillment_host.stdout }}/api/private/v1/external_ip_pools/{{ lab_external_ip_pool_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _lab_pool_sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _lab_pool_status
+  until: >-
+    (_lab_pool_status.json.get('object', _lab_pool_status.json)
+      .get('status', {}).get('state', '')) in
+    ['EXTERNAL_IP_POOL_STATE_READY', 'Ready']
+  retries: 60
+  delay: 10
+  no_log: true
+
+- name: Report the lab ExternalIPPool
+  ansible.builtin.debug:
+    msg: >-
+      Lab ExternalIPPool {{ osac_external_ip_pool_name }} ({{ osac_external_ip_pool_cidr }})
+      is READY as {{ lab_external_ip_pool_id }}.
