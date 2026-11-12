@@ -115,9 +115,13 @@ KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
     "
 echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24, gateway 10.0.0.30 (net-node)"
 
-KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
-    --type=merge -p "{\"spec\":{\"interfaces\":[\"$FABRIC_NIC\"]}}"
-echo "  L2Advertisement: announcing on $FABRIC_NIC (fabric)"
+if [[ -n "$(KUBECONFIG="$KUBECONFIG" oc get l2advertisement caas-l2-advertisement -n metallb-system --ignore-not-found -o name)" ]]; then
+    KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
+        --type=merge -p "{\"spec\":{\"interfaces\":[\"$FABRIC_NIC\"]}}"
+    echo "  L2Advertisement: announcing on $FABRIC_NIC (fabric)"
+else
+    info "caas-l2-advertisement is absent; skipping the MetalLB patch"
+fi
 
 # ---------- configure trunk ports ----------
 

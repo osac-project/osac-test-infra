@@ -8,10 +8,12 @@ It does not exercise isolation, security groups, or a second host.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -75,34 +77,69 @@ def state_of(resource: dict[str, Any]) -> str:
 
 
 def is_ready(resource: dict[str, Any]) -> bool:
-    """True for a network in *_READY or a BMI in *_RUNNING."""
+    """True when a virtual network or subnet is in a *_READY state."""
     state = state_of(resource)
     if "NOT_READY" in state or "FAILED" in state:
         return False
-    return state.endswith("_READY") or state.endswith("_RUNNING")
+    return state.endswith("_READY")
+
+
+def is_bmi_running(resource: dict[str, Any]) -> bool:
+    """True only for BARE_METAL_INSTANCE_STATE_RUNNING."""
+    state = state_of(resource)
+    return state.endswith("_RUNNING") and "FAILED" not in state
 
 
 def is_failed(resource: dict[str, Any]) -> bool:
     return "FAILED" in state_of(resource)
 
 
+class CallTimeout(RuntimeError):
+    """One gRPC call exceeded its own deadline."""
+
+
+def grpcurl_command(
+    *,
+    address: str,
+    token: str,
+    ca_file: str,
+    service: str,
+    data: dict[str, Any] | None = None,
+) -> list[str]:
+    return [
+        "grpcurl",
+        "-cacert",
+        ca_file,
+        "-H",
+        f"Authorization: Bearer {token}",
+        "-d",
+        json.dumps(data or {}),
+        address,
+        service,
+    ]
+
+
 class Api:
-    def __init__(self, *, address: str, token: str) -> None:
+    def __init__(self, *, address: str, token: str, ca_file: str, call_timeout: int = 30) -> None:
         self.address = address
         self.token = token
+        self.ca_file = ca_file
+        self.call_timeout = call_timeout
 
     def call(self, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
-        command = [
-            "grpcurl",
-            "-insecure",
-            "-H",
-            f"Authorization: Bearer {self.token}",
-            "-d",
-            json.dumps(data or {}),
-            self.address,
-            service,
-        ]
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        command = grpcurl_command(
+            address=self.address,
+            token=self.token,
+            ca_file=self.ca_file,
+            service=service,
+            data=data,
+        )
+        try:
+            completed = subprocess.run(
+                command, check=False, capture_output=True, text=True, timeout=self.call_timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CallTimeout(f"{service} timed out after {self.call_timeout}s") from exc
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()
             raise RuntimeError(f"{service} failed: {detail}")
@@ -132,12 +169,21 @@ def create_proof(
     disk_image_ref: str,
     template_name: str,
     ssh_public_key: str,
+    state_path: Path,
 ) -> dict[str, str]:
+    state: dict[str, str] = {}
+
+    def remember(key: str, value: str) -> None:
+        state[key] = value
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(state))
+
     network = api.call(
         f"{PUBLIC_API}.VirtualNetworks/Create",
         {"object": {"metadata": {"name": "bmaas-proof", "tenant": tenant}, "spec": {"ipv4_cidr": "10.100.0.0/16"}}},
     )
     network_id = _object_id(network, "VirtualNetworks/Create")
+    remember("vnet_id", network_id)
     wait_for_state(
         api,
         f"{PUBLIC_API}.VirtualNetworks/Get",
@@ -155,6 +201,7 @@ def create_proof(
         },
     )
     subnet_id = _object_id(subnet, "Subnets/Create")
+    remember("subnet_id", subnet_id)
     wait_for_state(
         api,
         f"{PUBLIC_API}.Subnets/Get",
@@ -180,6 +227,7 @@ def create_proof(
             }
         },
     )
+    remember("type_id", _object_id(instance_type, "BareMetalInstanceTypes/Create"))
     disk_image = api.call(
         f"{PUBLIC_API}.DiskImages/Create",
         {
@@ -194,6 +242,7 @@ def create_proof(
             }
         },
     )
+    remember("disk_image_id", _object_id(disk_image, "DiskImages/Create"))
     catalog = api.call(
         f"{PUBLIC_API}.BareMetalInstanceCatalogItems/Create",
         {
@@ -206,6 +255,7 @@ def create_proof(
             }
         },
     )
+    remember("catalog_id", _object_id(catalog, "BareMetalInstanceCatalogItems/Create"))
     bmi = api.call(
         f"{PUBLIC_API}.BareMetalInstances/Create",
         bmi_create_body(
@@ -218,21 +268,20 @@ def create_proof(
             ssh_public_key=ssh_public_key,
         ),
     )
-    return {
-        "vnet_id": network_id,
-        "subnet_id": subnet_id,
-        "type_id": _object_id(instance_type, "BareMetalInstanceTypes/Create"),
-        "disk_image_id": _object_id(disk_image, "DiskImages/Create"),
-        "catalog_id": _object_id(catalog, "BareMetalInstanceCatalogItems/Create"),
-        "bmi_id": _object_id(bmi, "BareMetalInstances/Create"),
-    }
+    remember("bmi_id", _object_id(bmi, "BareMetalInstances/Create"))
+    return state
 
 
 def wait_for_state(api: Api, service: str, resource_id: str, *, timeout_seconds: int, interval_seconds: int) -> None:
     deadline = time.monotonic() + timeout_seconds
     last = ""
     while time.monotonic() < deadline:
-        response = api.call(service, {"id": resource_id})
+        try:
+            response = api.call(service, {"id": resource_id})
+        except CallTimeout as exc:
+            last = str(exc)
+            time.sleep(interval_seconds)
+            continue
         resource = response.get("object") or response
         last = state_of(resource)
         if is_ready(resource):
@@ -247,13 +296,18 @@ def wait_for_address(api: Api, bmi_id: str, *, timeout_seconds: int, interval_se
     deadline = time.monotonic() + timeout_seconds
     last = ""
     while time.monotonic() < deadline:
-        response = api.call(f"{PUBLIC_API}.BareMetalInstances/Get", {"id": bmi_id})
+        try:
+            response = api.call(f"{PUBLIC_API}.BareMetalInstances/Get", {"id": bmi_id})
+        except CallTimeout as exc:
+            last = str(exc)
+            time.sleep(interval_seconds)
+            continue
         resource = response.get("object") or response
         last = json.dumps(resource.get("status") or {})
         if is_failed(resource):
             raise RuntimeError(f"BMI {bmi_id} entered {state_of(resource)}. Last status: {last}")
         address = discovered_address(resource)
-        if address and is_ready(resource):
+        if address and is_bmi_running(resource):
             return address
         time.sleep(interval_seconds)
     raise TimeoutError(f"BMI {bmi_id} did not become running with an address. Last status: {last}")
@@ -293,6 +347,49 @@ def _token(namespace: str) -> str:
     return token
 
 
+def ingress_ca_file(namespace: str) -> str:
+    """Return a CA file for the fulfillment route, obtained through the kube API.
+
+    The route certificate is not verified by disabling TLS. The CA is the
+    route's own caCertificate when set, otherwise the cluster ingress CA.
+    """
+    route = subprocess.run(
+        ["oc", "get", "route", "fulfillment-internal-api", "-n", namespace, "-o", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if route.returncode != 0:
+        raise RuntimeError((route.stderr or route.stdout).strip() or "fulfillment-internal-api route is not available")
+    tls = (json.loads(route.stdout).get("spec") or {}).get("tls") or {}
+    material = str(tls.get("caCertificate") or "").strip()
+    if not material:
+        secret = subprocess.run(
+            [
+                "oc",
+                "get",
+                "secret",
+                "router-ca",
+                "-n",
+                "openshift-ingress-operator",
+                "-o",
+                r"jsonpath={.data.tls\.crt}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if secret.returncode != 0 or not secret.stdout.strip():
+            raise RuntimeError("the ingress CA is not available; refusing an unverified API connection")
+        material = base64.b64decode(secret.stdout).decode()
+    descriptor, name = tempfile.mkstemp(prefix="osac-ingress-ca-", suffix=".crt")
+    os.close(descriptor)
+    path = Path(name)
+    path.write_text(material if material.endswith("\n") else material + "\n")
+    path.chmod(0o600)
+    return str(path)
+
+
 def _api_address(namespace: str) -> str:
     completed = subprocess.run(
         ["oc", "get", "route", "fulfillment-internal-api", "-n", namespace, "-o", "jsonpath={.spec.host}"],
@@ -319,7 +416,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     state_path = Path(args.state_file)
-    api = Api(address=_api_address(args.namespace), token=_token(args.namespace))
+    api = Api(
+        address=_api_address(args.namespace),
+        token=_token(args.namespace),
+        ca_file=ingress_ca_file(args.namespace),
+    )
     if args.delete:
         if not state_path.is_file():
             print(f"no proof state at {state_path}; nothing to delete")
@@ -336,9 +437,8 @@ def main(argv: list[str] | None = None) -> int:
         disk_image_ref=args.disk_image_ref,
         template_name=args.template,
         ssh_public_key=key_path.read_text().strip(),
+        state_path=state_path,
     )
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state))
     address = wait_for_address(
         api,
         state["bmi_id"],
