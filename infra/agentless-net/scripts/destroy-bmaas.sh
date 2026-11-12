@@ -23,9 +23,13 @@ INVENTORY_FILE="${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json"
 
 info() { echo "==> $*"; }
 
+cleanup_failed=0
 if [[ -f "$STATE_FILE" ]]; then
     info "Deleting the proof BMI and its network"
-    python3 "${SCRIPT_DIR}/prove_bmi.py" --delete --namespace "$OSAC_NAMESPACE" --state-file "$STATE_FILE" || true
+    if ! python3 "${SCRIPT_DIR}/prove_bmi.py" --delete --namespace "$OSAC_NAMESPACE" --state-file "$STATE_FILE"; then
+        echo "ERROR: proof resource deletion failed; ${STATE_FILE} was kept for a retry" >&2
+        cleanup_failed=1
+    fi
 fi
 
 INVENTORY_NAMES=()
@@ -38,12 +42,18 @@ if [[ ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
         oc -n "$BMH_NAMESPACE" delete baremetalhost "$name" --ignore-not-found --wait=false || true
     done
     info "Deleting the virtual BMH VM recorded for ${CLONE_NAME}"
-    python3 "${REPO_ROOT}/.github/scripts/manage-virtual-bmh-vms.py" delete \
-        --inventory-file "$INVENTORY_FILE" --names "${INVENTORY_NAMES[@]}" || true
+    if ! python3 "${REPO_ROOT}/.github/scripts/manage-virtual-bmh-vms.py" delete \
+        --inventory-file "$INVENTORY_FILE" "${INVENTORY_NAMES[@]}"; then
+        echo "ERROR: virtual BMH VM deletion failed" >&2
+        cleanup_failed=1
+    fi
 fi
 if [[ -n "${BMH_NAME:-}" ]]; then
     info "Deleting BareMetalHost ${BMH_NAME}"
     oc -n "$BMH_NAMESPACE" delete baremetalhost "$BMH_NAME" --ignore-not-found --wait=false || true
 fi
 
+if [[ "$cleanup_failed" -ne 0 ]]; then
+    exit 1
+fi
 info "destroy-bmaas complete"

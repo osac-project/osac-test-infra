@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import subprocess
 import sys
 import tempfile
@@ -104,6 +106,40 @@ class ProofPayloadTest(unittest.TestCase):
         self.assertIsNone(caught.exception.__context__)
         self.assertNotIn("super-secret-token", str(caught.exception))
 
+    def test_retry_reuses_a_recorded_network(self) -> None:
+        class RecordingApi:
+            def __init__(self) -> None:
+                self.services: list[str] = []
+
+            def call(self, service: str, data: dict | None = None) -> dict:
+                self.services.append(service)
+                if service.endswith("/Get"):
+                    return {"object": {"metadata": {"name": "kept"}, "status": {"state": "VIRTUAL_NETWORK_STATE_READY"}}}
+                return {"object": {"id": "created-id", "metadata": {"name": "created"}}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state_path.write_text('{"vnet_id": "vnet-kept"}')
+            api = RecordingApi()
+            result = prove_bmi.create_proof(
+                api,
+                tenant="osac-e2e-ci",
+                disk_image_ref="oci://example/image:1",
+                template_name="bm-host-provisioning",
+                state_path=state_path,
+            )
+        self.assertEqual(result["vnet_id"], "vnet-kept")
+        self.assertNotIn(f"{prove_bmi.PUBLIC_API}.VirtualNetworks/Create", api.services)
+        self.assertIn(f"{prove_bmi.PUBLIC_API}.Subnets/Create", api.services)
+
+    def test_delete_reports_a_failed_resource(self) -> None:
+        class FailingApi:
+            def call(self, service: str, data: dict | None = None) -> dict:
+                raise RuntimeError("api rejected the delete")
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertFalse(prove_bmi.delete_proof(FailingApi(), {"bmi_id": "bmi-1", "vnet_id": "vnet-1"}))
+
 
 class SanitizeTest(unittest.TestCase):
     def test_private_keys_passwords_and_bearers_are_removed(self) -> None:
@@ -141,13 +177,22 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("bridge sysctl is 0", cleaned)
         self.assertIn("[REDACTED PRIVATE KEY]", cleaned)
 
+    def test_private_key_header_without_an_end_marker_fails(self) -> None:
+        begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            source.mkdir()
+            (source / "job.log").write_text(f"{begin}\npartial\n")
+            with self.assertRaises(RuntimeError):
+                sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
+
 
 class WorkflowContractTest(unittest.TestCase):
     def test_manual_run_is_isolated_and_proves_one_bmi(self) -> None:
         caller = yaml.safe_load(CALLER.read_text())
         caller_trigger = caller[True]
         self.assertIn("workflow_dispatch", caller_trigger)
-        self.assertEqual(caller_trigger["schedule"][0]["cron"], "0 0 * * *")
+        self.assertNotIn("schedule", caller_trigger)
         self.assertIn("labeled", caller_trigger["pull_request_target"]["types"])
         self.assertNotIn("pull_request", caller_trigger)
         self.assertIn("pr-number", caller["concurrency"]["group"])
@@ -174,6 +219,20 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertFalse(checkout["with"]["persist-credentials"])
         self.assertIn("inputs.test-infra-sha", checkout["with"]["ref"])
         self.assertIn("inputs.test-infra-repository", checkout["with"]["repository"])
+        for job_name in ("authorize", "push-secrets"):
+            privileged = next(
+                step for step in document["jobs"][job_name]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
+            )
+            self.assertNotIn("repository", privileged["with"])
+            self.assertNotIn("ref", privileged["with"])
+            self.assertFalse(privileged["with"]["persist-credentials"])
+        self.assertNotIn("test-infra-sha", document["jobs"]["provision"]["with"])
+        self.assertNotIn("test-infra-sha", document["jobs"]["teardown"]["with"])
+        destroy = (INFRA / "scripts" / "destroy-bmaas.sh").read_text()
+        self.assertNotIn("--names ", destroy)
+        self.assertIn('"${INVENTORY_NAMES[@]}"', destroy)
+        self.assertIn("cleanup_failed", destroy)
+        self.assertIn("proof resource deletion failed", destroy)
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
         bridges = (INFRA / "scripts" / "prepare-host-bridges.sh").read_text()
