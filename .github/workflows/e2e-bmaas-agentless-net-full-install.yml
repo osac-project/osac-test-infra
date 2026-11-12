@@ -1,0 +1,234 @@
+---
+name: E2E BMaaS Agentless-Net Full Install
+
+permissions:
+  contents: read
+
+# Manual environment for one virtual BMH on the Agentless containerlab fabric.
+# Each dispatch gets its own EC2 box and runner label. Teardown always
+# terminates that box, including after failure or cancellation. Nightly and
+# pull-request triggers belong to the follow-on connectivity story.
+on:
+  workflow_dispatch:
+    inputs:
+      instance-type:
+        description: "EC2 instance type"
+        required: false
+        type: choice
+        options:
+          - c5n.metal
+        default: c5n.metal
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        type: string
+        default: "us-east-1"
+      orchestrator-runner-label:
+        description: "Self-hosted runner label for the orchestrator"
+        required: false
+        type: string
+        default: "osac-ci-orchestrator"
+      tooling-check-cmds:
+        description: "Commands to verify on the box before JIT registration"
+        required: false
+        type: string
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+      osac-repo:
+        description: "Override osac mono-repo git URI -- empty means upstream"
+        required: false
+        type: string
+        default: ""
+      osac-branch:
+        description: "Branch, tag, or commit of the osac mono-repo to clone -- empty means main"
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: e2e-bmaas-agentless-net-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    uses: ./.github/workflows/ec2-runner-provision.yml
+    permissions:
+      contents: read
+    with:
+      instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
+
+  push-secrets:
+    needs: provision
+    runs-on: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch pull secret and AAP license from Vault
+        id: vault-secrets
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.setup.outputs.role-id }}
+          secretId: ${{ steps.setup.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
+            secret/data/osac/e2e/aap-license license | AAP_LICENSE ;
+            secret/data/osac/e2e/quay-io-osac-ci-bot-account user | QUAY_USER ;
+            secret/data/osac/e2e/quay-io-osac-ci-bot-account password | QUAY_PASSWORD
+
+      - name: Write pull secret and AAP license to temp files
+        shell: bash
+        env:
+          PULL_SECRET: ${{ steps.vault-secrets.outputs.PULL_SECRET }}
+          AAP_LICENSE: ${{ steps.vault-secrets.outputs.AAP_LICENSE }}
+          QUAY_USER: ${{ steps.vault-secrets.outputs.QUAY_USER }}
+          QUAY_PASSWORD: ${{ steps.vault-secrets.outputs.QUAY_PASSWORD }}
+        run: |
+          jq -s \
+            '.[0].auths * {"quay.io/osac-project": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}} | {auths: .}' \
+            <(printf '%s' "${PULL_SECRET}") \
+            > "$RUNNER_TEMP/pull-secret.json"
+          chmod 600 "$RUNNER_TEMP/pull-secret.json"
+          printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
+          chmod 600 "$RUNNER_TEMP/aap-license.zip"
+
+      - name: Fetch Route 53 credentials
+        id: route53-creds
+        uses: ./.github/actions/fetch-route53-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Push secrets to ephemeral box
+        shell: bash
+        env:
+          SSH_USER: ${{ needs.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
+          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
+          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
+          AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
+          PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
+          LAB_NAME: ci-${{ github.run_id }}
+          AWS_REGION: ${{ inputs.aws-region || 'us-east-1' }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/push-caas-agentless-net-secrets.sh
+
+  e2e:
+    needs: [provision, push-secrets]
+    runs-on: ${{ needs.provision.outputs.runner-label }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Stage secrets into place
+        run: |
+          STAGING_DIR="/root/agentless-net-secrets"
+          cp "${STAGING_DIR}/pull-secret" /root/pull-secret
+          chmod 600 /root/pull-secret
+          mkdir -p /root/.config/containers
+          cp /root/pull-secret /root/.config/containers/auth.json
+          chmod 600 /root/.config/containers/auth.json
+          cp "${STAGING_DIR}/license.zip" /root/aap-license.zip
+          chmod 600 /root/aap-license.zip
+          cp "${STAGING_DIR}/config" infra/agentless-net/config
+          chmod 600 infra/agentless-net/config
+
+      - name: Install prerequisites
+        timeout-minutes: 30
+        run: make -C infra/agentless-net setup-infra
+
+      - name: Deploy OCP from snapshot
+        timeout-minutes: 60
+        run: make -C infra/agentless-net deploy-ocp
+
+      - name: Deploy OSAC for BMaaS
+        timeout-minutes: 90
+        env:
+          OSAC_PROFILE: bmaas-ci
+          OSAC_REPO: ${{ inputs.osac-repo }}
+          OSAC_BRANCH: ${{ inputs.osac-branch }}
+        run: make -C infra/agentless-net deploy-osac
+
+      - name: Deploy containerlab fabric
+        timeout-minutes: 30
+        run: make -C infra/agentless-net deploy-fabric
+
+      - name: Register one virtual BMH
+        timeout-minutes: 45
+        run: make -C infra/agentless-net setup-bmaas
+
+      - name: Prove one BMI reaches Ready
+        id: prove-bmi
+        timeout-minutes: 60
+        run: make -C infra/agentless-net prove-bmi
+
+      - name: Gather infra diagnostics
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 10
+        run: make -C infra/agentless-net gather-infra
+
+      - name: Gather BMaaS diagnostics
+        id: gather-bmaas
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 10
+        run: make -C infra/agentless-net gather-bmaas
+
+      - name: Sanitize diagnostics
+        id: sanitize
+        if: always()
+        timeout-minutes: 5
+        run: |
+          python3 infra/agentless-net/scripts/sanitize_diagnostics.py \
+            infra/agentless-net/logs \
+            infra/agentless-net/logs-sanitized
+
+      - name: Upload sanitized diagnostics
+        if: always() && steps.sanitize.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bmaas-agentless-diagnostics-${{ github.run_id }}
+          path: infra/agentless-net/logs-sanitized
+          if-no-files-found: warn
+
+      - name: Remove resources created by this run
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 15
+        run: make -C infra/agentless-net destroy-bmaas
+
+  teardown:
+    needs: [provision, push-secrets, e2e]
+    if: always()
+    uses: ./.github/workflows/ec2-runner-teardown.yml
+    permissions:
+      contents: read
+    with:
+      instance-id: ${{ needs.provision.outputs.instance-id }}
+      runner-id: ${{ needs.provision.outputs.runner-id }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
+      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
