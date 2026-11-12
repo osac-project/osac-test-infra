@@ -68,6 +68,11 @@ done
 wait
 info "All switches ready."
 
+# Host bridges must exist before a virtual BMH fabric NIC is attached.
+# setup-caas skips bridge creation when these already exist.
+info "Preparing host bridges for fabric NICs..."
+"${SCRIPT_DIR}/prepare-host-bridges.sh"
+
 # ---------- fix sudo on switches ----------
 
 info "Fixing sudo permissions on switches..."
