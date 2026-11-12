@@ -17,16 +17,17 @@ _PRIVATE_KEY = re.compile(
     re.DOTALL,
 )
 _PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
-_AUTHORIZATION = re.compile(rb"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)\S+")
+_AUTHORIZATION = re.compile(rb"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)[^\r\n]+")
 _SECRET_ASSIGNMENT = re.compile(
     rb"(?i)"
     rb"(\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*\""
     rb"|[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*)"
     rb"(\s*[:=]\s*)"
-    rb"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\S+)"
+    rb"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\r\n]+)"
 )
 _REDACTED = b"[REDACTED]"
-_BLOCK_INDICATOR = re.compile(rb"^[|>][+-]?$")
+# YAML block header: | or >, optional chomp, optional single-digit indent, in either order.
+_BLOCK_HEADER = re.compile(rb"^[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:[ \t]+#.*)?[ \t]*$")
 
 
 def _redact_assignment(match: re.Match[bytes]) -> bytes:
@@ -53,7 +54,10 @@ def redact(data: bytes) -> bytes:
     while index < len(lines):
         line = lines[index]
         match = _SECRET_ASSIGNMENT.search(line)
-        if match and _BLOCK_INDICATOR.fullmatch(match.group(3)):
+        value = match.group(3) if match else b""
+        if match and value[:1] in (b"|", b">"):
+            if _BLOCK_HEADER.fullmatch(value.strip()) is None:
+                raise RuntimeError("unsupported secret block scalar")
             output.append(line[: match.start(3)] + _REDACTED + line[match.end(3) :])
             key_indent = _line_indent(line)
             index += 1
