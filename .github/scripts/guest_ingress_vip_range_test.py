@@ -57,6 +57,27 @@ class ParseNetworkTests(unittest.TestCase):
         self.assertEqual(vip._ip(net.dhcp_last), "192.168.163.254")
         self.assertIn(vip._parse_ipv4("192.168.163.10"), net.reserved)
 
+    def test_rejects_netmask_definitions(self) -> None:
+        for netmask in ("255.255.255.0", "255.255.255.128"):
+            xml = f"<network><ip family='ipv4' address='192.168.163.1' netmask='{netmask}'/></network>"
+            with self.subTest(netmask=netmask), self.assertRaisesRegex(vip.RangeError, "netmask is unsupported"):
+                vip.parse_network(xml)
+
+    def test_rejects_multiple_dhcp_ranges_in_either_order(self) -> None:
+        ranges = [
+            "<range start='192.168.163.128' end='192.168.163.254'/>",
+            "<range start='192.168.163.120' end='192.168.163.127'/>",
+        ]
+        for reverse in (False, True):
+            ordered = list(reversed(ranges)) if reverse else ranges
+            xml = (
+                "<network><ip family='ipv4' address='192.168.163.1' prefix='24'><dhcp>"
+                + "".join(ordered)
+                + "</dhcp></ip></network>"
+            )
+            with self.subTest(reverse=reverse), self.assertRaisesRegex(vip.RangeError, "multiple DHCP ranges"):
+                vip.parse_network(xml)
+
     def test_ignores_ipv6_element_and_survives_no_dhcp(self) -> None:
         xml = (
             "<network><ip family='ipv6' address='fd00::1' prefix='64'/>"
@@ -242,6 +263,28 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(out, "")
         self.assertIn("error:", err)
+
+    def test_unsupported_network_layout_exits_one_without_a_range(self) -> None:
+        cases = (
+            (
+                "<network><ip family='ipv4' address='192.168.163.1' netmask='255.255.255.128'/></network>",
+                "netmask is unsupported",
+            ),
+            (
+                "<network><ip family='ipv4' address='192.168.163.1' prefix='24'><dhcp>"
+                "<range start='192.168.163.128' end='192.168.163.254'/>"
+                "<range start='192.168.163.120' end='192.168.163.127'/></dhcp></ip></network>",
+                "multiple DHCP ranges",
+            ),
+        )
+        for xml, message in cases:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                xml_path = _write(directory, "net.xml", xml)
+                code, out, err = _run(["--network-xml", xml_path])
+
+                self.assertEqual(code, 1)
+                self.assertEqual(out, "")
+                self.assertIn(message, err)
 
     def test_unavailable_block_exits_one(self) -> None:
         xml = (

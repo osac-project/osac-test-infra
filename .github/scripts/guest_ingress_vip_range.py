@@ -110,6 +110,9 @@ def parse_network(xml: str) -> CloneNetwork:
     if ip_element is None:
         raise RangeError("network XML has no IPv4 <ip> element")
 
+    if ip_element.get("netmask") is not None:
+        raise RangeError("network netmask is unsupported; use an explicit IPv4 prefix")
+
     gateway = _parse_ipv4(ip_element.get("address", ""))
     try:
         prefix = int(ip_element.get("prefix", "24"))
@@ -123,8 +126,11 @@ def parse_network(xml: str) -> CloneNetwork:
 
     dhcp = ip_element.find("dhcp")
     if dhcp is not None:
-        dhcp_range = dhcp.find("range")
-        if dhcp_range is not None:
+        dhcp_ranges = dhcp.findall("range")
+        if len(dhcp_ranges) > 1:
+            raise RangeError("multiple DHCP ranges are unsupported")
+        if dhcp_ranges:
+            dhcp_range = dhcp_ranges[0]
             parsed.dhcp_first = _parse_ipv4(dhcp_range.get("start", ""))
             parsed.dhcp_last = _parse_ipv4(dhcp_range.get("end", ""))
             if parsed.dhcp_first > parsed.dhcp_last:
