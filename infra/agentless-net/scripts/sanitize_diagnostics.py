@@ -16,6 +16,7 @@ _PRIVATE_KEY = re.compile(
     rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
     re.DOTALL,
 )
+_PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 _AUTHORIZATION = re.compile(rb"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)\S+")
 _SECRET_ASSIGNMENT = re.compile(
     rb"(?i)"
@@ -60,7 +61,7 @@ def sanitize_tree(source: Path, destination: Path) -> int:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         cleaned = redact(path.read_bytes())
-        if _PRIVATE_KEY.search(cleaned):
+        if _PRIVATE_KEY_HEADER.search(cleaned):
             raise RuntimeError(f"private key material remains in {relative}")
         target.write_bytes(cleaned)
         count += 1

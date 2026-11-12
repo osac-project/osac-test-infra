@@ -169,6 +169,15 @@ def _object_name(response: dict[str, Any]) -> str:
     return str(response["object"]["metadata"]["name"])
 
 
+def _load_state(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    loaded = json.loads(path.read_text() or "{}")
+    if not isinstance(loaded, dict):
+        raise RuntimeError(f"{path} does not contain an object")
+    return {str(key): str(value) for key, value in loaded.items() if value}
+
+
 def create_proof(
     api: Api,
     *,
@@ -177,19 +186,21 @@ def create_proof(
     template_name: str,
     state_path: Path,
 ) -> dict[str, str]:
-    state: dict[str, str] = {}
+    state = _load_state(state_path)
 
     def remember(key: str, value: str) -> None:
         state[key] = value
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(state))
 
-    network = api.call(
-        f"{PUBLIC_API}.VirtualNetworks/Create",
-        {"object": {"metadata": {"name": "bmaas-proof", "tenant": tenant}, "spec": {"ipv4_cidr": "10.100.0.0/16"}}},
-    )
-    network_id = _object_id(network, "VirtualNetworks/Create")
-    remember("vnet_id", network_id)
+    network_id = state.get("vnet_id", "")
+    if not network_id:
+        network = api.call(
+            f"{PUBLIC_API}.VirtualNetworks/Create",
+            {"object": {"metadata": {"name": "bmaas-proof", "tenant": tenant}, "spec": {"ipv4_cidr": "10.100.0.0/16"}}},
+        )
+        network_id = _object_id(network, "VirtualNetworks/Create")
+        remember("vnet_id", network_id)
     wait_for_state(
         api,
         f"{PUBLIC_API}.VirtualNetworks/Get",
@@ -197,17 +208,19 @@ def create_proof(
         timeout_seconds=300,
         interval_seconds=5,
     )
-    subnet = api.call(
-        f"{PUBLIC_API}.Subnets/Create",
-        {
-            "object": {
-                "metadata": {"name": "bmaas-proof-subnet", "tenant": tenant},
-                "spec": {"virtual_network": {"id": network_id}, "ipv4_cidr": "10.100.1.0/24"},
-            }
-        },
-    )
-    subnet_id = _object_id(subnet, "Subnets/Create")
-    remember("subnet_id", subnet_id)
+    subnet_id = state.get("subnet_id", "")
+    if not subnet_id:
+        subnet = api.call(
+            f"{PUBLIC_API}.Subnets/Create",
+            {
+                "object": {
+                    "metadata": {"name": "bmaas-proof-subnet", "tenant": tenant},
+                    "spec": {"virtual_network": {"id": network_id}, "ipv4_cidr": "10.100.1.0/24"},
+                }
+            },
+        )
+        subnet_id = _object_id(subnet, "Subnets/Create")
+        remember("subnet_id", subnet_id)
     wait_for_state(
         api,
         f"{PUBLIC_API}.Subnets/Get",
@@ -215,65 +228,72 @@ def create_proof(
         timeout_seconds=300,
         interval_seconds=5,
     )
-    instance_type = api.call(
-        f"{PRIVATE_API}.BareMetalInstanceTypes/Create",
-        {
-            "object": {
-                "metadata": {"name": "bmaas-agentless-ci", "tenant": "shared"},
-                "spec": {
-                    "hardware": {
-                        "cpu": {"cores": 4, "architecture": "amd64", "threads_per_core": 2},
-                        "memory": {"total_gb": 8},
-                        "network_ports": [
-                            {"name": FABRIC_INTERFACE, "role": "fabric", "type": "Ethernet", "speed": "10Gbps"}
-                        ],
+    if not state.get("type_id"):
+        instance_type = api.call(
+            f"{PRIVATE_API}.BareMetalInstanceTypes/Create",
+            {
+                "object": {
+                    "metadata": {"name": "bmaas-agentless-ci", "tenant": "shared"},
+                    "spec": {
+                        "hardware": {
+                            "cpu": {"cores": 4, "architecture": "amd64", "threads_per_core": 2},
+                            "memory": {"total_gb": 8},
+                            "network_ports": [
+                                {"name": FABRIC_INTERFACE, "role": "fabric", "type": "Ethernet", "speed": "10Gbps"}
+                            ],
+                        },
+                        "host_label_selector": {"match_labels": {"osac.openshift.io/host-type": "agentless-ci"}},
                     },
-                    "host_label_selector": {"match_labels": {"osac.openshift.io/host-type": "agentless-ci"}},
-                },
-            }
-        },
-    )
-    remember("type_id", _object_id(instance_type, "BareMetalInstanceTypes/Create"))
-    disk_image = api.call(
-        f"{PUBLIC_API}.DiskImages/Create",
-        {
-            "object": {
-                "metadata": {"name": "bmaas-proof-image", "tenant": tenant},
-                "spec": {
-                    "source_type": "SOURCE_TYPE_REGISTRY",
-                    "source_ref": disk_image_ref,
-                    "guest_os_family": "GUEST_OS_FAMILY_LINUX",
-                    "architecture": ["ARCHITECTURE_AMD64"],
-                },
-            }
-        },
-    )
-    remember("disk_image_id", _object_id(disk_image, "DiskImages/Create"))
-    catalog = api.call(
-        f"{PUBLIC_API}.BareMetalInstanceCatalogItems/Create",
-        {
-            "object": {
-                "metadata": {"name": "bmaas-proof", "tenant": tenant},
-                "title": "BMaaS Agentless proof",
-                "description": "One virtual BMH on the Agentless fabric.",
-                "template": {"name": template_name, "shared": True},
-                "published": True,
-            }
-        },
-    )
-    remember("catalog_id", _object_id(catalog, "BareMetalInstanceCatalogItems/Create"))
-    bmi = api.call(
-        f"{PUBLIC_API}.BareMetalInstances/Create",
-        bmi_create_body(
-            name="bmaas-proof",
-            tenant=tenant,
-            subnet_id=subnet_id,
-            catalog_name=_object_name(catalog),
-            instance_type_name=_object_name(instance_type),
-            disk_image_name=_object_name(disk_image),
-        ),
-    )
-    remember("bmi_id", _object_id(bmi, "BareMetalInstances/Create"))
+                }
+            },
+        )
+        remember("type_id", _object_id(instance_type, "BareMetalInstanceTypes/Create"))
+        remember("type_name", _object_name(instance_type))
+    if not state.get("disk_image_id"):
+        disk_image = api.call(
+            f"{PUBLIC_API}.DiskImages/Create",
+            {
+                "object": {
+                    "metadata": {"name": "bmaas-proof-image", "tenant": tenant},
+                    "spec": {
+                        "source_type": "SOURCE_TYPE_REGISTRY",
+                        "source_ref": disk_image_ref,
+                        "guest_os_family": "GUEST_OS_FAMILY_LINUX",
+                        "architecture": ["ARCHITECTURE_AMD64"],
+                    },
+                }
+            },
+        )
+        remember("disk_image_id", _object_id(disk_image, "DiskImages/Create"))
+        remember("disk_image_name", _object_name(disk_image))
+    if not state.get("catalog_id"):
+        catalog = api.call(
+            f"{PUBLIC_API}.BareMetalInstanceCatalogItems/Create",
+            {
+                "object": {
+                    "metadata": {"name": "bmaas-proof", "tenant": tenant},
+                    "title": "BMaaS Agentless proof",
+                    "description": "One virtual BMH on the Agentless fabric.",
+                    "template": {"name": template_name, "shared": True},
+                    "published": True,
+                }
+            },
+        )
+        remember("catalog_id", _object_id(catalog, "BareMetalInstanceCatalogItems/Create"))
+        remember("catalog_name", _object_name(catalog))
+    if not state.get("bmi_id"):
+        bmi = api.call(
+            f"{PUBLIC_API}.BareMetalInstances/Create",
+            bmi_create_body(
+                name="bmaas-proof",
+                tenant=tenant,
+                subnet_id=subnet_id,
+                catalog_name=state.get("catalog_name", "bmaas-proof"),
+                instance_type_name=state.get("type_name", "bmaas-agentless-ci"),
+                disk_image_name=state.get("disk_image_name", "bmaas-proof-image"),
+            ),
+        )
+        remember("bmi_id", _object_id(bmi, "BareMetalInstances/Create"))
     return state
 
 
@@ -318,7 +338,9 @@ def wait_for_address(api: Api, bmi_id: str, *, timeout_seconds: int, interval_se
     raise TimeoutError(f"BMI {bmi_id} did not become running with an address. Last status: {last}")
 
 
-def delete_proof(api: Api, state: dict[str, str]) -> None:
+def delete_proof(api: Api, state: dict[str, str]) -> bool:
+    """Delete recorded resources. Return False when any deletion fails."""
+    ok = True
     for service, key in (
         (f"{PUBLIC_API}.BareMetalInstances/Delete", "bmi_id"),
         (f"{PUBLIC_API}.BareMetalInstanceCatalogItems/Delete", "catalog_id"),
@@ -334,7 +356,9 @@ def delete_proof(api: Api, state: dict[str, str]) -> None:
             api.call(service, {"id": resource_id})
             print(f"deleted {key} {resource_id}")
         except RuntimeError as exc:
-            print(f"warning: {exc}", file=sys.stderr)
+            ok = False
+            print(f"ERROR: failed to delete {key} {resource_id}: {exc}", file=sys.stderr)
+    return ok
 
 
 def _token(namespace: str) -> str:
@@ -429,7 +453,8 @@ def main(argv: list[str] | None = None) -> int:
         if not state_path.is_file():
             print(f"no proof state at {state_path}; nothing to delete")
             return 0
-        delete_proof(api, json.loads(state_path.read_text()))
+        if not delete_proof(api, json.loads(state_path.read_text())):
+            return 1
         return 0
 
     state = create_proof(
