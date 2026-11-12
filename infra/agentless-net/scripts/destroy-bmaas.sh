@@ -34,12 +34,21 @@ fi
 
 INVENTORY_NAMES=()
 if [[ -f "$INVENTORY_FILE" ]]; then
-    mapfile -t INVENTORY_NAMES < <(python3 -c 'import json,sys; print("\n".join(h["name"] for h in json.load(open(sys.argv[1])).get("hosts", [])))' "$INVENTORY_FILE")
+    if ! inventory_text=$(python3 -c 'import json,sys; print("\n".join(h["name"] for h in json.load(open(sys.argv[1])).get("hosts", [])))' "$INVENTORY_FILE"); then
+        echo "ERROR: failed to read virtual BMH inventory ${INVENTORY_FILE}" >&2
+        exit 1
+    fi
+    if [[ -n "$inventory_text" ]]; then
+        mapfile -t INVENTORY_NAMES <<< "$inventory_text"
+    fi
 fi
 if [[ ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
     for name in "${INVENTORY_NAMES[@]}"; do
         info "Deleting BareMetalHost ${name}"
-        oc -n "$BMH_NAMESPACE" delete baremetalhost "$name" --ignore-not-found --wait=false || true
+        if ! oc -n "$BMH_NAMESPACE" delete baremetalhost "$name" --ignore-not-found --wait=false; then
+            echo "ERROR: failed to delete BareMetalHost ${name}" >&2
+            cleanup_failed=1
+        fi
     done
     info "Deleting the virtual BMH VM recorded for ${CLONE_NAME}"
     if ! python3 "${REPO_ROOT}/.github/scripts/manage-virtual-bmh-vms.py" delete \
@@ -50,7 +59,10 @@ if [[ ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
 fi
 if [[ -n "${BMH_NAME:-}" ]]; then
     info "Deleting BareMetalHost ${BMH_NAME}"
-    oc -n "$BMH_NAMESPACE" delete baremetalhost "$BMH_NAME" --ignore-not-found --wait=false || true
+    if ! oc -n "$BMH_NAMESPACE" delete baremetalhost "$BMH_NAME" --ignore-not-found --wait=false; then
+        echo "ERROR: failed to delete BareMetalHost ${BMH_NAME}" >&2
+        cleanup_failed=1
+    fi
 fi
 
 if [[ "$cleanup_failed" -ne 0 ]]; then

@@ -10,8 +10,8 @@ permissions:
   pull-requests: write
 
 concurrency:
-  # Same PR-scoped group as the label-triggered Agentless workflow, so a new
-  # commit cancels the previous run immediately.
+  # Same PR-scoped group as e2e-pr-bmaas-agentless.yml, so a new commit cancels
+  # that suite. This workflow does not check out the pull request.
   group: e2e-bmaas-agentless-net-full-install-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
