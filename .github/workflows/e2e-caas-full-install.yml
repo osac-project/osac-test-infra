@@ -343,8 +343,12 @@ jobs:
               echo "Flavor '${FLAVOR_NAME}' is up to date — skipping pull."
             elif [[ -n "${REMOTE_DIGEST}" ]]; then
               echo "Flavor '${FLAVOR_NAME}' image changed — deleting and re-pulling..."
+              rm -f "${DIGEST_FILE}"
               sudo python3 /usr/local/bin/cluster-tool flavors --delete "${FLAVOR_NAME}" 9>&- || true
               NEED_PULL=true
+            elif [[ -z "${LOCAL_DIGEST}" ]]; then
+              echo "::error::Could not check remote digest for flavor '${FLAVOR_NAME}' and no local digest is available."
+              exit 1
             else
               echo "::warning::Could not check remote digest for flavor '${FLAVOR_NAME}'; using the cached flavor without verifying freshness."
             fi
