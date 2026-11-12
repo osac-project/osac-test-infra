@@ -158,6 +158,9 @@ jobs:
           sudo cp "${HOME}/.config/containers/auth.json" /root/.config/containers/auth.json
           sudo chmod 600 /root/.config/containers/auth.json
 
+          cp "${HOME}/.config/containers/auth.json" "$RUNNER_TEMP/containers-auth-base.json"
+          chmod 600 "$RUNNER_TEMP/containers-auth-base.json"
+
           printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
           chmod 600 "$RUNNER_TEMP/pull-secret.json"
 
@@ -189,7 +192,9 @@ jobs:
           # re-check whether the pull is still needed (another job may
           # have completed it while we waited).
           DIGEST_FILE="/tmp/cluster-tool-flavor-${FLAVOR_NAME}.digest"
-          REMOTE_DIGEST=$(skopeo inspect "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' 2>/dev/null || echo "")
+          REMOTE_DIGEST=$(skopeo inspect \
+            --authfile "$RUNNER_TEMP/containers-auth-base.json" \
+            "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' || echo "")
 
           # Use fd-based locking so the lock is tied to this shell, not
           # to child processes.  The `9>&-` on every sudo call prevents
@@ -215,15 +220,12 @@ jobs:
           if ${FLAVOR_EXISTS}; then
             if [[ -n "${REMOTE_DIGEST}" ]] && [[ "${REMOTE_DIGEST}" == "${LOCAL_DIGEST}" ]]; then
               echo "Flavor '${FLAVOR_NAME}' is up to date (digest: ${LOCAL_DIGEST}) — skipping pull."
-            elif [[ -n "${REMOTE_DIGEST}" ]] && [[ -z "${LOCAL_DIGEST}" ]]; then
-              echo "Flavor '${FLAVOR_NAME}' already present, seeding digest file (${REMOTE_DIGEST})."
-              echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
             elif [[ -n "${REMOTE_DIGEST}" ]]; then
               echo "Flavor '${FLAVOR_NAME}' exists but image changed (local: ${LOCAL_DIGEST}, remote: ${REMOTE_DIGEST}) — deleting and re-pulling..."
               sudo python3 /usr/local/bin/cluster-tool flavors --delete "${FLAVOR_NAME}" 9>&- || true
               NEED_PULL=true
             else
-              echo "Flavor '${FLAVOR_NAME}' already present, could not check remote digest — skipping pull."
+              echo "::warning::Could not check remote digest for flavor '${FLAVOR_NAME}'; using the cached flavor without verifying freshness."
             fi
           else
             echo "Flavor '${FLAVOR_NAME}' not found — pulling..."
