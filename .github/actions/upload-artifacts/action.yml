@@ -93,7 +93,10 @@ runs:
       shell: bash
       env:
         GITLEAKS_IMAGE: "ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
-      run: python3 -I "${GITHUB_WORKSPACE}/.github/scripts/scan-mce-artifacts.py"
+      run: |
+        python3 -I "${GITHUB_WORKSPACE}/.github/scripts/inspect-artifacts.py" \
+          --directory "${RUNNER_TEMP}/osac-artifacts/mgmt-cluster/mce-must-gather" \
+          --marker "${RUNNER_TEMP}/mce-scan-complete"
 
     - name: Scan artifacts with gitleaks
       # Skipped only when the caller passes gitleaks: "false" (see the input):

@@ -5,14 +5,14 @@ umask 077
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 artifact_dir="${RUNNER_TEMP}/osac-artifacts"
 rm -f "${artifact_dir}/.redaction-complete" "${RUNNER_TEMP}/mce-scan-complete"
-output=$(mktemp -d "${RUNNER_TEMP}/mce-collection.XXXXXX")
+output=$(mktemp -d "${RUNNER_TEMP}/artifact-collection.XXXXXX")
 status="${output}/status.txt"
 log="${output}/collection.log"
 printf 'status=started\n' > "${status}"
 
 stage() {
-  if python3 -I "${GITHUB_WORKSPACE}/.github/scripts/scan-mce-artifacts.py" \
-    --prepare-only "${output}" > /dev/null 2>&1; then
+  if python3 -I "${GITHUB_WORKSPACE}/.github/scripts/inspect-artifacts.py" \
+    --prepare-only --directory "${output}" > /dev/null 2>&1; then
     mkdir -p "${artifact_dir}/mgmt-cluster"
     rm -rf "${artifact_dir}/mgmt-cluster/mce-must-gather"
     mv "${output}" "${artifact_dir}/mgmt-cluster/mce-must-gather"
@@ -64,10 +64,13 @@ timeout --kill-after=10s 60s oc adm inspect ns/hypershift \
 printf 'hypershift_inspect_exit_code=%s\n' "${inspect_rc}" >> "${status}"
 
 resources_rc=0
-timeout --kill-after=10s 30s oc adm inspect \
-  hostedclusters.hypershift.openshift.io nodepools.hypershift.openshift.io \
-  mutatingwebhookconfigurations.admissionregistration.k8s.io \
-  validatingwebhookconfigurations.admissionregistration.k8s.io \
+resources=(hostedclusters.hypershift.openshift.io nodepools.hypershift.openshift.io)
+# HC/NodePool coverage varies by collector; webhooks only need a failed-gather fallback.
+if [[ "${gather_rc}" -ne 0 ]]; then
+  resources+=(mutatingwebhookconfigurations.admissionregistration.k8s.io
+    validatingwebhookconfigurations.admissionregistration.k8s.io)
+fi
+timeout --kill-after=10s 30s oc adm inspect "${resources[@]}" \
   --all-namespaces --dest-dir="${output}/hcp-resources" >> "${log}" 2>&1 || resources_rc=$?
 printf 'hcp_resources_inspect_exit_code=%s\n' "${resources_rc}" >> "${status}"
 
