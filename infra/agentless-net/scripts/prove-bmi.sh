@@ -15,9 +15,21 @@ SSH_PUB="${BMI_SSH_PUBLIC_KEY_FILE:-${HOME}/.ssh/id_rsa.pub}"
 
 if ! command -v grpcurl >/dev/null 2>&1; then
     echo "==> Installing grpcurl"
-    curl -fsSL -o /tmp/grpcurl.tar.gz \
-        https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_x86_64.tar.gz
-    sudo tar -C /usr/local/bin -xzf /tmp/grpcurl.tar.gz grpcurl
+    version=1.9.1
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    tarball="grpcurl_${version}_linux_x86_64.tar.gz"
+    curl --retry 5 --retry-delay 2 -fsSL -o "${work}/${tarball}" \
+        "https://github.com/fullstorydev/grpcurl/releases/download/v${version}/${tarball}"
+    curl --retry 5 --retry-delay 2 -fsSL \
+        "https://github.com/fullstorydev/grpcurl/releases/download/v${version}/grpcurl_${version}_checksums.txt" \
+        | grep " ${tarball}\$" \
+        | sed "s|${tarball}|${work}/${tarball}|" \
+        | sha256sum -c -
+    tar -C "$work" -xzf "${work}/${tarball}" grpcurl
+    sudo install -m 0755 "${work}/grpcurl" /usr/local/bin/grpcurl
+    rm -rf "$work"
+    trap - EXIT
 fi
 
 exec python3 "${SCRIPT_DIR}/prove_bmi.py" \
