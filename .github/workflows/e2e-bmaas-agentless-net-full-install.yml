@@ -101,8 +101,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: ${{ inputs.test-infra-repository || job.workflow_repository }}
-          ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
           persist-credentials: false
 
       - name: Validate and bootstrap
@@ -166,9 +164,6 @@ jobs:
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
       tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
-      test-infra-repository: ${{ inputs.test-infra-repository }}
-      test-infra-ref: ${{ inputs.test-infra-ref }}
-      test-infra-sha: ${{ inputs.test-infra-sha }}
 
   push-secrets:
     needs: provision
@@ -182,8 +177,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: ${{ inputs.test-infra-repository || job.workflow_repository }}
-          ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
           persist-credentials: false
 
       - name: Validate and bootstrap
@@ -253,6 +246,7 @@ jobs:
     permissions:
       contents: read
     steps:
+      # This host is disposable. Orchestrator jobs stay on the trusted workflow revision.
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -349,6 +343,3 @@ jobs:
       runner-id: ${{ needs.provision.outputs.runner-id }}
       orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
       aws-region: ${{ inputs.aws-region || 'us-east-1' }}
-      test-infra-repository: ${{ inputs.test-infra-repository }}
-      test-infra-ref: ${{ inputs.test-infra-ref }}
-      test-infra-sha: ${{ inputs.test-infra-sha }}
