@@ -26,6 +26,7 @@ _SECRET_ASSIGNMENT = re.compile(
     rb"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\S+)"
 )
 _REDACTED = b"[REDACTED]"
+_BLOCK_INDICATOR = re.compile(rb"^[|>][+-]?$")
 
 
 def _redact_assignment(match: re.Match[bytes]) -> bytes:
@@ -39,11 +40,40 @@ def _redact_assignment(match: re.Match[bytes]) -> bytes:
     return match.group(1) + match.group(2) + replacement
 
 
+def _line_indent(line: bytes) -> int:
+    return len(line) - len(line.lstrip(b" \t"))
+
+
 def redact(data: bytes) -> bytes:
     data = _PRIVATE_KEY.sub(b"[REDACTED PRIVATE KEY]", data)
     data = _AUTHORIZATION.sub(lambda match: match.group(1) + _REDACTED, data)
-    data = _SECRET_ASSIGNMENT.sub(_redact_assignment, data)
-    return data
+    lines = data.splitlines(keepends=True)
+    output: list[bytes] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        match = _SECRET_ASSIGNMENT.search(line)
+        if match and _BLOCK_INDICATOR.fullmatch(match.group(3)):
+            output.append(line[: match.start(3)] + _REDACTED + line[match.end(3) :])
+            key_indent = _line_indent(line)
+            index += 1
+            consumed_value = False
+            while index < len(lines):
+                follower = lines[index]
+                if follower.strip() == b"":
+                    index += 1
+                    continue
+                if _line_indent(follower) > key_indent:
+                    consumed_value = True
+                    index += 1
+                    continue
+                break
+            if not consumed_value:
+                raise RuntimeError("secret block scalar has no indented value")
+            continue
+        output.append(_SECRET_ASSIGNMENT.sub(_redact_assignment, line))
+        index += 1
+    return b"".join(output)
 
 
 def sanitize_tree(source: Path, destination: Path) -> int:

@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parents[3]
 INFRA = ROOT / "infra" / "agentless-net"
 WORKFLOW = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install.yml"
 CALLER = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install-caller.yml"
+PR_SUITE = ROOT / ".github" / "workflows" / "e2e-pr-bmaas-agentless.yml"
+CLEANUP = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-label-cleanup.yml"
 
 
 class InventoryTest(unittest.TestCase):
@@ -94,7 +96,8 @@ class ProofPayloadTest(unittest.TestCase):
         self.assertEqual(prove_bmi.discovered_address({"status": {}}), "")
 
     def test_timeout_does_not_include_the_request(self) -> None:
-        api = prove_bmi.Api(address="api.example:443", token="super-secret-token", ca_file="/tmp/ca.crt", call_timeout=1)
+        test_token = "super-secret-token"
+        api = prove_bmi.Api(address="api.example:443", token=test_token, ca_file="/tmp/ca.crt", call_timeout=1)
 
         def expire(command, **kwargs):
             raise subprocess.TimeoutExpired(cmd=command, timeout=kwargs["timeout"])
@@ -104,7 +107,77 @@ class ProofPayloadTest(unittest.TestCase):
                 api.call("osac.public.v1.BareMetalInstances/Get")
         self.assertIsNone(caught.exception.__cause__)
         self.assertIsNone(caught.exception.__context__)
-        self.assertNotIn("super-secret-token", str(caught.exception))
+        self.assertNotIn(test_token, str(caught.exception))
+
+    def test_unavailable_is_retried_and_other_status_codes_are_not(self) -> None:
+        class Flaky:
+            def __init__(self, code: str) -> None:
+                self.code = code
+                self.calls = 0
+
+            def call(self, service: str, data: dict | None = None) -> dict:
+                self.calls += 1
+                if self.code == "Unavailable" and self.calls >= 3:
+                    return {"object": {"status": {"state": "VIRTUAL_NETWORK_STATE_READY"}}}
+                raise prove_bmi.GrpcError(service, f"code = {self.code}", self.code)
+
+        ready = Flaky("Unavailable")
+        with mock.patch("prove_bmi.time.sleep"):
+            prove_bmi.wait_for_state(ready, "svc", "id-1", timeout_seconds=30, interval_seconds=1)
+        self.assertEqual(ready.calls, 3)
+
+        missing = Flaky("NotFound")
+        with mock.patch("prove_bmi.time.sleep"):
+            with self.assertRaises(prove_bmi.GrpcError):
+                prove_bmi.wait_for_state(missing, "svc", "id-1", timeout_seconds=30, interval_seconds=1)
+        self.assertEqual(missing.calls, 1)
+
+    def test_call_records_the_grpc_status_code(self) -> None:
+        test_token = "super-secret-token"
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="rpc error: code = Unavailable desc = unreachable",
+        )
+        api = prove_bmi.Api(address="api.example:443", token=test_token, ca_file="/tmp/ca.crt")
+        with mock.patch("prove_bmi.subprocess.run", return_value=completed):
+            with self.assertRaises(prove_bmi.GrpcError) as caught:
+                api.call("osac.public.v1.VirtualNetworks/Get")
+        self.assertEqual(caught.exception.code, "Unavailable")
+        self.assertNotIn(test_token, str(caught.exception))
+
+    def test_successful_delete_removes_the_state_file(self) -> None:
+        test_token = "not-used"
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state_path.write_text('{"vnet_id": "vnet-1"}')
+            with (
+                mock.patch("prove_bmi._api_address", return_value="api.example:443"),
+                mock.patch("prove_bmi._token", return_value=test_token),
+                mock.patch("prove_bmi.ingress_ca_file", return_value="/tmp/ca.crt"),
+                mock.patch.object(prove_bmi.Api, "call", return_value={}),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                code = prove_bmi.main(["--delete", "--state-file", str(state_path)])
+            self.assertEqual(code, 0)
+            self.assertFalse(state_path.exists())
+
+    def test_failed_delete_keeps_the_state_file(self) -> None:
+        test_token = "not-used"
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state_path.write_text('{"vnet_id": "vnet-1"}')
+            with (
+                mock.patch("prove_bmi._api_address", return_value="api.example:443"),
+                mock.patch("prove_bmi._token", return_value=test_token),
+                mock.patch("prove_bmi.ingress_ca_file", return_value="/tmp/ca.crt"),
+                mock.patch.object(prove_bmi.Api, "call", side_effect=RuntimeError("api rejected the delete")),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                code = prove_bmi.main(["--delete", "--state-file", str(state_path)])
+            self.assertEqual(code, 1)
+            self.assertTrue(state_path.is_file())
 
     def test_retry_reuses_a_recorded_network(self) -> None:
         class RecordingApi:
@@ -177,6 +250,31 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("bridge sysctl is 0", cleaned)
         self.assertIn("[REDACTED PRIVATE KEY]", cleaned)
 
+    def test_secret_block_scalars_are_removed(self) -> None:
+        test_literal = "hunter2"
+        test_folded = "folded-secret"
+        raw = (
+            "password: |\n"
+            f"  {test_literal}\n"
+            "bridge sysctl is 0\n"
+            "token: >\n"
+            f"  {test_folded}\n"
+            "done: yes\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            self.assertEqual(sanitize_diagnostics.sanitize_tree(source, destination), 1)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn(test_literal, cleaned)
+        self.assertNotIn(test_folded, cleaned)
+        self.assertIn("password: [REDACTED]", cleaned)
+        self.assertIn("token: [REDACTED]", cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+        self.assertIn("done: yes", cleaned)
+
     def test_private_key_header_without_an_end_marker_fails(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,10 +291,21 @@ class WorkflowContractTest(unittest.TestCase):
         caller_trigger = caller[True]
         self.assertIn("workflow_dispatch", caller_trigger)
         self.assertEqual(caller_trigger["schedule"][0]["cron"], "0 0 * * *")
-        self.assertIn("labeled", caller_trigger["pull_request_target"]["types"])
+        self.assertNotIn("pull_request_target", caller_trigger)
         self.assertNotIn("pull_request", caller_trigger)
+        self.assertNotIn("github.event.pull_request", CALLER.read_text())
         self.assertIn("pr-number", caller["concurrency"]["group"])
-        self.assertIn("pull_request_target", caller["concurrency"]["cancel-in-progress"])
+
+        suite = yaml.safe_load(PR_SUITE.read_text())
+        cleanup = yaml.safe_load(CLEANUP.read_text())
+        self.assertTrue(suite["concurrency"]["group"].startswith("e2e-bmaas-agentless-net-full-install-"))
+        self.assertTrue(cleanup["concurrency"]["group"].startswith("e2e-bmaas-agentless-net-full-install-"))
+        self.assertIn("inputs.repo", suite["concurrency"]["group"])
+        self.assertIn("inputs.pr-number", suite["concurrency"]["group"])
+        self.assertIn("github.event.pull_request.head.repo.full_name", cleanup["concurrency"]["group"])
+        self.assertIn("github.event.pull_request.number", cleanup["concurrency"]["group"])
+        self.assertTrue(suite["concurrency"]["cancel-in-progress"])
+        self.assertTrue(cleanup["concurrency"]["cancel-in-progress"])
 
         document = yaml.safe_load(WORKFLOW.read_text())
         self.assertIn("workflow_call", document[True])
@@ -223,8 +332,10 @@ class WorkflowContractTest(unittest.TestCase):
             privileged = next(
                 step for step in document["jobs"][job_name]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
             )
-            self.assertNotIn("repository", privileged["with"])
-            self.assertNotIn("ref", privileged["with"])
+            self.assertEqual(privileged["with"]["repository"], "${{ job.workflow_repository }}")
+            self.assertEqual(privileged["with"]["ref"], "${{ job.workflow_sha }}")
+            self.assertNotIn("inputs.test-infra", privileged["with"]["repository"])
+            self.assertNotIn("inputs.test-infra", privileged["with"]["ref"])
             self.assertFalse(privileged["with"]["persist-credentials"])
         self.assertNotIn("test-infra-sha", document["jobs"]["provision"]["with"])
         self.assertNotIn("test-infra-sha", document["jobs"]["teardown"]["with"])
@@ -233,6 +344,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn('"${INVENTORY_NAMES[@]}"', destroy)
         self.assertIn("cleanup_failed", destroy)
         self.assertIn("proof resource deletion failed", destroy)
+        self.assertIn("failed to read virtual BMH inventory", destroy)
+        self.assertIn("failed to delete BareMetalHost", destroy)
+        self.assertNotIn("|| true", destroy)
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
         bridges = (INFRA / "scripts" / "prepare-host-bridges.sh").read_text()
