@@ -188,6 +188,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("caas-l2-advertisement", fabric)
         self.assertIn("--ignore-not-found", fabric)
         self.assertIn("osac-bmaas-install-stamp", deploy)
+        self.assertIn("{.data.profile}", deploy)
+        self.assertIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
+        setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
+        self.assertLess(setup.index("Reusing the virtual BMH"), setup.index("reconcile-bmhs.py"))
+        self.assertLess(setup.index("reconcile-bmhs.py"), setup.index("annotate baremetalhost"))
 
 
 if __name__ == "__main__":

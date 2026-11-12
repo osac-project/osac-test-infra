@@ -43,6 +43,11 @@ if [[ "$host_count" -gt 1 ]]; then
 fi
 if [[ "$host_count" -eq 1 ]]; then
     info "Reusing the virtual BMH already recorded in ${INVENTORY_FILE}"
+    # oc apply in reconcile-bmhs.py updates a BareMetalHost that already
+    # exists and creates one when registration stopped after the VM.
+    python3 "${REPO_ROOT}/.github/scripts/reconcile-bmhs.py" \
+        --inventory-file "${INVENTORY_FILE}" \
+        --namespace "${BMH_NAMESPACE}"
 else
     info "Registering ${BMH_COUNT} virtual BMH through sushy-tools"
     CLONE_NAME="$CLONE_NAME" BMH_COUNT="$BMH_COUNT" BMH_NAMESPACE="$BMH_NAMESPACE" \
