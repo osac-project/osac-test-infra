@@ -13,6 +13,46 @@ consume deployment configuration and do not depend on which backend created it.
 [the OSAC E2E guide](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md)
 for test conventions.
 
+## CaaS Failure Diagnostics
+
+The CaaS full-install workflow runs MCE diagnostics only on failure, before
+normal log collection and teardown (not on success or cancellation). It uses
+the runner's management kubeconfig, not guest credentials, and does not require
+a HostedCluster to exist. Collection failures are non-fatal and preserve the
+original CI failure. Other workflows are unchanged.
+
+The helper reads the `multicluster-engine` Subscription's `status.installedCSV`
+in namespace `multicluster-engine`, then uses that CSV's
+`operators.openshift.io/must-gather-image` annotation unchanged. There is no
+hardcoded version or fallback image. Missing kubeconfig, tools, Subscription,
+CSV, or annotation produces a visible skip. The annotation is present in the
+[MCE 2.17 bundle](https://github.com/stolostron/backplane-operator/blob/backplane-2.17/bundle/manifests/multicluster-engine.clusterserviceversion.yaml)
+and the current bundle; source-tree development image references are not defaults.
+
+Discovery is capped at two 15-second requests, MCE gather at 300 seconds,
+HyperShift namespace inspection at 60 seconds, and management-side HCP/webhook
+resource inspection at 30 seconds, with bounded kill grace periods and an
+eight-minute step cap. The existing normal collection's 900-second timeout is
+unchanged. No additional OpenShift must-gather or guest dump runs. Default MCE
+coverage varies by release; supplemental inspection captures available operator resources/logs, HostedClusters,
+NodePools and webhook configuration, not a guaranteed complete HCP or guest dump.
+
+Output, partial results, logs, selected image and exit status are staged under
+`mgmt-cluster/mce-must-gather/` in the existing `osac-logs-caas-full-install-*`
+artifact. Raw collector logs are not printed to Actions logs. All retained files
+pass existing recursive redaction, a mandatory private MCE pattern scan, and the
+known-secret release gate before upload. Archives (including unexpected
+`hypershift-dump.tar.gz`), binary/oversized files, links and special files are
+withheld rather than allowed to bypass member scanning. The MCE scan limits files
+to 32 MiB and the payload to 256 MiB; it has a 180-second cap. Missing/failed scans,
+invalid/missing reports, or remaining findings withhold the MCE payload, even if
+the ordinary artifact pattern scan is disabled. A safe withholding notice remains
+where possible. The cluster secret inventory is namespace-scoped, so this is
+defense in depth, not a claim that collector logs cannot contain credentials.
+
+Related to [#802](https://github.com/osac-project/osac-test-infra/issues/802): this
+collects diagnostic evidence and does not fix the webhook TLS failure.
+
 ## Architecture
 
 The repository connects two layers:

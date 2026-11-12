@@ -1043,6 +1043,14 @@ jobs:
               pytest ${TEST_ARGS} "${FILTER_ARGS[@]}" "${MARKER_ARGS[@]}" \
                 --junitxml=/tmp/test-output/junit.xml -v
 
+      - name: Collect MCE failure diagnostics
+        if: failure() && !cancelled()
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig
+        run: bash .github/scripts/collect-mce-must-gather.sh
+
       # Teardown comes right after the collection, ahead of the slow scan and
       # upload: a cancelled job gets only 5 minutes for its always() steps.
       # The collection and the upload each come as two steps with opposite
