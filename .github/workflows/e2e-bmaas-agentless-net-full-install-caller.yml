@@ -10,6 +10,8 @@ on:
   pull_request_target:
     types: [labeled]
     branches: [main]
+  schedule:
+    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       pr-number:
@@ -62,7 +64,7 @@ on:
 
 concurrency:
   # A new commit cancels the previous run of the same pull request.
-  # A manual dispatch uses its own run id and is not cancelled.
+  # Scheduled and manual runs keep independent groups and are not cancelled.
   group: e2e-bmaas-agentless-net-full-install-${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}-${{ inputs.pr-number || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ inputs.pr-number != '' || github.event_name == 'pull_request_target' }}
 
