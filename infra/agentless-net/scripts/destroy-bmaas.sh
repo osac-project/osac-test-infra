@@ -28,18 +28,22 @@ if [[ -f "$STATE_FILE" ]]; then
     python3 "${SCRIPT_DIR}/prove_bmi.py" --delete --namespace "$OSAC_NAMESPACE" --state-file "$STATE_FILE" || true
 fi
 
+INVENTORY_NAMES=()
+if [[ -f "$INVENTORY_FILE" ]]; then
+    mapfile -t INVENTORY_NAMES < <(python3 -c 'import json,sys; print("\n".join(h["name"] for h in json.load(open(sys.argv[1])).get("hosts", [])))' "$INVENTORY_FILE")
+fi
+if [[ ${#INVENTORY_NAMES[@]} -gt 0 ]]; then
+    for name in "${INVENTORY_NAMES[@]}"; do
+        info "Deleting BareMetalHost ${name}"
+        oc -n "$BMH_NAMESPACE" delete baremetalhost "$name" --ignore-not-found --wait=false || true
+    done
+    info "Deleting the virtual BMH VM recorded for ${CLONE_NAME}"
+    python3 "${REPO_ROOT}/.github/scripts/manage-virtual-bmh-vms.py" delete \
+        --inventory-file "$INVENTORY_FILE" --names "${INVENTORY_NAMES[@]}" || true
+fi
 if [[ -n "${BMH_NAME:-}" ]]; then
     info "Deleting BareMetalHost ${BMH_NAME}"
     oc -n "$BMH_NAMESPACE" delete baremetalhost "$BMH_NAME" --ignore-not-found --wait=false || true
-fi
-
-if [[ -f "$INVENTORY_FILE" ]]; then
-    info "Deleting the virtual BMH VM recorded for ${CLONE_NAME}"
-    mapfile -t NAMES < <(python3 -c 'import json,sys; print("\n".join(h["name"] for h in json.load(open(sys.argv[1])).get("hosts", [])))' "$INVENTORY_FILE")
-    if [[ ${#NAMES[@]} -gt 0 ]]; then
-        python3 "${REPO_ROOT}/.github/scripts/manage-virtual-bmh-vms.py" delete \
-            --inventory-file "$INVENTORY_FILE" --names "${NAMES[@]}" || true
-    fi
 fi
 
 info "destroy-bmaas complete"

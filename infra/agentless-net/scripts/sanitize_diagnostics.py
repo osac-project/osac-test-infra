@@ -16,29 +16,32 @@ _PRIVATE_KEY = re.compile(
     rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
     re.DOTALL,
 )
-_BEARER = re.compile(rb"Bearer\s+\S+")
-_SECRET_NAME = rb"password|passwd|secret|token|api[_-]?key|client-key-data"
-_JSON_FIELD = re.compile(
-    rb'(?i)("(?:' + _SECRET_NAME + rb')")(\s*:\s*)("(?:\\.|[^"\\])*")'
-)
-_QUOTED_ASSIGNMENT = re.compile(
-    rb"(?i)\b(" + _SECRET_NAME + rb""")(\s*[:=]\s*)(["'])(?:\\.|(?!\3).)*\3"""
-)
-_PLAIN_ASSIGNMENT = re.compile(
-    rb"(?i)\b(" + _SECRET_NAME + rb""")(\s*[:=]\s*)([^\s#"']\S*)"""
+_AUTHORIZATION = re.compile(rb"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)\S+")
+_SECRET_ASSIGNMENT = re.compile(
+    rb"(?i)"
+    rb"(\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*\""
+    rb"|[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*)"
+    rb"(\s*[:=]\s*)"
+    rb"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\S+)"
 )
 _REDACTED = b"[REDACTED]"
 
 
+def _redact_assignment(match: re.Match[bytes]) -> bytes:
+    value = match.group(3)
+    if value.startswith(b'"') and value.endswith(b'"'):
+        replacement = b'"' + _REDACTED + b'"'
+    elif value.startswith(b"'") and value.endswith(b"'"):
+        replacement = b"'" + _REDACTED + b"'"
+    else:
+        replacement = _REDACTED
+    return match.group(1) + match.group(2) + replacement
+
+
 def redact(data: bytes) -> bytes:
     data = _PRIVATE_KEY.sub(b"[REDACTED PRIVATE KEY]", data)
-    data = _BEARER.sub(b"Bearer " + _REDACTED, data)
-    data = _JSON_FIELD.sub(lambda match: match.group(1) + match.group(2) + b'"' + _REDACTED + b'"', data)
-    data = _QUOTED_ASSIGNMENT.sub(
-        lambda match: match.group(1) + match.group(2) + match.group(3) + _REDACTED + match.group(3),
-        data,
-    )
-    data = _PLAIN_ASSIGNMENT.sub(lambda match: match.group(1) + match.group(2) + _REDACTED, data)
+    data = _AUTHORIZATION.sub(lambda match: match.group(1) + _REDACTED, data)
+    data = _SECRET_ASSIGNMENT.sub(_redact_assignment, data)
     return data
 
 

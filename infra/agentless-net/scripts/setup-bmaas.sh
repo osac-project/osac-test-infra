@@ -33,9 +33,21 @@ if [[ ! -f "$SSH_KEY" ]]; then
     ssh-keygen -t ed25519 -N "" -f "$SSH_KEY"
 fi
 
-info "Registering ${BMH_COUNT} virtual BMH through sushy-tools"
-CLONE_NAME="$CLONE_NAME" BMH_COUNT="$BMH_COUNT" BMH_NAMESPACE="$BMH_NAMESPACE" \
-    "${REPO_ROOT}/.github/scripts/setup-virtual-bmh.sh"
+host_count=0
+if [[ -f "$INVENTORY_FILE" ]]; then
+    host_count="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("hosts", [])))' "$INVENTORY_FILE")"
+fi
+if [[ "$host_count" -gt 1 ]]; then
+    echo "ERROR: ${INVENTORY_FILE} has ${host_count} virtual BMHs; refusing to create another" >&2
+    exit 1
+fi
+if [[ "$host_count" -eq 1 ]]; then
+    info "Reusing the virtual BMH already recorded in ${INVENTORY_FILE}"
+else
+    info "Registering ${BMH_COUNT} virtual BMH through sushy-tools"
+    CLONE_NAME="$CLONE_NAME" BMH_COUNT="$BMH_COUNT" BMH_NAMESPACE="$BMH_NAMESPACE" \
+        "${REPO_ROOT}/.github/scripts/setup-virtual-bmh.sh"
+fi
 
 mapfile -t BMH_NAMES < <(python3 -c '
 import json, sys
@@ -46,6 +58,9 @@ if len(names) != 1:
 print(names[0])
 ' "$INVENTORY_FILE")
 BMH_NAME="${BMH_NAMES[0]}"
+grep -v '^BMH_NAME=' "${INFRA_DIR}/.mgmt-network" >"${INFRA_DIR}/.mgmt-network.tmp"
+echo "BMH_NAME=${BMH_NAME}" >>"${INFRA_DIR}/.mgmt-network.tmp"
+mv "${INFRA_DIR}/.mgmt-network.tmp" "${INFRA_DIR}/.mgmt-network"
 info "Virtual BMH ${BMH_NAME}"
 
 if ! sudo virsh domiflist "$BMH_NAME" | awk 'NR>2 {print $5}' | grep -qx "$FABRIC_MAC"; then
@@ -98,7 +113,4 @@ KEY_B64="$(base64 -w0 "$SSH_KEY")"
 oc -n "$OSAC_NAMESPACE" patch secret network-fulfillment-ig --type merge -p \
     "{\"data\":{\"AGENTLESS_NET_SSH_PRIVATE_KEY\":\"${KEY_B64}\"}}"
 
-grep -v '^BMH_NAME=' "${INFRA_DIR}/.mgmt-network" >"${INFRA_DIR}/.mgmt-network.tmp"
-echo "BMH_NAME=${BMH_NAME}" >>"${INFRA_DIR}/.mgmt-network.tmp"
-mv "${INFRA_DIR}/.mgmt-network.tmp" "${INFRA_DIR}/.mgmt-network"
 info "setup-bmaas complete for ${BMH_NAME}"

@@ -115,7 +115,11 @@ KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
     "
 echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24, gateway 10.0.0.30 (net-node)"
 
-if [[ -n "$(KUBECONFIG="$KUBECONFIG" oc get l2advertisement caas-l2-advertisement -n metallb-system --ignore-not-found -o name)" ]]; then
+if ! advertisement="$(KUBECONFIG="$KUBECONFIG" oc get l2advertisement caas-l2-advertisement -n metallb-system --ignore-not-found -o name)"; then
+    echo "ERROR: failed to read caas-l2-advertisement" >&2
+    exit 1
+fi
+if [[ -n "$advertisement" ]]; then
     KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
         --type=merge -p "{\"spec\":{\"interfaces\":[\"$FABRIC_NIC\"]}}"
     echo "  L2Advertisement: announcing on $FABRIC_NIC (fabric)"
