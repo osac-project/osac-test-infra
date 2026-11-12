@@ -303,6 +303,31 @@ class CreateDeleteEndToEndTests(unittest.TestCase):
         for name in names:
             self.assertRegex(name, rf"^{prefix}-[0-9a-f]{{2}}$")
 
+    def test_redefine_after_undefine_resolves_the_domain(self) -> None:
+        self._create()
+        name = json.loads(self.inventory_file.read_text())["hosts"][0]["name"]
+        deleted = self._delete(name)
+        self.assertEqual(deleted.returncode, 0, deleted.stdout + deleted.stderr)
+
+        defined = subprocess.run(
+            ["virsh", "-c", "qemu:///system", "define", "/dev/stdin"],
+            input=f"<domain type='kvm'><name>{name}</name></domain>\n",
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(defined.returncode, 0, defined.stderr)
+        resolved = subprocess.run(
+            ["virsh", "-c", "qemu:///system", "domuuid", name],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(resolved.returncode, 0, resolved.stderr)
+        self.assertEqual(resolved.stdout.strip(), f"uuid-of-{name}")
+
 
 if __name__ == "__main__":
     unittest.main()
