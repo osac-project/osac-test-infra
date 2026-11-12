@@ -63,86 +63,12 @@
   retries: 10
   delay: 15
 
-# OSAC creates the Netris IPAM allocation when the shared pool is reconciled.
-# Tenant egress uses this shared pool; cluster API and ingress use the existing
-# Netris external-access flow.
-- name: List OSAC ExternalIPPools for tenant egress
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/external_ip_pools"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-    validate_certs: false
-    status_code: [200]
-  register: _caas_external_ip_pools
-  no_log: true
-
-- name: Find the lab ExternalIPPool
-  ansible.builtin.set_fact:
-    _caas_external_pool_by_cidr: >-
-      {{ _caas_external_ip_pools.json.get('items', [])
-         | selectattr('spec.cidrs', 'equalto', [osac_external_ip_pool_cidr]) | list }}
-    _caas_external_pool_by_name: >-
-      {{ _caas_external_ip_pools.json.get('items', [])
-         | selectattr('metadata.name', 'equalto', osac_external_ip_pool_name) | list }}
-
-- name: Reject conflicting ExternalIPPool definitions
-  ansible.builtin.assert:
-    that:
-      - _caas_external_pool_by_cidr | length <= 1
-      - _caas_external_pool_by_name | length <= 1
-      - >-
-        (_caas_external_pool_by_name | length == 0) or
-        ((_caas_external_pool_by_name | first).get('spec', {}).get('cidrs', []) == [osac_external_ip_pool_cidr])
-      - >-
-        (_caas_external_pool_by_cidr | length == 0) or
-        ((_caas_external_pool_by_cidr | first).get('spec', {}).get('implementation_strategy', 'netris') == 'netris')
-    fail_msg: >-
-      ExternalIPPool name/CIDR conflicts with the Netris lab configuration.
-
-- name: Create the Netris lab ExternalIPPool when missing
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/external_ip_pools"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: application/json
-    body_format: json
-    body:
-      metadata:
-        name: "{{ osac_external_ip_pool_name }}"
-      spec:
-        cidrs: ["{{ osac_external_ip_pool_cidr }}"]
-        ip_family: IP_FAMILY_IPV4
-        implementation_strategy: netris
-    validate_certs: false
-    status_code: [200, 201]
-  register: _caas_external_pool_created
-  when: _caas_external_pool_by_cidr | length == 0
-  no_log: true
-
-- name: Select the Netris lab ExternalIPPool ID
-  ansible.builtin.set_fact:
-    _caas_external_pool_id: >-
-      {{ (_caas_external_pool_by_cidr | first).id if _caas_external_pool_by_cidr | length > 0
-         else (_caas_external_pool_created.json.get('object', _caas_external_pool_created.json)).id }}
-
-- name: Wait for the Netris lab ExternalIPPool to be ready
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/external_ip_pools/{{ _caas_external_pool_id }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-    validate_certs: false
-    status_code: [200]
-  register: _caas_external_pool_status
-  until: >-
-    (_caas_external_pool_status.json.get('object', _caas_external_pool_status.json)
-      .get('status', {}).get('state', '')) in
-    ['EXTERNAL_IP_POOL_STATE_READY', 'Ready']
-  retries: 60
-  delay: 10
-  no_log: true
+# The lab ExternalIPPool is a prerequisite for tenant default networking and
+# tenant egress in every deploy suite, so the shared role owns it. It sets
+# lab_external_ip_pool_id for the readiness assertion below.
+- name: Ensure the lab ExternalIPPool
+  ansible.builtin.include_role:
+    name: lab-external-ip-pool
 
 # OSAC auto-selects the ready pool with the most addresses. A second ready
 # IPv4 pool could silently put cluster endpoints on an unrouted lab CIDR.
@@ -163,7 +89,7 @@
       - >-
         (_caas_external_pool_selection.json.get('items', [])
          | selectattr('status.state', 'in', ['EXTERNAL_IP_POOL_STATE_READY', 'Ready'])
-         | rejectattr('id', 'equalto', _caas_external_pool_id) | list | length) == 0
+         | rejectattr('id', 'equalto', lab_external_ip_pool_id) | list | length) == 0
     fail_msg: >-
       OSAC auto-selects an ExternalIPPool. Another ready pool could receive
       the cluster API and ingress addresses instead of {{ osac_external_ip_pool_cidr }}.

@@ -1,5 +1,5 @@
 ---
-- name: Check VMaaS cluster and OSAC readiness (no cluster changes)
+- name: Ensure the lab ExternalIPPool and check VMaaS cluster and OSAC readiness
   hosts: all
   gather_facts: false
   environment:
@@ -16,6 +16,14 @@
           - _vmaas_kubeconfig.stat.exists
           - _vmaas_kubeconfig.stat.isreg
         fail_msg: "OCP kubeconfig is missing or is not a regular file: {{ kubeconfig_path }}"
+
+    # Tenant default networking allocates its default-nat ExternalIP from a READY
+    # IPv4 pool, and the E2E session gate waits for DefaultNetworkingReady before
+    # any test runs. Only the CaaS setup used to create the lab pool, so a VMaaS
+    # deploy depended on a pool an earlier CaaS run left behind. Ensure it here.
+    - name: Ensure the lab ExternalIPPool
+      ansible.builtin.include_role:
+        name: lab-external-ip-pool
 
     - name: Check the OCP API is ready
       ansible.builtin.command:
@@ -543,10 +551,12 @@
     - name: Report the VMaaS readiness result
       ansible.builtin.debug:
         msg: >-
-          Read-only readiness passed for the OSAC VMaaS controller, the
-          ComputeInstance API, the installer-rendered Netris and cudn_evpn
-          registrations, and the default NetworkClass (netris, cudn_evpn,
-          READY). The ComputeInstanceTemplate is not queried here; ensure the
+          Readiness passed for the OSAC VMaaS controller, the ComputeInstance
+          API, the installer-rendered Netris and cudn_evpn registrations, and
+          the default NetworkClass (netris, cudn_evpn, READY). The lab
+          ExternalIPPool ({{ osac_external_ip_pool_name }}, {{ osac_external_ip_pool_cidr }})
+          is READY, so tenant default networking can allocate default-nat.
+          The ComputeInstanceTemplate is not queried here; ensure the
           VMaaS template configured for the suite exists and is usable.
           OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED is exported to .env.infra only
           when the ExternalIP tests and the return path acknowledgement are both
