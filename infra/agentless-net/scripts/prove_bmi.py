@@ -60,7 +60,13 @@ def bmi_create_body(
 def discovered_address(resource: dict[str, Any]) -> str:
     """Return the first non-empty attachment address in a Get response."""
     status = resource.get("status") or {}
-    attachments = status.get("network_attachments") or status.get("networkAttachments") or []
+    attachments = (
+        status.get("network_attachment_statuses")
+        or status.get("networkAttachmentStatuses")
+        or status.get("network_attachments")
+        or status.get("networkAttachments")
+        or []
+    )
     if isinstance(attachments, dict):
         attachments = list(attachments.values())
     for item in attachments:
@@ -134,12 +140,15 @@ class Api:
             service=service,
             data=data,
         )
+        timed_out = False
         try:
             completed = subprocess.run(
                 command, check=False, capture_output=True, text=True, timeout=self.call_timeout
             )
-        except subprocess.TimeoutExpired as exc:
-            raise CallTimeout(f"{service} timed out after {self.call_timeout}s") from exc
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        if timed_out:
+            raise CallTimeout(f"{service} timed out after {self.call_timeout}s")
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()
             raise RuntimeError(f"{service} failed: {detail}")

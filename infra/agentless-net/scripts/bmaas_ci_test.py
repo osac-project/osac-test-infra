@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -66,7 +68,7 @@ class ProofPayloadTest(unittest.TestCase):
 
     def test_address_and_ready_state(self) -> None:
         ready = {"status": {"state": "BARE_METAL_INSTANCE_STATE_READY", "network_attachments": [{"ip_address": "10.100.1.193"}]}}
-        camel = {"status": {"state": "STATE_READY", "networkAttachments": [{"ipAddress": "10.100.1.50"}]}}
+        camel = {"status": {"state": "STATE_READY", "networkAttachmentStatuses": [{"ipAddress": "10.100.1.50"}]}}
         self.assertEqual(prove_bmi.discovered_address(ready), "10.100.1.193")
         self.assertEqual(prove_bmi.discovered_address(camel), "10.100.1.50")
         self.assertTrue(prove_bmi.is_ready(ready))
@@ -75,6 +77,8 @@ class ProofPayloadTest(unittest.TestCase):
         self.assertFalse(prove_bmi.is_bmi_running(ready))
         self.assertFalse(prove_bmi.is_ready(running))
         self.assertEqual(prove_bmi.discovered_address(running), "10.100.1.193")
+        proto = {"status": {"network_attachment_statuses": [{"ip_address": "10.100.1.194"}]}}
+        self.assertEqual(prove_bmi.discovered_address(proto), "10.100.1.194")
         command = prove_bmi.grpcurl_command(
             address="api.example:443", token="token", ca_file="/tmp/ca.crt", service="osac.public.v1.BareMetalInstances/Get"
         )
@@ -84,6 +88,19 @@ class ProofPayloadTest(unittest.TestCase):
         self.assertFalse(prove_bmi.is_ready({"status": {"state": "BARE_METAL_INSTANCE_STATE_PROVISIONING"}}))
         self.assertFalse(prove_bmi.is_ready({"status": {"state": "BARE_METAL_INSTANCE_STATE_FAILED"}}))
         self.assertEqual(prove_bmi.discovered_address({"status": {}}), "")
+
+    def test_timeout_does_not_include_the_request(self) -> None:
+        api = prove_bmi.Api(address="api.example:443", token="super-secret-token", ca_file="/tmp/ca.crt", call_timeout=1)
+
+        def expire(command, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=command, timeout=kwargs["timeout"])
+
+        with mock.patch("prove_bmi.subprocess.run", side_effect=expire):
+            with self.assertRaises(prove_bmi.CallTimeout) as caught:
+                api.call("osac.public.v1.BareMetalInstances/Get")
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("super-secret-token", str(caught.exception))
 
 
 class SanitizeTest(unittest.TestCase):
@@ -97,7 +114,11 @@ class SanitizeTest(unittest.TestCase):
             "password: hunter2\n"
             'PASSWORD="my secret"\n'
             '"password": "hunter2"\n'
+            "DB_PASSWORD=hunter2\n"
+            "AWS_SECRET_ACCESS_KEY: abc123\n"
+            '"aws_secret_access_key": "abc123"\n'
             "Authorization: Bearer abc.def.ghi\n"
+            "Authorization: Basic dXNlcjpwYXNz\n"
             "client-key-data: bXlrZXk=\n"
             "bridge sysctl is 0\n"
         )
@@ -111,7 +132,9 @@ class SanitizeTest(unittest.TestCase):
         self.assertNotIn("c2VjcmV0a2V5ZGF0YQ==", cleaned)
         self.assertNotIn("hunter2", cleaned)
         self.assertNotIn("my secret", cleaned)
+        self.assertNotIn("abc123", cleaned)
         self.assertNotIn("abc.def.ghi", cleaned)
+        self.assertNotIn("dXNlcjpwYXNz", cleaned)
         self.assertNotIn("bXlrZXk=", cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
         self.assertIn("[REDACTED PRIVATE KEY]", cleaned)
@@ -164,6 +187,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("prepare-host-bridges.sh", fabric)
         self.assertIn("caas-l2-advertisement", fabric)
         self.assertIn("--ignore-not-found", fabric)
+        self.assertIn("osac-bmaas-install-stamp", deploy)
 
 
 if __name__ == "__main__":

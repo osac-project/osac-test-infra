@@ -93,9 +93,13 @@ fi
 # ---------- step 8: install OSAC ----------
 
 if [[ -n "${OSAC_PROFILE:-}" ]]; then
-    if KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | grep -q "1/1" \
+    requested_revision="$(git -C "$OSAC_DIR" rev-parse HEAD)"
+    overlay_sum="$(sha256sum "${INFRA_DIR}/values-bmaas-overlay.yaml" | awk '{print $1}')"
+    installed_stamp="$(KUBECONFIG="$KUBECONFIG" oc get configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" -o jsonpath='{.data.revision}{" "}{.data.overlay}' 2>/dev/null || true)"
+    if [[ "$installed_stamp" == "$requested_revision $overlay_sum" ]] \
+        && KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | grep -q "1/1" \
         && KUBECONFIG="$KUBECONFIG" oc get deploy -n "$OSAC_NAMESPACE" -o name | grep -q bmf; then
-        info "OSAC profile ${OSAC_PROFILE} already running — skipping install"
+        info "OSAC profile ${OSAC_PROFILE} at ${requested_revision} is already installed"
     else
         info "Installing OSAC profile ${OSAC_PROFILE}..."
         cp "${INFRA_DIR}/values-bmaas-overlay.yaml" "${INSTALLER_DIR}/values/bmaas-agentless-overlay.yaml"
@@ -156,6 +160,10 @@ if [[ -n "${OSAC_PROFILE:-}" ]]; then
     fi
     KUBECONFIG="$KUBECONFIG" oc wait "${BMF_DEPLOYS[@]}" -n "$OSAC_NAMESPACE" \
         --for=condition=Available --timeout=300s
+    KUBECONFIG="$KUBECONFIG" oc create configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" \
+        --from-literal=revision="$(git -C "$OSAC_DIR" rev-parse HEAD)" \
+        --from-literal=overlay="$(sha256sum "${INFRA_DIR}/values-bmaas-overlay.yaml" | awk '{print $1}')" \
+        --dry-run=client -o yaml | KUBECONFIG="$KUBECONFIG" oc apply -f -
 fi
 info "OSAC is running:"
 KUBECONFIG="$KUBECONFIG" oc get pods -n "$OSAC_NAMESPACE" --no-headers | \
