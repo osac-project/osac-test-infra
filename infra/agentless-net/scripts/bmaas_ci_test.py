@@ -192,7 +192,7 @@ class WorkflowContractTest(unittest.TestCase):
         caller = yaml.safe_load(CALLER.read_text())
         caller_trigger = caller[True]
         self.assertIn("workflow_dispatch", caller_trigger)
-        self.assertNotIn("schedule", caller_trigger)
+        self.assertEqual(caller_trigger["schedule"][0]["cron"], "0 0 * * *")
         self.assertIn("labeled", caller_trigger["pull_request_target"]["types"])
         self.assertNotIn("pull_request", caller_trigger)
         self.assertIn("pr-number", caller["concurrency"]["group"])
