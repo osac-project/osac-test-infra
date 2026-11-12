@@ -34,7 +34,6 @@ def bmi_create_body(
     catalog_name: str,
     instance_type_name: str,
     disk_image_name: str,
-    ssh_public_key: str,
 ) -> dict[str, Any]:
     return {
         "object": {
@@ -44,7 +43,6 @@ def bmi_create_body(
                 "instance_type": {"name": instance_type_name, "shared": True},
                 "disk_image": {"name": disk_image_name, "shared": True},
                 "run_strategy": "RUN_STRATEGY_ALWAYS",
-                "ssh_public_key": ssh_public_key,
                 "network_attachments": [
                     {
                         "interface": FABRIC_INTERFACE,
@@ -177,7 +175,6 @@ def create_proof(
     tenant: str,
     disk_image_ref: str,
     template_name: str,
-    ssh_public_key: str,
     state_path: Path,
 ) -> dict[str, str]:
     state: dict[str, str] = {}
@@ -274,7 +271,6 @@ def create_proof(
             catalog_name=_object_name(catalog),
             instance_type_name=_object_name(instance_type),
             disk_image_name=_object_name(disk_image),
-            ssh_public_key=ssh_public_key,
         ),
     )
     remember("bmi_id", _object_id(bmi, "BareMetalInstances/Create"))
@@ -417,7 +413,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tenant", default=os.environ.get("OSAC_TENANT", "osac-e2e-ci"))
     parser.add_argument("--disk-image-ref", default=os.environ.get("BMI_DISK_IMAGE_REF", DEFAULT_DISK_IMAGE))
     parser.add_argument("--template", default=os.environ.get("OSAC_BMI_TEMPLATE", DEFAULT_TEMPLATE))
-    parser.add_argument("--ssh-public-key-file", default=os.environ.get("BMI_SSH_PUBLIC_KEY_FILE", ""))
     parser.add_argument("--state-file", required=True)
     parser.add_argument("--delete", action="store_true")
     parser.add_argument("--timeout-seconds", type=int, default=2700)
@@ -437,15 +432,11 @@ def main(argv: list[str] | None = None) -> int:
         delete_proof(api, json.loads(state_path.read_text()))
         return 0
 
-    key_path = Path(args.ssh_public_key_file) if args.ssh_public_key_file else None
-    if key_path is None or not key_path.is_file():
-        raise RuntimeError("BMI_SSH_PUBLIC_KEY_FILE must point at the public key registered on the guest")
     state = create_proof(
         api,
         tenant=args.tenant,
         disk_image_ref=args.disk_image_ref,
         template_name=args.template,
-        ssh_public_key=key_path.read_text().strip(),
         state_path=state_path,
     )
     address = wait_for_address(

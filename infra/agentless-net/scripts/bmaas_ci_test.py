@@ -21,6 +21,7 @@ import sanitize_diagnostics  # noqa: E402
 ROOT = Path(__file__).resolve().parents[3]
 INFRA = ROOT / "infra" / "agentless-net"
 WORKFLOW = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install.yml"
+CALLER = ROOT / ".github" / "workflows" / "e2e-bmaas-agentless-net-full-install-caller.yml"
 
 
 class InventoryTest(unittest.TestCase):
@@ -57,8 +58,9 @@ class ProofPayloadTest(unittest.TestCase):
             catalog_name="bmaas-proof",
             instance_type_name="bmaas-agentless-ci",
             disk_image_name="bmaas-proof-image",
-            ssh_public_key="ssh-ed25519 AAAA proof",
         )
+        self.assertNotIn("ssh_public_key", body["object"]["spec"])
+        self.assertNotIn("ssh_key", body["object"]["spec"])
         attachments = body["object"]["spec"]["network_attachments"]
         self.assertEqual(len(attachments), 1)
         self.assertEqual(attachments[0]["interface"], "eth9")
@@ -142,13 +144,19 @@ class SanitizeTest(unittest.TestCase):
 
 class WorkflowContractTest(unittest.TestCase):
     def test_manual_run_is_isolated_and_proves_one_bmi(self) -> None:
+        caller = yaml.safe_load(CALLER.read_text())
+        caller_trigger = caller[True]
+        self.assertIn("workflow_dispatch", caller_trigger)
+        self.assertEqual(caller_trigger["schedule"][0]["cron"], "0 0 * * *")
+        self.assertIn("labeled", caller_trigger["pull_request_target"]["types"])
+        self.assertNotIn("pull_request", caller_trigger)
+        self.assertIn("pr-number", caller["concurrency"]["group"])
+        self.assertIn("pull_request_target", caller["concurrency"]["cancel-in-progress"])
+
         document = yaml.safe_load(WORKFLOW.read_text())
-        trigger = document[True]
-        self.assertIn("workflow_dispatch", trigger)
-        self.assertNotIn("schedule", trigger)
-        self.assertNotIn("pull_request", trigger)
-        self.assertIn("github.run_id", document["concurrency"]["group"])
-        self.assertFalse(document["concurrency"]["cancel-in-progress"])
+        self.assertIn("workflow_call", document[True])
+        self.assertNotIn("workflow_dispatch", document[True])
+        self.assertNotIn("pull_request", document[True])
 
         steps = [step["run"] for step in document["jobs"]["e2e"]["steps"] if "run" in step]
         joined = "\n".join(steps)
@@ -164,6 +172,8 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("steps.sanitize.outcome == 'success'", upload["if"])
         checkout = next(step for step in document["jobs"]["e2e"]["steps"] if step.get("name") == "Checkout repository")
         self.assertFalse(checkout["with"]["persist-credentials"])
+        self.assertIn("inputs.test-infra-sha", checkout["with"]["ref"])
+        self.assertIn("inputs.test-infra-repository", checkout["with"]["repository"])
 
     def test_host_bridge_sysctl_and_bmaas_overlay_are_separate_from_caas(self) -> None:
         bridges = (INFRA / "scripts" / "prepare-host-bridges.sh").read_text()
@@ -193,6 +203,11 @@ class WorkflowContractTest(unittest.TestCase):
         setup = (INFRA / "scripts" / "setup-bmaas.sh").read_text()
         self.assertLess(setup.index("Reusing the virtual BMH"), setup.index("reconcile-bmhs.py"))
         self.assertLess(setup.index("reconcile-bmhs.py"), setup.index("annotate baremetalhost"))
+        self.assertIn("apk add --no-cache dnsmasq supervisor", setup)
+        self.assertIn("/etc/agentless-net/supervisord.conf", setup)
+        self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf pid", setup)
+        gather = (INFRA / "scripts" / "gather-bmaas.sh").read_text()
+        self.assertIn("supervisorctl -c /etc/agentless-net/supervisord.conf status", gather)
 
 
 if __name__ == "__main__":
