@@ -11,6 +11,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -102,6 +103,29 @@ class CallTimeout(RuntimeError):
     """One gRPC call exceeded its own deadline."""
 
 
+class GrpcError(RuntimeError):
+    """A gRPC call failed. `code` is the status name, or empty when grpcurl did not report one."""
+
+    def __init__(self, service: str, detail: str, code: str) -> None:
+        super().__init__(f"{service} failed: {detail}")
+        self.code = code
+
+
+_GRPC_CODE = re.compile(r"(?i)\bcode\s*[:=]\s*([A-Za-z_]+)")
+
+
+def _grpc_code(detail: str) -> str:
+    match = _GRPC_CODE.search(detail)
+    return match.group(1) if match else ""
+
+
+def _retryable_poll_error(exc: Exception) -> bool:
+    """Retry a timeout or UNAVAILABLE until the poll deadline. Other status codes are permanent."""
+    if isinstance(exc, CallTimeout):
+        return True
+    return isinstance(exc, GrpcError) and exc.code.lower() == "unavailable"
+
+
 def grpcurl_command(
     *,
     address: str,
@@ -149,7 +173,7 @@ class Api:
             raise CallTimeout(f"{service} timed out after {self.call_timeout}s")
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()
-            raise RuntimeError(f"{service} failed: {detail}")
+            raise GrpcError(service, detail, _grpc_code(detail))
         if not completed.stdout.strip():
             return {}
         parsed = json.loads(completed.stdout)
@@ -303,7 +327,9 @@ def wait_for_state(api: Api, service: str, resource_id: str, *, timeout_seconds:
     while time.monotonic() < deadline:
         try:
             response = api.call(service, {"id": resource_id})
-        except CallTimeout as exc:
+        except (CallTimeout, GrpcError) as exc:
+            if not _retryable_poll_error(exc):
+                raise
             last = str(exc)
             time.sleep(interval_seconds)
             continue
@@ -323,7 +349,9 @@ def wait_for_address(api: Api, bmi_id: str, *, timeout_seconds: int, interval_se
     while time.monotonic() < deadline:
         try:
             response = api.call(f"{PUBLIC_API}.BareMetalInstances/Get", {"id": bmi_id})
-        except CallTimeout as exc:
+        except (CallTimeout, GrpcError) as exc:
+            if not _retryable_poll_error(exc):
+                raise
             last = str(exc)
             time.sleep(interval_seconds)
             continue
@@ -455,6 +483,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not delete_proof(api, json.loads(state_path.read_text())):
             return 1
+        state_path.unlink()
         return 0
 
     state = create_proof(

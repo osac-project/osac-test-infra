@@ -33,6 +33,12 @@ on:
 
 permissions: {}
 
+concurrency:
+  # Same PR-scoped group as e2e-bmaas-agentless-label-cleanup.yml. A new commit
+  # cancels this suite. inputs.repo is the pull request head repository.
+  group: e2e-bmaas-agentless-net-full-install-${{ inputs.repo }}-${{ inputs.pr-number }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     permissions:
