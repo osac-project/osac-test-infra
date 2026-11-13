@@ -19,6 +19,16 @@
 #               SKIP_PURGE (default: false) -- when true, skip deleting raw
 #                 logs/artifacts after redaction (useful for periodic scans
 #                 where preserving the originals aids debugging)
+#               PRIVATE_ARTIFACT_REPO (owner/name) and PRIVATE_GH_TOKEN --
+#                 also scan the artifacts this run's jobs published to the
+#                 private artifact repository (publish-private-artifacts)
+#                 instead of to the run. The token needs actions:write there
+#                 (read to download, write to delete). Both set, or neither:
+#                 the repository without the token is a failed scan, not a
+#                 skipped one. A leak in such an artifact is deleted like any
+#                 other, but its redacted copy is never written under
+#                 redacted/, which the caller uploads as a public artifact:
+#                 the content was private on purpose.
 #
 # Writes to <output-dir>:
 #   findings.json   sanitized findings (always; "[]" if clean or the scan
@@ -176,6 +186,9 @@ cleanup_raw() {
     "${OUTPUT_DIR}"/artifacts-list.json \
     "${OUTPUT_DIR}"/artifacts-list.json.tmp \
     "${OUTPUT_DIR}"/artifacts-list.page*.json \
+    "${OUTPUT_DIR}"/private-runs.page*.json \
+    "${OUTPUT_DIR}"/private-artifacts.*.json \
+    "${OUTPUT_DIR}"/run-probe.json \
     "${FINDINGS_RAW_JSON}"
   # REDACTED_DIR is only populated post-redact (staging pattern) -- keep it.
   # Staging dirs above always hold raw pre-redact copies and must go.
@@ -387,6 +400,76 @@ else
 fi
 echo "::endgroup::"
 
+# --- Artifacts published to the private repository --------------------------
+
+# A job that published there left no artifact on its run. Its collect run in
+# the private repository is titled "collect <repo>#<run id>.<attempt> - ...",
+# so find those runs and add their artifacts to the list, each marked with
+# the repository it lives in.
+PRIVATE_REPO="${PRIVATE_ARTIFACT_REPO:-}"
+if [[ -n "${PRIVATE_REPO}" ]]; then
+  echo "::group::List private artifacts for run ${RUN_ID} in ${PRIVATE_REPO}"
+  if [[ -z "${PRIVATE_GH_TOKEN:-}" ]]; then
+    echo "::warning::PRIVATE_ARTIFACT_REPO is set but PRIVATE_GH_TOKEN is not -- the private artifacts of run ${RUN_ID} were not scanned."
+    SCAN_OK=false
+  else
+    run_file="${OUTPUT_DIR}/run-probe.json"
+    code=$(fetch_with_retry "${run_file}" "200" "${GITHUB_API_URL}/repos/${REPO}/actions/runs/${RUN_ID}")
+    since=$(jq -r '.created_at // empty' "${run_file}" 2>/dev/null || true)
+    if [[ "${code}" != "200" || -z "${since}" ]]; then
+      echo "::warning::Could not read run ${RUN_ID} (HTTP ${code}) to look for its private artifacts -- audit incomplete for this run."
+      SCAN_OK=false
+    else
+      title="collect ${REPO}#${RUN_ID}."
+      private_ok=true
+      private_runs=""
+      private_page=1
+      while (( private_page <= 5 )); do
+        page_file="${OUTPUT_DIR}/private-runs.page${private_page}.json"
+        code=$(FETCH_TOKEN="${PRIVATE_GH_TOKEN}" fetch_with_retry "${page_file}" "200" \
+          -G "${GITHUB_API_URL}/repos/${PRIVATE_REPO}/actions/workflows/collect.yml/runs" \
+          --data-urlencode "per_page=100" \
+          --data-urlencode "page=${private_page}" \
+          --data-urlencode "created=>=${since}")
+        if [[ "${code}" != "200" ]] || ! jq -e '.workflow_runs | type == "array"' "${page_file}" >/dev/null 2>&1; then
+          echo "::warning::Could not list collect runs in ${PRIVATE_REPO} (HTTP ${code}) -- the private artifacts of run ${RUN_ID} were not scanned."
+          private_ok=false
+          break
+        fi
+        private_runs+=$(jq -r --arg t "${title}" '.workflow_runs[] | select((.display_title // "") | startswith($t)) | .id' "${page_file}")$'\n'
+        if (( $(jq '.workflow_runs | length' "${page_file}") < 100 )); then
+          break
+        fi
+        if (( private_page == 5 )); then
+          echo "::warning::More than 500 collect runs since run ${RUN_ID} started -- its private artifacts may not all have been found."
+          private_ok=false
+        fi
+        private_page=$((private_page + 1))
+      done
+      while IFS= read -r private_run; do
+        [[ -z "${private_run}" ]] && continue
+        page_file="${OUTPUT_DIR}/private-artifacts.${private_run}.json"
+        code=$(FETCH_TOKEN="${PRIVATE_GH_TOKEN}" fetch_with_retry "${page_file}" "200" \
+          -G "${GITHUB_API_URL}/repos/${PRIVATE_REPO}/actions/runs/${private_run}/artifacts" \
+          --data-urlencode "per_page=100")
+        if [[ "${code}" != "200" ]] || ! jq -e '.artifacts | type == "array"' "${page_file}" >/dev/null 2>&1; then
+          echo "::warning::Could not list the artifacts of collect run ${private_run} in ${PRIVATE_REPO} (HTTP ${code})."
+          private_ok=false
+          continue
+        fi
+        jq -c --slurpfile acc "${ARTIFACT_LIST}" --arg r "${PRIVATE_REPO}" \
+          '$acc[0] + [.artifacts[] | . + {repo: $r}]' "${page_file}" > "${ARTIFACT_LIST}.tmp"
+        mv -f -- "${ARTIFACT_LIST}.tmp" "${ARTIFACT_LIST}"
+      done <<<"${private_runs}"
+      if [[ "${private_ok}" != "true" ]]; then
+        SCAN_OK=false
+      fi
+      echo "Listed $(jq '[.[] | select(.repo != null)] | length' "${ARTIFACT_LIST}") private artifact(s) for run ${RUN_ID}."
+    fi
+  fi
+  echo "::endgroup::"
+fi
+
 # Scan every artifact collected so far even if pagination later failed.
 while IFS= read -r art_json; do
   [[ -z "${art_json}" ]] && continue
@@ -394,6 +477,18 @@ while IFS= read -r art_json; do
   art_name=$(jq -r '.name' <<<"${art_json}")
   art_expired=$(jq -r '.expired' <<<"${art_json}")
   art_size=$(jq -r '.size_in_bytes // 0' <<<"${art_json}")
+  # Artifacts of the private repository carry their repository; the run's own
+  # do not. The private ones are read and deleted with their own token, and
+  # their content never goes under REDACTED_DIR.
+  art_repo=$(jq -r '.repo // empty' <<<"${art_json}")
+  art_token=""
+  art_private=false
+  if [[ -n "${art_repo}" ]]; then
+    art_private=true
+    art_token="${PRIVATE_GH_TOKEN}"
+  else
+    art_repo="${REPO}"
+  fi
 
   if [[ "${art_expired}" == "true" ]]; then
     echo "Skipping expired artifact ${art_name} (${art_id})."
@@ -412,9 +507,9 @@ while IFS= read -r art_json; do
   mkdir -p "${art_dir}"
 
   # --max-time 300 overrides lib-github.sh's default 30s (large zips).
-  HTTP_CODE=$(fetch_with_retry "${art_zip}" "200" \
+  HTTP_CODE=$(FETCH_TOKEN="${art_token}" fetch_with_retry "${art_zip}" "200" \
     --max-time 300 \
-    "${GITHUB_API_URL}/repos/${REPO}/actions/artifacts/${art_id}/zip")
+    "${GITHUB_API_URL}/repos/${art_repo}/actions/artifacts/${art_id}/zip")
   if [[ "${HTTP_CODE}" != "200" ]]; then
     echo "::warning::Could not download artifact ${art_name} (${art_id}) (HTTP ${HTTP_CODE})."
     SCAN_OK=false
@@ -446,18 +541,25 @@ while IFS= read -r art_json; do
     art_stage="${OUTPUT_DIR}/.redact-staging-art-${art_id}"
     rm -rf -- "${art_stage}"
     cp -r "${art_dir}" "${art_stage}"
-    python3 "${SCRIPT_DIR}/redact.py" "${art_report}" "${art_stage}"
-    mkdir -p "${REDACTED_DIR}/artifacts"
-    mv -- "${art_stage}" "${REDACTED_DIR}/artifacts/${art_slug}"
+    if [[ "${art_private}" == "true" ]]; then
+      # Private on purpose: the caller uploads REDACTED_DIR as a public
+      # artifact, so no copy of this one goes there. The findings (rule,
+      # file, line) are recorded; the raw artifact is deleted below.
+      rm -rf -- "${art_stage}"
+    else
+      python3 "${SCRIPT_DIR}/redact.py" "${art_report}" "${art_stage}"
+      mkdir -p "${REDACTED_DIR}/artifacts"
+      mv -- "${art_stage}" "${REDACTED_DIR}/artifacts/${art_slug}"
+    fi
 
     if [[ "${SKIP_PURGE:-false}" == "true" ]]; then
       echo "SKIP_PURGE=true -- keeping raw artifact ${art_name} (${art_id})."
     else
       # 404 = already gone (e.g. first DELETE succeeded, retry saw 404 after
       # a transport blip) -- exposure window is closed either way.
-      HTTP_CODE=$(fetch_with_retry /dev/null "204,404" \
+      HTTP_CODE=$(FETCH_TOKEN="${art_token}" fetch_with_retry /dev/null "204,404" \
         -X DELETE \
-        "${GITHUB_API_URL}/repos/${REPO}/actions/artifacts/${art_id}")
+        "${GITHUB_API_URL}/repos/${art_repo}/actions/artifacts/${art_id}")
       if [[ "${HTTP_CODE}" != "204" && "${HTTP_CODE}" != "404" ]]; then
         echo "::warning::Failed to delete artifact ${art_name} (${art_id}) (HTTP ${HTTP_CODE}) -- exposure window is NOT closed."
         PURGE_OK=false

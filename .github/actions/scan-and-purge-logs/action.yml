@@ -14,6 +14,17 @@ inputs:
   github-token:
     description: "Token with actions:write on this repo (to fetch and delete run logs/artifacts)"
     required: true
+  private-artifact-repo:
+    description: >-
+      owner/name of the private artifact repository (osac-ci-artifacts) that
+      the run's jobs may have published their artifacts to. Needs
+      private-artifact-token. Empty scans only the run's own artifacts.
+    required: false
+    default: ""
+  private-artifact-token:
+    description: "Token with actions:write on private-artifact-repo (to download and delete its artifacts)"
+    required: false
+    default: ""
 
 outputs:
   scan-ok:
@@ -34,6 +45,9 @@ outputs:
   upload-ok:
     description: "'true' if the redacted-logs evidence artifact uploaded successfully; 'false' when upload failed or was skipped (no leaks)"
     value: ${{ steps.upload-status.outputs.upload-ok }}
+  redacted-withheld:
+    description: "'true' when leaks were found but no redacted copy exists to upload, because they were all in artifacts held in the private artifact repository, whose content is deliberately not republished"
+    value: ${{ steps.redacted.outputs.withheld }}
 
 runs:
   using: composite
@@ -44,6 +58,8 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         RUN_ID: ${{ inputs.run-id }}
+        PRIVATE_ARTIFACT_REPO: ${{ inputs.private-artifact-repo }}
+        PRIVATE_GH_TOKEN: ${{ inputs.private-artifact-token }}
       run: |
         OUTPUT_DIR="${RUNNER_TEMP}/scan-logs-${RUN_ID}"
         # Set before calling the script, not after -- so this output is
@@ -104,11 +120,32 @@ runs:
           fi
         } >> "$GITHUB_STEP_SUMMARY"
 
+    # The scanner writes a redacted copy of what it found in the run's own
+    # artifacts and logs. What it found in artifacts held in the private
+    # artifact repository gets none: this evidence is uploaded as a public
+    # artifact of the scan run, and that content was private on purpose. A
+    # leak only in those leaves nothing to upload, which is not an upload
+    # failure.
+    - name: Check for a redacted copy
+      id: redacted
+      if: always() && steps.scan.outputs.leaks-found == 'true'
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ steps.scan.outputs.output-dir }}
+      run: |
+        if [[ -d "${OUTPUT_DIR}/redacted" ]] && [[ -n "$(find "${OUTPUT_DIR}/redacted" -type f -print -quit)" ]]; then
+          echo "has-redacted=true" >> "$GITHUB_OUTPUT"
+          echo "withheld=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "has-redacted=false" >> "$GITHUB_OUTPUT"
+          echo "withheld=true" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Upload redacted evidence artifact
       id: upload
       # always(): a hard failure in an earlier composite step must not skip
       # uploading evidence when leaks were already recorded.
-      if: always() && steps.scan.outputs.leaks-found == 'true'
+      if: always() && steps.scan.outputs.leaks-found == 'true' && steps.redacted.outputs.has-redacted == 'true'
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: redacted-logs-${{ inputs.run-id }}
@@ -148,6 +185,7 @@ runs:
         PURGE_OK: ${{ steps.scan.outputs.purge-ok }}
         OUTPUT_DIR: ${{ steps.scan.outputs.output-dir }}
         UPLOAD_OK: ${{ steps.upload-status.outputs.upload-ok }}
+        REDACTED_WITHHELD: ${{ steps.redacted.outputs.withheld }}
         # Artifact lives on *this* scan run (github.run_id), named after the
         # scanned e2e run (inputs.run-id). Same #artifacts pattern as audit.
         ARTIFACT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
@@ -175,6 +213,8 @@ runs:
           # via always().
           if [[ "${UPLOAD_OK}" == "true" ]]; then
             echo "- Redacted evidence: [\`redacted-logs-${RUN_ID}\`](${ARTIFACT_URL}) (paths under \`logs/\` and/or \`artifacts/\`)."
+          elif [[ "${REDACTED_WITHHELD}" == "true" ]]; then
+            echo "- No redacted copy was uploaded: the findings are in artifacts held in the private artifact repository, whose content is not republished here. The raw artifacts were deleted; the table below lists what was found."
           else
             echo "- :warning: **Failed to upload the redacted-logs artifact** -- no redacted copy is attached; check the run logs for the upload step's failure."
           fi

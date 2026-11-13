@@ -45,6 +45,7 @@ jobs:
           python3 -I .github/scripts/release_gate_test.py
           python3 -I .github/scripts/release_gate_canary_test.py
           python3 -I .github/scripts/upload_artifacts_test.py
+          python3 -I .github/scripts/scan_run_logs_private_test.py
           python3 -I .github/scripts/test_ai_diagnose_failure.py
           python3 -I .github/scripts/test_manage_virtual_bmh_vms.py
           python3 -I .github/scripts/test_raw_inventory.py
