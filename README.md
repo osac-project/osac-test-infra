@@ -13,6 +13,36 @@ consume deployment configuration and do not depend on which backend created it.
 [the OSAC E2E guide](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md)
 for test conventions.
 
+## Full-regression management storage
+
+The cluster-tool SNO used by `e2e-full-regression.yml` exposes its OS disk as
+`/dev/sda` and its blank data disk as `/dev/sdb`. The first infrastructure
+install merges `.github/overlays/full-ci-infra.yaml` into the installer's
+`values/full-ci/infra.yaml`, explicitly selecting only `/dev/sdb` for LVMS.
+Do not include the OS disk or enable automatic disk discovery. The upstream
+`full-ci` profile's `/dev/vdb` remains appropriate for its stretched-Netris VM;
+this override does not change that profile or other CI topologies.
+
+Regression reference: [full-regression run 43350660005](https://github.com/osac-project/osac-test-infra/actions/runs/43350660005).
+Its management LVMS could not find `/dev/vdb`, excluded `/dev/sdb` by selector,
+and left storage PVCs pending before the Kafka configuration hook timed out.
+Correcting the selector does not establish that all other Kafka or E2E blockers
+are resolved; that requires a separate live run.
+
+Run the infrastructure contract check with a local OSAC installer checkout,
+PyYAML, yq v4, and Helm available:
+
+```bash
+make -C /path/to/osac/osac-installer helm-infra-deps
+OSAC_INSTALLER_DIR=/path/to/osac/osac-installer python3 -I .github/scripts/test_full_ci_lvms.py
+```
+
+The check runs the workflow's actual infrastructure merge in a temporary
+directory and renders the installer's real LVMS Helm template, checking the
+explicit data-disk allowlist, worker selector, other values, and unchanged
+source profiles. It does not deploy anything. Roll back by reverting the
+CI overlay selector override, not by widening the disk allowlist.
+
 ## Architecture
 
 The repository connects two layers:

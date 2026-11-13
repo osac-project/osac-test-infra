@@ -3,6 +3,10 @@
 # (tenant1_admin / foobar) fail with invalid_grant. Same as vmaas-ci/caas-ci.
 # Must be applied on the first install-infra — a later helm upgrade re-runs
 # the CNV configure hook and can BackoffLimitExceeded on an already-configured cluster.
+lvms:
+  deviceSelector:
+    optionalPaths:
+      - /dev/sdb
 keycloak:
   devFixtures:
     enabled: true
