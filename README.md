@@ -26,7 +26,7 @@ plugin must-gather is added.
 Artifacts include `mgmt-cluster/must-gather/`, collected with the default
 `oc adm must-gather` image selected for the cluster release. Standard master
 service logs include `host_service_logs/masters/kubelet_service.log` and
-`crio_service.log` before normalization (also applicable to a single-node
+`crio_service.log` (also applicable to a single-node
 management cluster).
 This improves diagnostic coverage for [#470](https://github.com/osac-project/osac-test-infra/issues/470);
 it is not a garbage-collection fix.
@@ -40,14 +40,19 @@ Recognizable archives inside base64 text are also withheld (up to three encoding
 layers, withholding still-encoded data at that limit); archives are never
 extracted or decompressed for public publication.
 Supported text includes logs, YAML, JSON/JSONL, HTML, stderr, and the standard
-extensionless `version` and `timestamp` files. All source directory and file names
-are replaced with deterministic SHA-256 identifiers: credentials can occur in
-names as well as content, and content scanners do not sanitize names. No raw-name
-mapping is published. This preserves directory grouping, but loses source-name
-context; original must-gather paths are not available in this public subset.
+extensionless `version` and `timestamp` files. A narrow literal allowlist preserves
+only the public structural directory names `host_service_logs`, `masters`, and
+`workers`, and the fixed filenames `kubelet_service.log` and `crio_service.log`.
+Every other source directory and filename is replaced with a deterministic
+SHA-256 identifier: credentials can occur in names as well as content, and content
+scanners do not sanitize names. No raw-name mapping is published. Service-log
+suffixes remain navigable, but dynamic image/node wrapper names are hashed; this
+preserves grouping while losing node identity and other dynamic path context.
 Files outside the existing redaction suffixes receive `.txt`. Normalization stages
-outside the artifact tree. Total retained input is capped at 128 MiB and
-20,000 entries. `omissions.json` contains only fixed reason codes and counts,
+outside the artifact tree. The unchanged 32-MiB per-file bound also applies to
+kubelet and CRI-O journals: oversized journals are omitted entirely, not truncated,
+so this subset does not promise full service history. Total retained input is
+capped at 128 MiB and 20,000 entries. `omissions.json` contains only fixed reason codes and counts,
 never omitted names, paths, or values. Existing raw Netris must-gather/inspect
 exclusions remain in effect.
 

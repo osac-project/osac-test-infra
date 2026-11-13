@@ -36,6 +36,8 @@ OMISSION_REASONS = {
 }
 DIRECTORY_NAME = re.compile(r"dir-[0-9a-f]{64}")
 FILE_NAME = re.compile(r"file-[0-9a-f]{64}\.(log|txt|yaml|json|jsonl)")
+PUBLIC_DIRECTORIES = {"host_service_logs", "masters", "workers"}
+PUBLIC_FILES = {"kubelet_service.log", "crio_service.log"}
 ENCODED_VALUE = re.compile(rb"[A-Za-z0-9+/_-]{32,}={0,2}")
 TEXT_SUFFIXES = {".log", ".txt", ".yaml", ".json", ".jsonl", ".yml", ".stderr", ".html", ".logs"}
 TEXT_NAMES = {"version", "timestamp"}
@@ -145,12 +147,19 @@ def text_bytes(path: pathlib.Path) -> tuple[bytes | None, str]:
 
 
 def normalized_path(relative: pathlib.Path) -> pathlib.Path:
-    directories = ["dir-" + hashlib.sha256(os.fsencode(part)).hexdigest() for part in relative.parts[:-1]]
+    directories = [
+        part if part in PUBLIC_DIRECTORIES else "dir-" + hashlib.sha256(os.fsencode(part)).hexdigest()
+        for part in relative.parts[:-1]
+    ]
     suffix = relative.suffix.lower()
     suffix = {".logs": ".log", ".yml": ".yaml"}.get(suffix, suffix)
     if suffix not in {".log", ".txt", ".yaml", ".json", ".jsonl"}:
         suffix = ".txt"
-    name = "file-" + hashlib.sha256(os.fsencode(relative.name)).hexdigest() + suffix
+    name = (
+        relative.name
+        if relative.name in PUBLIC_FILES
+        else "file-" + hashlib.sha256(os.fsencode(relative.name)).hexdigest() + suffix
+    )
     return pathlib.Path(*directories, name)
 
 
@@ -208,7 +217,7 @@ def normalize(root: pathlib.Path, check: bool = False) -> None:
             base = pathlib.Path(directory)
             if check and base == root:
                 files = [name for name in files if name not in {"omissions.json", "collection-status.json"}]
-            if check and any(not DIRECTORY_NAME.fullmatch(name) for name in subdirs):
+            if check and any(name not in PUBLIC_DIRECTORIES and not DIRECTORY_NAME.fullmatch(name) for name in subdirs):
                 raise ValueError("unsafe diagnostic directory name")
             entries += len(subdirs)
             if entries > MAX_ENTRIES:
@@ -224,6 +233,7 @@ def normalize(root: pathlib.Path, check: bool = False) -> None:
                 if (
                     check
                     and not (base == root and name in {"omissions.json", "collection-status.json"})
+                    and name not in PUBLIC_FILES
                     and not FILE_NAME.fullmatch(name)
                 ):
                     raise ValueError("unsafe diagnostic file name")
