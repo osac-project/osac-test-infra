@@ -170,6 +170,7 @@ fi
 
 # Keep the inventory while VMs of the group remain — or libvirt is
 # unreachable: it is the map for cleaning up a leak by hand.
+timeout 10 python3 "$(dirname "${BASH_SOURCE[0]}")/bmh_history.py" cleanup "${BMH_INVENTORY_FILE}" || true
 if VM_LISTING=$(${VIRSH} list --all --name 2>/dev/null); then
   if [[ -z "$(grep "^${BMH_VM_PREFIX}-" <<<"${VM_LISTING}" || true)" ]]; then
     rm -f "${BMH_INVENTORY_FILE}"
