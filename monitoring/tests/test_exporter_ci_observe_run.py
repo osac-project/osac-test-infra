@@ -414,6 +414,35 @@ class TestNativePrivateRepository:
 
         assert native["status"] == "available"
 
+    @pytest.mark.parametrize("artifacts", [1, [None], ["x"], [{"name": 3}]])
+    def test_a_malformed_artifacts_field_is_a_failed_lookup_not_an_exception(self, artifacts, evidence, github, wfe):
+        # Another suite's name already matched: it must survive the bad one.
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_LIST_PATH, private_artifact_payload(wfe.API_URL))
+        github.add(
+            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name=osac-logs-bmaas-full-install-{RUN_ID}&per_page=100",
+            FakeResponse(payload={"total_count": 1, "artifacts": artifacts}),
+        )
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "available"
+        assert native["artifact_name"] == ARTIFACT_NAME
+
+    def test_a_malformed_artifacts_field_alone_is_reported_in_the_notes(self, evidence, github):
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_LIST_PATH, FakeResponse(payload={"total_count": 1, "artifacts": 1}))
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] != "available"
+        assert "unexpected response" in json.dumps(native)
+
     def test_a_non_json_answer_alone_is_reported_in_the_notes(self, evidence, github):
         class BadJson(FakeResponse):
             def json(self):

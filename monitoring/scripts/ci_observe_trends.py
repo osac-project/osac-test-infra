@@ -662,7 +662,11 @@ class ArtifactFetcher:
                 # artifact" rather than being asked again on every pass.
                 return None, f"artifact listing failed ({private_reason})"
             if private_reason:
+                # Kept in the stored reason so a trend can tell a repository
+                # this token cannot see from a lookup that found nothing; the
+                # words fetch_state retries on are absent, so it stays no_data.
                 logger.warning("run %s: %s", run_id, private_reason)
+                return None, f"no osac-logs-[<suite>-]full-install artifact ({private_reason})"
             return None, "no osac-logs-[<suite>-]full-install artifact"
         # A live artifact before an expired one, so a rerun that left both
         # behind still parses the ones that exist.

@@ -885,7 +885,14 @@ def private_native_artifacts(get, run_id, org=ORG, api_url=API_URL):
         if not isinstance(listing, dict):
             reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (unexpected response)"
             continue
-        for artifact in listing.get("artifacts") or []:
+        artifacts = listing.get("artifacts") or []
+        if not isinstance(artifacts, list) or not all(
+            isinstance(artifact, dict) and isinstance(artifact.get("name") or "", str)
+            for artifact in artifacts
+        ):
+            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (unexpected response)"
+            continue
+        for artifact in artifacts:
             if CIObserveRunEvidence._is_native_artifact(artifact.get("name") or "", run_id):
                 found.append(dict(artifact, _private_repo=PRIVATE_ARTIFACT_REPO))
     return found, (None if found else reason)
