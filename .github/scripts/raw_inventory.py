@@ -27,6 +27,10 @@ VMs. Every add/remove is followed by a save, so the file always
 describes exactly the hosts the group holds.
 
 Invalid files raise InventoryError; callers decide how to report it.
+
+Optional planned_names lists exact reserved domain names before provisioning.
+These are diagnostics metadata, not provisioned hosts; successful hosts alone
+enter hosts. Plans survive partial failure and are removed by verified deletion.
 """
 from __future__ import annotations
 
@@ -86,9 +90,11 @@ def _validate_host_types(host: Host, path: Path) -> None:
 
 class RawInventory:
     """A group of hosts tracked in a raw inventory file."""
-    def __init__(self, name_prefix: str | None = None, hosts: list[Host] | None = None) -> None:
+    def __init__(self, name_prefix: str | None = None, hosts: list[Host] | None = None,
+                 planned_names: list[str] | None = None) -> None:
         self.name_prefix = name_prefix
         self.hosts: list[Host] = hosts if hosts is not None else []
+        self.planned_names = planned_names if planned_names is not None else []
 
     @classmethod
     def load(cls, path: Path) -> RawInventory:
@@ -115,13 +121,19 @@ class RawInventory:
                 raise InventoryError(f"invalid host entry in '{path}': {exc}") from exc
             _validate_host_types(host, path)
             hosts.append(host)
-        return cls(name_prefix=name_prefix, hosts=hosts)
+        planned_names = inventory.get("planned_names", [])
+        if (not isinstance(planned_names, list) or len(planned_names) > 256 or
+                any(not isinstance(name, str) or not is_group_host_name(name, name_prefix) for name in planned_names)):
+            raise InventoryError(f"raw inventory file '{path}' has invalid planned_names")
+        return cls(name_prefix=name_prefix, hosts=hosts, planned_names=planned_names)
 
     def save(self, path: Path) -> None:
         """Write the raw inventory atomically (temp file + rename)."""
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_name(f"{path.name}.tmp")
         payload = {"name_prefix": self.name_prefix, "hosts": [asdict(host) for host in self.hosts]}
+        if self.planned_names:
+            payload["planned_names"] = self.planned_names
         with open(tmp_path, "w") as inventory_file:
             json.dump(payload, inventory_file, indent=2)
             inventory_file.write("\n")
@@ -149,3 +161,4 @@ class RawInventory:
         """Drop the hosts with these names; unknown names are ignored."""
         target = set(names)
         self.hosts = [host for host in self.hosts if host.name not in target]
+        self.planned_names = [name for name in self.planned_names if name not in target]
