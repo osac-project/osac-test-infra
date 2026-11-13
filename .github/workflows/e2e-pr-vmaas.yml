@@ -64,6 +64,8 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       test-suite: vmaas
       test-marker: not requires_caas and not requires_bmaas

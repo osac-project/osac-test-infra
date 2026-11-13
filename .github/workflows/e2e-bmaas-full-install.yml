@@ -160,6 +160,17 @@ on:
           ci-observe). Passed through to the capture action when ci-observe
           is on; empty degrades to running the test without telemetry.
         required: false
+      osac-ci-app-id:
+        description: >-
+          ID of the OSAC CI GitHub App (the organization secret OSAC_CI_APP_ID).
+          With the private key it makes the logs artifact private: the files
+          are handed to osac-project/osac-ci-artifacts instead of being
+          uploaded to this public run. Without them the artifact is uploaded
+          to the run as before.
+        required: false
+      osac-ci-app-private-key:
+        description: Private key of the OSAC CI GitHub App (OSAC_CI_APP_PRIVATE_KEY).
+        required: false
     outputs:
       result:
         description: "Test result: PASSED or FAILED"
@@ -966,6 +977,9 @@ jobs:
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
+          private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
+          private-repo-app-id: ${{ secrets.osac-ci-app-id }}
+          private-repo-app-key: ${{ secrets.osac-ci-app-private-key }}
 
       # Only a cancelled job is bounded: its always() steps get 5 minutes in
       # total. A timeout elsewhere would turn a passing run red. It runs when
@@ -978,6 +992,9 @@ jobs:
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
+          private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
+          private-repo-app-id: ${{ secrets.osac-ci-app-id }}
+          private-repo-app-key: ${{ secrets.osac-ci-app-private-key }}
           overwrite: "true"
 
       - name: Authenticate for AI diagnosis

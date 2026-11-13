@@ -69,6 +69,8 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       # PR/merge_group runs are sanity-only,
       # regardless of tier labels or inputs. Periodics include the full suite.

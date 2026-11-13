@@ -77,6 +77,8 @@ jobs:
       # Live OTLP push credential; without it ci-observe degrades to no
       # telemetry and the run shows "Recorded: No" on the entry page.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       # The chart packaging smoke is not one of the vmaas suite runs (see
       # the suite filter), but it runs the same full-install workflow and
