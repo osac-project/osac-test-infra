@@ -89,6 +89,16 @@ on:
       OSAC_AI_APP_PRIVATE_KEY:
         description: The OSAC AI GitHub App's PEM private key.
         required: true
+      # Only needed for runs whose artifacts the E2E job published to the
+      # private artifact repository (upload-artifacts' private-repo input)
+      # instead of to the run. Optional so a caller that does not publish
+      # there keeps working: without them the run's own artifacts are used.
+      OSAC_CI_APP_ID:
+        description: The OSAC CI GitHub App's numeric ID (reads osac-ci-artifacts).
+        required: false
+      OSAC_CI_APP_PRIVATE_KEY:
+        description: The OSAC CI GitHub App's PEM private key.
+        required: false
 
 concurrency:
   # Keyed by the PR's fork repo + branch, NOT workflow_run.id or head_sha:
@@ -336,12 +346,40 @@ jobs:
           diff_json=$(jq -Rs . <<<"${diff_text}")
           echo "diff=${diff_json}" >> "${GITHUB_OUTPUT}"
 
+      - name: Check for private artifact access
+        id: private-access
+        env:
+          APP_ID: ${{ secrets.OSAC_CI_APP_ID }}
+          APP_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+        run: |
+          # `secrets` cannot be tested in a step `if`, so test it here.
+          if [[ -n "${APP_ID}" && -n "${APP_KEY}" ]]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      # A token that can only read the artifacts of osac-ci-artifacts, the
+      # private repository E2E jobs publish their artifacts to.
+      - name: Mint OSAC CI token to read private artifacts
+        id: mint-private-token
+        if: steps.private-access.outputs.enabled == 'true'
+        uses: ./.github/actions/mint-github-app-token
+        with:
+          app-id: ${{ secrets.OSAC_CI_APP_ID }}
+          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+          account-login: osac-project
+          repositories: osac-ci-artifacts
+          permissions: '{"actions":"read"}'
+
       - name: Download failure artifact
         id: artifact
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          PRIVATE_TOKEN: ${{ steps.mint-private-token.outputs.token }}
+          PRIVATE_REPO: osac-project/osac-ci-artifacts
         run: |
           set -euo pipefail
           EXTRACT_DIR="${RUNNER_TEMP}/osac-artifacts"
@@ -355,6 +393,26 @@ jobs:
             | first // empty
           ')
           if [[ -z "${art_json}" || "${art_json}" == "null" ]]; then
+            # A job that published to the private artifact repository has no
+            # artifact on its run. Its artifact there is named as the job
+            # named it, with this run's id: the suffix the E2E workflows give.
+            if [[ -n "${PRIVATE_TOKEN}" ]]; then
+              zip_path="${RUNNER_TEMP}/artifact-private.zip"
+              rc=0
+              GH_TOKEN="${PRIVATE_TOKEN}" bash .github/scripts/fetch-private-run-artifact.sh \
+                "${PRIVATE_REPO}" "${zip_path}" \
+                "osac-logs-${RUN_ID}" \
+                "osac-logs-full-install-${RUN_ID}" \
+                "osac-logs-bmaas-full-install-${RUN_ID}" \
+                "osac-logs-caas-full-install-${RUN_ID}" \
+                "osac-logs-full-regression-${RUN_ID}" || rc=$?
+              if [[ "${rc}" -eq 0 ]]; then
+                unzip -q -o "${zip_path}" -d "${EXTRACT_DIR}"
+                echo "found=true" >> "${GITHUB_OUTPUT}"
+                echo "dir=${EXTRACT_DIR}" >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
+            fi
             echo "No osac-logs-* artifact found for run ${RUN_ID}; diagnosing without log/junit signal."
             echo "found=false" >> "${GITHUB_OUTPUT}"
             exit 0
