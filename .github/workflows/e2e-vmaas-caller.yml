@@ -34,3 +34,6 @@ jobs:
       installer-ref: ${{ inputs.installer-ref || 'main' }}
       image-overrides: ${{ inputs.image-overrides || '{}' }}
       osac-cli-version: ${{ inputs.osac-cli-version || '' }}
+    secrets:
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
