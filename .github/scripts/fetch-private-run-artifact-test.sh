@@ -36,13 +36,13 @@ done
 [[ "${content}" == FAIL ]] && exit 1
 printf '%s' "${content}"
 STUB
-chmod +x "${WORK}/bin/gh"
+chmod +x "${WORK}/bin/gh" || exit 1
 # sleep is recorded, not slept.
 cat > "${WORK}/bin/sleep" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "${WORK}/sleeps"
 STUB
-chmod +x "${WORK}/bin/sleep"
+chmod +x "${WORK}/bin/sleep" || exit 1
 export WORK PATH="${WORK}/bin:${PATH}"
 
 failures=0
