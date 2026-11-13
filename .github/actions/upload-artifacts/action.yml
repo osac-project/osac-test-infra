@@ -60,7 +60,8 @@ inputs:
       secrets this job actually holds (pull secret, k8s Secrets inventory),
       and a post-upload scanner still covers the artifact. Only the ci-observe
       capture opts out: its ~1 GB telemetry JSONL costs ~24 minutes of
-      pattern scanning.
+      pattern scanning. Ignored when private-repo is set: the post-upload
+      scanner does not see a private publication, so the scan always runs.
     required: false
     default: "true"
   private-repo:
@@ -70,9 +71,10 @@ inputs:
       can be downloaded by every signed-in GitHub user. When set, the files
       are handed to that repository's collect workflow and nothing is uploaded
       to this run; app-id and app-key are then required. The post-upload
-      scanner only reads this run's artifacts, so with this set a gitleaks
-      scan that cannot finish clean fails the job instead of uploading
-      anyway. Empty keeps the upload to this run.
+      scanner only reads this run's artifacts, so with this set the gitleaks
+      scan always runs (the gitleaks input is ignored) and one that cannot
+      finish clean fails the job instead of publishing anyway. Empty keeps
+      the upload to this run.
     required: false
     default: ""
   private-repo-app-id:
@@ -109,9 +111,10 @@ runs:
         # first (collect-artifacts.sh), and the upload leaves it out.
 
     - name: Scan artifacts with gitleaks
-      # Skipped only when the caller passes gitleaks: "false" (see the input):
-      # the release gate and the upload below still run for every caller.
-      if: always() && inputs.gitleaks == 'true'
+      # Skipped only when the caller passes gitleaks: "false" (see the input)
+      # and publishes to this run: the release gate and the upload below still
+      # run for every caller. A private publication is always scanned.
+      if: always() && (inputs.gitleaks == 'true' || inputs.private-repo != '')
       shell: bash
       env:
         ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
