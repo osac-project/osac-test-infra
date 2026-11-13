@@ -35,8 +35,17 @@ restore_host_bridge_sysctls() {
         echo "ERROR: ${STATE_FILE} has no saved bridge sysctl values; leaving the runtime settings unchanged." >&2
         return 0
     fi
-    sudo sysctl -w "net.bridge.bridge-nf-call-iptables=${ipt}"
-    sudo sysctl -w "net.bridge.bridge-nf-call-ip6tables=${ip6}"
+    # prepare_failed invokes this as `cmd || true`, which disables set -e for
+    # the whole function. Check each write so a failure cannot fall through
+    # to deleting the saved values.
+    if ! sudo sysctl -w "net.bridge.bridge-nf-call-iptables=${ipt}"; then
+        echo "ERROR: failed to restore net.bridge.bridge-nf-call-iptables; keeping ${STATE_FILE}." >&2
+        return 1
+    fi
+    if ! sudo sysctl -w "net.bridge.bridge-nf-call-ip6tables=${ip6}"; then
+        echo "ERROR: failed to restore net.bridge.bridge-nf-call-ip6tables; keeping ${STATE_FILE}." >&2
+        return 1
+    fi
     sudo rm -f "$SYSCTL_FILE" "$STATE_FILE"
     info "Restored bridge netfilter sysctls"
 }

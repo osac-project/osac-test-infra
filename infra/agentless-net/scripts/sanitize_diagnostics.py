@@ -99,21 +99,39 @@ def redact(data: bytes) -> bytes:
     return b"".join(output)
 
 
+def _diagnostic_bytes(source_root: Path, path: Path) -> bytes:
+    """Read one diagnostic file that is inside source_root."""
+    if path.is_symlink():
+        raise RuntimeError(f"diagnostic path is a symlink: {path}")
+    resolved = path.resolve()
+    if not resolved.is_relative_to(source_root):
+        raise RuntimeError(f"diagnostic path is outside the source directory: {path}")
+    return resolved.read_bytes()
+
+
 def sanitize_tree(source: Path, destination: Path) -> int:
     """Copy source into destination, redacting each file. Returns the file count."""
+    if source.is_symlink():
+        raise RuntimeError(f"diagnostic directory is a symlink: {source}")
     if not source.is_dir():
         raise FileNotFoundError(f"diagnostic directory does not exist: {source}")
+    source_root = source.resolve()
     count = 0
     for path in sorted(source.rglob("*")):
+        if path.is_symlink():
+            raise RuntimeError(f"diagnostic path is a symlink: {path}")
         relative = path.relative_to(source)
         target = destination / relative
-        if path.is_dir():
+        resolved = path.resolve()
+        if not resolved.is_relative_to(source_root):
+            raise RuntimeError(f"diagnostic path is outside the source directory: {path}")
+        if resolved.is_dir():
             target.mkdir(parents=True, exist_ok=True)
             continue
-        if not path.is_file():
+        if not resolved.is_file():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        cleaned = redact(path.read_bytes())
+        cleaned = redact(_diagnostic_bytes(source_root, path))
         if _PRIVATE_KEY_HEADER.search(cleaned):
             raise RuntimeError(f"private key material remains in {relative}")
         target.write_bytes(cleaned)

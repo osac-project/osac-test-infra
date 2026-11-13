@@ -345,6 +345,26 @@ class SanitizeTest(unittest.TestCase):
         self.assertIn("'password': '[REDACTED]'", cleaned)
         self.assertIn("bridge sysctl is 0", cleaned)
 
+    def test_diagnostic_symlinks_are_rejected(self) -> None:
+        outside_secret = "outside-secret"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "logs"
+            source.mkdir()
+            outside = root / "outside.txt"
+            outside.write_text(outside_secret)
+            (source / "linked.log").symlink_to(outside)
+            with self.assertRaises(RuntimeError) as caught:
+                sanitize_diagnostics.sanitize_tree(source, root / "clean")
+            self.assertIn("symlink", str(caught.exception))
+            published = (root / "clean").rglob("*") if (root / "clean").exists() else []
+            for path in published:
+                if path.is_file() and not path.is_symlink():
+                    self.assertNotIn(outside_secret, path.read_text())
+            with self.assertRaises(RuntimeError) as caught:
+                sanitize_diagnostics._diagnostic_bytes(source.resolve(), outside)
+            self.assertIn("outside", str(caught.exception))
+
     def test_private_key_header_without_an_end_marker_fails(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
         with tempfile.TemporaryDirectory() as tmp:
@@ -448,6 +468,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn('timeout "${minutes}m" ssh', remote)
         teardown = next(step for step in steps if "teardown.sh" in step.get("run", ""))
         self.assertEqual(teardown["if"], "always()")
+        names = [step.get("name") for step in steps]
+        self.assertLess(names.index("Terminate the ephemeral instance"), names.index("Sanitize diagnostics"))
+        self.assertLess(names.index("Sanitize diagnostics"), names.index("Upload sanitized diagnostics"))
 
         upload = next(step for step in steps if step.get("name") == "Upload sanitized diagnostics")
         self.assertIn("steps.publish-attestation.outcome == 'success'", upload["if"])
@@ -516,6 +539,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("/var/tmp/osac-host-bridge-sysctl.prior", bridges)
         self.assertLess(bridges.index("sysctl -n net.bridge.bridge-nf-call-iptables"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
         self.assertIn("restore_host_bridge_sysctls", bridges)
+        restore = bridges.split("restore_host_bridge_sysctls()", 1)[1].split("prepare_failed()", 1)[0]
+        removal = restore.index('sudo rm -f "$SYSCTL_FILE" "$STATE_FILE"')
+        self.assertLess(restore.index('net.bridge.bridge-nf-call-iptables=${ipt}'), removal)
+        self.assertLess(restore.index('net.bridge.bridge-nf-call-ip6tables=${ip6}'), removal)
+        self.assertLess(restore.rindex("return 1"), removal)
         fabric_teardown = (INFRA / "scripts" / "destroy-fabric.sh").read_text()
         self.assertIn('prepare-host-bridges.sh" restore', fabric_teardown)
 
