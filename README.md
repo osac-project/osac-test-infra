@@ -84,6 +84,15 @@ is 80% of its remaining cap. Version and identity API requests, process shutdown
 and copying consume their respective windows, never the sanitization reserve.
 All subprocess groups, including copy and deletion, have external hard bounds.
 
+Cancellation prioritizes cleanup over optional recovery: it stops the active
+subprocess, skips new recovery copies, and stops before copying additional pods.
+Later signals can stop newly active subprocesses without recursively handling
+signals during a stop. Ownership proof and UID-preconditioned deletion retain
+their independent cleanup deadline, never a shortened copy allowance or the
+sanitization reserve. An interrupted collection exits without authorizing upload.
+Cleanup is best effort: failed or interrupted API proofs withhold deletion, and
+runner hard termination or Kubernetes finalizers can still leave resources.
+
 Recovery never selects namespaces by listing a prefix. A private, bounded
 in-memory stream parser captures only the exact client's timestamped namespace
 and role-binding creation records; plugin-prefixed, duplicate, stale or

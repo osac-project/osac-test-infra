@@ -24,8 +24,10 @@ with (home / "commands.jsonl").open("a") as output:
 
 
 def checkpoint(phase: str) -> None:
+    with (home / "processes.jsonl").open("a") as output:
+        output.write(json.dumps({"phase": phase, "pid": os.getpid()}) + "\n")
     (home / "phase").write_text(phase)
-    if os.environ.get("TEST_HANG_PHASE") == phase:
+    if phase in os.environ.get("TEST_HANG_PHASE", "").split(","):
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"])
         (home / "child.pid").write_text(str(child.pid))
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -180,7 +182,12 @@ elif "get" in args and "pods" in args and state_file.exists():
         pod["spec"]["containers"][0]["name"] = []
     if fault == "malformed-container-state":
         pod["status"]["containerStatuses"][0]["state"] = None
-    print(json.dumps({"items": [] if fault == "missing-pods" else [pod] * (2 if fault == "duplicate-pods" else 1)}))
+    pods = [pod] * (2 if fault == "duplicate-pods" else 1)
+    if fault == "multiple-pods":
+        other = copy.deepcopy(pod)
+        other["metadata"]["name"] = "must-gather-fghij"
+        pods.append(other)
+    print(json.dumps({"items": [] if fault == "missing-pods" else pods}))
 elif "rsync" in args:
     if fault == "failed-copy":
         sys.exit(1)

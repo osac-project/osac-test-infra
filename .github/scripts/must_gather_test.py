@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import gzip
 import importlib.util
 import io
@@ -288,6 +289,46 @@ time.sleep(90)
                 process.wait()
 
 
+class CancellationBudgetTests(unittest.TestCase):
+    def test_latched_signals_stop_new_active_without_recursing_and_keep_cleanup_deadline(self) -> None:
+        specification = importlib.util.spec_from_file_location("cancellation_collector", HELPER)
+        collector = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(collector)
+        clock = [100.0]
+        deadline = 730.0
+        identity = ("openshift-must-gather-abcde", "01234567-0123-0123-0123-0123456789ab")
+        first, later = mock.Mock(), mock.Mock()
+
+        def stop(_process: object) -> None:
+            signal.raise_signal(signal.SIGINT)
+
+        def native(*_arguments: object, **_keywords: object) -> int:
+            collector.ACTIVE = first
+            signal.raise_signal(signal.SIGINT)
+            collector.ACTIVE = later
+            signal.raise_signal(signal.SIGTERM)
+            collector.ACTIVE = None
+            clock[0] = 725.0
+            return 7
+
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            mock.patch.object(collector.time, "monotonic", side_effect=lambda: clock[0]),
+            mock.patch.object(collector, "api", return_value={}),
+            mock.patch.object(collector, "run", side_effect=native),
+            mock.patch.object(collector, "stop_group", side_effect=stop) as stopped,
+            mock.patch.object(collector, "owned_namespace", return_value=identity) as owned,
+            mock.patch.object(collector, "recover") as recovered,
+            mock.patch.object(collector, "cleanup_namespace", return_value="deletion-requested") as cleaned,
+        ):
+            with self.assertRaises(InterruptedError):
+                collector.standard_gather(pathlib.Path(temporary), deadline)
+            self.assertEqual(stopped.call_args_list, [mock.call(first), mock.call(later)])
+            self.assertEqual(owned.call_args.args[-1], deadline)
+            cleaned.assert_called_once_with(identity, deadline)
+            recovered.assert_not_called()
+
+
 class RecoveryTests(unittest.TestCase):
     collect = CollectionTests.collect
 
@@ -301,6 +342,118 @@ class RecoveryTests(unittest.TestCase):
 
     def commands(self) -> list:
         return [json.loads(line) for line in (self.temp / "commands.jsonl").read_text().splitlines()]
+
+    def cancel_long_collection(
+        self, phase: str, number: int, fault: str = "", interrupt_cleanup: bool = False
+    ) -> tuple[str, float]:
+        for name in ("phase", "child.pid", "deletion-requested", "commands.jsonl", "processes.jsonl"):
+            (self.temp / name).unlink(missing_ok=True)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                "import importlib.util, pathlib, sys, time\n"
+                "spec = importlib.util.spec_from_file_location('collector', sys.argv[1])\n"
+                "collector = importlib.util.module_from_spec(spec)\n"
+                "spec.loader.exec_module(collector)\n"
+                "try:\n"
+                "    collector.standard_gather(pathlib.Path(sys.argv[2]), time.monotonic() + 630)\n"
+                "except InterruptedError:\n"
+                "    sys.exit(143)\n",
+                str(HELPER),
+                str(self.tree),
+            ],
+            env=self.environment
+            | {
+                "TEST_MODE": "blocked-log-follow" if phase == "client" else "failed",
+                "TEST_HANG_PHASE": phase + (",cleanup" if interrupt_cleanup else ""),
+                "TEST_FAULT": fault,
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        children = set()
+
+        def await_phase(expected: str) -> None:
+            until = time.monotonic() + 5
+            while time.monotonic() < until and process.poll() is None:
+                marker = self.temp / "phase"
+                child = self.temp / "child.pid"
+                if marker.exists() and marker.read_text() == expected and child.exists():
+                    child_pid = int(child.read_text())
+                    if child_pid not in children:
+                        children.add(child_pid)
+                        return
+                time.sleep(0.01)
+            self.fail(f"synthetic phase {expected} not reached")
+
+        try:
+            await_phase(phase)
+            started = time.monotonic()
+            process.send_signal(number)
+            if interrupt_cleanup:
+                await_phase("cleanup")
+                time.sleep(0.15)
+                for attempt in range(8):
+                    if process.poll() is None:
+                        process.send_signal(signal.SIGTERM if attempt % 2 else signal.SIGINT)
+                    time.sleep(0.005)
+            output, _ = process.communicate(timeout=5)
+            elapsed = time.monotonic() - started
+            self.assertEqual(process.returncode, 143, output)
+            self.assertLess(elapsed, 5)
+            self.assertFalse((self.artifacts / ".redaction-complete").exists())
+            self.assertNotIn(SENTINEL, output)
+            for child_pid in children:
+                state = pathlib.Path(f"/proc/{child_pid}/stat")
+                self.assertTrue(not state.exists() or state.read_text().split()[2] == "Z")
+            print(f"Cancellation {phase}/{signal.Signals(number).name}/{fault or 'valid'}: {elapsed:.3f}s", flush=True)
+            return output, elapsed
+        finally:
+            if process.poll() is None:
+                process.send_signal(signal.SIGTERM)
+                try:
+                    process.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+            for child_pid in children:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child_pid, signal.SIGKILL)
+            records = self.temp / "processes.jsonl"
+            if records.exists():
+                for line in records.read_text().splitlines():
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(json.loads(line)["pid"], signal.SIGKILL)
+
+    def test_large_budget_single_signals_skip_recovery_and_delete_proven_namespace(self) -> None:
+        for number in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(number=number):
+                output, _ = self.cancel_long_collection("client", number)
+                self.assertFalse(any("rsync" in command for command in self.commands()))
+                self.assertTrue((self.temp / "deletion-requested").exists())
+                self.assertIn("cleanup: deletion-requested", output)
+
+    def test_large_budget_cancellation_stops_before_second_pod_copy(self) -> None:
+        output, _ = self.cancel_long_collection("copy", signal.SIGINT, "multiple-pods")
+        self.assertEqual(sum("rsync" in command for command in self.commands()), 1)
+        self.assertTrue((self.temp / "deletion-requested").exists())
+        self.assertIn("cleanup: deletion-requested", output)
+
+    def test_later_spaced_signal_stops_new_active_cleanup_without_reentrancy(self) -> None:
+        output, _ = self.cancel_long_collection("copy", signal.SIGINT, "multiple-pods", interrupt_cleanup=True)
+        self.assertEqual(sum("rsync" in command for command in self.commands()), 1)
+        self.assertFalse((self.temp / "deletion-requested").exists())
+        self.assertIn("cleanup: deletion-incomplete", output)
+
+    def test_large_budget_cancellation_with_unproved_identity_never_deletes(self) -> None:
+        for fault in ("missing-api", "foreign-owner", "stale", "duplicate", "changed-uid"):
+            with self.subTest(fault=fault):
+                self.cancel_long_collection("client", signal.SIGTERM, fault)
+                self.assertFalse(any("rsync" in command or "delete" in command for command in self.commands()))
+                self.assertFalse((self.temp / "deletion-requested").exists())
 
     def assert_safe_journals(self) -> None:
         for role in ("masters", "workers"):
