@@ -30,6 +30,31 @@ def _host(name: str) -> raw_inventory.Host:
 
 
 class LoadSaveTests(unittest.TestCase):
+    def test_planned_names_round_trip_without_fabricating_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            planned = ["virtual-bmh-aabbccdd-01", "virtual-bmh-aabbccdd-02"]
+            inventory = raw_inventory.RawInventory("virtual-bmh-aabbccdd", planned_names=planned)
+            inventory.save(path)
+            loaded = raw_inventory.RawInventory.load(path)
+            self.assertEqual(loaded.hosts, [])
+            self.assertEqual(loaded.planned_names, planned)
+            loaded.add_host(_host(planned[0]))
+            loaded.save(path)
+            self.assertEqual(len(raw_inventory.RawInventory.load(path).hosts), 1)
+            loaded.remove_hosts([planned[1]])
+            loaded.save(path)
+            self.assertEqual(raw_inventory.RawInventory.load(path).planned_names, [planned[0]])
+
+    def test_invalid_planned_names_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            for names in (None, {}, "name", [1], ["foreign-01"], ["virtual-bmh-aabbccdd-01-extra"]):
+                with self.subTest(names=names):
+                    path.write_text(json.dumps({"name_prefix": "virtual-bmh-aabbccdd", "hosts": [], "planned_names": names}))
+                    with self.assertRaises(raw_inventory.InventoryError):
+                        raw_inventory.RawInventory.load(path)
+
     def test_missing_file_starts_an_empty_group(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             inventory = raw_inventory.RawInventory.load(Path(temp_dir) / "missing.json")

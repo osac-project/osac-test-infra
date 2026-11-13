@@ -94,7 +94,7 @@ class HistoryTests(unittest.TestCase):
             staging = directory / "staging"
             staging.mkdir()
             prefix = "virtual-bmh-aabbccdd"
-            names = [prefix + "-01.serial.log" + suffix for suffix in ("", ".0", ".1", ".2")]
+            names = [prefix + "-01.serial.log" + suffix for suffix in ("", ".0", ".1", ".2")] + [prefix + "-02.serial.log"]
             commands = []
             def scoped_sudo(arguments, **kwargs):
                 self.assertEqual(arguments[:3], ["sudo", "-n", "/usr/local/sbin/osac-bmh-history"])
@@ -102,7 +102,7 @@ class HistoryTests(unittest.TestCase):
                 data = json.dumps(names).encode() if arguments[3] == "list" else b"synthetic raw serial"
                 return subprocess.CompletedProcess(arguments, 0, data, b"")
             with mock.patch.object(bmh_history.subprocess, "run", side_effect=scoped_sudo):
-                bmh_history.stage(directory, prefix, staging)
+                bmh_history.stage(directory, prefix, staging, {prefix + "-01"})
             self.assertEqual(commands, ["list", "read", "read", "read", "read"])
             self.assertEqual(len(list(staging.glob("*.log"))), 4)
 
@@ -119,6 +119,8 @@ class HistoryTests(unittest.TestCase):
             def start_recording(path, prefix):
                 self.assertTrue(path.is_file())
                 self.assertTrue(json.loads(path.read_text())["name_prefix"])
+                self.assertEqual(len(json.loads(path.read_text())["planned_names"]), 1)
+                self.assertEqual(json.loads(path.read_text())["hosts"], [])
                 calls.append("launched")
                 return history
             def virsh(arguments, **kwargs):
@@ -147,7 +149,7 @@ class HistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             with mock.patch.object(bmh_history.subprocess, "Popen", side_effect=FileNotFoundError), self.assertRaises(FileNotFoundError):
-                bmh_history.listen(directory, "virtual-bmh-aabbccdd")
+                bmh_history.listen(directory, "virtual-bmh-aabbccdd", directory / "inventory.json")
             self.assertFalse((directory / "ready.json").exists())
 
     def test_serial_staging_is_bounded(self) -> None:
@@ -159,31 +161,103 @@ class HistoryTests(unittest.TestCase):
             with mock.patch.object(bmh_history, "MAX_BYTES", 8), mock.patch.object(
                 bmh_history, "serial_helper", side_effect=[json.dumps(["virtual-bmh-aabbccdd-01.serial.log"]).encode(), b"x" * 100]
             ):
-                bmh_history.stage(base, "virtual-bmh-aabbccdd", staging)
+                bmh_history.stage(base, "virtual-bmh-aabbccdd", staging, {"virtual-bmh-aabbccdd-01"})
             self.assertEqual((staging / "virtual-bmh-aabbccdd-01.serial.log").stat().st_size, 8)
 
-    def run_stream(self, data: bytes, **limits):
+    def run_stream(self, data: bytes, inventory_data=None, **limits):
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        payload = {"name_prefix": "virtual-bmh-aabbccdd", "hosts": [], "planned_names": ["virtual-bmh-aabbccdd-01"]} if inventory_data is None else inventory_data
+        (directory / "inventory.json").write_text(json.dumps(payload) if isinstance(payload, dict) else payload)
         child = subprocess.Popen([sys.executable, "-c", "import os; os.write(1, " + repr(data) + ")"], stdout=subprocess.PIPE)
         with mock.patch.object(bmh_history.subprocess, "Popen", return_value=child) as launch, \
              mock.patch.object(bmh_history, "serial_capability", return_value={"serial": "unavailable"}), \
              mock.patch.multiple(bmh_history, **(limits or {"MAX_BYTES": bmh_history.MAX_BYTES})):
-            bmh_history.listen(directory, "virtual-bmh-aabbccdd")
+            bmh_history.listen(directory, "virtual-bmh-aabbccdd", directory / "inventory.json")
         self.assertIsNotNone(child.returncode)
         self.assertEqual(launch.call_args.args[0], ["virsh", "-c", "qemu:///system", "event", "--all", "--loop", "--timestamp", "--timeout", "86400"])
         self.assertEqual(launch.call_args.kwargs["env"]["LC_ALL"], "C")
         return directory
 
+    def test_cli_rejects_valid_same_prefix_domain_absent_from_inventory(self) -> None:
+        line = b"2026-11-13 00:00:00.000+0000: event 'lifecycle' for domain 'virtual-bmh-aabbccdd-02': Defined Added\n"
+        directory = self.run_stream(line)
+        self.assertEqual((directory / "events.log").read_bytes(), b"")
+        self.assertFalse((directory / "virtual-bmh-aabbccdd-02.defined").exists())
+
     def test_cli_filters_separate_events_and_oversized_lines(self) -> None:
         prefix = b"2026-11-13 00:00:00.000+0000: event "
         lifecycle = prefix + b"'lifecycle' for domain 'virtual-bmh-aabbccdd-01': Defined Added\n"
         reboot = prefix + b"'reboot' for domain 'virtual-bmh-aabbccdd-01'\n"
-        directory = self.run_stream(b"bad\n" + b"x" * 9000 + b"\n" + lifecycle + reboot +
+        directory = self.run_stream(b"bad\n\xff\xfe\n" + b"x" * 9000 + b"\n" + lifecycle + reboot +
+            lifecycle.replace(b"Defined Added", b"Defined \xff") +
             reboot.replace(b"aabbccdd", b"11223344") + reboot.replace(b"-01'", b"-01-extra'") +
             prefix + b"'graphics' for domain 'virtual-bmh-aabbccdd-01': private\n")
         self.assertEqual((directory / "events.log").read_bytes(), lifecycle + reboot)
         self.assertTrue((directory / "virtual-bmh-aabbccdd-01.defined").exists())
         self.assertFalse((directory / "ready.json").exists())
+
+    def test_invalid_inventory_is_explicit_and_never_broadens_selection(self) -> None:
+        line = b"2026-11-13 00:00:00.000+0000: event 'lifecycle' for domain 'virtual-bmh-aabbccdd-01': Defined Added\n"
+        for payload in ("{bad", {"name_prefix": "virtual-bmh-aabbccdd", "hosts": [], "planned_names": [1]}):
+            with self.subTest(payload=payload):
+                directory = self.run_stream(line, inventory_data=payload)
+                self.assertEqual((directory / "events.log").read_bytes(), b"")
+                self.assertEqual(json.loads((directory / "status.json").read_text())["selection"], "inventory unavailable")
+        self.assertIsNone(bmh_history.inventory_names(directory / "missing.json", "virtual-bmh-aabbccdd"))
+
+    def test_partial_chunks_refresh_evolving_inventory_without_cached_broadening(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / "inventory.json"
+            prefix = "virtual-bmh-aabbccdd"
+            line = b"2026-11-13 00:00:00.000+0000: event 'lifecycle' for domain 'virtual-bmh-aabbccdd-01': Defined Updated\n"
+            second = line.replace(b"-01'", b"-02'")
+            raw_inventory.RawInventory(prefix, planned_names=[prefix + "-01"]).save(path)
+            chunks = iter([line[:17], line[17:], second, second, line, second + line, b""])
+            reads = []
+            def read(*arguments):
+                reads.append(True)
+                if len(reads) == 4:
+                    raw_inventory.RawInventory(prefix, planned_names=[prefix + "-01", prefix + "-02"]).save(path)
+                if len(reads) == 5:
+                    path.write_text("{bad")
+                if len(reads) == 6:
+                    raw_inventory.RawInventory(prefix, [_host(prefix + "-01")]).save(path)
+                return next(chunks)
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=subprocess.PIPE)
+            with mock.patch.object(bmh_history.subprocess, "Popen", return_value=child), \
+                 mock.patch.object(bmh_history, "serial_capability", return_value={"serial": "unavailable"}), \
+                 mock.patch.object(bmh_history.select, "select", return_value=([child.stdout], [], [])), \
+                 mock.patch.object(bmh_history.os, "read", side_effect=read):
+                bmh_history.listen(directory, prefix, path)
+            self.assertEqual((directory / "events.log").read_bytes(), line + second + line)
+            self.assertIsNotNone(child.returncode)
+
+    def test_partial_create_persists_plan_before_launch_but_only_successful_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            prefix = "virtual-bmh-aabbccdd"
+            raw_inventory.RawInventory(prefix).save(path)
+            planned = []
+            def start(inventory, name_prefix):
+                current = raw_inventory.RawInventory.load(inventory)
+                self.assertEqual(current.hosts, [])
+                planned.extend(current.planned_names)
+                self.assertEqual(len(set(planned)), 2)
+                return None
+            def create(**arguments):
+                if arguments["name"] == planned[1]:
+                    raise subprocess.CalledProcessError(1, "fake create")
+                return _host(arguments["name"])
+            args = argparse.Namespace(inventory_file=path, count=2, network="net", disk_dir=Path(temporary),
+                redfish_host="127.0.0.1", redfish_port=8000, cpu=4, memory_mib=8192, disk_size="150G", record_history=True)
+            with mock.patch.object(bmh_history, "start", side_effect=start), \
+                 mock.patch.object(manage_virtual_bmh_vms, "check_network"), \
+                 mock.patch.object(manage_virtual_bmh_vms, "create_vm", side_effect=create), self.assertRaises(subprocess.CalledProcessError):
+                manage_virtual_bmh_vms.cmd_create(args)
+            current = raw_inventory.RawInventory.load(path)
+            self.assertEqual(current.host_names(), {planned[0]})
+            self.assertEqual(current.planned_names, planned)
 
     def test_cli_cap_stops_and_reaps(self) -> None:
         line = b"2026-11-13 00:00:00.000+0000: event 'reboot' for domain 'virtual-bmh-aabbccdd-01'\n"
@@ -201,7 +275,7 @@ class HistoryTests(unittest.TestCase):
                 with mock.patch.object(bmh_history.subprocess, "Popen", return_value=child), \
                      mock.patch.object(bmh_history, "serial_capability", return_value={"serial": "unavailable"}), \
                      mock.patch.object(bmh_history, "MAX_SECONDS", 0.02):
-                    bmh_history.listen(directory, "virtual-bmh-aabbccdd")
+                    bmh_history.listen(directory, "virtual-bmh-aabbccdd", directory / "inventory.json")
                 self.assertIsNotNone(child.returncode)
 
     def test_cli_sigterm_reaps_and_restores_handler(self) -> None:
@@ -215,7 +289,7 @@ class HistoryTests(unittest.TestCase):
             with mock.patch.object(bmh_history.subprocess, "Popen", return_value=child), \
                  mock.patch.object(bmh_history, "serial_capability", return_value={"serial": "unavailable"}), \
                  mock.patch.object(bmh_history.select, "select", side_effect=cancel):
-                bmh_history.listen(directory, "virtual-bmh-aabbccdd")
+                bmh_history.listen(directory, "virtual-bmh-aabbccdd", directory / "inventory.json")
             self.assertIsNotNone(child.returncode)
             self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
             self.assertEqual(json.loads((directory / "status.json").read_text())["event_stop"], "stop requested")
@@ -229,14 +303,17 @@ class HistoryTests(unittest.TestCase):
             self.assertTrue(bmh_history.defined(directory, "virtual-bmh-aabbccdd-01", timeout=0.01))
 
     def test_delayed_ack_redefines_only_confirmed_inactive_owned_domain(self) -> None:
-        for state in ("shut off", "running", "error", "timeout", "foreign", "no-ack"):
+        for state in ("shut off", "running", "error", "timeout", "foreign", "unlisted", "no-ack"):
             with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 name = "virtual-bmh-aabbccdd-01"
                 efi = directory / "efi"
                 efi.write_bytes(b"efi")
                 (directory / "ready.json").write_text("{}")
-                (directory / "status.json").write_text(json.dumps({"serial": "unavailable", "prefix":
+                inventory = directory / "inventory.json"
+                raw_inventory.RawInventory("virtual-bmh-aabbccdd", planned_names=[
+                    "virtual-bmh-aabbccdd-02" if state == "unlisted" else name]).save(inventory)
+                (directory / "status.json").write_text(json.dumps({"serial": "unavailable", "inventory": str(inventory), "prefix":
                     "virtual-bmh-11223344" if state == "foreign" else "virtual-bmh-aabbccdd"}))
                 definitions, calls = [], []
                 def virsh(arguments, **kwargs):
@@ -249,7 +326,7 @@ class HistoryTests(unittest.TestCase):
                         self.assertEqual(kwargs["timeout"], 2)
                         if state == "timeout":
                             raise subprocess.TimeoutExpired(arguments, 2)
-                        return subprocess.CompletedProcess(arguments, int(state == "error"), state if state != "no-ack" else "shut off", "")
+                        return subprocess.CompletedProcess(arguments, int(state == "error"), state if state not in ("no-ack", "unlisted") else "shut off", "")
                     if arguments[0] == "start" and state == "shut off":
                         self.assertTrue((directory / (name + ".defined")).exists())
                     return subprocess.CompletedProcess(arguments, 0, "uuid", "")

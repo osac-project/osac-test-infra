@@ -123,7 +123,17 @@ prefix is persisted first; a managed runner-account process executes
 `virsh -c qemu:///system event --all --loop --timestamp --timeout 86400` with
 `LC_ALL=C` before the normal domain definition. Only lifecycle and separate
 reboot lines for exact run-owned names enter `events.log`; foreign-domain and
-other event output is discarded without being printed or persisted. No guest
+other event output is discarded without being printed or persisted. Selection
+requires exact membership in the raw inventory's `hosts` or optional
+`planned_names`, with the prefix/name grammar checked only as defense in depth.
+The manager atomically persists all reserved names in `planned_names` before
+launching the listener; it adds real `hosts` entries only after successful
+creation. Partial failures retain the plan without fabricating provisioned hosts.
+Verified deletion removes the corresponding plan entries. The recorder reloads
+the inventory before each matching event (and serial staging uses the same
+allowlist), so an unlisted same-prefix domain is never implicitly selected.
+Missing/malformed inventories disable selection explicitly in `status.json`
+without broadening capture or failing provisioning. No guest
 agent or Python libvirt callback subscriber is needed. These observations do
 not establish a guest failure cause.
 

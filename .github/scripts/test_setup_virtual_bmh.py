@@ -44,7 +44,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             inventory = base / "inventory.json"
-            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
             history = bmh_history.history_dir(inventory)
             history.mkdir(mode=0o700)
             for status, listing in ((1, ""), (0, "virtual-bmh-aabbccdd-01\n")):
@@ -67,7 +67,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             inventory = base / "inventory.json"
-            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
             history = bmh_history.history_dir(inventory)
             history.mkdir(mode=0o700)
             (history / "virtual-bmh-aabbccdd-01.serial.log").write_text("private raw data")
@@ -96,7 +96,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
                 oc.chmod(0o755)
                 install_serial_reader(binaries)
                 inventory = base / "virtual-bmh-inventory-test.json"
-                inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+                inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
                 history = bmh_history.history_dir(inventory)
                 history.mkdir(mode=0o700)
                 (history / "virtual-bmh-aabbccdd-01.serial.log").write_text('first boot\n{"password":"synthetic-password-012345"}\n')
@@ -128,7 +128,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             inventory = base / "inventory.json"
-            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
             history = bmh_history.history_dir(inventory)
             history.mkdir(mode=0o700)
             secret = "synthetic-history-token-0123456789"
@@ -137,6 +137,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             for suffix in (".0", ".1", ".2"):
                 (history / ("virtual-bmh-aabbccdd-01.serial.log" + suffix)).write_text('{"password":"' + secret + '"}\n')
             (history / "virtual-bmh-foreign-01.serial.log").write_text("foreign")
+            (history / "virtual-bmh-aabbccdd-02.serial.log").write_text(secret)
             (history / "events.log").write_text("2026-11-13 00:00:00.000+0000: event 'reboot' for domain 'virtual-bmh-aabbccdd-01'\n" + secret + "\n")
             artifact = base / "artifacts/bmh-history"
             binaries = base / "bin"
@@ -154,6 +155,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             self.assertIn("first boot", output)
             self.assertIn("second boot", output)
             self.assertFalse((artifact / "virtual-bmh-foreign-01.serial.log").exists())
+            self.assertFalse((artifact / "virtual-bmh-aabbccdd-02.serial.log").exists())
             self.assertTrue((history / "virtual-bmh-aabbccdd-01.serial.log").exists())
             self.assertEqual(list(history.glob("staging-*")), [])
 
@@ -177,7 +179,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
     def test_cleanup_keeps_inventory_map_when_serial_reader_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             inventory = Path(temporary) / "inventory.json"
-            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
             history = bmh_history.history_dir(inventory)
             history.mkdir()
             with mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "")), \
