@@ -90,11 +90,27 @@ runs:
   using: composite
   steps:
     - name: Verify redaction complete
+      id: verify
       if: always()
       shell: bash
       env:
         ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
       run: |
+        if [[ -L "${ARTIFACT_DIR}" || -L "${ARTIFACT_DIR}/mgmt-cluster" ]]; then
+          echo "::error::Artifact directory links are not permitted — withholding artifacts"
+          rm -rf "${ARTIFACT_DIR}"
+          exit 1
+        fi
+        if [[ -e "${ARTIFACT_DIR}/mgmt-cluster/must-gather" || -L "${ARTIFACT_DIR}/mgmt-cluster/must-gather" ]]; then
+          echo "must-gather=true" >> "$GITHUB_OUTPUT"
+          if [[ "${{ inputs.gitleaks }}" != "true" ]] || ! python3 -I \
+            "${{ github.workspace }}/.github/scripts/collect-must-gather.py" \
+            "${ARTIFACT_DIR}/mgmt-cluster/must-gather" --check; then
+            echo "::error::Must-gather safety guard failed — withholding artifacts"
+            rm -rf "${ARTIFACT_DIR}"
+            exit 1
+          fi
+        fi
         if [[ -d "${ARTIFACT_DIR}/compact-boot" ]] \
           && [[ ! -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
           echo "::error::Compact-boot diagnostics are incomplete — removing artifacts instead of uploading"
@@ -111,6 +127,7 @@ runs:
         # first (collect-artifacts.sh), and the upload leaves it out.
 
     - name: Scan artifacts with gitleaks
+      id: scan
       # Skipped only when the caller passes gitleaks: "false" (see the input)
       # and publishes to this run: the release gate and the upload below still
       # run for every caller. A private publication is always scanned.
@@ -130,6 +147,9 @@ runs:
 
         COMPACT_DIAGNOSTICS=false
         if [[ -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
+          COMPACT_DIAGNOSTICS=true
+        fi
+        if [[ -d "${ARTIFACT_DIR}/mgmt-cluster/must-gather" ]]; then
           COMPACT_DIAGNOSTICS=true
         fi
 
@@ -164,6 +184,7 @@ runs:
         fi
 
         REPORT_DIR="${RUNNER_TEMP}/gitleaks-pre-upload"
+        rm -rf "${REPORT_DIR}"
         mkdir -p "${REPORT_DIR}"
         chmod 777 "${REPORT_DIR}"
         trap 'rm -rf -- "${REPORT_DIR}"' EXIT
@@ -203,10 +224,13 @@ runs:
           fi
 
           if [[ ! -f "${REPORT}" ]]; then
+            if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
+              fail_closed "Gitleaks report was not produced"
+            fi
             echo "[]" > "${REPORT}"
           fi
 
-          FINDING_COUNT=$(jq 'length' "${REPORT}") \
+          FINDING_COUNT=$(jq -er 'if type == "array" then length else error("invalid report") end' "${REPORT}") \
             || fail_closed "Could not read the gitleaks report of pass ${pass}"
           echo "Pass ${pass}: ${FINDING_COUNT} finding(s)"
           if [[ "${FINDING_COUNT}" -gt 0 ]]; then
@@ -244,9 +268,12 @@ runs:
               break
             fi
             if [[ ! -f "${FINAL_REPORT}" ]]; then
+              if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
+                fail_closed "Final gitleaks report was not produced"
+              fi
               echo "[]" > "${FINAL_REPORT}"
             fi
-            REMAINING=$(jq 'length' "${FINAL_REPORT}") \
+            REMAINING=$(jq -er 'if type == "array" then length else error("invalid report") end' "${FINAL_REPORT}") \
               || fail_closed "Could not read the final gitleaks report"
             if [[ "${REMAINING}" -gt 0 ]]; then
               if [[ "${FAIL_CLOSED}" == "true" ]]; then
@@ -262,6 +289,7 @@ runs:
         rm -rf "${REPORT_DIR}"
 
     - name: Release gate - censor secrets
+      id: release
       if: always()
       shell: bash
       env:
@@ -306,9 +334,20 @@ runs:
           rm -rf "${ARTIFACT_DIR}"
           exit 1
         fi
+        if [[ -e "${ARTIFACT_DIR}/mgmt-cluster/must-gather" || -L "${ARTIFACT_DIR}/mgmt-cluster/must-gather" ]]; then
+          if ! python3 -I "${{ github.workspace }}/.github/scripts/collect-must-gather.py" \
+            "${ARTIFACT_DIR}/mgmt-cluster/must-gather" --check; then
+            echo "::error::Final must-gather safety guard failed — withholding artifacts"
+            rm -rf "${ARTIFACT_DIR}"
+            exit 1
+          fi
+        fi
 
     - name: Publish artifacts to the private repository
-      if: always() && inputs.private-repo != ''
+      if: >-
+        always() && inputs.private-repo != '' &&
+        steps.verify.outcome == 'success' && steps.release.outcome == 'success' &&
+        steps.scan.outcome == 'success'
       uses: ./.github/actions/publish-private-artifacts
       with:
         artifact-name: ${{ inputs.artifact-name }}
@@ -317,7 +356,9 @@ runs:
         app-key: ${{ inputs.private-repo-app-key }}
 
     - name: Upload artifacts
-      if: always() && inputs.private-repo == ''
+      if: >-
+        always() && inputs.private-repo == '' && steps.verify.outcome == 'success' && steps.release.outcome == 'success' &&
+        (steps.verify.outputs.must-gather != 'true' || steps.scan.outcome == 'success')
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}

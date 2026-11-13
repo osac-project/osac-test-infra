@@ -1052,6 +1052,7 @@ jobs:
       - name: Gather cluster logs
         id: gather
         if: always() && !cancelled()
+        continue-on-error: true
         uses: ./.github/actions/collect-artifacts
         with:
           namespace: ${{ inputs.namespace }}
@@ -1060,6 +1061,7 @@ jobs:
 
       - name: Gather cluster logs (job cancelled, short cap)
         if: cancelled() && (steps.gather.outcome == 'skipped' || steps.gather.outcome == 'cancelled')
+        continue-on-error: true
         uses: ./.github/actions/collect-artifacts
         with:
           namespace: ${{ inputs.namespace }}
@@ -1077,6 +1079,7 @@ jobs:
       - name: Scan and upload artifacts
         id: upload
         if: always() && !cancelled()
+        continue-on-error: true
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-caas-full-install-${{ github.run_id }}
@@ -1089,6 +1092,7 @@ jobs:
       - name: Scan and upload artifacts (job cancelled)
         if: cancelled() && (steps.upload.outcome == 'skipped' || steps.upload.outcome == 'cancelled')
         timeout-minutes: 3
+        continue-on-error: true
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-caas-full-install-${{ github.run_id }}

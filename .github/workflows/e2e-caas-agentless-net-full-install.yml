@@ -241,16 +241,67 @@ jobs:
         run: make -C infra/agentless-net test-e2e
 
       - name: Gather infra diagnostics
-        if: always()
+        if: always() && !cancelled()
         continue-on-error: true
         timeout-minutes: 10
         run: make -C infra/agentless-net gather-infra
 
       - name: Gather e2e diagnostics
-        if: always()
+        if: always() && !cancelled()
         continue-on-error: true
         timeout-minutes: 10
         run: make -C infra/agentless-net gather-e2e
+
+      - name: Select management kubeconfig for artifact collection
+        id: artifact-kubeconfig
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          kubeconfig_path="${HOME}/.kube/${MGMT_CLONE_NAME:-agentless-lab-mgmt}.kubeconfig"
+          if [[ -f infra/agentless-net/.mgmt-network ]]; then
+            source infra/agentless-net/.mgmt-network
+            kubeconfig_path="${KUBECONFIG:-$kubeconfig_path}"
+          fi
+          echo "path=${kubeconfig_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Gather cluster logs
+        id: gather
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: ./.github/actions/collect-artifacts
+        with:
+          namespace: osac-e2e-ci
+          kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
+
+      - name: Gather cluster logs (job cancelled, short cap)
+        if: cancelled() && (steps.gather.outcome == 'skipped' || steps.gather.outcome == 'cancelled')
+        continue-on-error: true
+        uses: ./.github/actions/collect-artifacts
+        with:
+          namespace: osac-e2e-ci
+          kubeconfig-path: ${{ steps.artifact-kubeconfig.outputs.path }}
+          timeout-seconds: "120"
+
+      - name: Scan and upload artifacts
+        id: upload
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: ./.github/actions/upload-artifacts
+        with:
+          artifact-name: caas-agentless-net-artifacts
+          known-secret-files: /root/pull-secret
+
+      - name: Scan and upload artifacts (job cancelled)
+        if: cancelled() && (steps.upload.outcome == 'skipped' || steps.upload.outcome == 'cancelled')
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: ./.github/actions/upload-artifacts
+        with:
+          artifact-name: caas-agentless-net-artifacts
+          known-secret-files: /root/pull-secret
+          overwrite: "true"
+
 
   teardown:
     needs: [provision, push-secrets, e2e]
