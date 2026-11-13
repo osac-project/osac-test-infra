@@ -53,6 +53,7 @@ ROUTER_NAMESPACE="openshift-ingress"
 ROUTER_LOG_MAX_LINES=2000
 ROUTER_LOG_READ_LINES=20000
 
+collect_diagnostics() {
 if [[ ! -f "${KUBECONFIG:-}" ]]; then
     echo "ERROR: KUBECONFIG not set or file does not exist" >&2
     exit 1
@@ -710,6 +711,15 @@ if [[ -d "${E2E_OUTPUT_DIR}" ]]; then
             chmod -R u+rwX "${ARTIFACT_DIR}/e2e" 2>/dev/null || true
         fi
     done
+fi
+
+}
+
+if [[ "${OSAC_GATHER_REDACT_ONLY:-false}" != "true" ]]; then
+    collect_diagnostics
+fi
+if [[ "${OSAC_GATHER_COLLECT_ONLY:-false}" == "true" ]]; then
+    exit 0
 fi
 
 # ── Redact ───────────────────────────────────────────────────────────

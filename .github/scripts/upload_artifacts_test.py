@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import itertools
 import json
 import os
 import pathlib
@@ -49,6 +51,7 @@ class UploadArtifactsTest(unittest.TestCase):
             "PATH": f"{binaries}:{os.defpath}",
             "RUNNER_TEMP": str(self.temp),
             "GATE_ARGUMENTS": str(self.arguments),
+            "GITHUB_OUTPUT": str(self.temp / "step-outputs"),
         }
 
     def step(self, name: str) -> dict:
@@ -96,7 +99,7 @@ class UploadArtifactsTest(unittest.TestCase):
         self.assertEqual(scan["if"], "always() && (inputs.gitleaks == 'true' || inputs.private-repo != '')")
         # The gate and the upload must always run, whatever the input says.
         self.assertEqual(self.step("Release gate - censor secrets")["if"], "always()")
-        self.assertEqual(self.step("Upload artifacts")["if"], "always() && inputs.private-repo == ''")
+        self.assertIn("steps.release.outcome == 'success'", self.step("Upload artifacts")["if"])
 
     def test_invalid_size_fails_closed(self) -> None:
         result = self.run_step("Release gate - censor secrets", {"max-file-mbytes": "invalid"})
@@ -125,7 +128,8 @@ class UploadArtifactsTest(unittest.TestCase):
 
     def test_upload_contract_is_preserved(self) -> None:
         upload = self.step("Upload artifacts")
-        self.assertEqual(upload["if"], "always() && inputs.private-repo == ''")
+        self.assertIn("steps.verify.outcome == 'success'", upload["if"])
+        self.assertIn("steps.scan.outcome == 'success'", upload["if"])
         self.assertEqual(upload["with"]["overwrite"], "${{ inputs.overwrite }}")
         self.assertEqual(upload["with"]["retention-days"], 30)
         self.assertEqual(upload["with"]["if-no-files-found"], "warn")
@@ -146,7 +150,10 @@ class UploadArtifactsTest(unittest.TestCase):
         self.without_container_runtime()
         result = self.run_step("Scan artifacts with gitleaks", {"private-repo": "osac-project/osac-ci-artifacts"})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("::error::No container runtime available to scan artifacts bound for osac-project/osac-ci-artifacts", result.stdout)
+        self.assertIn(
+            "::error::No container runtime available to scan artifacts bound for osac-project/osac-ci-artifacts",
+            result.stdout,
+        )
         self.assertFalse(self.artifacts.exists())
 
     def test_scan_that_cannot_run_still_uploads_to_the_public_run(self) -> None:
@@ -168,12 +175,11 @@ class UploadArtifactsTest(unittest.TestCase):
         ):
             value = expression.replace("inputs.gitleaks", repr(gitleaks)).replace("inputs.private-repo", repr(private))
             value = value.replace("||", " or ").replace("&&", " and ")
-            self.assertEqual(eval(value, {}, {}), scanned, (gitleaks, private))  # noqa: S307
+            self.assertEqual(eval(value, {}, {}), scanned, (gitleaks, private))
         # Fails closed rather than skipping when the combination is set.
         self.without_container_runtime()
         result = self.run_step(
-            "Scan artifacts with gitleaks",
-            {"private-repo": "osac-project/osac-ci-artifacts", "gitleaks": "false"},
+            "Scan artifacts with gitleaks", {"private-repo": "osac-project/osac-ci-artifacts", "gitleaks": "false"}
         )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 
@@ -184,15 +190,181 @@ class UploadArtifactsTest(unittest.TestCase):
     def test_private_publish_replaces_the_public_upload(self) -> None:
         publish = self.step("Publish artifacts to the private repository")
         upload = self.step("Upload artifacts")
-        # Exactly one of the two runs, and both still run after a failure.
-        self.assertEqual(publish["if"], "always() && inputs.private-repo != ''")
-        self.assertEqual(upload["if"], "always() && inputs.private-repo == ''")
+        self.assertIn("inputs.private-repo != ''", publish["if"])
+        self.assertIn("inputs.private-repo == ''", upload["if"])
         self.assertEqual(publish["uses"], "./.github/actions/publish-private-artifacts")
         # The release gate, which censors secrets, comes before either.
         names = [step["name"] for step in self.action["runs"]["steps"]]
         gate = names.index("Release gate - censor secrets")
         self.assertLess(gate, names.index("Publish artifacts to the private repository"))
         self.assertLess(gate, names.index("Upload artifacts"))
+
+    def must_gather(self) -> pathlib.Path:
+        tree = self.artifacts / "mgmt-cluster/must-gather"
+        tree.mkdir(parents=True)
+        (tree / "kubelet_service.log").write_text("service history\n")
+        self.normalize(tree)
+        return tree
+
+    def normalize(self, tree: pathlib.Path) -> None:
+        result = subprocess.run(
+            [sys.executable, str(REPO / ".github/scripts/collect-must-gather.py"), str(tree), "--normalize"],
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (tree / "collection-status.json").write_text('{"status":"complete","reason":"none"}\n')
+
+    def scanner(self, mode: str) -> None:
+        docker = self.temp / "bin/docker"
+        docker.write_text(f'''#!/bin/bash
+set -eu
+output=""
+for argument in "$@"; do
+  case "$argument" in
+    *:/out:rw*) output="${{argument%%:/out:rw*}}" ;;
+  esac
+done
+if [[ "{mode}" == "failed" ]]; then exit 2; fi
+if [[ "{mode}" == "missing" ]]; then exit 0; fi
+report="findings-pass-1.json"
+for argument in "$@"; do
+  case "$argument" in --report-path=*) report="${{argument##*/}}" ;; esac
+done
+if [[ "{mode}" == "remaining" ]]; then
+  printf '%s\\n' '[{{"RuleID":"synthetic","File":"/scan/log.txt","StartLine":1}}]' > "$output/$report"
+elif [[ "{mode}" == "invalid" ]]; then
+  printf '{{}}\\n' > "$output/$report"
+else
+  printf '[]\\n' > "$output/$report"
+fi
+''')
+        docker.chmod(0o755)
+
+    def test_must_gather_guard_refuses_missing_normalization_and_scanner_opt_out(self) -> None:
+        for mode in (
+            "missing-normalization",
+            "scan-disabled",
+            "binary",
+            "encoded-archive",
+            "symlink",
+            "unsafe-name",
+            "metadata",
+            "duplicate-key",
+        ):
+            with self.subTest(mode=mode):
+                self.artifacts.mkdir(exist_ok=True)
+                tree = self.must_gather()
+                if mode == "missing-normalization":
+                    (tree / "omissions.json").unlink()
+                if mode == "binary":
+                    next(tree.glob("*.log")).write_bytes(b"\x00opaque")
+                if mode == "encoded-archive":
+                    next(tree.glob("*.log")).write_bytes(base64.b64encode(b"\x1f\x8b" + b"opaque" * 12))
+                if mode == "symlink":
+                    path = next(tree.glob("*.log"))
+                    path.unlink()
+                    path.symlink_to(self.arguments)
+                if mode == "unsafe-name":
+                    (tree / "synthetic-sentinel-credential.yaml").write_text("kind: List\n")
+                if mode == "metadata":
+                    (tree / "omissions.json").write_text('{"synthetic-sentinel-credential": 1}')
+                if mode == "duplicate-key":
+                    (tree / "collection-status.json").write_text(
+                        '{"status":"synthetic-sentinel-credential","status":"complete","reason":"none"}'
+                    )
+                result = self.run_step(
+                    "Verify redaction complete", {"gitleaks": "false" if mode == "scan-disabled" else "true"}
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(self.artifacts.exists())
+
+    def test_artifact_ancestor_link_is_refused_without_touching_its_target(self) -> None:
+        self.artifacts.rename(self.temp / "external-diagnostics")
+        self.artifacts.symlink_to(self.temp / "external-diagnostics", target_is_directory=True)
+        result = self.run_step("Verify redaction complete")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(self.artifacts.exists())
+        self.assertTrue((self.temp / "external-diagnostics/log.txt").exists())
+
+    def test_must_gather_scan_fails_closed_on_engine_failure_missing_report_or_remaining_findings(self) -> None:
+        for mode in ("failed", "missing", "remaining", "invalid"):
+            with self.subTest(mode=mode):
+                self.artifacts.mkdir(exist_ok=True)
+                self.must_gather()
+                self.scanner(mode)
+                reports = self.temp / "gitleaks-pre-upload"
+                reports.mkdir(exist_ok=True)
+                (reports / "findings-pass-1.json").write_text("[]")
+                result = self.run_step("Scan artifacts with gitleaks")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(self.artifacts.exists())
+
+    def test_must_gather_real_gate_censors_known_secret_in_plaintext_yaml_and_json(self) -> None:
+        tree = self.must_gather()
+        sentinel = "synthetic-upload-secret-950147-testing-only"
+        self.inventory.write_text(
+            json.dumps({"items": [{"data": {"token": base64.b64encode(sentinel.encode()).decode()}}]})
+        )
+        (tree / "resource.yaml").write_text(f"credential: {sentinel}\n")
+        (tree / "resource.json").write_text(json.dumps({"credential": sentinel}))
+        (tree / f"{sentinel}.yaml").write_text(f"credential: {sentinel}\n")
+        self.normalize(tree)
+        self.assertEqual(self.run_step("Verify redaction complete").returncode, 0)
+        self.scanner("clean")
+        self.assertEqual(self.run_step("Scan artifacts with gitleaks").returncode, 0)
+        result = self.run_step("Release gate - censor secrets")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for path in tree.rglob("*"):
+            self.assertNotIn(sentinel, str(path.relative_to(tree)))
+            if path.is_file():
+                self.assertNotIn(sentinel, path.read_text())
+        self.assertNotIn(sentinel, result.stdout + result.stderr)
+        self.assertTrue(any("service history" in path.read_text() for path in tree.glob("*.log")))
+
+    def test_final_gate_rechecks_the_actual_subset_after_initial_verification(self) -> None:
+        tree = self.must_gather()
+        self.assertEqual(self.run_step("Verify redaction complete").returncode, 0)
+        self.scanner("clean")
+        self.assertEqual(self.run_step("Scan artifacts with gitleaks").returncode, 0)
+        (tree / "unvouched-name.txt").write_text("diagnostic text\n")
+        result = self.run_step("Release gate - censor secrets")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.artifacts.exists())
+        self.assertIn("steps.release.outcome == 'success'", self.step("Upload artifacts")["if"])
+
+    def test_must_gather_scanner_unavailable_fails_closed(self) -> None:
+        self.must_gather()
+        binaries = self.temp / "no-runtime"
+        binaries.mkdir()
+        for command in ("bash", "rm"):
+            (binaries / command).symlink_to(pathlib.Path("/bin") / command)
+        self.environment["PATH"] = str(binaries)
+        result = self.run_step("Scan artifacts with gitleaks")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(self.artifacts.exists())
+
+    def test_actual_upload_predicate_blocks_every_failed_skipped_or_interrupted_gate(self) -> None:
+        outcomes = ("success", "failure", "skipped", "cancelled")
+        combinations = itertools.product(
+            outcomes, outcomes, outcomes, ("true", ""), ("", "osac-project/osac-ci-artifacts")
+        )
+        for verify, scan, release, must_gather, private in combinations:
+            for destination in ("Upload artifacts", "Publish artifacts to the private repository"):
+                expression = self.step(destination)["if"]
+                expression = expression.replace("always()", "True")
+                expression = expression.replace("inputs.private-repo", repr(private))
+                expression = expression.replace("steps.verify.outputs.must-gather", repr(must_gather))
+                for name, outcome in (("verify", verify), ("scan", scan), ("release", release)):
+                    expression = expression.replace(f"steps.{name}.outcome", repr(outcome))
+                expression = expression.replace("&&", " and ").replace("||", " or ")
+                allowed = eval(expression, {"__builtins__": {}})
+                expected = (
+                    verify == "success"
+                    and release == "success"
+                    and ((not private and must_gather != "true") or scan == "success")
+                    and bool(private) == (destination == "Publish artifacts to the private repository")
+                )
+                self.assertEqual(allowed, expected, (destination, verify, scan, release, must_gather, private))
 
 
 class PublishPrivateArtifactsTest(unittest.TestCase):

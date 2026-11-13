@@ -13,6 +13,67 @@ consume deployment configuration and do not depend on which backend created it.
 [the OSAC E2E guide](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md)
 for test conventions.
 
+## E2E diagnostic artifacts
+
+All nine E2E execution families collect a shared management-cluster baseline:
+VMaaS against an existing cluster; VMaaS, CaaS, and BMaaS full installs; full
+regression; VMaaS, BMaaS, and stretched Netris; and CaaS agentless-net. Their
+scheduled, PR, merge-queue, build, and manual callers inherit this behavior.
+The shared `collect-artifacts` action runs before cluster/EC2 teardown;
+`upload-artifacts` needs only the collected files. No guest-cluster or additional
+plugin must-gather is added.
+
+Artifacts include `mgmt-cluster/must-gather/`, collected with the default
+`oc adm must-gather` image selected for the cluster release. Standard master
+service logs include `host_service_logs/masters/kubelet_service.log` and
+`crio_service.log` before normalization (also applicable to a single-node
+management cluster).
+This improves diagnostic coverage for [#470](https://github.com/osac-project/osac-test-infra/issues/470);
+it is not a garbage-collection fix.
+
+This is a **sanitized plaintext subset, not a complete unmodified must-gather
+archive**. Before recursive redaction, the collector withholds archives and
+compressed content (including Insights archives), binary/opaque or unsupported
+files, links, unreadable files, and files above 32 MiB. Content checks inspect
+magic bytes, tar headers, UTF-8 validity, and control characters, not just suffixes.
+Recognizable archives inside base64 text are also withheld (up to three encoding
+layers, withholding still-encoded data at that limit); archives are never
+extracted or decompressed for public publication.
+Supported text includes logs, YAML, JSON/JSONL, HTML, stderr, and the standard
+extensionless `version` and `timestamp` files. All source directory and file names
+are replaced with deterministic SHA-256 identifiers: credentials can occur in
+names as well as content, and content scanners do not sanitize names. No raw-name
+mapping is published. This preserves directory grouping, but loses source-name
+context; original must-gather paths are not available in this public subset.
+Files outside the existing redaction suffixes receive `.txt`. Normalization stages
+outside the artifact tree. Total retained input is capped at 128 MiB and
+20,000 entries. `omissions.json` contains only fixed reason codes and counts,
+never omitted names, paths, or values. Existing raw Netris must-gather/inspect
+exclusions remain in effect.
+
+`collection-status.json` reports `complete`, `partial`, `timed-out`, or `skipped`.
+Missing/empty kubeconfig and an unreachable API are explicit skips. Collection
+failures retain safe partial output without changing the test result. The
+existing 900-second normal and 120-second cancellation collection budgets cover
+custom diagnostics, must-gather, normalization, secret inventory, and recursive
+redaction; collection subprocess groups are terminated before sanitization.
+Budget is reserved for sanitization. A cancellation during collection is followed
+by a fresh short collection; failed/interrupted sanitization never writes
+`.redaction-complete`.
+
+Uploads require the redaction marker, a successful must-gather content guard,
+successful gitleaks scanning, and the mandatory release gate, which rechecks the
+subset and fixed-schema metadata immediately before upload. Gitleaks cannot be
+disabled for this subtree. Scanner failure, missing reports, or remaining
+findings withhold the upload. The release gate also censors known pull-secret and
+namespace Secret values. Diagnostics steps are best effort; their failure does
+not replace the original test outcome.
+
+The infrastructure-only regression commands are
+`python3 -I .github/scripts/must_gather_test.py` and
+`python3 -I .github/scripts/upload_artifacts_test.py` (PyYAML is required, as in CI).
+They use synthetic data and stubbed commands, not live clusters.
+
 ## Architecture
 
 The repository connects two layers:
