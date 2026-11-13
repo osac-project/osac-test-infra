@@ -31,7 +31,10 @@ class FullCILVMSTests(unittest.TestCase):
             if "make install-infra PLATFORM=openshift PROFILE=full-ci" in step.get("run", "")
         )
         merge = re.search(
-            r"yq eval-all[^\n]*\\\n.*?mv values/full-ci/infra.yaml.merged values/full-ci/infra.yaml", install, re.DOTALL
+            r"OVERLAY_DIR=[^\n]*\n\s*yq eval-all[^\n]*\\\n"
+            r".*?mv values/full-ci/infra.yaml.merged values/full-ci/infra.yaml",
+            install,
+            re.DOTALL,
         )
         self.assertIsNotNone(merge, "Missing first-install infrastructure overlay merge")
         self.assertLess(merge.end(), install.index("make install-infra"))
@@ -58,7 +61,9 @@ class FullCILVMSTests(unittest.TestCase):
                 text=True,
             )
             config = yaml.safe_load(result.stdout)
-            return yaml.safe_load(config["data"]["config.yaml"])["spec"]["storage"]["deviceClasses"][0]
+            device_classes = yaml.safe_load(config["data"]["config.yaml"])["spec"]["storage"]["deviceClasses"]
+            self.assertEqual(len(device_classes), 1)
+            return device_classes[0]
 
         original_device_class = render(source)
         try:
@@ -70,7 +75,7 @@ class FullCILVMSTests(unittest.TestCase):
                 subprocess.run(
                     ["bash", "-euo", "pipefail", "-c", merge.group(0)],
                     cwd=temporary,
-                    env={**os.environ, "OVERLAY_DIR": str(ROOT / ".github/overlays")},
+                    env={**os.environ, "GITHUB_WORKSPACE": str(ROOT)},
                     check=True,
                 )
                 device_class = render(values)
@@ -80,8 +85,10 @@ class FullCILVMSTests(unittest.TestCase):
                 expected_values["lvms"]["deviceSelector"] = {"optionalPaths": ["/dev/sdb"]}
                 expected_values["keycloak"]["devFixtures"] = {"enabled": True}
                 self.assertEqual(merged_values, expected_values, "Only the two CI overrides may change values")
-                self.assertEqual(device_class["nodeSelector"], original_device_class["nodeSelector"])
-                self.assertEqual(device_class["name"], "vg1")
+                expected_device_class = {**original_device_class, "deviceSelector": {"optionalPaths": ["/dev/sdb"]}}
+                self.assertEqual(
+                    device_class, expected_device_class, "All other worker disk safeguards must remain intact"
+                )
         finally:
             self.assertEqual({path: path.read_bytes() for path in originals}, originals)
         self.assertEqual(original_device_class["deviceSelector"], original_values["lvms"]["deviceSelector"])

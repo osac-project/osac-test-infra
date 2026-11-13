@@ -29,7 +29,8 @@ and left storage PVCs pending before the Kafka configuration hook timed out.
 Correcting the selector does not establish that all other Kafka or E2E blockers
 are resolved; that requires a separate live run.
 
-Run the infrastructure contract check with a local OSAC installer checkout,
+The `CI` script-tests job runs this contract against a pinned public installer
+revision with checksum-verified Helm and yq binaries. Run it locally with an OSAC installer checkout,
 PyYAML, yq v4, and Helm available:
 
 ```bash
