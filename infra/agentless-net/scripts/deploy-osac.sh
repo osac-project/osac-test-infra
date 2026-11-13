@@ -18,6 +18,13 @@ OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"
 OSAC_VALUES_FILE="${OSAC_VALUES_FILE:-values/caas-ci/values.yaml}"
 OSAC_REPO="${OSAC_REPO:-https://github.com/osac-project/osac.git}"
 OSAC_BRANCH="${OSAC_BRANCH:-main}"
+# A blank workflow input is exported as an empty string, which must not override the default.
+if [[ -z "$OSAC_REPO" ]]; then
+    OSAC_REPO="https://github.com/osac-project/osac.git"
+fi
+if [[ -z "$OSAC_BRANCH" ]]; then
+    OSAC_BRANCH="main"
+fi
 OSAC_DIR="/opt/osac"
 INSTALLER_DIR="${OSAC_DIR}/osac-installer"
 VALUES_OVERLAY="${INFRA_DIR}/values-overlay.yaml"
@@ -42,9 +49,13 @@ else
 fi
 
 # ---------- merge values overlay ----------
+# Profile installs read values/<profile>/instance.yaml. The legacy CaaS file
+# is not part of that layout, so the merge runs only for the CaaS path.
 
 MERGED_VALUES_DIR="${INSTALLER_DIR}/values/agentless-net-ci"
 MERGED_VALUES="${MERGED_VALUES_DIR}/values.yaml"
+
+if [[ -z "${OSAC_PROFILE:-}" ]]; then
 mkdir -p "$MERGED_VALUES_DIR"
 
 info "Merging values overlay with ${OSAC_VALUES_FILE}..."
@@ -77,10 +88,31 @@ print(f'  Merged {sys.argv[1]} + {sys.argv[2]} -> {sys.argv[3]}')
 AAP_LICENSE="${AAP_LICENSE_PATH:-/root/aap-license.zip}"
 cp "$PULL_SECRET" "${MERGED_VALUES_DIR}/pull-secret.json"
 cp "$AAP_LICENSE" "${MERGED_VALUES_DIR}/license.zip"
+fi
 
 # ---------- step 8: install OSAC ----------
 
-if KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | grep -q "1/1"; then
+if [[ -n "${OSAC_PROFILE:-}" ]]; then
+    requested_revision="$(git -C "$OSAC_DIR" rev-parse HEAD)"
+    overlay_sum="$(sha256sum "${INFRA_DIR}/values-bmaas-overlay.yaml" | awk '{print $1}')"
+    installed_stamp="$(KUBECONFIG="$KUBECONFIG" oc get configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" -o jsonpath='{.data.profile}{" "}{.data.revision}{" "}{.data.overlay}' 2>/dev/null || true)"
+    if [[ "$installed_stamp" == "${OSAC_PROFILE} ${requested_revision} ${overlay_sum}" ]] \
+        && KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | grep -q "1/1" \
+        && KUBECONFIG="$KUBECONFIG" oc get deploy -n "$OSAC_NAMESPACE" -o name | grep -q bmf; then
+        info "OSAC profile ${OSAC_PROFILE} at ${requested_revision} is already installed"
+    else
+        info "Installing OSAC profile ${OSAC_PROFILE}..."
+        cp "${INFRA_DIR}/values-bmaas-overlay.yaml" "${INSTALLER_DIR}/values/bmaas-agentless-overlay.yaml"
+        (cd "$INSTALLER_DIR" && \
+            KUBECONFIG="$KUBECONFIG" \
+            make install \
+                PLATFORM=openshift \
+                PROFILE="$OSAC_PROFILE" \
+                NS="$OSAC_NAMESPACE" \
+                AAP_LICENSE_FILE="${AAP_LICENSE_FILE:-/root/aap-license.zip}" \
+                EXTRA_HELM_ARGS="-f values/bmaas-agentless-overlay.yaml")
+    fi
+elif KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NAMESPACE" 2>/dev/null | grep -q "1/1"; then
     info "OSAC already running — skipping install"
 else
     info "Installing OSAC via Helm (this may take several minutes)..."
@@ -120,15 +152,31 @@ KUBECONFIG="$KUBECONFIG" oc wait deploy/fulfillment-grpc-server -n "$OSAC_NAMESP
     --for=condition=Available --timeout=300s
 KUBECONFIG="$KUBECONFIG" oc wait deploy/osac-operator -n "$OSAC_NAMESPACE" \
     --for=condition=Available --timeout=300s
+if [[ -n "${OSAC_PROFILE:-}" ]]; then
+    mapfile -t BMF_DEPLOYS < <(KUBECONFIG="$KUBECONFIG" oc get deploy -n "$OSAC_NAMESPACE" -o name | grep bmf)
+    if [[ ${#BMF_DEPLOYS[@]} -eq 0 ]]; then
+        echo "ERROR: no bare-metal fulfillment deployment in ${OSAC_NAMESPACE}" >&2
+        exit 1
+    fi
+    KUBECONFIG="$KUBECONFIG" oc wait "${BMF_DEPLOYS[@]}" -n "$OSAC_NAMESPACE" \
+        --for=condition=Available --timeout=300s
+    KUBECONFIG="$KUBECONFIG" oc create configmap osac-bmaas-install-stamp -n "$OSAC_NAMESPACE" \
+        --from-literal=profile="$OSAC_PROFILE" \
+        --from-literal=revision="$(git -C "$OSAC_DIR" rev-parse HEAD)" \
+        --from-literal=overlay="$(sha256sum "${INFRA_DIR}/values-bmaas-overlay.yaml" | awk '{print $1}')" \
+        --dry-run=client -o yaml | KUBECONFIG="$KUBECONFIG" oc apply -f -
+fi
 info "OSAC is running:"
 KUBECONFIG="$KUBECONFIG" oc get pods -n "$OSAC_NAMESPACE" --no-headers | \
     awk '{print $3}' | sort | uniq -c | sort -rn
 
 # ---------- step 10b: patch MetalLB to use fabric subnet ----------
 
-info "Patching MetalLB to use fabric subnet..."
-KUBECONFIG="$KUBECONFIG" oc patch ipaddresspool caas-address-pool -n metallb-system \
-    --type=merge -p '{"spec":{"addresses":["10.0.0.240-10.0.0.250"]}}'
-echo "  Pool: 10.0.0.240-10.0.0.250"
+if [[ -z "${OSAC_PROFILE:-}" ]]; then
+    info "Patching MetalLB to use fabric subnet..."
+    KUBECONFIG="$KUBECONFIG" oc patch ipaddresspool caas-address-pool -n metallb-system \
+        --type=merge -p '{"spec":{"addresses":["10.0.0.240-10.0.0.250"]}}'
+    echo "  Pool: 10.0.0.240-10.0.0.250"
+fi
 
 info "deploy-osac complete."

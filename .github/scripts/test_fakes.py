@@ -100,6 +100,13 @@ FAKE_VIRSH = textwrap.dedent(
       define)
         n=$(ls "${CAPTURE_DIR}" 2>/dev/null | grep -c '^vm-' || true)
         cat > "${CAPTURE_DIR}/vm-${n}.xml"
+        # undefine records the name so domuuid fails. A later define of
+        # that name is a new domain, as it is with real virsh.
+        name=$(python3 -c 'import re,sys; found=re.search(r"<name>([^<]+)</name>", open(sys.argv[1]).read()); print(found.group(1) if found else "")' "${CAPTURE_DIR}/vm-${n}.xml")
+        if [[ -n "${name}" ]]; then
+          grep -vxF "${name}" "${UNDEFINED_FILE}" > "${UNDEFINED_FILE}.tmp" || true
+          mv "${UNDEFINED_FILE}.tmp" "${UNDEFINED_FILE}"
+        fi
         exit 0
         ;;
       start) exit 0 ;;

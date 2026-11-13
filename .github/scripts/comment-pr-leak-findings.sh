@@ -14,6 +14,12 @@
 #   HEAD_BRANCH, HEAD_OWNER  -- workflow_run head repo owner (fork-aware)
 #   PR_FROM_EVENT  -- workflow_run.pull_requests[0].number
 #   UPLOAD_OK  -- 'true' if redacted-logs artifact uploaded on the scan run
+#
+# workflow_dispatch PR suites run the workflow file from the default branch,
+# so workflow_run.head_sha is that branch, not the tested commit. Their run
+# name is "E2E suite · <suite> · #<pr> · <sha>". That identity is resolved
+# before any lookup by head SHA, and only after the pull request is open
+# and the SHA is its head, or GitHub lists that commit on the pull request.
 set -euo pipefail
 
 : "${GH_TOKEN:?}"
@@ -64,11 +70,46 @@ pr_ok_for_comment() {
     && "$(jq -r '.s' <<<"${meta}")" == "${HEAD_SHA}" ]]
 }
 
-# Resolve a PR to comment on. Prefer a unique open PR associated with the
-# e2e HEAD_SHA; on failure/empty/ambiguity fall back to (in order)
+# Resolve a PR to comment on. A workflow_dispatch suite names the tested
+# pull request in its run title; workflow_run.head_sha is the default
+# branch, so that identity comes before any SHA fallback. Other events
+# keep the SHA order: a unique open PR associated with HEAD_SHA, then
 # workflow_run.pull_requests, the e2e run's REST pull_requests, then an
 # open PR matching the head branch/tip SHA.
 PR_NUMBER=""
+SUITE_RUN_VALIDATED=false
+run_event=""
+run_title=""
+if run_json=$(gh api "repos/${REPO}/actions/runs/${E2E_RUN_ID}"); then
+  run_event=$(jq -r '.event // ""' <<<"${run_json}")
+  run_title=$(jq -r '.display_title // ""' <<<"${run_json}")
+else
+  echo "::warning::Could not read e2e run ${E2E_RUN_ID}; suite run-name fallback skipped."
+fi
+
+if [[ "${run_event}" == "workflow_dispatch" ]] \
+  && suite_identity=$(jq -Rn --arg title "${run_title}" '$title | capture("^E2E suite \u00b7 (?<suite>[A-Za-z0-9-]+) \u00b7 #(?<pr>[0-9]+) \u00b7 (?<sha>[0-9a-fA-F]{40})$")'); then
+  candidate_pr=$(jq -r '.pr' <<<"${suite_identity}")
+  tested_sha=$(jq -r '.sha' <<<"${suite_identity}" | tr '[:upper:]' '[:lower:]')
+  pr_meta=$(gh api "repos/${REPO}/pulls/${candidate_pr}" --jq '{st: .state, s: (.head.sha // "")}') || pr_meta=""
+  if [[ -n "${pr_meta}" && "$(jq -r '.st' <<<"${pr_meta}")" == "open" \
+    && "$(jq -r '.s' <<<"${pr_meta}")" == "${tested_sha}" ]]; then
+    PR_NUMBER="${candidate_pr}"
+    SUITE_RUN_VALIDATED=true
+    echo "Using PR #${PR_NUMBER} from the suite run name; tested commit ${tested_sha} is its head."
+  elif [[ -n "${pr_meta}" && "$(jq -r '.st' <<<"${pr_meta}")" == "open" ]] \
+    && associated_prs=$(gh api --paginate "repos/${REPO}/commits/${tested_sha}/pulls" \
+      --jq '.[] | select(.state == "open") | .number') \
+    && grep -qx "${candidate_pr}" <<<"${associated_prs}"; then
+    PR_NUMBER="${candidate_pr}"
+    SUITE_RUN_VALIDATED=true
+    echo "Using PR #${PR_NUMBER} from the suite run name; tested commit ${tested_sha} is on that pull request."
+  else
+    echo "Suite run name PR #${candidate_pr} does not contain ${tested_sha}; ignoring."
+  fi
+fi
+
+if [[ -z "${PR_NUMBER}" ]]; then
 OPEN_PRS_JSON="${COMMIT_OPEN_PRS_JSON}"
 OPEN_PR_COUNT=$(jq 'length' <<<"${OPEN_PRS_JSON}")
 if [[ "${OPEN_PR_COUNT}" -eq 1 ]]; then
@@ -150,14 +191,16 @@ if [[ -z "${PR_NUMBER}" ]]; then
     fi
   fi
 fi
+fi
 
 if [[ -z "${PR_NUMBER}" ]]; then
   echo "::warning::Unable to resolve an open PR for ${HEAD_SHA} (${HEAD_BRANCH}); skipping PR comment."
   exit 0
 fi
 
-# Final guard: association or tip match before post.
-if ! pr_ok_for_comment "${PR_NUMBER}"; then
+# Final guard: association or tip match before post. A suite run name that
+# already matched the tested commit does not use workflow_run.head_sha.
+if [[ "${SUITE_RUN_VALIDATED}" != "true" ]] && ! pr_ok_for_comment "${PR_NUMBER}"; then
   echo "::warning::Resolved PR #${PR_NUMBER} not associated with ${HEAD_SHA}; skipping PR comment."
   exit 0
 fi

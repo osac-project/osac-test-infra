@@ -1,0 +1,70 @@
+---
+# The BMaaS Agentless suite of a pull request, started as its own run by the decision in e2e-pr.yml.
+# The policy maps `bmaas-agentless` to this workflow. Its run name and deepest job id must keep that
+# suite id so osac-ci can track this run and publish the result on the matching check line.
+name: E2E BMaaS Agentless PR suite
+run-name: "E2E suite · bmaas-agentless · #${{ inputs.pr-number }} · ${{ inputs.sha }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: The repository that holds the commit (a fork for a fork pull request), owner/name
+        required: true
+        type: string
+      sha:
+        description: The head commit to test
+        required: true
+        type: string
+      pr-number:
+        description: The pull request number
+        required: true
+        type: string
+      fork-pr-author:
+        description: Ignored (read from the pull request)
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: Ignored (read from the pull request)
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  # Same PR-scoped group as e2e-bmaas-agentless-label-cleanup.yml. A new commit
+  # cancels this suite. inputs.repo is the pull request head repository.
+  group: e2e-bmaas-agentless-net-full-install-${{ inputs.repo }}-${{ inputs.pr-number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: osac-project/osac-ci/.github/workflows/suite-inputs.yml@492acce3715226b06731d3d02dd85e9f4eb52ca7  # v1.3.8
+    with:
+      repo: ${{ inputs.repo }}
+      sha: ${{ inputs.sha }}
+      pr-number: ${{ inputs.pr-number }}
+
+  bmaas-agentless:
+    needs: verify
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/e2e-bmaas-agentless-net-full-install.yml
+    with:
+      deploy-suite: bmaas-agentless
+      test-infra-repository: ${{ inputs.repo }}
+      test-infra-ref: ${{ inputs.sha }}
+      test-infra-sha: ${{ inputs.sha }}
+      pr-repository: ${{ inputs.repo }}
+      pr-sha: ${{ inputs.sha }}
+      fork-pr-author-association: ${{ needs.verify.outputs.fork-association }}
+      fork-pr-author: ${{ needs.verify.outputs.fork-author }}
+      pr-number: ${{ inputs.pr-number }}

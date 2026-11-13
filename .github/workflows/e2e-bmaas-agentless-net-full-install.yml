@@ -1,0 +1,421 @@
+---
+name: E2E BMaaS Agentless-Net Full Install
+
+permissions:
+  contents: read
+
+# One virtual BMH on the Agentless containerlab fabric. Triggers live on the
+# caller. A pull-request run checks out that pull request's commit on the
+# ephemeral host. Provision, the install, and teardown are steps of one job
+# so "Re-run failed jobs" starts a new instance instead of reusing one that
+# teardown already terminated. The host is not registered as a runner.
+on:
+  workflow_call:
+    inputs:
+      deploy-suite:
+        description: "Deployment scenario recorded on the diagnostics artifact"
+        required: false
+        type: string
+        default: "bmaas-agentless"
+      instance-type:
+        description: "EC2 instance type"
+        required: false
+        type: string
+        default: "c5n.metal"
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        type: string
+        default: "us-east-1"
+      orchestrator-runner-label:
+        description: "Self-hosted runner label for the orchestrator"
+        required: false
+        type: string
+        default: "osac-ci-orchestrator"
+      tooling-check-cmds:
+        description: "Commands to verify on the box before the install"
+        required: false
+        type: string
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+      osac-repo:
+        description: "Override osac mono-repo git URI -- empty means upstream"
+        required: false
+        type: string
+        default: ""
+      osac-branch:
+        description: "Branch, tag, or commit of the osac mono-repo to clone -- empty means main"
+        required: false
+        type: string
+        default: ""
+      test-infra-repository:
+        description: "Repository to checkout for actions and scripts"
+        required: false
+        type: string
+        default: ""
+      test-infra-ref:
+        description: "Branch, tag, or commit of the test-infra repository to checkout"
+        required: false
+        type: string
+        default: ""
+      test-infra-sha:
+        description: "Exact commit SHA of the test-infra repository to checkout"
+        required: false
+        type: string
+        default: ""
+      pr-repository:
+        description: "Repository containing the expected PR head"
+        required: false
+        type: string
+        default: ""
+      pr-ref:
+        description: "Expected PR head branch/ref"
+        required: false
+        type: string
+        default: ""
+      pr-sha:
+        description: "Expected immutable PR head SHA"
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: "PR author_association from the caller"
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: "GitHub login of the PR author"
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: "PR number"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  authorize:
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Validate pull request metadata
+        if: (inputs.pr-number == '' && inputs.pr-sha != '') || (inputs.pr-number != '' && inputs.pr-sha == '')
+        shell: bash
+        run: |
+          echo "::error::pr-number and pr-sha must be supplied together."
+          exit 1
+
+      - name: Authorize fork PR
+        if: inputs.fork-pr-author-association != ''
+        uses: ./.github/actions/authorize-fork-pr
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          fork-pr-author: ${{ inputs.fork-pr-author }}
+          pr-number: ${{ inputs.pr-number }}
+
+      - name: Validate pull request revision
+        if: inputs.pr-number != '' && inputs.pr-sha != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          EXPECTED_SHA: ${{ inputs.pr-sha }}
+          EXPECTED_REF: ${{ inputs.pr-ref }}
+          EXPECTED_REPOSITORY: ${{ inputs.pr-repository }}
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          actual_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+          actual_ref=$(jq -r '.head.ref' <<<"${pr_json}")
+          actual_repository=$(jq -r '.head.repo.full_name' <<<"${pr_json}")
+          [[ "${actual_sha}" == "${EXPECTED_SHA}" ]] || {
+            echo "::error::PR head SHA changed; refusing to provision."
+            exit 1
+          }
+          [[ -z "${EXPECTED_REPOSITORY}" || "${actual_repository}" == "${EXPECTED_REPOSITORY}" ]] || {
+            echo "::error::PR head repository changed; refusing to provision."
+            exit 1
+          }
+          [[ -z "${EXPECTED_REF}" || "${actual_ref}" == "${EXPECTED_REF}" ]] || {
+            echo "::error::PR head ref changed; refusing to provision."
+            exit 1
+          }
+
+  # "Re-run failed jobs" keeps successful jobs. A separate test job would still
+  # be bound to the runner label of an instance teardown had already terminated.
+  # This job provisions a new instance, runs the install over SSH, and tears
+  # the instance down. The host is not registered as a GitHub runner.
+  install:
+    needs: authorize
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    # 420 install + 45 provision + 15 secret push + 4 diagnostics retry
+    # + sanitize, attest, upload, and teardown.
+    timeout-minutes: 540
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+      attestations: write
+    env:
+      # Same derivation as ec2-runner-provision.yml so teardown.sh removes the
+      # known_hosts entry provision.sh created for this instance.
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout trusted scripts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch EC2 runner AWS credentials
+        id: aws-creds
+        uses: ./.github/actions/fetch-ec2-runner-aws-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch EC2 runner network config
+        id: network-config
+        uses: ./.github/actions/fetch-ec2-runner-network-config
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Verify orchestrator SSH keypair exists
+        shell: bash
+        run: |
+          if [ ! -f "${HOME}/.ssh/osac_ec2_orchestrator" ] || [ ! -f "${HOME}/.ssh/osac_ec2_orchestrator.pub" ]; then
+            echo "::error::Orchestrator SSH keypair not found at ~/.ssh/osac_ec2_orchestrator{,.pub}."
+            echo "This is a static, non-rotating keypair generated once during orchestrator"
+            echo "runner setup (see docs/new-ci-machine-setup.md), not per-run -- it must"
+            echo "already exist on this machine."
+            exit 1
+          fi
+
+      # "Re-run failed jobs" keeps a successful authorize job, so this check
+      # has to run again before a retry provisions an instance.
+      - name: Validate pull request revision
+        if: inputs.pr-number != '' && inputs.pr-sha != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          EXPECTED_SHA: ${{ inputs.pr-sha }}
+          EXPECTED_REF: ${{ inputs.pr-ref }}
+          EXPECTED_REPOSITORY: ${{ inputs.pr-repository }}
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          actual_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+          actual_ref=$(jq -r '.head.ref' <<<"${pr_json}")
+          actual_repository=$(jq -r '.head.repo.full_name' <<<"${pr_json}")
+          [[ "${actual_sha}" == "${EXPECTED_SHA}" ]] || {
+            echo "::error::PR head SHA changed; refusing to provision."
+            exit 1
+          }
+          [[ -z "${EXPECTED_REPOSITORY}" || "${actual_repository}" == "${EXPECTED_REPOSITORY}" ]] || {
+            echo "::error::PR head repository changed; refusing to provision."
+            exit 1
+          }
+          [[ -z "${EXPECTED_REF}" || "${actual_ref}" == "${EXPECTED_REF}" ]] || {
+            echo "::error::PR head ref changed; refusing to provision."
+            exit 1
+          }
+
+      - name: Provision ephemeral EC2 instance
+        id: provision
+        timeout-minutes: 45
+        shell: bash
+        env:
+          AMI_ID: ${{ steps.network-config.outputs.AMI_ID }}
+          INSTANCE_TYPE: ${{ inputs.instance-type }}
+          SUBNET_ID: ${{ steps.network-config.outputs.SUBNET_ID }}
+          SECURITY_GROUP_ID: ${{ steps.network-config.outputs.SECURITY_GROUP_ID }}
+          # run_attempt distinguishes "Re-run all jobs" from the previous attempt.
+          # A failed-job rerun does not increment it; this step still calls
+          # run-instances, so the new attempt gets a new instance id.
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
+          EC2_KEY_PAIR: ${{ steps.network-config.outputs.EC2_KEY_PAIR }}
+        run: |
+          export ORCHESTRATOR_PUBKEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator.pub"
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/provision.sh
+
+      - name: Fetch pull secret and AAP license from Vault
+        id: vault-secrets
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.setup.outputs.role-id }}
+          secretId: ${{ steps.setup.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
+            secret/data/osac/e2e/aap-license license | AAP_LICENSE ;
+            secret/data/osac/e2e/quay-io-osac-ci-bot-account user | QUAY_USER ;
+            secret/data/osac/e2e/quay-io-osac-ci-bot-account password | QUAY_PASSWORD
+
+      - name: Write pull secret and AAP license to temp files
+        shell: bash
+        env:
+          PULL_SECRET: ${{ steps.vault-secrets.outputs.PULL_SECRET }}
+          AAP_LICENSE: ${{ steps.vault-secrets.outputs.AAP_LICENSE }}
+          QUAY_USER: ${{ steps.vault-secrets.outputs.QUAY_USER }}
+          QUAY_PASSWORD: ${{ steps.vault-secrets.outputs.QUAY_PASSWORD }}
+        run: |
+          jq -s \
+            '.[0].auths * {"quay.io/osac-project": {"auth": ((env.QUAY_USER + ":" + env.QUAY_PASSWORD) | @base64)}} | {auths: .}' \
+            <(printf '%s' "${PULL_SECRET}") \
+            > "$RUNNER_TEMP/pull-secret.json"
+          chmod 600 "$RUNNER_TEMP/pull-secret.json"
+          printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
+          chmod 600 "$RUNNER_TEMP/aap-license.zip"
+
+      - name: Fetch Route 53 credentials
+        id: route53-creds
+        uses: ./.github/actions/fetch-route53-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Push secrets to ephemeral host
+        timeout-minutes: 15
+        shell: bash
+        env:
+          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
+          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
+          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
+          AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
+          PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
+          LAB_NAME: ci-${{ github.run_id }}
+          AWS_REGION: ${{ inputs.aws-region || 'us-east-1' }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/push-caas-agentless-net-secrets.sh
+
+      - name: Checkout the revision under test
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || job.workflow_repository }}
+          ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
+          persist-credentials: false
+          path: under-test
+
+      - name: Run the BMaaS install on the ephemeral host
+        id: install
+        # Target budgets plus the in-script diagnostics copy are 360 minutes.
+        # The extra 60 minutes cover the upload and the tooling checks.
+        timeout-minutes: 420
+        shell: bash
+        env:
+          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
+          UNDER_TEST_DIR: ${{ github.workspace }}/under-test
+          LOG_DIR: ${{ github.workspace }}/infra/agentless-net/logs
+          TOOLING_CHECK_CMDS: ${{ inputs.tooling-check-cmds }}
+          OSAC_REPO: ${{ inputs.osac-repo }}
+          OSAC_BRANCH: ${{ inputs.osac-branch }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/run-bmaas-agentless.sh
+
+      # A step timeout kills the install before its own copy. Retry the copy
+      # here, capped so a cancelled run still reaches teardown inside GitHub's
+      # five-minute always() window.
+      - name: Copy diagnostics from the ephemeral host
+        if: always() && steps.provision.outputs.public-ip != ''
+        timeout-minutes: 4
+        shell: bash
+        env:
+          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
+          LOG_DIR: ${{ github.workspace }}/infra/agentless-net/logs
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/run-bmaas-agentless.sh copy-logs
+
+      # Terminate before sanitize, attest, and upload. Those steps use the
+      # local logs, and a cancelled job only gives the remaining always()
+      # steps five minutes.
+      - name: Terminate the ephemeral instance
+        if: always()
+        shell: bash
+        env:
+          INSTANCE_ID: ${{ steps.provision.outputs.instance-id }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ inputs.aws-region || 'us-east-1' }}
+        run: ./scripts/ec2-runner/teardown.sh
+
+      - name: Sanitize diagnostics
+        id: sanitize
+        if: always()
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          rm -rf infra/agentless-net/logs-sanitized
+          if [ ! -d infra/agentless-net/logs ]; then
+            echo "No diagnostics were collected."
+            exit 1
+          fi
+          python3 infra/agentless-net/scripts/sanitize_diagnostics.py \
+            infra/agentless-net/logs \
+            infra/agentless-net/logs-sanitized
+
+      - name: Attest sanitized diagnostics
+        id: attest
+        if: always() && steps.sanitize.outcome == 'success'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: ${{ github.workspace }}/infra/agentless-net/logs-sanitized/**
+
+      - name: Publish the attestation with the diagnostics
+        id: publish-attestation
+        if: always() && steps.attest.outcome == 'success'
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -n "${BUNDLE_PATH}"
+          test -f "${BUNDLE_PATH}"
+          cp "${BUNDLE_PATH}" infra/agentless-net/logs-sanitized/attestation.intoto.jsonl
+
+      - name: Upload sanitized diagnostics
+        if: always() && steps.publish-attestation.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.deploy-suite }}-diagnostics-${{ github.run_id }}
+          path: infra/agentless-net/logs-sanitized
+          if-no-files-found: warn

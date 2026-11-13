@@ -8,6 +8,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${SCRIPT_DIR}/.."
+# prepare-host-bridges.sh saved the previous values. Restore them even when
+# a later teardown step fails. With no saved state the runtime values stay
+# as they are, and a second run finds nothing left to restore.
+trap '"${SCRIPT_DIR}/prepare-host-bridges.sh" restore' EXIT
 
 MGMT_CLONE_NAME="${MGMT_CLONE_NAME:-agentless-lab-mgmt}"
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac-e2e-ci}"

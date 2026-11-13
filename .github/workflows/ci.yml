@@ -54,6 +54,7 @@ jobs:
           python3 -I .github/scripts/netris_catalog_test.py
           python3 -I .github/scripts/export_vm_allowlist_test.py
           python3 -I .github/scripts/guest_ingress_vip_range_test.py
+          python3 -I infra/agentless-net/scripts/bmaas_ci_test.py
       - name: Shell script tests
         run: |
           set -euo pipefail

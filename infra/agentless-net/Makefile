@@ -15,6 +15,7 @@ export MGMT_CLONE_NAME OSAC_NAMESPACE OSAC_VALUES_FILE OSAC_PULL_SECRET_PATH
 #
 # Called individually from the workflow or command line.
 # Order: setup-infra → deploy-ocp → deploy-osac → deploy-fabric → setup-caas → test-e2e
+# BMaaS: setup-infra → deploy-ocp → deploy-osac (OSAC_PROFILE=bmaas-ci) → deploy-fabric → setup-bmaas → prove-bmi
 
 setup-infra:
 	@echo "=== Installing prerequisites ==="
@@ -41,6 +42,14 @@ setup-caas:
 	@echo "=== Registering host type, creating InfraEnv, booting VMs, approving agents ==="
 	$(SCRIPTS)/setup-caas.sh
 
+setup-bmaas:
+	@echo "=== Registering one virtual BMH and publishing its AgentlessNet inventory ==="
+	$(SCRIPTS)/setup-bmaas.sh
+
+prove-bmi:
+	@echo "=== Creating one BMI and waiting for its DHCP address ==="
+	$(SCRIPTS)/prove-bmi.sh
+
 test-e2e:
 	@echo "=== Running E2E tests ==="
 	$(SCRIPTS)/test-e2e.sh
@@ -63,6 +72,10 @@ destroy-caas:
 	@echo "=== Tearing down CaaS VMs ==="
 	$(SCRIPTS)/destroy-caas.sh
 
+destroy-bmaas:
+	@echo "=== Tearing down the proof BMI and virtual BMH ==="
+	$(SCRIPTS)/destroy-bmaas.sh
+
 gather-infra:
 	@echo "=== Gathering infra diagnostics ==="
 	$(SCRIPTS)/gather-infra.sh || true
@@ -71,9 +84,13 @@ gather-e2e:
 	@echo "=== Gathering E2E diagnostics ==="
 	$(SCRIPTS)/gather-e2e.sh || true
 
+gather-bmaas:
+	@echo "=== Gathering virtual BMH and BMI diagnostics ==="
+	$(SCRIPTS)/gather-bmaas.sh || true
+
 # ─── .PHONY ────────────────────────────────────────────────────────
 
 .PHONY: setup-infra deploy-ocp deploy-osac deploy-fabric \
-        setup-caas test-e2e \
-        destroy-osac destroy-ocp destroy-fabric destroy-caas \
-        gather-infra gather-e2e
+        setup-caas setup-bmaas prove-bmi test-e2e \
+        destroy-osac destroy-ocp destroy-fabric destroy-caas destroy-bmaas \
+        gather-infra gather-e2e gather-bmaas

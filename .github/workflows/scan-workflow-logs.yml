@@ -24,6 +24,8 @@ on:
       - E2E VMaaS
       - E2E VMaaS Full Install
       - E2E BMaaS Netris Full Install
+      - E2E BMaaS Agentless-Net Full Install
+      - E2E BMaaS Agentless PR suite
       - E2E VMaaS Netris Full Install
       - E2E BMaaS Netris PR suite
       - E2E VMaaS Netris PR suite
@@ -71,8 +73,12 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Comment on an associated open PR when leaks were found. Schedule /
-      # dispatch / no-PR runs skip quietly. Body is a short notice with
+      # Comment on an associated open PR when leaks were found. A
+      # workflow_dispatch PR suite runs from the default branch, so
+      # workflow_run.head_sha is not the tested commit. The suite run name
+      # carries "#<pr> · <sha>"; the script comments only after that commit
+      # is confirmed to belong to that open pull request. Schedule runs and
+      # runs with no resolvable PR skip quietly. Body is a short notice with
       # scan/redacted-artifact links (no findings table -- details on the
       # scan job summary / redacted artifact only).
       - name: Comment on PR if leaks found

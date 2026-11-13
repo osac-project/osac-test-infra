@@ -1,7 +1,9 @@
 .mgmt-network
 .env.infra
+.bmaas-proof.json
 clab-agentless-net-lab/
 logs/
+logs-sanitized/
 # Staged at runtime by the CI push/stage steps -- never commit real secrets
 config
 license.zip
