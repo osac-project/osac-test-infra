@@ -364,6 +364,10 @@ jobs:
       - name: Mint OSAC CI token to read private artifacts
         id: mint-private-token
         if: steps.private-access.outputs.enabled == 'true'
+        # Best effort: expired or wrong credentials must not stop the
+        # diagnosis, which still has the run's own artifact and its job log.
+        # The download step uses the token only after this step succeeded.
+        continue-on-error: true
         uses: ./.github/actions/mint-github-app-token
         with:
           app-id: ${{ secrets.OSAC_CI_APP_ID }}
@@ -378,7 +382,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
-          PRIVATE_TOKEN: ${{ steps.mint-private-token.outputs.token }}
+          PRIVATE_TOKEN: ${{ steps.mint-private-token.outcome == 'success' && steps.mint-private-token.outputs.token || '' }}
           PRIVATE_REPO: osac-project/osac-ci-artifacts
         run: |
           set -euo pipefail
@@ -399,7 +403,11 @@ jobs:
             if [[ -n "${PRIVATE_TOKEN}" ]]; then
               zip_path="${RUNNER_TEMP}/artifact-private.zip"
               rc=0
-              GH_TOKEN="${PRIVATE_TOKEN}" bash .github/scripts/fetch-private-run-artifact.sh \
+              # The job dispatches the collector and does not wait for it, and
+              # this workflow starts as soon as the run completes, so the
+              # artifact may still be on its way: ask for a few minutes.
+              GH_TOKEN="${PRIVATE_TOKEN}" FETCH_WAIT_SECONDS=180 FETCH_WAIT_INTERVAL=15 \
+                bash .github/scripts/fetch-private-run-artifact.sh \
                 "${PRIVATE_REPO}" "${zip_path}" \
                 "osac-logs-${RUN_ID}" \
                 "osac-logs-full-install-${RUN_ID}" \
