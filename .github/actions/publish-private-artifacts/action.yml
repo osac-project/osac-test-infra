@@ -57,6 +57,11 @@ runs:
         # collect.yml only accepts directories under /var/tmp/osac-artifacts/;
         # the override is for the unit tests.
         STAGING_ROOT="${OSAC_ARTIFACT_STAGING_ROOT:-/var/tmp/osac-artifacts}"
+        # Where the files are staged and on which host go to the dispatch step
+        # through this file, not through step outputs: a step's env block is
+        # printed in the public run log, and neither belongs there.
+        STATE_FILE="${RUNNER_TEMP}/publish-private-artifacts.json"
+        rm -f "${STATE_FILE}"
         if [[ ! -d "${SOURCE_DIR}" ]]; then
           echo "::warning::No artifact directory at ${SOURCE_DIR} -- nothing to publish"
           echo "staged=false" >> "${GITHUB_OUTPUT}"
@@ -85,9 +90,9 @@ runs:
           echo "staged=false" >> "${GITHUB_OUTPUT}"
           exit 0
         fi
+        (umask 077 && jq -n --arg dir "${DEST}" --arg host "${HOST_LABEL:-$(hostname -s)}" \
+          '{dir: $dir, host: $host}' > "${STATE_FILE}")
         echo "staged=true" >> "${GITHUB_OUTPUT}"
-        echo "dir=${DEST}" >> "${GITHUB_OUTPUT}"
-        echo "host=${HOST_LABEL:-$(hostname -s)}" >> "${GITHUB_OUTPUT}"
 
     - name: Split the repository name
       id: repo
@@ -123,12 +128,14 @@ runs:
         PRIVATE_REPO: ${{ inputs.private-repo }}
         WORKFLOW: ${{ inputs.workflow }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
-        STAGED_DIR: ${{ steps.stage.outputs.dir }}
-        HOST: ${{ steps.stage.outputs.host }}
         WORKFLOW_NAME: ${{ github.workflow }}
         ACTOR: ${{ github.triggering_actor }}
       run: |
         set -euo pipefail
+        STATE_FILE="${RUNNER_TEMP}/publish-private-artifacts.json"
+        HOST=$(jq -r '.host' "${STATE_FILE}")
+        STAGED_DIR=$(jq -r '.dir' "${STATE_FILE}")
+        rm -f "${STATE_FILE}"
         BODY=$(jq -n \
           --arg host "${HOST}" --arg dir "${STAGED_DIR}" --arg name "${ARTIFACT_NAME}" \
           --arg repo "${GITHUB_REPOSITORY}" --arg run_id "${GITHUB_RUN_ID}" --arg attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -147,7 +154,9 @@ runs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${PRIVATE_REPO}/actions/workflows/${WORKFLOW}/dispatches" \
             -d "${BODY}"); then
-          echo "::error::Could not dispatch ${WORKFLOW} in ${PRIVATE_REPO}. The files stay on ${HOST} in ${STAGED_DIR} until the host prunes them (1 day)."
+          # No host or path here: this log is public. The runner that ran
+          # this job is named in the job header.
+          echo "::error::Could not dispatch ${WORKFLOW} in ${PRIVATE_REPO}. The staged files stay on the runner host until a later job there prunes them, after a day."
           exit 1
         fi
         URL=$(jq -r '.html_url // empty' <<<"${RESP}")
