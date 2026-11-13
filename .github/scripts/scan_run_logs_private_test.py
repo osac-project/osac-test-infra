@@ -277,6 +277,22 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
         # Bounded: 30s at 15s is two sleeps, not a loop.
         self.assertEqual(len(self.sleeps.read_text().splitlines()), 2)
 
+    def test_the_wait_is_shared_by_every_pending_collect_run(self) -> None:
+        runs = self.routes[f"GET /repos/{PRIVATE}/actions/workflows/collect.yml/runs"]["body"]["workflow_runs"]
+        runs[0]["status"] = "in_progress"
+        runs.append({"id": 9004, "status": "in_progress", "display_title": f"collect {REPO}#{RUN}.2 - e2e vmaas / e2e"})
+        for run in (9001, 9004):
+            self.routes[f"GET /repos/{PRIVATE}/actions/runs/{run}"] = {"status": 200, "body": {"status": "in_progress"}}
+        self.routes[f"GET /repos/{PRIVATE}/actions/runs/9004/artifacts"] = {"status": 200, "body": {"artifacts": []}}
+        self.wait_seconds = "30"
+        result, status = self.run_script()
+        self.assertEqual(status["SCAN_OK"], "false")
+        # 30s at 15s is two sleeps in all, not two for each of the two runs.
+        self.assertEqual(len(self.sleeps.read_text().splitlines()), 2)
+        # Both are reported as unfinished; the second without waiting at all.
+        self.assertIn("Collect run 9001", result.stdout)
+        self.assertIn("Collect run 9004", result.stdout)
+
     def test_a_finished_collect_run_is_not_polled(self) -> None:
         self.run_script()
         self.assertEqual(self.calls_exact(f"/repos/{PRIVATE}/actions/runs/9001"), [])
