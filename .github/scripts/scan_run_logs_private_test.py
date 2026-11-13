@@ -24,8 +24,8 @@ API = "https://api.github.com"
 REPO = "osac-project/osac"
 PRIVATE = "osac-project/osac-ci-artifacts"
 RUN = "100"
-SOURCE_TOKEN = "source-token"
-PRIVATE_TOKEN = "private-token"
+TEST_SOURCE_TOKEN = "test-placeholder-source"
+TEST_PRIVATE_TOKEN = "test-placeholder-private"
 
 CURL = r"""#!__PYTHON__
 import json, os, sys
@@ -134,12 +134,12 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
             f"DELETE /repos/{PRIVATE}/actions/artifacts/77": {"status": 204},
         }
 
-    def run_script(self, *, private_repo: str | None = PRIVATE, private_token: str | None = PRIVATE_TOKEN):
+    def run_script(self, *, private_repo: str | None = PRIVATE, private_token: str | None = TEST_PRIVATE_TOKEN):
         self.routes_file.write_text(json.dumps(self.routes))
         environment = {
             "PATH": f"{self.bin}:{os.environ['PATH']}",
             "HOME": str(self.temp),
-            "GH_TOKEN": SOURCE_TOKEN,
+            "GH_TOKEN": TEST_SOURCE_TOKEN,
             "GITHUB_API_URL": API,
             "CONTAINER_ENGINE": str(self.bin / "engine"),
             "REQUEST_LOG": str(self.requests),
@@ -183,17 +183,17 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
         )
         download = self.calls_to("/artifacts/77/zip")
         self.assertEqual(len(download), 1)
-        self.assertEqual(download[0]["token"], PRIVATE_TOKEN)
+        self.assertEqual(download[0]["token"], TEST_PRIVATE_TOKEN)
         # Only the run's own calls use the source token.
         for call in self.calls_to(f"/repos/{REPO}/"):
-            self.assertEqual(call["token"], SOURCE_TOKEN, call)
+            self.assertEqual(call["token"], TEST_SOURCE_TOKEN, call)
         self.assertEqual([c for c in self.calls() if c["method"] == "DELETE"], [])
 
     def test_collect_runs_are_listed_since_the_run_started(self) -> None:
         self.run_script()
         listing = self.calls_to("/workflows/collect.yml/runs")[0]
         self.assertIn("created=>=2026-11-13T10:00:00Z", listing["query"])
-        self.assertEqual(listing["token"], PRIVATE_TOKEN)
+        self.assertEqual(listing["token"], TEST_PRIVATE_TOKEN)
 
     def test_only_this_runs_collect_runs_are_read(self) -> None:
         self.run_script()
@@ -210,7 +210,7 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((status["LEAKS_FOUND"], status["PURGE_OK"], status["FINDINGS_COUNT"]), ("true", "true", "1"))
         deletes = [c for c in self.calls() if c["method"] == "DELETE"]
-        self.assertEqual([(c["path"], c["token"]) for c in deletes], [(f"/repos/{PRIVATE}/actions/artifacts/77", PRIVATE_TOKEN)])
+        self.assertEqual([(c["path"], c["token"]) for c in deletes], [(f"/repos/{PRIVATE}/actions/artifacts/77", TEST_PRIVATE_TOKEN)])
         # The caller uploads redacted/ as a public artifact: nothing of the
         # private artifact may be in it, and the secret is in no output.
         redacted = self.output / "redacted"
