@@ -22,10 +22,6 @@ MAX_BYTES = 2 * 1024 * 1024
 MAX_SECONDS = 24 * 60 * 60
 
 
-def timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def history_dir(inventory: Path) -> Path:
     return inventory.with_suffix(".history")
 
@@ -50,92 +46,100 @@ def serial_capability(prefix: str) -> dict:
         return dict(serial="unavailable: installed helper or bounded standard backend unavailable")
 
 
-class EventWriter:
-    def __init__(self, directory: Path, prefix: str):
-        self.directory = directory
-        self.prefix = prefix
-        self.path = directory / "events.jsonl"
-        self.size = self.path.stat().st_size if self.path.exists() else 0
-        self.truncated = False
-
-    def record(self, domain, kind: str, **detail) -> None:
-        if not is_group_host_name(domain.name(), self.prefix):
-            return
-        entry = dict(timestamp=timestamp(), domain=domain.name(), uuid=domain.UUIDString(), event=kind, **detail)
-        data = (json.dumps(entry) + "\n").encode()
-        if self.size + len(data) <= MAX_BYTES:
-            with self.path.open("ab") as output:
-                output.write(data)
-            self.size += len(data)
-        else:
-            self.truncated = True
-
-
 def listen(directory: Path, prefix: str) -> None:
-    import libvirt
-
     os.umask(0o077)
-    libvirt.registerErrorHandler(lambda *_: None, None)
-    libvirt.virEventRegisterDefaultImpl()
-    connection = libvirt.openReadOnly("qemu:///system")
-    writer = EventWriter(directory, prefix)
-    callbacks = [
-        connection.domainEventRegisterAny(None, libvirt.VIR_DOMAIN_EVENT_ID_LIFECYCLE,
-                                         lambda conn, dom, event, detail, opaque:
-                                         writer.record(dom, "lifecycle", state=event, detail=detail), None),
-        connection.domainEventRegisterAny(None, libvirt.VIR_DOMAIN_EVENT_ID_REBOOT,
-                                         lambda conn, dom, opaque: writer.record(dom, "reboot"), None),
-    ]
-    if any(callback < 0 for callback in callbacks):
-        raise RuntimeError("event registration failed")
-    timer = libvirt.virEventAddTimeout(200, lambda *_: None, None)
-    if timer < 0:
-        raise RuntimeError("event timer registration failed")
     state = dict(pid=os.getpid(), identity=process_identity(os.getpid()), prefix=prefix,
-                 started=timestamp(), **serial_capability(prefix))
+                 started=datetime.now(timezone.utc).isoformat(), **serial_capability(prefix))
     (directory / "status.json").write_text(json.dumps(state))
-    (directory / "ready.json").write_text(json.dumps(state))
+    process = subprocess.Popen(["virsh", "-c", "qemu:///system", "event", "--all", "--loop",
+                                "--timestamp", "--timeout", "86400"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=dict(os.environ, LC_ALL="C"))
+    previous = signal.signal(signal.SIGTERM, lambda *_: (directory / "stop").touch())
+    pattern = re.compile(rb"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\+0000: event '(lifecycle|reboot)' for domain '(virtual-bmh-[0-9a-f]{8}-[0-9a-f]{2})'(?:: [^\r\n]*)?\n")
     deadline = time.monotonic() + MAX_SECONDS
+    pending, dropping, size = b"", False, 0
+    reason = "deadline"
     try:
-        while not (directory / "stop").exists() and time.monotonic() < deadline:
-            if libvirt.virEventRunDefaultImpl() < 0:
-                break
+        (directory / "ready.json").write_text(json.dumps(state))
+        with (directory / "events.log").open("wb") as output:
+            while time.monotonic() < deadline:
+                if (directory / "stop").exists():
+                    reason = "stop requested"
+                    break
+                if not select.select([process.stdout], [], [], 0.1)[0]:
+                    continue
+                chunk = os.read(process.stdout.fileno(), 4096)
+                if not chunk:
+                    reason = "CLI exited"
+                    break
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    line += b"\n"
+                    match = pattern.fullmatch(line) if not dropping and len(line) <= 4096 else None
+                    dropping = False
+                    if not match or not is_group_host_name(match[2].decode(), prefix):
+                        continue
+                    if size + len(line) > MAX_BYTES:
+                        reason = "byte limit"
+                        break
+                    output.write(line)
+                    output.flush()
+                    size += len(line)
+                    if match[1] == b"lifecycle" and line.endswith((b": Defined Added\n", b": Defined Updated\n")):
+                        (directory / (match[2].decode() + ".defined")).touch()
+                if reason == "byte limit":
+                    break
+                if len(pending) > 4096:
+                    pending, dropping = b"", True
     finally:
-        state.update(stopped=timestamp(), events_truncated=writer.truncated)
-        (directory / "status.json").write_text(json.dumps(state))
-        for callback in callbacks:
-            connection.domainEventDeregisterAny(callback)
-        libvirt.virEventRemoveTimeout(timer)
-        connection.close()
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+        process.stdout.close()
+        signal.signal(signal.SIGTERM, previous)
+        state.update(stopped=datetime.now(timezone.utc).isoformat(), event_stop=reason)
+        (directory / "status.tmp").write_text(json.dumps(state))
+        (directory / "status.tmp").replace(directory / "status.json")
         (directory / "ready.json").unlink(missing_ok=True)
+
+
+def defined(directory: Path, name: str, timeout: float = 1) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if (directory / (name + ".defined")).is_file():
+            return True
+        if (directory / "stop").exists():
+            return False
+        time.sleep(0.05)
+    return False
 
 
 def start(inventory: Path, prefix: str) -> Path | None:
     directory = history_dir(inventory)
     try:
         directory.mkdir(mode=0o700)
-    except FileExistsError:
-        print("WARNING: BMH history directory already exists; not starting another recorder.", file=sys.stderr)
-        return None
-    except OSError:
-        print("WARNING: BMH history directory unavailable; continuing without history.", file=sys.stderr)
-        return None
-    os.chmod(directory, 0o700)
-    try:
         process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "listen", str(inventory), prefix],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    start_new_session=True)
     except OSError:
-        print("WARNING: BMH recorder could not start; continuing without history.", file=sys.stderr)
+        print("WARNING: BMH recorder unavailable or history already exists; continuing without another recorder.", file=sys.stderr)
         return None
     deadline = time.monotonic() + 15
-    while process.poll() is None and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
         try:
-            state = json.loads((directory / "ready.json").read_text())
+            state = json.loads((directory / "status.json").read_text())
             if state["pid"] == process.pid and state["prefix"] == prefix:
+                process.poll()
                 return directory
         except (OSError, ValueError):
             pass
+        if process.poll() is not None:
+            break
         time.sleep(0.05)
     if process.poll() is None:
         process.terminate()
@@ -149,12 +153,9 @@ def start(inventory: Path, prefix: str) -> Path | None:
 
 
 def pidfd_call(name: str, *arguments: int) -> int:
-    library = ctypes.CDLL(None, use_errno=True)
-    function = getattr(library, name)
-    if name == "pidfd_open":
-        function.argtypes = [ctypes.c_int, ctypes.c_uint]
-    else:
-        function.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
+    function = getattr(ctypes.CDLL(None, use_errno=True), name)
+    function.argtypes = ([ctypes.c_int, ctypes.c_uint] if name == "pidfd_open" else
+                         [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint])
     function.restype = ctypes.c_int
     result = function(*arguments)
     if result < 0:
@@ -206,7 +207,7 @@ def collect(inventory: Path, destination: Path) -> None:
 
 def stage(directory: Path, prefix: str, destination: Path) -> None:
     for path in directory.iterdir():
-        if path.name not in ("events.jsonl", "status.json"):
+        if path.name not in ("events.log", "status.json"):
             continue
         if path.is_symlink() or not path.is_file():
             continue
