@@ -63,6 +63,24 @@ inputs:
       pattern scanning.
     required: false
     default: "true"
+  private-repo:
+    description: >-
+      owner/name of a private repository (osac-project/osac-ci-artifacts) to
+      hold the artifact instead of this run. A public repository's artifacts
+      can be downloaded by every signed-in GitHub user. When set, the files
+      are handed to that repository's collect workflow and nothing is uploaded
+      to this run; app-id and app-key are then required. Empty keeps the
+      upload to this run.
+    required: false
+    default: ""
+  private-repo-app-id:
+    description: "ID of the GitHub App installed on private-repo (OSAC_CI_APP_ID)"
+    required: false
+    default: ""
+  private-repo-app-key:
+    description: "Private key of that GitHub App (OSAC_CI_APP_PRIVATE_KEY)"
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -273,8 +291,17 @@ runs:
           exit 1
         fi
 
+    - name: Publish artifacts to the private repository
+      if: always() && inputs.private-repo != ''
+      uses: ./.github/actions/publish-private-artifacts
+      with:
+        artifact-name: ${{ inputs.artifact-name }}
+        private-repo: ${{ inputs.private-repo }}
+        app-id: ${{ inputs.private-repo-app-id }}
+        app-key: ${{ inputs.private-repo-app-key }}
+
     - name: Upload artifacts
-      if: always()
+      if: always() && inputs.private-repo == ''
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}

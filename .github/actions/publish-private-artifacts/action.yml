@@ -1,0 +1,151 @@
+---
+name: Publish artifacts to the private artifact repository
+description: >-
+  Hand a job's files to a private repository instead of uploading them as an
+  artifact of this run. GitHub lets every signed-in user download the
+  artifacts of a public repository's runs, so a public job that must not
+  expose its files stages them on the runner and dispatches the collect
+  workflow of a private repository (osac-project/osac-ci-artifacts). That
+  workflow runs on the same host, uploads the files as an artifact of the
+  private repository, and deletes them from the host. The run summary links to
+  that run, and the run and its artifact carry everything needed to trace
+  back to this job.
+
+  Needs a self-hosted runner whose runner label is its short hostname (or an
+  explicit host-label): the collect job is pinned to the host by that label.
+  The runners of one host share /var/tmp, so any of them can pick it up.
+
+inputs:
+  artifact-name:
+    description: "Name for the artifact in the private repository"
+    required: true
+  source-dir:
+    description: "Directory whose contents are published"
+    required: false
+    default: ""
+  private-repo:
+    description: "owner/name of the private artifact repository"
+    required: true
+  workflow:
+    description: "Workflow file in the private repository that collects the files"
+    required: false
+    default: "collect.yml"
+  app-id:
+    description: "ID of the GitHub App installed on the private repository"
+    required: true
+  app-key:
+    description: "Private key of that GitHub App"
+    required: true
+  host-label:
+    description: "Runner label of this host. Empty means the short hostname."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Stage files on the runner host
+      id: stage
+      shell: bash
+      env:
+        SOURCE_DIR: ${{ inputs.source-dir != '' && inputs.source-dir || format('{0}/osac-artifacts', runner.temp) }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        HOST_LABEL: ${{ inputs.host-label }}
+      run: |
+        set -euo pipefail
+        STAGING_ROOT=/var/tmp/osac-artifacts
+        if [[ ! -d "${SOURCE_DIR}" ]]; then
+          echo "::warning::No artifact directory at ${SOURCE_DIR} -- nothing to publish"
+          echo "staged=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        install -d -m 700 "${STAGING_ROOT}"
+        # A run that died before the collect job finished leaves its files
+        # here; every later job on the host clears what is a day old.
+        find "${STAGING_ROOT}" -mindepth 1 -maxdepth 1 -mmin +1440 -exec rm -rf -- {} + || true
+
+        SAFE_NAME=$(printf '%s' "${ARTIFACT_NAME}" | tr -c 'A-Za-z0-9._-' '_')
+        DEST="${STAGING_ROOT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB//[^A-Za-z0-9._-]/_}-${SAFE_NAME}-$(date +%s)"
+        mkdir -m 700 "${DEST}"
+        cp -a "${SOURCE_DIR}/." "${DEST}/"
+        rm -f "${DEST}/.redaction-complete"
+        if [[ -z "$(ls -A "${DEST}")" ]]; then
+          echo "::warning::${SOURCE_DIR} is empty -- nothing to publish"
+          rm -rf "${DEST}"
+          echo "staged=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        echo "staged=true" >> "${GITHUB_OUTPUT}"
+        echo "dir=${DEST}" >> "${GITHUB_OUTPUT}"
+        echo "host=${HOST_LABEL:-$(hostname -s)}" >> "${GITHUB_OUTPUT}"
+
+    - name: Split the repository name
+      id: repo
+      if: steps.stage.outputs.staged == 'true'
+      shell: bash
+      env:
+        PRIVATE_REPO: ${{ inputs.private-repo }}
+      run: |
+        set -euo pipefail
+        if [[ ! "${PRIVATE_REPO}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::private-repo must be owner/name, got '${PRIVATE_REPO}'"
+          exit 1
+        fi
+        echo "owner=${PRIVATE_REPO%%/*}" >> "${GITHUB_OUTPUT}"
+        echo "name=${PRIVATE_REPO##*/}" >> "${GITHUB_OUTPUT}"
+
+    - name: Mint a token that can only dispatch workflows in the private repository
+      id: token
+      if: steps.stage.outputs.staged == 'true'
+      uses: ./.github/actions/mint-github-app-token
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-key }}
+        account-login: ${{ steps.repo.outputs.owner }}
+        repositories: ${{ steps.repo.outputs.name }}
+        permissions: '{"actions":"write"}'
+
+    - name: Dispatch the collect workflow
+      if: steps.stage.outputs.staged == 'true'
+      shell: bash
+      env:
+        GH_DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
+        PRIVATE_REPO: ${{ inputs.private-repo }}
+        WORKFLOW: ${{ inputs.workflow }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        STAGED_DIR: ${{ steps.stage.outputs.dir }}
+        HOST: ${{ steps.stage.outputs.host }}
+        WORKFLOW_NAME: ${{ github.workflow }}
+        ACTOR: ${{ github.triggering_actor }}
+      run: |
+        set -euo pipefail
+        BODY=$(jq -n \
+          --arg host "${HOST}" --arg dir "${STAGED_DIR}" --arg name "${ARTIFACT_NAME}" \
+          --arg repo "${GITHUB_REPOSITORY}" --arg run_id "${GITHUB_RUN_ID}" --arg attempt "${GITHUB_RUN_ATTEMPT}" \
+          --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+          --arg workflow "${WORKFLOW_NAME}" --arg job "${GITHUB_JOB}" --arg sha "${GITHUB_SHA}" \
+          --arg ref "${GITHUB_REF}" --arg event "${GITHUB_EVENT_NAME}" --arg actor "${ACTOR}" \
+          --arg runner "${RUNNER_NAME}" \
+          '{ref: "main", return_run_details: true, inputs: {
+              host_label: $host, src_dir: $dir, artifact_name: $name,
+              source_repo: $repo, source_run_id: $run_id, source_run_attempt: $attempt,
+              source_run_url: $run_url, source_workflow: $workflow, source_job: $job,
+              source_sha: $sha, source_ref: $ref, source_event: $event,
+              source_actor: $actor, source_runner: $runner}}')
+        if ! RESP=$(curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_DISPATCH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${PRIVATE_REPO}/actions/workflows/${WORKFLOW}/dispatches" \
+            -d "${BODY}"); then
+          echo "::error::Could not dispatch ${WORKFLOW} in ${PRIVATE_REPO}. The files stay on ${HOST} in ${STAGED_DIR} until the host prunes them (1 day)."
+          exit 1
+        fi
+        URL=$(jq -r '.html_url // empty' <<<"${RESP}")
+        if [[ -z "${URL}" ]]; then
+          URL="https://github.com/${PRIVATE_REPO}/actions/workflows/${WORKFLOW}"
+        fi
+        {
+          echo "### Private artifact \`${ARTIFACT_NAME}\`"
+          echo "Uploaded by [${URL#https://github.com/}](${URL}). Only people with access to \`${PRIVATE_REPO}\` can open it."
+        } >> "${GITHUB_STEP_SUMMARY}"
+        echo "Dispatched ${URL}"
