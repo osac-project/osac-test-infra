@@ -87,7 +87,8 @@ All subprocess groups, including copy and deletion, have external hard bounds.
 Cancellation prioritizes cleanup over optional recovery: it stops the active
 subprocess, skips new recovery copies, and stops before copying additional pods.
 Later signals can stop newly active subprocesses without recursively handling
-signals during a stop. Ownership proof and UID-preconditioned deletion retain
+signals during a stop. Cancellation is rechecked after subprocess registration
+to cover signals during spawn. Ownership proof and UID-preconditioned deletion retain
 their independent cleanup deadline, never a shortened copy allowance or the
 sanitization reserve. An interrupted collection exits without authorizing upload.
 Cleanup is best effort: failed or interrupted API proofs withhold deletion, and

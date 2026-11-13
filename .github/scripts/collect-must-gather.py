@@ -117,10 +117,11 @@ def run(
     env: dict | None = None,
     stdout: object = subprocess.DEVNULL,
     capture: PrivateCapture | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> int:
     global ACTIVE
     duration = min(seconds, deadline - time.monotonic() - 0.3)
-    if duration <= 0:
+    if duration <= 0 or (cancelled is not None and cancelled()):
         return 124
     try:
         ACTIVE = subprocess.Popen(
@@ -135,6 +136,8 @@ def run(
             reader = threading.Thread(target=capture.drain, args=(ACTIVE.stdout,), daemon=True)
             reader.start()
         try:
+            if cancelled is not None and cancelled():
+                return 124
             return ACTIVE.wait(timeout=duration)
         except subprocess.TimeoutExpired:
             return 124
@@ -288,6 +291,7 @@ def recover(root: pathlib.Path, identity: tuple[str, str], deadline: float, canc
             ["oc", "rsync", "-n", identity[0], "--container=copy", f"{name}:/must-gather/", str(target)],
             (deadline - time.monotonic()) / (len(pods) - index),
             deadline,
+            cancelled=cancelled,
         )
         if copied != 0:
             result = "copy-incomplete"
@@ -350,6 +354,7 @@ def standard_gather(root: pathlib.Path, deadline: float) -> tuple[int, dict]:
                 client_deadline - time.monotonic(),
                 client_deadline,
                 capture=records,
+                cancelled=lambda: cancelled,
             )
         identity = owned_namespace(records, started, time.time(), deadline)
         if result != 0 or cancelled:

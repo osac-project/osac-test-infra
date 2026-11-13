@@ -344,19 +344,36 @@ class RecoveryTests(unittest.TestCase):
         return [json.loads(line) for line in (self.temp / "commands.jsonl").read_text().splitlines()]
 
     def cancel_long_collection(
-        self, phase: str, number: int, fault: str = "", interrupt_cleanup: bool = False
+        self, phase: str, number: int, fault: str = "", interrupt_cleanup: bool = False, spawn_signal: str = ""
     ) -> tuple[str, float]:
-        for name in ("phase", "child.pid", "deletion-requested", "commands.jsonl", "processes.jsonl"):
+        if self.tree.exists():
+            shutil.rmtree(self.tree)
+        for name in ("phase", "child.pid", "spawn.pid", "deletion-requested", "commands.jsonl", "processes.jsonl"):
             (self.temp / name).unlink(missing_ok=True)
         process = subprocess.Popen(
             [
                 sys.executable,
                 "-I",
                 "-c",
-                "import importlib.util, pathlib, sys, time\n"
+                "import importlib.util, os, pathlib, signal, sys, time\n"
                 "spec = importlib.util.spec_from_file_location('collector', sys.argv[1])\n"
                 "collector = importlib.util.module_from_spec(spec)\n"
                 "spec.loader.exec_module(collector)\n"
+                "original = collector.subprocess.Popen\n"
+                "def spawn(command, **options):\n"
+                "    inject = 'rsync' in command and os.environ.get('TEST_COPY_SPAWN_SIGNAL')\n"
+                "    if inject:\n"
+                "        assert collector.ACTIVE is None\n"
+                "    if inject == 'before':\n"
+                "        signal.raise_signal(signal.SIGINT)\n"
+                "    child = original(command, **options)\n"
+                "    if inject:\n"
+                "        pathlib.Path(os.environ['RUNNER_TEMP'], 'spawn.pid').write_text(str(child.pid))\n"
+                "        print('copy spawn signal: ' + inject, flush=True)\n"
+                "    if inject == 'after':\n"
+                "        signal.raise_signal(signal.SIGINT)\n"
+                "    return child\n"
+                "collector.subprocess.Popen = spawn\n"
                 "try:\n"
                 "    collector.standard_gather(pathlib.Path(sys.argv[2]), time.monotonic() + 630)\n"
                 "except InterruptedError:\n"
@@ -369,6 +386,7 @@ class RecoveryTests(unittest.TestCase):
                 "TEST_MODE": "blocked-log-follow" if phase == "client" else "failed",
                 "TEST_HANG_PHASE": phase + (",cleanup" if interrupt_cleanup else ""),
                 "TEST_FAULT": fault,
+                "TEST_COPY_SPAWN_SIGNAL": spawn_signal,
             },
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -390,9 +408,11 @@ class RecoveryTests(unittest.TestCase):
             self.fail(f"synthetic phase {expected} not reached")
 
         try:
-            await_phase(phase)
             started = time.monotonic()
-            process.send_signal(number)
+            if not spawn_signal:
+                await_phase(phase)
+                started = time.monotonic()
+                process.send_signal(number)
             if interrupt_cleanup:
                 await_phase("cleanup")
                 time.sleep(0.15)
@@ -406,6 +426,10 @@ class RecoveryTests(unittest.TestCase):
             self.assertLess(elapsed, 5)
             self.assertFalse((self.artifacts / ".redaction-complete").exists())
             self.assertNotIn(SENTINEL, output)
+            for name in ("child.pid", "spawn.pid"):
+                child = self.temp / name
+                if child.exists():
+                    children.add(int(child.read_text()))
             for child_pid in children:
                 state = pathlib.Path(f"/proc/{child_pid}/stat")
                 self.assertTrue(not state.exists() or state.read_text().split()[2] == "Z")
@@ -427,6 +451,19 @@ class RecoveryTests(unittest.TestCase):
                 for line in records.read_text().splitlines():
                     with contextlib.suppress(ProcessLookupError):
                         os.killpg(json.loads(line)["pid"], signal.SIGKILL)
+            spawned = self.temp / "spawn.pid"
+            if spawned.exists():
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(int(spawned.read_text()), signal.SIGKILL)
+
+    def test_cancellation_between_copy_check_and_active_registration_still_cleans_up(self) -> None:
+        for position in ("before", "after"):
+            with self.subTest(position=position):
+                output, _ = self.cancel_long_collection("copy", signal.SIGINT, "multiple-pods", spawn_signal=position)
+                self.assertIn("copy spawn signal: " + position, output)
+                self.assertLessEqual(sum("rsync" in command for command in self.commands()), 1)
+                self.assertTrue((self.temp / "deletion-requested").exists())
+                self.assertIn("cleanup: deletion-requested", output)
 
     def test_large_budget_single_signals_skip_recovery_and_delete_proven_namespace(self) -> None:
         for number in (signal.SIGINT, signal.SIGTERM):
