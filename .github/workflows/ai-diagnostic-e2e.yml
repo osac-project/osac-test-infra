@@ -382,6 +382,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           PRIVATE_TOKEN: ${{ steps.mint-private-token.outcome == 'success' && steps.mint-private-token.outputs.token || '' }}
           PRIVATE_REPO: osac-project/osac-ci-artifacts
         run: |
@@ -406,7 +407,11 @@ jobs:
               # The job dispatches the collector and does not wait for it, and
               # this workflow starts as soon as the run completes, so the
               # artifact may still be on its way: ask for a few minutes.
+              # A rerun reuses the artifact names, so the collector run's
+              # title (collect <repo>#<run>.<attempt> - ...) says which
+              # attempt an artifact is from; only this attempt's counts.
               GH_TOKEN="${PRIVATE_TOKEN}" FETCH_WAIT_SECONDS=180 FETCH_WAIT_INTERVAL=15 \
+                FETCH_TITLE_PREFIX="collect ${REPO}#${RUN_ID}.${RUN_ATTEMPT} - " \
                 bash .github/scripts/fetch-private-run-artifact.sh \
                 "${PRIVATE_REPO}" "${zip_path}" \
                 "osac-logs-${RUN_ID}" \
