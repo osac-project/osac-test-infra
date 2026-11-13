@@ -75,6 +75,13 @@ def failing(name: str, time: str = "2.0", classname: str = "tests/e2e/vmaas") ->
     )
 
 
+class BadJsonResponse(FakeResponse):
+    """A 200 whose body is not JSON."""
+
+    def json(self):
+        raise ValueError("not json")
+
+
 def zip_bytes(files: dict[str, bytes]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -432,8 +439,54 @@ class TestArtifactFetch:
         cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
 
         assert cases is None
-        assert reason.startswith("no osac-logs-[<suite>-]full-install artifact; ")
         assert "HTTP 403" in reason
+        # A failed lookup is retried, not stored as a run with no artifact.
+        assert trends.fetch_state(reason) == "error"
+
+    def test_a_repository_the_token_cannot_see_is_not_retried_forever(self, trends, github):
+        # Unrouted private URLs answer 404, as a repository the token cannot
+        # see does: that is a setting, not a state that retrying fixes.
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        _, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+
+        assert trends.fetch_state(reason) == "no_data"
+
+    def test_an_answer_that_is_not_json_is_a_failed_lookup(self, trends, github):
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(
+            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name=osac-logs-full-install-{RUN_ID}&per_page=100",
+            BadJsonResponse(),
+        )
+
+        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+
+        assert cases is None
+        assert trends.fetch_state(reason) == "error"
+
+    def test_a_run_with_no_private_artifact_is_still_no_data(self, trends, github):
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        for name in ("", "bmaas-", "caas-"):
+            github.add(
+                f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name=osac-logs-{name}full-install-{RUN_ID}&per_page=100",
+                FakeResponse(payload={"total_count": 0, "artifacts": []}),
+            )
+
+        _, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+
+        assert trends.fetch_state(reason) == "no_data"
+
+    def test_the_fetchers_org_and_api_url_reach_the_private_lookup(self, trends, github):
+        github.add(
+            "/repos/other-org/runs-here/actions/runs/{}/artifacts?per_page=100".format(RUN_ID),
+            FakeResponse(payload={"total_count": 0, "artifacts": []}),
+        )
+
+        trends.ArtifactFetcher(token=TOKEN, org="other-org", api_url="https://api.github.com").fetch("runs-here", RUN_ID)
+
+        private_calls = [call for call in github.calls if "osac-ci-artifacts" in call]
+        assert private_calls
+        assert all(call.startswith("/repos/other-org/osac-ci-artifacts/") for call in private_calls)
 
     def test_the_run_artifact_is_read_without_asking_the_private_repository(self, trends, github, wfe):
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))

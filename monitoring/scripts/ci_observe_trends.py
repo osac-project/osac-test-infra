@@ -650,10 +650,20 @@ class ArtifactFetcher:
             # A job that published to the private artifact repository has
             # nothing on its run.
             artifacts, private_reason = private_native_artifacts(
-                lambda private_url: requests.get(private_url, headers=self.headers, timeout=60), run_id)
+                lambda private_url: requests.get(private_url, headers=self.headers, timeout=60), run_id,
+                org=self.org, api_url=self.api_url)
         if not artifacts:
-            reason = "no osac-logs-[<suite>-]full-install artifact"
-            return None, f"{reason}; {private_reason}" if private_reason else reason
+            if private_reason and "HTTP 404" not in private_reason:
+                # GitHub did not answer for the private repository (a timeout,
+                # a 403, a 5xx): say so in the words fetch_state reads as a
+                # failure worth retrying, not as "this run has no artifact".
+                # A 404 is the repository not being visible to this token --
+                # a setting that retrying does not fix -- so it stays "no
+                # artifact" rather than being asked again on every pass.
+                return None, f"artifact listing failed ({private_reason})"
+            if private_reason:
+                logger.warning("run %s: %s", run_id, private_reason)
+            return None, "no osac-logs-[<suite>-]full-install artifact"
         # A live artifact before an expired one, so a rerun that left both
         # behind still parses the ones that exist.
         return sorted(artifacts, key=lambda artifact: bool(artifact.get("expired"))), None

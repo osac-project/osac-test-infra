@@ -391,6 +391,44 @@ class TestNativePrivateRepository:
         assert native["status"] == "missing"
         assert any("osac-ci-artifacts failed with HTTP 403" in note for note in native["notes"])
 
+    def test_an_answer_that_is_not_json_is_a_failed_lookup_not_an_exception(self, evidence, github, wfe):
+        class BadJson(FakeResponse):
+            def json(self):
+                raise ValueError("not json")
+
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        # The plain name has an artifact; the suite-qualified lookups then
+        # answer garbage. What was found must not be thrown away.
+        github.add(PRIVATE_LIST_PATH, private_artifact_payload(wfe.API_URL))
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+        for suite in ("bmaas", "caas"):
+            github.add(
+                f"/repos/osac-project/osac-ci-artifacts/actions/artifacts"
+                f"?name=osac-logs-{suite}-full-install-{RUN_ID}&per_page=100",
+                BadJson(),
+            )
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "available"
+
+    def test_a_non_json_answer_alone_is_reported_in_the_notes(self, evidence, github):
+        class BadJson(FakeResponse):
+            def json(self):
+                raise ValueError("not json")
+
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_LIST_PATH, BadJson())
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "missing"
+        assert any("invalid response" in note for note in native["notes"])
+
     def test_a_similar_name_for_another_run_is_not_accepted(self, evidence, github, wfe):
         seed_direct_run(evidence)
         github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
