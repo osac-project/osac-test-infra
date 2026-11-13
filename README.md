@@ -13,44 +13,6 @@ consume deployment configuration and do not depend on which backend created it.
 [the OSAC E2E guide](https://github.com/osac-project/osac/blob/main/tests/e2e/AGENTS.md)
 for test conventions.
 
-## E2E diagnostic artifacts
-
-All nine E2E execution families collect the default management-cluster
-`oc adm must-gather` before cluster or runner teardown: existing-cluster VMaaS,
-VMaaS/CaaS/BMaaS full installs, full regression, VMaaS/BMaaS/stretched Netris,
-and CaaS agentless-net. No guest-cluster or additional plugin gather is added.
-
-The native hierarchy survives under `mgmt-cluster/must-gather/`, including
-image, node and resource context, extensionless `version`, and
-`host_service_logs/masters/{kubelet,crio}_service.log`. Command stdout/stderr is
-captured there, not printed raw to CI. The existing shared recursive redaction,
-gitleaks scan, known-secret release gate and public/private upload checks apply;
-`.redaction-complete` still authorizes only a completed shared redaction pass.
-
-Collection uses the existing 900-second normal / 120-second cancellation budgets.
-Native gathering uses at most 600 seconds of the remaining time, reserving 60
-seconds for ordinary diagnostics and shared redaction after the short Secret
-inventory snapshot. An external timeout also bounds the command. Failures may
-leave only locally downloaded partial output or none; no separate recovery or
-namespace cleanup is attempted. Diagnostic failures do not replace test results.
-
-A post-command 128-MiB total-size check, including the captured command log,
-withholds an oversized must-gather subtree without discarding other diagnostics.
-This is a retained-payload cap, **not an instantaneous disk quota**. The final
-shared release gate withholds recognizable archives/compressed files within
-must-gather, including Insights archives and representative base64-wrapped archive
-headers (a bounded 8-KiB prefix per candidate, including whitespace wrapping).
-It does not unpack or repack them. Symlinks and unreadable/oversized files remain
-subject to the shared gate. Other diagnostics, including public telemetry's
-optional pre-scan contract, are unchanged; private publication always requires a
-successful scan. Native names are not anonymized, and content scanners do not
-promise detection of arbitrary encodings or credentials embedded in filenames.
-
-This improves diagnostic coverage for [#470](https://github.com/osac-project/osac-test-infra/issues/470),
-not a fix for the underlying E2E failure. Infrastructure consumer tests run
-with `python3 -I .github/scripts/must_gather_test.py` and
-`python3 -I .github/scripts/upload_artifacts_test.py` (PyYAML required, as in CI).
-
 ## Architecture
 
 The repository connects two layers:
