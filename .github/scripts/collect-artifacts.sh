@@ -21,6 +21,11 @@ COLLECT_TIMEOUT_SECONDS="${COLLECT_TIMEOUT_SECONDS:-900}"
 # not vouch for this one.
 rm -f "${ARTIFACT_DIR}/.redaction-complete"
 
+if [[ -n "${CLONE_NAME:-}" ]]; then
+  BMH_INVENTORY="${INVENTORY_FILE:-${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json}"
+  timeout 6 python3 "${GITHUB_WORKSPACE}/.github/scripts/bmh_history.py" stop "${BMH_INVENTORY}" || true
+fi
+
 # Compact boot diagnostics are deliberately collected without kubeconfig
 # access. Their helper omits raw cluster-tool logs; the upload action must scan
 # and redact this path successfully before it can be uploaded.
@@ -53,6 +58,11 @@ mkdir -p "${INVENTORY_DIR}"
   || { rm -f "${INVENTORY_DIR}/k8s-secrets.json"; echo "::notice::Secret inventory not collected"; }
 
 if [[ "${rc}" -eq 0 ]]; then
+  if [[ -n "${CLONE_NAME:-}" ]]; then
+    BMH_INVENTORY="${INVENTORY_FILE:-${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json}"
+    timeout 25 python3 "${GITHUB_WORKSPACE}/.github/scripts/bmh_history.py" collect \
+      "${BMH_INVENTORY}" "${ARTIFACT_DIR}/bmh-history" || true
+  fi
   touch "${ARTIFACT_DIR}/.redaction-complete"
 elif [[ "${rc}" -eq 124 ]]; then
   echo "::warning::Log collection stopped after ${COLLECT_TIMEOUT_SECONDS}s" \
