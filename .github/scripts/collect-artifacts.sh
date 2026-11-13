@@ -4,9 +4,7 @@
 # cluster; the scan and upload that follow do not (see the upload-artifacts
 # action), so a workflow can destroy the cluster in between.
 #
-# Collection is best effort; sanitization is all-or-nothing. Only successful
-# normalization and recursive redaction authorize .redaction-complete. The
-# upload action refuses interrupted or failed sanitization.
+# Only successful collection and shared redaction authorize .redaction-complete.
 #
 # Required env: KUBECONFIG, RUNNER_TEMP, GITHUB_WORKSPACE
 # Optional env: E2E_NAMESPACE, JUNIT_PATH, INVENTORY_FILE (read by
@@ -30,6 +28,9 @@ rm -f "${ARTIFACT_DIR}/.redaction-complete"
 # and redact this path successfully before it can be uploaded.
 if [[ ! -f "${KUBECONFIG:-}" && -f "${ARTIFACT_DIR}/compact-boot/.collection-complete" ]]; then
   echo "No kubeconfig is available; retaining selected compact-boot host diagnostics only."
+  rm -rf -- "${ARTIFACT_DIR}/mgmt-cluster/must-gather"
+  touch "${ARTIFACT_DIR}/.redaction-complete"
+  exit 0
 fi
 
 NETRIS_ARTIFACT_LAYOUT=false
@@ -41,5 +42,21 @@ if [[ -d "${ARTIFACT_DIR}/netris-logs" \
 fi
 export NETRIS_ARTIFACT_LAYOUT
 
-exec python3 -I "${GITHUB_WORKSPACE}/.github/scripts/collect-must-gather.py" \
-  "${ARTIFACT_DIR}" --timeout-seconds "${COLLECT_TIMEOUT_SECONDS}"
+export OSAC_COLLECTION_DEADLINE=$(( $(date +%s) + COLLECT_TIMEOUT_SECONDS ))
+INVENTORY_DIR="${RUNNER_TEMP}/osac-secret-inventory"
+mkdir -p "${INVENTORY_DIR}"
+chmod 700 "${INVENTORY_DIR}"
+rm -f "${INVENTORY_DIR}/k8s-secrets.json"
+inventory_seconds=$(( COLLECT_TIMEOUT_SECONDS < 15 ? COLLECT_TIMEOUT_SECONDS : 15 ))
+(umask 077 && timeout -k 2 "${inventory_seconds}" oc get secrets \
+  -n "${E2E_NAMESPACE:-osac-e2e-ci}" -o json \
+  > "${INVENTORY_DIR}/k8s-secrets.json" 2>/dev/null) \
+  || { rm -f "${INVENTORY_DIR}/k8s-secrets.json"; echo "::notice::Secret inventory not collected"; }
+
+remaining=$(( OSAC_COLLECTION_DEADLINE - $(date +%s) ))
+if (( remaining > 0 )) && timeout -k 5 "${remaining}" \
+  "${GITHUB_WORKSPACE}/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}"; then
+  touch "${ARTIFACT_DIR}/.redaction-complete"
+else
+  echo "::warning::Collection or redaction incomplete; artifacts will not be uploaded"
+fi

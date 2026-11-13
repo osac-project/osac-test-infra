@@ -15,135 +15,41 @@ for test conventions.
 
 ## E2E diagnostic artifacts
 
-All nine E2E execution families collect a shared management-cluster baseline:
-VMaaS against an existing cluster; VMaaS, CaaS, and BMaaS full installs; full
-regression; VMaaS, BMaaS, and stretched Netris; and CaaS agentless-net. Their
-scheduled, PR, merge-queue, build, and manual callers inherit this behavior.
-The shared `collect-artifacts` action runs before cluster/EC2 teardown;
-`upload-artifacts` needs only the collected files. No guest-cluster or additional
-plugin must-gather is added.
+All nine E2E execution families collect the default management-cluster
+`oc adm must-gather` before cluster or runner teardown: existing-cluster VMaaS,
+VMaaS/CaaS/BMaaS full installs, full regression, VMaaS/BMaaS/stretched Netris,
+and CaaS agentless-net. No guest-cluster or additional plugin gather is added.
 
-Artifacts include `mgmt-cluster/must-gather/`, collected with the default
-`oc adm must-gather` image selected for the cluster release. Standard master
-service logs include `host_service_logs/masters/kubelet_service.log` and
-`crio_service.log` (also applicable to a single-node
-management cluster).
-This improves diagnostic coverage for [#470](https://github.com/osac-project/osac-test-infra/issues/470);
-it is not a garbage-collection fix.
+The native hierarchy survives under `mgmt-cluster/must-gather/`, including
+image, node and resource context, extensionless `version`, and
+`host_service_logs/masters/{kubelet,crio}_service.log`. Command stdout/stderr is
+captured there, not printed raw to CI. The existing shared recursive redaction,
+gitleaks scan, known-secret release gate and public/private upload checks apply;
+`.redaction-complete` still authorizes only a completed shared redaction pass.
 
-This is a **sanitized plaintext subset, not a complete unmodified must-gather
-archive**. Before recursive redaction, the collector withholds archives and
-compressed content (including Insights archives), binary/opaque or unsupported
-files, links, unreadable files, and files above 32 MiB. Content checks inspect
-magic bytes, tar headers, UTF-8 validity, and control characters, not just suffixes.
-Recognizable archives inside base64 text are also withheld (up to three encoding
-layers, withholding still-encoded data at that limit); archives are never
-extracted or decompressed for public publication.
-ASCII-whitespace-wrapped base64 blocks are also inspected, including blocks
-following journal text. The bounded check tries four base64 alignments, matches
-specific embedded format signatures, and validates embedded tar headers by
-checksum. Excessive tar-header candidates are withheld as opaque. Encoded
-candidates retain the 32-character recognition floor. This is not a general
-decoder for arbitrary encodings, encryption, or fragmented/interleaved
-payloads; no archive contents are extracted or published in decoded form.
-Supported text includes logs, YAML, JSON/JSONL, HTML, stderr, and the standard
-extensionless `version` and `timestamp` files. A narrow literal allowlist preserves
-only the public structural directory names `host_service_logs`, `masters`, and
-`workers`, and the fixed filenames `kubelet_service.log` and `crio_service.log`.
-Every other source directory and filename is replaced with a deterministic
-SHA-256 identifier: credentials can occur in names as well as content, and content
-scanners do not sanitize names. No raw-name mapping is published. Service-log
-suffixes remain navigable, but dynamic image/node wrapper names are hashed; this
-preserves grouping while losing node identity and other dynamic path context.
-Files outside the existing redaction suffixes receive `.txt`. Normalization stages
-outside the artifact tree. The unchanged 32-MiB per-file bound also applies to
-kubelet and CRI-O journals: oversized journals are omitted entirely, not truncated,
-so this subset does not promise full service history. Total retained input is
-capped at 128 MiB and 20,000 entries. `omissions.json` contains only fixed reason codes and counts,
-never omitted names, paths, or values. Existing raw Netris must-gather/inspect
-exclusions remain in effect.
+Collection uses the existing 900-second normal / 120-second cancellation budgets.
+Native gathering uses at most 600 seconds of the remaining time, reserving 60
+seconds for ordinary diagnostics and shared redaction after the short Secret
+inventory snapshot. An external timeout also bounds the command. Failures may
+leave only locally downloaded partial output or none; no separate recovery or
+namespace cleanup is attempted. Diagnostic failures do not replace test results.
 
-`collection-status.json` reports `complete`, `partial`, `timed-out`, or `skipped`.
-Missing/empty kubeconfig and an unreachable API are explicit skips. Collection
-failures retain safe partial output without changing the test result. The
-existing 900-second normal and 120-second cancellation collection budgets cover
-custom diagnostics, must-gather, normalization, secret inventory, and recursive
-redaction; collection subprocess groups are terminated before sanitization.
-Budget is reserved for sanitization. A cancellation during collection is followed
-by a fresh short collection; failed/interrupted sanitization never writes
-`.redaction-complete`.
+A post-command 128-MiB total-size check, including the captured command log,
+withholds an oversized must-gather subtree without discarding other diagnostics.
+This is a retained-payload cap, **not an instantaneous disk quota**. The final
+shared release gate withholds recognizable archives/compressed files within
+must-gather, including Insights archives and representative base64-wrapped archive
+headers (a bounded 8-KiB prefix per candidate, including whitespace wrapping).
+It does not unpack or repack them. Symlinks and unreadable/oversized files remain
+subject to the shared gate. Other diagnostics, including public telemetry's
+optional pre-scan contract, are unchanged; private publication always requires a
+successful scan. Native names are not anonymized, and content scanners do not
+promise detection of arbitrary encodings or credentials embedded in filenames.
 
-The host runner's actual `oc version --client` is recorded as a bounded numeric
-release (or `unknown`), not inferred from the test container. The client runs
-with a native gather `--timeout` below its external process-group cap. Native
-timeout alone is insufficient: supported clients follow remote logs outside that
-timeout, and gather errors return before downloading pod output. `--keep`
-preserves those resources for a separately bounded recovery `oc rsync` from the
-standard `copy` container's `/must-gather/`. A successful native download is not
-copied twice; recovered output does not promote a failed/timed-out collection to
-`complete`.
-
-After custom collection (at most 30% of the total budget) and readiness checking,
-30% of the total remains reserved for normalization, inventory and redaction.
-Of the remaining must-gather window, recovery receives 35%, cleanup receives
-15% (capped at 10 seconds), and the client receives the rest; its native timeout
-is 80% of its remaining cap. Version and identity API requests, process shutdown
-and copying consume their respective windows, never the sanitization reserve.
-All subprocess groups, including copy and deletion, have external hard bounds.
-
-Cancellation prioritizes cleanup over optional recovery: it stops the active
-subprocess, skips new recovery copies, and stops before copying additional pods.
-Later signals can stop newly active subprocesses without recursively handling
-signals during a stop. Cancellation is rechecked after subprocess registration
-and while waiting. Signal handlers only latch requests and signal the active
-group; normal execution owns bounded termination grace, escalation and reaping,
-so a signal cannot recursively wait on CPython's process-wait lock.
-This covers signals during spawn. Ownership proof and UID-preconditioned deletion retain
-their independent cleanup deadline, never a shortened copy allowance or the
-sanitization reserve. An interrupted collection exits without authorizing upload.
-Cleanup is best effort: failed or interrupted API proofs withhold deletion, and
-runner hard termination or Kubernetes finalizers can still leave resources.
-
-Recovery never selects namespaces by listing a prefix. A private, bounded
-in-memory stream parser captures only the exact client's timestamped namespace
-and role-binding creation records; plugin-prefixed, duplicate, stale or
-ambiguous records cannot authorize recovery. Live API metadata must match the
-command, generated names, creation window, namespace UID and binding ownership
-and role. Cleanup rechecks the namespace UID and sends a UID-preconditioned
-delete only for that proven identity, after copying (also after native success).
-`collection-status.json` separately reports recovery and cleanup; accepted
-deletion is only `deletion-requested`, not proof that resources disappeared.
-Ownership/API failure withholds copy/deletion rather than touching other runs.
-Server/API failure, an unsupported client output format, unavailable copy pods,
-exhausted copy time, or hard runner death can still lose remote diagnostics or
-leave resources until infrastructure teardown. An interrupted attempt does not
-authorize upload; cancellation's fresh collection and the existing gates remain
-required. No extra image, custom gather command, or cluster-admin binding is
-created by the recovery helper.
-
-`--keep` disables the client's own cleanup, including on success. There is no
-unsafe cleanup fallback when the host client rejects flags, changes its output
-format, or fails the identity checks: the helper never broadens namespace
-selection or starts a replacement gather. Unknown version strings alone do not
-disable recovery when the exact creation records and API proof still match.
-Unsupported flags can prevent gathering; unsupported output or lost API access
-can leave the privileged namespace and its cluster-admin binding behind.
-Existing-cluster jobs do not destroy their cluster afterward, so an operator
-must remove retained resources there; infrastructure teardown is not a fallback
-for those jobs. Cleanup status is diagnostic evidence, not a retention guarantee.
-
-Uploads require the redaction marker, a successful must-gather content guard,
-successful gitleaks scanning, and the mandatory release gate, which rechecks the
-subset and fixed-schema metadata immediately before upload. Gitleaks cannot be
-disabled for this subtree. Scanner failure, missing reports, or remaining
-findings withhold the upload. The release gate also censors known pull-secret and
-namespace Secret values. Diagnostics steps are best effort; their failure does
-not replace the original test outcome.
-
-The infrastructure-only regression commands are
-`python3 -I .github/scripts/must_gather_test.py` and
-`python3 -I .github/scripts/upload_artifacts_test.py` (PyYAML is required, as in CI).
-They use synthetic data and stubbed commands, not live clusters.
+This improves diagnostic coverage for [#470](https://github.com/osac-project/osac-test-infra/issues/470),
+not the underlying garbage-collection failure. Infrastructure consumer tests run
+with `python3 -I .github/scripts/must_gather_test.py` and
+`python3 -I .github/scripts/upload_artifacts_test.py` (PyYAML required, as in CI).
 
 ## Architecture
 

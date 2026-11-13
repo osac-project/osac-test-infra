@@ -104,10 +104,8 @@ runs:
         fi
         if [[ -e "${ARTIFACT_DIR}/mgmt-cluster/must-gather" || -L "${ARTIFACT_DIR}/mgmt-cluster/must-gather" ]]; then
           echo "must-gather=true" >> "$GITHUB_OUTPUT"
-          if [[ "${{ inputs.private-repo }}" == "" && "${{ inputs.gitleaks }}" != "true" ]] || ! python3 -I \
-            "${{ github.workspace }}/.github/scripts/collect-must-gather.py" \
-            "${ARTIFACT_DIR}/mgmt-cluster/must-gather" --check; then
-            echo "::error::Must-gather safety guard failed — withholding artifacts"
+          if [[ "${{ inputs.private-repo }}" == "" && "${{ inputs.gitleaks }}" != "true" ]]; then
+            echo "::error::Must-gather requires a pre-upload scan — withholding artifacts"
             rm -rf "${ARTIFACT_DIR}"
             exit 1
           fi
@@ -334,15 +332,6 @@ runs:
           rm -rf "${ARTIFACT_DIR}"
           exit 1
         fi
-        if [[ -e "${ARTIFACT_DIR}/mgmt-cluster/must-gather" || -L "${ARTIFACT_DIR}/mgmt-cluster/must-gather" ]]; then
-          if ! python3 -I "${{ github.workspace }}/.github/scripts/collect-must-gather.py" \
-            "${ARTIFACT_DIR}/mgmt-cluster/must-gather" --check; then
-            echo "::error::Final must-gather safety guard failed — withholding artifacts"
-            rm -rf "${ARTIFACT_DIR}"
-            exit 1
-          fi
-        fi
-
     - name: Publish artifacts to the private repository
       if: >-
         always() && inputs.private-repo != '' &&
