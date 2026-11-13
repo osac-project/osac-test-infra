@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
+import sys
 import threading
 import urllib.request
 import zipfile
@@ -401,6 +402,46 @@ class TestArtifactFetch:
 
         assert cases is None
         assert "no osac-logs" in reason
+
+    def test_reads_the_artifact_from_the_private_repository(self, trends, github, wfe):
+        name = f"osac-logs-full-install-{RUN_ID}"
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        entry = artifact_payload(wfe.API_URL).json()["artifacts"][0]
+        entry["archive_download_url"] = f"{wfe.API_URL}/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip"
+        github.add(
+            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
+            FakeResponse(payload={"total_count": 1, "artifacts": [entry]}),
+        )
+        github.add(
+            "/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip",
+            FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})),
+        )
+
+        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+
+        assert reason is None
+        assert len(cases) == 3
+
+    def test_a_private_lookup_that_fails_is_part_of_the_reason(self, trends, github):
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(
+            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name=osac-logs-full-install-{RUN_ID}&per_page=100",
+            FakeResponse(403, text="forbidden"),
+        )
+
+        cases, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+
+        assert cases is None
+        assert reason.startswith("no osac-logs-[<suite>-]full-install artifact; ")
+        assert "HTTP 403" in reason
+
+    def test_the_run_artifact_is_read_without_asking_the_private_repository(self, trends, github, wfe):
+        github.add(LIST_PATH, artifact_payload(wfe.API_URL))
+        github.add(DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
+
+        assert not [call for call in github.calls if "osac-ci-artifacts" in call]
 
     def test_the_token_never_reaches_the_outcomes(self, trends, github, wfe):
         github.add(LIST_PATH, artifact_payload(wfe.API_URL))

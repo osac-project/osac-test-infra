@@ -44,6 +44,14 @@ logger = logging.getLogger(__name__)
 ORG = os.getenv("GITHUB_ORG", "osac-project")
 API_URL = os.getenv("API_URL", "https://api.github.com")
 JOBS_HISTORY_DAYS = int(os.getenv("JOBS_HISTORY_DAYS", "30"))
+# The private repository E2E jobs publish their artifacts to instead of to
+# their own run (upload-artifacts' private-repo input). A run that published
+# there has no artifact of its own, so a reader that finds none on the run
+# asks this repository for the exact names. Empty turns the lookup off.
+PRIVATE_ARTIFACT_REPO = os.getenv("PRIVATE_ARTIFACT_REPO", "osac-ci-artifacts")
+# The suite part of "osac-logs-[<suite>-]full-install-<run id>": VMaaS has
+# none, BMaaS and CaaS insert theirs.
+PRIVATE_ARTIFACT_SUITES = ("", "bmaas-", "caas-")
 
 
 class BoundedCache:
@@ -557,6 +565,20 @@ class CIObserveRunEvidence:
         match = CIObserveRunEvidence.NATIVE_ARTIFACT_RE.match(name or "")
         return match is not None and int(match.group(1)) == run_id
 
+    @staticmethod
+    def _artifact_page_url(artifact, repo, run_id):
+        """The page an artifact is on: its run's, or -- for one read from the
+        private artifact repository -- the run there that published it."""
+        private_repo = artifact.get("_private_repo")
+        if private_repo:
+            private_run = (artifact.get("workflow_run") or {}).get("id")
+            if private_run:
+                return (f"https://github.com/{ORG}/{private_repo}/actions/runs/"
+                        f"{private_run}/artifacts/{artifact.get('id')}")
+            return f"https://github.com/{ORG}/{private_repo}/actions"
+        return (f"https://github.com/{ORG}/{repo}/actions/runs/{run_id}"
+                f"/artifacts/{artifact.get('id')}")
+
     def _ci_observe_native_uncached(self, run_id, repo):
         """The native JUnit evidence of one run, straight from GitHub. Every
         failure path returns a document whose status explains the gap; this
@@ -593,11 +615,14 @@ class CIObserveRunEvidence:
             a for a in resp.json().get("artifacts") or []
             if self._is_native_artifact(a.get("name", ""), run_id)
         ]
+        private_reason = None
+        if not matches:
+            matches, private_reason = private_native_artifacts(self.exporter._get, run_id)
         if not matches:
             return self._native_doc(
                 "missing", artifact_name, "",
                 [f"no osac-logs-[<suite>-]full-install-{run_id} artifact "
-                 f"exists in {ORG}/{repo}"],
+                 f"exists in {ORG}/{repo}"] + ([private_reason] if private_reason else []),
             )
         matches.sort(key=lambda a: (bool(a.get("expired")),
                                     a.get("name") != artifact_name,
@@ -609,10 +634,7 @@ class CIObserveRunEvidence:
             notes.append(
                 f"{len(matches)} artifacts matched; used {artifact_name}"
             )
-        artifact_url = (
-            f"https://github.com/{ORG}/{repo}/actions/runs/{run_id}"
-            f"/artifacts/{artifact.get('id')}"
-        )
+        artifact_url = self._artifact_page_url(artifact, repo, run_id)
         if artifact.get("expired"):
             return self._native_doc(
                 "expired", artifact_name, artifact_url,
@@ -829,3 +851,34 @@ class CIObserveRunEvidence:
         repo = (doc["run"] or {}).get("repo") or rows[0].get("repo", "")
         doc["native"] = self._ci_observe_native(run_id, run_attempt, repo)
         return doc
+
+
+def private_native_artifacts(get, run_id):
+    """The native-evidence artifacts of one run that its job published to the
+    private artifact repository: (artifacts, reason).
+
+    The artifact there has the name the job gave it, so the lookup asks for
+    each name this run's artifact can have. `get` is a function from a URL to
+    a response (the caller supplies its own authentication). The reason is
+    only set, to the first failure, when nothing was found and a lookup
+    failed -- a token without access to the repository reads as that, not as
+    "not published"."""
+    if not PRIVATE_ARTIFACT_REPO:
+        return [], None
+    found = []
+    reason = None
+    for suite in PRIVATE_ARTIFACT_SUITES:
+        name = f"osac-logs-{suite}full-install-{run_id}"
+        url = f"{API_URL}/repos/{ORG}/{PRIVATE_ARTIFACT_REPO}/actions/artifacts?name={name}&per_page=100"
+        try:
+            response = get(url)
+        except requests.exceptions.RequestException:
+            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (network error)"
+            continue
+        if not response.ok:
+            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed with HTTP {response.status_code}"
+            continue
+        for artifact in response.json().get("artifacts") or []:
+            if CIObserveRunEvidence._is_native_artifact(artifact.get("name") or "", run_id):
+                found.append(dict(artifact, _private_repo=PRIVATE_ARTIFACT_REPO))
+    return found, (None if found else reason)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import threading
 import urllib.request
 import zipfile
@@ -309,6 +310,110 @@ def test_invalid_and_missing_capture_id(evidence):
     assert empty["parsed"] == "invalid"
     assert empty["capture_id"] == ""
     assert any("missing or empty" in n for n in empty["coverage"]["notes"])
+
+
+PRIVATE_LIST_PATH = f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={ARTIFACT_NAME}&per_page=100"
+PRIVATE_DOWNLOAD_PATH = "/repos/osac-project/osac-ci-artifacts/actions/artifacts/77/zip"
+PRIVATE_ARTIFACT_URL = "https://github.com/osac-project/osac-ci-artifacts/actions/runs/9001/artifacts/77"
+
+
+def private_artifact_payload(api_url, *, name=ARTIFACT_NAME, expired=False):
+    """One artifact as the private repository's name-filtered listing returns
+    it: it belongs to the private collect run (9001), not to the E2E run."""
+    entry = artifact_entry(api_url, art_id=77, name=name, expired=expired)
+    entry["archive_download_url"] = f"{api_url}{PRIVATE_DOWNLOAD_PATH}"
+    entry["workflow_run"] = {"id": 9001}
+    return FakeResponse(payload={"total_count": 1, "artifacts": [entry]})
+
+
+class TestNativePrivateRepository:
+    """A job that published to osac-ci-artifacts has no artifact on its run."""
+
+    def test_reads_the_artifact_from_the_private_repository(self, evidence, github, wfe):
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_LIST_PATH, private_artifact_payload(wfe.API_URL))
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "available"
+        assert native["artifact_name"] == ARTIFACT_NAME
+        # The page is the private collect run's, not the E2E run's.
+        assert native["artifact_url"] == PRIVATE_ARTIFACT_URL
+        assert (native["tests"], native["failures"]) == (4, 1)
+
+    def test_suite_qualified_names_are_looked_up_too(self, evidence, github, wfe):
+        seed_direct_run(evidence)
+        name = f"osac-logs-bmaas-full-install-{RUN_ID}"
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(
+            f"/repos/osac-project/osac-ci-artifacts/actions/artifacts?name={name}&per_page=100",
+            private_artifact_payload(wfe.API_URL, name=name),
+        )
+        github.add(PRIVATE_DOWNLOAD_PATH, FakeResponse(content=zip_bytes({"junit.xml": VALID_JUNIT})))
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "available"
+        assert native["artifact_name"] == name
+
+    def test_the_run_artifact_wins_and_the_private_repository_is_not_asked(self, evidence, github, wfe):
+        seed_direct_run(evidence)
+        TestNative().route_available(github, wfe)
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["artifact_url"] == ARTIFACT_URL
+        assert not [call for call in github.calls if "osac-ci-artifacts" in call]
+
+    def test_an_expired_private_artifact_is_reported_as_expired(self, evidence, github, wfe):
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_LIST_PATH, private_artifact_payload(wfe.API_URL, expired=True))
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "expired"
+        assert github.count(PRIVATE_DOWNLOAD_PATH) == 0
+
+    def test_a_token_without_access_says_so_instead_of_missing_quietly(self, evidence, github):
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(PRIVATE_LIST_PATH, FakeResponse(403, text="forbidden"))
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "missing"
+        assert any("osac-ci-artifacts failed with HTTP 403" in note for note in native["notes"])
+
+    def test_a_similar_name_for_another_run_is_not_accepted(self, evidence, github, wfe):
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+        github.add(
+            PRIVATE_LIST_PATH,
+            private_artifact_payload(wfe.API_URL, name=f"osac-logs-full-install-{RUN_ID + 1}"),
+        )
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "missing"
+
+    def test_an_empty_repository_name_turns_the_lookup_off(self, evidence, github, monkeypatch):
+        monkeypatch.setattr(sys.modules["ci_observe_run_evidence"], "PRIVATE_ARTIFACT_REPO", "")
+        seed_direct_run(evidence)
+        github.add(RUN_PATH, FakeResponse(payload={"head_sha": "a" * 40}))
+        github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
+
+        native = evidence.get_ci_observe_run_json({"capture_id": [CAPTURE]})["native"]
+
+        assert native["status"] == "missing"
+        assert not [call for call in github.calls if "osac-ci-artifacts" in call]
 
 
 class TestNative:
