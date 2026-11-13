@@ -173,7 +173,10 @@ class Api:
             raise CallTimeout(f"{service} timed out after {self.call_timeout}s")
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()
-            raise GrpcError(service, detail, _grpc_code(detail))
+            code = _grpc_code(detail)
+            if self.token:
+                detail = detail.replace(self.token, "[REDACTED]")
+            raise GrpcError(service, detail, code)
         if not completed.stdout.strip():
             return {}
         parsed = json.loads(completed.stdout)
@@ -366,8 +369,13 @@ def wait_for_address(api: Api, bmi_id: str, *, timeout_seconds: int, interval_se
     raise TimeoutError(f"BMI {bmi_id} did not become running with an address. Last status: {last}")
 
 
-def delete_proof(api: Api, state: dict[str, str]) -> bool:
-    """Delete recorded resources. Return False when any deletion fails."""
+def delete_proof(api: Api, state: dict[str, str], state_path: Path | None = None) -> bool:
+    """Delete recorded resources. Return False when any deletion fails.
+
+    Each id is removed from the state file as soon as that delete succeeds.
+    A later failure must not leave an already-deleted id for the next retry
+    to Get instead of Create. Ids whose delete failed stay in the file.
+    """
     ok = True
     for service, key in (
         (f"{PUBLIC_API}.BareMetalInstances/Delete", "bmi_id"),
@@ -382,10 +390,14 @@ def delete_proof(api: Api, state: dict[str, str]) -> bool:
             continue
         try:
             api.call(service, {"id": resource_id})
-            print(f"deleted {key} {resource_id}")
         except RuntimeError as exc:
             ok = False
             print(f"ERROR: failed to delete {key} {resource_id}: {exc}", file=sys.stderr)
+            continue
+        print(f"deleted {key} {resource_id}")
+        state.pop(key, None)
+        if state_path is not None:
+            state_path.write_text(json.dumps(state))
     return ok
 
 
@@ -481,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         if not state_path.is_file():
             print(f"no proof state at {state_path}; nothing to delete")
             return 0
-        if not delete_proof(api, json.loads(state_path.read_text())):
+        if not delete_proof(api, json.loads(state_path.read_text()), state_path):
             return 1
         state_path.unlink()
         return 0

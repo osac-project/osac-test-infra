@@ -15,10 +15,8 @@
 # secret content never appears as a process argument on either machine.
 #
 # Secrets land in a fixed staging directory rather than directly under
-# infra/agentless-net/: at this point in the flow the JIT runner hasn't
-# started yet, so there's no git checkout on the box for infra/agentless-net/
-# to exist under. The e2e job's "Stage secrets into place" step (run after
-# its own checkout) copies them into their final places:
+# infra/agentless-net/: the revision under test is copied onto the box
+# afterwards. run-bmaas-agentless.sh copies them into their final places:
 #   pull-secret -> /root/pull-secret
 #   license.zip -> /root/aap-license.zip
 #   config      -> infra/agentless-net/config
