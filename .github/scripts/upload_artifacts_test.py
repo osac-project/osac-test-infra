@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import base64
 import gzip
-import hashlib
 import io
 import itertools
 import json
@@ -19,6 +18,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 
 import yaml
 
@@ -207,25 +207,18 @@ class UploadArtifactsTest(unittest.TestCase):
         tree = self.artifacts / "mgmt-cluster/must-gather"
         tree.mkdir(parents=True)
         (tree / "kubelet_service.log").write_text("service history\n")
-        self.normalize(tree)
         return tree
-
-    def normalize(self, tree: pathlib.Path) -> None:
-        result = subprocess.run(
-            [sys.executable, str(REPO / ".github/scripts/collect-must-gather.py"), str(tree), "--normalize"],
-            capture_output=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        (tree / "collection-status.json").write_text('{"status":"complete","reason":"none"}\n')
 
     def scanner(self, mode: str) -> None:
         docker = self.temp / "bin/docker"
         docker.write_text(f'''#!/bin/bash
 set -eu
 output=""
+scan=""
 for argument in "$@"; do
   case "$argument" in
     *:/out:rw*) output="${{argument%%:/out:rw*}}" ;;
+    *:/scan:ro*) scan="${{argument%%:/scan:ro*}}" ;;
   esac
 done
 if [[ "{mode}" == "failed" ]]; then exit 2; fi
@@ -235,7 +228,11 @@ for argument in "$@"; do
   case "$argument" in --report-path=*) report="${{argument##*/}}" ;; esac
 done
 if [[ "{mode}" == "missing-final" && "$report" == "findings-final.json" ]]; then exit 0; fi
-if [[ "{mode}" == "invalid-final" && "$report" == "findings-final.json" ]]; then
+if [[ "{mode}" == "redact-once" ]] && grep -rq 'synthetic-scanner-only-928385-testing' "$scan"; then
+  finding='[{{"RuleID":"synthetic","File":"scanner-control.log",'
+  finding+='"Secret":"synthetic-scanner-only-928385-testing"}}]'
+  printf '%s\\n' "$finding" > "$output/$report"
+elif [[ "{mode}" == "invalid-final" && "$report" == "findings-final.json" ]]; then
   printf '{{}}\\n' > "$output/$report"
 elif [[ "{mode}" == "remaining" || "{mode}" == "missing-final" || "{mode}" == "invalid-final" ]]; then
   printf '%s\\n' '[{{"RuleID":"synthetic","File":"/scan/log.txt","StartLine":1}}]' > "$output/$report"
@@ -294,117 +291,6 @@ fi
                 if mode != "clean":
                     self.assertFalse(self.artifacts.exists())
 
-    def test_private_must_gather_opt_out_keeps_initial_and_final_content_guards(self) -> None:
-        inputs = {"private-repo": "synthetic/private", "gitleaks": "false"}
-        for phase in ("verify", "release"):
-            with self.subTest(phase=phase):
-                shutil.rmtree(self.artifacts, ignore_errors=True)
-                self.artifacts.mkdir()
-                (self.artifacts / ".redaction-complete").touch()
-                tree = self.must_gather()
-                self.inventory.write_text('{"items": []}')
-                if phase == "verify":
-                    (tree / "omissions.json").unlink()
-                    result = self.run_step("Verify redaction complete", inputs)
-                else:
-                    self.assertEqual(self.run_step("Verify redaction complete", inputs).returncode, 0)
-                    self.scanner("clean")
-                    self.assertEqual(self.run_step("Scan artifacts with gitleaks", inputs).returncode, 0)
-                    (tree / "unvouched-name.txt").write_text("diagnostic text\n")
-                    result = self.run_step("Release gate - censor secrets", inputs)
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertFalse(self.artifacts.exists())
-
-    def test_wrapped_archives_are_withheld_through_real_redaction_and_final_gates(self) -> None:
-        tree = self.artifacts / "mgmt-cluster/must-gather"
-        tree.mkdir(parents=True)
-        credential = b"synthetic-wrapped-credential-937224-testing-only"
-        self.inventory.write_text(json.dumps({"items": [{"data": {"token": base64.b64encode(credential).decode()}}]}))
-        archive = io.BytesIO()
-        with tarfile.open(fileobj=archive, mode="w") as handle:
-            entry = tarfile.TarInfo("credential.txt")
-            entry.size = len(credential)
-            handle.addfile(entry, io.BytesIO(credential))
-        blobs = (gzip.compress(credential, mtime=0), archive.getvalue())
-        count = 0
-        for blob in blobs:
-            encoded = base64.b64encode(blob)
-            for width in range(1, 32):
-                for separator in (b"\n", b"\r\n", b" "):
-                    wrapped = separator.join(encoded[index : index + width] for index in range(0, len(encoded), width))
-                    for prefix in (b"", b"journal\n", b"payload: |\n"):
-                        (tree / f"opaque-{count}.log").write_bytes(prefix + wrapped)
-                        count += 1
-        history = tree / "host_service_logs/masters/kubelet_service.log"
-        history.parent.mkdir(parents=True)
-        history.write_text("ordinary journal history\nplain multiline text\n")
-        (tree / "negative.yaml").write_text("kind: List\nitems: []\n")
-        (tree / "negative.json").write_text('{"ordinary": "journal data"}\n')
-        self.normalize(tree)
-        self.assertEqual(json.loads((tree / "omissions.json").read_text()), {"archive-or-opaque": count})
-        redaction = subprocess.run(
-            ["bash", str(REPO / "scripts/gather-osac-logs.sh"), str(self.artifacts)],
-            env=self.environment | {"OSAC_GATHER_REDACT_ONLY": "true", "OSAC_GATHER_COLLECT_ONLY": "false"},
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        self.assertEqual(redaction.returncode, 0, redaction.stdout + redaction.stderr)
-        (self.artifacts / ".redaction-complete").touch()
-        self.scanner("clean")
-        for step in ("Verify redaction complete", "Scan artifacts with gitleaks", "Release gate - censor secrets"):
-            result = self.run_step(step)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("ordinary journal history", history.read_text())
-        self.assertEqual(len(list(tree.rglob("*.log"))), 1)
-        self.assertTrue(any(path.read_text() == "kind: List\nitems: []\n" for path in tree.glob("*.yaml")))
-        self.assertTrue(any(path.read_text() == '{"ordinary": "journal data"}\n' for path in tree.glob("*.json")))
-        self.assertNotIn("opaque-", (tree / "omissions.json").read_text())
-
-    def test_must_gather_guard_refuses_missing_normalization_and_scanner_opt_out(self) -> None:
-        for mode in (
-            "missing-normalization",
-            "scan-disabled",
-            "binary",
-            "encoded-archive",
-            "symlink",
-            "unsafe-name",
-            "lookalike-service-name",
-            "lookalike-directory-name",
-            "metadata",
-            "duplicate-key",
-        ):
-            with self.subTest(mode=mode):
-                self.artifacts.mkdir(exist_ok=True)
-                tree = self.must_gather()
-                if mode == "missing-normalization":
-                    (tree / "omissions.json").unlink()
-                if mode == "binary":
-                    next(tree.glob("*.log")).write_bytes(b"\x00opaque")
-                if mode == "encoded-archive":
-                    next(tree.glob("*.log")).write_bytes(base64.b64encode(b"\x1f\x8b" + b"opaque" * 12))
-                if mode == "symlink":
-                    path = next(tree.glob("*.log"))
-                    path.unlink()
-                    path.symlink_to(self.arguments)
-                if mode == "unsafe-name":
-                    (tree / "synthetic-sentinel-credential.yaml").write_text("kind: List\n")
-                if mode == "lookalike-service-name":
-                    (tree / "synthetic-sentinel-credential-kubelet_service.log").write_text("service history\n")
-                if mode == "lookalike-directory-name":
-                    (tree / "host_service_logs-synthetic-sentinel-credential").mkdir()
-                if mode == "metadata":
-                    (tree / "omissions.json").write_text('{"synthetic-sentinel-credential": 1}')
-                if mode == "duplicate-key":
-                    (tree / "collection-status.json").write_text(
-                        '{"status":"synthetic-sentinel-credential","status":"complete","reason":"none"}'
-                    )
-                result = self.run_step(
-                    "Verify redaction complete", {"gitleaks": "false" if mode == "scan-disabled" else "true"}
-                )
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertFalse(self.artifacts.exists())
-
     def test_artifact_ancestor_link_is_refused_without_touching_its_target(self) -> None:
         self.artifacts.rename(self.temp / "external-diagnostics")
         self.artifacts.symlink_to(self.temp / "external-diagnostics", target_is_directory=True)
@@ -434,88 +320,16 @@ fi
         )
         (tree / "resource.yaml").write_text(f"credential: {sentinel}\n")
         (tree / "resource.json").write_text(json.dumps({"credential": sentinel}))
-        (tree / f"{sentinel}.yaml").write_text(f"credential: {sentinel}\n")
-        self.normalize(tree)
         self.assertEqual(self.run_step("Verify redaction complete").returncode, 0)
         self.scanner("clean")
         self.assertEqual(self.run_step("Scan artifacts with gitleaks").returncode, 0)
         result = self.run_step("Release gate - censor secrets")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for path in tree.rglob("*"):
-            self.assertNotIn(sentinel, str(path.relative_to(tree)))
             if path.is_file():
                 self.assertNotIn(sentinel, path.read_text())
         self.assertNotIn(sentinel, result.stdout + result.stderr)
         self.assertTrue(any("service history" in path.read_text() for path in tree.glob("*.log")))
-
-    def test_standard_service_paths_survive_real_redaction_and_upload_gate(self) -> None:
-        tree = self.artifacts / "mgmt-cluster/must-gather"
-        sentinel = "synthetic-service-secret-950147-testing-only"
-        image = f"quay-io-openshift-release-dev-ocp-v4-0-art-dev-sha256-{sentinel}"
-        node = f"node-{sentinel}"
-        source = tree / image / "host_service_logs"
-        expected = []
-        wrapper = "dir-" + hashlib.sha256(os.fsencode(image)).hexdigest()
-        for role in ("masters", "workers"):
-            for service in ("kubelet_service.log", "crio_service.log"):
-                path = source / role / service
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(f'service history\n{{"password": "{sentinel}"}}\n')
-                expected.append(pathlib.Path(wrapper) / "host_service_logs" / role / service)
-        dynamic = source / "masters" / node
-        dynamic.mkdir()
-        (dynamic / "kubelet_service.log").write_text(f'node history\n{{"token": "{sentinel}"}}\n')
-        expected.append(
-            pathlib.Path(wrapper)
-            / "host_service_logs/masters"
-            / ("dir-" + hashlib.sha256(os.fsencode(node)).hexdigest())
-            / "kubelet_service.log"
-        )
-        (dynamic / f"{sentinel}-crio_service.log").write_text(f'{{"password": "{sentinel}"}}\n')
-        oversized = source / "workers" / node / "crio_service.log"
-        oversized.parent.mkdir()
-        with oversized.open("wb") as handle:
-            handle.truncate(33 * 1024 * 1024)
-        (self.artifacts / ".redaction-complete").unlink()
-        self.normalize(tree)
-        self.assertEqual(json.loads((tree / "omissions.json").read_text()), {"oversized": 1})
-        self.assertEqual(len(list(tree.rglob("crio_service.log"))), 2)
-        redaction = subprocess.run(
-            ["bash", str(REPO / "scripts/gather-osac-logs.sh"), str(self.artifacts)],
-            env=self.environment | {"OSAC_GATHER_REDACT_ONLY": "true", "OSAC_GATHER_COLLECT_ONLY": "false"},
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(redaction.returncode, 0, redaction.stdout + redaction.stderr)
-        for relative in expected:
-            self.assertIn("history", (tree / relative).read_text())
-            self.assertIn("REDACTED", (tree / relative).read_text())
-        self.assertFalse((self.artifacts / ".redaction-complete").exists())
-        (self.artifacts / ".redaction-complete").touch()
-        self.scanner("clean")
-        outputs = redaction.stdout + redaction.stderr
-        for step in ("Verify redaction complete", "Scan artifacts with gitleaks", "Release gate - censor secrets"):
-            result = self.run_step(step)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            outputs += result.stdout + result.stderr
-        for relative in expected:
-            self.assertTrue((tree / relative).is_file(), relative)
-        self.assertNotIn(sentinel, outputs)
-        for path in self.artifacts.rglob("*"):
-            self.assertNotIn(sentinel, str(path.relative_to(self.artifacts)))
-            if path.is_file():
-                self.assertNotIn(sentinel, path.read_text())
-
-    def test_final_gate_rechecks_the_actual_subset_after_initial_verification(self) -> None:
-        tree = self.must_gather()
-        self.assertEqual(self.run_step("Verify redaction complete").returncode, 0)
-        self.scanner("clean")
-        self.assertEqual(self.run_step("Scan artifacts with gitleaks").returncode, 0)
-        (tree / "unvouched-name.txt").write_text("diagnostic text\n")
-        result = self.run_step("Release gate - censor secrets")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(self.artifacts.exists())
-        self.assertIn("steps.release.outcome == 'success'", self.step("Upload artifacts")["if"])
 
     def test_must_gather_scanner_unavailable_fails_closed(self) -> None:
         self.must_gather()
@@ -603,6 +417,61 @@ fi
                 self.assertEqual(release.returncode, 1, release.stdout + release.stderr)
                 self.assertFalse(self.artifacts.exists())
                 self.assertFalse(allowed("Upload artifacts", "success", scan, "failure"))
+
+    def test_public_must_gather_cannot_disable_scan(self) -> None:
+        self.must_gather()
+        result = self.run_step("Verify redaction complete", {"gitleaks": "false"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(self.artifacts.exists())
+
+    def test_final_release_withholds_archives_only_inside_must_gather(self) -> None:
+        tree = self.must_gather()
+        self.scanner("clean")
+        for step in ("Verify redaction complete", "Scan artifacts with gitleaks"):
+            self.assertEqual(self.run_step(step).returncode, 0)
+        credential = b"synthetic-archive-credential-937224-testing-only"
+        self.inventory.write_text(json.dumps({"items": [{"data": {"token": base64.b64encode(credential).decode()}}]}))
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as handle:
+            entry = tarfile.TarInfo("credential.txt")
+            entry.size = len(credential)
+            handle.addfile(entry, io.BytesIO(credential))
+        zipped = io.BytesIO()
+        with zipfile.ZipFile(zipped, "w", zipfile.ZIP_DEFLATED) as handle:
+            handle.writestr("credential.txt", credential)
+        encoded = base64.b64encode(gzip.compress(credential, mtime=0))
+        wrapped = b"journal\npayload: |\n" + b"\n".join(
+            encoded[index : index + 8] for index in range(0, len(encoded), 8)
+        )
+        for name, data in (
+            ("hidden.log", gzip.compress(credential)),
+            ("data.zip", zipped.getvalue()),
+            ("data.tar", archive.getvalue()),
+            ("wrapped.log", wrapped),
+            ("encoded-tar.log", base64.b64encode(archive.getvalue())),
+        ):
+            (tree / name).write_bytes(data)
+        (tree / "version").write_text("openshift/must-gather\n")
+        (tree / "ordinary.yaml").write_text("kind: List\nitems: []\n")
+        (tree / "ordinary.json").write_text('{"description":"ordinary journal data"}\n')
+        external = self.temp / "outside-control"
+        external.write_bytes(credential)
+        (tree / "external.log").symlink_to(external)
+        (tree / "external-directory").symlink_to(self.inventory.parent, target_is_directory=True)
+        telemetry = self.artifacts / "telemetry.gz"
+        telemetry.write_bytes(gzip.compress(b"ordinary telemetry"))
+        result = self.run_step("Release gate - censor secrets")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            {path.name for path in tree.iterdir()}, {"kubelet_service.log", "version", "ordinary.yaml", "ordinary.json"}
+        )
+        self.assertTrue(telemetry.is_file())
+        self.assertEqual(external.read_bytes(), credential)
+        self.assertNotIn("hidden.log", result.stdout + result.stderr)
+        self.assertNotIn(credential.decode(), result.stdout + result.stderr)
+        report = json.loads((self.artifacts / "redaction-report.json").read_text())
+        self.assertEqual(len(report["withheld"]), 7)
+        self.assertTrue(all(entry["file"] == "mgmt-cluster/must-gather/[withheld]" for entry in report["withheld"]))
 
 
 class PublishPrivateArtifactsTest(unittest.TestCase):

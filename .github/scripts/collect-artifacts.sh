@@ -52,11 +52,20 @@ if [[ -d "${ARTIFACT_DIR}/netris-logs" \
 fi
 export NETRIS_ARTIFACT_LAYOUT
 
-rc=0
-python3 -I "${GITHUB_WORKSPACE}/.github/scripts/collect-must-gather.py" \
-  "${COLLECTION_DIR}" --timeout-seconds "${COLLECT_TIMEOUT_SECONDS}" || rc=$?
+export OSAC_COLLECTION_DEADLINE=$(( $(date +%s) + COLLECT_TIMEOUT_SECONDS ))
+INVENTORY_DIR="${RUNNER_TEMP}/osac-secret-inventory"
+mkdir -p "${INVENTORY_DIR}"
+chmod 700 "${INVENTORY_DIR}"
+rm -f "${INVENTORY_DIR}/k8s-secrets.json"
+inventory_seconds=$(( COLLECT_TIMEOUT_SECONDS < 15 ? COLLECT_TIMEOUT_SECONDS : 15 ))
+(umask 077 && timeout -k 2 "${inventory_seconds}" oc get secrets \
+  -n "${E2E_NAMESPACE:-osac-e2e-ci}" -o json \
+  > "${INVENTORY_DIR}/k8s-secrets.json" 2>/dev/null) \
+  || { rm -f "${INVENTORY_DIR}/k8s-secrets.json"; echo "::notice::Secret inventory not collected"; }
 
-if [[ "${rc}" -eq 0 ]]; then
+remaining=$(( OSAC_COLLECTION_DEADLINE - $(date +%s) ))
+if (( remaining > 0 )) && timeout -k 5 "${remaining}" \
+  "${GITHUB_WORKSPACE}/scripts/gather-osac-logs.sh" "${COLLECTION_DIR}"; then
   if [[ "${COLLECTION_DIR}" != "${ARTIFACT_DIR}" ]]; then
     # Keep the original host bundle intact. The upload gate discards cluster
     # files if publication fails or is interrupted before the copy completes.
@@ -66,7 +75,6 @@ if [[ "${rc}" -eq 0 ]]; then
     rm -f "${ARTIFACT_DIR}/.cluster-copy-in-progress"
   fi
   touch "${ARTIFACT_DIR}/.redaction-complete"
-elif [[ "${rc}" -eq 124 ]]; then
-  echo "::warning::Log collection stopped after ${COLLECT_TIMEOUT_SECONDS}s" \
-    "- the artifacts are incomplete and will not be uploaded"
+else
+  echo "::warning::Collection or redaction incomplete; artifacts will not be uploaded"
 fi
