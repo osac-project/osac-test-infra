@@ -131,14 +131,14 @@ class SetupVirtualBmhTests(unittest.TestCase):
             inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[], planned_names=["virtual-bmh-aabbccdd-01"])))
             history = bmh_history.history_dir(inventory)
             history.mkdir(mode=0o700)
-            secret = "synthetic-history-token-0123456789"
-            (base / "pull-secret.json").write_text(json.dumps({"auths": {"example.invalid": {"auth": secret}}}))
-            (history / "virtual-bmh-aabbccdd-01.serial.log").write_text('first boot\n{"password":"' + secret + '"}\nsecond boot\n')
+            fixture_secret = "synthetic-history-token-0123456789"
+            (base / "pull-secret.json").write_text(json.dumps({"auths": {"example.invalid": {"auth": fixture_secret}}}))
+            (history / "virtual-bmh-aabbccdd-01.serial.log").write_text('first boot\n{"password":"' + fixture_secret + '"}\nsecond boot\n')
             for suffix in (".0", ".1", ".2"):
-                (history / ("virtual-bmh-aabbccdd-01.serial.log" + suffix)).write_text('{"password":"' + secret + '"}\n')
+                (history / ("virtual-bmh-aabbccdd-01.serial.log" + suffix)).write_text('{"password":"' + fixture_secret + '"}\n')
             (history / "virtual-bmh-foreign-01.serial.log").write_text("foreign")
-            (history / "virtual-bmh-aabbccdd-02.serial.log").write_text(secret)
-            (history / "events.log").write_text("2026-11-13 00:00:00.000+0000: event 'reboot' for domain 'virtual-bmh-aabbccdd-01'\n" + secret + "\n")
+            (history / "virtual-bmh-aabbccdd-02.serial.log").write_text(fixture_secret)
+            (history / "events.log").write_text("2026-11-13 00:00:00.000+0000: event 'reboot' for domain 'virtual-bmh-aabbccdd-01'\n" + fixture_secret + "\n")
             artifact = base / "artifacts/bmh-history"
             binaries = base / "bin"
             binaries.mkdir()
@@ -148,10 +148,10 @@ class SetupVirtualBmhTests(unittest.TestCase):
                                                       "FAKE_BMH_SERIAL": str(history)}, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             output = (artifact / "virtual-bmh-aabbccdd-01.serial.log").read_text()
-            self.assertNotIn(secret, output + result.stdout + result.stderr)
+            self.assertNotIn(fixture_secret, output + result.stdout + result.stderr)
             self.assertEqual(len(list(artifact.glob("*.log"))), 5)
             for serial in artifact.glob("*.log"):
-                self.assertNotIn(secret, serial.read_text())
+                self.assertNotIn(fixture_secret, serial.read_text())
             self.assertIn("first boot", output)
             self.assertIn("second boot", output)
             self.assertFalse((artifact / "virtual-bmh-foreign-01.serial.log").exists())
