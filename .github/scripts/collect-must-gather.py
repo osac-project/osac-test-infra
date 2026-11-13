@@ -160,7 +160,7 @@ def api(arguments: list[str], deadline: float) -> dict:
     try:
         document = json.loads(capture.data, object_pairs_hook=unique_mapping)
         return document if isinstance(document, dict) and not capture.invalid else {}
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         return {}
 
 
@@ -235,6 +235,7 @@ def recover(root: pathlib.Path, identity: tuple[str, str], deadline: float) -> s
     if not isinstance(pods, list) or not 1 <= len(pods) <= 16:
         return "pods-unavailable"
     result = "copied"
+    visited = set()
     for index, pod in enumerate(pods):
         if not isinstance(pod, dict):
             result = "copy-incomplete"
@@ -246,6 +247,7 @@ def recover(root: pathlib.Path, identity: tuple[str, str], deadline: float) -> s
             result = "copy-incomplete"
             continue
         name = metadata.get("name", "")
+        labels = metadata.get("labels", {})
         containers = specification.get("containers", [])
         states = status.get("containerStatuses", [])
         if not all(
@@ -254,14 +256,23 @@ def recover(root: pathlib.Path, identity: tuple[str, str], deadline: float) -> s
             result = "copy-incomplete"
             continue
         if (
-            not re.fullmatch(r"must-gather-[a-z0-9]{5}", name)
+            not isinstance(name, str)
+            or not re.fullmatch(r"must-gather-[a-z0-9]{5}", name)
+            or name in visited
             or metadata.get("namespace") != identity[0]
-            or metadata.get("labels", {}).get("app") != "must-gather"
-            or {container.get("name") for container in containers} != {"gather", "copy"}
-            or not any(item.get("name") == "copy" and "running" in item.get("state", {}) for item in states)
+            or not isinstance(labels, dict)
+            or labels.get("app") != "must-gather"
+            or [container.get("name") for container in containers] not in (["gather", "copy"], ["copy", "gather"])
+            or not any(
+                item.get("name") == "copy"
+                and isinstance(item.get("state"), dict)
+                and isinstance(item["state"].get("running"), dict)
+                for item in states
+            )
         ):
             result = "copy-incomplete"
             continue
+        visited.add(name)
         target = root / ("recovery-" + hashlib.sha256(name.encode()).hexdigest())
         target.mkdir(mode=0o700)
         copied = run(
@@ -302,6 +313,8 @@ def standard_gather(root: pathlib.Path, deadline: float) -> tuple[int, dict]:
 
     def defer_interrupt(_number: int, _frame: object) -> None:
         nonlocal cancelled
+        if cancelled:
+            return
         cancelled = True
         if ACTIVE is not None:
             stop_group(ACTIVE)
@@ -312,7 +325,9 @@ def standard_gather(root: pathlib.Path, deadline: float) -> tuple[int, dict]:
     result = 124
     try:
         version = api(["version", "--client"], min(client_deadline, time.monotonic() + 2.5))
-        client_version = version.get("releaseClientVersion", version.get("clientVersion", {}).get("gitVersion", ""))
+        client_version = version.get("releaseClientVersion", "")
+        if not client_version and isinstance(version.get("clientVersion"), dict):
+            client_version = version["clientVersion"].get("gitVersion", "")
         if isinstance(client_version, str) and VERSION.fullmatch(client_version):
             details["client"] = client_version
         started = time.time()
@@ -336,6 +351,11 @@ def standard_gather(root: pathlib.Path, deadline: float) -> tuple[int, dict]:
                 signal.signal(number, handler)
     print(f"Management must-gather recovery: {details['recovery']}; cleanup: {details['cleanup']}", flush=True)
     print(f"Management must-gather host client: {details['client']}", flush=True)
+    if details["cleanup"] != "deletion-requested":
+        print(
+            "::warning::Must-gather resources may remain privileged; existing-cluster jobs require operator cleanup",
+            flush=True,
+        )
     if cancelled:
         raise InterruptedError
     return result, details

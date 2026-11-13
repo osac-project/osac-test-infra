@@ -101,6 +101,17 @@ authorize upload; cancellation's fresh collection and the existing gates remain
 required. No extra image, custom gather command, or cluster-admin binding is
 created by the recovery helper.
 
+`--keep` disables the client's own cleanup, including on success. There is no
+unsafe cleanup fallback when the host client rejects flags, changes its output
+format, or fails the identity checks: the helper never broadens namespace
+selection or starts a replacement gather. Unknown version strings alone do not
+disable recovery when the exact creation records and API proof still match.
+Unsupported flags can prevent gathering; unsupported output or lost API access
+can leave the privileged namespace and its cluster-admin binding behind.
+Existing-cluster jobs do not destroy their cluster afterward, so an operator
+must remove retained resources there; infrastructure teardown is not a fallback
+for those jobs. Cleanup status is diagnostic evidence, not a retention guarantee.
+
 Uploads require the redaction marker, a successful must-gather content guard,
 successful gitleaks scanning, and the mandatory release gate, which rechecks the
 subset and fixed-schema metadata immediately before upload. Gitleaks cannot be

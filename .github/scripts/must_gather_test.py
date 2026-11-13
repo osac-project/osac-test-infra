@@ -18,6 +18,7 @@ import tempfile
 import time
 import unittest
 import zipfile
+from unittest import mock
 
 import yaml
 
@@ -348,8 +349,9 @@ class RecoveryTests(unittest.TestCase):
         process = subprocess.Popen(
             [sys.executable, str(HELPER), str(self.artifacts), "--timeout-seconds", "12"],
             env=self.environment | {"TEST_MODE": "blocked-log-follow"},
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
         try:
             deadline = time.monotonic() + 8
@@ -360,7 +362,8 @@ class RecoveryTests(unittest.TestCase):
             self.assertFalse(list(self.tree.rglob("*_service.log")))
             self.assertTrue((self.tree / "must-gather.logs").exists())
             self.assertTrue((self.tree / "timestamp").exists())
-            self.assertEqual(process.wait(timeout=12), 0)
+            output, _unused = process.communicate(timeout=12)
+            self.assertEqual(process.returncode, 0, output)
             self.assert_safe_journals()
             self.assertEqual(self.status()["status"], "timed-out")
         finally:
@@ -429,6 +432,27 @@ class RecoveryTests(unittest.TestCase):
                 state = pathlib.Path(f"/proc/{child}/stat")
                 self.assertTrue(not state.exists() or state.read_text().split()[2] == "Z")
 
+    def test_malformed_api_values_preserve_proven_cleanup_and_sanitization(self) -> None:
+        for fault in (
+            "malformed-version",
+            "malformed-pod-name",
+            "malformed-pod-labels",
+            "malformed-container-name",
+            "malformed-container-state",
+            "duplicate-pods",
+        ):
+            with self.subTest(fault=fault):
+                self.environment["TEST_FAULT"] = fault
+                result = self.collect("failed")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.status()["cleanup"], "deletion-requested")
+                self.assertEqual(self.status()["status"], "partial")
+                self.assertEqual(
+                    self.status()["recovery"], "copied" if fault == "malformed-version" else "copy-incomplete"
+                )
+                self.assertTrue((self.artifacts / ".redaction-complete").exists())
+                self.assertNotIn(SENTINEL, result.stdout + result.stderr)
+
     def test_sigterm_each_remote_phase_kills_descendants_and_never_marks_redaction_complete(self) -> None:
         for phase in ("version", "client", "identity", "pods", "copy", "cleanup"):
             with self.subTest(phase=phase):
@@ -450,7 +474,11 @@ class RecoveryTests(unittest.TestCase):
                     ):
                         time.sleep(0.02)
                     self.assertTrue((self.temp / "child.pid").exists())
-                    process.send_signal(signal.SIGTERM)
+                    for _attempt in range(8):
+                        if process.poll() is not None:
+                            break
+                        process.send_signal(signal.SIGTERM)
+                        time.sleep(0.005)
                     self.assertEqual(process.wait(timeout=12), 143)
                     self.assertFalse((self.artifacts / ".redaction-complete").exists())
                     child = int((self.temp / "child.pid").read_text())
@@ -494,6 +522,17 @@ class RecoveryTests(unittest.TestCase):
 
 
 class PrivateCaptureTests(unittest.TestCase):
+    def test_api_decoder_recursion_failure_is_unavailable_not_an_exception(self) -> None:
+        spec = importlib.util.spec_from_file_location("collector", HELPER)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with (
+            mock.patch.object(module, "run", return_value=0),
+            mock.patch.object(module.json, "loads", side_effect=RecursionError),
+        ):
+            self.assertEqual(module.api(["get", "namespace/openshift-must-gather-abcde"], 0), {})
+
     def test_capture_bounds_api_bytes_and_never_retains_plugin_or_oversized_raw_output(self) -> None:
         spec = importlib.util.spec_from_file_location("collector", HELPER)
         module = importlib.util.module_from_spec(spec)
