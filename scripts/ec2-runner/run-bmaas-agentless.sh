@@ -42,8 +42,22 @@ if [ ! -d "$UNDER_TEST_DIR" ]; then
     exit 1
 fi
 
+# timeout(1) executes a program. It cannot call this function, so the limit
+# wraps the ssh binary itself. Callers pass --timeout MINUTES; other calls
+# have no limit.
 ssh_exec() {
-    ssh -i "$SSH_KEY_PATH" \
+    local minutes=""
+    if [ "${1:-}" = "--timeout" ]; then
+        minutes="$2"
+        shift 2
+    fi
+    local -a ssh_cmd
+    if [ -n "$minutes" ]; then
+        ssh_cmd=(timeout "${minutes}m" ssh)
+    else
+        ssh_cmd=(ssh)
+    fi
+    "${ssh_cmd[@]}" -i "$SSH_KEY_PATH" \
         -o StrictHostKeyChecking=accept-new \
         -o UserKnownHostsFile="${KNOWN_HOSTS_FILE}" \
         -o BatchMode=yes \
@@ -56,7 +70,7 @@ ssh_exec() {
 run_remote() {
     local minutes="$1"
     shift
-    timeout "${minutes}m" ssh_exec "$@"
+    ssh_exec --timeout "$minutes" "$@"
 }
 
 echo "Copying the revision under test to ${PUBLIC_IP}:${REMOTE_DIR}"
@@ -70,7 +84,7 @@ for check in "${CHECKS[@]}"; do
     check_trimmed="$(echo "$check" | sed 's/^ *//;s/ *$//')"
     [ -z "$check_trimmed" ] && continue
     echo "  checking: ${check_trimmed}"
-    if ! output=$(timeout 15m ssh_exec "$check_trimmed" 2>&1); then
+    if ! output=$(ssh_exec --timeout 15 "$check_trimmed" 2>&1); then
         echo "  FAILED: ${check_trimmed}" >&2
         printf '%s\n' "$output" >&2
         tooling_failed=1
@@ -143,7 +157,7 @@ copy_status=0
 rm -rf "$LOG_DIR"
 mkdir -p "$LOG_DIR"
 copy_cmd=$(printf 'mkdir -p %q && tar -C %q -czf - .' "$REMOTE_LOG_DIR" "$REMOTE_LOG_DIR")
-timeout 10m ssh_exec "$copy_cmd" | tar -xzf - -C "$LOG_DIR" || copy_status=$?
+ssh_exec --timeout 10 "$copy_cmd" | tar -xzf - -C "$LOG_DIR" || copy_status=$?
 if [ "$copy_status" -ne 0 ]; then
     echo "ERROR: failed to copy diagnostics (status ${copy_status})" >&2
 fi

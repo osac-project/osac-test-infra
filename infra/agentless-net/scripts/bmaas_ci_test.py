@@ -331,6 +331,20 @@ class SanitizeTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
 
+    def test_single_quoted_secret_keys_are_redacted(self) -> None:
+        test_secret = "quoted-secret"
+        raw = f"'password': '{test_secret}'\nbridge sysctl is 0\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn(test_secret, cleaned)
+        self.assertIn("'password': '[REDACTED]'", cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+
     def test_private_key_header_without_an_end_marker_fails(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
         with tempfile.TemporaryDirectory() as tmp:
@@ -430,6 +444,8 @@ class WorkflowContractTest(unittest.TestCase):
         ):
             self.assertIn(target, remote)
         self.assertIn("OSAC_PROFILE=bmaas-ci", remote)
+        self.assertNotRegex(remote, r"timeout\b[^\n]*\bssh_exec\b")
+        self.assertIn('timeout "${minutes}m" ssh', remote)
         teardown = next(step for step in steps if "teardown.sh" in step.get("run", ""))
         self.assertEqual(teardown["if"], "always()")
 
@@ -471,6 +487,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("display_title", leak_script)
         self.assertIn("workflow_dispatch", leak_script)
         self.assertIn("SUITE_RUN_VALIDATED", leak_script)
+        self.assertLess(leak_script.index('capture("^E2E suite'), leak_script.index("OPEN_PR_COUNT="))
         title = "E2E suite · bmaas-agentless · #795 · " + ("a" * 40)
         parsed = subprocess.check_output(
             [
@@ -494,6 +511,13 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("net.bridge.bridge-nf-call-ip6tables=0", bridges)
         self.assertIn("br-host1", bridges)
         self.assertIn("leaf1-swp2", bridges)
+        self.assertIn("sysctl -n net.bridge.bridge-nf-call-iptables", bridges)
+        self.assertIn("sysctl -n net.bridge.bridge-nf-call-ip6tables", bridges)
+        self.assertIn("/var/tmp/osac-host-bridge-sysctl.prior", bridges)
+        self.assertLess(bridges.index("sysctl -n net.bridge.bridge-nf-call-iptables"), bridges.index("net.bridge.bridge-nf-call-iptables=0"))
+        self.assertIn("restore_host_bridge_sysctls", bridges)
+        fabric_teardown = (INFRA / "scripts" / "destroy-fabric.sh").read_text()
+        self.assertIn('prepare-host-bridges.sh" restore', fabric_teardown)
 
         overlay = yaml.safe_load((INFRA / "values-bmaas-overlay.yaml").read_text())
         self.assertEqual(overlay["global"]["networking"]["fabricManager"], "agentless_net")

@@ -18,10 +18,13 @@ _PRIVATE_KEY = re.compile(
 )
 _PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 _AUTHORIZATION = re.compile(rb"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)[^\r\n]+")
+_SECRET_NAME = (
+    rb"\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*\""
+    rb"|'[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*'"
+    rb"|[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*"
+)
 _SECRET_ASSIGNMENT = re.compile(
-    rb"(?i)"
-    rb"(\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*\""
-    rb"|[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*)"
+    rb"(?i)(" + _SECRET_NAME + rb")"
     rb"(\s*[:=]\s*)"
     rb"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\r\n]+)"
 )
@@ -30,11 +33,7 @@ _REDACTED = b"[REDACTED]"
 _BLOCK_HEADER = re.compile(rb"^[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:[ \t]+#.*)?[ \t]*$")
 # A secret key whose line has no value. The value is the indented block that follows.
 _SECRET_KEY_ONLY = re.compile(
-    rb"(?i)^[ \t]*"
-    rb"(\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*\""
-    rb"|[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*)"
-    rb"(\s*[:=])"
-    rb"[ \t]*$"
+    rb"(?i)^[ \t]*(" + _SECRET_NAME + rb")(\s*[:=])[ \t]*$"
 )
 
 
