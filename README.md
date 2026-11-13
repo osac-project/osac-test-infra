@@ -47,7 +47,7 @@ successful scan. Native names are not anonymized, and content scanners do not
 promise detection of arbitrary encodings or credentials embedded in filenames.
 
 This improves diagnostic coverage for [#470](https://github.com/osac-project/osac-test-infra/issues/470),
-not the underlying garbage-collection failure. Infrastructure consumer tests run
+not a fix for the underlying E2E failure. Infrastructure consumer tests run
 with `python3 -I .github/scripts/must_gather_test.py` and
 `python3 -I .github/scripts/upload_artifacts_test.py` (PyYAML required, as in CI).
 
