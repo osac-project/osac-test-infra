@@ -20,6 +20,25 @@ sys.path.insert(0, str(ROOT / ".github/scripts"))
 import bmh_history
 
 
+def install_serial_reader(binaries: Path) -> None:
+    reader = binaries / "sudo"
+    reader.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+arguments = sys.argv[1:]
+if arguments[:2] != ["-n", "/usr/local/sbin/osac-bmh-history"]:
+    sys.exit(1)
+command, prefix = arguments[2:4]
+directory = pathlib.Path(os.environ["FAKE_BMH_SERIAL"])
+if command == "list":
+    print(json.dumps(sorted(path.name for path in directory.glob(prefix + "-*.serial.log*"))))
+elif command == "read":
+    sys.stdout.buffer.write((directory / arguments[4]).read_bytes()[:2097152])
+else:
+    sys.exit(1)
+''')
+    reader.chmod(0o755)
+
+
 class SetupVirtualBmhTests(unittest.TestCase):
     def test_cleanup_retains_live_or_unreachable_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -53,7 +72,8 @@ class SetupVirtualBmhTests(unittest.TestCase):
             history.mkdir(mode=0o700)
             (history / "virtual-bmh-aabbccdd-01.serial.log").write_text("private raw data")
             destination = base / "artifacts/history"
-            with mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], 2)):
+            with mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], 2)), \
+                 mock.patch.object(bmh_history, "serial_helper", return_value=b"[]"):
                 bmh_history.collect(inventory, destination)
             self.assertFalse(destination.exists())
             self.assertEqual(list(history.glob("staging-*")), [])
@@ -74,13 +94,15 @@ class SetupVirtualBmhTests(unittest.TestCase):
                 oc = binaries / "oc"
                 oc.write_text('#!/bin/bash\nprintf \'{"items":[]}\\n\'\n')
                 oc.chmod(0o755)
+                install_serial_reader(binaries)
                 inventory = base / "virtual-bmh-inventory-test.json"
                 inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
                 history = bmh_history.history_dir(inventory)
                 history.mkdir(mode=0o700)
                 (history / "virtual-bmh-aabbccdd-01.serial.log").write_text('first boot\n{"password":"synthetic-password-012345"}\n')
                 env = os.environ | dict(RUNNER_TEMP=str(base), GITHUB_WORKSPACE=str(workspace), HOME=str(base),
-                                        CLONE_NAME="test", KUBECONFIG=str(base / "kubeconfig"), PATH=f"{binaries}:{os.defpath}")
+                                        CLONE_NAME="test", KUBECONFIG=str(base / "kubeconfig"), PATH=f"{binaries}:{os.defpath}",
+                                        FAKE_BMH_SERIAL=str(history))
                 result = subprocess.run(["bash", str(ROOT / ".github/scripts/collect-artifacts.sh")],
                                         env=env, capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -112,19 +134,58 @@ class SetupVirtualBmhTests(unittest.TestCase):
             secret = "synthetic-history-token-0123456789"
             (base / "pull-secret.json").write_text(json.dumps({"auths": {"example.invalid": {"auth": secret}}}))
             (history / "virtual-bmh-aabbccdd-01.serial.log").write_text('first boot\n{"password":"' + secret + '"}\nsecond boot\n')
+            for suffix in (".0", ".1", ".2"):
+                (history / ("virtual-bmh-aabbccdd-01.serial.log" + suffix)).write_text('{"password":"' + secret + '"}\n')
             (history / "virtual-bmh-foreign-01.serial.log").write_text("foreign")
             (history / "events.jsonl").write_text('{"event":"reboot"}\n')
             artifact = base / "artifacts/bmh-history"
+            binaries = base / "bin"
+            binaries.mkdir()
+            install_serial_reader(binaries)
             result = subprocess.run([sys.executable, str(ROOT / ".github/scripts/bmh_history.py"), "collect", str(inventory), str(artifact)],
-                                    env=os.environ | {"RUNNER_TEMP": str(base)}, capture_output=True, text=True, timeout=30)
+                                    env=os.environ | {"RUNNER_TEMP": str(base), "PATH": f"{binaries}:{os.defpath}",
+                                                      "FAKE_BMH_SERIAL": str(history)}, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             output = (artifact / "virtual-bmh-aabbccdd-01.serial.log").read_text()
             self.assertNotIn(secret, output + result.stdout + result.stderr)
+            self.assertEqual(len(list(artifact.glob("*.log"))), 4)
+            for serial in artifact.glob("*.log"):
+                self.assertNotIn(secret, serial.read_text())
             self.assertIn("first boot", output)
             self.assertIn("second boot", output)
             self.assertFalse((artifact / "virtual-bmh-foreign-01.serial.log").exists())
             self.assertTrue((history / "virtual-bmh-aabbccdd-01.serial.log").exists())
             self.assertEqual(list(history.glob("staging-*")), [])
+
+    def test_missing_invalid_inventory_never_releases_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            inventory = base / "inventory.json"
+            artifact = base / "artifacts/history"
+            for content in (None, "invalid synthetic-secret-value", '{}', '{"name_prefix":"../foreign","hosts":[]}'):
+                with self.subTest(content=content):
+                    if content is not None:
+                        inventory.write_text(content)
+                    history = bmh_history.history_dir(inventory)
+                    history.mkdir(exist_ok=True)
+                    result = subprocess.run([sys.executable, str(ROOT / ".github/scripts/bmh_history.py"), "collect", str(inventory), str(artifact)],
+                                            capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 0)
+                    self.assertNotIn("synthetic-secret-value", result.stdout + result.stderr)
+                    self.assertFalse(artifact.exists())
+
+    def test_cleanup_keeps_inventory_map_when_serial_reader_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            inventory = Path(temporary) / "inventory.json"
+            inventory.write_text(json.dumps(dict(name_prefix="virtual-bmh-aabbccdd", hosts=[])))
+            history = bmh_history.history_dir(inventory)
+            history.mkdir()
+            with mock.patch.object(bmh_history.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "")), \
+                 mock.patch.object(bmh_history, "serial_helper", side_effect=OSError):
+                bmh_history.cleanup(inventory)
+            self.assertTrue(history.exists())
+            teardown = TEARDOWN_SCRIPT.read_text()
+            self.assertIn('&& ! -d "${BMH_INVENTORY_FILE%.json}.history"', teardown)
 
     def test_host_compatibility_and_retry_guards(self) -> None:
         """Check the disk paths and the cgroup manager."""

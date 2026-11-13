@@ -184,7 +184,7 @@ def create_vm(
         try:
             state = json.loads((history / "ready.json").read_text())
             if state["serial"] == "bounded virtlogd":
-                serial_log = history / f"{name}.serial.log"
+                serial_log = Path(state["serial_root"]) / f"{name}.serial.log"
         except (OSError, ValueError, KeyError):
             pass
     xml = render_vm_xml(
@@ -200,7 +200,7 @@ def create_vm(
     )
     run_virsh(["define", "/dev/stdin"], stdin=xml)
     result = run_virsh(["start", name], check=False, capture=True)
-    if result.returncode and serial_log is not None:
+    if result.returncode and serial_log is not None and str(serial_log) in result.stderr:
         state = run_virsh(["domstate", name], check=False, capture=True)
         if state.returncode == 0 and state.stdout.strip() == "shut off":
             root = ET.fromstring(xml)

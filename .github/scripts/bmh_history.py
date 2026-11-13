@@ -19,7 +19,6 @@ from pathlib import Path
 from raw_inventory import RawInventory, is_group_host_name
 
 MAX_BYTES = 2 * 1024 * 1024
-MAX_BACKUPS = 3
 MAX_SECONDS = 24 * 60 * 60
 
 
@@ -35,45 +34,20 @@ def process_identity(pid: int) -> str:
     return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
 
 
-def daemon_config(name: str, config: str) -> dict[str, str]:
-    pid = int(Path(f"/run/{name}.pid").read_text())
-    command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-    if Path(os.fsdecode(command[0])).name != name or any(
-        argument in (b"-f", b"--config") or argument.startswith(b"--config=")
-        for argument in command[1:]
-    ):
-        raise ValueError("nonstandard daemon configuration")
-    boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
-                if line.startswith("btime "))
-    started = boot + int(process_identity(pid)) / os.sysconf("SC_CLK_TCK")
-    path = Path(config)
-    if path.stat().st_mtime >= started:
-        raise ValueError("daemon predates configuration")
-    settings = {}
-    for line in path.read_text().splitlines():
-        line = line.split("#", 1)[0].strip()
-        if re.match(r"^(stdio_handler|max_size|max_backups)\s*=", line):
-            key, value = line.split("=", 1)
-            settings[key.strip()] = value.strip().strip('"')
-    return settings
+def serial_helper(command: str, prefix: str, *arguments: str) -> bytes:
+    if not isinstance(prefix, str) or not re.fullmatch(r"virtual-bmh-[0-9a-f]{8}", prefix):
+        raise ValueError("invalid history run prefix")
+    result = subprocess.run(["sudo", "-n", "/usr/local/sbin/osac-bmh-history", command, prefix, *arguments],
+                            capture_output=True, timeout=12 if command == "prepare" else 6, check=True)
+    return result.stdout
 
 
-def serial_capability(connection) -> str:
+def serial_capability(prefix: str) -> dict:
     try:
-        if connection.getLibVersion() < 10010000:
-            return "unavailable: libvirt older than verified 10.10 backend"
-        daemon = "virtqemud" if Path("/run/virtqemud.pid").exists() else "libvirtd"
-        qemu = daemon_config(daemon, "/etc/libvirt/qemu.conf")
-        logging = daemon_config("virtlogd", "/etc/libvirt/virtlogd.conf")
-        size = int(logging.get("max_size", str(MAX_BYTES)))
-        backups = int(logging.get("max_backups", str(MAX_BACKUPS)))
-        if qemu.get("stdio_handler", "logd") != "logd" or not 0 < size <= MAX_BYTES:
-            return "unavailable: serial backend is not bounded virtlogd"
-        if not 0 <= backups <= MAX_BACKUPS:
-            return "unavailable: serial backup count exceeds limit"
-        return "bounded virtlogd"
-    except (OSError, ValueError, StopIteration):
-        return "unavailable: could not verify active standard daemon configuration"
+        capability = json.loads(serial_helper("prepare", prefix))
+        return dict(serial="bounded virtlogd", **capability)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return dict(serial="unavailable: installed helper or bounded standard backend unavailable")
 
 
 class EventWriter:
@@ -118,7 +92,7 @@ def listen(directory: Path, prefix: str) -> None:
     if timer < 0:
         raise RuntimeError("event timer registration failed")
     state = dict(pid=os.getpid(), identity=process_identity(os.getpid()), prefix=prefix,
-                 started=timestamp(), serial=serial_capability(connection))
+                 started=timestamp(), **serial_capability(prefix))
     (directory / "status.json").write_text(json.dumps(state))
     (directory / "ready.json").write_text(json.dumps(state))
     deadline = time.monotonic() + MAX_SECONDS
@@ -154,7 +128,7 @@ def start(inventory: Path, prefix: str) -> Path | None:
     except OSError:
         print("WARNING: BMH recorder could not start; continuing without history.", file=sys.stderr)
         return None
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 15
     while process.poll() is None and time.monotonic() < deadline:
         try:
             state = json.loads((directory / "ready.json").read_text())
@@ -215,6 +189,8 @@ def collect(inventory: Path, destination: Path) -> None:
         return
     stop(directory)
     prefix = RawInventory.load(inventory).name_prefix
+    if not isinstance(prefix, str) or not re.fullmatch(r"virtual-bmh-[0-9a-f]{8}", prefix):
+        return
     with tempfile.TemporaryDirectory(prefix="staging-", dir=directory) as temporary:
         staging = Path(temporary)
         stage(directory, prefix, staging)
@@ -230,37 +206,47 @@ def collect(inventory: Path, destination: Path) -> None:
 
 def stage(directory: Path, prefix: str, destination: Path) -> None:
     for path in directory.iterdir():
-        serial = re.fullmatch(r"(.+)\.serial\.log(?:\.[0-2])?", path.name)
-        if path.name not in ("events.jsonl", "status.json") and not (serial and is_group_host_name(serial[1], prefix)):
+        if path.name not in ("events.jsonl", "status.json"):
             continue
         if path.is_symlink() or not path.is_file():
             continue
         try:
             with path.open("rb") as source:
                 data = source.read(MAX_BYTES)
-        except PermissionError:
-            result = subprocess.run(["sudo", "-n", "head", "-c", str(MAX_BYTES), "--", str(path)],
-                                    capture_output=True, timeout=2, check=False)
-            if result.returncode:
-                continue
-            data = result.stdout
-        name = path.name.replace(".log.", ".part-")
-        if serial and path.suffix != ".log":
-            name += ".log"
-        (destination / name).write_bytes(data)
+        except OSError:
+            continue
+        (destination / path.name).write_bytes(data)
+    try:
+        names = json.loads(serial_helper("list", prefix))
+        if not isinstance(names, list) or len(names) > 1024:
+            raise ValueError("invalid serial listing")
+        for name in names:
+            if not isinstance(name, str) or not re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{2}\.serial\.log(?:\.[012])?", name):
+                raise ValueError("invalid serial name")
+            data = serial_helper("read", prefix, name)
+            artifact_name = name.replace(".log.", ".part-")
+            if not artifact_name.endswith(".log"):
+                artifact_name += ".log"
+            (destination / artifact_name).write_bytes(data[:MAX_BYTES])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        (destination / "serial-collection-status.txt").write_text("Serial collection incomplete: scoped helper unavailable or read rejected.\n")
 
 
 def cleanup(inventory: Path) -> None:
     directory = history_dir(inventory)
-    if not directory.is_dir():
-        return
-    stop(directory)
+    if directory.is_dir():
+        stop(directory)
     prefix = RawInventory.load(inventory).name_prefix
     result = subprocess.run(["virsh", "-c", "qemu:///system", "list", "--all", "--name"],
                             capture_output=True, text=True, timeout=5, check=False)
     if result.returncode or any(is_group_host_name(name, prefix) for name in result.stdout.splitlines()):
         return
-    shutil.rmtree(directory)
+    try:
+        serial_helper("cleanup", prefix)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if directory.is_dir():
+        shutil.rmtree(directory)
 
 
 def main() -> None:
