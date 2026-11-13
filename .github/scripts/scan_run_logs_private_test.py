@@ -224,6 +224,43 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
             if "LEAKVALUE" in line:
                 self.assertTrue(line.startswith("::add-mask::"), line)
 
+    def test_every_page_of_a_collect_runs_artifacts_is_read(self) -> None:
+        key = f"GET /repos/{PRIVATE}/actions/runs/9001/artifacts"
+        # 150 artifacts: the first page is full, the leaking one is on page two.
+        self.routes[key] = [
+            {"status": 200, "body": {"total_count": 150, "artifacts": [
+                {"id": 77, "name": "osac-logs-100", "expired": False, "size_in_bytes": 10}]}},
+            {"status": 200, "body": {"total_count": 150, "artifacts": [
+                {"id": 78, "name": "osac-logs-extra", "expired": False, "size_in_bytes": 10}]}},
+        ]
+        self.routes[f"GET /repos/{PRIVATE}/actions/artifacts/78/zip"] = {
+            "status": 200, "zip_b64": zip_b64({"kubeconfig": "LEAK\n"}),
+        }
+        self.routes[f"DELETE /repos/{PRIVATE}/actions/artifacts/78"] = {"status": 204}
+        result, status = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pages = [c["query"] for c in self.calls_to("/runs/9001/artifacts")]
+        self.assertEqual(len(pages), 2, pages)
+        self.assertIn("page=1", pages[0])
+        self.assertIn("page=2", pages[1])
+        self.assertEqual((status["LEAKS_FOUND"], status["PURGE_OK"], status["SCAN_OK"]), ("true", "true", "true"))
+        deletes = [c["path"] for c in self.calls() if c["method"] == "DELETE"]
+        self.assertEqual(deletes, [f"/repos/{PRIVATE}/actions/artifacts/78"])
+
+    def test_a_page_that_cannot_be_read_makes_the_scan_incomplete(self) -> None:
+        key = f"GET /repos/{PRIVATE}/actions/runs/9001/artifacts"
+        self.routes[key] = [
+            {"status": 200, "body": {"total_count": 150, "artifacts": [
+                {"id": 77, "name": "osac-logs-100", "expired": False, "size_in_bytes": 10}]}},
+            {"status": 403, "body": {}},
+        ]
+        _, status = self.run_script()
+        self.assertEqual(status["SCAN_OK"], "false")
+
+    def test_a_single_page_is_asked_for_once(self) -> None:
+        self.run_script()
+        self.assertEqual(len(self.calls_to("/runs/9001/artifacts")), 1)
+
     def test_a_failed_delete_leaves_the_exposure_open(self) -> None:
         self.routes[f"GET /repos/{PRIVATE}/actions/artifacts/77/zip"]["zip_b64"] = zip_b64({"kubeconfig": "LEAK\n"})
         self.routes[f"DELETE /repos/{PRIVATE}/actions/artifacts/77"] = {"status": 403}

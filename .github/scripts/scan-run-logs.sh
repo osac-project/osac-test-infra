@@ -505,18 +505,29 @@ if [[ -n "${PRIVATE_REPO}" ]]; then
           fi
           private_status=$(jq -r '.status // empty' "${state_file}" 2>/dev/null || true)
         done
-        page_file="${OUTPUT_DIR}/private-artifacts.${private_run}.json"
-        code=$(FETCH_TOKEN="${PRIVATE_GH_TOKEN}" fetch_with_retry "${page_file}" "200" \
-          -G "${GITHUB_API_URL}/repos/${PRIVATE_REPO}/actions/runs/${private_run}/artifacts" \
-          --data-urlencode "per_page=100")
-        if [[ "${code}" != "200" ]] || ! jq -e '.artifacts | type == "array"' "${page_file}" >/dev/null 2>&1; then
-          echo "::warning::Could not list the artifacts of collect run ${private_run} in ${PRIVATE_REPO} (HTTP ${code})."
-          private_ok=false
-          continue
-        fi
-        jq -c --slurpfile acc "${ARTIFACT_LIST}" --arg r "${PRIVATE_REPO}" \
-          '$acc[0] + [.artifacts[] | . + {repo: $r}]' "${page_file}" > "${ARTIFACT_LIST}.tmp"
-        mv -f -- "${ARTIFACT_LIST}.tmp" "${ARTIFACT_LIST}"
+        # Every page: an artifact on a page that was not read is neither
+        # scanned nor deleted, so a listing that stops early is not complete.
+        private_art_page=1
+        while :; do
+          page_file="${OUTPUT_DIR}/private-artifacts.${private_run}.${private_art_page}.json"
+          code=$(FETCH_TOKEN="${PRIVATE_GH_TOKEN}" fetch_with_retry "${page_file}" "200" \
+            -G "${GITHUB_API_URL}/repos/${PRIVATE_REPO}/actions/runs/${private_run}/artifacts" \
+            --data-urlencode "per_page=100" --data-urlencode "page=${private_art_page}")
+          if [[ "${code}" != "200" ]] || ! jq -e '.artifacts | type == "array"' "${page_file}" >/dev/null 2>&1; then
+            echo "::warning::Could not list the artifacts of collect run ${private_run} in ${PRIVATE_REPO} (HTTP ${code})."
+            private_ok=false
+            break
+          fi
+          jq -c --slurpfile acc "${ARTIFACT_LIST}" --arg r "${PRIVATE_REPO}" \
+            '$acc[0] + [.artifacts[] | . + {repo: $r}]' "${page_file}" > "${ARTIFACT_LIST}.tmp"
+          mv -f -- "${ARTIFACT_LIST}.tmp" "${ARTIFACT_LIST}"
+          private_total=$(jq -r '.total_count // 0' "${page_file}" 2>/dev/null || echo 0)
+          [[ "${private_total}" =~ ^[0-9]+$ ]] || private_total=0
+          if (( private_art_page * 100 >= private_total )); then
+            break
+          fi
+          private_art_page=$((private_art_page + 1))
+        done
       done <<<"${private_runs}"
       if [[ "${private_ok}" != "true" ]]; then
         SCAN_OK=false
