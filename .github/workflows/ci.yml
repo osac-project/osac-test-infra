@@ -49,6 +49,7 @@ jobs:
           python3 -I .github/scripts/test_manage_virtual_bmh_vms.py
           python3 -I .github/scripts/test_raw_inventory.py
           python3 -I .github/scripts/test_setup_virtual_bmh.py
+          python3 -I .github/scripts/test_bmh_history_helper.py
           python3 -I .github/scripts/test_reconcile_bmhs.py
           python3 -I .github/scripts/test_upsert_pr_comment.py
           python3 -I .github/scripts/netris_catalog_test.py

@@ -178,7 +178,7 @@ create_runner_user() {
     # installs these root-owned helpers separately.
     for helper in \
         osac-hosts-entry osac-compact-dns cluster-tool-compact-boot \
-        osac-compact-boot-diagnostics osac-compact-kubeconfig; do
+        osac-compact-boot-diagnostics osac-compact-kubeconfig osac-bmh-history; do
         if [[ -f "${SCRIPT_DIR}/${helper}" ]]; then
             install -m 0755 "${SCRIPT_DIR}/${helper}" "/usr/local/sbin/${helper}"
             echo "    Installed /usr/local/sbin/${helper}"
@@ -251,6 +251,7 @@ Cmnd_Alias HOSTS_ENTRY_REMOVE = /usr/local/sbin/osac-hosts-entry remove *
 Cmnd_Alias COMPACT_DNS_ADD    = /usr/local/sbin/osac-compact-dns add *
 Cmnd_Alias COMPACT_DNS_REMOVE = /usr/local/sbin/osac-compact-dns remove *
 Cmnd_Alias COMPACT_KUBECONFIG_COPY = /usr/local/sbin/osac-compact-kubeconfig *
+Cmnd_Alias BMH_HISTORY = /usr/local/sbin/osac-bmh-history *
 
 ${KUBECONFIG_COPY_ALIAS}
 
@@ -261,7 +262,7 @@ ${RUNNER_USER} ALL=(root) NOPASSWD: CLUSTER_TOOL_FLAVORS, CLUSTER_TOOL_FLAVORS_D
     BRIDGE_DOWN, BRIDGE_DELETE, \\
     AUTH_JSON_MKDIR, AUTH_JSON_COPY, AUTH_JSON_CHMOD, AUTH_JSON_RM, \\
     HOSTS_ENTRY_ADD, HOSTS_ENTRY_REMOVE, COMPACT_DNS_ADD, COMPACT_DNS_REMOVE, \\
-    KUBECONFIG_COPY, KUBECONFIG_CHOWN, COMPACT_KUBECONFIG_COPY
+    KUBECONFIG_COPY, KUBECONFIG_CHOWN, COMPACT_KUBECONFIG_COPY, BMH_HISTORY
 EOF
 
     if ! visudo -c -f "${SUDOERS_STAGING}" >/dev/null; then

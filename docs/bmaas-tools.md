@@ -127,7 +127,7 @@ state transition. These observations do not establish a guest failure cause.
 
 The recorder uses `libvirt-python`, already installed by `setup-sushy-tools.sh`,
 and a read-only `qemu:///system` connection. It needs no guest agent. Registration
-failure or a ten-second readiness timeout disables recording without failing
+failure or a fifteen-second readiness timeout disables recording without failing
 provisioning. Existing history directories are never shared or overwritten by
 another recorder. Event retention is capped at 2 MiB and recorder lifetime at
 24 hours; status reports event truncation. Long runs can therefore have gaps.
@@ -135,17 +135,31 @@ another recorder. Event retention is capped at 2 MiB and recorder lifetime at
 Passive serial logging is configured in domain XML before first boot with
 `<log append="on">`, preserving the PTY console. It captures only output the
 guest already sends to its serial device; it does not change kernel arguments,
-connect a console client, or send input. Serial logging requires libvirt 10.10+
-and verified standard, running libvirtd/virtqemud and virtlogd configuration:
+connect a console client, or send input. Serial logging requires libvirt 6.0+
+with the upstream logd character-device backend and standard running
+libvirtd/virtqemud and virtlogd configuration:
 `stdio_handler=logd`, positive `max_size` no greater than 2097152 bytes, and
-`max_backups` no greater than three. Default settings meet these limits.
+`max_backups` no greater than three. The installed helper checks daemon version,
+process identity, standard config paths and config age as root. Connecting to
+the existing virtlogd socket activates a socket-managed daemon before checking
+its PID/config; this changes no daemon settings. Missing or commented options
+use **assumed upstream defaults**, not queried effective settings, and
+`defaults_assumed` records that distinction. Those defaults are logd, 2 MiB,
+and three backups. A completely missing config also requires its parent
+directory to predate the daemon; otherwise serial capture is declined.
 Nonstandard daemon configuration paths, unreadable configuration/process
 metadata, configuration newer than its daemon, and unrecognized size syntax
 disable serial capture explicitly in `status.json`. No daemon settings change.
 Administrators must not reload/change the logging configuration during a run.
+The config-age check cannot detect a reload with subsequently restored mtimes.
+Vendor builds must preserve upstream defaults/backend behavior; there is no
+API here querying effective logd retention. Unpinned package installation does
+not itself establish those settings or a particular installed version.
 
 This backend choice follows libvirt's
-[QEMU character-device preparation](https://github.com/libvirt/libvirt/blob/v10.10.0/src/qemu/qemu_process.c)
+[6.0 QEMU character-device preparation](https://github.com/libvirt/libvirt/blob/v6.0.0/src/qemu/qemu_command.c),
+[12.0 host character-device preparation](https://github.com/libvirt/libvirt/blob/v12.0.0/src/qemu/qemu_process.c),
+[default retention](https://github.com/libvirt/libvirt/blob/v12.0.0/src/logging/log_daemon_config.c)
 and [virtlogd handler](https://github.com/libvirt/libvirt/blob/v10.10.0/src/logging/log_handler.c):
 with logd selected, serial log writes use its rotating-file writer, not an
 unbounded QEMU file. At most four 2 MiB serial files remain per VM. Rotation
@@ -153,17 +167,39 @@ retains recent output; append preserves retained history across guest reboots
 and domain stop/start, not an unlimited archive. Driver disconnects or missed
 events are not reconstructed afterward.
 
-Raw history lives next to the run inventory in its `.history` directory (0700),
-outside the upload tree. The privileged libvirt logging daemon opens the serial
+Events/status live next to the run inventory in its `.history` directory (0700).
+Raw serial lives under the fixed root-owned 0700 directory
+`/var/log/libvirt/qemu/osac-bmh-history/<runner-uid>/<random-run-prefix>`, never
+under the upload tree. The privileged libvirt logging daemon opens the serial
 file and passes QEMU a descriptor; QEMU needs no traversal permission on that
-private directory. Rotated files can be root-owned 0600, so collection uses
-bounded, captured `sudo -n head` reads only when needed. This uses the existing
-CI runner privilege model, never prints serial data, and grants no new access.
-SELinux denial or another log-open failure can make first start fail: only a
-confirmed still-shut-off domain is retried without the optional log, preserving
+private directory. Current and rotated files are root-owned 0600, so collection
+uses only `sudo -n /usr/local/sbin/osac-bmh-history`. The root-installed isolated
+Python helper accepts fixed commands and validated run/name arguments, scopes
+paths by `SUDO_UID`, rejects symlinks, hardlinks and nonregular files, and reads
+at most 2 MiB per file. It exposes neither arbitrary paths nor generic root
+commands. Raw helper stdout is captured privately, never forwarded to step logs.
+SELinux denial or another log-open failure can make first start fail: only an
+error naming the configured serial file and a confirmed still-shut-off domain
+allow retry without the optional log, preserving
 the original PTY and leaving ordinary start failures as failures. No SELinux
 policy or host permissions are relaxed. Live runner/SELinux validation remains
-necessary; mock tests cannot establish host compatibility.
+necessary; mock tests cannot establish host compatibility. Standard log-directory
+SELinux labeling and descriptor-passing behavior are assumed, not proven here.
+
+**Host rollout is required before enabling this on existing runners:** rerun
+`scripts/machine-init.sh runner-user` from this checkout (as the host
+administrator), or the fleet `machine_base` runner-user task. Both install the
+root-owned 0755 helper before generating its narrow sudoers allowance. The
+existing policy does not permit `head` and is not widened to do so. Fresh hosts
+use this same install path; `packages` installs unpinned libvirt and `services`
+enables libvirtd. With the installed helper, normal upstream defaults and
+standard socket/process paths, setup captures serial from the first start,
+including all three rotation suffixes. Old hosts without this rollout explicitly
+report serial unavailable while still recording events; checking out the PR
+alone cannot install privileged host prerequisites.
+The [upstream RPM manifest](https://github.com/libvirt/libvirt/blob/v12.0.0/libvirt.spec.in)
+provides the root-owned 0700 `/var/log/libvirt/qemu` parent directory. The helper
+creates only its private subtree, not arbitrary log-directory parents.
 
 Collection requests bounded recorder shutdown before cluster gathering, including
 failed and cancelled collection attempts. Serial snapshots are capped at 2 MiB
@@ -174,7 +210,9 @@ redaction markers, gitleaks, upload release gates and cancellation conditions
 remain unchanged. Collection failure omits optional history, not test results.
 Teardown stops the recorder again and removes raw history only after libvirt
 confirms no domains in the inventory's group remain; unreachable libvirt or
-surviving domains preserve the raw directory for cleanup. The inventory path is
+surviving domains preserve the raw directory for cleanup. A rejected privileged
+cleanup also retains the local history and inventory for retry, without turning
+optional diagnostics cleanup into a teardown failure. The inventory path is
 exported before VM creation, so partial setup remains discoverable.
 
 To roll back, revert the reboot-history change; no persistent daemon or guest
