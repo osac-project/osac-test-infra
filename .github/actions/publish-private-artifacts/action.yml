@@ -48,12 +48,15 @@ runs:
       id: stage
       shell: bash
       env:
-        SOURCE_DIR: ${{ inputs.source-dir != '' && inputs.source-dir || format('{0}/osac-artifacts', runner.temp) }}
+        SOURCE_DIR_INPUT: ${{ inputs.source-dir }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         HOST_LABEL: ${{ inputs.host-label }}
       run: |
         set -euo pipefail
-        STAGING_ROOT=/var/tmp/osac-artifacts
+        SOURCE_DIR="${SOURCE_DIR_INPUT:-${RUNNER_TEMP}/osac-artifacts}"
+        # collect.yml only accepts directories under /var/tmp/osac-artifacts/;
+        # the override is for the unit tests.
+        STAGING_ROOT="${OSAC_ARTIFACT_STAGING_ROOT:-/var/tmp/osac-artifacts}"
         if [[ ! -d "${SOURCE_DIR}" ]]; then
           echo "::warning::No artifact directory at ${SOURCE_DIR} -- nothing to publish"
           echo "staged=false" >> "${GITHUB_OUTPUT}"
@@ -68,6 +71,8 @@ runs:
         DEST="${STAGING_ROOT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB//[^A-Za-z0-9._-]/_}-${SAFE_NAME}-$(date +%s)"
         mkdir -m 700 "${DEST}"
         cp -a "${SOURCE_DIR}/." "${DEST}/"
+        # cp -a copies the source directory's mode onto DEST too.
+        chmod 700 "${DEST}"
         rm -f "${DEST}/.redaction-complete"
         if [[ -z "$(ls -A "${DEST}")" ]]; then
           echo "::warning::${SOURCE_DIR} is empty -- nothing to publish"
