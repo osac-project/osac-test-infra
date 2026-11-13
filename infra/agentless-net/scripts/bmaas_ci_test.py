@@ -139,7 +139,7 @@ class ProofPayloadTest(unittest.TestCase):
             args=[],
             returncode=1,
             stdout="",
-            stderr="rpc error: code = Unavailable desc = unreachable",
+            stderr=f"rpc error: code = Unavailable desc = unreachable {test_token}",
         )
         api = prove_bmi.Api(address="api.example:443", token=test_token, ca_file="/tmp/ca.crt")
         with mock.patch("prove_bmi.subprocess.run", return_value=completed):
@@ -147,6 +147,7 @@ class ProofPayloadTest(unittest.TestCase):
                 api.call("osac.public.v1.VirtualNetworks/Get")
         self.assertEqual(caught.exception.code, "Unavailable")
         self.assertNotIn(test_token, str(caught.exception))
+        self.assertIn("[REDACTED]", str(caught.exception))
 
     def test_successful_delete_removes_the_state_file(self) -> None:
         test_token = "not-used"
@@ -178,7 +179,7 @@ class ProofPayloadTest(unittest.TestCase):
             ):
                 code = prove_bmi.main(["--delete", "--state-file", str(state_path)])
             self.assertEqual(code, 1)
-            self.assertTrue(state_path.is_file())
+            self.assertEqual(json.loads(state_path.read_text())["vnet_id"], "vnet-1")
 
     def test_retry_reuses_a_recorded_network(self) -> None:
         class RecordingApi:
@@ -213,6 +214,24 @@ class ProofPayloadTest(unittest.TestCase):
 
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(prove_bmi.delete_proof(FailingApi(), {"bmi_id": "bmi-1", "vnet_id": "vnet-1"}))
+
+    def test_partial_delete_forgets_only_removed_ids(self) -> None:
+        class Selective:
+            def call(self, service: str, data: dict | None = None) -> dict:
+                if "Catalog" in service:
+                    raise RuntimeError("catalog delete failed")
+                return {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state = {"catalog_id": "cat-1", "vnet_id": "vnet-1", "address": "10.100.1.9"}
+            state_path.write_text(json.dumps(state))
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(prove_bmi.delete_proof(Selective(), state, state_path))
+            remaining = json.loads(state_path.read_text())
+        self.assertEqual(remaining["catalog_id"], "cat-1")
+        self.assertNotIn("vnet_id", remaining)
+        self.assertEqual(remaining["address"], "10.100.1.9")
 
 
 class SanitizeTest(unittest.TestCase):
@@ -321,6 +340,30 @@ class SanitizeTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
 
+    def test_nested_secret_mappings_are_redacted(self) -> None:
+        test_secret = "nested-secret"
+        raw = f"password:\n  value: {test_secret}\nbridge sysctl is 0\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            destination = Path(tmp) / "clean"
+            source.mkdir()
+            (source / "job.log").write_text(raw)
+            sanitize_diagnostics.sanitize_tree(source, destination)
+            cleaned = (destination / "job.log").read_text()
+        self.assertNotIn(test_secret, cleaned)
+        self.assertNotIn("value:", cleaned)
+        self.assertIn("password: [REDACTED]", cleaned)
+        self.assertIn("bridge sysctl is 0", cleaned)
+
+    def test_secret_key_without_a_value_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "logs"
+            source.mkdir()
+            (source / "job.log").write_text("password:\nbridge sysctl is 0\n")
+            with self.assertRaises(RuntimeError) as caught:
+                sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
+        self.assertIn("secret key has no value", str(caught.exception))
+
 
 class WorkflowContractTest(unittest.TestCase):
     def test_manual_run_is_isolated_and_proves_one_bmi(self) -> None:
@@ -348,34 +391,72 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("workflow_call", document[True])
         self.assertNotIn("workflow_dispatch", document[True])
         self.assertNotIn("pull_request", document[True])
+        self.assertEqual(set(document["jobs"]), {"authorize", "install"})
+        install = document["jobs"]["install"]
+        self.assertEqual(install["needs"], "authorize")
+        self.assertEqual(install["runs-on"], "${{ inputs.orchestrator-runner-label }}")
+        self.assertGreaterEqual(install["timeout-minutes"], 430)
+        self.assertEqual(install["permissions"]["id-token"], "write")
+        self.assertEqual(install["permissions"]["attestations"], "write")
+        self.assertEqual(caller["permissions"]["id-token"], "write")
+        self.assertEqual(caller["permissions"]["attestations"], "write")
+        self.assertEqual(suite["jobs"]["bmaas-agentless"]["permissions"]["id-token"], "write")
+        self.assertEqual(suite["jobs"]["bmaas-agentless"]["permissions"]["attestations"], "write")
+        self.assertNotIn("outputs.runner-label", WORKFLOW.read_text())
 
-        steps = [step["run"] for step in document["jobs"]["e2e"]["steps"] if "run" in step]
-        joined = "\n".join(steps)
-        self.assertIn("setup-bmaas", joined)
-        self.assertIn("prove-bmi", joined)
-        self.assertIn("destroy-bmaas", joined)
+        steps = install["steps"]
+        joined = "\n".join(step.get("run", "") for step in steps)
+        remote = (ROOT / "scripts" / "ec2-runner" / "run-bmaas-agentless.sh").read_text()
+        self.assertIn("run-bmaas-agentless.sh", joined)
+        self.assertIn("provision.sh", joined)
+        self.assertIn("push-caas-agentless-net-secrets.sh", joined)
+        self.assertIn("teardown.sh", joined)
         self.assertIn("sanitize_diagnostics.py", joined)
+        self.assertNotIn("verify-and-register.sh", joined)
+        self.assertNotIn("start-runner.sh", joined)
         self.assertNotIn("setup-caas", joined)
-        self.assertEqual(document["jobs"]["e2e"]["runs-on"], "${{ needs.provision.outputs.runner-label }}")
-        self.assertEqual(document["jobs"]["teardown"]["if"], "always()")
+        self.assertNotIn("setup-caas", remote)
+        self.assertNotIn("verify-and-register", remote)
+        for target in (
+            "setup-infra",
+            "deploy-ocp",
+            "deploy-osac",
+            "deploy-fabric",
+            "setup-bmaas",
+            "prove-bmi",
+            "gather-infra",
+            "gather-bmaas",
+            "destroy-bmaas",
+        ):
+            self.assertIn(target, remote)
+        self.assertIn("OSAC_PROFILE=bmaas-ci", remote)
+        teardown = next(step for step in steps if "teardown.sh" in step.get("run", ""))
+        self.assertEqual(teardown["if"], "always()")
 
-        upload = next(step for step in document["jobs"]["e2e"]["steps"] if step.get("name") == "Upload sanitized diagnostics")
-        self.assertIn("steps.sanitize.outcome == 'success'", upload["if"])
-        checkout = next(step for step in document["jobs"]["e2e"]["steps"] if step.get("name") == "Checkout repository")
-        self.assertFalse(checkout["with"]["persist-credentials"])
-        self.assertIn("inputs.test-infra-sha", checkout["with"]["ref"])
-        self.assertIn("inputs.test-infra-repository", checkout["with"]["repository"])
-        for job_name in ("authorize", "push-secrets"):
-            privileged = next(
-                step for step in document["jobs"][job_name]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
-            )
-            self.assertEqual(privileged["with"]["repository"], "${{ job.workflow_repository }}")
-            self.assertEqual(privileged["with"]["ref"], "${{ job.workflow_sha }}")
-            self.assertNotIn("inputs.test-infra", privileged["with"]["repository"])
-            self.assertNotIn("inputs.test-infra", privileged["with"]["ref"])
-            self.assertFalse(privileged["with"]["persist-credentials"])
-        self.assertNotIn("test-infra-sha", document["jobs"]["provision"]["with"])
-        self.assertNotIn("test-infra-sha", document["jobs"]["teardown"]["with"])
+        upload = next(step for step in steps if step.get("name") == "Upload sanitized diagnostics")
+        self.assertIn("steps.publish-attestation.outcome == 'success'", upload["if"])
+        attest = next(step for step in steps if "attest-build-provenance" in step.get("uses", ""))
+        self.assertIn("e8998f949152b193b063cb0ec769d69d929409be", attest["uses"])
+        self.assertIn("logs-sanitized/**", attest["with"]["subject-path"])
+        sanitize = next(step for step in steps if step.get("name") == "Sanitize diagnostics")
+        self.assertNotIn("under-test", sanitize["run"])
+        trusted = next(step for step in steps if step.get("name") == "Checkout trusted scripts")
+        self.assertEqual(trusted["with"]["repository"], "${{ job.workflow_repository }}")
+        self.assertEqual(trusted["with"]["ref"], "${{ job.workflow_sha }}")
+        self.assertFalse(trusted["with"]["persist-credentials"])
+        under_test = next(step for step in steps if step.get("name") == "Checkout the revision under test")
+        self.assertEqual(under_test["with"]["path"], "under-test")
+        self.assertFalse(under_test["with"]["persist-credentials"])
+        self.assertIn("inputs.test-infra-sha", under_test["with"]["ref"])
+        self.assertIn("inputs.test-infra-repository", under_test["with"]["repository"])
+        privileged = next(
+            step for step in document["jobs"]["authorize"]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
+        )
+        self.assertEqual(privileged["with"]["repository"], "${{ job.workflow_repository }}")
+        self.assertEqual(privileged["with"]["ref"], "${{ job.workflow_sha }}")
+        self.assertNotIn("inputs.test-infra", privileged["with"]["repository"])
+        self.assertNotIn("inputs.test-infra", privileged["with"]["ref"])
+        self.assertFalse(privileged["with"]["persist-credentials"])
         destroy = (INFRA / "scripts" / "destroy-bmaas.sh").read_text()
         self.assertNotIn("--names ", destroy)
         self.assertIn('"${INVENTORY_NAMES[@]}"', destroy)
