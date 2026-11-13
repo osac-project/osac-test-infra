@@ -41,6 +41,7 @@ concurrency:
 
 jobs:
   osac-ci-large:
+    name: E2E VMaaS 3-Node Full Install
     permissions:
       contents: read
       id-token: write
