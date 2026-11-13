@@ -19,6 +19,8 @@
 #               SKIP_PURGE (default: false) -- when true, skip deleting raw
 #                 logs/artifacts after redaction (useful for periodic scans
 #                 where preserving the originals aids debugging)
+#               PRIVATE_COLLECT_WAIT_SECONDS (default 300) -- how long to wait
+#                 for a private collect run that has not finished uploading
 #               PRIVATE_ARTIFACT_REPO (owner/name) and PRIVATE_GH_TOKEN --
 #                 also scan the artifacts this run's jobs published to the
 #                 private artifact repository (publish-private-artifacts)
@@ -36,8 +38,12 @@
 #                   the actual secret value. File paths are prefixed with
 #                   logs/ or artifacts/<name>/ so callers can tell the channel.
 #   status.env      SCAN_OK=true|false, LEAKS_FOUND=true|false,
-#                   PURGE_OK=true|false, and FINDINGS_COUNT=N, for the caller
-#                   to `source`.
+#                   PURGE_OK=true|false, FINDINGS_COUNT=N and
+#                   REDACTED_WITHHELD=true|false, for the caller to `source`.
+#                     - REDACTED_WITHHELD=true means every leak found was in
+#                       an artifact of the private repository, whose redacted
+#                       copy is deliberately not written: there is nothing to
+#                       upload. A redaction that failed is not this.
 #                     - SCAN_OK=false means the scan did not complete for
 #                       logs and/or artifacts (fetch/list/download/scan
 #                       failure, or an oversize artifact skipped). A run
@@ -111,6 +117,12 @@ LEAKS_FOUND=false
 PURGE_OK=true
 # Any raw content downloaded from GitHub (logs zip and/or artifact zip).
 CONTENT_FETCHED=false
+# Where leaks were found. A redacted copy is written for every one of them
+# except those in artifacts of the private repository, which is why the
+# caller's "no redacted copy" is only intended when the private ones are all
+# there is: see REDACTED_WITHHELD in status.env.
+PUBLIC_LEAK_SEEN=false
+PRIVATE_LEAK_SEEN=false
 # Set true after every DELETE required for this run's findings has been
 # attempted. EXIT trap uses this so an abort *after* successful purge
 # (e.g. during findings.json / ::add-mask::) does not rewrite PURGE_OK=false.
@@ -120,6 +132,17 @@ PURGE_PHASE_DONE=false
 # abort between cp and redact would otherwise leave secrets in a tree the
 # trap might keep / the composite might upload.
 echo "[]" > "${FINDINGS_RAW_JSON}"
+
+# true only when every leak found was in a private artifact, whose redacted
+# copy is withheld on purpose. A redaction that failed for a public artifact is
+# a missing copy, not a withheld one.
+redacted_withheld() {
+  if [[ "${PRIVATE_LEAK_SEEN}" == "true" && "${PUBLIC_LEAK_SEEN}" != "true" ]]; then
+    echo true
+  else
+    echo false
+  fi
+}
 
 # Atomically write status.env (KEY=value lines via temp + mv) so callers can
 # source a complete file even if the script aborts mid-write.
@@ -188,6 +211,7 @@ cleanup_raw() {
     "${OUTPUT_DIR}"/artifacts-list.page*.json \
     "${OUTPUT_DIR}"/private-runs.page*.json \
     "${OUTPUT_DIR}"/private-artifacts.*.json \
+    "${OUTPUT_DIR}"/private-run.*.json \
     "${OUTPUT_DIR}"/run-probe.json \
     "${FINDINGS_RAW_JSON}"
   # REDACTED_DIR is only populated post-redact (staging pattern) -- keep it.
@@ -211,7 +235,8 @@ cleanup_raw() {
         final_purge=false
       fi
       write_status "SCAN_OK=false" "LEAKS_FOUND=true" \
-        "PURGE_OK=${final_purge}" "FINDINGS_COUNT=${trap_count}"
+        "PURGE_OK=${final_purge}" "FINDINGS_COUNT=${trap_count}" \
+        "REDACTED_WITHHELD=$(redacted_withheld)"
     elif [[ "${CONTENT_FETCHED:-false}" == "true" ]]; then
       write_status "SCAN_OK=false" "LEAKS_FOUND=false" "PURGE_OK=false" "FINDINGS_COUNT=0"
     else
@@ -351,6 +376,9 @@ else
     run_gitleaks "${LOGS_DIR}" "${LOG_REPORT}"
     LOG_FINDINGS_COUNT=$(jq 'length' "${LOG_REPORT}")
     echo "Found ${LOG_FINDINGS_COUNT} potential secret(s) in logs."
+    if (( LOG_FINDINGS_COUNT > 0 )); then
+      PUBLIC_LEAK_SEEN=true
+    fi
     merge_findings "${LOG_REPORT}" "logs/"
     LOGS_SCANNED=true
     echo "::endgroup::"
@@ -436,7 +464,7 @@ if [[ -n "${PRIVATE_REPO}" ]]; then
           private_ok=false
           break
         fi
-        private_runs+=$(jq -r --arg t "${title}" '.workflow_runs[] | select((.display_title // "") | startswith($t)) | .id' "${page_file}")$'\n'
+        private_runs+=$(jq -r --arg t "${title}" '.workflow_runs[] | select((.display_title // "") | startswith($t)) | "\(.id) \(.status)"' "${page_file}")$'\n'
         if (( $(jq '.workflow_runs | length' "${page_file}") < 100 )); then
           break
         fi
@@ -446,8 +474,34 @@ if [[ -n "${PRIVATE_REPO}" ]]; then
         fi
         private_page=$((private_page + 1))
       done
-      while IFS= read -r private_run; do
+      # The job dispatches its collect run and does not wait for it, and this
+      # scan starts when the run completes, so a collect run may still be
+      # queued or uploading: its artifacts do not exist yet. Wait for it, up to
+      # PRIVATE_COLLECT_WAIT_SECONDS, and call the scan incomplete if it never
+      # finishes rather than reporting an empty listing as clean.
+      private_wait="${PRIVATE_COLLECT_WAIT_SECONDS:-300}"
+      [[ "${private_wait}" =~ ^[0-9]+$ ]] || private_wait=300
+      while read -r private_run private_status; do
         [[ -z "${private_run}" ]] && continue
+        waited=0
+        while [[ "${private_status}" != "completed" ]]; do
+          if (( waited >= private_wait )); then
+            echo "::warning::Collect run ${private_run} in ${PRIVATE_REPO} has not completed after ${private_wait}s -- its private artifacts of run ${RUN_ID} were not fully scanned."
+            private_ok=false
+            break
+          fi
+          sleep 15
+          waited=$((waited + 15))
+          state_file="${OUTPUT_DIR}/private-run.${private_run}.json"
+          code=$(FETCH_TOKEN="${PRIVATE_GH_TOKEN}" fetch_with_retry "${state_file}" "200" \
+            "${GITHUB_API_URL}/repos/${PRIVATE_REPO}/actions/runs/${private_run}")
+          if [[ "${code}" != "200" ]]; then
+            echo "::warning::Could not read collect run ${private_run} in ${PRIVATE_REPO} (HTTP ${code})."
+            private_ok=false
+            break
+          fi
+          private_status=$(jq -r '.status // empty' "${state_file}" 2>/dev/null || true)
+        done
         page_file="${OUTPUT_DIR}/private-artifacts.${private_run}.json"
         code=$(FETCH_TOKEN="${PRIVATE_GH_TOKEN}" fetch_with_retry "${page_file}" "200" \
           -G "${GITHUB_API_URL}/repos/${PRIVATE_REPO}/actions/runs/${private_run}/artifacts" \
@@ -536,6 +590,11 @@ while IFS= read -r art_json; do
 
   if (( art_findings_count > 0 )); then
     LEAKS_FOUND=true
+    if [[ "${art_private}" == "true" ]]; then
+      PRIVATE_LEAK_SEEN=true
+    else
+      PUBLIC_LEAK_SEEN=true
+    fi
     # Stage → redact → move into REDACTED_DIR so an abort never leaves a
     # raw copy under the tree the composite uploads as evidence.
     art_stage="${OUTPUT_DIR}/.redact-staging-art-${art_id}"
@@ -660,4 +719,5 @@ write_status \
   "SCAN_OK=${SCAN_OK}" \
   "LEAKS_FOUND=${LEAKS_FOUND}" \
   "PURGE_OK=${PURGE_OK}" \
-  "FINDINGS_COUNT=${FINDINGS_COUNT}"
+  "FINDINGS_COUNT=${FINDINGS_COUNT}" \
+  "REDACTED_WITHHELD=$(redacted_withheld)"

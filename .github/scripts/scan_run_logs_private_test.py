@@ -45,8 +45,14 @@ while i < len(args):
 path = url.replace("https://api.github.com", "")
 with open(os.environ["REQUEST_LOG"], "a") as log:
     log.write(json.dumps({"method": method, "path": path, "query": query, "token": auth}) + "\n")
-routes = json.load(open(os.environ["ROUTES"]))
+routes_file = os.environ["ROUTES"]
+routes = json.load(open(routes_file))
 route = routes.get(f"{method} {path}") or {"status": 404, "body": {}}
+if isinstance(route, list):
+    # Answered in turn, the last one repeating.
+    key = f"{method} {path}"
+    route = routes[key][0] if len(routes[key]) == 1 else routes[key].pop(0)
+    json.dump(routes, open(routes_file, "w"))
 if out and out != "/dev/null":
     if "zip_b64" in route:
         import base64
@@ -92,6 +98,9 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
         self.bin.mkdir()
         (self.bin / "curl").write_text(CURL.replace("__PYTHON__", sys.executable))
         (self.bin / "curl").chmod(0o755)
+        (self.bin / "sleep").write_text('#!/bin/bash\necho "$*" >> "$SLEEP_LOG"\n')
+        (self.bin / "sleep").chmod(0o755)
+        self.sleeps = self.temp / "sleeps.log"
         (self.bin / "engine").write_text(ENGINE)
         (self.bin / "engine").chmod(0o755)
         self.requests = self.temp / "requests.log"
@@ -108,9 +117,9 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
                 "status": 200,
                 "body": {
                     "workflow_runs": [
-                        {"id": 9001, "display_title": f"collect {REPO}#{RUN}.1 - e2e vmaas / e2e"},
-                        {"id": 9002, "display_title": f"collect {REPO}#{RUN}1.1 - lookalike run id"},
-                        {"id": 9003, "display_title": f"collect other/repo#{RUN}.1 - other repository"},
+                        {"id": 9001, "status": "completed", "display_title": f"collect {REPO}#{RUN}.1 - e2e vmaas / e2e"},
+                        {"id": 9002, "status": "completed", "display_title": f"collect {REPO}#{RUN}1.1 - lookalike run id"},
+                        {"id": 9003, "status": "completed", "display_title": f"collect other/repo#{RUN}.1 - other repository"},
                     ]
                 },
             },
@@ -134,7 +143,9 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
             "GITHUB_API_URL": API,
             "CONTAINER_ENGINE": str(self.bin / "engine"),
             "REQUEST_LOG": str(self.requests),
+            "SLEEP_LOG": str(self.sleeps),
             "ROUTES": str(self.routes_file),
+            "PRIVATE_COLLECT_WAIT_SECONDS": getattr(self, "wait_seconds", "300"),
         }
         if private_repo is not None:
             environment["PRIVATE_ARTIFACT_REPO"] = private_repo
@@ -156,6 +167,9 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
         if not self.requests.exists():
             return []
         return [json.loads(line) for line in self.requests.read_text().splitlines()]
+
+    def calls_exact(self, path: str) -> list[dict]:
+        return [call for call in self.calls() if call["path"] == path]
 
     def calls_to(self, fragment: str) -> list[dict]:
         return [call for call in self.calls() if fragment in call["path"]]
@@ -232,7 +246,67 @@ class ScanPrivateArtifactsTest(unittest.TestCase):
         _, status = self.run_script(private_repo=None, private_token=None)
         self.assertEqual(status["SCAN_OK"], "true")
         self.assertEqual(self.calls_to(PRIVATE), [])
-        self.assertEqual(self.calls_to(f"/repos/{REPO}/actions/runs/{RUN}\n"), [])
+        # The run itself is only read to date the private lookup, which was not made.
+        self.assertEqual(self.calls_exact(f"/repos/{REPO}/actions/runs/{RUN}"), [])
+
+    def test_a_collect_run_that_is_still_running_is_waited_for(self) -> None:
+        self.routes[f"GET /repos/{PRIVATE}/actions/workflows/collect.yml/runs"]["body"]["workflow_runs"][0][
+            "status"
+        ] = "in_progress"
+        self.routes[f"GET /repos/{PRIVATE}/actions/runs/9001"] = [
+            {"status": 200, "body": {"status": "queued"}},
+            {"status": 200, "body": {"status": "completed"}},
+        ]
+        result, status = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(status["SCAN_OK"], "true", result.stdout)
+        # Two polls, a sleep before each, then the artifact was scanned.
+        self.assertEqual(len(self.sleeps.read_text().splitlines()), 2)
+        self.assertEqual(len(self.calls_exact(f"/repos/{PRIVATE}/actions/runs/9001")), 2)
+        self.assertEqual(len(self.calls_to("/artifacts/77/zip")), 1)
+
+    def test_a_collect_run_that_never_finishes_is_an_incomplete_scan(self) -> None:
+        self.routes[f"GET /repos/{PRIVATE}/actions/workflows/collect.yml/runs"]["body"]["workflow_runs"][0][
+            "status"
+        ] = "in_progress"
+        self.routes[f"GET /repos/{PRIVATE}/actions/runs/9001"] = {"status": 200, "body": {"status": "in_progress"}}
+        self.wait_seconds = "30"
+        result, status = self.run_script()
+        self.assertEqual(status["SCAN_OK"], "false")
+        self.assertIn("has not completed after 30s", result.stdout)
+        # Bounded: 30s at 15s is two sleeps, not a loop.
+        self.assertEqual(len(self.sleeps.read_text().splitlines()), 2)
+
+    def test_a_finished_collect_run_is_not_polled(self) -> None:
+        self.run_script()
+        self.assertEqual(self.calls_exact(f"/repos/{PRIVATE}/actions/runs/9001"), [])
+        self.assertFalse(self.sleeps.exists())
+
+    def test_withheld_is_set_only_when_every_leak_was_private(self) -> None:
+        # No leak at all.
+        _, status = self.run_script()
+        self.assertEqual((status["LEAKS_FOUND"], status["REDACTED_WITHHELD"]), ("false", "false"))
+        # A leak only in the private artifact: nothing to upload on purpose.
+        self.routes[f"GET /repos/{PRIVATE}/actions/artifacts/77/zip"]["zip_b64"] = zip_b64({"kubeconfig": "LEAK\n"})
+        _, status = self.run_script()
+        self.assertEqual((status["LEAKS_FOUND"], status["REDACTED_WITHHELD"]), ("true", "true"))
+
+    def test_a_public_leak_is_never_called_withheld(self) -> None:
+        self.routes[f"GET /repos/{REPO}/actions/runs/{RUN}/artifacts"] = {
+            "status": 200,
+            "body": {"artifacts": [{"id": 5, "name": "osac-logs-100", "expired": False, "size_in_bytes": 10}]},
+        }
+        self.routes[f"GET /repos/{REPO}/actions/artifacts/5/zip"] = {
+            "status": 200,
+            "zip_b64": zip_b64({"kubeconfig": "token: LEAKVALUE\n"}),
+        }
+        self.routes[f"DELETE /repos/{REPO}/actions/artifacts/5"] = {"status": 204}
+        # Public leak only, then public and private together.
+        _, status = self.run_script(private_repo=None, private_token=None)
+        self.assertEqual((status["LEAKS_FOUND"], status["REDACTED_WITHHELD"]), ("true", "false"))
+        self.routes[f"GET /repos/{PRIVATE}/actions/artifacts/77/zip"]["zip_b64"] = zip_b64({"kubeconfig": "LEAK\n"})
+        _, status = self.run_script()
+        self.assertEqual((status["LEAKS_FOUND"], status["REDACTED_WITHHELD"]), ("true", "false"))
 
     def test_the_runs_own_artifacts_are_still_scanned_and_redacted(self) -> None:
         self.routes[f"GET /repos/{REPO}/actions/runs/{RUN}/artifacts"] = {

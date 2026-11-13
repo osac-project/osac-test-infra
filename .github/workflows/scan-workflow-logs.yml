@@ -85,6 +85,12 @@ jobs:
       - name: Mint OSAC CI token for private artifacts
         id: mint-private-token
         if: steps.private-access.outputs.enabled == 'true'
+        # Best effort: the scan of the run's own logs and artifacts is the
+        # security-critical part and must run whatever happens to this token.
+        # If it fails the scanner is still told about the private repository,
+        # so it reports the private artifacts as not scanned (SCAN_OK=false)
+        # instead of silently skipping them.
+        continue-on-error: true
         uses: ./.github/actions/mint-github-app-token
         with:
           app-id: ${{ secrets.OSAC_CI_APP_ID }}
@@ -99,8 +105,8 @@ jobs:
         with:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          private-artifact-repo: ${{ steps.mint-private-token.outputs.token != '' && 'osac-project/osac-ci-artifacts' || '' }}
-          private-artifact-token: ${{ steps.mint-private-token.outputs.token }}
+          private-artifact-repo: ${{ steps.private-access.outputs.enabled == 'true' && 'osac-project/osac-ci-artifacts' || '' }}
+          private-artifact-token: ${{ steps.mint-private-token.outcome == 'success' && steps.mint-private-token.outputs.token || '' }}
 
       # Comment on an associated open PR when leaks were found. Schedule /
       # dispatch / no-PR runs skip quietly. Body is a short notice with

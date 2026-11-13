@@ -47,7 +47,7 @@ outputs:
     value: ${{ steps.upload-status.outputs.upload-ok }}
   redacted-withheld:
     description: "'true' when leaks were found but no redacted copy exists to upload, because they were all in artifacts held in the private artifact repository, whose content is deliberately not republished"
-    value: ${{ steps.redacted.outputs.withheld }}
+    value: ${{ steps.scan.outputs.redacted-withheld }}
 
 runs:
   using: composite
@@ -88,6 +88,9 @@ runs:
         echo "leaks-found=${LEAKS_FOUND}" >> "$GITHUB_OUTPUT"
         echo "purge-ok=${PURGE_OK}" >> "$GITHUB_OUTPUT"
         echo "findings-count=${FINDINGS_COUNT}" >> "$GITHUB_OUTPUT"
+        # Set by the scanner when every leak was in a private artifact, whose
+        # redacted copy it deliberately does not write.
+        echo "redacted-withheld=${REDACTED_WITHHELD:-false}" >> "$GITHUB_OUTPUT"
         # Step output, not $GITHUB_ENV: an env var here would leak into every
         # later step of the *calling* job (not just this action's own steps),
         # and would collide if this action is ever invoked more than once in
@@ -135,17 +138,18 @@ runs:
       run: |
         if [[ -d "${OUTPUT_DIR}/redacted" ]] && [[ -n "$(find "${OUTPUT_DIR}/redacted" -type f -print -quit)" ]]; then
           echo "has-redacted=true" >> "$GITHUB_OUTPUT"
-          echo "withheld=false" >> "$GITHUB_OUTPUT"
         else
           echo "has-redacted=false" >> "$GITHUB_OUTPUT"
-          echo "withheld=true" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Upload redacted evidence artifact
       id: upload
       # always(): a hard failure in an earlier composite step must not skip
       # uploading evidence when leaks were already recorded.
-      if: always() && steps.scan.outputs.leaks-found == 'true' && steps.redacted.outputs.has-redacted == 'true'
+      # Skipped only when the scanner says there is nothing to upload on
+      # purpose. A missing redacted copy for any other reason -- redact.py
+      # failed -- still fails here, loudly, as it always has.
+      if: always() && steps.scan.outputs.leaks-found == 'true' && (steps.redacted.outputs.has-redacted == 'true' || steps.scan.outputs.redacted-withheld != 'true')
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: redacted-logs-${{ inputs.run-id }}
@@ -185,7 +189,7 @@ runs:
         PURGE_OK: ${{ steps.scan.outputs.purge-ok }}
         OUTPUT_DIR: ${{ steps.scan.outputs.output-dir }}
         UPLOAD_OK: ${{ steps.upload-status.outputs.upload-ok }}
-        REDACTED_WITHHELD: ${{ steps.redacted.outputs.withheld }}
+        REDACTED_WITHHELD: ${{ steps.scan.outputs.redacted-withheld }}
         # Artifact lives on *this* scan run (github.run_id), named after the
         # scanned e2e run (inputs.run-id). Same #artifacts pattern as audit.
         ARTIFACT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
@@ -214,7 +218,12 @@ runs:
           if [[ "${UPLOAD_OK}" == "true" ]]; then
             echo "- Redacted evidence: [\`redacted-logs-${RUN_ID}\`](${ARTIFACT_URL}) (paths under \`logs/\` and/or \`artifacts/\`)."
           elif [[ "${REDACTED_WITHHELD}" == "true" ]]; then
-            echo "- No redacted copy was uploaded: the findings are in artifacts held in the private artifact repository, whose content is not republished here. The raw artifacts were deleted; the table below lists what was found."
+            # Said only as far as it is true: the delete above can have failed.
+            if [[ "${PURGE_OK}" == "true" ]]; then
+              echo "- No redacted copy was uploaded: the findings are in artifacts held in the private artifact repository, whose content is not republished here. The raw artifacts were deleted; the table below lists what was found."
+            else
+              echo "- No redacted copy was uploaded: the findings are in artifacts held in the private artifact repository, whose content is not republished here. Deleting the raw artifacts failed (see above); the table below lists what was found."
+            fi
           else
             echo "- :warning: **Failed to upload the redacted-logs artifact** -- no redacted copy is attached; check the run logs for the upload step's failure."
           fi
