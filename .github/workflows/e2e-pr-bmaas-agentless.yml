@@ -55,6 +55,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/e2e-bmaas-agentless-net-full-install.yml
     with:
       deploy-suite: bmaas-agentless

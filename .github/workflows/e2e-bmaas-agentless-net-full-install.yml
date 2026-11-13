@@ -5,7 +5,10 @@ permissions:
   contents: read
 
 # One virtual BMH on the Agentless containerlab fabric. Triggers live on the
-# caller. A pull-request run checks out that pull request's commit.
+# caller. A pull-request run checks out that pull request's commit on the
+# ephemeral host. Provision, the install, and teardown are steps of one job
+# so "Re-run failed jobs" starts a new instance instead of reusing one that
+# teardown already terminated. The host is not registered as a runner.
 on:
   workflow_call:
     inputs:
@@ -30,7 +33,7 @@ on:
         type: string
         default: "osac-ci-orchestrator"
       tooling-check-cmds:
-        description: "Commands to verify on the box before JIT registration"
+        description: "Commands to verify on the box before the install"
         required: false
         type: string
         default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
@@ -156,27 +159,24 @@ jobs:
             exit 1
           }
 
-  provision:
+  # "Re-run failed jobs" keeps successful jobs. A separate test job would still
+  # be bound to the runner label of an instance teardown had already terminated.
+  # This job provisions a new instance, runs the install over SSH, and tears
+  # the instance down. The host is not registered as a GitHub runner.
+  install:
     needs: authorize
-    uses: ./.github/workflows/ec2-runner-provision.yml
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 450
     permissions:
       contents: read
-    with:
-      instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
-      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
-      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
-      tooling-check-cmds: ${{ inputs.tooling-check-cmds || 'dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make' }}
-
-  push-secrets:
-    needs: provision
-    runs-on: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
-    timeout-minutes: 15
-    permissions:
-      contents: read
+      id-token: write
+      attestations: write
     env:
+      # Same derivation as ec2-runner-provision.yml so teardown.sh removes the
+      # known_hosts entry provision.sh created for this instance.
       KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - name: Checkout repository
+      - name: Checkout trusted scripts
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ job.workflow_repository }}
@@ -189,6 +189,53 @@ jobs:
         with:
           test-suite: ec2-runner
           run-id: ${{ github.run_id }}
+
+      - name: Fetch EC2 runner AWS credentials
+        id: aws-creds
+        uses: ./.github/actions/fetch-ec2-runner-aws-creds
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Fetch EC2 runner network config
+        id: network-config
+        uses: ./.github/actions/fetch-ec2-runner-network-config
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Verify orchestrator SSH keypair exists
+        shell: bash
+        run: |
+          if [ ! -f "${HOME}/.ssh/osac_ec2_orchestrator" ] || [ ! -f "${HOME}/.ssh/osac_ec2_orchestrator.pub" ]; then
+            echo "::error::Orchestrator SSH keypair not found at ~/.ssh/osac_ec2_orchestrator{,.pub}."
+            echo "This is a static, non-rotating keypair generated once during orchestrator"
+            echo "runner setup (see docs/new-ci-machine-setup.md), not per-run -- it must"
+            echo "already exist on this machine."
+            exit 1
+          fi
+
+      - name: Provision ephemeral EC2 instance
+        id: provision
+        timeout-minutes: 45
+        shell: bash
+        env:
+          AMI_ID: ${{ steps.network-config.outputs.AMI_ID }}
+          INSTANCE_TYPE: ${{ inputs.instance-type }}
+          SUBNET_ID: ${{ steps.network-config.outputs.SUBNET_ID }}
+          SECURITY_GROUP_ID: ${{ steps.network-config.outputs.SECURITY_GROUP_ID }}
+          # run_attempt distinguishes "Re-run all jobs" from the previous attempt.
+          # A failed-job rerun does not increment it; this step still calls
+          # run-instances, so the new attempt gets a new instance id.
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
+          EC2_KEY_PAIR: ${{ steps.network-config.outputs.EC2_KEY_PAIR }}
+        run: |
+          export ORCHESTRATOR_PUBKEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator.pub"
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/provision.sh
 
       - name: Fetch pull secret and AAP license from Vault
         id: vault-secrets
@@ -228,11 +275,12 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
-      - name: Push secrets to ephemeral box
+      - name: Push secrets to ephemeral host
+        timeout-minutes: 15
         shell: bash
         env:
-          SSH_USER: ${{ needs.provision.outputs.ssh-user }}
-          PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
+          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
           ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
           ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
           AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
@@ -243,107 +291,78 @@ jobs:
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
           ./scripts/ec2-runner/push-caas-agentless-net-secrets.sh
 
-  e2e:
-    needs: [provision, push-secrets]
-    runs-on: ${{ needs.provision.outputs.runner-label }}
-    timeout-minutes: 360
-    permissions:
-      contents: read
-    steps:
-      # This host is disposable. Orchestrator jobs stay on the trusted workflow revision.
-      - name: Checkout repository
+      - name: Checkout the revision under test
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ inputs.test-infra-repository || job.workflow_repository }}
           ref: ${{ inputs.test-infra-sha || inputs.test-infra-ref || ((inputs.test-infra-repository == '' || inputs.test-infra-repository == job.workflow_repository) && job.workflow_sha || '') }}
           persist-credentials: false
+          path: under-test
 
-      - name: Stage secrets into place
-        run: |
-          STAGING_DIR="/root/agentless-net-secrets"
-          cp "${STAGING_DIR}/pull-secret" /root/pull-secret
-          chmod 600 /root/pull-secret
-          mkdir -p /root/.config/containers
-          cp /root/pull-secret /root/.config/containers/auth.json
-          chmod 600 /root/.config/containers/auth.json
-          cp "${STAGING_DIR}/license.zip" /root/aap-license.zip
-          chmod 600 /root/aap-license.zip
-          cp "${STAGING_DIR}/config" infra/agentless-net/config
-          chmod 600 infra/agentless-net/config
-
-      - name: Install prerequisites
-        timeout-minutes: 30
-        run: make -C infra/agentless-net setup-infra
-
-      - name: Deploy OCP from snapshot
-        timeout-minutes: 60
-        run: make -C infra/agentless-net deploy-ocp
-
-      - name: Deploy OSAC for BMaaS
-        timeout-minutes: 90
+      - name: Run the BMaaS install on the ephemeral host
+        id: install
+        timeout-minutes: 360
+        shell: bash
         env:
-          OSAC_PROFILE: bmaas-ci
+          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
+          UNDER_TEST_DIR: ${{ github.workspace }}/under-test
+          LOG_DIR: ${{ github.workspace }}/infra/agentless-net/logs
+          TOOLING_CHECK_CMDS: ${{ inputs.tooling-check-cmds }}
           OSAC_REPO: ${{ inputs.osac-repo }}
           OSAC_BRANCH: ${{ inputs.osac-branch }}
-        run: make -C infra/agentless-net deploy-osac
-
-      - name: Deploy containerlab fabric
-        timeout-minutes: 30
-        run: make -C infra/agentless-net deploy-fabric
-
-      - name: Register one virtual BMH
-        timeout-minutes: 45
-        run: make -C infra/agentless-net setup-bmaas
-
-      - name: Prove one BMI reaches Ready
-        id: prove-bmi
-        timeout-minutes: 60
-        run: make -C infra/agentless-net prove-bmi
-
-      - name: Gather infra diagnostics
-        if: always()
-        continue-on-error: true
-        timeout-minutes: 10
-        run: make -C infra/agentless-net gather-infra
-
-      - name: Gather BMaaS diagnostics
-        id: gather-bmaas
-        if: always()
-        continue-on-error: true
-        timeout-minutes: 10
-        run: make -C infra/agentless-net gather-bmaas
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/run-bmaas-agentless.sh
 
       - name: Sanitize diagnostics
         id: sanitize
         if: always()
         timeout-minutes: 5
         run: |
+          set -euo pipefail
+          rm -rf infra/agentless-net/logs-sanitized
+          if [ ! -d infra/agentless-net/logs ]; then
+            echo "No diagnostics were collected."
+            exit 1
+          fi
           python3 infra/agentless-net/scripts/sanitize_diagnostics.py \
             infra/agentless-net/logs \
             infra/agentless-net/logs-sanitized
 
-      - name: Upload sanitized diagnostics
+      - name: Attest sanitized diagnostics
+        id: attest
         if: always() && steps.sanitize.outcome == 'success'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: ${{ github.workspace }}/infra/agentless-net/logs-sanitized/**
+
+      - name: Publish the attestation with the diagnostics
+        id: publish-attestation
+        if: always() && steps.attest.outcome == 'success'
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -n "${BUNDLE_PATH}"
+          test -f "${BUNDLE_PATH}"
+          cp "${BUNDLE_PATH}" infra/agentless-net/logs-sanitized/attestation.intoto.jsonl
+
+      - name: Upload sanitized diagnostics
+        if: always() && steps.publish-attestation.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ inputs.deploy-suite }}-diagnostics-${{ github.run_id }}
           path: infra/agentless-net/logs-sanitized
           if-no-files-found: warn
 
-      - name: Remove resources created by this run
+      - name: Terminate the ephemeral instance
         if: always()
-        continue-on-error: true
-        timeout-minutes: 15
-        run: make -C infra/agentless-net destroy-bmaas
-
-  teardown:
-    needs: [provision, push-secrets, e2e]
-    if: always()
-    uses: ./.github/workflows/ec2-runner-teardown.yml
-    permissions:
-      contents: read
-    with:
-      instance-id: ${{ needs.provision.outputs.instance-id }}
-      runner-id: ${{ needs.provision.outputs.runner-id }}
-      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label || 'osac-ci-orchestrator' }}
-      aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+        shell: bash
+        env:
+          INSTANCE_ID: ${{ steps.provision.outputs.instance-id }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ inputs.aws-region || 'us-east-1' }}
+        run: ./scripts/ec2-runner/teardown.sh

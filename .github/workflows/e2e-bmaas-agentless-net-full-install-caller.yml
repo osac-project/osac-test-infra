@@ -5,6 +5,8 @@ run-name: "E2E BMaaS Agentless-Net Full Install${{ inputs.pr-number != '' && for
 permissions:
   contents: read
   pull-requests: read
+  id-token: write
+  attestations: write
 
 on:
   schedule:

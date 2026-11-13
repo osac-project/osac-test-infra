@@ -28,6 +28,14 @@ _SECRET_ASSIGNMENT = re.compile(
 _REDACTED = b"[REDACTED]"
 # YAML block header: | or >, optional chomp, optional single-digit indent, in either order.
 _BLOCK_HEADER = re.compile(rb"^[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:[ \t]+#.*)?[ \t]*$")
+# A secret key whose line has no value. The value is the indented block that follows.
+_SECRET_KEY_ONLY = re.compile(
+    rb"(?i)^[ \t]*"
+    rb"(\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*\""
+    rb"|[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*)"
+    rb"(\s*[:=])"
+    rb"[ \t]*$"
+)
 
 
 def _redact_assignment(match: re.Match[bytes]) -> bytes:
@@ -45,6 +53,22 @@ def _line_indent(line: bytes) -> int:
     return len(line) - len(line.lstrip(b" \t"))
 
 
+def _drop_indented_block(lines: list[bytes], index: int, key_indent: int) -> tuple[int, bool]:
+    """Skip a nested value. Blank lines are discarded. Returns the next index and whether a value was present."""
+    consumed_value = False
+    while index < len(lines):
+        follower = lines[index]
+        if follower.strip() == b"":
+            index += 1
+            continue
+        if _line_indent(follower) > key_indent:
+            consumed_value = True
+            index += 1
+            continue
+        break
+    return index, consumed_value
+
+
 def redact(data: bytes) -> bytes:
     data = _PRIVATE_KEY.sub(b"[REDACTED PRIVATE KEY]", data)
     data = _AUTHORIZATION.sub(lambda match: match.group(1) + _REDACTED, data)
@@ -59,21 +83,17 @@ def redact(data: bytes) -> bytes:
             if _BLOCK_HEADER.fullmatch(value.strip()) is None:
                 raise RuntimeError("unsupported secret block scalar")
             output.append(line[: match.start(3)] + _REDACTED + line[match.end(3) :])
-            key_indent = _line_indent(line)
-            index += 1
-            consumed_value = False
-            while index < len(lines):
-                follower = lines[index]
-                if follower.strip() == b"":
-                    index += 1
-                    continue
-                if _line_indent(follower) > key_indent:
-                    consumed_value = True
-                    index += 1
-                    continue
-                break
+            index, consumed_value = _drop_indented_block(lines, index + 1, _line_indent(line))
             if not consumed_value:
                 raise RuntimeError("secret block scalar has no indented value")
+            continue
+        key_only = None if match else _SECRET_KEY_ONLY.search(line.rstrip(b"\r\n"))
+        if key_only:
+            ending = line[len(line.rstrip(b"\r\n")) :]
+            output.append(key_only.group(1) + key_only.group(2) + b" " + _REDACTED + ending)
+            index, consumed_value = _drop_indented_block(lines, index + 1, _line_indent(line))
+            if not consumed_value:
+                raise RuntimeError("secret key has no value")
             continue
         output.append(_SECRET_ASSIGNMENT.sub(_redact_assignment, line))
         index += 1
