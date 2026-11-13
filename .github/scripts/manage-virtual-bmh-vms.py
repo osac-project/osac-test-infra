@@ -60,7 +60,8 @@ def fail(message: str) -> None:
 
 
 def run_virsh(
-    virsh_args: list[str], *, stdin: str | None = None, check: bool = True, capture: bool = False
+    virsh_args: list[str], *, stdin: str | None = None, check: bool = True, capture: bool = False,
+    timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [*VIRSH, *virsh_args],
@@ -68,7 +69,7 @@ def run_virsh(
         text=True,
         check=check,
         capture_output=capture,
-        timeout=COMMAND_TIMEOUT_SECONDS,
+        timeout=COMMAND_TIMEOUT_SECONDS if timeout is None else timeout,
     )
 
 
@@ -182,7 +183,7 @@ def create_vm(
     serial_log = None
     if history is not None:
         try:
-            state = json.loads((history / "ready.json").read_text())
+            state = json.loads((history / "status.json").read_text())
             if state["serial"] == "bounded virtlogd":
                 serial_log = Path(state["serial_root"]) / f"{name}.serial.log"
         except (OSError, ValueError, KeyError):
@@ -198,7 +199,22 @@ def create_vm(
         network=network,
         serial_log=serial_log,
     )
+    if history is not None:
+        (history / (name + ".defined")).unlink(missing_ok=True)
     run_virsh(["define", "/dev/stdin"], stdin=xml)
+    if history is not None:
+        try:
+            for attempt in range(3):
+                if bmh_history.defined(history, name):
+                    break
+                if attempt == 2 or not (history / "ready.json").exists() or not is_group_host_name(name, json.loads((history / "status.json").read_text())["prefix"]):
+                    raise ValueError("no acknowledgment")
+                state = run_virsh(["domstate", name], check=False, capture=True, timeout=2)
+                if state.returncode or state.stdout.strip() != "shut off":
+                    raise ValueError("not confirmed inactive")
+                run_virsh(["define", "/dev/stdin"], stdin=xml, timeout=2)
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            print("WARNING: BMH Defined event not observed before first start; event history may be incomplete.", file=sys.stderr)
     result = run_virsh(["start", name], check=False, capture=True)
     if result.returncode and serial_log is not None and str(serial_log) in result.stderr:
         state = run_virsh(["domstate", name], check=False, capture=True)
