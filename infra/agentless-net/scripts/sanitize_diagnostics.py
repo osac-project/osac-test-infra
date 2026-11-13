@@ -21,7 +21,7 @@ _AUTHORIZATION = re.compile(rb"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)[^\r
 _SECRET_NAME = (
     rb"\"[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*\""
     rb"|'[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*'"
-    rb"|[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*"
+    rb"|(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|client-key-data)[A-Za-z0-9_.-]*"
 )
 _SECRET_ASSIGNMENT = re.compile(
     rb"(?i)(" + _SECRET_NAME + rb")"
@@ -68,6 +68,58 @@ def _drop_indented_block(lines: list[bytes], index: int, key_indent: int) -> tup
     return index, consumed_value
 
 
+def _closed_quote(value: bytes, quote: bytes) -> bool:
+    if quote == b'"':
+        pattern = rb'"(?:\\.|[^"\\])*"\Z'
+    else:
+        pattern = rb"'(?:\\.|[^'\\])*'\Z"
+    return re.fullmatch(pattern, value) is not None
+
+
+def _flow_closed(value: bytes) -> bool:
+    pairs = {b"{": b"}", b"[": b"]"}
+    stack: list[bytes] = []
+    quote = b""
+    index = 0
+    while index < len(value):
+        char = value[index:index + 1]
+        if quote:
+            if char == b"\\":
+                index += 2
+                continue
+            if char == quote:
+                quote = b""
+            index += 1
+            continue
+        if char in (b'"', b"'"):
+            quote = char
+            index += 1
+            continue
+        if char in pairs:
+            stack.append(pairs[char])
+            index += 1
+            continue
+        if char in (b"}", b"]"):
+            if not stack or stack[-1] != char:
+                return False
+            stack.pop()
+            index += 1
+            continue
+        index += 1
+    return not stack and quote == b""
+
+
+def _multiline_secret(value: bytes) -> bool:
+    """A quoted or flow value that continues past this line."""
+    if value.startswith(b'"'):
+        return not _closed_quote(value, b'"')
+    if value.startswith(b"'"):
+        return not _closed_quote(value, b"'")
+    if value.startswith((b"{", b"[")):
+        return not _flow_closed(value)
+    return False
+
+
 def redact(data: bytes) -> bytes:
     data = _PRIVATE_KEY.sub(b"[REDACTED PRIVATE KEY]", data)
     data = _AUTHORIZATION.sub(lambda match: match.group(1) + _REDACTED, data)
@@ -86,6 +138,8 @@ def redact(data: bytes) -> bytes:
             if not consumed_value:
                 raise RuntimeError("secret block scalar has no indented value")
             continue
+        if match and _multiline_secret(value):
+            raise RuntimeError("unsupported multiline secret value")
         key_only = None if match else _SECRET_KEY_ONLY.search(line.rstrip(b"\r\n"))
         if key_only:
             ending = line[len(line.rstrip(b"\r\n")) :]
