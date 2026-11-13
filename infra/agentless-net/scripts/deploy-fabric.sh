@@ -115,7 +115,16 @@ KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
     "
 echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24, gateway 10.0.0.30 (net-node)"
 
-if ! advertisement="$(KUBECONFIG="$KUBECONFIG" oc get l2advertisement caas-l2-advertisement -n metallb-system --ignore-not-found -o name)"; then
+# --ignore-not-found does not hide a missing CRD. The bmaas-ci profile does
+# not install MetalLB, so an absent CRD is a skip and any other read error
+# still stops the deploy.
+if ! crd="$(KUBECONFIG="$KUBECONFIG" oc get crd l2advertisements.metallb.io --ignore-not-found -o name)"; then
+    echo "ERROR: failed to read l2advertisements.metallb.io CRD" >&2
+    exit 1
+fi
+if [[ -z "$crd" ]]; then
+    advertisement=""
+elif ! advertisement="$(KUBECONFIG="$KUBECONFIG" oc get l2advertisement caas-l2-advertisement -n metallb-system --ignore-not-found -o name)"; then
     echo "ERROR: failed to read caas-l2-advertisement" >&2
     exit 1
 fi

@@ -166,9 +166,12 @@ jobs:
   install:
     needs: authorize
     runs-on: ${{ inputs.orchestrator-runner-label }}
-    timeout-minutes: 450
+    # 420 install + 45 provision + 15 secret push + 4 diagnostics retry
+    # + sanitize, attest, upload, and teardown.
+    timeout-minutes: 540
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
       attestations: write
     env:
@@ -214,6 +217,36 @@ jobs:
             echo "already exist on this machine."
             exit 1
           fi
+
+      # "Re-run failed jobs" keeps a successful authorize job, so this check
+      # has to run again before a retry provisions an instance.
+      - name: Validate pull request revision
+        if: inputs.pr-number != '' && inputs.pr-sha != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          EXPECTED_SHA: ${{ inputs.pr-sha }}
+          EXPECTED_REF: ${{ inputs.pr-ref }}
+          EXPECTED_REPOSITORY: ${{ inputs.pr-repository }}
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          actual_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+          actual_ref=$(jq -r '.head.ref' <<<"${pr_json}")
+          actual_repository=$(jq -r '.head.repo.full_name' <<<"${pr_json}")
+          [[ "${actual_sha}" == "${EXPECTED_SHA}" ]] || {
+            echo "::error::PR head SHA changed; refusing to provision."
+            exit 1
+          }
+          [[ -z "${EXPECTED_REPOSITORY}" || "${actual_repository}" == "${EXPECTED_REPOSITORY}" ]] || {
+            echo "::error::PR head repository changed; refusing to provision."
+            exit 1
+          }
+          [[ -z "${EXPECTED_REF}" || "${actual_ref}" == "${EXPECTED_REF}" ]] || {
+            echo "::error::PR head ref changed; refusing to provision."
+            exit 1
+          }
 
       - name: Provision ephemeral EC2 instance
         id: provision
@@ -301,7 +334,9 @@ jobs:
 
       - name: Run the BMaaS install on the ephemeral host
         id: install
-        timeout-minutes: 360
+        # Target budgets plus the in-script diagnostics copy are 360 minutes.
+        # The extra 60 minutes cover the upload and the tooling checks.
+        timeout-minutes: 420
         shell: bash
         env:
           SSH_USER: ${{ steps.provision.outputs.ssh-user }}
@@ -315,9 +350,24 @@ jobs:
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
           ./scripts/ec2-runner/run-bmaas-agentless.sh
 
-      # The install has already copied diagnostics locally. Terminate before
-      # sanitize, attest, and upload so a cancelled job spends its remaining
-      # always() window on the instance rather than on those steps.
+      # A step timeout kills the install before its own copy. Retry the copy
+      # here, capped so a cancelled run still reaches teardown inside GitHub's
+      # five-minute always() window.
+      - name: Copy diagnostics from the ephemeral host
+        if: always() && steps.provision.outputs.public-ip != ''
+        timeout-minutes: 4
+        shell: bash
+        env:
+          SSH_USER: ${{ steps.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ steps.provision.outputs.public-ip }}
+          LOG_DIR: ${{ github.workspace }}/infra/agentless-net/logs
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/run-bmaas-agentless.sh copy-logs
+
+      # Terminate before sanitize, attest, and upload. Those steps use the
+      # local logs, and a cancelled job only gives the remaining always()
+      # steps five minutes.
       - name: Terminate the ephemeral instance
         if: always()
         shell: bash
