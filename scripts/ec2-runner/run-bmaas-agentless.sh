@@ -3,6 +3,10 @@
 # run-bmaas-agentless.sh -- Copy the revision under test onto the ephemeral
 # host, run the BMaaS Agentless install over SSH, and copy diagnostics back.
 #
+# `copy-logs` copies diagnostics only. The workflow runs that after the
+# install so a step timeout still collects logs before the instance is
+# terminated.
+#
 # The host is not registered as a GitHub Actions runner. The workflow job that
 # calls this script also provisions the instance and tears it down, so a
 # failed-job rerun starts a new instance instead of targeting one that has
@@ -27,20 +31,12 @@ set -euo pipefail
 : "${SSH_USER:?SSH_USER is required}"
 : "${PUBLIC_IP:?PUBLIC_IP is required}"
 : "${KNOWN_HOSTS_FILE:?KNOWN_HOSTS_FILE is required}"
-: "${UNDER_TEST_DIR:?UNDER_TEST_DIR is required}"
-: "${LOG_DIR:?LOG_DIR is required}"
-: "${TOOLING_CHECK_CMDS:?TOOLING_CHECK_CMDS is required}"
 
 OSAC_REPO="${OSAC_REPO:-}"
 OSAC_BRANCH="${OSAC_BRANCH:-}"
 REMOTE_DIR=/root/osac-test-infra
 REMOTE_LOG_DIR="${REMOTE_DIR}/infra/agentless-net/logs"
 REMOTE_INFRA="${REMOTE_DIR}/infra/agentless-net"
-
-if [ ! -d "$UNDER_TEST_DIR" ]; then
-    echo "ERROR: UNDER_TEST_DIR is not a directory: ${UNDER_TEST_DIR}" >&2
-    exit 1
-fi
 
 # timeout(1) executes a program. It cannot call this function, so the limit
 # wraps the ssh binary itself. Callers pass --timeout MINUTES; other calls
@@ -72,6 +68,35 @@ run_remote() {
     shift
     ssh_exec --timeout "$minutes" "$@"
 }
+
+copy_diagnostics() {
+    local minutes="$1"
+    local copy_status=0
+    local copy_cmd
+    : "${LOG_DIR:?LOG_DIR is required}"
+    echo "Copying diagnostics back to ${LOG_DIR}"
+    rm -rf "$LOG_DIR"
+    mkdir -p "$LOG_DIR"
+    copy_cmd=$(printf 'mkdir -p %q && tar -C %q -czf - .' "$REMOTE_LOG_DIR" "$REMOTE_LOG_DIR")
+    ssh_exec --timeout "$minutes" "$copy_cmd" | tar -xzf - -C "$LOG_DIR" || copy_status=$?
+    if [ "$copy_status" -ne 0 ]; then
+        echo "ERROR: failed to copy diagnostics (status ${copy_status})" >&2
+        return "$copy_status"
+    fi
+}
+
+if [ "${1:-}" = "copy-logs" ]; then
+    copy_diagnostics 3
+    exit
+fi
+
+: "${UNDER_TEST_DIR:?UNDER_TEST_DIR is required}"
+: "${LOG_DIR:?LOG_DIR is required}"
+: "${TOOLING_CHECK_CMDS:?TOOLING_CHECK_CMDS is required}"
+if [ ! -d "$UNDER_TEST_DIR" ]; then
+    echo "ERROR: UNDER_TEST_DIR is not a directory: ${UNDER_TEST_DIR}" >&2
+    exit 1
+fi
 
 echo "Copying the revision under test to ${PUBLIC_IP}:${REMOTE_DIR}"
 ssh_exec "$(printf 'mkdir -p %q' "$REMOTE_DIR")"
@@ -152,15 +177,8 @@ run_optional 10 gather-infra
 run_optional 10 gather-bmaas
 run_optional 15 destroy-bmaas
 
-echo "Copying diagnostics back to ${LOG_DIR}"
 copy_status=0
-rm -rf "$LOG_DIR"
-mkdir -p "$LOG_DIR"
-copy_cmd=$(printf 'mkdir -p %q && tar -C %q -czf - .' "$REMOTE_LOG_DIR" "$REMOTE_LOG_DIR")
-ssh_exec --timeout 10 "$copy_cmd" | tar -xzf - -C "$LOG_DIR" || copy_status=$?
-if [ "$copy_status" -ne 0 ]; then
-    echo "ERROR: failed to copy diagnostics (status ${copy_status})" >&2
-fi
+copy_diagnostics 10 || copy_status=$?
 if [ "$install_status" -ne 0 ]; then
     exit "$install_status"
 fi

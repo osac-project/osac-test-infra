@@ -9,6 +9,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -365,6 +366,37 @@ class SanitizeTest(unittest.TestCase):
                 sanitize_diagnostics._diagnostic_bytes(source.resolve(), outside)
             self.assertIn("outside", str(caught.exception))
 
+    def test_multiline_secret_values_are_rejected(self) -> None:
+        second = "second-half"
+        samples = (
+            f'password: "first-half\n  {second}"\n',
+            f"password: 'first-half\n  {second}'\n",
+            "password: {\n  value: " + second + "\n}\n",
+        )
+        for raw in samples:
+            with tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "logs"
+                source.mkdir()
+                (source / "job.log").write_text(raw)
+                with self.assertRaises(RuntimeError) as caught:
+                    sanitize_diagnostics.sanitize_tree(source, Path(tmp) / "clean")
+                self.assertIn("multiline", str(caught.exception))
+                destination = Path(tmp) / "clean"
+                if destination.exists():
+                    for path in destination.rglob("*"):
+                        if path.is_file():
+                            self.assertNotIn(second, path.read_text())
+        closed = sanitize_diagnostics.redact(b'password: "closed-secret"\npassword: {inline: closed-secret}\n')
+        self.assertNotIn(b"closed-secret", closed)
+
+    def test_long_identifier_line_does_not_stall_redaction(self) -> None:
+        payload = b"a" * 8192 + b"\n"
+        started = time.monotonic()
+        self.assertEqual(sanitize_diagnostics.redact(payload), payload)
+        self.assertLess(time.monotonic() - started, 1)
+        prefixed = (b"a" * 64) + b"password: hunter2\n"
+        self.assertNotIn(b"hunter2", sanitize_diagnostics.redact(prefixed))
+
     def test_private_key_header_without_an_end_marker_fails(self) -> None:
         begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
         with tempfile.TemporaryDirectory() as tmp:
@@ -431,6 +463,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertEqual(install["runs-on"], "${{ inputs.orchestrator-runner-label }}")
         self.assertGreaterEqual(install["timeout-minutes"], 430)
         self.assertEqual(install["permissions"]["id-token"], "write")
+        self.assertEqual(install["permissions"]["pull-requests"], "read")
         self.assertEqual(install["permissions"]["attestations"], "write")
         self.assertEqual(caller["permissions"]["id-token"], "write")
         self.assertEqual(caller["permissions"]["attestations"], "write")
@@ -466,11 +499,21 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("OSAC_PROFILE=bmaas-ci", remote)
         self.assertNotRegex(remote, r"timeout\b[^\n]*\bssh_exec\b")
         self.assertIn('timeout "${minutes}m" ssh', remote)
+        self.assertIn("copy-logs", remote)
         teardown = next(step for step in steps if "teardown.sh" in step.get("run", ""))
         self.assertEqual(teardown["if"], "always()")
         names = [step.get("name") for step in steps]
+        self.assertLess(names.index("Validate pull request revision"), names.index("Provision ephemeral EC2 instance"))
+        self.assertLess(names.index("Copy diagnostics from the ephemeral host"), names.index("Terminate the ephemeral instance"))
         self.assertLess(names.index("Terminate the ephemeral instance"), names.index("Sanitize diagnostics"))
         self.assertLess(names.index("Sanitize diagnostics"), names.index("Upload sanitized diagnostics"))
+        install_run = next(step for step in steps if step.get("name") == "Run the BMaaS install on the ephemeral host")
+        self.assertGreaterEqual(install_run["timeout-minutes"], 420)
+        copy_step = next(step for step in steps if step.get("name") == "Copy diagnostics from the ephemeral host")
+        self.assertIn("always()", copy_step["if"])
+        self.assertIn("copy-logs", copy_step["run"])
+        self.assertLessEqual(copy_step["timeout-minutes"], 4)
+        self.assertGreaterEqual(install["timeout-minutes"], install_run["timeout-minutes"] + 90)
 
         upload = next(step for step in steps if step.get("name") == "Upload sanitized diagnostics")
         self.assertIn("steps.publish-attestation.outcome == 'success'", upload["if"])
@@ -562,6 +605,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("prepare-host-bridges.sh", fabric)
         self.assertIn("caas-l2-advertisement", fabric)
         self.assertIn("--ignore-not-found", fabric)
+        self.assertLess(fabric.index("l2advertisements.metallb.io"), fabric.index("oc get l2advertisement"))
         self.assertIn("osac-bmaas-install-stamp", deploy)
         self.assertIn("{.data.profile}", deploy)
         self.assertIn('--from-literal=profile="$OSAC_PROFILE"', deploy)
