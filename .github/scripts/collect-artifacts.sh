@@ -22,6 +22,11 @@ COLLECT_TIMEOUT_SECONDS="${COLLECT_TIMEOUT_SECONDS:-900}"
 # not vouch for this one.
 rm -f "${ARTIFACT_DIR}/.redaction-complete"
 
+if [[ -n "${CLONE_NAME:-}" ]]; then
+  BMH_INVENTORY="${INVENTORY_FILE:-${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json}"
+  timeout 6 python3 "${GITHUB_WORKSPACE}/.github/scripts/bmh_history.py" stop "${BMH_INVENTORY}" || true
+fi
+
 # Keep validated host files in the upload directory and collect cluster data
 # separately. A timeout or cancellation must not mix unredacted partial output
 # into the host bundle or cause the upload gate to discard that bundle.
@@ -62,6 +67,11 @@ mkdir -p "${INVENTORY_DIR}"
   || { rm -f "${INVENTORY_DIR}/k8s-secrets.json"; echo "::notice::Secret inventory not collected"; }
 
 if [[ "${rc}" -eq 0 ]]; then
+  if [[ -n "${CLONE_NAME:-}" ]]; then
+    BMH_INVENTORY="${INVENTORY_FILE:-${HOME}/virtual-bmh-inventory-${CLONE_NAME}.json}"
+    timeout 25 python3 "${GITHUB_WORKSPACE}/.github/scripts/bmh_history.py" collect \
+      "${BMH_INVENTORY}" "${COLLECTION_DIR}/bmh-history" || true
+  fi
   if [[ "${COLLECTION_DIR}" != "${ARTIFACT_DIR}" ]]; then
     # Keep the original host bundle intact. The upload gate discards cluster
     # files if publication fails or is interrupted before the copy completes.
