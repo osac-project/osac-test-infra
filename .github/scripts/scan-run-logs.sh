@@ -481,9 +481,12 @@ if [[ -n "${PRIVATE_REPO}" ]]; then
       # finishes rather than reporting an empty listing as clean.
       private_wait="${PRIVATE_COLLECT_WAIT_SECONDS:-300}"
       [[ "${private_wait}" =~ ^[0-9]+$ ]] || private_wait=300
+      # One budget for all of them, not one each: several pending runs must not
+      # add up to more than the job can spare before it purges the logs. Counted
+      # in the sleeps taken, so the bound does not depend on the clock.
+      waited=0
       while read -r private_run private_status; do
         [[ -z "${private_run}" ]] && continue
-        waited=0
         while [[ "${private_status}" != "completed" ]]; do
           if (( waited >= private_wait )); then
             echo "::warning::Collect run ${private_run} in ${PRIVATE_REPO} has not completed after ${private_wait}s -- its private artifacts of run ${RUN_ID} were not fully scanned."
