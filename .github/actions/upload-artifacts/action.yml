@@ -55,12 +55,14 @@ inputs:
     default: "512"
   gitleaks:
     description: >-
-      Run the gitleaks pre-upload scan. Publication to either destination
-      requires successful verification, scanning and release gating. Setting
-      this to false skips the public pre-scan and therefore withholds the
-      public upload; it does not bypass a publication gate. Ignored when
-      private-repo is set: the post-upload scanner does not see a private
-      publication, so the scan always runs.
+      Run the gitleaks pre-upload scan. Ordinary public artifacts may opt out:
+      the mandatory release gate censors the values of secrets this job holds,
+      and a post-upload scanner still covers the artifact. The ci-observe
+      capture opts out because its ~1 GB telemetry JSONL costs ~24 minutes of
+      pattern scanning. Must-gather payloads require a successful pre-scan and
+      cannot opt out. Ignored when private-repo is set: the post-upload scanner
+      does not see a private publication, so the scan always runs and must
+      succeed. Verification and release gating are required for both destinations.
     required: false
     default: "true"
   private-repo:
@@ -356,7 +358,7 @@ runs:
     - name: Upload artifacts
       if: >-
         always() && inputs.private-repo == '' && steps.verify.outcome == 'success' && steps.release.outcome == 'success' &&
-        steps.scan.outcome == 'success'
+        (steps.verify.outputs.must-gather != 'true' || steps.scan.outcome == 'success')
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}
