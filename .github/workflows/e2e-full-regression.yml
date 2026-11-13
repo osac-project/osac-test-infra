@@ -774,13 +774,29 @@ jobs:
             sleep 2
           done
 
+          # Guest ingress VIPs: MetalLB runs inside each CaaS guest, so the VIP
+          # has to be on the guest workers' L2 segment -- the clone network.
+          # Derive a free static block from the libvirt network definition
+          # rather than hardcoding a subnet: cluster-tool allocates a different
+          # 192.168.<subnet>.0/24 per clone. The block sits below the DHCP pool
+          # (192.168.<subnet>.128-254) and outside the pinned .1/.10 addresses.
+          # A missing range makes guest provisioning fail loudly in AAP, so a
+          # derivation failure fails the install here instead.
+          GUEST_INGRESS_IP_RANGE=$(CLONE_NAME="${CLONE_NAME}" \
+            python3 "${GITHUB_WORKSPACE}/.github/scripts/guest_ingress_vip_range.py" --explain) || {
+            echo "::error::could not derive a guest ingress VIP range from test-infra-net-${CLONE_NAME}"
+            exit 1
+          }
+          echo "Guest ingress VIP range: ${GUEST_INGRESS_IP_RANGE}"
+
           # Configure CaaS domain (after image overrides so helm upgrade cannot overwrite)
           oc patch configmap cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
             -p "{\"data\":{
                 \"DNS_ZONE\":\"${CAAS_DOMAIN}\",
                 \"EXTERNAL_ACCESS_BASE_DOMAIN\":\"${CAAS_DOMAIN}\",
                 \"EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS\":\"${CAAS_DOMAIN}\",
-                \"HOSTED_CLUSTER_BASE_DOMAIN\":\"${CAAS_DOMAIN}\"
+                \"HOSTED_CLUSTER_BASE_DOMAIN\":\"${CAAS_DOMAIN}\",
+                \"CI_GUEST_INGRESS_IP_RANGE\":\"${GUEST_INGRESS_IP_RANGE}\"
             }}"
 
           # Configure AWS credentials (after image overrides so helm upgrade cannot overwrite)
