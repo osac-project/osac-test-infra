@@ -75,6 +75,10 @@ runs:
         # cp -a copies the source directory's mode onto DEST too.
         chmod 700 "${DEST}"
         rm -f "${DEST}/.redaction-complete"
+        # cp -a also carried over the source directory's modification time,
+        # which can be old. The prune above goes by that time, so start the
+        # staged directory's day now, when it is published.
+        touch "${DEST}"
         if [[ -z "$(ls -A "${DEST}")" ]]; then
           echo "::warning::${SOURCE_DIR} is empty -- nothing to publish"
           rm -rf "${DEST}"

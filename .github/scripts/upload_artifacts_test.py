@@ -93,7 +93,7 @@ class UploadArtifactsTest(unittest.TestCase):
         # the full scan.
         self.assertEqual(self.action["inputs"]["gitleaks"]["default"], "true")
         scan = self.step("Scan artifacts with gitleaks")
-        self.assertEqual(scan["if"], "always() && inputs.gitleaks == 'true'")
+        self.assertEqual(scan["if"], "always() && (inputs.gitleaks == 'true' || inputs.private-repo != '')")
         # The gate and the upload must always run, whatever the input says.
         self.assertEqual(self.step("Release gate - censor secrets")["if"], "always()")
         self.assertEqual(self.step("Upload artifacts")["if"], "always() && inputs.private-repo == ''")
@@ -155,6 +155,27 @@ class UploadArtifactsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("post-upload scanner will cover", result.stdout)
         self.assertTrue((self.artifacts / "log.txt").is_file())
+
+    def test_private_publication_is_scanned_even_if_gitleaks_is_off(self) -> None:
+        # Evaluate the step condition for the four input combinations.
+        condition = self.step("Scan artifacts with gitleaks")["if"]
+        expression = condition.replace("always() && ", "")
+        for gitleaks, private, scanned in (
+            ("true", "", True),
+            ("false", "", False),
+            ("false", "osac-project/osac-ci-artifacts", True),
+            ("true", "osac-project/osac-ci-artifacts", True),
+        ):
+            value = expression.replace("inputs.gitleaks", repr(gitleaks)).replace("inputs.private-repo", repr(private))
+            value = value.replace("||", " or ").replace("&&", " and ")
+            self.assertEqual(eval(value, {}, {}), scanned, (gitleaks, private))  # noqa: S307
+        # Fails closed rather than skipping when the combination is set.
+        self.without_container_runtime()
+        result = self.run_step(
+            "Scan artifacts with gitleaks",
+            {"private-repo": "osac-project/osac-ci-artifacts", "gitleaks": "false"},
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 
     def test_public_upload_is_the_default(self) -> None:
         # Opt-in: callers that do not pass private-repo keep uploading to the run.
@@ -263,6 +284,20 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
         self.assertFalse((destination / ".redaction-complete").exists())
         # The source is left alone for the other steps.
         self.assertTrue((self.source / "logs/e2e.log").is_file())
+
+    def test_staged_directory_starts_its_day_at_publication(self) -> None:
+        # cp -a copies the source directory's mtime; an old one must not make
+        # the next job's prune delete the files before they are collected.
+        long_ago = self.source.stat().st_mtime - 3 * 86400
+        os.utime(self.source, (long_ago, long_ago))
+        result = self.run_step("Stage files on the runner host")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        destination = pathlib.Path(self.outputs()["dir"])
+        self.assertGreater(destination.stat().st_mtime, long_ago + 86400)
+        # And a second job's prune leaves it alone.
+        result = self.run_step("Stage files on the runner host")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(destination.exists())
 
     def test_staging_prunes_directories_a_day_old(self) -> None:
         stale = self.staging / "1-1-old-job"
