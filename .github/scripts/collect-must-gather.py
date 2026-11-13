@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+from collections.abc import Callable
 
 MAX_FILE_BYTES = 32 * 1024 * 1024
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
@@ -228,15 +229,21 @@ def same_namespace(identity: tuple[str, str], deadline: float) -> bool:
     )
 
 
-def recover(root: pathlib.Path, identity: tuple[str, str], deadline: float) -> str:
+def recover(root: pathlib.Path, identity: tuple[str, str], deadline: float, cancelled: Callable[[], bool]) -> str:
+    if cancelled():
+        return "copy-incomplete"
     if not same_namespace(identity, deadline):
         return "ownership-unavailable"
+    if cancelled():
+        return "copy-incomplete"
     pods = api(["get", "pods", "-n", identity[0]], deadline).get("items", [])
     if not isinstance(pods, list) or not 1 <= len(pods) <= 16:
         return "pods-unavailable"
     result = "copied"
     visited = set()
     for index, pod in enumerate(pods):
+        if cancelled():
+            return "copy-incomplete"
         if not isinstance(pod, dict):
             result = "copy-incomplete"
             continue
@@ -275,6 +282,8 @@ def recover(root: pathlib.Path, identity: tuple[str, str], deadline: float) -> s
         visited.add(name)
         target = root / ("recovery-" + hashlib.sha256(name.encode()).hexdigest())
         target.mkdir(mode=0o700)
+        if cancelled():
+            return "copy-incomplete"
         copied = run(
             ["oc", "rsync", "-n", identity[0], "--container=copy", f"{name}:/must-gather/", str(target)],
             (deadline - time.monotonic()) / (len(pods) - index),
@@ -310,14 +319,17 @@ def standard_gather(root: pathlib.Path, deadline: float) -> tuple[int, dict]:
     copy_deadline = deadline - cleanup_budget
     details = {"client": "unknown", "recovery": "not-needed", "cleanup": "ownership-unavailable"}
     cancelled = False
+    stopping = False
 
     def defer_interrupt(_number: int, _frame: object) -> None:
-        nonlocal cancelled
-        if cancelled:
-            return
+        nonlocal cancelled, stopping
         cancelled = True
-        if ACTIVE is not None:
-            stop_group(ACTIVE)
+        if ACTIVE is not None and not stopping:
+            stopping = True
+            try:
+                stop_group(ACTIVE)
+            finally:
+                stopping = False
 
     previous = {number: signal.signal(number, defer_interrupt) for number in (signal.SIGTERM, signal.SIGINT)}
     records = PrivateCapture(records=True)
@@ -339,9 +351,14 @@ def standard_gather(root: pathlib.Path, deadline: float) -> tuple[int, dict]:
                 client_deadline,
                 capture=records,
             )
-        identity = owned_namespace(records, started, time.time(), copy_deadline)
+        identity = owned_namespace(records, started, time.time(), deadline)
         if result != 0 or cancelled:
-            details["recovery"] = recover(root, identity, copy_deadline) if identity else "ownership-unavailable"
+            if cancelled:
+                details["recovery"] = "copy-incomplete"
+            elif identity:
+                details["recovery"] = recover(root, identity, copy_deadline, lambda: cancelled)
+            else:
+                details["recovery"] = "ownership-unavailable"
     finally:
         try:
             if identity is not None:
