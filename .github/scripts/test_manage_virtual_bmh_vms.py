@@ -74,6 +74,20 @@ class RunVirshTests(unittest.TestCase):
 
 
 class HistoryTests(unittest.TestCase):
+    def test_start_waits_for_cli_launch_not_just_serial_preparation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            inventory = Path(temporary) / "inventory.json"
+            directory = bmh_history.history_dir(inventory)
+            process = mock.Mock(pid=123)
+            process.poll.return_value = None
+            def launch(*arguments, **kwargs):
+                (directory / "status.json").write_text(json.dumps({"pid": 123, "prefix": "virtual-bmh-aabbccdd"}))
+                return process
+            with mock.patch.object(bmh_history.subprocess, "Popen", side_effect=launch), \
+                 mock.patch.object(bmh_history.time, "sleep", side_effect=lambda _: (directory / "ready.json").write_text("{}")):
+                self.assertEqual(bmh_history.start(inventory, "virtual-bmh-aabbccdd"), directory)
+                self.assertTrue((directory / "ready.json").exists())
+
     def test_default_policy_reads_root_owned_current_and_all_rotations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

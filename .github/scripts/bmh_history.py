@@ -133,7 +133,7 @@ def start(inventory: Path, prefix: str) -> Path | None:
     while time.monotonic() < deadline:
         try:
             state = json.loads((directory / "status.json").read_text())
-            if state["pid"] == process.pid and state["prefix"] == prefix:
+            if state["pid"] == process.pid and state["prefix"] == prefix and ((directory / "ready.json").exists() or process.poll() is not None):
                 process.poll()
                 return directory
         except (OSError, ValueError):
