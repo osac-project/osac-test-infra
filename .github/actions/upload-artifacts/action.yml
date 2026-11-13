@@ -69,8 +69,10 @@ inputs:
       hold the artifact instead of this run. A public repository's artifacts
       can be downloaded by every signed-in GitHub user. When set, the files
       are handed to that repository's collect workflow and nothing is uploaded
-      to this run; app-id and app-key are then required. Empty keeps the
-      upload to this run.
+      to this run; app-id and app-key are then required. The post-upload
+      scanner only reads this run's artifacts, so with this set a gitleaks
+      scan that cannot finish clean fails the job instead of uploading
+      anyway. Empty keeps the upload to this run.
     required: false
     default: ""
   private-repo-app-id:
@@ -113,6 +115,7 @@ runs:
       shell: bash
       env:
         ARTIFACT_DIR: ${{ runner.temp }}/osac-artifacts
+        PRIVATE_REPO: ${{ inputs.private-repo }}
         GITLEAKS_CONFIG: ${{ github.workspace }}/.github/scripts/.gitleaks.toml
         # Same pinned image as scan-run-logs.sh
         GITLEAKS_IMAGE: "ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
@@ -127,14 +130,24 @@ runs:
           COMPACT_DIAGNOSTICS=true
         fi
 
+        # The post-upload scanner reads the artifacts of this run. A private
+        # publication never lands there, so nothing would catch what a failed
+        # or incomplete scan lets through: fail closed, as for compact-boot.
+        FAIL_CLOSED=${COMPACT_DIAGNOSTICS}
+        SCAN_SUBJECT="compact-boot diagnostics"
+        if [[ -n "${PRIVATE_REPO}" ]]; then
+          FAIL_CLOSED=true
+          SCAN_SUBJECT="artifacts bound for ${PRIVATE_REPO}"
+        fi
+
         ENGINE=""
         if command -v docker &>/dev/null; then
           ENGINE=docker
         elif command -v podman &>/dev/null; then
           ENGINE=podman
         else
-          if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
-            echo "::error::No container runtime available to scan compact-boot diagnostics — removing artifacts instead of uploading"
+          if [[ "${FAIL_CLOSED}" == "true" ]]; then
+            echo "::error::No container runtime available to scan ${SCAN_SUBJECT} — removing artifacts instead of uploading"
             rm -rf "${ARTIFACT_DIR}"
             exit 1
           fi
@@ -177,8 +190,8 @@ runs:
             --report-format=json \
             --report-path="/out/$(basename "${REPORT}")" \
             --exit-code=0; then
-            if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
-              fail_closed "Gitleaks scan failed for compact-boot diagnostics"
+            if [[ "${FAIL_CLOSED}" == "true" ]]; then
+              fail_closed "Gitleaks scan failed for ${SCAN_SUBJECT}"
             fi
             echo "::warning::Gitleaks scan failed — uploading anyway (post-upload scanner will cover)"
             echo "::endgroup::"
@@ -221,8 +234,8 @@ runs:
               --report-format=json \
               --report-path="/out/findings-final.json" \
               --exit-code=0; then
-              if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
-                fail_closed "Final gitleaks scan failed for compact-boot diagnostics"
+              if [[ "${FAIL_CLOSED}" == "true" ]]; then
+                fail_closed "Final gitleaks scan failed for ${SCAN_SUBJECT}"
               fi
               echo "::warning::Final gitleaks scan failed — uploading anyway (post-upload scanner will cover)"
               break
@@ -233,8 +246,8 @@ runs:
             REMAINING=$(jq 'length' "${FINAL_REPORT}") \
               || fail_closed "Could not read the final gitleaks report"
             if [[ "${REMAINING}" -gt 0 ]]; then
-              if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
-                fail_closed "${REMAINING} finding(s) remain in compact-boot diagnostics after ${MAX_PASSES} redaction passes"
+              if [[ "${FAIL_CLOSED}" == "true" ]]; then
+                fail_closed "${REMAINING} finding(s) remain in ${SCAN_SUBJECT} after ${MAX_PASSES} redaction passes"
               fi
               echo "::warning::${REMAINING} finding(s) remain after ${MAX_PASSES} redaction passes — uploading anyway (post-upload scanner will cover)"
               echo "Remaining findings (sanitized):"

@@ -68,8 +68,9 @@ runs:
         find "${STAGING_ROOT}" -mindepth 1 -maxdepth 1 -mmin +1440 -exec rm -rf -- {} + || true
 
         SAFE_NAME=$(printf '%s' "${ARTIFACT_NAME}" | tr -c 'A-Za-z0-9._-' '_')
-        DEST="${STAGING_ROOT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB//[^A-Za-z0-9._-]/_}-${SAFE_NAME}-$(date +%s)"
-        mkdir -m 700 "${DEST}"
+        # mktemp creates the directory atomically, so two publishes from one
+        # job can never share one, and it is private from the start.
+        DEST=$(mktemp -d "${STAGING_ROOT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB//[^A-Za-z0-9._-]/_}-${SAFE_NAME}-XXXXXX")
         cp -a "${SOURCE_DIR}/." "${DEST}/"
         # cp -a copies the source directory's mode onto DEST too.
         chmod 700 "${DEST}"

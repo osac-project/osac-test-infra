@@ -8,6 +8,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -132,6 +133,28 @@ class UploadArtifactsTest(unittest.TestCase):
             upload["with"]["path"].splitlines(),
             ["${{ runner.temp }}/osac-artifacts/", "!${{ runner.temp }}/osac-artifacts/.redaction-complete"],
         )
+
+    def without_container_runtime(self) -> None:
+        # Only bash and rm: the step finds neither docker nor podman.
+        lean = self.temp / "lean-bin"
+        lean.mkdir()
+        for tool in ("bash", "rm"):
+            (lean / tool).symlink_to(shutil.which(tool))
+        self.environment["PATH"] = str(lean)
+
+    def test_scan_that_cannot_run_fails_closed_for_a_private_repo(self) -> None:
+        self.without_container_runtime()
+        result = self.run_step("Scan artifacts with gitleaks", {"private-repo": "osac-project/osac-ci-artifacts"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("::error::No container runtime available to scan artifacts bound for osac-project/osac-ci-artifacts", result.stdout)
+        self.assertFalse(self.artifacts.exists())
+
+    def test_scan_that_cannot_run_still_uploads_to_the_public_run(self) -> None:
+        self.without_container_runtime()
+        result = self.run_step("Scan artifacts with gitleaks")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("post-upload scanner will cover", result.stdout)
+        self.assertTrue((self.artifacts / "log.txt").is_file())
 
     def test_public_upload_is_the_default(self) -> None:
         # Opt-in: callers that do not pass private-repo keep uploading to the run.
