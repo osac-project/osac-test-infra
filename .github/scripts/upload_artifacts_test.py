@@ -439,10 +439,63 @@ fi
                 expected = (
                     verify == "success"
                     and release == "success"
-                    and scan == "success"
+                    and ((not private and must_gather != "true") or scan == "success")
                     and bool(private) == (destination == "Publish artifacts to the private repository")
                 )
                 self.assertEqual(allowed, expected, (destination, verify, scan, release, must_gather, private))
+
+    def test_public_non_must_gather_optional_scan_preserves_release_guards(self) -> None:
+        def allowed(destination: str, verify: str, scan: str, release: str) -> bool:
+            expression = self.step(destination)["if"].replace("always()", "True")
+            expression = expression.replace("inputs.private-repo", repr(""))
+            expression = expression.replace("steps.verify.outputs.must-gather", repr(""))
+            for name, outcome in (("verify", verify), ("scan", scan), ("release", release)):
+                expression = expression.replace(f"steps.{name}.outcome", repr(outcome))
+            return eval(expression.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}})
+
+        for mode in ("opt-out", "failed-scanner"):
+            with self.subTest(mode=mode):
+                self.artifacts.mkdir(exist_ok=True)
+                (self.artifacts / ".redaction-complete").touch()
+                (self.artifacts / "log.txt").write_text("ordinary log output\n")
+                self.inventory.write_text('{"items": []}')
+                inputs = {"gitleaks": "false" if mode == "opt-out" else "true"}
+                verify = self.run_step("Verify redaction complete", inputs)
+                self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+                scan = "skipped"
+                condition = self.step("Scan artifacts with gitleaks")["if"]
+                condition = condition.replace("always()", "True").replace("inputs.gitleaks", repr(inputs["gitleaks"]))
+                condition = condition.replace("inputs.private-repo", repr(""))
+                should_scan = eval(condition.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}})
+                self.assertEqual(should_scan, mode == "failed-scanner")
+                if should_scan:
+                    self.scanner("failed")
+                    result = self.run_step("Scan artifacts with gitleaks", inputs)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("post-upload scanner will cover", result.stdout)
+                    scan = "success"
+                release = self.run_step("Release gate - censor secrets", inputs)
+                self.assertEqual(release.returncode, 0, release.stdout + release.stderr)
+                self.assertTrue((self.artifacts / "redaction-report.json").is_file())
+                self.assertTrue(allowed("Upload artifacts", "success", scan, "success"))
+                self.assertFalse(allowed("Publish artifacts to the private repository", "success", scan, "success"))
+
+                (self.artifacts / ".redaction-complete").unlink()
+                verify = self.run_step("Verify redaction complete", inputs)
+                self.assertEqual(verify.returncode, 1, verify.stdout + verify.stderr)
+                self.assertFalse(self.artifacts.exists())
+                self.assertFalse(allowed("Upload artifacts", "failure", scan, "success"))
+
+                self.artifacts.mkdir()
+                (self.artifacts / ".redaction-complete").touch()
+                (self.artifacts / "log.txt").write_text("ordinary log output\n")
+                self.inventory.write_text("invalid JSON")
+                verify = self.run_step("Verify redaction complete", inputs)
+                self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+                release = self.run_step("Release gate - censor secrets", inputs)
+                self.assertEqual(release.returncode, 1, release.stdout + release.stderr)
+                self.assertFalse(self.artifacts.exists())
+                self.assertFalse(allowed("Upload artifacts", "success", scan, "failure"))
 
 
 class PublishPrivateArtifactsTest(unittest.TestCase):
