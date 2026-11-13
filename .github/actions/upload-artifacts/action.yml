@@ -55,13 +55,12 @@ inputs:
     default: "512"
   gitleaks:
     description: >-
-      Run the gitleaks pre-upload scan. The release gate and the upload below
-      always run, whatever this input says: the gate censors the values of the
-      secrets this job actually holds (pull secret, k8s Secrets inventory),
-      and a post-upload scanner still covers the artifact. Only the ci-observe
-      capture opts out: its ~1 GB telemetry JSONL costs ~24 minutes of
-      pattern scanning. Ignored when private-repo is set: the post-upload
-      scanner does not see a private publication, so the scan always runs.
+      Run the gitleaks pre-upload scan. Publication to either destination
+      requires successful verification, scanning and release gating. Setting
+      this to false skips the public pre-scan and therefore withholds the
+      public upload; it does not bypass a publication gate. Ignored when
+      private-repo is set: the post-upload scanner does not see a private
+      publication, so the scan always runs.
     required: false
     default: "true"
   private-repo:
@@ -129,8 +128,7 @@ runs:
     - name: Scan artifacts with gitleaks
       id: scan
       # Skipped only when the caller passes gitleaks: "false" (see the input)
-      # and publishes to this run: the release gate and the upload below still
-      # run for every caller. A private publication is always scanned.
+      # and publishes to this run. A private publication is always scanned.
       if: always() && (inputs.gitleaks == 'true' || inputs.private-repo != '')
       shell: bash
       env:
@@ -224,7 +222,7 @@ runs:
           fi
 
           if [[ ! -f "${REPORT}" ]]; then
-            if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
+            if [[ "${FAIL_CLOSED}" == "true" ]]; then
               fail_closed "Gitleaks report was not produced"
             fi
             echo "[]" > "${REPORT}"
@@ -268,7 +266,7 @@ runs:
               break
             fi
             if [[ ! -f "${FINAL_REPORT}" ]]; then
-              if [[ "${COMPACT_DIAGNOSTICS}" == "true" ]]; then
+              if [[ "${FAIL_CLOSED}" == "true" ]]; then
                 fail_closed "Final gitleaks report was not produced"
               fi
               echo "[]" > "${FINAL_REPORT}"
@@ -358,7 +356,7 @@ runs:
     - name: Upload artifacts
       if: >-
         always() && inputs.private-repo == '' && steps.verify.outcome == 'success' && steps.release.outcome == 'success' &&
-        (steps.verify.outputs.must-gather != 'true' || steps.scan.outcome == 'success')
+        steps.scan.outcome == 'success'
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}

@@ -231,7 +231,8 @@ report="findings-pass-1.json"
 for argument in "$@"; do
   case "$argument" in --report-path=*) report="${{argument##*/}}" ;; esac
 done
-if [[ "{mode}" == "remaining" ]]; then
+if [[ "{mode}" == "missing-final" && "$report" == "findings-final.json" ]]; then exit 0; fi
+if [[ "{mode}" == "remaining" || "{mode}" == "missing-final" ]]; then
   printf '%s\\n' '[{{"RuleID":"synthetic","File":"/scan/log.txt","StartLine":1}}]' > "$output/$report"
 elif [[ "{mode}" == "invalid" ]]; then
   printf '{{}}\\n' > "$output/$report"
@@ -240,6 +241,18 @@ else
 fi
 ''')
         docker.chmod(0o755)
+
+    def test_private_scan_without_must_gather_fails_closed_on_unusable_reports(self) -> None:
+        for mode in ("missing", "missing-final", "invalid", "failed", "remaining"):
+            with self.subTest(mode=mode):
+                self.artifacts.mkdir(exist_ok=True)
+                (self.artifacts / "log.txt").write_text("ordinary log output\n")
+                self.scanner(mode)
+                result = self.run_step(
+                    "Scan artifacts with gitleaks", {"private-repo": "osac-project/osac-ci-artifacts"}
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(self.artifacts.exists())
 
     def test_must_gather_guard_refuses_missing_normalization_and_scanner_opt_out(self) -> None:
         for mode in (
@@ -426,7 +439,7 @@ fi
                 expected = (
                     verify == "success"
                     and release == "success"
-                    and ((not private and must_gather != "true") or scan == "success")
+                    and scan == "success"
                     and bool(private) == (destination == "Publish artifacts to the private repository")
                 )
                 self.assertEqual(allowed, expected, (destination, verify, scan, release, must_gather, private))
