@@ -853,7 +853,7 @@ class CIObserveRunEvidence:
         return doc
 
 
-def private_native_artifacts(get, run_id):
+def private_native_artifacts(get, run_id, org=ORG, api_url=API_URL):
     """The native-evidence artifacts of one run that its job published to the
     private artifact repository: (artifacts, reason).
 
@@ -869,16 +869,23 @@ def private_native_artifacts(get, run_id):
     reason = None
     for suite in PRIVATE_ARTIFACT_SUITES:
         name = f"osac-logs-{suite}full-install-{run_id}"
-        url = f"{API_URL}/repos/{ORG}/{PRIVATE_ARTIFACT_REPO}/actions/artifacts?name={name}&per_page=100"
+        url = f"{api_url}/repos/{org}/{PRIVATE_ARTIFACT_REPO}/actions/artifacts?name={name}&per_page=100"
         try:
             response = get(url)
-        except requests.exceptions.RequestException:
-            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (network error)"
+            # Decoded here too: a 200 with a body that is not JSON is a failed
+            # lookup, not an exception for the caller, and must not discard
+            # what the earlier names found.
+            listing = response.json() if response.ok else None
+        except (requests.exceptions.RequestException, ValueError):
+            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (network error or invalid response)"
             continue
         if not response.ok:
             reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed with HTTP {response.status_code}"
             continue
-        for artifact in response.json().get("artifacts") or []:
+        if not isinstance(listing, dict):
+            reason = reason or f"private artifact lookup in {PRIVATE_ARTIFACT_REPO} failed (unexpected response)"
+            continue
+        for artifact in listing.get("artifacts") or []:
             if CIObserveRunEvidence._is_native_artifact(artifact.get("name") or "", run_id):
                 found.append(dict(artifact, _private_repo=PRIVATE_ARTIFACT_REPO))
     return found, (None if found else reason)
