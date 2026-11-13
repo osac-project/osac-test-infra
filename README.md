@@ -66,6 +66,41 @@ Budget is reserved for sanitization. A cancellation during collection is followe
 by a fresh short collection; failed/interrupted sanitization never writes
 `.redaction-complete`.
 
+The host runner's actual `oc version --client` is recorded as a bounded numeric
+release (or `unknown`), not inferred from the test container. The client runs
+with a native gather `--timeout` below its external process-group cap. Native
+timeout alone is insufficient: supported clients follow remote logs outside that
+timeout, and gather errors return before downloading pod output. `--keep`
+preserves those resources for a separately bounded recovery `oc rsync` from the
+standard `copy` container's `/must-gather/`. A successful native download is not
+copied twice; recovered output does not promote a failed/timed-out collection to
+`complete`.
+
+After custom collection (at most 30% of the total budget) and readiness checking,
+30% of the total remains reserved for normalization, inventory and redaction.
+Of the remaining must-gather window, recovery receives 35%, cleanup receives
+15% (capped at 10 seconds), and the client receives the rest; its native timeout
+is 80% of its remaining cap. Version and identity API requests, process shutdown
+and copying consume their respective windows, never the sanitization reserve.
+All subprocess groups, including copy and deletion, have external hard bounds.
+
+Recovery never selects namespaces by listing a prefix. A private, bounded
+in-memory stream parser captures only the exact client's timestamped namespace
+and role-binding creation records; plugin-prefixed, duplicate, stale or
+ambiguous records cannot authorize recovery. Live API metadata must match the
+command, generated names, creation window, namespace UID and binding ownership
+and role. Cleanup rechecks the namespace UID and sends a UID-preconditioned
+delete only for that proven identity, after copying (also after native success).
+`collection-status.json` separately reports recovery and cleanup; accepted
+deletion is only `deletion-requested`, not proof that resources disappeared.
+Ownership/API failure withholds copy/deletion rather than touching other runs.
+Server/API failure, an unsupported client output format, unavailable copy pods,
+exhausted copy time, or hard runner death can still lose remote diagnostics or
+leave resources until infrastructure teardown. An interrupted attempt does not
+authorize upload; cancellation's fresh collection and the existing gates remain
+required. No extra image, custom gather command, or cluster-admin binding is
+created by the recovery helper.
+
 Uploads require the redaction marker, a successful must-gather content guard,
 successful gitleaks scanning, and the mandatory release gate, which rechecks the
 subset and fixed-schema metadata immediately before upload. Gitleaks cannot be
