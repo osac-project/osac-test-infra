@@ -70,7 +70,7 @@ import requests
 # sys.path the way workflow-exporter.py does before importing it.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_observe_phases as phases
-from ci_observe_run_evidence import CIObserveRunEvidence
+from ci_observe_run_evidence import CIObserveRunEvidence, private_native_artifacts
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -645,8 +645,15 @@ class ArtifactFetcher:
             artifact for artifact in response.json().get("artifacts") or []
             if CIObserveRunEvidence._is_native_artifact(artifact.get("name") or "", run_id)
         ]
+        private_reason = None
         if not artifacts:
-            return None, "no osac-logs-[<suite>-]full-install artifact"
+            # A job that published to the private artifact repository has
+            # nothing on its run.
+            artifacts, private_reason = private_native_artifacts(
+                lambda private_url: requests.get(private_url, headers=self.headers, timeout=60), run_id)
+        if not artifacts:
+            reason = "no osac-logs-[<suite>-]full-install artifact"
+            return None, f"{reason}; {private_reason}" if private_reason else reason
         # A live artifact before an expired one, so a rerun that left both
         # behind still parses the ones that exist.
         return sorted(artifacts, key=lambda artifact: bool(artifact.get("expired"))), None
