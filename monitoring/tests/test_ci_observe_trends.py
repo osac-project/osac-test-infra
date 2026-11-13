@@ -451,6 +451,9 @@ class TestArtifactFetch:
         _, reason = trends.ArtifactFetcher(token=TOKEN).fetch("osac", RUN_ID)
 
         assert trends.fetch_state(reason) == "no_data"
+        # ...but the stored reason still says the private lookup was refused,
+        # so a trend can tell it from a lookup that found nothing.
+        assert "HTTP 404" in reason
 
     def test_an_answer_that_is_not_json_is_a_failed_lookup(self, trends, github):
         github.add(LIST_PATH, FakeResponse(payload={"total_count": 0, "artifacts": []}))
