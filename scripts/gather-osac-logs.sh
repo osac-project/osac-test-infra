@@ -336,8 +336,11 @@ collect_bom() {
     operators_json=$(printf '%s\n' "${operator_entries[@]}" | jq -s '.')
 
     # Every deployment/statefulset's actual *running* image in the namespaces
-    # that matter: OSAC's own components plus bundled Postgres (both live in
-    # E2E_NAMESPACE), and standalone Keycloak (its own "keycloak" namespace).
+    # that matter: OSAC's own components and the AAP-managed Postgres
+    # (E2E_NAMESPACE), standalone Keycloak and its database ("keycloak"), the
+    # osac-infra chart's bundled services -- the shared Postgres that backs
+    # fulfillment-service, metering and NetBox, and OpenBao ("osac-infra") --
+    # and Kafka ("osac-kafka").
     # Reports whatever is actually running rather than hand-listing every
     # component name, so this doesn't need updating when a new one is added.
     #
@@ -368,8 +371,14 @@ collect_bom() {
             return
         fi
 
-        local workloads_raw
+        local workloads_raw strimzi_raw
         workloads_raw=$(oc get deployments,statefulsets -n "${ns}" -o json 2>/dev/null) || workloads_raw='{"items":[]}'
+        # Strimzi runs the Kafka brokers as StrimziPodSets, not StatefulSets.
+        # Queried on its own because the CRD only exists where Kafka is
+        # installed; a failed get must not drop the Deployments above.
+        strimzi_raw=$(oc get strimzipodsets.core.strimzi.io -n "${ns}" -o json 2>/dev/null) || strimzi_raw='{"items":[]}'
+        workloads_raw=$(jq -s '{items: ((.[0].items // []) + (.[1].items // []))}' \
+            <<<"${workloads_raw}"$'\n'"${strimzi_raw}" 2>/dev/null) || workloads_raw='{"items":[]}'
 
         local entries=()
         local workload kind name selector pods_json entry
@@ -404,8 +413,10 @@ collect_bom() {
     workloads_json=$(jq -n \
         --argjson main "$(collect_namespace_workload_images "${E2E_NAMESPACE}")" \
         --argjson keycloak "$(collect_namespace_workload_images keycloak)" \
+        --argjson infra "$(collect_namespace_workload_images osac-infra)" \
+        --argjson kafka "$(collect_namespace_workload_images osac-kafka)" \
         --arg main_ns "${E2E_NAMESPACE}" \
-        '{($main_ns): $main, "keycloak": $keycloak}')
+        '{($main_ns): $main, "keycloak": $keycloak, "osac-infra": $infra, "osac-kafka": $kafka}')
 
     jq -n \
         --arg capturedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
