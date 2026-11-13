@@ -624,7 +624,7 @@ jobs:
           # Add-on operator installation needs more capacity than the
           # default BMaaS test hosts.
           BMH_CPU: "8"
-          BMH_MEMORY_MIB: "16384"
+          BMH_MEMORY_MIB: "12288"
         run: bash .github/scripts/setup-virtual-bmh.sh
 
       - name: Install OSAC
