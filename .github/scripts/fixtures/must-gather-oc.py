@@ -135,7 +135,15 @@ elif "--raw=/readyz" in args:
     sys.exit(0)
 elif "version" in args:
     checkpoint("version")
-    print(json.dumps({"releaseClientVersion": sentinel if fault == "unsafe-version" else "5.0.1", "private": sentinel}))
+    print(
+        json.dumps(
+            {
+                "releaseClientVersion": sentinel if fault == "unsafe-version" else "5.0.1",
+                "clientVersion": [] if fault == "malformed-version" else {},
+                "private": sentinel,
+            }
+        )
+    )
 elif any(item.startswith("namespace/") for item in args) and "get" in args:
     checkpoint("identity")
     if not state_file.exists() or fault in ("missing-api", "missing-namespace"):
@@ -163,7 +171,16 @@ elif any(item.startswith("clusterrolebinding.") for item in args) and "get" in a
     print(json.dumps(role))
 elif "get" in args and "pods" in args and state_file.exists():
     checkpoint("pods")
-    print(json.dumps({"items": [] if fault == "missing-pods" else [json.loads(state_file.read_text())["pod"]]}))
+    pod = json.loads(state_file.read_text())["pod"]
+    if fault == "malformed-pod-name":
+        pod["metadata"]["name"] = []
+    if fault == "malformed-pod-labels":
+        pod["metadata"]["labels"] = []
+    if fault == "malformed-container-name":
+        pod["spec"]["containers"][0]["name"] = []
+    if fault == "malformed-container-state":
+        pod["status"]["containerStatuses"][0]["state"] = None
+    print(json.dumps({"items": [] if fault == "missing-pods" else [pod] * (2 if fault == "duplicate-pods" else 1)}))
 elif "rsync" in args:
     if fault == "failed-copy":
         sys.exit(1)
