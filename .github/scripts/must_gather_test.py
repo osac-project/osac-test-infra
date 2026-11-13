@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 import zipfile
@@ -256,6 +257,29 @@ elif '-o' in args and args[args.index('-o') + 1] == 'json':
         self.assertNotIn(SENTINEL.encode(), result.stdout + result.stderr)
         self.assertTrue(any(path.read_text() == "kind: List\n" for path in self.tree.rglob("*.yaml")))
 
+    def test_wrapped_archive_checks_bound_work_and_validate_embedded_headers(self) -> None:
+        specification = importlib.util.spec_from_file_location("wrapped_collector", HELPER)
+        collector = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(collector)
+        ordinary = b"ordinary journal words\n" * 50000
+        with mock.patch.object(collector.base64, "b64decode", wraps=base64.b64decode) as decoded:
+            self.assertFalse(collector.wrapped_archive(ordinary))
+            self.assertLessEqual(decoded.call_count, 16)
+        for value in (b"PK ordinary journal, not a zip header", b"normal text " * 30 + b"ustar\x00not a tar header"):
+            encoded = base64.b64encode(value)
+            wrapped = b"\n".join(encoded[index : index + 7] for index in range(0, len(encoded), 7))
+            self.assertFalse(collector.wrapped_archive(wrapped))
+        markers = base64.b64encode(b"ustar\x00" * 300)
+        wrapped = b"\n".join(markers[index : index + 7] for index in range(0, len(markers), 7))
+        self.assertTrue(collector.wrapped_archive(wrapped))
+        for nested in (False, True):
+            value = gzip.compress(b"synthetic-wrapped-testing-only", mtime=0)
+            if nested:
+                value = base64.b64encode(value)
+            encoded = base64.urlsafe_b64encode(value)
+            wrapped = b"journal\n" + b"\n".join(encoded[index : index + 7] for index in range(0, len(encoded), 7))
+            self.assertTrue(collector.wrapped_archive(wrapped))
+
     def test_interruption_during_redaction_kills_processes_and_never_marks_complete(self) -> None:
         sed = self.temp / "bin/sed"
         sed.write_text(f"""#!{sys.executable}
@@ -316,7 +340,7 @@ class CancellationBudgetTests(unittest.TestCase):
             mock.patch.object(collector.time, "monotonic", side_effect=lambda: clock[0]),
             mock.patch.object(collector, "api", return_value={}),
             mock.patch.object(collector, "run", side_effect=native),
-            mock.patch.object(collector, "stop_group", side_effect=stop) as stopped,
+            mock.patch.object(collector, "request_stop", side_effect=stop) as stopped,
             mock.patch.object(collector, "owned_namespace", return_value=identity) as owned,
             mock.patch.object(collector, "recover") as recovered,
             mock.patch.object(collector, "cleanup_namespace", return_value="deletion-requested") as cleaned,
@@ -336,6 +360,93 @@ class RecoveryTests(unittest.TestCase):
         CollectionTests.setUp(self)
         fixture = REPO / ".github/scripts/fixtures/must-gather-oc.py"
         (self.temp / "bin/oc").write_text(f"#!{sys.executable}\n" + fixture.read_text())
+
+    def test_real_wait_lock_signals_are_bounded_and_reap_native_copy_and_capture(self) -> None:
+        worker = textwrap.dedent("""\
+            import importlib.util, json, os, pathlib, signal, subprocess, sys, time
+            spec = importlib.util.spec_from_file_location('collector', sys.argv[1])
+            collector = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(collector)
+            phase, handler, number = sys.argv[3], sys.argv[4], int(sys.argv[5])
+            home = pathlib.Path(os.environ['RUNNER_TEMP'])
+            original = subprocess.Popen._try_wait
+            injected = False
+            def locked_wait(process, flags):
+                global injected
+                marker = home / 'phase'
+                if not injected and marker.exists() and marker.read_text() == phase and (home / 'child.pid').exists():
+                    injected = True
+                    assert process._waitpid_lock.locked()
+                    (home / 'lock-injected').write_text(str(process.pid))
+                    signal.raise_signal(number)
+                return original(process, flags)
+            subprocess.Popen._try_wait = locked_wait
+            try:
+                if handler == 'deferred':
+                    collector.standard_gather(pathlib.Path(sys.argv[2]), time.monotonic() + 630)
+                else:
+                    for signum in (signal.SIGINT, signal.SIGTERM):
+                        signal.signal(signum, collector.interrupted)
+                    collector.run(['oc', 'adm', 'must-gather', '--keep', '--dest-dir=' + sys.argv[2]],
+                                  600, time.monotonic() + 630, capture=collector.PrivateCapture(records=True))
+            except InterruptedError:
+                sys.exit(143)
+            sys.exit(2)
+            """)
+        for handler, phase in (
+            ("deferred", "client"),
+            ("deferred", "copy"),
+            ("deferred", "identity"),
+            ("top-level", "client"),
+        ):
+            for number in (signal.SIGINT, signal.SIGTERM):
+                with self.subTest(handler=handler, phase=phase, number=number):
+                    shutil.rmtree(self.tree, ignore_errors=True)
+                    for filename in (
+                        "child.pid",
+                        "phase",
+                        "deletion-requested",
+                        "commands.jsonl",
+                        "processes.jsonl",
+                        "lock-injected",
+                    ):
+                        (self.temp / filename).unlink(missing_ok=True)
+                    started = time.monotonic()
+                    process = subprocess.Popen(
+                        [sys.executable, "-I", "-c", worker, str(HELPER), str(self.tree), phase, handler, str(number)],
+                        env=self.environment | {"TEST_MODE": "failed", "TEST_HANG_PHASE": phase},
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    )
+                    try:
+                        output, _ = process.communicate(timeout=4)
+                        elapsed = time.monotonic() - started
+                        self.assertEqual(process.returncode, 143, output)
+                        self.assertTrue((self.temp / "lock-injected").exists(), output)
+                        self.assertFalse((self.artifacts / ".redaction-complete").exists())
+                        self.assertNotIn(SENTINEL, output)
+                        self.assertLess(elapsed, 3)
+                        requested = (self.temp / "deletion-requested").exists()
+                        self.assertEqual(requested, handler == "deferred" and phase != "identity", output)
+                        for filename in ("child.pid", "lock-injected"):
+                            pid = int((self.temp / filename).read_text())
+                            state = pathlib.Path(f"/proc/{pid}/stat")
+                            self.assertTrue(not state.exists() or state.read_text().split()[2] == "Z")
+                        print(
+                            f"Real wait lock {handler}/{phase}/{signal.Signals(number).name}: "
+                            f"{elapsed:.3f}s; UID delete={requested}",
+                            flush=True,
+                        )
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.communicate(timeout=2)
+                        for filename in ("child.pid", "lock-injected"):
+                            record = self.temp / filename
+                            if record.exists():
+                                with contextlib.suppress(ProcessLookupError):
+                                    os.kill(int(record.read_text()), signal.SIGKILL)
 
     def status(self) -> dict:
         return json.loads((self.tree / "collection-status.json").read_text())

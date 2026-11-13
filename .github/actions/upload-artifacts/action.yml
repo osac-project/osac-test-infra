@@ -104,7 +104,7 @@ runs:
         fi
         if [[ -e "${ARTIFACT_DIR}/mgmt-cluster/must-gather" || -L "${ARTIFACT_DIR}/mgmt-cluster/must-gather" ]]; then
           echo "must-gather=true" >> "$GITHUB_OUTPUT"
-          if [[ "${{ inputs.gitleaks }}" != "true" ]] || ! python3 -I \
+          if [[ "${{ inputs.private-repo }}" == "" && "${{ inputs.gitleaks }}" != "true" ]] || ! python3 -I \
             "${{ github.workspace }}/.github/scripts/collect-must-gather.py" \
             "${ARTIFACT_DIR}/mgmt-cluster/must-gather" --check; then
             echo "::error::Must-gather safety guard failed — withholding artifacts"

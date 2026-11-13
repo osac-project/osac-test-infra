@@ -56,6 +56,30 @@ MAGICS = (
     b"SQLite format",
 )
 ACTIVE: subprocess.Popen | None = None
+STOP_REQUESTED: subprocess.Popen | None = None
+INTERRUPTED = False
+SIGNALLING = False
+EMBEDDED_MAGICS = (
+    b"\x1f\x8b\x08",
+    b"BZh1",
+    b"BZh2",
+    b"BZh3",
+    b"BZh4",
+    b"BZh5",
+    b"BZh6",
+    b"BZh7",
+    b"BZh8",
+    b"BZh9",
+    b"\xfd7zXZ\x00",
+    b"PK\x03\x04",
+    b"PK\x05\x06",
+    b"PK\x07\x08",
+    b"\x28\xb5\x2f\xfd",
+    b"7z\xbc\xaf",
+    b"Rar!\x1a\x07",
+    b"%PDF-",
+    b"SQLite format 3\x00",
+)
 CREATION = re.compile(
     rb"\[must-gather      \] OUT ([0-9TZ:.+-]+) "
     rb"(namespace/openshift-must-gather-[a-z0-9]{5}|"
@@ -94,20 +118,36 @@ def remove(path: pathlib.Path) -> None:
         shutil.rmtree(path)
 
 
-def stop_group(process: subprocess.Popen) -> None:
+def request_stop(process: subprocess.Popen) -> None:
+    global STOP_REQUESTED, SIGNALLING
+    STOP_REQUESTED = process
+    if SIGNALLING:
+        return
+    SIGNALLING = True
     try:
         os.killpg(process.pid, signal.SIGTERM)
-        time.sleep(0.1)
+    except ProcessLookupError:
+        pass
+    finally:
+        SIGNALLING = False
+
+
+def stop_group(process: subprocess.Popen, deadline: float) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    process.wait()
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=min(0.1, max(0, deadline - time.monotonic())))
 
 
 def interrupted(_number: int, _frame: object) -> None:
+    global INTERRUPTED
+    INTERRUPTED = True
     if ACTIVE is not None:
-        stop_group(ACTIVE)
-    raise InterruptedError
+        request_stop(ACTIVE)
 
 
 def run(
@@ -119,11 +159,14 @@ def run(
     capture: PrivateCapture | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> int:
-    global ACTIVE
+    global ACTIVE, STOP_REQUESTED
+    if INTERRUPTED:
+        raise InterruptedError
     duration = min(seconds, deadline - time.monotonic() - 0.3)
     if duration <= 0 or (cancelled is not None and cancelled()):
         return 124
     try:
+        STOP_REQUESTED = None
         ACTIVE = subprocess.Popen(
             command,
             env=env,
@@ -136,15 +179,23 @@ def run(
             reader = threading.Thread(target=capture.drain, args=(ACTIVE.stdout,), daemon=True)
             reader.start()
         try:
-            if cancelled is not None and cancelled():
-                return 124
-            return ACTIVE.wait(timeout=duration)
-        except subprocess.TimeoutExpired:
-            return 124
+            wait_deadline = time.monotonic() + duration
+            while True:
+                if INTERRUPTED:
+                    raise InterruptedError
+                if STOP_REQUESTED is ACTIVE or (cancelled is not None and cancelled()):
+                    return 124
+                remaining = min(wait_deadline, deadline - 0.3) - time.monotonic()
+                if remaining <= 0:
+                    return 124
+                try:
+                    return ACTIVE.wait(timeout=min(0.05, remaining))
+                except subprocess.TimeoutExpired:
+                    pass
         finally:
-            stop_group(ACTIVE)
+            stop_group(ACTIVE, min(deadline, time.monotonic() + 0.2))
             if reader is not None:
-                reader.join(timeout=0.2)
+                reader.join(timeout=min(0.2, max(0, deadline - time.monotonic())))
                 if reader.is_alive():
                     capture.invalid = True
                 else:
@@ -331,7 +382,7 @@ def standard_gather(root: pathlib.Path, deadline: float) -> tuple[int, dict]:
         if ACTIVE is not None and not stopping:
             stopping = True
             try:
-                stop_group(ACTIVE)
+                request_stop(ACTIVE)
             finally:
                 stopping = False
 
@@ -401,6 +452,35 @@ def encoded_archive(data: bytes, depth: int = 0) -> bool:
     return False
 
 
+def wrapped_archive(data: bytes) -> bool:
+    compact = data.translate(None, b" \t\n\r\v\f")
+    if len(compact) == len(data):
+        return False
+    for match in ENCODED_VALUE.finditer(compact):
+        value = match.group()
+        for offset in range(4):
+            candidate = value[offset:]
+            try:
+                decoded = base64.b64decode(candidate + b"=" * (-len(candidate) % 4), altchars=b"-_", validate=True)
+            except binascii.Error:
+                continue
+            if any(magic in decoded for magic in EMBEDDED_MAGICS) or encoded_archive(decoded, 1):
+                return True
+            for index, marker in enumerate(re.finditer(rb"ustar(?:\x00| )", decoded)):
+                if index >= 128:
+                    return True
+                start = marker.start() - 257
+                if start < 0 or len(decoded) < start + 512:
+                    continue
+                header = decoded[start : start + 512]
+                checksum = header[148:156].strip(b"\x00 ")
+                if re.fullmatch(rb"[0-7]{1,7}", checksum) and int(checksum, 8) == sum(header[:148]) + 256 + sum(
+                    header[156:]
+                ):
+                    return True
+    return False
+
+
 def text_bytes(path: pathlib.Path) -> tuple[bytes | None, str]:
     metadata = path.lstat()
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
@@ -423,7 +503,7 @@ def text_bytes(path: pathlib.Path) -> tuple[bytes | None, str]:
         return None, "binary"
     if path.suffix.lower() not in TEXT_SUFFIXES and path.name not in TEXT_NAMES:
         return None, "unsupported-name"
-    if encoded_archive(data):
+    if encoded_archive(data) or wrapped_archive(data):
         return None, "archive-or-opaque"
     return data, ""
 
@@ -620,6 +700,8 @@ def collect(artifacts: pathlib.Path, seconds: int) -> int:
     if result != 0:
         print("::warning::Artifact sanitization incomplete; upload remains blocked", flush=True)
         return 1
+    if INTERRUPTED:
+        raise InterruptedError
     marker.touch()
     return 0
 
@@ -636,11 +718,17 @@ def main() -> int:
     try:
         if args.normalize or args.check:
             normalize(args.directory, check=args.check)
+            if INTERRUPTED:
+                raise InterruptedError
             return 0
         if args.timeout_seconds < 3:
             raise ValueError("collection budget must be at least three seconds")
-        return collect(args.directory, args.timeout_seconds)
+        result = collect(args.directory, args.timeout_seconds)
+        if INTERRUPTED:
+            raise InterruptedError
+        return result
     except InterruptedError:
+        (args.directory / ".redaction-complete").unlink(missing_ok=True)
         return 143
     except (OSError, ValueError):
         print("::warning::Diagnostic preparation failed; upload remains blocked", flush=True)

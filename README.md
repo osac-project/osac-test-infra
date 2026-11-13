@@ -39,6 +39,13 @@ magic bytes, tar headers, UTF-8 validity, and control characters, not just suffi
 Recognizable archives inside base64 text are also withheld (up to three encoding
 layers, withholding still-encoded data at that limit); archives are never
 extracted or decompressed for public publication.
+ASCII-whitespace-wrapped base64 blocks are also inspected, including blocks
+following journal text. The bounded check tries four base64 alignments, matches
+specific embedded format signatures, and validates embedded tar headers by
+checksum. Excessive tar-header candidates are withheld as opaque. Encoded
+candidates retain the 32-character recognition floor. This is not a general
+decoder for arbitrary encodings, encryption, or fragmented/interleaved
+payloads; no archive contents are extracted or published in decoded form.
 Supported text includes logs, YAML, JSON/JSONL, HTML, stderr, and the standard
 extensionless `version` and `timestamp` files. A narrow literal allowlist preserves
 only the public structural directory names `host_service_logs`, `masters`, and
@@ -88,7 +95,10 @@ Cancellation prioritizes cleanup over optional recovery: it stops the active
 subprocess, skips new recovery copies, and stops before copying additional pods.
 Later signals can stop newly active subprocesses without recursively handling
 signals during a stop. Cancellation is rechecked after subprocess registration
-to cover signals during spawn. Ownership proof and UID-preconditioned deletion retain
+and while waiting. Signal handlers only latch requests and signal the active
+group; normal execution owns bounded termination grace, escalation and reaping,
+so a signal cannot recursively wait on CPython's process-wait lock.
+This covers signals during spawn. Ownership proof and UID-preconditioned deletion retain
 their independent cleanup deadline, never a shortened copy allowance or the
 sanitization reserve. An interrupted collection exits without authorizing upload.
 Cleanup is best effort: failed or interrupted API proofs withhold deletion, and
