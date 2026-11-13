@@ -315,6 +315,19 @@ jobs:
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
           ./scripts/ec2-runner/run-bmaas-agentless.sh
 
+      # The install has already copied diagnostics locally. Terminate before
+      # sanitize, attest, and upload so a cancelled job spends its remaining
+      # always() window on the instance rather than on those steps.
+      - name: Terminate the ephemeral instance
+        if: always()
+        shell: bash
+        env:
+          INSTANCE_ID: ${{ steps.provision.outputs.instance-id }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ inputs.aws-region || 'us-east-1' }}
+        run: ./scripts/ec2-runner/teardown.sh
+
       - name: Sanitize diagnostics
         id: sanitize
         if: always()
@@ -356,13 +369,3 @@ jobs:
           name: ${{ inputs.deploy-suite }}-diagnostics-${{ github.run_id }}
           path: infra/agentless-net/logs-sanitized
           if-no-files-found: warn
-
-      - name: Terminate the ephemeral instance
-        if: always()
-        shell: bash
-        env:
-          INSTANCE_ID: ${{ steps.provision.outputs.instance-id }}
-          AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ inputs.aws-region || 'us-east-1' }}
-        run: ./scripts/ec2-runner/teardown.sh
