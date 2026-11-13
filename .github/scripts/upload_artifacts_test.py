@@ -258,6 +258,16 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
     def outputs(self) -> dict[str, str]:
         return dict(line.split("=", 1) for line in self.output.read_text().splitlines())
 
+    @property
+    def state_file(self) -> pathlib.Path:
+        return self.temp / "publish-private-artifacts.json"
+
+    def state(self) -> dict[str, str]:
+        return json.loads(self.state_file.read_text())
+
+    def write_state(self, directory: str, host: str = "osac-7") -> None:
+        self.state_file.write_text(json.dumps({"dir": directory, "host": host}))
+
     def stub_curl(self, body: str, status: int = 0) -> None:
         stub = self.bin / "curl"
         stub.write_text(
@@ -272,10 +282,12 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
     def test_staging_copies_files_without_the_marker(self) -> None:
         result = self.run_step("Stage files on the runner host")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        outputs = self.outputs()
-        self.assertEqual(outputs["staged"], "true")
-        self.assertEqual(outputs["host"], "osac-7")
-        destination = pathlib.Path(outputs["dir"])
+        # The host and the path are not step outputs: they would be printed
+        # in the public log with the next step's env.
+        self.assertEqual(self.outputs(), {"staged": "true"})
+        self.assertEqual(self.state()["host"], "osac-7")
+        self.assertEqual(oct(self.state_file.stat().st_mode & 0o777), "0o600")
+        destination = pathlib.Path(self.state()["dir"])
         self.assertEqual(destination.parent, self.staging)
         self.assertTrue(destination.name.startswith("4242-2-e2e-osac-logs-"))
         self.assertEqual(oct(destination.stat().st_mode & 0o777), "0o700")
@@ -292,7 +304,7 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
         os.utime(self.source, (long_ago, long_ago))
         result = self.run_step("Stage files on the runner host")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        destination = pathlib.Path(self.outputs()["dir"])
+        destination = pathlib.Path(self.state()["dir"])
         self.assertGreater(destination.stat().st_mtime, long_ago + 86400)
         # And a second job's prune leaves it alone.
         result = self.run_step("Stage files on the runner host")
@@ -318,6 +330,7 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
             result = self.run_step("Stage files on the runner host", {"inputs.source-dir": str(path)})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(self.outputs(), {"staged": "false"})
+            self.assertFalse(self.state_file.exists())
             self.assertIn("::warning::", result.stdout)
         self.assertEqual(list(self.staging.iterdir()) if self.staging.exists() else [], [])
 
@@ -331,10 +344,10 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
 
     def test_dispatch_sends_the_source_context_and_links_the_run(self) -> None:
         self.stub_curl('{"html_url": "https://github.com/osac-project/osac-ci-artifacts/actions/runs/77"}')
-        self.contexts["steps.stage.outputs.dir"] = "/var/tmp/osac-artifacts/4242-2-e2e-osac-logs-1"
-        self.contexts["steps.stage.outputs.host"] = "osac-7"
+        self.write_state("/var/tmp/osac-artifacts/4242-2-e2e-osac-logs-1")
         result = self.run_step("Dispatch the collect workflow")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.state_file.exists())
         body = json.loads(self.request.read_text())
         self.assertEqual(body["ref"], "main")
         self.assertTrue(body["return_run_details"])
@@ -365,18 +378,33 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
 
     def test_dispatch_without_run_details_links_the_workflow(self) -> None:
         self.stub_curl("")
-        self.contexts["steps.stage.outputs.dir"] = "/var/tmp/osac-artifacts/x"
+        self.write_state("/var/tmp/osac-artifacts/x")
         result = self.run_step("Dispatch the collect workflow")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("/osac-ci-artifacts/actions/workflows/collect.yml", self.summary.read_text())
 
     def test_failed_dispatch_fails_and_keeps_the_files(self) -> None:
         self.stub_curl("", status=22)
-        self.contexts["steps.stage.outputs.dir"] = "/var/tmp/osac-artifacts/x"
+        self.write_state("/var/tmp/osac-artifacts/secret-dir", host="osac-7")
         result = self.run_step("Dispatch the collect workflow")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("::error::Could not dispatch collect.yml", result.stdout)
+        # The log is public: no host and no staging path in it.
+        for value in ("osac-7", "secret-dir", "/var/tmp"):
+            self.assertNotIn(value, result.stdout + result.stderr)
         self.assertFalse(self.summary.exists())
+
+    def test_no_step_prints_the_host_or_staging_path_in_its_env(self) -> None:
+        # A step's env block is printed in the public run log.
+        for step in self.action["runs"]["steps"]:
+            for value in (step.get("env") or {}).values():
+                self.assertNotIn("steps.stage.outputs", str(value), step["name"])
+        stage = next(step for step in self.action["runs"]["steps"] if step["name"].startswith("Stage"))
+        self.assertNotIn("dir", self.outputs_written_by(stage))
+
+    @staticmethod
+    def outputs_written_by(step: dict) -> list[str]:
+        return re.findall(r'echo "(\w+)=.*>> "\$\{GITHUB_OUTPUT\}"', step["run"])
 
     def test_token_is_limited_to_dispatching_in_the_private_repo(self) -> None:
         mint = next(step for step in self.action["runs"]["steps"] if step["name"].startswith("Mint a token"))
