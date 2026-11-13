@@ -119,18 +119,34 @@ rm -rf "${HOME}/virtual-bmh-disks" "${HOME}/sushy-local" \
 
 The CI setup enables `manage-virtual-bmh-vms.py create --record-history`.
 Direct tool users opt in with the same flag. The inventory's random group
-prefix is persisted first; a separate recorder registers both libvirt lifecycle
-and reboot callbacks before acknowledging readiness and before any VM is
-defined or started. UTC JSONL records include domain name, UUID and numeric
-libvirt lifecycle state/detail. A reboot is a separate event, not an inferred
-state transition. These observations do not establish a guest failure cause.
+prefix is persisted first; a managed runner-account process executes
+`virsh -c qemu:///system event --all --loop --timestamp --timeout 86400` with
+`LC_ALL=C` before the normal domain definition. Only lifecycle and separate
+reboot lines for exact run-owned names enter `events.log`; foreign-domain and
+other event output is discarded without being printed or persisted. No guest
+agent or Python libvirt callback subscriber is needed. These observations do
+not establish a guest failure cause.
 
-The recorder uses `libvirt-python`, already installed by `setup-sushy-tools.sh`,
-and a read-only `qemu:///system` connection. It needs no guest agent. Registration
-failure or a fifteen-second readiness timeout disables recording without failing
-provisioning. Existing history directories are never shared or overwritten by
-another recorder. Event retention is capped at 2 MiB and recorder lifetime at
-24 hours; status reports event truncation. Long runs can therefore have gaps.
+Before first start, the manager waits for a matching Defined Added/Updated event.
+If needed, it retries the identical XML definition at most twice, only for the
+same owned domain confirmed shut off. Each acknowledgment wait is at most one
+second, and optional state/define commands each time out after two seconds.
+A missing acknowledgment or failed optional retry emits a generic warning and
+continues the original start; it does not change the provisioning outcome.
+`ready.json` means the recorder launched, **not** that subscriptions registered.
+This establishes observed lifecycle delivery before first boot on success, not
+capture of the initial definition or atomic confirmation of every callback.
+Upstream [virsh](https://github.com/libvirt/libvirt/blob/v12.0.0/tools/virsh-domain-event.c)
+registers lifecycle before reboot and silently tolerates later registration
+failures under `--all`. Reboot capture therefore depends on normal QEMU reboot
+event support; `event --list` only lists client event names and cannot verify it.
+
+Existing history directories are never shared or overwritten by another recorder.
+Retained events are capped at 2 MiB, input chunks/accepted lines at 4096 bytes,
+and lifetime at 24 hours. The child is stopped and reaped on cap, deadline,
+collection cancellation, or early exit; `status.json` records the stop reason.
+Long runs and rejected oversized lines can therefore have gaps. Serial capture
+is prepared independently and can remain available after the event CLI exits.
 
 Passive serial logging is configured in domain XML before first boot with
 `<log append="on">`, preserving the PTY console. It captures only output the

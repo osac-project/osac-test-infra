@@ -16,6 +16,8 @@ from __future__ import annotations
 import importlib.util
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -90,26 +92,30 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(commands, ["list", "read", "read", "read", "read"])
             self.assertEqual(len(list(staging.glob("*.log"))), 4)
 
-    def test_actual_create_subscribes_before_first_define_and_start(self) -> None:
+    def test_actual_create_launches_before_define_and_observes_ack_before_start(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             inventory = base / "inventory.json"
             history = base / "history"
             history.mkdir()
-            (history / "ready.json").write_text(json.dumps({"serial": "bounded virtlogd", "serial_root": str(history)}))
+            (history / "status.json").write_text(json.dumps({"serial": "bounded virtlogd", "serial_root": str(history)}))
             efi = base / "efi-vars"
             efi.write_bytes(b"efi")
             calls = []
             def start_recording(path, prefix):
                 self.assertTrue(path.is_file())
                 self.assertTrue(json.loads(path.read_text())["name_prefix"])
-                calls.append("subscribed")
+                calls.append("launched")
                 return history
             def virsh(arguments, **kwargs):
                 calls.append(arguments[0])
                 if arguments[0] == "define":
                     self.assertIn('append="on"', kwargs["stdin"])
                     self.assertIn(str(history), kwargs["stdin"])
+                    name = manage_virtual_bmh_vms.ET.fromstring(kwargs["stdin"]).findtext("name")
+                    (history / (name + ".defined")).touch()
+                if arguments[0] == "start":
+                    self.assertTrue((history / (arguments[1] + ".defined")).exists())
                 return subprocess.CompletedProcess(arguments, 0, "test-uuid", "")
             args = argparse.Namespace(inventory_file=inventory, count=1, network="net", disk_dir=base,
                                       redfish_host="127.0.0.1", redfish_port=8000, cpu=4, memory_mib=8192,
@@ -120,15 +126,13 @@ class HistoryTests(unittest.TestCase):
                  mock.patch.object(manage_virtual_bmh_vms, "warn_if_redfish_unreachable"), \
                  mock.patch.object(manage_virtual_bmh_vms, "EFI_VARS", str(efi)):
                 manage_virtual_bmh_vms.cmd_create(args)
-            self.assertLess(calls.index("subscribed"), calls.index("define"))
+            self.assertLess(calls.index("launched"), calls.index("define"))
             self.assertLess(calls.index("define"), calls.index("start"))
 
-    def test_registration_failure_never_acknowledges_readiness(self) -> None:
+    def test_cli_missing_never_acknowledges_launch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            libvirt = mock.Mock()
-            libvirt.openReadOnly.return_value.domainEventRegisterAny.side_effect = RuntimeError("registration failed")
-            with mock.patch.dict(sys.modules, libvirt=libvirt), self.assertRaises(RuntimeError):
+            with mock.patch.object(bmh_history.subprocess, "Popen", side_effect=FileNotFoundError), self.assertRaises(FileNotFoundError):
                 bmh_history.listen(directory, "virtual-bmh-aabbccdd")
             self.assertFalse((directory / "ready.json").exists())
 
@@ -144,51 +148,108 @@ class HistoryTests(unittest.TestCase):
                 bmh_history.stage(base, "virtual-bmh-aabbccdd", staging)
             self.assertEqual((staging / "virtual-bmh-aabbccdd-01.serial.log").stat().st_size, 8)
 
-    def test_separate_lifecycle_and_reboot_callbacks_ready_after_registration(self) -> None:
+    def run_stream(self, data: bytes, **limits):
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        child = subprocess.Popen([sys.executable, "-c", "import os; os.write(1, " + repr(data) + ")"], stdout=subprocess.PIPE)
+        with mock.patch.object(bmh_history.subprocess, "Popen", return_value=child) as launch, \
+             mock.patch.object(bmh_history, "serial_capability", return_value={"serial": "unavailable"}), \
+             mock.patch.multiple(bmh_history, **(limits or {"MAX_BYTES": bmh_history.MAX_BYTES})):
+            bmh_history.listen(directory, "virtual-bmh-aabbccdd")
+        self.assertIsNotNone(child.returncode)
+        self.assertEqual(launch.call_args.args[0], ["virsh", "-c", "qemu:///system", "event", "--all", "--loop", "--timestamp", "--timeout", "86400"])
+        self.assertEqual(launch.call_args.kwargs["env"]["LC_ALL"], "C")
+        return directory
+
+    def test_cli_filters_separate_events_and_oversized_lines(self) -> None:
+        prefix = b"2026-11-13 00:00:00.000+0000: event "
+        lifecycle = prefix + b"'lifecycle' for domain 'virtual-bmh-aabbccdd-01': Defined Added\n"
+        reboot = prefix + b"'reboot' for domain 'virtual-bmh-aabbccdd-01'\n"
+        directory = self.run_stream(b"bad\n" + b"x" * 9000 + b"\n" + lifecycle + reboot +
+            reboot.replace(b"aabbccdd", b"11223344") + reboot.replace(b"-01'", b"-01-extra'") +
+            prefix + b"'graphics' for domain 'virtual-bmh-aabbccdd-01': private\n")
+        self.assertEqual((directory / "events.log").read_bytes(), lifecycle + reboot)
+        self.assertTrue((directory / "virtual-bmh-aabbccdd-01.defined").exists())
+        self.assertFalse((directory / "ready.json").exists())
+
+    def test_cli_cap_stops_and_reaps(self) -> None:
+        line = b"2026-11-13 00:00:00.000+0000: event 'reboot' for domain 'virtual-bmh-aabbccdd-01'\n"
+        directory = self.run_stream(line * 50, MAX_BYTES=256)
+        self.assertLessEqual((directory / "events.log").stat().st_size, 256)
+        self.assertEqual(json.loads((directory / "status.json").read_text())["event_stop"], "byte limit")
+
+    def test_cli_deadline_and_cancel_reap(self) -> None:
+        for cancelled in (False, True):
+            with self.subTest(cancelled=cancelled), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                if cancelled:
+                    (directory / "stop").touch()
+                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=subprocess.PIPE)
+                with mock.patch.object(bmh_history.subprocess, "Popen", return_value=child), \
+                     mock.patch.object(bmh_history, "serial_capability", return_value={"serial": "unavailable"}), \
+                     mock.patch.object(bmh_history, "MAX_SECONDS", 0.02):
+                    bmh_history.listen(directory, "virtual-bmh-aabbccdd")
+                self.assertIsNotNone(child.returncode)
+
+    def test_cli_sigterm_reaps_and_restores_handler(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            connection = mock.Mock()
-            connection.domainEventRegisterAny.side_effect = [7, 8]
-            libvirt = mock.Mock(VIR_DOMAIN_EVENT_ID_LIFECYCLE=0, VIR_DOMAIN_EVENT_ID_REBOOT=1)
-            libvirt.openReadOnly.return_value = connection
-            libvirt.virEventAddTimeout.return_value = 1
-            def event_loop():
-                self.assertTrue((directory / "ready.json").exists())
-                domain = mock.Mock()
-                domain.name.return_value = "virtual-bmh-aabbccdd-01"
-                domain.UUIDString.return_value = "test-uuid"
-                calls = connection.domainEventRegisterAny.call_args_list
-                self.assertEqual([call.args[1] for call in calls], [0, 1])
-                calls[0].args[2](connection, domain, 2, 0, None)
-                calls[1].args[2](connection, domain, None)
-                (directory / "stop").touch()
-                return 0
-            libvirt.virEventRunDefaultImpl.side_effect = event_loop
-            def prepare_serial(prefix):
-                self.assertEqual(connection.domainEventRegisterAny.call_count, 2)
-                self.assertFalse((directory / "ready.json").exists())
-                return {"serial": "bounded virtlogd", "serial_root": "/root-owned/run"}
-            with mock.patch.dict(sys.modules, libvirt=libvirt), mock.patch.object(bmh_history, "serial_capability", side_effect=prepare_serial):
+            previous = signal.getsignal(signal.SIGTERM)
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=subprocess.PIPE)
+            def cancel(*arguments):
+                os.kill(os.getpid(), signal.SIGTERM)
+                return [], [], []
+            with mock.patch.object(bmh_history.subprocess, "Popen", return_value=child), \
+                 mock.patch.object(bmh_history, "serial_capability", return_value={"serial": "unavailable"}), \
+                 mock.patch.object(bmh_history.select, "select", side_effect=cancel):
                 bmh_history.listen(directory, "virtual-bmh-aabbccdd")
-            events = [json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()]
-            self.assertEqual([entry["event"] for entry in events], ["lifecycle", "reboot"])
-            self.assertTrue(all("+00:00" in entry["timestamp"] for entry in events))
-            self.assertFalse((directory / "ready.json").exists())
-            self.assertEqual(connection.domainEventDeregisterAny.call_count, 2)
+            self.assertIsNotNone(child.returncode)
+            self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+            self.assertEqual(json.loads((directory / "status.json").read_text())["event_stop"], "stop requested")
 
-    def test_event_limit_and_group_isolation(self) -> None:
+    def test_defined_ack_waits_and_times_out_without_launch_claim(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            writer = bmh_history.EventWriter(Path(temporary), "virtual-bmh-aabbccdd")
-            domain = mock.Mock()
-            domain.name.return_value = "virtual-bmh-aabbccdd-01-extra"
-            writer.record(domain, "reboot")
-            self.assertFalse(writer.path.exists())
-            domain.name.return_value = "virtual-bmh-aabbccdd-01"
-            domain.UUIDString.return_value = "test-uuid"
-            with mock.patch.object(bmh_history, "MAX_BYTES", 512):
-                for count in range(20):
-                    writer.record(domain, "reboot")
-            self.assertLessEqual(writer.path.stat().st_size, 512)
+            directory = Path(temporary)
+            (directory / "ready.json").write_text("{}")
+            self.assertFalse(bmh_history.defined(directory, "virtual-bmh-aabbccdd-01", timeout=0.01))
+            (directory / "virtual-bmh-aabbccdd-01.defined").touch()
+            self.assertTrue(bmh_history.defined(directory, "virtual-bmh-aabbccdd-01", timeout=0.01))
+
+    def test_delayed_ack_redefines_only_confirmed_inactive_owned_domain(self) -> None:
+        for state in ("shut off", "running", "error", "timeout", "foreign", "no-ack"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                name = "virtual-bmh-aabbccdd-01"
+                efi = directory / "efi"
+                efi.write_bytes(b"efi")
+                (directory / "ready.json").write_text("{}")
+                (directory / "status.json").write_text(json.dumps({"serial": "unavailable", "prefix":
+                    "virtual-bmh-11223344" if state == "foreign" else "virtual-bmh-aabbccdd"}))
+                definitions, calls = [], []
+                def virsh(arguments, **kwargs):
+                    calls.append(arguments[0])
+                    if arguments[0] == "define":
+                        definitions.append(kwargs["stdin"])
+                        if len(definitions) == 2 and state != "no-ack":
+                            (directory / (name + ".defined")).touch()
+                    if arguments[0] == "domstate":
+                        self.assertEqual(kwargs["timeout"], 2)
+                        if state == "timeout":
+                            raise subprocess.TimeoutExpired(arguments, 2)
+                        return subprocess.CompletedProcess(arguments, int(state == "error"), state if state != "no-ack" else "shut off", "")
+                    if arguments[0] == "start" and state == "shut off":
+                        self.assertTrue((directory / (name + ".defined")).exists())
+                    return subprocess.CompletedProcess(arguments, 0, "uuid", "")
+                original = bmh_history.defined
+                with mock.patch.object(manage_virtual_bmh_vms, "run_virsh", side_effect=virsh), \
+                     mock.patch.object(bmh_history, "defined", side_effect=lambda directory, name: original(directory, name, timeout=0.01)), \
+                     mock.patch.object(manage_virtual_bmh_vms.subprocess, "run"), \
+                     mock.patch.object(manage_virtual_bmh_vms, "EFI_VARS", str(efi)):
+                    manage_virtual_bmh_vms.create_vm(name=name, mac="52:54:00:bb:cc:01", cpu=4,
+                        memory_mib=8192, disk_size="150G", disk_dir=directory, network="net",
+                        redfish_host="127.0.0.1", redfish_port=8000, history=directory)
+                self.assertEqual(calls.count("start"), 1)
+                self.assertEqual(len(definitions), 3 if state == "no-ack" else 2 if state == "shut off" else 1)
+                self.assertTrue(all(xml == definitions[0] for xml in definitions))
 
     def test_serial_capability_fails_closed(self) -> None:
         with mock.patch.object(bmh_history, "serial_helper", side_effect=OSError):
@@ -211,7 +272,7 @@ class HistoryTests(unittest.TestCase):
                 base = Path(temporary)
                 efi = base / "efi"
                 efi.write_bytes(b"efi")
-                (base / "ready.json").write_text(json.dumps({"serial": "bounded virtlogd", "serial_root": str(base)}))
+                (base / "status.json").write_text(json.dumps({"serial": "bounded virtlogd", "serial_root": str(base)}))
                 definitions = []
                 starts = []
                 def virsh(arguments, **kwargs):
@@ -242,7 +303,7 @@ class HistoryTests(unittest.TestCase):
             base = Path(temporary)
             efi = base / "efi"
             efi.write_bytes(b"efi")
-            (base / "ready.json").write_text(json.dumps({"serial": "bounded virtlogd", "serial_root": str(base)}))
+            (base / "status.json").write_text(json.dumps({"serial": "bounded virtlogd", "serial_root": str(base)}))
             starts = []
             def virsh(arguments, **kwargs):
                 if arguments[0] == "start":

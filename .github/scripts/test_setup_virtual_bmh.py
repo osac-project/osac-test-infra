@@ -137,7 +137,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             for suffix in (".0", ".1", ".2"):
                 (history / ("virtual-bmh-aabbccdd-01.serial.log" + suffix)).write_text('{"password":"' + secret + '"}\n')
             (history / "virtual-bmh-foreign-01.serial.log").write_text("foreign")
-            (history / "events.jsonl").write_text('{"event":"reboot"}\n')
+            (history / "events.log").write_text("2026-11-13 00:00:00.000+0000: event 'reboot' for domain 'virtual-bmh-aabbccdd-01'\n" + secret + "\n")
             artifact = base / "artifacts/bmh-history"
             binaries = base / "bin"
             binaries.mkdir()
@@ -148,7 +148,7 @@ class SetupVirtualBmhTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             output = (artifact / "virtual-bmh-aabbccdd-01.serial.log").read_text()
             self.assertNotIn(secret, output + result.stdout + result.stderr)
-            self.assertEqual(len(list(artifact.glob("*.log"))), 4)
+            self.assertEqual(len(list(artifact.glob("*.log"))), 5)
             for serial in artifact.glob("*.log"):
                 self.assertNotIn(secret, serial.read_text())
             self.assertIn("first boot", output)
