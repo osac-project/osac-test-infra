@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import itertools
 import json
 import os
@@ -248,6 +249,8 @@ fi
             "encoded-archive",
             "symlink",
             "unsafe-name",
+            "lookalike-service-name",
+            "lookalike-directory-name",
             "metadata",
             "duplicate-key",
         ):
@@ -266,6 +269,10 @@ fi
                     path.symlink_to(self.arguments)
                 if mode == "unsafe-name":
                     (tree / "synthetic-sentinel-credential.yaml").write_text("kind: List\n")
+                if mode == "lookalike-service-name":
+                    (tree / "synthetic-sentinel-credential-kubelet_service.log").write_text("service history\n")
+                if mode == "lookalike-directory-name":
+                    (tree / "host_service_logs-synthetic-sentinel-credential").mkdir()
                 if mode == "metadata":
                     (tree / "omissions.json").write_text('{"synthetic-sentinel-credential": 1}')
                 if mode == "duplicate-key":
@@ -320,6 +327,64 @@ fi
                 self.assertNotIn(sentinel, path.read_text())
         self.assertNotIn(sentinel, result.stdout + result.stderr)
         self.assertTrue(any("service history" in path.read_text() for path in tree.glob("*.log")))
+
+    def test_standard_service_paths_survive_real_redaction_and_upload_gate(self) -> None:
+        tree = self.artifacts / "mgmt-cluster/must-gather"
+        sentinel = "synthetic-service-secret-950147-testing-only"
+        image = f"quay-io-openshift-release-dev-ocp-v4-0-art-dev-sha256-{sentinel}"
+        node = f"node-{sentinel}"
+        source = tree / image / "host_service_logs"
+        expected = []
+        wrapper = "dir-" + hashlib.sha256(os.fsencode(image)).hexdigest()
+        for role in ("masters", "workers"):
+            for service in ("kubelet_service.log", "crio_service.log"):
+                path = source / role / service
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f'service history\n{{"password": "{sentinel}"}}\n')
+                expected.append(pathlib.Path(wrapper) / "host_service_logs" / role / service)
+        dynamic = source / "masters" / node
+        dynamic.mkdir()
+        (dynamic / "kubelet_service.log").write_text(f'node history\n{{"token": "{sentinel}"}}\n')
+        expected.append(
+            pathlib.Path(wrapper)
+            / "host_service_logs/masters"
+            / ("dir-" + hashlib.sha256(os.fsencode(node)).hexdigest())
+            / "kubelet_service.log"
+        )
+        (dynamic / f"{sentinel}-crio_service.log").write_text(f'{{"password": "{sentinel}"}}\n')
+        oversized = source / "workers" / node / "crio_service.log"
+        oversized.parent.mkdir()
+        with oversized.open("wb") as handle:
+            handle.truncate(33 * 1024 * 1024)
+        (self.artifacts / ".redaction-complete").unlink()
+        self.normalize(tree)
+        self.assertEqual(json.loads((tree / "omissions.json").read_text()), {"oversized": 1})
+        self.assertEqual(len(list(tree.rglob("crio_service.log"))), 2)
+        redaction = subprocess.run(
+            ["bash", str(REPO / "scripts/gather-osac-logs.sh"), str(self.artifacts)],
+            env=self.environment | {"OSAC_GATHER_REDACT_ONLY": "true", "OSAC_GATHER_COLLECT_ONLY": "false"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(redaction.returncode, 0, redaction.stdout + redaction.stderr)
+        for relative in expected:
+            self.assertIn("history", (tree / relative).read_text())
+            self.assertIn("REDACTED", (tree / relative).read_text())
+        self.assertFalse((self.artifacts / ".redaction-complete").exists())
+        (self.artifacts / ".redaction-complete").touch()
+        self.scanner("clean")
+        outputs = redaction.stdout + redaction.stderr
+        for step in ("Verify redaction complete", "Scan artifacts with gitleaks", "Release gate - censor secrets"):
+            result = self.run_step(step)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            outputs += result.stdout + result.stderr
+        for relative in expected:
+            self.assertTrue((tree / relative).is_file(), relative)
+        self.assertNotIn(sentinel, outputs)
+        for path in self.artifacts.rglob("*"):
+            self.assertNotIn(sentinel, str(path.relative_to(self.artifacts)))
+            if path.is_file():
+                self.assertNotIn(sentinel, path.read_text())
 
     def test_final_gate_rechecks_the_actual_subset_after_initial_verification(self) -> None:
         tree = self.must_gather()
