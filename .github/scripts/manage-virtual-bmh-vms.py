@@ -73,7 +73,7 @@ def run_virsh(
     )
 
 
-def generate_vm_token(hosts: list[Host], prefix: str) -> str:
+def generate_vm_token(hosts: list[Host], prefix: str, reserved: list[str] | None = None) -> str:
     """Random two-hex-digit token for a new VM, unique within the group.
 
     The token is both the VM name suffix and the last MAC address byte:
@@ -85,6 +85,7 @@ def generate_vm_token(hosts: list[Host], prefix: str) -> str:
         for host in hosts
         if host.name.startswith(f"{prefix}-")
     }
+    used.update(name[len(prefix) + 1:] for name in reserved or [])
     if len(used) >= MAX_VMS_PER_GROUP:
         fail(f"the group already holds {MAX_VMS_PER_GROUP} VMs (boot MAC address space exhausted)")
     while True:
@@ -204,10 +205,12 @@ def create_vm(
     run_virsh(["define", "/dev/stdin"], stdin=xml)
     if history is not None:
         try:
+            recording = json.loads((history / "status.json").read_text())
             for attempt in range(3):
                 if bmh_history.defined(history, name):
                     break
-                if attempt == 2 or not (history / "ready.json").exists() or not is_group_host_name(name, json.loads((history / "status.json").read_text())["prefix"]):
+                if (attempt == 2 or not (history / "ready.json").exists() or
+                        name not in (bmh_history.inventory_names(Path(recording["inventory"]), recording["prefix"]) or set())):
                     raise ValueError("no acknowledgment")
                 state = run_virsh(["domstate", name], check=False, capture=True, timeout=2)
                 if state.returncode or state.stdout.strip() != "shut off":
@@ -301,6 +304,13 @@ def cmd_create(args: argparse.Namespace) -> None:
     inventory = RawInventory.load(args.inventory_file)
     name_prefix = inventory.ensure_name_prefix(args.inventory_file)
 
+    tokens = []
+    if args.record_history:
+        for _ in range(args.count):
+            token = generate_vm_token(inventory.hosts, name_prefix, inventory.planned_names)
+            inventory.planned_names.append(f"{name_prefix}-{token}")
+            tokens.append(token)
+        inventory.save(args.inventory_file)
     history = bmh_history.start(args.inventory_file, name_prefix) if args.record_history else None
 
     args.disk_dir.mkdir(parents=True, exist_ok=True)
@@ -308,8 +318,8 @@ def cmd_create(args: argparse.Namespace) -> None:
 
     print(f"==> Creating {args.count} VM(s) on network {args.network}...")
     created: list[str] = []
-    for _ in range(args.count):
-        token = generate_vm_token(inventory.hosts, name_prefix)
+    for index in range(args.count):
+        token = tokens[index] if args.record_history else generate_vm_token(inventory.hosts, name_prefix, inventory.planned_names)
         name = f"{name_prefix}-{token}"
         mac = f"{MAC_PREFIX}:{token}"
         print(f"  Creating VM: {name} (MAC: {mac}, {args.cpu} CPU, {args.memory_mib} MiB)...")
@@ -362,6 +372,8 @@ def cmd_delete(args: argparse.Namespace) -> None:
     for name in unknown_names:
         if not delete_vm(name):
             failed_names.append(name)
+        else:
+            deleted_names.append(name)
 
     inventory.remove_hosts(deleted_names)
     inventory.save(args.inventory_file)

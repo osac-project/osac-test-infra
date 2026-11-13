@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from raw_inventory import RawInventory, is_group_host_name
+from raw_inventory import InventoryError, RawInventory, is_group_host_name
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_SECONDS = 24 * 60 * 60
@@ -46,16 +46,28 @@ def serial_capability(prefix: str) -> dict:
         return dict(serial="unavailable: installed helper or bounded standard backend unavailable")
 
 
-def listen(directory: Path, prefix: str) -> None:
+def inventory_names(inventory: Path, prefix: str) -> set[str] | None:
+    try:
+        current = RawInventory.load(inventory)
+        names = current.host_names() | set(current.planned_names)
+        if current.name_prefix == prefix and all(is_group_host_name(name, prefix) for name in names):
+            return names
+    except (OSError, ValueError, InventoryError):
+        pass
+    return None
+
+
+def listen(directory: Path, prefix: str, inventory: Path) -> None:
     os.umask(0o077)
-    state = dict(pid=os.getpid(), identity=process_identity(os.getpid()), prefix=prefix,
-                 started=datetime.now(timezone.utc).isoformat(), **serial_capability(prefix))
+    state = dict(pid=os.getpid(), identity=process_identity(os.getpid()), prefix=prefix, inventory=str(inventory.resolve()),
+                 started=datetime.now(timezone.utc).isoformat(), **serial_capability(prefix),
+                 selection="inventory unavailable" if inventory_names(inventory, prefix) is None else "inventory allowlist")
     (directory / "status.json").write_text(json.dumps(state))
     process = subprocess.Popen(["virsh", "-c", "qemu:///system", "event", "--all", "--loop",
                                 "--timestamp", "--timeout", "86400"], stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=dict(os.environ, LC_ALL="C"))
     previous = signal.signal(signal.SIGTERM, lambda *_: (directory / "stop").touch())
-    pattern = re.compile(rb"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\+0000: event '(lifecycle|reboot)' for domain '(virtual-bmh-[0-9a-f]{8}-[0-9a-f]{2})'(?:: [^\r\n]*)?\n")
+    pattern = re.compile(rb"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\+0000: event '(lifecycle|reboot)' for domain '(virtual-bmh-[0-9a-f]{8}-[0-9a-f]{2})'(?:: [\x20-\x7e]*)?\n")
     deadline = time.monotonic() + MAX_SECONDS
     pending, dropping, size = b"", False, 0
     reason = "deadline"
@@ -79,6 +91,10 @@ def listen(directory: Path, prefix: str) -> None:
                     match = pattern.fullmatch(line) if not dropping and len(line) <= 4096 else None
                     dropping = False
                     if not match or not is_group_host_name(match[2].decode(), prefix):
+                        continue
+                    names = inventory_names(inventory, prefix)
+                    state["selection"] = "inventory unavailable" if names is None else "inventory allowlist"
+                    if names is None or match[2].decode() not in names:
                         continue
                     if size + len(line) > MAX_BYTES:
                         reason = "byte limit"
@@ -194,7 +210,10 @@ def collect(inventory: Path, destination: Path) -> None:
         return
     with tempfile.TemporaryDirectory(prefix="staging-", dir=directory) as temporary:
         staging = Path(temporary)
-        stage(directory, prefix, staging)
+        names = inventory_names(inventory, prefix)
+        if names is None:
+            return
+        stage(directory, prefix, staging, names)
         runner_temp = Path(os.environ.get("RUNNER_TEMP", str(inventory.parent)))
         result = subprocess.run([sys.executable, "-I", str(Path(__file__).with_name("release_gate.py")),
                                  str(staging), "--secret-file", str(runner_temp / "pull-secret.json"),
@@ -205,7 +224,7 @@ def collect(inventory: Path, destination: Path) -> None:
         shutil.copytree(staging, destination, dirs_exist_ok=True)
 
 
-def stage(directory: Path, prefix: str, destination: Path) -> None:
+def stage(directory: Path, prefix: str, destination: Path, allowed: set[str]) -> None:
     for path in directory.iterdir():
         if path.name not in ("events.log", "status.json"):
             continue
@@ -224,6 +243,8 @@ def stage(directory: Path, prefix: str, destination: Path) -> None:
         for name in names:
             if not isinstance(name, str) or not re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{2}\.serial\.log(?:\.[012])?", name):
                 raise ValueError("invalid serial name")
+            if name.split(".serial.log", 1)[0] not in allowed:
+                continue
             data = serial_helper("read", prefix, name)
             artifact_name = name.replace(".log.", ".part-")
             if not artifact_name.endswith(".log"):
@@ -258,7 +279,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "listen":
-            listen(history_dir(args.inventory), args.argument)
+            listen(history_dir(args.inventory), args.argument, args.inventory)
         elif args.command == "stop":
             if history_dir(args.inventory).is_dir():
                 stop(history_dir(args.inventory))
