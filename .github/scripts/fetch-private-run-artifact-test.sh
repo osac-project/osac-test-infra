@@ -7,8 +7,10 @@ WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
 mkdir -p "${WORK}/bin"
 
-# The stub answers listings from $WORK/list-<name> (its content is the id, or
-# empty for none, or the word FAIL) and downloads from $WORK/zip-<id>.
+# The stub answers listings from $WORK/list-<name> (its content is lines of
+# "<artifact id> <collector run id>", newest first, or empty for none, or the
+# word FAIL), collector run titles from $WORK/title-<run id> and downloads from
+# $WORK/zip-<id>.
 cat > "${WORK}/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 args="$*"
@@ -17,6 +19,12 @@ if [[ "${args}" == *"/actions/artifacts/"*"/zip"* ]]; then
   id=${args##*artifacts/}; id=${id%%/*}
   [[ -f "${WORK}/zip-${id}" ]] || exit 1
   cat "${WORK}/zip-${id}"
+  exit 0
+fi
+if [[ "${args}" == *"/actions/runs/"* ]]; then
+  rid=${args##*runs/}; rid=${rid%% *}
+  [[ -f "${WORK}/title-${rid}" ]] || exit 1
+  cat "${WORK}/title-${rid}"
   exit 0
 fi
 name=""
@@ -54,7 +62,7 @@ check() { # description, expected, actual
     echo "ok: $1"
   fi
 }
-reset() { rm -f "${WORK}"/list-* "${WORK}"/asks-* "${WORK}"/zip-* "${WORK}/calls" "${WORK}/out.zip" "${WORK}/sleeps" "${WORK}/asks"; }
+reset() { rm -f "${WORK}"/list-* "${WORK}"/asks-* "${WORK}"/zip-* "${WORK}"/title-* "${WORK}/calls" "${WORK}/out.zip" "${WORK}/sleeps" "${WORK}/asks"; }
 
 reset
 printf 'ZIPDATA' > "${WORK}/zip-77"
@@ -115,6 +123,35 @@ check "a failed lookup is not waited for" "4 no" "${rc} $([[ -e "${WORK}/sleeps"
 reset
 FETCH_WAIT_SECONDS=abc FETCH_WAIT_INTERVAL=0 "${SCRIPT}" org/priv "${WORK}/out.zip" a >/dev/null 2>&1; rc=$?
 check "a bad wait setting means no wait" "3 no" "${rc} $([[ -e "${WORK}/sleeps" ]] && echo yes || echo no)"
+
+# --- a rerun must not get an earlier attempt's artifact
+reset
+printf 'ONE' > "${WORK}/zip-1"; printf 'TWO' > "${WORK}/zip-2"
+printf '2 200\n1 100\n' > "${WORK}/list-a"
+printf 'collect org/src#5.2 - wf / job' > "${WORK}/title-200"
+printf 'collect org/src#5.1 - wf / job' > "${WORK}/title-100"
+out=$(FETCH_TITLE_PREFIX='collect org/src#5.2 - ' "${SCRIPT}" org/priv "${WORK}/out.zip" a 2>/dev/null); rc=$?
+check "takes the artifact of the wanted attempt" "0 a 2" "${rc} ${out}"
+check "downloads that attempt's bytes" "TWO" "$(cat "${WORK}/out.zip")"
+reset
+printf 'ONE' > "${WORK}/zip-1"
+printf '1 100\n' > "${WORK}/list-a"
+printf 'collect org/src#5.1 - wf / job' > "${WORK}/title-100"
+FETCH_TITLE_PREFIX='collect org/src#5.2 - ' "${SCRIPT}" org/priv "${WORK}/out.zip" a >/dev/null 2>&1; rc=$?
+check "an earlier attempt's artifact is not returned" "3 no" "${rc} $([[ -e "${WORK}/out.zip" ]] && echo yes || echo no)"
+reset
+printf 'TWO' > "${WORK}/zip-2"
+printf '1 100\n' > "${WORK}/list-a.from-1"
+printf '2 200\n1 100\n' > "${WORK}/list-a.from-3"
+printf 'collect org/src#5.2 - wf / job' > "${WORK}/title-200"
+printf 'collect org/src#5.1 - wf / job' > "${WORK}/title-100"
+out=$(FETCH_TITLE_PREFIX='collect org/src#5.2 - ' FETCH_WAIT_SECONDS=60 "${SCRIPT}" org/priv "${WORK}/out.zip" a 2>/dev/null); rc=$?
+check "waits for the wanted attempt's upload" "0 a 2" "${rc} ${out}"
+check "asked three times, slept twice" "2" "$(wc -l < "${WORK}/sleeps" | tr -d ' ')"
+reset
+printf '1 100\n' > "${WORK}/list-a"
+FETCH_TITLE_PREFIX='collect org/src#5.2 - ' "${SCRIPT}" org/priv "${WORK}/out.zip" a >/dev/null 2>&1; rc=$?
+check "a run whose title cannot be read is a failure, not a match" "4" "${rc}"
 
 if [[ ${failures} -gt 0 ]]; then
   echo "${failures} check(s) failed"
