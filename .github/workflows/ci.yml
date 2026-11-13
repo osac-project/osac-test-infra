@@ -58,6 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           bash .github/scripts/discover-audit-runs-test.sh
+          bash .github/scripts/fetch-private-run-artifact-test.sh
           bash .github/scripts/fabric-snapshot-test.sh
           bash .github/scripts/router_gather_test.sh
 
