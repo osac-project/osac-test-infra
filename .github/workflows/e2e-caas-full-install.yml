@@ -1153,7 +1153,7 @@ jobs:
           commit-sha: ${{ github.sha }}
           # A private artifact is not on this run: the run page's summary holds the link to where it is, so the link
           # points at the run itself and not at its (empty) artifacts section.
-          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ (secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '') && '' || '#artifacts' }}
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ (secrets.osac-ci-app-id == '' || secrets.osac-ci-app-private-key == '') && '#artifacts' || '' }}
 
       - name: Prepare AI diagnosis for Slack
         id: prepare-diagnosis-text
