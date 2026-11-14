@@ -1751,6 +1751,156 @@ class TestRecordFormat:
         assert len(upgraded) == 2
 
 
+class TestMachineAccountsAndTheFinalApproval:
+    """Machine accounts GitHub does not mark as bots are not reviewers, and the
+    review stage ends at the final approval: the last one before the queue."""
+
+    def machine_reviews(self, github):
+        fixture = load_fixture("merged_pr")
+        reviews = [
+            {"id": 9010, "state": "APPROVED", "user": {"login": "osac-ci-bot", "type": "User"},
+             "submitted_at": "2026-10-01T10:02:00Z", "commit_id": "c1"},
+            {"id": 9011, "state": "COMMENTED", "user": {"login": "redhat-chai-bot", "type": "User"},
+             "submitted_at": "2026-10-01T10:03:00Z", "commit_id": "c1"},
+            *fixture["reviews"],
+        ]
+        timeline = [
+            {"event": "review_requested", "created_at": "2026-10-01T10:01:00Z",
+             "actor": {"login": "author1"}, "requested_reviewer": {"login": "redhat-chai-bot"}},
+            *fixture["timeline"],
+        ]
+        github.add(f"/repos/osac-project/{REPO}/pulls/101/reviews?per_page=100", FakeResponse(payload=reviews))
+        github.add(f"/repos/osac-project/{REPO}/issues/101/timeline?per_page=100", FakeResponse(payload=timeline))
+
+    def test_a_machine_account_is_not_a_reviewer(self, prs, github, service):
+        self.machine_reviews(github)
+        run_backfill(service)
+        row = pr_row(service, 101)
+        assert row["first_review_at"] == "2026-10-01T10:20:00Z", "reviewer1, not osac-ci-bot at 10:02"
+        assert row["first_approval_at"] == "2026-10-01T10:50:00Z"
+        assert row["human_review_count"] == 2
+        assert row["review_request_count"] == 1
+        events = rows(service, "SELECT kind, actor, detail FROM pr_timeline WHERE number = 101")
+        assert not [e for e in events if "bot" in (e["actor"] + e["detail"])]
+
+    def test_the_machine_accounts_come_from_the_environment(self, prs, monkeypatch):
+        assert prs.is_bot({"login": "osac-ci-bot", "type": "User"})
+        assert prs.is_bot({"login": "Redhat-Chai-Bot", "type": "User"})
+        assert prs.is_bot({"login": "dependabot[bot]", "type": "Bot"})
+        assert not prs.is_bot({"login": "reviewer1", "type": "User"})
+        monkeypatch.setattr(prs, "MACHINE_ACCOUNTS", frozenset({"reviewer1"}))
+        assert prs.is_bot({"login": "reviewer1", "type": "User"})
+        assert not prs.is_bot({"login": "osac-ci-bot", "type": "User"})
+
+    def test_the_review_ends_at_the_final_approval(self, prs, github, service):
+        fixture = load_fixture("merged_pr")
+        reviews = [
+            *fixture["reviews"],
+            {"id": 9004, "state": "APPROVED", "user": {"login": "reviewer2", "type": "User"},
+             "submitted_at": "2026-10-01T11:00:00Z", "commit_id": "c1"},
+        ]
+        github.add(f"/repos/osac-project/{REPO}/pulls/101/reviews?per_page=100", FakeResponse(payload=reviews))
+        run_backfill(service)
+        row = pr_row(service, 101)
+        assert row["first_approval_at"] == "2026-10-01T10:50:00Z"
+        assert row["last_approval_at"] == "2026-10-01T11:00:00Z", "reviewer2's, before the queue entry"
+        assert row["review_seconds"] == 40 * 60, "first review 10:20 to the final approval 11:00"
+        assert row["waiting_seconds"] == prs.ordered_seconds(row["last_approval_at"], row["queued_at"])
+        doc = service.get_json({"number": ["101"], "repo": [REPO]})
+        review = next(stage for stage in doc["stages"] if stage["stage"] == "review")
+        assert (review["start_at"], review["end_at"], review["seconds"]) == (
+            "2026-10-01T10:20:00Z", "2026-10-01T11:00:00Z", 2400)
+
+    def test_reviewed_but_never_approved_says_so(self, prs):
+        stages = {stage["stage"]: stage for stage in prs._stages({
+            "state": "closed", "opened_at": "2026-10-01T10:00:00Z", "first_review_at": "2026-10-01T10:20:00Z",
+            "authoring_seconds": 1200, "review_seconds": None, "closed_at": "2026-10-01T12:00:00Z",
+        })}
+        assert stages["review"]["state"] == "unknown"
+        assert stages["review"]["missing_reason"] == "no human approval before the merge queue"
+        assert stages["waiting"]["state"] == "not_reached"
+
+    def test_how_often_the_first_review_is_the_approval(self, prs):
+        def merged(number, first_review, first_approval, final=None):
+            return {"repo": REPO, "number": number, "state": "merged", "first_review_at": first_review,
+                    "first_approval_at": first_approval, "ready_at": "2026-10-01T09:00:00Z",
+                    "last_approval_at": final or first_approval, "total_seconds": 3600,
+                    "lifecycle_seconds": json.dumps({"waiting_review": 3600})}
+
+        rows_ = [
+            merged(1, "2026-10-01T10:00:00Z", "2026-10-01T10:00:00Z"),
+            merged(2, "2026-10-01T10:00:00Z", "2026-10-01T10:00:00Z", final="2026-10-01T13:00:00Z"),
+            merged(3, "2026-10-01T10:00:00Z", "2026-10-01T11:00:00Z"),
+            merged(4, None, None),
+        ]
+        kpis = prs._kpis(rows_, {})[0]
+        assert (kpis["approved_first_review"], kpis["reviewed"]) == (2, 3)
+        assert kpis["approved_first_review_share"] == round(2 / 3, 4)
+        # Ready at 09:00 to the final approvals at 10:00, 13:00 and 11:00.
+        assert kpis["ready_to_approval_median_s"] == 2 * 3600
+
+    def test_an_older_row_is_promoted_or_read_again(self, prs, github, service):
+        self.machine_reviews(github)
+        run_backfill(service)
+        with sqlite3.connect(service.db_file) as conn:
+            conn.execute("UPDATE pr_events SET record_version = 3, review_seconds = 1, waiting_seconds = 1")
+            # As format 3 stored it: osac-ci-bot's approval counted as a review.
+            conn.execute("INSERT INTO pr_timeline (repo, number, seq, at, kind, label, actor, detail, url, "
+                         "since_open_s) VALUES (?, 101, 999, '2026-10-01T10:02:00Z', 'review', 'Approved', "
+                         "'osac-ci-bot', '', '', 120)", (REPO,))
+        assert service._migrate_rows() == 2
+        versions = {row["number"]: row["record_version"] for row in rows(service, "SELECT * FROM pr_events")}
+        assert versions == {101: 3, 102: prs.RECORD_VERSION, 103: prs.RECORD_VERSION}
+        for row in rows(service, "SELECT * FROM pr_events"):
+            assert row["review_seconds"] == prs.seconds_between(row["first_review_at"], row["last_approval_at"])
+            assert row["waiting_seconds"] == prs.ordered_seconds(row["last_approval_at"], row["queued_at"])
+        assert service._migrate_rows() == 0
+        # The next pass reads #101 again and stores it in the new format.
+        run_backfill(service)
+        assert pr_row(service, 101)["record_version"] == prs.RECORD_VERSION
+
+    def test_a_row_without_its_events_is_read_again(self, prs, service):
+        run_backfill(service)
+        with sqlite3.connect(service.db_file) as conn:
+            conn.execute("UPDATE pr_events SET record_version = 3")
+            conn.execute("DELETE FROM pr_timeline WHERE number = 103")
+        assert service._migrate_rows() == 2
+        assert pr_row(service, 103)["record_version"] == 3
+
+
+class TestAboutTheseNumbers:
+    """The page says what it counts, how old the data is, and what the last
+    check against GitHub found."""
+
+    def test_before_any_check(self, service):
+        run_backfill(service)
+        about = service.get_json({"days": ["30"], "repo": [REPO]})["about"][0]
+        assert about["population"].startswith(f"Pull requests of {REPO} merged or closed in the window")
+        assert about["sources"].endswith("Not checked against GitHub yet (ci-observe-audit.timer)")
+        assert about["generated_at"] == "2026-10-15T00:00:00Z"
+
+    def test_what_the_check_found(self, prs, service):
+        run_backfill(service)
+        summary = {"checked_at": "2026-10-14T03:40:00Z", "days": 30, "e2e": None, "ok": False, "prs": {
+            "repo": REPO, "sample": 60, "sample_differ": 1, "merged_ok": False, "api_ok": True,
+            "order_violations": 1,
+            "order_examples": ["#2061 queued_at 2026-10-28T14:49:31Z before opened_at 2026-10-28T18:51:29Z"]}}
+        folder = Path(service.db_file).parent
+        (folder / prs.phases.AUDIT_FILE_NAME).write_text(json.dumps({"summary": summary}))
+        about = service.get_json({"days": ["30"], "repo": [REPO]})["about"][0]
+        assert about["sources"].endswith(
+            "Checked against GitHub 2026-10-14 03:40 UTC: 60 sampled merged pull requests, 1 differ;"
+            " the merged count differs")
+        assert "1 of 60 sampled pull requests differ from GitHub (ci-observe-audit.json lists them)" in about["missing"]
+        assert "the stored merged count differs from GitHub's search" in about["missing"]
+        assert "1 stored pull requests have their times out of order (#2061 queued_at" in about["missing"]
+
+    def test_an_empty_store_says_so(self, prs, tmp_path):
+        empty = prs.CIObservePRs(db_file=str(tmp_path / "none" / "prs.db"))
+        about = empty.get_json({"days": ["30"]}, now=NOW)["about"][0]
+        assert "prs.db has not been backfilled yet" in about["missing"]
+
+
 class TestIndexNumbers:
     def test_the_index_carries_kpis_and_a_weekly_trend(self, service):
         run_backfill(service)
@@ -2184,9 +2334,12 @@ class TestLifecycleStored:
         assert row["enqueued_at"] == row["queued_at"] == at("13:05")
         # A dismissed approval was still the first one.
         assert row["first_approval_at"] == at("11:00")
-        assert row["waiting_seconds"] == 2 * 3600 + 5 * 60, "first approval to the queue"
-        assert row["last_approval_wait_seconds"] == 5 * 60, "last approval before the queue to the queue"
         assert row["first_review_at"] == at("10:00")
+        # The review ends at the final approval, the last one before the first
+        # queue entry: rev-caas at 13:00, dismissed later by the rebase.
+        assert row["last_approval_at"] == at("13:00")
+        assert row["review_seconds"] == 3 * 3600, "first review to the final approval"
+        assert row["waiting_seconds"] == row["last_approval_wait_seconds"] == 5 * 60, "final approval to the queue"
         assert [segment["state"] for segment in json.loads(row["lifecycle"])][:4] == [
             "draft", "waiting_review", "with_author", "partly_approved",
         ]
@@ -2222,7 +2375,7 @@ class TestLifecycleStored:
         assert facts["Re-approved after a change"] == "2 (2 after a rebase); the longest took 30m"
         assert facts["Merge queue"] == "2 entries, removed once (failed checks)"
         assert facts["Merge when ready"] == "used"
-        assert facts["Last approval to the queue"] == "5m"
+        assert facts["Final approval to the queue"] == "5m"
 
     def test_a_row_stored_before_the_lifecycle_says_not_measured(self, prs, lifecycle_service):
         run_backfill(lifecycle_service)

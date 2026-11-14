@@ -4986,8 +4986,8 @@
     {
       "type": "stat",
       "id": 28,
-      "title": "Review to approval",
-      "description": "Median time from the first human review to the first approval. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "title": "Approved at the first review",
+      "description": "Share of the merged pull requests a person reviewed whose first human review was the approval; for these the review stage is zero. Bots and the machine accounts CI_OBSERVE_MACHINE_ACCOUNTS names are not reviewers. The Pull requests page shows the time from ready to the final approval. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 9,
         "y": 57,
@@ -5000,8 +5000,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "dtdhms",
-          "decimals": 1,
+          "unit": "percentunit",
+          "decimals": 0,
           "noValue": "not measured",
           "color": {
             "mode": "thresholds"
@@ -5052,7 +5052,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^review_median_s$/",
+          "fields": "/^approved_first_review_share$/",
           "values": false
         },
         "orientation": "auto",
@@ -5081,8 +5081,8 @@
           "root_selector": "kpis",
           "columns": [
             {
-              "selector": "review_median_s",
-              "text": "review_median_s",
+              "selector": "approved_first_review_share",
+              "text": "approved_first_review_share",
               "type": "number"
             }
           ]
@@ -5092,8 +5092,8 @@
     {
       "type": "stat",
       "id": 29,
-      "title": "First approval to queue",
-      "description": "Median time from the first approval to entering the merge queue. The Pull requests page also shows the last approval to queue. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "title": "Final approval to queue",
+      "description": "Median time from the final approval to entering the merge queue. The final approval is the last human approval before the pull request first entered the merge queue, or before the merge when it never queued. Population: pull requests merged in the selected repository. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 12,
         "y": 57,

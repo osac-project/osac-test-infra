@@ -5,6 +5,31 @@ For an introduction, start with [ci-observe/README.md](ci-observe/README.md).
 
 The application and the individual tests keep their current source and behavior.
 
+## Status at 2026-11-14
+
+A check against GitHub (`ci_observe_audit.py`) found the pages count what `ci-observe/model.md` says and store what GitHub says, with three faults, fixed here:
+
+- **Missing runs.** The exporter reads the 50 newest completed runs per poll and follows the runs it saw active. A burst of more than 50 runs between two polls, a restart or a failed poll lost runs for good: 61 of 5,309 counted suite runs in 28 days. It now also lists every completed run created in the last 48 hours every 30 minutes and at start, and stores what it does not have (`RECONCILE_INTERVAL`, `RECONCILE_HOURS`, `RECONCILE_MIN_RATE_LIMIT`; `github_actions_reconciled_runs_total` counts what it stored). Runs older than 48 hours are recovered once by hand:
+
+  ```bash
+  podman exec -e BACKFILL_DAYS=30 workflow-exporter python3 /app/workflow-exporter.py
+  ```
+- **Outdated results.** A stored run was read again only when its attempt number grew; a run that waited for approval (`action_required`) and then ran kept its first result. A completed run whose conclusion changed under the same attempt is now stored again. A suite row of a re-run merge-queue or pull-request run keeps the attempt its own test job ran in, so a suite that did not run again stays a first-try result.
+- **Machine accounts counted as people.** `osac-ci-bot` approvals and `redhat-chai-bot` reviews counted as human reviews. Bots, `[bot]` logins and the accounts `CI_OBSERVE_MACHINE_ACCOUNTS` names (`osac-ci-bot,redhat-chai-bot,openshift-ci-robot,openshift-cherrypick-robot` by default) are no longer reviewers or review requests.
+
+The Pull requests page also changed:
+
+- Review ends at the **final approval**: the last human approval before the pull request first entered the merge queue, or before the merge when it never queued. Waiting runs from the final approval to the queue. Most pull requests are approved by the first person who reviews them, so the review stage is 0 for them; **Approved at the first review** says how many, **Ready to final approval** how long getting approved takes. **Review to approval** and **First approval to queue** are gone; **Last approval to queue** is **Final approval to queue**.
+- An **About these numbers** table, as the run pages have.
+- Record format 4. A stored pull request no machine account reviewed is promoted in place; the others are read again, 100 per daily full pass. To read them now, run the catch-up below (`--refresh-old`).
+
+`ci-observe-audit.timer` runs the check daily at 03:35 UTC and writes `ci-observe-audit.json` next to the stores. Every page shows what it compared and what differed under **Data as of** and **Missing or partial data** in **About these numbers**. By hand:
+
+```bash
+podman exec workflow-exporter python3 /app/ci_observe_audit.py --days 30
+podman exec workflow-exporter python3 /app/ci_observe_audit.py --part prs --pr 2061 --sample 0
+```
+
 ## Status at 2026-11-07
 
 The ci-observe pages were redesigned around four across-runs pages. Built and checked against a seeded dataset; not yet deployed:

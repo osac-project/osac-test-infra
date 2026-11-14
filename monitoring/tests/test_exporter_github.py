@@ -358,6 +358,107 @@ class TestBackfill:
         assert exporter.backfill(2) == (6, 2)
 
 
+class TestReconcile:
+    """The runs the polling cannot see: bursts, restarts, failed polls, and a
+    result that changed under the same attempt."""
+
+    def calls(self, exporter, monkeypatch, result=(10, 2)):
+        seen = []
+
+        def fake(repo, since, until, wait=True):
+            seen.append((repo, until - since, wait))
+            return result
+
+        monkeypatch.setattr(exporter, "_backfill_range", fake)
+        return seen
+
+    def test_it_runs_on_the_first_cycle_then_every_interval(self, exporter, wfe, monkeypatch):
+        seen = self.calls(exporter, monkeypatch)
+        clock = [1000.0]
+        monkeypatch.setattr(wfe.time, "monotonic", lambda: clock[0])
+        assert exporter._reconcile_if_due(["osac", "osac-test-infra"]) == 4
+        assert seen == [("osac", timedelta(hours=wfe.RECONCILE_HOURS), False),
+                        ("osac-test-infra", timedelta(hours=wfe.RECONCILE_HOURS), False)]
+        clock[0] += wfe.RECONCILE_INTERVAL - 1
+        assert exporter._reconcile_if_due(["osac"]) is None
+        clock[0] += 1
+        assert exporter._reconcile_if_due(["osac"]) == 2
+        assert len(seen) == 3
+
+    def test_it_waits_while_the_budget_is_low(self, exporter, wfe, monkeypatch):
+        seen = self.calls(exporter, monkeypatch)
+        exporter._rate_limit_remaining = wfe.RECONCILE_MIN_RATE_LIMIT - 1
+        assert exporter._reconcile_if_due(["osac"]) is None
+        assert seen == []
+        exporter._rate_limit_remaining = wfe.RECONCILE_MIN_RATE_LIMIT
+        assert exporter._reconcile_if_due(["osac"]) == 2
+
+    def test_it_counts_what_it_stored(self, exporter, wfe, monkeypatch):
+        self.calls(exporter, monkeypatch, result=(10, 3))
+        before = wfe.reconciled_runs.labels(org=wfe.ORG, repo="osac")._value.get()
+        exporter._reconcile_if_due(["osac"])
+        assert wfe.reconciled_runs.labels(org=wfe.ORG, repo="osac")._value.get() == before + 3
+
+    def test_a_missed_run_and_an_outdated_result_are_stored(self, exporter, wfe, github, monkeypatch):
+        since = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        until = datetime(2026, 10, 1, 4, tzinfo=timezone.utc)
+        exporter._upsert_job(make_job(id=1, conclusion="success"))
+        exporter._upsert_job(make_job(id=3, conclusion="action_required"))
+        route = (f"/repos/{wfe.ORG}/osac/actions/runs?status=completed&per_page=100"
+                 f"&created={iso(since)}..{iso(until)}")
+        github.add(route, runs_page(make_run(id=1), make_run(id=2), make_run(id=3, conclusion="failure")))
+        for run_id in (2, 3):
+            github.add(f"/repos/{wfe.ORG}/osac/actions/runs/{run_id}/jobs?filter=latest&per_page=30",
+                       FakeResponse(payload={"jobs": []}))
+        assert exporter._backfill_range("osac", since, until, wait=False) == (3, 2)
+        got = {r["id"]: r["conclusion"] for r in rows(exporter, "SELECT id, conclusion FROM jobs")}
+        assert got == {1: "success", 2: "success", 3: "failure"}
+
+    def test_an_exhausted_budget_ends_the_pass_without_sleeping(self, exporter, wfe, github, monkeypatch):
+        slept = []
+        monkeypatch.setattr(wfe.time, "sleep", slept.append)
+        since = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        until = datetime(2026, 10, 1, 4, tzinfo=timezone.utc)
+        limited = FakeResponse(403, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "0"})
+        route = (f"/repos/{wfe.ORG}/osac/actions/runs?status=completed&per_page=100"
+                 f"&created={iso(since)}..{iso(until)}")
+        github.add(route, limited)
+        assert exporter._backfill_range("osac", since, until, wait=False) == (0, 0)
+        github.add("/more", limited)
+        assert exporter._backfill_page("osac", f"{wfe.API_URL}/more", wait=False) == (0, 0)
+        assert slept == []
+
+    def test_collect_reconciles_after_the_poll(self, exporter, wfe, monkeypatch):
+        monkeypatch.setattr(wfe, "REPOS_FILTER", ["osac"])
+        monkeypatch.setattr(exporter, "_refresh_pr_map", lambda repos: None)
+        monkeypatch.setattr(exporter, "_backfill_missing_pr_data", lambda: None)
+        monkeypatch.setattr(exporter, "_backfill_queue_data_if_needed", lambda: None)
+        monkeypatch.setattr(exporter, "_run_count", lambda repo, status: 0)
+        monkeypatch.setattr(exporter, "_recent_completed", lambda repo: [])
+        monkeypatch.setattr(exporter, "_backfill_timelines_if_needed", lambda: None)
+        asked = []
+        monkeypatch.setattr(exporter, "_reconcile_if_due", lambda repos: asked.append(list(repos)))
+        exporter.collect()
+        assert asked == [["osac"]]
+
+    def test_a_failed_reconciliation_does_not_stop_the_cycle(self, exporter, wfe, monkeypatch):
+        monkeypatch.setattr(wfe, "REPOS_FILTER", ["osac"])
+        monkeypatch.setattr(exporter, "_refresh_pr_map", lambda repos: None)
+        monkeypatch.setattr(exporter, "_backfill_missing_pr_data", lambda: None)
+        monkeypatch.setattr(exporter, "_backfill_queue_data_if_needed", lambda: None)
+        monkeypatch.setattr(exporter, "_run_count", lambda repo, status: 0)
+        monkeypatch.setattr(exporter, "_recent_completed", lambda repo: [])
+        timelines = []
+        monkeypatch.setattr(exporter, "_backfill_timelines_if_needed", lambda: timelines.append(True))
+
+        def boom(repos):
+            raise RuntimeError("GitHub is down")
+
+        monkeypatch.setattr(exporter, "_reconcile_if_due", boom)
+        exporter.collect()
+        assert timelines == [True]
+
+
 class TestInitialLoad:
     def test_skips_non_empty_db(self, exporter, github):
         exporter._upsert_job(make_job())

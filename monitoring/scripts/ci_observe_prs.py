@@ -125,9 +125,14 @@ DEFAULT_INDEX_DAYS = 30
 # the new counts fill in, a bounded number per pass so the shared GitHub
 # budget is not spent in one hour. Version 3 adds the lifecycle: the event
 # list, the code-owner teams, the size of the change and the merge-queue
-# entries as GitHub records them. --refresh-old lifts the per-pass bound
-# for a one-time catch-up.
-RECORD_VERSION = 3
+# entries as GitHub records them. Version 4 counts the machine accounts
+# below as bots and ends the review stage at the final approval; a version 3
+# row no machine account reviewed is promoted in place (_migrate_rows).
+# --refresh-old lifts the per-pass bound for a one-time catch-up.
+RECORD_VERSION = 4
+# The format that added the lifecycle columns, which a version 4 row derives
+# its review and waiting stages from.
+LIFECYCLE_RECORD_VERSION = 3
 # The format that added the rebase and E2E counts. A version 2 row has them
 # even when its lifecycle is not measured yet.
 COUNTS_RECORD_VERSION = 2
@@ -180,6 +185,17 @@ MERGE_QUEUE_COMMENT_MARKERS = ("merge queue", "merge group", "gh-readonly-queue"
 MERGE_QUEUE_COMMENT_MAX_CHARS = 240
 
 BOT_LOGIN_RE = re.compile(r"\[bot\]$")
+# Accounts GitHub does not mark as bots that are machines all the same: the CI
+# account that approves, the automated reviewer, the Prow robots. Their
+# reviews, approvals and review requests are not a person's.
+# CI_OBSERVE_MACHINE_ACCOUNTS replaces the list (comma-separated logins); the
+# audit (ci_observe_audit.py) reads the same variable with the same default.
+DEFAULT_MACHINE_ACCOUNTS = "osac-ci-bot,redhat-chai-bot,openshift-ci-robot,openshift-cherrypick-robot"
+MACHINE_ACCOUNTS = frozenset(
+    login.strip().lower()
+    for login in os.getenv("CI_OBSERVE_MACHINE_ACCOUNTS", DEFAULT_MACHINE_ACCOUNTS).split(",")
+    if login.strip()
+)
 
 STAGES = (
     ("authoring", "Authoring"),
@@ -211,7 +227,8 @@ DERIVATION = {
         "reviewers when GitHub dismissed the approval or when an approval follows before the next queue "
         "entry (a re-review). In the merge queue from GitHub's added event; Out of the queue from a removal "
         "other than the merge, until it is added again. The author's own replies in review threads are not "
-        "reviews."
+        "reviews, and neither are the reviews of bots and of the machine accounts CI_OBSERVE_MACHINE_ACCOUNTS "
+        "names (osac-ci-bot, redhat-chai-bot, openshift-ci-robot, openshift-cherrypick-robot by default)."
     ),
     "working_groups": (
         "Working groups that had to approve are the code-owner teams GitHub reports on the pull request: the "
@@ -505,12 +522,18 @@ def _unique_runs(runs):
     return list(unique.values())
 
 
+def is_machine_login(login):
+    """A GitHub App ("name[bot]") or one of MACHINE_ACCOUNTS."""
+    login = (login or "").lower()
+    return bool(BOT_LOGIN_RE.search(login)) or login in MACHINE_ACCOUNTS
+
+
 def is_bot(user):
     if not user:
         return False
     if user.get("type") == "Bot":
         return True
-    return bool(BOT_LOGIN_RE.search(user.get("login") or ""))
+    return is_machine_login(user.get("login"))
 
 
 def merge_queue_pr_number(branch):
@@ -952,7 +975,7 @@ def lifecycle_events(pr, timeline, reviews, commits, graph, attempts):
             team = event.get("requested_team") or {}
             slug = team.get("slug") or team.get("name") or ""
             reviewer = slug or _login(event.get("requested_reviewer"))
-            if reviewer and not reviewer.endswith("[bot]"):
+            if reviewer and (slug or not is_machine_login(reviewer)):
                 add(at, "review_requested", actor, reviewer, team=bool(slug))
         elif kind == "head_ref_force_pushed":
             moment = parse_iso(at)
@@ -1736,6 +1759,7 @@ class CIObservePRs:
             raise ValueError(f"unknown backfill mode: {mode!r}")
         now = now or datetime.now(UTC)
         self._init_db()
+        self._migrate_rows()
         self.api_calls = 0
         self.rate_limit_remaining = None
         self.graphql_calls = 0
@@ -2058,6 +2082,48 @@ class CIObservePRs:
             runs.extend(page.get("workflow_runs") or [])
         return [run for run in runs if run.get("event") == "merge_group"]
 
+    def _migrate_rows(self):
+        """Bring older rows to record format 4 without GitHub where their own
+        columns allow it. Every older row gets its review and waiting stages
+        from its final approval (NULL when it has none, until it is read
+        again). A format 3 row whose events name no machine account computes
+        the same under format 4, so it becomes format 4; one a machine
+        account reviewed, or was asked to review, is read again like any
+        older row. Returns the number of rows promoted."""
+        machines = sorted(MACHINE_ACCOUNTS) or [""]
+        marks = ", ".join("?" * len(machines))
+        with self._db() as conn:
+            older = conn.execute(
+                "SELECT repo, number, first_review_at, last_approval_at, queued_at FROM pr_events "
+                "WHERE COALESCE(record_version, 1) < ?",
+                (RECORD_VERSION,),
+            ).fetchall()
+            conn.executemany(
+                "UPDATE pr_events SET review_seconds = ?, waiting_seconds = ? WHERE repo = ? AND number = ?",
+                [
+                    (seconds_between(row["first_review_at"], row["last_approval_at"]),
+                     ordered_seconds(row["last_approval_at"], row["queued_at"]), row["repo"], row["number"])
+                    for row in older
+                ],
+            )
+            promoted = conn.execute(
+                f"""
+                UPDATE pr_events SET record_version = ?
+                WHERE record_version = ?
+                  AND EXISTS (SELECT 1 FROM pr_timeline t WHERE t.repo = pr_events.repo AND t.number = pr_events.number)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM pr_timeline t
+                      WHERE t.repo = pr_events.repo AND t.number = pr_events.number
+                        AND ((t.kind = 'review' AND LOWER(t.actor) IN ({marks}))
+                             OR (t.kind = 'review_requested' AND LOWER(t.detail) IN ({marks})))
+                  )
+                """,
+                (RECORD_VERSION, LIFECYCLE_RECORD_VERSION, *machines, *machines),
+            ).rowcount
+        if promoted:
+            logger.info("Promoted %d stored pull requests to record format %d in place", promoted, RECORD_VERSION)
+        return promoted
+
     def _is_stored(self, repo, number):
         """Whether the pull request is stored in the current record format,
         with its code-owner teams read.
@@ -2183,8 +2249,7 @@ class CIObservePRs:
             for event in timeline
             if event.get("event") == "review_requested"
         }
-        review_requesters.discard(None)
-        review_requesters.discard("")
+        review_requesters = {login for login in review_requesters if login and not is_machine_login(login)}
 
         labels = set()
         for event in timeline:
@@ -2223,7 +2288,9 @@ class CIObservePRs:
             "closed_at": closed_at,
             "last_attempt_at": None,
             "authoring_seconds": seconds_between(pr.get("created_at"), first_review_at),
-            "review_seconds": seconds_between(first_review_at, first_approval_at),
+            # The review stage ends at the final approval, which the lifecycle
+            # gives; _write_pr and the live read fill it.
+            "review_seconds": None,
             "waiting_seconds": None,
             "queue_seconds": None,
             "merged_seconds": None,
@@ -2456,6 +2523,9 @@ class CIObservePRs:
         """One transaction: the PR row, then its attempts, their stage
         timings and the event list. Replacing by key makes a --force re-run
         idempotent."""
+        # Review runs from the first human review to the final approval: the
+        # last one before the merge queue (or before the merge or the close).
+        record["review_seconds"] = seconds_between(record.get("first_review_at"), record.get("last_approval_at"))
         if attempts or record.get("enqueued_at"):
             completed = [a["completed_at"] for a in attempts if a["completed_at"]]
             record["last_attempt_at"] = max(completed) if completed else None
@@ -2464,7 +2534,7 @@ class CIObservePRs:
             record["queued_at"] = record.get("enqueued_at") or attempts[0]["started_at"]
             # An approval after the queue entry (a repository that allows
             # it, an admin) is not a zero wait: it is no wait to measure.
-            record["waiting_seconds"] = ordered_seconds(record["first_approval_at"], record["queued_at"])
+            record["waiting_seconds"] = ordered_seconds(record.get("last_approval_at"), record["queued_at"])
             # The queue ends when its last attempt ends. The merge then runs
             # from that moment to merged_at; using merged_at for both would
             # count the same time twice.
@@ -2646,7 +2716,12 @@ class CIObservePRs:
 
     def _empty_index_document(self, days, now):
         freshness = self._never_freshness(now)
+        notes = [
+            "prs.db has not been backfilled yet: run monitoring/scripts/ci_observe_prs.py "
+            "--days 60. This is an empty dataset, not a repository with no pull requests."
+        ]
         return {
+            "about": self._about(now, days, None, notes, freshness),
             "mode": "index",
             "generated_at": _utc_now(),
             "days": days,
@@ -2673,10 +2748,7 @@ class CIObservePRs:
             "pr_state_message": NO_SELECTION_MESSAGE,
             "status_message": "",
             "source": "none",
-            "notes": [
-                "prs.db has not been backfilled yet: run monitoring/scripts/ci_observe_prs.py "
-                "--days 60. This is an empty dataset, not a repository with no pull requests."
-            ],
+            "notes": notes,
             "states": _states_document(),
             "derivation": DERIVATION,
             **self._freshness_fields(now, freshness),
@@ -2754,6 +2826,25 @@ class CIObservePRs:
             "ok": bool(last["ok"]),
             "message": message,
         }
+
+    def _about(self, now, days, repo, notes, freshness):
+        """The page's "About these numbers" row, as the run pages have it:
+        what is counted, the window, what is missing, the data's age and the
+        last check against GitHub (ci_observe_audit.py)."""
+        audit = phases.read_audit_summary(os.path.join(os.path.dirname(self.db_file), phases.AUDIT_FILE_NAME))
+        checked, found = phases.audit_lines(audit, now, "prs")
+        missing = [*notes, *found]
+        return [{
+            "population": (
+                f"Pull requests of {repo or 'every repository'} merged or closed in the window, as the hourly "
+                "backfill read them from GitHub. Reviews by bots and by the machine accounts "
+                "CI_OBSERVE_MACHINE_ACCOUNTS names are not human reviews."
+            ),
+            "window": f"{now - timedelta(days=days):%Y-%m-%d %H:%M} to {now:%Y-%m-%d %H:%M} UTC",
+            "missing": "; ".join(missing) or "Nothing is missing in this window.",
+            "sources": f"{freshness['message']} {checked}",
+            "generated_at": _iso(now),
+        }]
 
     def _freshness_fields(self, now, freshness=None):
         freshness = freshness or self._freshness(now)
@@ -2880,16 +2971,12 @@ class CIObservePRs:
         merge_runs = [run for run in runs if run.get("event") == "merge_group"]
         if merge_runs:
             record["queued_at"] = min(run["created_at"] for run in merge_runs)
-            record["waiting_seconds"] = seconds_between(record["first_approval_at"], record["queued_at"])
             done = max((run.get("done_at_ms") or 0) for run in merge_runs)
             record["last_attempt_at"] = _iso_from_ms(done) if done else None
             # A pull request still in the queue runs to now; an ended one
             # stops at its last attempt, leaving the merge as its own stage.
             queue_end = _iso(now) if record["state"] == "open" else record["last_attempt_at"]
             record["queue_seconds"] = seconds_between(record["queued_at"], queue_end)
-        elif record["state"] == "open" and record["first_approval_at"]:
-            # Approved but not queued yet: the wait is still running.
-            record["waiting_seconds"] = seconds_between(record["first_approval_at"], _iso(now))
         if record["state"] == "merged" and record["last_attempt_at"] and record["merged_at"]:
             record["merged_seconds"] = seconds_between(record["last_attempt_at"], record["merged_at"])
         record["final_stage"] = final_stage(
@@ -2901,6 +2988,15 @@ class CIObservePRs:
         graph = self._fetch_lifecycle(repo, number)
         live_attempts = self._attempts_from_runs(repo, number, runs)
         record["events"] = self._apply_lifecycle(record, live, timeline, reviews, commits, graph, live_attempts, now)
+        # Review ends at the final approval, which the lifecycle gives: the
+        # last approval before the queue, or the latest one so far.
+        final = record.get("last_approval_at")
+        record["review_seconds"] = seconds_between(record.get("first_review_at"), final)
+        if record.get("queued_at"):
+            record["waiting_seconds"] = seconds_between(final, record["queued_at"])
+        elif record["state"] == "open" and final:
+            # Approved but not queued yet: the wait is still running.
+            record["waiting_seconds"] = seconds_between(final, _iso(now))
         record["last_approval_wait_seconds"] = ordered_seconds(
             record.get("last_approval_at"), record.get("enqueued_at") or record.get("queued_at")
         )
@@ -3369,6 +3465,7 @@ class CIObservePRs:
                 + "."
             )
         return {
+            "about": self._about(now, days, repo, notes, freshness),
             "mode": "index",
             "generated_at": _utc_now(),
             "days": days,
@@ -3420,20 +3517,20 @@ def _stages(pr):
     # as-of moment, the same moment its stat measures to.
     as_of = pr.get("as_of") if pr.get("state") == "open" else None
     waiting_end = pr.get("queued_at")
-    if as_of and pr.get("first_approval_at") and not pr.get("queued_at"):
+    if as_of and pr.get("last_approval_at") and not pr.get("queued_at"):
         waiting_end = as_of
     queue_end = as_of if as_of and pr.get("queued_at") else pr.get("last_attempt_at")
     boundaries = {
         "authoring": (pr.get("opened_at"), pr.get("first_review_at"), pr.get("authoring_seconds")),
-        "review": (pr.get("first_review_at"), pr.get("first_approval_at"), pr.get("review_seconds")),
-        "waiting": (pr.get("first_approval_at"), waiting_end, pr.get("waiting_seconds")),
+        "review": (pr.get("first_review_at"), pr.get("last_approval_at"), pr.get("review_seconds")),
+        "waiting": (pr.get("last_approval_at"), waiting_end, pr.get("waiting_seconds")),
         "queue": (pr.get("queued_at"), queue_end, pr.get("queue_seconds")),
         "merged": (pr.get("last_attempt_at"), pr.get("merged_at"), pr.get("merged_seconds")),
     }
     reasons = {
         "authoring": "no human review after the pull request opened",
         "review": "the pull request was never reviewed by a human",
-        "waiting": "the pull request was never approved by a human",
+        "waiting": "no human approval before the merge queue",
         "queue": "the pull request has no merge_group attempt",
         "merged": "the pull request did not merge",
     }
@@ -3454,6 +3551,15 @@ def _stages(pr):
             state = "not_reached"
         elif seconds is None:
             state = "unknown"
+            if key == "review" and not end:
+                # Reviewed, and either no approval came before the queue (or
+                # the merge, or the close), or the lifecycle that gives the
+                # final approval has not been read yet.
+                reasons["review"] = (
+                    "the backfill has not read this pull request's lifecycle yet"
+                    if pr.get("first_approval_at") and not pr.get("lifecycle_seconds")
+                    else "no human approval before the merge queue"
+                )
         else:
             state = "measured"
         stages.append(
@@ -3586,6 +3692,20 @@ def _kpis(rows, attempts):
         "waiting_median_s": _median(row.get("waiting_seconds") for row in merged),
         "queue_median_s": _median(row.get("queue_seconds") for row in merged),
         "merge_median_s": _median(row.get("merged_seconds") for row in merged),
+        # Most pull requests are approved by the first person who reviews
+        # them, so the review stage reads 0 for them. These say how often that
+        # is, and how long getting approved takes from ready for review.
+        "approved_first_review_share": _share(
+            row.get("first_approval_at") == row["first_review_at"] for row in merged if row.get("first_review_at")
+        ),
+        "approved_first_review": sum(
+            1 for row in merged if row.get("first_review_at") and row.get("first_approval_at") == row["first_review_at"]
+        ),
+        "reviewed": sum(1 for row in merged if row.get("first_review_at")),
+        "ready_to_approval_median_s": _median(
+            seconds_between(row.get("ready_at") or row.get("opened_at"), row.get("last_approval_at"))
+            for row in lifecycle
+        ),
         "queued_share": _share(queued(row) for row in merged),
         "ejected_share": _share(ejected(row) for row in merged if queued(row)),
         "ejections": sum(outcomes(row).count("ejected") for row in merged),
@@ -4000,7 +4120,7 @@ def facts_document(pr):
         ("Approvals dismissed", count("approvals_dismissed")),
         ("Force pushes", str(pr.get("force_push_count")) if pr.get("force_push_count") is not None else not_yet),
         ("Base branch merged in", count("merge_commits")),
-        ("Last approval to the queue", human_duration(last_wait) if last_wait is not None else "not measured"),
+        ("Final approval to the queue", human_duration(last_wait) if last_wait is not None else "not measured"),
         ("Merge queue", queue),
         ("Merge when ready", ("used" if pr.get("auto_merge") else "not used") if measured else not_yet),
     ]

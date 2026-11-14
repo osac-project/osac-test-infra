@@ -594,3 +594,75 @@ def run_phases(timeline: list | None, steps: list | None = None) -> dict:
         phases[step_phase(step.get("name"))] += float(seconds)
         measured = True
     return {"phases": phases, "queue_s": None, "total_s": None, "measured": measured, "source": "steps"}
+
+
+# ---------------------------------------------------------------------------
+# The daily check against GitHub
+# ---------------------------------------------------------------------------
+# ci_observe_audit.py (ci-observe-audit.timer) writes its result next to the
+# stores. The pages print its summary; they compute nothing from it.
+AUDIT_FILE_NAME = "ci-observe-audit.json"
+# The timer runs daily; a check older than this is late.
+AUDIT_LATE_HOURS = 36
+
+
+def read_audit_summary(path: str) -> dict | None:
+    """The summary block of the last check, or None when there is none or
+    the file cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            summary = json.load(handle).get("summary")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return summary if isinstance(summary, dict) else None
+
+
+def audit_lines(summary: dict | None, now: datetime, part: str) -> tuple[str, list[str]]:
+    """(source, notes) for one page: the line next to "Data as of" and what
+    the check found, for "Missing or partial data". part is "e2e" for the run
+    pages and "prs" for the Pull requests page."""
+    block = (summary or {}).get(part)
+    checked = parse_time((summary or {}).get("checked_at"))
+    if not block or checked is None:
+        return "Not checked against GitHub yet (ci-observe-audit.timer)", []
+    when = f"{checked:%Y-%m-%d %H:%M} UTC"
+    notes = []
+    hours = (now - checked).total_seconds() / 3600
+    if hours > AUDIT_LATE_HOURS:
+        notes.append(f"the last check against GitHub ran {hours:.0f} h ago ({when}); the daily check is late")
+    if part == "e2e":
+        listed_from = parse_time(block.get("listed_from"))
+        since = f" since {listed_from:%Y-%m-%d}" if listed_from else ""
+        source = (f"Checked against GitHub {when}: {block.get('runs_listed', 0):,} completed suite runs{since}, "
+                  f"{block.get('runs_missing', 0):,} not stored; {block.get('sample', 0)} sampled runs, "
+                  f"{block.get('sample_differ', 0)} differ")
+        if block.get("runs_missing"):
+            notes.append(f"the check against GitHub ({when}) found {block['runs_missing']:,} of "
+                         f"{block.get('runs_listed', 0):,} completed suite runs{since} not stored")
+        if block.get("runs_other_result"):
+            notes.append(f"the check against GitHub ({when}) found {block['runs_other_result']:,} stored runs "
+                         "with an outdated result or attempt")
+        if block.get("sample_differ"):
+            notes.append(f"{block['sample_differ']} of {block.get('sample', 0)} sampled runs differ from GitHub "
+                         f"({AUDIT_FILE_NAME} lists them)")
+        if block.get("recount_ok") is False:
+            notes.append("the Overview's counts differ from a recount of the stored rows by the documented scope")
+        if block.get("lists_incomplete"):
+            notes.append(f"GitHub could not list every run of {block['lists_incomplete']} workflows; "
+                         "the check covers the rest")
+        return source, notes
+    merged = "matches" if block.get("merged_ok") else "differs"
+    source = (f"Checked against GitHub {when}: {block.get('sample', 0)} sampled merged pull requests, "
+              f"{block.get('sample_differ', 0)} differ; the merged count {merged}")
+    if block.get("sample_differ"):
+        notes.append(f"{block['sample_differ']} of {block.get('sample', 0)} sampled pull requests differ from "
+                     f"GitHub ({AUDIT_FILE_NAME} lists them)")
+    if block.get("merged_ok") is False:
+        notes.append("the stored merged count differs from GitHub's search")
+    if block.get("api_ok") is False:
+        notes.append("a number on this page differs from a recount of its stored rows")
+    if block.get("order_violations"):
+        examples = "; ".join(block.get("order_examples") or [])
+        notes.append(f"{block['order_violations']} stored pull requests have their times out of order"
+                     + (f" ({examples})" if examples else ""))
+    return source, notes

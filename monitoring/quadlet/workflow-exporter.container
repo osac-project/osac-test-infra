@@ -70,6 +70,7 @@ Volume=%h/.monitoring-server/scripts/ci_observe_prs.py:/app/ci_observe_prs.py:ro
 Volume=%h/.monitoring-server/scripts/ci_observe_phases.py:/app/ci_observe_phases.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_insights.py:/app/ci_observe_insights.py:ro,Z
 Volume=%h/.monitoring-server/scripts/ci_observe_spans.py:/app/ci_observe_spans.py:ro,Z
+Volume=%h/.monitoring-server/scripts/ci_observe_audit.py:/app/ci_observe_audit.py:ro,Z
 # Mount data directory for cache persistence across restarts
 Volume=%h/.monitoring-server/data:/data:Z
 Environment=CACHE_DIR=/data

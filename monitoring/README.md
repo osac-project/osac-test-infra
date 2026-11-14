@@ -103,6 +103,7 @@ starts from that deploy. Every panel and the daily digest filter on
 | `org-runner-exporter` | central only | 127.0.0.1:9102 | GitHub Actions runner online/offline status (org-wide, via GitHub API) |
 | `workflow-exporter` | central only | 127.0.0.1:9103 | Workflow queue depth, run history/duration, failed-step counts (via GitHub API); SQLite-backed, 30-day retention. Also serves the JSON API the ci-observe dashboards read, including `/api/ci-observe/runs`, which joins the run history to Tempo's recording ids. The container runs with `Network=host` so it can reach the host's Tempo on 127.0.0.1:3210 (`CI_OBSERVE_TEMPO_URL` overrides it); `BIND_ADDRESS=127.0.0.1` keeps its own API off the network interfaces. |
 | `service-health-textfile.timer` | every machine | n/a | Writes `osac_service_active` textfile-collector metrics every 30s |
+| `ci-observe-audit.timer` | central only | n/a | Daily at 03:35 UTC: `ci_observe_audit.py` checks the ci-observe stores and API against GitHub (every completed E2E run of 28 days listed, a sample of runs and pull requests compared field by field, the Overview recounted) and writes `ci-observe-audit.json`, which every ci-observe page shows under **About these numbers** |
 | `monitoring-tunnel@<host>--<port>.service` | central only, one per agent | n/a | Persistent SSH tunnel forwarding an agent's `node_exporter:9100` and `haproxy_exporter:9104` to local ports `<port>`/`<port>+1` on the central machine |
 | `ci-observe-tempo210` | central only | 127.0.0.1:3210 (API), 14418 (OTLP) | Tempo 2.10 traces backend for ci-observe, separate from the LGTM bundle (Tempo 3.1.1's TraceQL search bug grafana/tempo#8054 drops ~1/3 of matching spans). The LGTM bundle's Tempo stays up on 3200 as the read-only archive datasource `ci-observe-traces-archive`. See [The ci-observe live OTLP ingest](#the-ci-observe-live-otlp-ingest-caddy-vhost--haproxy-route). |
 | `otelcol-router.service` | central only (host service, root) | 127.0.0.1:14318 (OTLP), 127.0.0.1:18888 (self-metrics) | Splits the runner fleet's OTLP pushes by signal: traces → `ci-observe-tempo210` on 14418, logs + metrics → the ci-observe LGTM bundle's OTLP receiver on 4318. A host process on purpose (rootless podman/pasta cross-container networking silently ate OTLP in earlier container-based router attempts); deployed as root by `scripts/deploy-otelcol-router.sh`, not by `monitoring-setup.sh`. Scraped by central Prometheus for exporter errors and accepted/sent counters. |
@@ -473,7 +474,8 @@ the shortest store shows gaps, not zeros.
 | Kubernetes events | Loki | 30 days |
 | Logs (adapter, router) | Loki | 30 days |
 | Run artifact: failed tests, JUnit, `failure.json`, pod logs, cluster snapshots | GitHub | 30 days |
-| Job history | workflow exporter SQLite | 30 days |
+| Job history | workflow exporter SQLite | 30 days; every 30 minutes the exporter lists the completed runs of the last 48 hours and stores what its polling missed |
+| The last check against GitHub | `ci-observe-audit.json` next to the stores | until the next daily check |
 | VMaaS, CaaS and BMaaS suite runs with their job timelines | `trends.db` (`suite_runs`) | 90 days (`CI_OBSERVE_KEEP_DAYS`) |
 | Per-test results and the daily rollup | `trends.db` | 90 days |
 | Per-test time split, waits and fixtures from the traces | `trends.db` (span rollup) | 90 days |
