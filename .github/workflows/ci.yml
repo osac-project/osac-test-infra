@@ -28,6 +28,8 @@ jobs:
   script-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      OSAC_INSTALLER_DIR: ${{ github.workspace }}/.installer-contract/osac-installer
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
         with:
@@ -37,6 +39,26 @@ jobs:
           python-version: "3.14"
       - name: Install script test dependencies
         run: python3 -m pip install 'PyYAML>=6.0,<7'
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          repository: osac-project/osac
+          ref: 4ad7bc3fd8fe4e90c05b84e235973f1338b2a261
+          path: .installer-contract
+          persist-credentials: false
+      - name: Prepare LVMS render contract dependencies
+        run: |
+          set -euo pipefail
+          tools="${RUNNER_TEMP}/lvms-contract"
+          mkdir -p "${tools}/bin"
+          curl --retry 5 -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o "${tools}/helm.tar.gz"
+          echo "ee88b3c851ae6466a3de507f7be73fe94d54cbf2987cbaa3d1a3832ea331f2cd  ${tools}/helm.tar.gz" | sha256sum -c -
+          tar -xzf "${tools}/helm.tar.gz" -C "${tools}/bin" --strip-components=1 linux-amd64/helm
+          curl --retry 5 -fsSL https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -o "${tools}/bin/yq"
+          echo "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  ${tools}/bin/yq" | sha256sum -c -
+          chmod +x "${tools}/bin/yq"
+          export PATH="${tools}/bin:${PATH}"
+          echo "${tools}/bin" >> "$GITHUB_PATH"
+          make -C "$OSAC_INSTALLER_DIR" helm-infra-deps
       - name: Python script tests
         run: |
           set -euo pipefail
@@ -55,6 +77,7 @@ jobs:
           python3 -I .github/scripts/netris_catalog_test.py
           python3 -I .github/scripts/export_vm_allowlist_test.py
           python3 -I .github/scripts/guest_ingress_vip_range_test.py
+          python3 -I .github/scripts/test_full_ci_lvms.py
       - name: Shell script tests
         run: |
           set -euo pipefail
