@@ -11,10 +11,12 @@ readable from its name.
 
 Run directly: python3 .github/scripts/manage-virtual-bmh-vms.py --help
 """
+
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -49,6 +51,67 @@ BMC_ADDRESS_TEMPLATE = "redfish-virtualmedia+http://{host}:{port}/redfish/v1/Sys
 # Storage files are named after the VM: <name>.qcow2 and <name>-VARS.fd.
 DISK_SUFFIX = ".qcow2"
 VARS_SUFFIX = "-VARS.fd"
+DATA_DISK_SUFFIX = "-data.qcow2"
+
+
+def data_disk_size(value: str) -> str:
+    if not re.fullmatch(r"[1-9][0-9]*[kMGT]?", value):
+        raise argparse.ArgumentTypeError("data disk size must be a positive integer with optional k/M/G/T suffix")
+    return value
+
+
+def validate_data_files(inventory: RawInventory, disk_dir: Path) -> None:
+    """Reject unrecorded data remnants and invalid owned files without commands or mutation."""
+    known_names = inventory.host_names()
+    if disk_dir.exists() or disk_dir.is_symlink():
+        if not disk_dir.is_dir():
+            fail(f"data disk directory '{disk_dir}' is not a directory")
+        for path in disk_dir.iterdir():
+            if not path.name.endswith(DATA_DISK_SUFFIX):
+                continue
+            name = path.name.removesuffix(DATA_DISK_SUFFIX)
+            if inventory.name_prefix:
+                if is_group_host_name(name, inventory.name_prefix) and name not in known_names:
+                    fail(f"unrecorded data storage '{path}'; refusing to create more VMs")
+            elif re.fullmatch(r"virtual-bmh-[0-9a-f]{8}-[0-9a-f]{2}", name):
+                fail(f"data storage '{path}' has ambiguous ownership without an inventory group")
+    for host in inventory.hosts:
+        for suffix in (DISK_SUFFIX, DATA_DISK_SUFFIX, VARS_SUFFIX):
+            path = disk_dir / f"{host.name}{suffix}"
+            if not path.is_file() or path.is_symlink():
+                fail(f"VM '{host.name}' has incompatible owned storage '{path}'")
+
+
+def validate_data_storage(host: Host, disk_dir: Path) -> None:
+    result = run_virsh(["dumpxml", host.name], capture=True)
+    root = ET.fromstring(result.stdout)
+    expected = {"vda": disk_dir / f"{host.name}{DISK_SUFFIX}", "vdb": disk_dir / f"{host.name}{DATA_DISK_SUFFIX}"}
+    for target, path in expected.items():
+        devices = [
+            device
+            for device in root.findall("./devices/disk")
+            if device.find("target") is not None and device.find("target").get("dev") == target
+        ]
+        if len(devices) != 1:
+            fail(f"VM '{host.name}' has incompatible {target} storage")
+        device = devices[0]
+        source, driver = device.find("source"), device.find("driver")
+        if (
+            device.get("type") != "file"
+            or device.get("device") != "disk"
+            or device.find("target").get("bus") != "virtio"
+            or source is None
+            or source.get("file") != str(path)
+            or driver is None
+            or driver.get("type") != "qcow2"
+            or device.find("readonly") is not None
+            or not path.is_file()
+            or path.is_symlink()
+        ):
+            fail(f"VM '{host.name}' has incompatible {target} storage")
+    nvram = disk_dir / f"{host.name}{VARS_SUFFIX}"
+    if root.findtext("./os/nvram") != str(nvram) or not nvram.is_file() or nvram.is_symlink():
+        fail(f"VM '{host.name}' has incompatible NVRAM storage")
 
 
 def fail(message: str) -> None:
@@ -76,11 +139,7 @@ def generate_vm_token(hosts: list[Host], prefix: str) -> str:
     a VM's MAC is readable from its name, and the fixed MAC prefix caps
     the group at 256 VMs.
     """
-    used = {
-        host.name[len(prefix) + 1 :]
-        for host in hosts
-        if host.name.startswith(f"{prefix}-")
-    }
+    used = {host.name[len(prefix) + 1 :] for host in hosts if host.name.startswith(f"{prefix}-")}
     if len(used) >= MAX_VMS_PER_GROUP:
         fail(f"the group already holds {MAX_VMS_PER_GROUP} VMs (boot MAC address space exhausted)")
     while True:
@@ -99,10 +158,19 @@ def render_vm_xml(
     vars_path: str,
     efi_code: str,
     network: str,
+    data_path: str | None = None,
 ) -> str:
     # libvirt 10.10+: firmware='efi' plus explicit <loader>/<nvram> fails
     # with "Unable to find 'efi' firmware". The pflash paths already
     # select UEFI.
+    data_xml = ""
+    if data_path is not None:
+        data_xml = f"""    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{data_path}'/>
+      <target dev='vdb' bus='virtio'/>
+    </disk>
+"""
     return f"""<domain type='kvm'>
   <name>{name}</name>
   <memory unit='MiB'>{memory_mib}</memory>
@@ -125,7 +193,7 @@ def render_vm_xml(
       <source file='{disk_path}'/>
       <target dev='vda' bus='virtio'/>
     </disk>
-    <interface type='network'>
+{data_xml}    <interface type='network'>
       <mac address='{mac}'/>
       <source network='{network}'/>
       <model type='virtio'/>
@@ -158,15 +226,26 @@ def create_vm(
     network: str,
     redfish_host: str,
     redfish_port: int,
+    data_size: str | None = None,
 ) -> Host:
     disk_path = disk_dir / f"{name}{DISK_SUFFIX}"
     vars_path = disk_dir / f"{name}{VARS_SUFFIX}"
+    data_path = disk_dir / f"{name}{DATA_DISK_SUFFIX}"
+    if data_size is not None:
+        if run_virsh(["dominfo", name], check=False, capture=True).returncode == 0:
+            fail(f"VM '{name}' already exists; refusing to overwrite it")
+        if any(path.exists() or path.is_symlink() for path in (disk_path, vars_path, data_path)):
+            fail(f"Storage for '{name}' already exists; refusing to overwrite it")
 
     subprocess.run(
-        ["qemu-img", "create", "-f", "qcow2", str(disk_path), disk_size],
-        check=True,
-        timeout=COMMAND_TIMEOUT_SECONDS,
+        ["qemu-img", "create", "-f", "qcow2", str(disk_path), disk_size], check=True, timeout=COMMAND_TIMEOUT_SECONDS
     )
+    if data_size is not None:
+        subprocess.run(
+            ["qemu-img", "create", "-f", "qcow2", str(data_path), data_size],
+            check=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
     shutil.copyfile(EFI_VARS, vars_path)
 
     xml = render_vm_xml(
@@ -178,6 +257,7 @@ def create_vm(
         vars_path=str(vars_path),
         efi_code=EFI_CODE,
         network=network,
+        data_path=str(data_path) if data_size is not None else None,
     )
     run_virsh(["define", "/dev/stdin"], stdin=xml)
     run_virsh(["start", name])
@@ -196,7 +276,7 @@ def create_vm(
     )
 
 
-def delete_vm(name: str) -> bool:
+def delete_vm(name: str, disk_dir: Path | None = None) -> bool:
     """Remove a VM from libvirt and delete the storage it owns.
 
     The storage paths come from the domain's own definition (virsh
@@ -204,7 +284,8 @@ def delete_vm(name: str) -> bool:
     files named after this VM following the tool's own scheme are
     removed: a group-named domain may not have been created by this
     tool, and its definition can reference shared images that must
-    survive the deletion.
+    survive the deletion. Data files additionally require an explicitly
+    authorized directory; without one they are retained.
 
     Returns True when the domain is gone from libvirt afterwards. A VM
     that is already gone is fine (mirrors teardown.sh); a deletion that
@@ -232,7 +313,23 @@ def delete_vm(name: str) -> bool:
     # libvirt left behind.
     owned_storage = {f"{name}{DISK_SUFFIX}", f"{name}{VARS_SUFFIX}"}
     for path in disk_paths:
-        if Path(path).name in owned_storage:
+        source = Path(path)
+        if source.name == f"{name}{DATA_DISK_SUFFIX}":
+            expected = disk_dir / source.name if disk_dir is not None else None
+            if (
+                expected is not None
+                and path == str(expected)
+                and source.resolve() == expected
+                and not source.is_symlink()
+                and source.is_file()
+            ):
+                source.unlink()
+            else:
+                print(
+                    f"WARNING: retaining data storage '{path}': no authorized regular direct-child file",
+                    file=sys.stderr,
+                )
+        elif source.name in owned_storage:
             Path(path).unlink(missing_ok=True)
     return True
 
@@ -251,7 +348,18 @@ def warn_if_redfish_unreachable(host: str, port: int) -> None:
         print(f"WARNING: sushy-emulator not responding at {url} (is setup-sushy-tools.sh running?)", file=sys.stderr)
 
 
+def cmd_validate_data_storage(args: argparse.Namespace) -> None:
+    if not args.disk_dir.is_absolute():
+        fail("--disk-dir must be absolute when data disks are enabled")
+    existing = RawInventory.load(args.inventory_file)
+    validate_data_files(existing, args.disk_dir)
+    for host in existing.hosts:
+        validate_data_storage(host, args.disk_dir)
+
+
 def cmd_create(args: argparse.Namespace) -> None:
+    if args.data_disk_size is not None:
+        cmd_validate_data_storage(args)
     check_network(args.network)
 
     inventory = RawInventory.load(args.inventory_file)
@@ -278,6 +386,7 @@ def cmd_create(args: argparse.Namespace) -> None:
                 network=args.network,
                 redfish_host=args.redfish_host,
                 redfish_port=args.redfish_port,
+                data_size=args.data_disk_size,
             )
         )
         # Save after each VM: a crash leaves an accurate inventory.
@@ -290,6 +399,10 @@ def cmd_create(args: argparse.Namespace) -> None:
 
 
 def cmd_delete(args: argparse.Namespace) -> None:
+    if args.disk_dir is not None and (
+        not args.disk_dir.is_absolute() or not args.disk_dir.is_dir() or args.disk_dir.resolve() != args.disk_dir
+    ):
+        fail("--disk-dir must be an existing absolute directory without symlink or '..' components")
     if not args.inventory_file.exists():
         fail(f"raw inventory file '{args.inventory_file}' not found")
     inventory = RawInventory.load(args.inventory_file)
@@ -307,13 +420,13 @@ def cmd_delete(args: argparse.Namespace) -> None:
     failed_names = []
     for host in inventory.hosts:
         if host.name in args.names:
-            if delete_vm(host.name):
+            if delete_vm(host.name, args.disk_dir):
                 deleted_names.append(host.name)
             else:
                 # VM still exists: keep the entry.
                 failed_names.append(host.name)
     for name in unknown_names:
-        if not delete_vm(name):
+        if not delete_vm(name, args.disk_dir):
             failed_names.append(name)
 
     inventory.remove_hosts(deleted_names)
@@ -324,9 +437,7 @@ def cmd_delete(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     create = subparsers.add_parser("create", help="create VMs and add them to the raw inventory")
@@ -346,14 +457,24 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"memory per VM in MiB (default: {DEFAULT_MEMORY_MIB})",
     )
     create.add_argument(
-        "--disk-size",
-        default=DEFAULT_DISK_SIZE,
-        help=f"qcow2 virtual disk size (default: {DEFAULT_DISK_SIZE})",
+        "--disk-size", default=DEFAULT_DISK_SIZE, help=f"qcow2 virtual disk size (default: {DEFAULT_DISK_SIZE})"
     )
     create.set_defaults(func=cmd_create)
+    create.add_argument(
+        "--data-disk-size",
+        type=data_disk_size,
+        default=None,
+        help="optional blank qcow2 vdb size, e.g. 50G (default: disabled)",
+    )
+
+    validate = subparsers.add_parser("validate-data-storage", help="check existing data disks without mutation")
+    validate.add_argument("--inventory-file", type=Path, required=True)
+    validate.add_argument("--disk-dir", type=Path, required=True)
+    validate.set_defaults(func=cmd_validate_data_storage)
 
     delete = subparsers.add_parser("delete", help="remove VMs from libvirt and the raw inventory")
     delete.add_argument("--inventory-file", type=Path, required=True, help="raw inventory JSON to update")
+    delete.add_argument("--disk-dir", type=Path, help="optional absolute owned directory for data-file cleanup")
     delete.add_argument("names", nargs="+", help="VM names to delete")
     delete.set_defaults(func=cmd_delete)
 
@@ -371,6 +492,8 @@ def main(argv: list[str] | None = None) -> None:
         fail(f"command timed out after {exc.timeout} seconds: {' '.join(exc.cmd)}")
     except InventoryError as exc:
         fail(str(exc))
+    except ET.ParseError as exc:
+        fail(f"invalid domain XML: {exc}")
     except FileNotFoundError as exc:
         fail(f"required command not found: {exc}")
 

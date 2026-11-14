@@ -11,14 +11,17 @@ verified deletions.
 
 Run directly: python3 .github/scripts/test_manage_virtual_bmh_vms.py
 """
+
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Import the sibling modules first: the script under test imports them
@@ -138,11 +141,7 @@ class CreateDeleteEndToEndTests(unittest.TestCase):
         env = dict(self.env)
         env.update(env_extra)
         return subprocess.run(
-            [sys.executable, str(SCRIPT), *args],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
+            [sys.executable, str(SCRIPT), *args], env=env, capture_output=True, text=True, check=False
         )
 
     def _create(self, *extra: str, **env_extra: str) -> subprocess.CompletedProcess[str]:
@@ -163,13 +162,293 @@ class CreateDeleteEndToEndTests(unittest.TestCase):
         )
 
     def _delete(self, *names: str, **env_extra: str) -> subprocess.CompletedProcess[str]:
-        return self._run(
-            "delete",
-            "--inventory-file",
-            str(self.inventory_file),
-            *names,
-            **env_extra,
+        return self._run("delete", "--inventory-file", str(self.inventory_file), *names, **env_extra)
+
+    def _enable_domain_capture(self) -> Path:
+        domains = self.temp / "domains"
+        domains.mkdir()
+        self.env["FAKE_DOMAIN_DIR"] = str(domains)
+        return domains
+
+    def _snapshot(self) -> dict[str, bytes | str]:
+        paths = list(self.disk_dir.iterdir())
+        if self.inventory_file.exists():
+            paths.append(self.inventory_file)
+        return {str(path): str(path.readlink()) if path.is_symlink() else path.read_bytes() for path in paths}
+
+    def test_data_disk_is_blank_vdb_and_creation_stays_additive(self) -> None:
+        """Execute the CLI twice: retain existing VMs and add new blank disks."""
+        self._enable_domain_capture()
+        for count in (2, 1):
+            result = self._create("--count", str(count), "--data-disk-size", "50G")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        hosts = json.loads(self.inventory_file.read_text())["hosts"]
+        self.assertEqual(len(hosts), 3)
+        calls = self.calls_file.read_text().splitlines()
+        self.assertEqual(sum(line.startswith("define ") for line in calls), 3)
+        for index, host in enumerate(hosts):
+            root = ET.fromstring((self.capture_dir / f"vm-{index}.xml").read_text())
+            disks = root.findall("./devices/disk")
+            self.assertEqual(len(disks), 2)
+            for disk, target, suffix, size in zip(
+                disks, ("vda", "vdb"), (".qcow2", "-data.qcow2"), ("150G", "50G"), strict=True
+            ):
+                path = self.disk_dir / f"{host['name']}{suffix}"
+                self.assertEqual(disk.find("target").attrib, {"dev": target, "bus": "virtio"})
+                self.assertEqual(disk.find("driver").attrib, {"name": "qemu", "type": "qcow2"})
+                self.assertEqual(disk.find("source").get("file"), str(path))
+                self.assertIn(f"qemu-img create -f qcow2 {path} {size}", calls)
+                self.assertTrue(path.is_file())
+        self.assertEqual(sum(line.startswith("qemu-img ") for line in calls), 6)
+
+    def test_invalid_data_sizes_fail_before_commands(self) -> None:
+        for size in ("", "0", "0G", "-1G", "1.5G", "50GB", " 50G", "50G\n", "$(false)"):
+            with self.subTest(size=size):
+                result = self._create("--data-disk-size", size)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.calls_file.exists())
+                self.assertFalse(self.inventory_file.exists())
+                self.assertEqual(list(self.disk_dir.iterdir()), [])
+
+    def test_incompatible_inventory_fails_without_mutation(self) -> None:
+        """Opt-in never repairs old single-disk or incompatible inventory domains."""
+        domains = self._enable_domain_capture()
+        result = self._create()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        host = json.loads(self.inventory_file.read_text())["hosts"][0]
+        domain = domains / f"{host['name']}.xml"
+        original = domain.read_text()
+        data = self.disk_dir / f"{host['name']}-data.qcow2"
+        for fault in (
+            "legacy",
+            "wrong_source",
+            "wrong_bus",
+            "wrong_driver",
+            "missing_file",
+            "symlink",
+            "readonly",
+            "duplicate",
+        ):
+            with self.subTest(fault=fault):
+                root = ET.fromstring(original)
+                if fault != "legacy":
+                    device = ET.SubElement(root.find("devices"), "disk", type="file", device="disk")
+                    ET.SubElement(device, "source", file=str(data) if fault != "wrong_source" else "/wrong.qcow2")
+                    ET.SubElement(device, "target", dev="vdb", bus="sata" if fault == "wrong_bus" else "virtio")
+                    ET.SubElement(device, "driver", type="raw" if fault == "wrong_driver" else "qcow2")
+                    if fault == "readonly":
+                        ET.SubElement(device, "readonly")
+                    if fault == "duplicate":
+                        root.find("devices").append(ET.fromstring(ET.tostring(device)))
+                    if fault == "symlink":
+                        data.symlink_to(self.temp / "absent-target")
+                    elif fault != "missing_file":
+                        data.write_bytes(b"keep")
+                domain.write_text(ET.tostring(root, encoding="unicode"))
+                before = self._snapshot()
+                self.calls_file.write_text("")
+                result = self._create("--data-disk-size", "50G")
+                self.assertNotEqual(result.returncode, 0, fault)
+                self.assertEqual(before, self._snapshot())
+                self.assertEqual(domain.read_text(), ET.tostring(root, encoding="unicode"))
+                self.assertNotRegex(self.calls_file.read_text(), r"(?m)^(define|start|qemu-img|net-info) ")
+                data.unlink(missing_ok=True)
+
+    def test_enabled_collisions_do_not_write_storage(self) -> None:
+        self.inventory_file.write_text(json.dumps({"name_prefix": "grp", "hosts": []}))
+        for fault in ("domain", "disk", "nvram", "data", "dangling"):
+            with self.subTest(fault=fault):
+                for number in range(256):
+                    suffix = {"disk": ".qcow2", "nvram": "-VARS.fd"}.get(fault, "-data.qcow2")
+                    path = self.disk_dir / f"grp-{number:02x}{suffix}"
+                    if fault == "dangling":
+                        path.symlink_to(self.temp / "absent-target")
+                    elif fault != "domain":
+                        path.write_bytes(b"keep")
+                before = self._snapshot()
+                self.calls_file.write_text("")
+                result = self._create("--data-disk-size", "50G", VIRSH_COLLISION="true" if fault == "domain" else "")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(before, self._snapshot())
+                self.assertNotRegex(self.calls_file.read_text(), r"(?m)^(define|start|qemu-img) ")
+                self.assertFalse((self.temp / "absent-target").exists())
+                for path in self.disk_dir.iterdir():
+                    path.unlink()
+
+    def test_delete_owns_data_file_but_preserves_shared_storage_and_failed_domains(self) -> None:
+        domains = self._enable_domain_capture()
+        result = self._create("--data-disk-size", "50G")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        host = json.loads(self.inventory_file.read_text())["hosts"][0]
+        domain = domains / f"{host['name']}.xml"
+        root = ET.fromstring(domain.read_text())
+        shared = self.disk_dir / "shared-data.qcow2"
+        shared.write_bytes(b"keep")
+        disk = ET.SubElement(root.find("devices"), "disk", type="file", device="disk")
+        ET.SubElement(disk, "source", file=str(shared))
+        domain.write_text(ET.tostring(root, encoding="unicode"))
+        before = self._snapshot()
+        result = self._delete("--disk-dir", str(self.disk_dir), host["name"], VIRSH_UNDEFINE_BROKEN="true")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(before, self._snapshot())
+        result = self._delete("--disk-dir", str(self.disk_dir), host["name"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(self.disk_dir.iterdir()), [shared])
+        self.assertEqual(shared.read_bytes(), b"keep")
+
+    def test_data_delete_requires_explicit_confined_directory(self) -> None:
+        """Only an explicitly authorized direct-child regular data file is removed."""
+        domains = self._enable_domain_capture()
+        for mode in ("valid", "omitted", "outside", "relative", "dotdot", "parent_link", "outside_alias", "file_link"):
+            with self.subTest(mode=mode):
+                result = self._create("--data-disk-size", "50G")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                name = json.loads(self.inventory_file.read_text())["hosts"][-1]["name"]
+                data = self.disk_dir / f"{name}-data.qcow2"
+                outside = self.temp / f"{name}-data.qcow2"
+                outside.write_bytes(b"outside")
+                alias = self.temp / f"alias-{name}"
+                source = str(data)
+                if mode == "outside":
+                    source = str(outside)
+                elif mode == "relative":
+                    source = os.path.relpath(outside)
+                elif mode == "dotdot":
+                    source = f"{self.disk_dir}/../{outside.name}"
+                elif mode == "parent_link":
+                    alias.symlink_to(self.temp, target_is_directory=True)
+                    source = str(alias / outside.name)
+                elif mode == "outside_alias":
+                    alias.symlink_to(self.disk_dir, target_is_directory=True)
+                    source = str(alias / data.name)
+                elif mode == "file_link":
+                    data.unlink()
+                    data.symlink_to(outside)
+                domain = domains / f"{name}.xml"
+                root = ET.fromstring(domain.read_text())
+                for disk in root.findall("./devices/disk"):
+                    if disk.find("target").get("dev") == "vdb":
+                        disk.find("source").set("file", source)
+                domain.write_text(ET.tostring(root, encoding="unicode"))
+                options = [] if mode == "omitted" else ["--disk-dir", str(self.disk_dir)]
+                result = self._delete(*options, name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outside.read_bytes(), b"outside")
+                self.assertEqual(data.exists() or data.is_symlink(), mode != "valid")
+                if mode != "valid":
+                    self.assertIn("WARNING", result.stderr)
+                self.assertFalse((self.disk_dir / f"{name}.qcow2").exists())
+                self.assertFalse((self.disk_dir / f"{name}-VARS.fd").exists())
+                domain.unlink()
+                data.unlink(missing_ok=True)
+
+    def test_invalid_delete_directory_fails_before_commands(self) -> None:
+        """Bad cleanup authority must not destroy domains or change inventory."""
+        self.inventory_file.write_text(json.dumps({"name_prefix": "grp", "hosts": []}))
+        regular = self.temp / "file"
+        regular.touch()
+        alias = self.temp / "alias"
+        alias.symlink_to(self.disk_dir, target_is_directory=True)
+        for directory in ("relative", str(self.temp / "absent"), str(regular), str(alias), f"{self.disk_dir}/.."):
+            with self.subTest(directory=directory):
+                before = self._snapshot()
+                self.calls_file.write_text("")
+                result = self._delete("--disk-dir", directory, "grp-01")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.calls_file.read_text(), "")
+                self.assertEqual(before, self._snapshot())
+
+    def test_orphan_preflight_rejects_without_commands_or_mutation(self) -> None:
+        """Missing, empty and populated inventories cannot hide regular or dangling remnants."""
+        domains = self._enable_domain_capture()
+        for state in ("missing", "empty", "populated"):
+            if state == "populated":
+                self.assertEqual(self._create("--data-disk-size", "50G").returncode, 0)
+            elif state == "empty":
+                self.inventory_file.write_text(json.dumps({"name_prefix": "virtual-bmh-1234abcd", "hosts": []}))
+            prefix = (
+                json.loads(self.inventory_file.read_text())["name_prefix"]
+                if self.inventory_file.exists()
+                else "virtual-bmh-1234abcd"
+            )
+            used = {path.name for path in domains.iterdir()}
+            name = next(f"{prefix}-{number:02x}" for number in range(256) if f"{prefix}-{number:02x}.xml" not in used)
+            orphan = self.disk_dir / f"{name}-data.qcow2"
+            for dangling in (False, True):
+                if dangling:
+                    orphan.symlink_to(self.temp / "missing-target")
+                else:
+                    orphan.write_bytes(b"orphan")
+                for command in ("validate", "create"):
+                    with self.subTest(state=state, dangling=dangling, command=command):
+                        before = self._snapshot()
+                        self.calls_file.write_text("")
+                        if command == "create":
+                            result = self._create("--data-disk-size", "50G")
+                        else:
+                            result = self._run(
+                                "validate-data-storage",
+                                "--inventory-file",
+                                str(self.inventory_file),
+                                "--disk-dir",
+                                str(self.disk_dir),
+                            )
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+                        self.assertEqual(self.calls_file.read_text(), "")
+                        self.assertEqual(before, self._snapshot())
+                orphan.unlink()
+            self.inventory_file.unlink(missing_ok=True)
+
+    def test_orphan_scan_ignores_other_groups_and_shared_files(self) -> None:
+        """Exact group matching must not claim overlapping groups or sibling directories."""
+        self.inventory_file.write_text(json.dumps({"name_prefix": "grp", "hosts": []}))
+        for filename in ("other-01-data.qcow2", "grp-01-02-data.qcow2", "grp-xyz-data.qcow2", "shared-data.qcow2"):
+            (self.disk_dir / filename).symlink_to(self.temp / "absent")
+        sibling = self.temp / "other-clone"
+        sibling.mkdir()
+        (sibling / "grp-01-data.qcow2").write_bytes(b"keep")
+        before = self._snapshot()
+        result = self._run(
+            "validate-data-storage", "--inventory-file", str(self.inventory_file), "--disk-dir", str(self.disk_dir)
         )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(before, self._snapshot())
+        self.assertEqual((sibling / "grp-01-data.qcow2").read_bytes(), b"keep")
+
+    def test_partial_create_orphan_blocks_next_additive_attempt(self) -> None:
+        """A failed start leaves unrecorded storage; a retry cannot pick another token."""
+        self._enable_domain_capture()
+        virsh = self.fakes.bin_dir / "virsh"
+        original = virsh.read_text()
+        virsh.write_text(original.replace("start) exit 0 ;;", "start) exit 23 ;;"))
+        result = self._create("--data-disk-size", "50G")
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertEqual(json.loads(self.inventory_file.read_text())["hosts"], [])
+        self.assertEqual(len(list(self.disk_dir.glob("*-data.qcow2"))), 1)
+        virsh.write_text(original)
+        before = self._snapshot()
+        self.calls_file.write_text("")
+        result = self._create("--data-disk-size", "50G")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.calls_file.read_text(), "")
+        self.assertEqual(before, self._snapshot())
+
+    def test_invalid_owned_files_fail_before_domain_commands(self) -> None:
+        """Validate all owned files before consulting libvirt."""
+        self._enable_domain_capture()
+        self.assertEqual(self._create("--data-disk-size", "50G").returncode, 0)
+        data = next(self.disk_dir.glob("*-data.qcow2"))
+        data.unlink()
+        for dangling in (False, True):
+            if dangling:
+                data.symlink_to(self.temp / "absent")
+            before = self._snapshot()
+            self.calls_file.write_text("")
+            result = self._create("--data-disk-size", "50G")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.calls_file.read_text(), "")
+            self.assertEqual(before, self._snapshot())
+            data.unlink(missing_ok=True)
 
     def test_create_records_inventory_and_defines_domains(self) -> None:
         result = self._create("--count", "2")
