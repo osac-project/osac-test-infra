@@ -15,6 +15,12 @@ description: >-
   explicit host-label): the collect job is pinned to the host by that label.
   The runners of one host share /var/tmp, so any of them can pick it up.
 
+  Two halves, which one job can run together or two jobs can run apart
+  (stage: and dispatch:). Staging needs no credentials, so a job that runs
+  code the repository does not control (a pull request's own commit) can stage
+  and leave the dispatch to a later job that runs this action from trusted
+  code on the same host: only the dispatch holds the GitHub App key.
+
 inputs:
   artifact-name:
     description: "Name for the artifact in the private repository"
@@ -31,21 +37,59 @@ inputs:
     required: false
     default: "collect.yml"
   app-id:
-    description: "ID of the GitHub App installed on the private repository"
-    required: true
-  app-key:
-    description: "Private key of that GitHub App"
-    required: true
-  host-label:
-    description: "Runner label of this host. Empty means the short hostname."
+    description: "ID of the GitHub App installed on the private repository (not needed when dispatch is false)"
     required: false
     default: ""
+  app-key:
+    description: "Private key of that GitHub App (not needed when dispatch is false)"
+    required: false
+    default: ""
+  host-label:
+    description: >-
+      Runner label of the host that holds the files. Empty means the short
+      hostname, which is right when this job stages them; a job that only
+      dispatches must pass the label the staging job reported.
+    required: false
+    default: ""
+  stage:
+    description: >-
+      Copy the files to the runner host. "false" means an earlier job on the
+      same host already did, and this one finds its files by run and artifact
+      name.
+    required: false
+    default: "true"
+  dispatch:
+    description: >-
+      Dispatch the collect workflow, which needs app-id and app-key. "false"
+      only stages the files and reports the host in the outputs.
+    required: false
+    default: "true"
+  source-job:
+    description: "Job to name as the source of the files. Empty means this job. For a dispatch that runs apart from the staging job."
+    required: false
+    default: ""
+  source-runner:
+    description: "Runner to name as the source of the files. Empty means this runner."
+    required: false
+    default: ""
+
+outputs:
+  staged:
+    description: "true when files were staged or found and are waiting for the collect workflow"
+    value: ${{ steps.stage.outputs.staged || steps.locate.outputs.staged || 'false' }}
+  host:
+    description: "Runner label of the host that holds the staged files; the job that dispatches runs on it"
+    value: ${{ steps.stage.outputs.host }}
+  runner:
+    description: "Name of the runner that staged the files"
+    value: ${{ steps.stage.outputs.runner }}
 
 runs:
   using: composite
   steps:
     - name: Stage files on the runner host
       id: stage
+      if: inputs.stage == 'true'
       shell: bash
       env:
         SOURCE_DIR_INPUT: ${{ inputs.source-dir }}
@@ -93,10 +137,55 @@ runs:
         (umask 077 && jq -n --arg dir "${DEST}" --arg host "${HOST_LABEL:-$(hostname -s)}" \
           '{dir: $dir, host: $host}' > "${STATE_FILE}")
         echo "staged=true" >> "${GITHUB_OUTPUT}"
+        # Not secret, and the job that dispatches needs it to run on this host.
+        # The runner's label is the host's name, which the job header shows too.
+        echo "host=${HOST_LABEL:-$(hostname -s)}" >> "${GITHUB_OUTPUT}"
+        echo "runner=${RUNNER_NAME}" >> "${GITHUB_OUTPUT}"
+
+    - name: Find the files an earlier job staged
+      id: locate
+      if: inputs.stage != 'true' && inputs.dispatch == 'true'
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        HOST_LABEL: ${{ inputs.host-label }}
+      run: |
+        set -euo pipefail
+        STAGING_ROOT="${OSAC_ARTIFACT_STAGING_ROOT:-/var/tmp/osac-artifacts}"
+        STATE_FILE="${RUNNER_TEMP}/publish-private-artifacts.json"
+        rm -f "${STATE_FILE}"
+        if [[ -z "${HOST_LABEL}" ]]; then
+          echo "::error::host-label is required when this job does not stage the files"
+          exit 1
+        fi
+        # The staging job named its directory <run>-<attempt>-<job>-<name>-XXXXXX.
+        # The job is not known here (the dispatch is a job of its own), the
+        # artifact name is, and the run and attempt are this run's.
+        SAFE_NAME=$(printf '%s' "${ARTIFACT_NAME}" | tr -c 'A-Za-z0-9._-' '_')
+        matches=()
+        for candidate in "${STAGING_ROOT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-"*"-${SAFE_NAME}-"??????; do
+          # Whatever the staging job left must be a plain directory of this
+          # user's: not a link to somewhere else on the host.
+          if [[ -d "${candidate}" && ! -L "${candidate}" && -O "${candidate}" ]]; then
+            matches+=("${candidate}")
+          fi
+        done
+        if [[ ${#matches[@]} -eq 0 ]]; then
+          echo "::warning::No staged files for this run and artifact -- nothing to publish"
+          echo "staged=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        if [[ ${#matches[@]} -gt 1 ]]; then
+          echo "::error::${#matches[@]} staged directories match this run and artifact; refusing to guess"
+          exit 1
+        fi
+        (umask 077 && jq -n --arg dir "${matches[0]}" --arg host "${HOST_LABEL}" \
+          '{dir: $dir, host: $host}' > "${STATE_FILE}")
+        echo "staged=true" >> "${GITHUB_OUTPUT}"
 
     - name: Split the repository name
       id: repo
-      if: steps.stage.outputs.staged == 'true'
+      if: inputs.dispatch == 'true' && (steps.stage.outputs.staged == 'true' || steps.locate.outputs.staged == 'true')
       shell: bash
       env:
         PRIVATE_REPO: ${{ inputs.private-repo }}
@@ -111,7 +200,7 @@ runs:
 
     - name: Mint a token that can only dispatch workflows in the private repository
       id: token
-      if: steps.stage.outputs.staged == 'true'
+      if: inputs.dispatch == 'true' && (steps.stage.outputs.staged == 'true' || steps.locate.outputs.staged == 'true')
       uses: ./.github/actions/mint-github-app-token
       with:
         app-id: ${{ inputs.app-id }}
@@ -121,7 +210,7 @@ runs:
         permissions: '{"actions":"write"}'
 
     - name: Dispatch the collect workflow
-      if: steps.stage.outputs.staged == 'true'
+      if: inputs.dispatch == 'true' && (steps.stage.outputs.staged == 'true' || steps.locate.outputs.staged == 'true')
       shell: bash
       env:
         GH_DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
@@ -130,6 +219,8 @@ runs:
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         WORKFLOW_NAME: ${{ github.workflow }}
         ACTOR: ${{ github.triggering_actor }}
+        SOURCE_JOB: ${{ inputs.source-job }}
+        SOURCE_RUNNER: ${{ inputs.source-runner }}
       run: |
         set -euo pipefail
         STATE_FILE="${RUNNER_TEMP}/publish-private-artifacts.json"
@@ -140,9 +231,9 @@ runs:
           --arg host "${HOST}" --arg dir "${STAGED_DIR}" --arg name "${ARTIFACT_NAME}" \
           --arg repo "${GITHUB_REPOSITORY}" --arg run_id "${GITHUB_RUN_ID}" --arg attempt "${GITHUB_RUN_ATTEMPT}" \
           --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
-          --arg workflow "${WORKFLOW_NAME}" --arg job "${GITHUB_JOB}" --arg sha "${GITHUB_SHA}" \
+          --arg workflow "${WORKFLOW_NAME}" --arg job "${SOURCE_JOB:-${GITHUB_JOB}}" --arg sha "${GITHUB_SHA}" \
           --arg ref "${GITHUB_REF}" --arg event "${GITHUB_EVENT_NAME}" --arg actor "${ACTOR}" \
-          --arg runner "${RUNNER_NAME}" \
+          --arg runner "${SOURCE_RUNNER:-${RUNNER_NAME}}" \
           '{ref: "main", return_run_details: true, inputs: {
               host_label: $host, src_dir: $dir, artifact_name: $name,
               source_repo: $repo, source_run_id: $run_id, source_run_attempt: $attempt,

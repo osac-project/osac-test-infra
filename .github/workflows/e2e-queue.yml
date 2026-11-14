@@ -27,11 +27,12 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
-      # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
-      # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
-      # request's. Only the schedule and manual callers pass them. A manual run can be started on any branch by a person
-      # with write access, who can already use the organization secrets this repository sees: this is not a barrier
-      # against them, only against pull request code that nobody started.
+      # The GitHub App that publishes the logs to the private repository. The merge group commit carries the queued pull
+      # request's own changes, so the key is not used by any step of the `e2e` job (it only stages the files on its
+      # runner host); the `publish-private` job of the called workflow, which checks out the actions of the default
+      # branch, is the only one that reads it.
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       test-suite: vmaas
       test-marker: not requires_caas and not requires_bmaas
@@ -54,11 +55,12 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
-      # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
-      # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
-      # request's. Only the schedule and manual callers pass them. A manual run can be started on any branch by a person
-      # with write access, who can already use the organization secrets this repository sees: this is not a barrier
-      # against them, only against pull request code that nobody started.
+      # The GitHub App that publishes the logs to the private repository. The merge group commit carries the queued pull
+      # request's own changes, so the key is not used by any step of the `e2e` job (it only stages the files on its
+      # runner host); the `publish-private` job of the called workflow, which checks out the actions of the default
+      # branch, is the only one that reads it.
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       test-suite: caas/sanity
       test-marker: sanity
@@ -82,11 +84,12 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
-      # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
-      # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
-      # request's. Only the schedule and manual callers pass them. A manual run can be started on any branch by a person
-      # with write access, who can already use the organization secrets this repository sees: this is not a barrier
-      # against them, only against pull request code that nobody started.
+      # The GitHub App that publishes the logs to the private repository. The merge group commit carries the queued pull
+      # request's own changes, so the key is not used by any step of the `e2e` job (it only stages the files on its
+      # runner host); the `publish-private` job of the called workflow, which checks out the actions of the default
+      # branch, is the only one that reads it.
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       test-suite: bmaas/sanity
       test-filter: not TestBmaasNetworking

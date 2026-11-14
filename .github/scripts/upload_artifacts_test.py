@@ -195,6 +195,15 @@ class UploadArtifactsTest(unittest.TestCase):
         self.assertLess(gate, names.index("Upload artifacts"))
 
 
+    def test_stage_only_withholds_the_dispatch_and_reports_the_host(self) -> None:
+        publish = self.step("Publish artifacts to the private repository")
+        self.assertEqual(self.action["inputs"]["private-repo-stage-only"]["default"], "false")
+        self.assertEqual(publish["with"]["dispatch"], "${{ inputs.private-repo-stage-only != 'true' }}")
+        self.assertEqual(self.action["outputs"]["private-host"]["value"], "${{ steps.publish.outputs.host }}")
+        self.assertEqual(self.action["outputs"]["private-runner"]["value"], "${{ steps.publish.outputs.runner }}")
+        self.assertEqual(publish["id"], "publish")
+
+
 class PublishPrivateArtifactsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.action = load_action("publish-private-artifacts")
@@ -218,6 +227,8 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
             "inputs.host-label": "osac-7",
             "inputs.private-repo": "osac-project/osac-ci-artifacts",
             "inputs.workflow": "collect.yml",
+            "inputs.source-job": "",
+            "inputs.source-runner": "",
             "steps.token.outputs.token": "app-token",
             "github.workflow": "e2e vmaas",
             "github.triggering_actor": "someone",
@@ -279,12 +290,110 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
         stub.chmod(0o755)
         self.environment["REQUEST_BODY"] = str(self.request)
 
+    def stage_directory(self, name: str = "4242-2-e2e-osac-logs-AbC123") -> pathlib.Path:
+        directory = self.staging / name
+        directory.mkdir(parents=True)
+        (directory / "log.txt").write_text("x")
+        return directory
+
+    def locate(self, overrides: dict | None = None) -> subprocess.CompletedProcess:
+        values = {"inputs.host-label": "osac-7"} | (overrides or {})
+        return self.run_step("Find the files an earlier job staged", values)
+
+    def test_every_step_follows_the_stage_and_dispatch_switches(self) -> None:
+        steps = {step["name"]: step for step in self.action["runs"]["steps"]}
+        self.assertEqual(steps["Stage files on the runner host"]["if"], "inputs.stage == 'true'")
+        self.assertEqual(
+            steps["Find the files an earlier job staged"]["if"],
+            "inputs.stage != 'true' && inputs.dispatch == 'true'",
+        )
+        for name in ("Split the repository name", "Dispatch the collect workflow"):
+            self.assertTrue(steps[name]["if"].startswith("inputs.dispatch == 'true' && "), name)
+        mint = next(step for key, step in steps.items() if key.startswith("Mint a token"))
+        self.assertTrue(mint["if"].startswith("inputs.dispatch == 'true' && "))
+        # A job that only stages never needs the key.
+        self.assertFalse(self.action["inputs"]["app-key"]["required"])
+        self.assertEqual(self.action["inputs"]["stage"]["default"], "true")
+        self.assertEqual(self.action["inputs"]["dispatch"]["default"], "true")
+
+    def test_locate_finds_the_directory_an_earlier_job_staged(self) -> None:
+        directory = self.stage_directory()
+        # Other runs' and other artifacts' directories are not this one's.
+        self.stage_directory("4242-2-e2e-other-name-Zzz999")
+        self.stage_directory("9999-1-e2e-osac-logs-Zzz999")
+        self.stage_directory("4242-1-e2e-osac-logs-Zzz999")
+        result = self.locate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.outputs(), {"staged": "true"})
+        self.assertEqual(self.state(), {"dir": str(directory), "host": "osac-7"})
+        self.assertEqual(oct(self.state_file.stat().st_mode & 0o777), "0o600")
+
+    def test_locate_needs_the_host_and_refuses_to_guess(self) -> None:
+        self.stage_directory()
+        result = self.locate({"inputs.host-label": ""})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("host-label is required", result.stdout)
+        self.stage_directory("4242-2-bmaas-osac-logs-Other1")
+        result = self.locate()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("refusing to guess", result.stdout)
+        self.assertFalse(self.state_file.exists())
+
+    def test_locate_with_nothing_staged_publishes_nothing(self) -> None:
+        self.staging.mkdir()
+        result = self.locate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.outputs(), {"staged": "false"})
+        self.assertIn("::warning::", result.stdout)
+        self.assertFalse(self.state_file.exists())
+
+    def test_locate_ignores_a_link_to_somewhere_else(self) -> None:
+        # Whatever the staging job's code left under the staging root, only a
+        # plain directory is handed to the collect workflow.
+        self.staging.mkdir()
+        elsewhere = self.temp / "elsewhere"
+        elsewhere.mkdir()
+        (self.staging / "4242-2-e2e-osac-logs-Link00").symlink_to(elsewhere)
+        result = self.locate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.outputs(), {"staged": "false"})
+        self.assertFalse(self.state_file.exists())
+
+    def test_the_dispatch_can_name_the_staging_job_as_the_source(self) -> None:
+        self.stub_curl("")
+        self.write_state("/var/tmp/osac-artifacts/x")
+        result = self.run_step(
+            "Dispatch the collect workflow",
+            {"inputs.source-job": "e2e", "inputs.source-runner": "osac-7-runner-05"} | {},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        body = json.loads(self.request.read_text())["inputs"]
+        self.assertEqual((body["source_job"], body["source_runner"]), ("e2e", "osac-7-runner-05"))
+        # Without them the dispatching job is the source, as before.
+        self.environment["GITHUB_JOB"] = "publish-private"
+        self.write_state("/var/tmp/osac-artifacts/x")
+        result = self.run_step("Dispatch the collect workflow")
+        body = json.loads(self.request.read_text())["inputs"]
+        self.assertEqual((body["source_job"], body["source_runner"]), ("publish-private", "osac-7-runner-02"))
+
+    def test_stage_then_locate_finds_what_stage_wrote(self) -> None:
+        # The two halves run in different jobs; their naming must agree.
+        self.assertEqual(self.run_step("Stage files on the runner host").returncode, 0)
+        staged = self.state()["dir"]
+        self.state_file.unlink()
+        self.output.write_text("")
+        self.environment["GITHUB_JOB"] = "publish-private"
+        result = self.locate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.state()["dir"], staged)
+
+
     def test_staging_copies_files_without_the_marker(self) -> None:
         result = self.run_step("Stage files on the runner host")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        # The host and the path are not step outputs: they would be printed
-        # in the public log with the next step's env.
-        self.assertEqual(self.outputs(), {"staged": "true"})
+        # The path is not a step output: it would be printed in the public log
+        # with the next step's env. The host is (the dispatching job runs on it).
+        self.assertEqual(self.outputs(), {"staged": "true", "host": "osac-7", "runner": "osac-7-runner-02"})
         self.assertEqual(self.state()["host"], "osac-7")
         self.assertEqual(oct(self.state_file.stat().st_mode & 0o777), "0o600")
         destination = pathlib.Path(self.state()["dir"])
@@ -410,6 +519,80 @@ class PublishPrivateArtifactsTest(unittest.TestCase):
         mint = next(step for step in self.action["runs"]["steps"] if step["name"].startswith("Mint a token"))
         self.assertEqual(mint["with"]["permissions"], '{"actions":"write"}')
         self.assertEqual(mint["with"]["repositories"], "${{ steps.repo.outputs.name }}")
+
+
+SHARED_WORKFLOWS = {
+    "e2e-vmaas": "osac-logs-${{ github.run_id }}",
+    "e2e-vmaas-full-install": "osac-logs-full-install-${{ github.run_id }}",
+    "e2e-bmaas-full-install": "osac-logs-bmaas-full-install-${{ github.run_id }}",
+    "e2e-caas-full-install": "osac-logs-caas-full-install-${{ github.run_id }}",
+    "e2e-full-regression": "osac-logs-full-regression-${{ github.run_id }}",
+}
+
+
+class SharedWorkflowsPublishFromATrustedJobTest(unittest.TestCase):
+    """The suite job stages; only a job of trusted code holds the app key."""
+
+    def workflow(self, name: str) -> dict:
+        return yaml.safe_load((REPO / f".github/workflows/{name}.yml").read_text())
+
+    def test_the_suite_job_never_receives_the_app_key(self) -> None:
+        for name in SHARED_WORKFLOWS:
+            text = json.dumps(self.workflow(name)["jobs"]["e2e"])
+            self.assertNotIn("private-repo-app-key", text, name)
+            self.assertNotIn("private-repo-app-id", text, name)
+            # The secrets may only be compared with '' (is the publication on?),
+            # never handed to a step, an env block or an output.
+            for secret in ("osac-ci-app-private-key", "osac-ci-app-id"):
+                uses = re.findall(rf"secrets\.{secret}(?! (?:!=|==) '')", text)
+                self.assertEqual(uses, [], f"{name}: {secret} is used by the suite job")
+
+    def test_both_upload_steps_only_stage(self) -> None:
+        for name, artifact in SHARED_WORKFLOWS.items():
+            steps = [s for s in self.workflow(name)["jobs"]["e2e"]["steps"] if s.get("uses") == "./.github/actions/upload-artifacts"]
+            self.assertEqual(len(steps), 2, name)
+            for step in steps:
+                self.assertEqual(step["with"]["private-repo-stage-only"], "true", name)
+                self.assertEqual(step["with"]["artifact-name"], artifact, name)
+            self.assertEqual({s["id"] for s in steps}, {"upload", "upload-cancelled"}, name)
+
+    def test_the_host_reaches_the_publish_job(self) -> None:
+        for name in SHARED_WORKFLOWS:
+            outputs = self.workflow(name)["jobs"]["e2e"]["outputs"]
+            for key in ("private-host", "private-runner"):
+                self.assertIn(f"steps.upload.outputs.{key}", outputs[key], name)
+                self.assertIn(f"steps.upload-cancelled.outputs.{key}", outputs[key], name)
+
+    def test_the_publish_job_runs_trusted_actions_on_the_same_host(self) -> None:
+        for name, artifact in SHARED_WORKFLOWS.items():
+            job = self.workflow(name)["jobs"]["publish-private"]
+            self.assertEqual(job["needs"], ["e2e"], name)
+            self.assertEqual(job["runs-on"], "${{ needs.e2e.outputs.private-host }}", name)
+            # A failed or cancelled run's logs matter most; nothing staged, nothing to do.
+            self.assertEqual(job["if"], "${{ always() && needs.e2e.outputs.private-host != '' }}", name)
+            self.assertEqual(job["permissions"], {"contents": "read"}, name)
+            checkout, publish = job["steps"]
+            # The default branch's actions, never the commit under test.
+            self.assertEqual(checkout["with"]["ref"], "main", name)
+            self.assertEqual(checkout["with"]["repository"], "${{ job.workflow_repository }}", name)
+            self.assertEqual(checkout["with"]["sparse-checkout"], ".github/actions", name)
+            self.assertNotIn("inputs.test-infra", json.dumps(checkout), name)
+            self.assertEqual(publish["uses"], "./.github/actions/publish-private-artifacts", name)
+            self.assertEqual(publish["with"]["artifact-name"], artifact, name)
+            self.assertEqual(publish["with"]["stage"], "false", name)
+            self.assertEqual(publish["with"]["host-label"], "${{ needs.e2e.outputs.private-host }}", name)
+            self.assertEqual(publish["with"]["app-key"], "${{ secrets.osac-ci-app-private-key }}", name)
+
+    def test_pull_request_and_queue_callers_pass_the_app_secrets(self) -> None:
+        # Only reachable now that the key is used by the trusted job alone.
+        for name in ("e2e-pr-vmaas", "e2e-pr-caas", "e2e-pr-bmaas"):
+            (job,) = [j for j in self.workflow(name)["jobs"].values() if "uses" in j and j["uses"].startswith("./")]
+            self.assertEqual(job["secrets"]["osac-ci-app-id"], "${{ secrets.OSAC_CI_APP_ID }}", name)
+            self.assertEqual(job["secrets"]["osac-ci-app-private-key"], "${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}", name)
+        suites = [j for j in self.workflow("e2e-queue")["jobs"].values() if str(j.get("uses", "")).startswith("./")]
+        self.assertEqual(len(suites), 3)
+        for job in suites:
+            self.assertEqual(job["secrets"]["osac-ci-app-private-key"], "${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}")
 
 
 if __name__ == "__main__":

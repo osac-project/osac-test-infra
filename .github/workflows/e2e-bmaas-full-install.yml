@@ -187,6 +187,9 @@ jobs:
       # Considers both test steps: the plain one (ci-observe off) and the
       # ci-observe-capture wrapper (ci-observe on); exactly one of them runs.
       result: ${{ (steps.test.outcome == 'success' || steps.test-observed.outcome == 'success') && 'PASSED' || 'FAILED' }}
+      # Where the staged logs are, for the `publish-private` job; empty when nothing was staged.
+      private-host: ${{ steps.upload.outputs.private-host || steps.upload-cancelled.outputs.private-host }}
+      private-runner: ${{ steps.upload.outputs.private-runner || steps.upload-cancelled.outputs.private-runner }}
 
     env:
       FLAVOR_LOCK: "/tmp/cluster-tool-flavor-${{ inputs.flavor-name }}.lock"
@@ -978,8 +981,7 @@ jobs:
         with:
           artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
           private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
-          private-repo-app-id: ${{ secrets.osac-ci-app-id }}
-          private-repo-app-key: ${{ secrets.osac-ci-app-private-key }}
+          private-repo-stage-only: "true"
 
       # Only a cancelled job is bounded: its always() steps get 5 minutes in
       # total. A timeout elsewhere would turn a passing run red. It runs when
@@ -987,14 +989,14 @@ jobs:
       # because the job was cancelled while it ran), not after one that did,
       # and replaces an artifact that the interrupted upload may have created.
       - name: Scan and upload artifacts (job cancelled)
+        id: upload-cancelled
         if: cancelled() && (steps.upload.outcome == 'skipped' || steps.upload.outcome == 'cancelled')
         timeout-minutes: 3
         uses: ./.github/actions/upload-artifacts
         with:
           artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
           private-repo: ${{ secrets.osac-ci-app-id != '' && secrets.osac-ci-app-private-key != '' && 'osac-project/osac-ci-artifacts' || '' }}
-          private-repo-app-id: ${{ secrets.osac-ci-app-id }}
-          private-repo-app-key: ${{ secrets.osac-ci-app-private-key }}
+          private-repo-stage-only: "true"
           overwrite: "true"
 
       - name: Authenticate for AI diagnosis
@@ -1084,3 +1086,38 @@ jobs:
           slack-channel-id: ${{ steps.secrets.outputs.SLACK_CHANNEL_ID }}
           thread-ts: ${{ steps.notify-slack.outputs.message-ts }}
           chai-bot-user-id: ${{ steps.secrets.outputs.CHAI_BOT_USER_ID }}
+
+  # Hands the staged logs to the private repository. Its own job, from the default branch's actions, for one reason: the
+  # `e2e` job runs the test infrastructure of whatever commit it was given (a pull request's own commit in the pull
+  # request flow), so a step there that received the GitHub App key would receive it from the pull request author's
+  # code. `e2e` only stages the files on its runner host, without the key; this job runs on the same host, from actions
+  # checked out of the default branch, and is the only place the key is used. The key also stays out of the pull
+  # request's checkout: this job never checks that out.
+  publish-private:
+    needs: [e2e]
+    # Not when `e2e` staged nothing (no key was passed, or no logs). always(): a failed or cancelled run is the one
+    # whose logs matter most.
+    if: ${{ always() && needs.e2e.outputs.private-host != '' }}
+    runs-on: ${{ needs.e2e.outputs.private-host }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the trusted actions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: main
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
+      - name: Publish artifacts to the private repository
+        uses: ./.github/actions/publish-private-artifacts
+        with:
+          artifact-name: osac-logs-bmaas-full-install-${{ github.run_id }}
+          private-repo: osac-project/osac-ci-artifacts
+          app-id: ${{ secrets.osac-ci-app-id }}
+          app-key: ${{ secrets.osac-ci-app-private-key }}
+          stage: "false"
+          host-label: ${{ needs.e2e.outputs.private-host }}
+          source-job: e2e
+          source-runner: ${{ needs.e2e.outputs.private-runner }}

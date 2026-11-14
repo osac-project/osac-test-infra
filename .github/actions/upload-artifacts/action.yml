@@ -85,6 +85,23 @@ inputs:
     description: "Private key of that GitHub App (OSAC_CI_APP_PRIVATE_KEY)"
     required: false
     default: ""
+  private-repo-stage-only:
+    description: >-
+      With private-repo: stage the files on the runner host and stop. No app
+      key is needed or passed. A later job on the same host (the `private-host`
+      output names it) runs publish-private-artifacts from trusted code to
+      dispatch the collect workflow. For a job that runs code the repository
+      does not control, which must not hold the key.
+    required: false
+    default: "false"
+
+outputs:
+  private-host:
+    description: "With private-repo-stage-only: the runner label of the host that holds the staged files. Empty when nothing was staged."
+    value: ${{ steps.publish.outputs.host }}
+  private-runner:
+    description: "With private-repo-stage-only: the runner that staged the files."
+    value: ${{ steps.publish.outputs.runner }}
 
 runs:
   using: composite
@@ -308,6 +325,7 @@ runs:
         fi
 
     - name: Publish artifacts to the private repository
+      id: publish
       if: always() && inputs.private-repo != ''
       uses: ./.github/actions/publish-private-artifacts
       with:
@@ -315,6 +333,7 @@ runs:
         private-repo: ${{ inputs.private-repo }}
         app-id: ${{ inputs.private-repo-app-id }}
         app-key: ${{ inputs.private-repo-app-key }}
+        dispatch: ${{ inputs.private-repo-stage-only != 'true' }}
 
     - name: Upload artifacts
       if: always() && inputs.private-repo == ''
