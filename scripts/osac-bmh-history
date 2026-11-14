@@ -1,0 +1,208 @@
+#!/usr/bin/python3 -I
+"""Root-installed, caller-scoped virtual-BMH serial storage and bounded reads."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import socket
+import subprocess
+import sys
+import time
+
+ROOT = Path("/var/log/libvirt/qemu/osac-bmh-history")
+MAX_BYTES = 2097152
+PREFIX = re.compile(r"virtual-bmh-[0-9a-f]{8}\Z")
+
+
+def check_prefix(prefix):
+    if not PREFIX.fullmatch(prefix):
+        raise ValueError("invalid run prefix")
+
+
+def logging_bounds(qemu, logging):
+    if qemu.get("stdio_handler", "logd") != "logd":
+        raise ValueError("serial logging requires virtlogd")
+    value = logging.get("max_size", "2097152")
+    match = re.fullmatch(r"([0-9]+)(B|KiB|MiB|KB|MB|k|M)?", value)
+    if not match:
+        raise ValueError("unsupported log size")
+    size = int(match[1]) * {None: 1, "B": 1, "KiB": 1024, "MiB": 1048576,
+                           "KB": 1000, "MB": 1000000, "k": 1024, "M": 1048576}[match[2]]
+    backups = int(logging.get("max_backups", "3"))
+    if not 0 < size <= MAX_BYTES or not 0 <= backups <= 3:
+        raise ValueError("unbounded or excessive serial retention")
+    return size, backups
+
+
+def daemon_settings(name, config):
+    pid = int(Path("/run/" + name + ".pid").read_text())
+    arguments = Path("/proc/%d/cmdline" % pid).read_bytes().split(b"\0")
+    if Path(os.fsdecode(arguments[0])).name != name or any(
+        argument.startswith(b"-f") or argument == b"--config" or argument.startswith(b"--config=")
+        for argument in arguments[1:]
+    ):
+        raise ValueError("nonstandard daemon configuration")
+    ticks = Path("/proc/%d/stat" % pid).read_text().rsplit(")", 1)[1].split()[19]
+    boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                if line.startswith("btime "))
+    started = boot + int(ticks) / os.sysconf("SC_CLK_TCK")
+    path = Path(config)
+    if path.exists():
+        if path.stat().st_mtime >= started:
+            raise ValueError("configuration newer than daemon")
+        content = path.read_text()
+    else:
+        if path.parent.stat().st_mtime >= started:
+            raise ValueError("missing configuration may have changed since startup")
+        content = ""
+    settings = {}
+    for line in content.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if re.match(r"^(stdio_handler|max_size|max_backups)\s*=", line):
+            key, value = line.split("=", 1)
+            settings[key.strip()] = value.strip().strip('"')
+    return settings
+
+
+def backend():
+    version = subprocess.run(["/usr/bin/virsh", "-c", "qemu:///system", "version", "--daemon"],
+                             capture_output=True, text=True, timeout=5, check=True,
+                             env={"PATH": "/usr/bin:/usr/sbin", "LC_ALL": "C"})
+    match = re.search(r"Running against daemon:\s*(\d+)\.(\d+)\.(\d+)", version.stdout)
+    if not match or tuple(map(int, match.groups())) < (6, 0, 0):
+        raise ValueError("serial backend requires libvirt 6.0 or newer")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(2)
+        connection.connect("/run/libvirt/virtlogd-sock")
+    deadline = time.monotonic() + 2
+    while not Path("/run/virtlogd.pid").exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    daemon = "virtqemud" if Path("/run/virtqemud.pid").exists() else "libvirtd"
+    qemu = daemon_settings(daemon, "/etc/libvirt/qemu.conf")
+    logging = daemon_settings("virtlogd", "/etc/libvirt/virtlogd.conf")
+    size, backups = logging_bounds(qemu, logging)
+    return dict(max_bytes=size, backups=backups, defaults_assumed=not all(
+        key in values for key, values in (("stdio_handler", qemu), ("max_size", logging), ("max_backups", logging))))
+
+
+class HistoryStore:
+    def __init__(self, root, uid):
+        self.root = root
+        self.uid = uid
+
+    def checked(self, path):
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        information = os.fstat(descriptor)
+        if information.st_uid != os.geteuid() or information.st_mode & 0o022:
+            os.close(descriptor)
+            raise OSError("untrusted serial directory")
+        return descriptor
+
+    def directory(self, prefix):
+        check_prefix(prefix)
+        descriptors = []
+        try:
+            descriptors.append(self.checked(self.root))
+            descriptors.append(self.checked(self.root / str(self.uid)))
+            path = self.root / str(self.uid) / prefix
+            descriptors.append(self.checked(path))
+            return path, os.dup(descriptors[-1])
+        finally:
+            for descriptor in descriptors:
+                os.close(descriptor)
+
+    def prepare(self, prefix):
+        check_prefix(prefix)
+        self.root.mkdir(mode=0o700, exist_ok=True)
+        descriptor = self.checked(self.root)
+        os.close(descriptor)
+        owner = self.root / str(self.uid)
+        owner.mkdir(mode=0o700, exist_ok=True)
+        descriptor = self.checked(owner)
+        try:
+            os.mkdir(prefix, mode=0o700, dir_fd=descriptor)
+        finally:
+            os.close(descriptor)
+        return owner / prefix
+
+    def valid_name(self, prefix, name):
+        if not re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{2}\.serial\.log(?:\.[012])?", name):
+            raise ValueError("invalid serial filename")
+
+    def list(self, prefix):
+        path, descriptor = self.directory(prefix)
+        try:
+            names = os.listdir(descriptor)
+            if len(names) > 1024:
+                raise ValueError("excessive serial files")
+            for name in names:
+                self.valid_name(prefix, name)
+            return sorted(names)
+        finally:
+            os.close(descriptor)
+
+    def read(self, prefix, name):
+        self.valid_name(prefix, name)
+        path, directory = self.directory(prefix)
+        try:
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            try:
+                information = os.fstat(descriptor)
+                if not stat.S_ISREG(information.st_mode) or information.st_nlink != 1 or information.st_uid != os.geteuid():
+                    raise OSError("untrusted serial file")
+                return os.read(descriptor, MAX_BYTES)
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(directory)
+
+    def cleanup(self, prefix):
+        result = subprocess.run(["/usr/bin/virsh", "-c", "qemu:///system", "list", "--all", "--name"],
+                                capture_output=True, text=True, timeout=5, check=True,
+                                env={"PATH": "/usr/bin:/usr/sbin", "LC_ALL": "C"})
+        if any(re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{2}", name) for name in result.stdout.splitlines()):
+            raise ValueError("run domains remain")
+        try:
+            path, descriptor = self.directory(prefix)
+        except FileNotFoundError:
+            return
+        try:
+            for name in self.list(prefix):
+                os.unlink(name, dir_fd=descriptor)
+        finally:
+            os.close(descriptor)
+        path.rmdir()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("prepare", "list", "read", "cleanup"))
+    parser.add_argument("prefix")
+    parser.add_argument("filename", nargs="?")
+    args = parser.parse_args()
+    try:
+        uid = int(os.environ.get("SUDO_UID", "0"))
+        if os.geteuid() != 0 or uid <= 0:
+            raise ValueError("requires installed sudo helper")
+        check_prefix(args.prefix)
+        store = HistoryStore(ROOT, uid)
+        if args.command == "prepare":
+            capability = backend()
+            capability["serial_root"] = str(store.prepare(args.prefix))
+            print(json.dumps(capability))
+        elif args.command == "list":
+            print(json.dumps(store.list(args.prefix)))
+        elif args.command == "read":
+            sys.stdout.buffer.write(store.read(args.prefix, args.filename or ""))
+        else:
+            store.cleanup(args.prefix)
+    except Exception:
+        print("BMH serial helper unavailable or request rejected", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

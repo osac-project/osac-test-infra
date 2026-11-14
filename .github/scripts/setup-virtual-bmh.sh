@@ -85,6 +85,7 @@ SUSHY_CACHE_PORT="${SUSHY_CACHE_PORT}" \
 
 # --- Create the VMs and the raw inventory ---
 VM_ARGS=(
+  --record-history
   --inventory-file "${INVENTORY_FILE}"
   --network "${CT_NETWORK}"
   --disk-dir "${VM_DISK_DIR}"
@@ -92,6 +93,9 @@ VM_ARGS=(
   --redfish-port "${SUSHY_PORT}"
   --count "${BMH_COUNT}"
 )
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  echo "INVENTORY_FILE=${INVENTORY_FILE}" >> "${GITHUB_ENV}"
+fi
 python3 "${SCRIPT_DIR}/manage-virtual-bmh-vms.py" create "${VM_ARGS[@]}"
 
 # --- Reconcile the BareMetalHosts with the raw inventory ---

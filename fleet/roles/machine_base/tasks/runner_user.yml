@@ -20,6 +20,7 @@
     - cluster-tool-compact-boot
     - osac-compact-boot-diagnostics
     - osac-compact-kubeconfig
+    - osac-bmh-history
 
 - name: Run machine-init.sh runner-user
   ansible.builtin.script: "{{ playbook_dir }}/../../scripts/machine-init.sh runner-user"
