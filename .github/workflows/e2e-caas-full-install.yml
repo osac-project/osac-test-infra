@@ -92,7 +92,10 @@ on:
         type: string
         default: "[]"
       osac-cli-version:
-        description: "OSAC CLI version for the test image (e.g. 0.0.73). Defaults to latest GitHub release."
+        description: >-
+          CLI release version (e.g. 0.0.73), secondary to a supplied image binary.
+          Uses the component-built CLI, or extracts it from the published
+          fulfillment-service:latest image when no component CLI was built.
         required: false
         type: string
         default: ""
@@ -512,6 +515,21 @@ jobs:
             } >> "$GITHUB_ENV"
             echo "::endgroup::"
           done
+
+      - name: Extract OSAC CLI from published image (fallback)
+        if: env.OSAC_CLI_BIN == ''
+        run: |
+          echo "::group::Extract OSAC CLI from published image"
+          IMAGE="ghcr.io/osac-project/fulfillment-service:latest"
+          echo "Pulling ${IMAGE}..."
+          podman pull "${IMAGE}"
+          cli_container=$(podman create "${IMAGE}")
+          podman cp "${cli_container}:/usr/local/bin/osac" "$RUNNER_TEMP/osac-cli-bin"
+          podman rm "${cli_container}" >/dev/null 2>&1 || true
+          chmod +x "$RUNNER_TEMP/osac-cli-bin"
+          echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
+          echo "Extracted OSAC CLI from ${IMAGE}"
+          echo "::endgroup::"
 
       - name: Build test image
         env:
