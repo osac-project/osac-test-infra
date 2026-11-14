@@ -386,7 +386,7 @@
       "type": "stat",
       "id": 115,
       "title": "Wait for first review",
-      "description": "Median time from ready for review (or opening) to the first human review. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "description": "Median time from ready for review (or opening) to the first human review. Reviews by bots and by the machine accounts CI_OBSERVE_MACHINE_ACCOUNTS names (osac-ci-bot, redhat-chai-bot, openshift-ci-robot, openshift-cherrypick-robot by default) are not human reviews. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 9,
         "y": 1,
@@ -485,8 +485,8 @@
     {
       "type": "stat",
       "id": 116,
-      "title": "Review to approval",
-      "description": "Median time from the first human review to the first approval. Zero when the first review is the approval, as it is for most pull requests. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "title": "Approved at the first review",
+      "description": "Share of the merged pull requests a person reviewed whose first human review was the approval. For these the review stage is zero: the reviewer's reading time before the approval is not recorded by GitHub and falls in Wait for first review. Reviews by bots and by the machine accounts CI_OBSERVE_MACHINE_ACCOUNTS names (osac-ci-bot, redhat-chai-bot, openshift-ci-robot, openshift-cherrypick-robot by default) are not human reviews. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: percent.",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -499,8 +499,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "dtdhms",
-          "decimals": 1,
+          "unit": "percentunit",
+          "decimals": 0,
           "noValue": "not measured",
           "color": {
             "mode": "thresholds"
@@ -545,7 +545,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^review_median_s$/",
+          "fields": "/^approved_first_review_share$/",
           "values": false
         },
         "orientation": "auto",
@@ -574,8 +574,8 @@
           "root_selector": "kpis",
           "columns": [
             {
-              "selector": "review_median_s",
-              "text": "review_median_s",
+              "selector": "approved_first_review_share",
+              "text": "approved_first_review_share",
               "type": "number"
             }
           ]
@@ -585,8 +585,8 @@
     {
       "type": "stat",
       "id": 117,
-      "title": "First approval to queue",
-      "description": "Median time from the first approval to entering the merge queue. A pull request that needs two working groups waits here for the second one; Last approval to queue, below, starts at the last approval. Population: pull requests merged in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "title": "Ready to final approval",
+      "description": "Median time from ready for review (or opening) to the final approval: how long getting approved takes, the wait for a reviewer and the review together. The final approval is the last human approval before the pull request first entered the merge queue, or before the merge when it never queued. Population: merged pull requests read with the lifecycle (Lifecycle measured), in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 15,
         "y": 1,
@@ -645,7 +645,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "/^waiting_median_s$/",
+          "fields": "/^ready_to_approval_median_s$/",
           "values": false
         },
         "orientation": "auto",
@@ -674,8 +674,8 @@
           "root_selector": "kpis",
           "columns": [
             {
-              "selector": "waiting_median_s",
-              "text": "waiting_median_s",
+              "selector": "ready_to_approval_median_s",
+              "text": "ready_to_approval_median_s",
               "type": "number"
             }
           ]
@@ -2115,8 +2115,8 @@
     {
       "type": "stat",
       "id": 144,
-      "title": "Last approval to queue",
-      "description": "Median time from the last approval before the merge queue to entering it. The first approval to queue tile above starts at the first approval, which for a pull request that needs two working groups is the first of them. Population: merged pull requests read with the lifecycle (Lifecycle measured), in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
+      "title": "Final approval to queue",
+      "description": "Median time from the final approval to entering the merge queue: the Waiting stage. The final approval is the last human approval before the pull request first entered the merge queue, or before the merge when it never queued. Population: merged pull requests read with the lifecycle (Lifecycle measured), in the selected repository, author and working groups. Time: merged in the last $days days (the Window above). Unit: duration.",
       "gridPos": {
         "x": 12,
         "y": 8,
@@ -2546,7 +2546,7 @@
       "type": "timeseries",
       "id": 128,
       "title": "Stage medians per week",
-      "description": "The median of each stage per week of the merge. A rising line is a stage pull requests wait longer in. Population: pull requests merged in the selected repository, author and working groups. Time: one point per week of the merge (the Monday), last $days days. Unit: duration.",
+      "description": "The median of each stage per week of the merge: the wait for a first review, the first review to the final approval, the final approval to the queue, the queue. A rising line is a stage pull requests wait longer in. The final approval is the last human approval before the pull request first entered the merge queue, or before the merge when it never queued. Population: pull requests merged in the selected repository, author and working groups. Time: one point per week of the merge (the Monday), last $days days. Unit: duration.",
       "gridPos": {
         "x": 0,
         "y": 11,
@@ -2631,7 +2631,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Review to approval"
+                "value": "First review to final approval"
               },
               {
                 "id": "color",
@@ -2650,7 +2650,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "First approval to queue"
+                "value": "Final approval to queue"
               },
               {
                 "id": "color",
@@ -5573,12 +5573,220 @@
       ]
     },
     {
+      "type": "table",
+      "id": 160,
+      "title": "About these numbers",
+      "description": "What this page counts, over which window, what is missing or partial, how old the data is and what the last check against GitHub found (ci_observe_audit.py, daily), as the API computed it. Population: the page's own population, named in the first column. Time: the window in the second column. Unit: text.",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "workflow-api"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "noValue": "",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 90
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "null": {
+                  "text": "–",
+                  "color": "#898781",
+                  "index": 91
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "population"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "What is counted"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "window"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Window"
+              },
+              {
+                "id": "custom.width",
+                "value": 290
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "missing"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Missing or partial data"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sources"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Data as of"
+              },
+              {
+                "id": "custom.width",
+                "value": 330
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "generated_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Computed at"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "workflow-api"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:9103/api/ci-observe/prs?days=${days}&repo=${pr_repo}&author=${pr_author:percentencode}&wgs=${wgs}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "about",
+          "columns": [
+            {
+              "selector": "population",
+              "text": "population",
+              "type": "string"
+            },
+            {
+              "selector": "window",
+              "text": "window",
+              "type": "string"
+            },
+            {
+              "selector": "missing",
+              "text": "missing",
+              "type": "string"
+            },
+            {
+              "selector": "sources",
+              "text": "sources",
+              "type": "string"
+            },
+            {
+              "selector": "generated_at",
+              "text": "generated_at",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "type": "row",
       "id": 130,
       "title": "One pull request: ${pr_repo} ${pr_number:text}",
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 77,
         "w": 24,
         "h": 1
       },
@@ -5593,7 +5801,7 @@
         "h": 3,
         "w": 24,
         "x": 0,
-        "y": 73
+        "y": 78
       },
       "id": 1,
       "datasource": {
@@ -5978,7 +6186,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 76
+        "y": 81
       },
       "id": 2,
       "datasource": {
@@ -6060,7 +6268,7 @@
         "h": 4,
         "w": 5,
         "x": 4,
-        "y": 76
+        "y": 81
       },
       "id": 3,
       "datasource": {
@@ -6136,13 +6344,13 @@
     },
     {
       "title": "Review",
-      "description": "First human review to the first human approval.",
+      "description": "First human review to the final approval. The final approval is the last human approval before the pull request first entered the merge queue, or before the merge when it never queued.",
       "type": "stat",
       "gridPos": {
         "h": 4,
         "w": 5,
         "x": 9,
-        "y": 76
+        "y": 81
       },
       "id": 4,
       "datasource": {
@@ -6218,13 +6426,13 @@
     },
     {
       "title": "Waiting",
-      "description": "First human approval to the first merge-queue attempt.",
+      "description": "The final approval to the first merge-queue entry.",
       "type": "stat",
       "gridPos": {
         "h": 4,
         "w": 5,
         "x": 14,
-        "y": 76
+        "y": 81
       },
       "id": 5,
       "datasource": {
@@ -6306,7 +6514,7 @@
         "h": 4,
         "w": 5,
         "x": 19,
-        "y": 76
+        "y": 81
       },
       "id": 6,
       "datasource": {
@@ -6387,7 +6595,7 @@
       "description": "Where the pull request was at every moment from opening to merge, stretch by stretch, numbered in order: a draft, waiting for a reviewer, with the author after review comments, waiting for another working group, approved but not queued, in the merge queue, out of the queue after a removal. The legend lists the stretches with their durations; What happened, below, lists the events that moved it. Population: the selected pull request. Time: opened to merged or closed; an open pull request to now. Unit: duration.",
       "gridPos": {
         "x": 0,
-        "y": 80,
+        "y": 85,
         "w": 24,
         "h": 9
       },
@@ -6565,7 +6773,7 @@
       "description": "Every event of the pull request, oldest first: opened, ready, review requests, reviews and who they counted for, pushes, force pushes (rebases), the base branch merged in, dismissed approvals, merge when ready, entries into and removals from the merge queue with GitHub's reason, the merge. Click an event to open it on GitHub. Population: the selected pull request. Time: opened to merged or closed. Unit: time after opening, d hh:mm:ss.",
       "gridPos": {
         "x": 0,
-        "y": 89,
+        "y": 94,
         "w": 15,
         "h": 13
       },
@@ -6805,7 +7013,7 @@
       "description": "Its size, the working groups that had to approve it, its review rounds and re-approvals, its pushes and its times in the merge queue. Population: the selected pull request. Time: opened to merged or closed. Unit: as each line says.",
       "gridPos": {
         "x": 15,
-        "y": 89,
+        "y": 94,
         "w": 9,
         "h": 13
       },
@@ -6932,7 +7140,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 102
+        "y": 107
       },
       "id": 8,
       "datasource": {
@@ -7264,7 +7472,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 114
       },
       "id": 9,
       "datasource": {
@@ -7847,7 +8055,7 @@
         "h": 3,
         "w": 24,
         "x": 0,
-        "y": 121
+        "y": 126
       },
       "id": 10,
       "datasource": {

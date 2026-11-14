@@ -641,9 +641,54 @@ def test_the_about_row_says_how_old_each_source_is(stores):
 
     assert about["sources"] == (
         "Runs: up to 2026-11-07 10:00 UTC · Test results: updated 2026-11-07 11:30 UTC"
-        " · Inside the tests: updated 2026-11-07 11:00 UTC"
+        " · Inside the tests: updated 2026-11-07 11:00 UTC · Not checked against GitHub yet (ci-observe-audit.timer)"
     )
     assert about["missing"] == "Nothing is missing in this window."
+
+
+def write_audit(stores, hours_ago, **e2e):
+    block = {"listed_from": "2026-10-10T12:00:00Z", "runs_listed": 5309, "runs_missing": 0, "runs_other_result": 0,
+             "lists_incomplete": 0, "sample": 30, "sample_differ": 0, "recount_ok": True, **e2e}
+    summary = {"checked_at": (NOW - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ"), "days": 30,
+               "e2e": block, "prs": None, "ok": True}
+    folder = Path(stores.jobs_db).parent
+    (folder / phases.AUDIT_FILE_NAME).write_text(json.dumps({"summary": summary, "e2e": {"sample": []}}))
+
+
+def test_the_about_row_says_what_the_check_against_github_found(stores):
+    stored_since(stores)
+    stores.run(NOW - timedelta(hours=2))
+    record_passes(stores, trends=0.5, spans=1)
+    write_audit(stores, 3)
+    about = get(stores.api(), "health")["about"][0]
+    assert about["sources"].endswith(
+        "Checked against GitHub 2026-11-07 09:00 UTC: 5,309 completed suite runs since 2026-10-10, 0 not stored;"
+        " 30 sampled runs, 0 differ"
+    )
+    assert about["missing"] == "Nothing is missing in this window."
+
+    write_audit(stores, 3, runs_missing=61, runs_other_result=2, sample_differ=1, recount_ok=False,
+                lists_incomplete=1)
+    missing = get(stores.api(), "health")["about"][0]["missing"]
+    assert "found 61 of 5,309 completed suite runs since 2026-10-10 not stored" in missing
+    assert "found 2 stored runs with an outdated result or attempt" in missing
+    assert "1 of 30 sampled runs differ from GitHub (ci-observe-audit.json lists them)" in missing
+    assert "the Overview's counts differ from a recount of the stored rows" in missing
+    assert "GitHub could not list every run of 1 workflows" in missing
+
+
+def test_a_late_check_against_github_says_so(stores):
+    stores.run(NOW - timedelta(hours=2))
+    write_audit(stores, 40)
+    missing = get(stores.api(), "failures")["about"][0]["missing"]
+    assert "the last check against GitHub ran 40 h ago (2026-11-05 20:00 UTC); the daily check is late" in missing
+
+
+def test_an_unreadable_check_is_not_a_check(stores):
+    stores.run(NOW - timedelta(hours=2))
+    (Path(stores.jobs_db).parent / phases.AUDIT_FILE_NAME).write_text("{not json")
+    assert get(stores.api(), "health")["about"][0]["sources"].endswith(
+        "Not checked against GitHub yet (ci-observe-audit.timer)")
 
 
 def test_without_stored_runs_before_the_window_nothing_is_compared(stores):

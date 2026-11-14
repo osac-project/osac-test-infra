@@ -69,20 +69,42 @@ def test_head_sha_is_stored_and_kept_current_on_upsert(exporter):
     assert job_row(exporter, 1)["head_sha"] == "b" * 40
 
 
-def test_upsert_job_only_overwrites_newer_attempts(exporter):
+def test_upsert_job_overwrites_a_newer_attempt_or_a_new_result(exporter):
     assert exporter._upsert_job(make_job(conclusion="failure", steps=[{"name": "a", "duration_s": 3}]))
     assert json.loads(job_row(exporter, 1)["steps_json"]) == [{"name": "a", "duration_s": 3}]
-    assert not exporter._upsert_job(make_job(conclusion="success"))
-    assert job_row(exporter, 1)["conclusion"] == "failure"
+    # The same attempt with the same result: nothing to change.
+    assert not exporter._upsert_job(make_job(conclusion="failure", steps=[]))
+    assert json.loads(job_row(exporter, 1)["steps_json"]) == [{"name": "a", "duration_s": 3}]
     assert exporter._upsert_job(make_job(conclusion="success", run_attempt=2))
     assert job_row(exporter, 1)["conclusion"] == "success"
+    # An older attempt never comes back.
+    assert not exporter._upsert_job(make_job(conclusion="failure", run_attempt=1))
+    assert job_row(exporter, 1)["conclusion"] == "success"
+
+
+def test_the_same_attempt_takes_its_real_result(exporter):
+    # A run that waited for approval ran under the same attempt; a row stored
+    # before its run ended had no result. Neither keeps its first value, and an
+    # empty result never replaces a real one.
+    assert exporter._upsert_job(make_job(conclusion="action_required"))
+    assert exporter._upsert_job(make_job(conclusion="failure"))
+    assert job_row(exporter, 1)["conclusion"] == "failure"
+    assert not exporter._upsert_job(make_job(conclusion=""))
+    assert job_row(exporter, 1)["conclusion"] == "failure"
+    assert exporter._upsert_job(make_job(id=2, conclusion=""))
+    assert exporter._upsert_job(make_job(id=2, conclusion="success"))
+    assert job_row(exporter, 2)["conclusion"] == "success"
 
 
 def test_needs_upsert(exporter):
     assert exporter._needs_upsert({"id": 1})
-    exporter._upsert_job(make_job(run_attempt=2))
-    assert not exporter._needs_upsert({"id": 1, "run_attempt": 2})
+    exporter._upsert_job(make_job(run_attempt=2, conclusion="action_required"))
+    assert not exporter._needs_upsert({"id": 1, "run_attempt": 2, "conclusion": "action_required"})
     assert exporter._needs_upsert({"id": 1, "run_attempt": 3})
+    assert not exporter._needs_upsert({"id": 1, "run_attempt": 1, "conclusion": "success"})
+    # Approved and run: the same attempt now has a result to store.
+    assert exporter._needs_upsert({"id": 1, "run_attempt": 2, "conclusion": "failure"})
+    assert not exporter._needs_upsert({"id": 1, "run_attempt": 2, "conclusion": None})
 
 
 def test_prune_jobs_and_cache_coverage(exporter, wfe, monkeypatch):

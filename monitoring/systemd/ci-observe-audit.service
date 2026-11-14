@@ -1,0 +1,25 @@
+# Daily check of the ci-observe pages against GitHub.
+# Installed by monitoring-setup.sh to ~/.config/systemd/user/ci-observe-audit.service
+#
+# Triggered by ci-observe-audit.timer. ci_observe_audit.py lists every
+# completed E2E run of the last 28 days from GitHub and looks each one up in
+# the job history, compares a sample of stored suite runs and of merged pull
+# requests field by field with GitHub's own record, and recounts the
+# Overview's numbers from the stored rows. It imports nothing from the code it
+# checks. The result goes to /data/ci-observe-audit.json; the pages show it
+# under "Data as of" and "Missing or partial data", and the Pull requests page
+# in its "About these numbers" table.
+#
+# It runs inside the workflow-exporter container because that container has
+# the GitHub token, the stores and the API. About a thousand GitHub calls a
+# day. With --out the exit status is 0 when the check ran, whatever it found:
+# a difference is data for the pages, not a failed unit. Do not enable it
+# directly; the timer owns the schedule.
+
+[Unit]
+Description=ci-observe check against GitHub
+After=workflow-exporter.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman exec workflow-exporter python3 /app/ci_observe_audit.py --days 30 --sample 60 --e2e-sample 30 --out /data/ci-observe-audit.json --quiet

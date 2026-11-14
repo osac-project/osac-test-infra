@@ -382,6 +382,12 @@ class Stores:
         finally:
             conn.close()
 
+    def audit_summary(self):
+        """The last check against GitHub (ci_observe_audit.py), written next
+        to the stores; None when it has not run."""
+        folder = os.path.dirname(self.jobs_db or self.trends_db or "")
+        return phases.read_audit_summary(os.path.join(folder, phases.AUDIT_FILE_NAME))
+
     def rollup_passes(self):
         """{job: finished_at} of the hourly rollups' last passes."""
         conn = self._open(self.trends_db)
@@ -648,6 +654,10 @@ class CIObserveInsights:
                     f"{noun} were last updated {hours:.0f} h ago ({timer}), so nothing after "
                     f"{finished:%Y-%m-%d %H:%M} UTC is counted"
                 )
+        # The daily check against GitHub: what it compared and what differed.
+        checked, found = phases.audit_lines(self.stores.audit_summary(), now, "e2e")
+        parts.append(checked)
+        notes.extend(found)
         return " · ".join(parts), notes
 
     # -- facts -------------------------------------------------------------
