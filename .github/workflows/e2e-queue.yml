@@ -27,8 +27,9 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
-      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
-      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+      # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
+      # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
+      # request's. Only runs of reviewed code on the default branch (schedule, manual) publish privately.
     with:
       test-suite: vmaas
       test-marker: not requires_caas and not requires_bmaas
@@ -51,8 +52,9 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
-      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
-      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+      # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
+      # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
+      # request's. Only runs of reviewed code on the default branch (schedule, manual) publish privately.
     with:
       test-suite: caas/sanity
       test-marker: sanity
@@ -76,8 +78,9 @@ jobs:
     secrets:
       # Live OTLP push credential; without it ci-observe degrades to no telemetry.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
-      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
-      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+      # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
+      # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
+      # request's. Only runs of reviewed code on the default branch (schedule, manual) publish privately.
     with:
       test-suite: bmaas/sanity
       test-filter: not TestBmaasNetworking
