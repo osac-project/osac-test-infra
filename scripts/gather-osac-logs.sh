@@ -54,7 +54,32 @@ if [[ ! -f "${KUBECONFIG:-}" ]]; then
     exit 1
 fi
 
+MUST_GATHER_DIR="$MGMT_CLUSTER_DIR/must-gather"
+if [[ -L "$ARTIFACT_DIR" || -L "$MGMT_CLUSTER_DIR" ]]; then
+    echo "::error::Artifact directory links are not permitted"
+    exit 1
+fi
 mkdir -p "$ARTIFACT_DIR" "$MGMT_CLUSTER_DIR"
+rm -rf -- "$MUST_GATHER_DIR"
+mkdir -p "$MUST_GATHER_DIR"
+gather_deadline="${OSAC_COLLECTION_DEADLINE:-$(( $(date +%s) + 900 ))}"
+gather_seconds=$(( gather_deadline - $(date +%s) - 60 ))
+(( gather_seconds > 600 )) && gather_seconds=600
+if (( gather_seconds > 0 )); then
+    native_seconds=$(( gather_seconds > 10 ? gather_seconds - 10 : 1 ))
+    if ! timeout -k 5 "${gather_seconds}" oc adm must-gather \
+        --dest-dir="$MUST_GATHER_DIR" --timeout="${native_seconds}s" \
+        > "$MUST_GATHER_DIR/command.log" 2>&1; then
+        echo "::warning::Management must-gather did not complete; only downloaded output is available"
+    fi
+else
+    echo "::warning::No time remains for management must-gather before shared redaction"
+fi
+gather_bytes=$(du -sb -- "$MUST_GATHER_DIR" | cut -f1) || exit 1
+if (( gather_bytes > 128 * 1024 * 1024 )); then
+    rm -rf -- "$MUST_GATHER_DIR"
+    echo "::warning::Management must-gather exceeds 128 MiB; withholding that subtree"
+fi
 
 # ── Collect ──────────────────────────────────────────────────────────
 
@@ -761,7 +786,7 @@ while IFS= read -r -d '' f; do
     match_lines=$(printf '%s\n' "$matches" | wc -l)
     total_lines=$((total_lines + (match_lines < remaining ? match_lines : remaining)))
     found=$((found + 1))
-done < <(find "${ARTIFACT_DIR}" -type f \( -name '*.log' -o -name '*.txt' \) \
+done < <(find "${ARTIFACT_DIR}" -path "${MUST_GATHER_DIR}" -prune -o -type f \( -name '*.log' -o -name '*.txt' \) \
     ! -name 'failure-summary.txt' -print0 | sort -z)
 if [[ ${total_lines} -ge ${MAX_SUMMARY_LINES} ]]; then
     echo ""
