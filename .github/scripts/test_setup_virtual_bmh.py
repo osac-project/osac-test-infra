@@ -25,6 +25,13 @@ class SetupVirtualBmhTests(unittest.TestCase):
         self.assertIn('BMH_DISK_DIR="${BMH_DISK_ROOT%/}/virtual-bmh-disks-${CLONE_NAME}"', teardown)
         self.assertIn("--cgroup-manager=cgroupfs", sushy)
 
+    def test_vm_resources_are_configurable(self) -> None:
+        setup = SETUP_SCRIPT.read_text()
+
+        self.assertIn('BMH_CPU="${BMH_CPU:-4}"', setup)
+        self.assertIn('BMH_MEMORY_MIB="${BMH_MEMORY_MIB:-8192}"', setup)
+        self.assertIn('  --cpu "${BMH_CPU}"', setup)
+        self.assertIn('  --memory-mib "${BMH_MEMORY_MIB}"', setup)
 
 if __name__ == "__main__":
     unittest.main()

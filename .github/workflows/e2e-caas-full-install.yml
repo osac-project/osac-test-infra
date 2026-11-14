@@ -632,6 +632,10 @@ jobs:
           # host-type=default) while test_worker_tenant_status holds one on a
           # different xdist worker (pytest -n 4 --dist loadfile).
           BMH_COUNT: "3"
+          # Add-on operator installation needs more capacity than the
+          # default BMaaS test hosts.
+          BMH_CPU: "8"
+          BMH_MEMORY_MIB: "12288"
         run: bash .github/scripts/setup-virtual-bmh.sh
 
       - name: Install OSAC

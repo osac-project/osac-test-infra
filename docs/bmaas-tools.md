@@ -48,7 +48,8 @@ python3 .github/scripts/manage-virtual-bmh-vms.py create \
 All hosts are named after a generated group prefix
 (`virtual-bmh-<random>`) — the group is managed as a unit. Specs
 default to 4 CPU / 8192 MiB / 150G per VM (`--cpu`, `--memory-mib`,
-`--disk-size` to override). Inspect what you got:
+`--disk-size` to override). The CI wrapper exposes the equivalent
+`BMH_CPU` and `BMH_MEMORY_MIB` environment overrides. Inspect what you got:
 
 ```bash
 jq -r '.name_prefix, (.hosts[] | "\(.name)  \(.boot_mac)  \(.bmc_address)")' \
