@@ -60,6 +60,11 @@ paths:
       # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_* (added to GitHub 2026);
       # drop this when actionlint is bumped to v1.18+. The suite checks out the revision of its own workflow file by default.
       - 'property "workflow_(repository|sha)" is not defined'
+  .github/workflows/e2e-vmaas.yml:
+    ignore:
+      # The job.workflow_repository gap (see e2e-vmaas-full-install.yml): its publish-private job checks out the actions of
+      # its own workflow's repository. Drop this when actionlint is bumped to v1.18+.
+      - 'property "workflow_(repository|sha)" is not defined'
   .github/workflows/ec2-runner-provision.yml:
     ignore:
       # The job.workflow_repository/job.workflow_sha gap: the v1.7.12 schema has no job.workflow_* (added to GitHub 2026);
