@@ -62,6 +62,7 @@ jobs:
           bash .github/scripts/fetch-private-run-artifact-test.sh
           bash .github/scripts/fabric-snapshot-test.sh
           bash .github/scripts/router_gather_test.sh
+          bash .github/scripts/load-image-onto-node-test.sh
 
   CI:
     name: CI
