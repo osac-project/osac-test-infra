@@ -1,0 +1,125 @@
+# vcluster Helm chart values for one OSAC E2E run on a shared OpenShift cluster.
+#
+# This is a TEMPLATE, not a values file. scripts/vcluster-run-setup.sh reads
+# the run's parameters from the outer cluster, substitutes the three
+# placeholders below, and installs the release with the rendered file:
+#
+#   __VCLUSTER_UID__      a UID inside the run namespace's allocated UID range
+#   __VCLUSTER_API_SAN__  DNS name of the vcluster API service
+#                          (<run>.vc-<run>.svc.cluster.local)
+#   __OUTER_DNS_IP__      ClusterIP of the outer cluster's DNS service
+#                          (dns-default.openshift-dns)
+#
+# Every non-obvious setting below was verified on a live POC on 2026-11-01
+# against vcluster 0.36.1 (chart loft/vcluster, version pinned in the setup
+# script) on an OpenShift SNO that runs the shared infrastructure installed by
+# `make install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=osac`.
+# See docs/vcluster-run-setup.md for the full run flow and troubleshooting.
+
+controlPlane:
+  statefulSet:
+    security:
+      podSecurityContext:
+        # POC fact 1: OpenShift's restricted-v2 SCC rejects the chart default
+        # (runAsUser 0) and also rejects any explicitly set runAsUser/fsGroup
+        # OUTSIDE the namespace's allocated UID range (annotation
+        # openshift.io/sa.scc.uid-range, format "<first>/<size>"). The vcluster
+        # docs' fixed 12345 only works where that exact UID is in range. The
+        # setup script reads the range from the run namespace and renders its
+        # first UID here.
+        fsGroup: __VCLUSTER_UID__
+      containerSecurityContext:
+        runAsNonRoot: true
+        runAsUser: __VCLUSTER_UID__
+
+  proxy:
+    extraSANs:
+      # POC fact 5: without this SAN, TLS verification fails for clients that
+      # reach the vcluster API by its service DNS name. Verified with the AAP
+      # controller in the outer cluster launching a job pod inside the
+      # vcluster through a bearer-token credential.
+      - __VCLUSTER_API_SAN__
+
+  coredns:
+    # POC fact 2: use overwriteConfig (Corefile only), NEVER
+    # overwriteManifests. overwriteManifests replaces the whole CoreDNS
+    # manifest set that the syncer generates (ServiceAccount, ClusterRole,
+    # Deployment, ConfigMap and the kube-dns Service). A hand-written
+    # replacement leaves out the kube-dns Service, so it never appears and
+    # the syncer hangs forever logging "waiting for DNS service IP". Verified
+    # failure in the POC. overwriteConfig replaces only the Corefile inside
+    # the generated manifest set and keeps the Service.
+    overwriteConfig: |
+      # Base is the chart's default Corefile for the non-embedded coredns
+      # (vcluster 0.36.1 pkg/coredns/template.go), plus the two forwarded
+      # zones at the bottom.
+      #
+      # POC fact 3: every server block MUST bind port 1053, not 53. The
+      # coredns pod syncs to the host namespace and runs as a non-root UID,
+      # so it cannot bind a privileged port. The generated kube-dns Service
+      # maps 53 -> 1053.
+      .:1053 {
+          errors
+          health
+          ready
+          rewrite name regex .*\.nodes\.vcluster\.com kubernetes.default.svc.cluster.local
+          kubernetes cluster.local in-addr.arpa ip6.arpa {
+              pods insecure
+              fallthrough in-addr.arpa ip6.arpa
+          }
+          hosts /etc/coredns/NodeHosts {
+              ttl 60
+              reload 15s
+              fallthrough
+          }
+          prometheus :9153
+          forward . /etc/resolv.conf
+          cache 30
+          loop
+          reload
+          loadbalance
+      }
+
+      # Forward the outer cluster's service zones to the outer cluster's DNS
+      # service (dns-default.openshift-dns), so pods inside the vcluster
+      # resolve postgres.osac-infra.svc.cluster.local and
+      # osac-kafka-kafka-bootstrap.osac-kafka.svc.cluster.local unchanged
+      # (verified in the POC: both resolved and accepted TCP connections).
+      # Without these blocks the kubernetes plugin answers authoritatively
+      # for all of cluster.local and returns NXDOMAIN for the outer
+      # namespaces, because they do not exist inside the vcluster.
+      osac-infra.svc.cluster.local:1053 {
+          errors
+          cache 30
+          forward . __OUTER_DNS_IP__
+      }
+
+      osac-kafka.svc.cluster.local:1053 {
+          errors
+          cache 30
+          forward . __OUTER_DNS_IP__
+      }
+
+      import /etc/coredns/custom/*.server
+
+rbac:
+  role:
+    extraRules:
+      # POC fact 4: OpenShift requirement. OpenShift's endpoints admission
+      # denies creating endpoints that point into the cluster or service
+      # network CIDRs unless the caller holds this permission; without it the
+      # syncer cannot sync Endpoints objects.
+      - apiGroups: [""]
+        resources: ["endpoints/restricted"]
+        verbs: ["create"]
+
+policies:
+  # The chart's default quotas cap a namespace at 20 pods and 100 secrets. An
+  # OSAC run holds about 25 pods (OSAC services, cert-manager, AAP job pods)
+  # and more secrets and configmaps than the quota allows. The chart renders
+  # neither object while both stay at the default "auto", but the defaults
+  # could change; pin them off explicitly.
+  resourceQuota:
+    enabled: false
+  limitRange:
+    enabled: false
