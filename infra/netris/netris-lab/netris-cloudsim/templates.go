@@ -529,10 +529,19 @@ runcmd:
     rm -f /etc/resolv.conf
     echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
 
-    curl -fsSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug
+    for attempt in 1 2 3; do
+        bash -o pipefail -c "curl -fsSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug"
+        rc=$?
 
-    # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
-    echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
+        # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
+        echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
+
+        [ "$rc" -eq 0 ] && break
+
+        echo "Netris-SG install failed (attempt $attempt/3)" >&2
+        if [ "$attempt" -eq 3 ]; then exit 1; fi
+        sleep 15
+    done
 
     reboot
 
