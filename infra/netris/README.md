@@ -274,6 +274,21 @@ For stretched tests against a full-ci deployment, use
 
 The Netris VMaaS and full paths use the single-node OCP 4.22 OVNKubernetes cluster with the `None` platform type. For `DEPLOY_SUITE=vmaas` or `DEPLOY_SUITE=full`, `deploy-infra` reuses h00's Netris-managed leaf-1 link (`eth10` ↔ `swp1s0`) for the `/31` underlay and enables underlay on that link; leaf-0's `eth9` link remains the `br-ex` data path. h00's Linux interface names are resolved from the MAC addresses correlated across Netris, the leaf interface, and the libvirt tunnel, so the guest NIC enumeration may change without changing which path carries data or underlay. It sets h00's server ASN and EVPN-VTEP inventory role so Netris can generate the leaf-side peer from the managed link. `deploy-ocp` validates the OpenShift inputs and writes an ignored, site-specific `infra/netris/.evpn-values.yaml`; the fresh `deploy-osac` path passes those values to `osac-installer` `install-infra`, which configures OVN route advertisements, NMState, the unmanaged VTEP, node uplink addresses, and OCP-side FRR. The separate Netris deployment configures the fabric side; this flow does not install or rely on the Netris host agent. No standalone VLAN-backed BGP object is created for the routed `/31`. `vmaas-ci` enables VMaaS only; `full-ci` enables every service, so VM and bare-metal instances can attach to one subnet. BMaaS continues to use the Netris server-port names and its separate per-BMH MAC mapping for `eth9`/`eth10`; assigning h00's `eth10` to the underlay does not change h01–h03 provisioning NIC selection. `setup-bmaas` publishes the configured BMI guest interface name as `OSAC_BMI_NETWORK_INTERFACE`; BMaaS and stretched networking tests consume that value instead of embedding a server-port name in the test code.
 
+BFD for the OCP-to-Netris BGP session is opt-in. Enable BFD on the matching
+Netris E-BGP peer first, then set `ocp_evpn_bfd_profile` to a profile name when
+running `deploy-ocp`; for example,
+`EXTRA_VARS='ocp_evpn_bfd_profile=bfd-fastest'`. The generated
+`.evpn-values.yaml` passes the profile name and timer values to the installer.
+The default timers are 300 ms receive/transmit with a detect multiplier of 3;
+override them only when the Netris switch supports the selected intervals.
+
+Unnumbered BGP is also opt-in. Set `ocp_evpn_bgp_unnumbered=true` when running
+`deploy-ocp` to generate an uplink with `unnumbered: true`; the generated
+`.evpn-values.yaml` then omits `address` and `peerAddress`, and the installer
+configures FRR to peer by the local interface name. The matching fabric port
+must already support unnumbered BGP and provide the required link-local
+underlay. Leave this setting false for the existing numbered `/31` contract.
+
 Netris/CUDN EVPN settings are overlays inside the existing OSAC service profile
 directories: `osac-installer/values/vmaas-ci/netris.yaml`,
 `osac-installer/values/bmaas-ci/netris.yaml`, and

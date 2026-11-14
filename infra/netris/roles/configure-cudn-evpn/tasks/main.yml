@@ -10,6 +10,28 @@
         fail_msg: "kubeconfig_path must name the existing OCP kubeconfig"
       tags: [cudn_evpn]
 
+    - name: Validate the optional EVPN BFD profile name
+      ansible.builtin.assert:
+        that:
+          - (ocp_evpn_bfd_profile | default('')) is string
+        fail_msg: "ocp_evpn_bfd_profile must be a string; leave it empty to disable BFD."
+      tags: [cudn_evpn]
+
+    - name: Validate EVPN BFD timers when a profile is enabled
+      ansible.builtin.assert:
+        that:
+          - ocp_evpn_bfd_receive_interval_ms | int >= 10
+          - ocp_evpn_bfd_receive_interval_ms | int <= 60000
+          - ocp_evpn_bfd_transmit_interval_ms | int >= 10
+          - ocp_evpn_bfd_transmit_interval_ms | int <= 60000
+          - ocp_evpn_bfd_detect_multiplier | int >= 2
+          - ocp_evpn_bfd_detect_multiplier | int <= 255
+        fail_msg: >-
+          EVPN BFD receive/transmit intervals must be 10..60000 ms and the
+          detect multiplier must be 2..255.
+      when: (ocp_evpn_bfd_profile | default('') | trim | length) > 0
+      tags: [cudn_evpn]
+
     - name: Wait for the OCP API to be ready
       ansible.builtin.command:
         argv:

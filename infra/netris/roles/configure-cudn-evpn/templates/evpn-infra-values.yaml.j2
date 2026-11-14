@@ -9,13 +9,27 @@ evpn:
     asn: {{ ocp_underlay_ocp_asn | int }}
     acceptPrefixes:
       - {{ ocp_evpn_netris_loopback_cidr | to_json }}
+{% if ocp_evpn_bgp_active_active | default(false) | bool %}
+    activeActive: true
+{% endif %}
     waitForEstablished: true
     timeoutSeconds: 900
+{% if ocp_evpn_bfd_profile | default('') | trim | length > 0 %}
+    bfdProfile: {{ ocp_evpn_bfd_profile | trim | to_json }}
+    bfdReceiveInterval: {{ ocp_evpn_bfd_receive_interval_ms | int }}
+    bfdTransmitInterval: {{ ocp_evpn_bfd_transmit_interval_ms | int }}
+    bfdDetectMultiplier: {{ ocp_evpn_bfd_detect_multiplier | int }}
+{% endif %}
   nodes:
     - name: {{ _ocp_evpn_node_name | to_json }}
       vtepIP: {{ _ocp_evpn_vtep_node_ip | to_json }}
       uplinks:
         - interface: {{ ocp_underlay_guest_interface | to_json }}
+{% if ocp_evpn_bgp_unnumbered | default(false) | bool %}
+          unnumbered: true
+          peerASN: {{ _ocp_evpn_leaf_asn | int }}
+{% else %}
           address: {{ (_ocp_evpn_ocp_ip ~ '/31') | to_json }}
           peerAddress: {{ _ocp_evpn_leaf_ip | to_json }}
           peerASN: {{ _ocp_evpn_leaf_asn | int }}
+{% endif %}
