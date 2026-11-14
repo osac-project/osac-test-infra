@@ -29,7 +29,9 @@ jobs:
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
       # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
       # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
-      # request's. Only runs of reviewed code on the default branch (schedule, manual) publish privately.
+      # request's. Only the schedule and manual callers pass them. A manual run can be started on any branch by a person
+      # with write access, who can already use the organization secrets this repository sees: this is not a barrier
+      # against them, only against pull request code that nobody started.
     with:
       test-suite: vmaas
       test-marker: not requires_caas and not requires_bmaas
@@ -54,7 +56,9 @@ jobs:
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
       # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
       # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
-      # request's. Only runs of reviewed code on the default branch (schedule, manual) publish privately.
+      # request's. Only the schedule and manual callers pass them. A manual run can be started on any branch by a person
+      # with write access, who can already use the organization secrets this repository sees: this is not a barrier
+      # against them, only against pull request code that nobody started.
     with:
       test-suite: caas/sanity
       test-marker: sanity
@@ -80,7 +84,9 @@ jobs:
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
       # No osac-ci-app-* secrets here, on purpose: the merge group commit carries the queued pull request's own changes,
       # so the actions that would receive the app key (upload-artifacts, mint-github-app-token) could be that pull
-      # request's. Only runs of reviewed code on the default branch (schedule, manual) publish privately.
+      # request's. Only the schedule and manual callers pass them. A manual run can be started on any branch by a person
+      # with write access, who can already use the organization secrets this repository sees: this is not a barrier
+      # against them, only against pull request code that nobody started.
     with:
       test-suite: bmaas/sanity
       test-filter: not TestBmaasNetworking
