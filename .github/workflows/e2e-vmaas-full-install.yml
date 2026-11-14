@@ -489,7 +489,9 @@ jobs:
           # and sudo is orphaned, the lock is still released when the
           # shell exits (fd 9 closes).
           DIGEST_FILE="/tmp/cluster-tool-flavor-${FLAVOR_NAME}.digest"
-          REMOTE_DIGEST=$(skopeo inspect "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' 2>/dev/null || echo "")
+          REMOTE_DIGEST=$(skopeo inspect \
+            --authfile "$RUNNER_TEMP/containers-auth-base.json" \
+            "docker://${FLAVOR_IMAGE}" --format '{{.Digest}}' || echo "")
 
           exec 9>"${FLAVOR_LOCK}"
           flock --exclusive 9
@@ -510,15 +512,16 @@ jobs:
           if ${FLAVOR_EXISTS}; then
             if [[ -n "${REMOTE_DIGEST}" ]] && [[ "${REMOTE_DIGEST}" == "${LOCAL_DIGEST}" ]]; then
               echo "Flavor '${FLAVOR_NAME}' is up to date (digest: ${LOCAL_DIGEST}) — skipping pull."
-            elif [[ -n "${REMOTE_DIGEST}" ]] && [[ -z "${LOCAL_DIGEST}" ]]; then
-              echo "Flavor '${FLAVOR_NAME}' already present, seeding digest file (${REMOTE_DIGEST})."
-              echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
             elif [[ -n "${REMOTE_DIGEST}" ]]; then
-              echo "Flavor '${FLAVOR_NAME}' exists but image changed (local: ${LOCAL_DIGEST}, remote: ${REMOTE_DIGEST}) — deleting and re-pulling..."
+              echo "Flavor '${FLAVOR_NAME}' exists but image changed (local: ${LOCAL_DIGEST:-none}, remote: ${REMOTE_DIGEST}) — deleting and re-pulling..."
+              rm -f "${DIGEST_FILE}"
               sudo python3 /usr/local/bin/cluster-tool flavors --delete "${FLAVOR_NAME}" 9>&- || true
               NEED_PULL=true
+            elif [[ -z "${LOCAL_DIGEST}" ]]; then
+              echo "::error::Could not check remote digest for flavor '${FLAVOR_NAME}' and no local digest is available."
+              exit 1
             else
-              echo "Flavor '${FLAVOR_NAME}' already present, could not check remote digest — skipping pull."
+              echo "::warning::Could not check remote digest for flavor '${FLAVOR_NAME}'; using the cached flavor without verifying freshness."
             fi
           else
             echo "Flavor '${FLAVOR_NAME}' not found — pulling..."
