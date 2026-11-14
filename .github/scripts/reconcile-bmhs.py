@@ -92,8 +92,6 @@ spec:
   bootMACAddress: "{host.boot_mac}"
   bootMode: UEFI
   automatedCleaningMode: metadata
-  rootDeviceHints:
-    deviceName: /dev/vda
   bmc:
     address: "{host.bmc_address}"
     credentialsName: {host.name}-bmc-secret
