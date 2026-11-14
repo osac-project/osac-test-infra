@@ -106,10 +106,17 @@ class RenderVmXmlTests(unittest.TestCase):
             "<mac address='52:54:00:bb:cc:01'/>",
             "<source network='test-infra-net-clone'/>",
             "<source file='/disks/grp-1.qcow2'/>",
+            "<serial>osac-virt-root</serial>",
             "<nvram>/disks/grp-1-VARS.fd</nvram>",
             "/usr/share/OVMF/OVMF_CODE.secboot.fd",
         ):
             self.assertIn(expected, xml)
+
+
+class DiskSerialTests(unittest.TestCase):
+    def test_serial_fits_the_virtio_blk_size(self) -> None:
+        # virtio-blk exposes at most 20 serial bytes to the guest.
+        self.assertLessEqual(len(manage_virtual_bmh_vms.DISK_SERIAL.encode("utf-8")), 20)
 
 
 class CreateDeleteEndToEndTests(unittest.TestCase):
