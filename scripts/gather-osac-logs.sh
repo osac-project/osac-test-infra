@@ -762,6 +762,7 @@ while IFS= read -r -d '' f; do
     total_lines=$((total_lines + (match_lines < remaining ? match_lines : remaining)))
     found=$((found + 1))
 done < <(find "${ARTIFACT_DIR}" -type f \( -name '*.log' -o -name '*.txt' \) \
+    ! -path "${ARTIFACT_DIR}/mgmt-cluster/mce-must-gather/*" \
     ! -name 'failure-summary.txt' -print0 | sort -z)
 if [[ ${total_lines} -ge ${MAX_SUMMARY_LINES} ]]; then
     echo ""
